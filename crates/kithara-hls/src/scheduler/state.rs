@@ -94,16 +94,20 @@ pub(crate) struct HlsScheduler {
 pub(super) const VERBOSE_SEGMENT_LIMIT: usize = 8;
 
 impl HlsScheduler {
-    pub(crate) fn layout_variant(&self) -> VariantIndex {
-        self.segments.lock_sync().layout_variant()
+    pub(crate) fn advance_current_segment_index(&mut self, segment_index: SegmentIndex) {
+        self.cursor.advance_fill_to(segment_index);
+    }
+
+    pub(crate) fn classify_variant_transition(
+        &self,
+        variant: usize,
+        segment_index: usize,
+    ) -> (bool, bool) {
+        classify_layout_transition(self.download_variant, variant, segment_index)
     }
 
     pub(crate) fn current_segment_index(&self) -> SegmentIndex {
         self.cursor.fill_next()
-    }
-
-    pub(super) fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
-        self.playlist_state.num_segments(variant)
     }
 
     pub(super) fn effective_total_bytes(&self) -> Option<u64> {
@@ -116,6 +120,61 @@ impl HlsScheduler {
 
     pub(crate) fn gap_scan_start_segment(&self) -> SegmentIndex {
         self.cursor.fill_floor()
+    }
+
+    pub(super) fn is_below_switch_floor(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+    ) -> bool {
+        if !self.coord.had_midstream_switch.load(Ordering::Acquire) {
+            return false;
+        }
+        let layout = self.segments.lock_sync().layout_variant();
+        if variant == layout {
+            return false;
+        }
+        let current_variant = self.abr.current_variant_index();
+        variant == current_variant && segment_index < self.gap_scan_start_segment()
+    }
+
+    pub(super) fn is_stale_cross_codec(&self, variant: VariantIndex, seg_idx: usize) -> bool {
+        let Some((current_variant, anchor_offset)) = self.switched_layout_anchor() else {
+            return false;
+        };
+        if variant == current_variant
+            || !is_cross_codec_switch(&self.playlist_state, current_variant, variant)
+        {
+            return false;
+        }
+
+        let fetch_offset = self
+            .playlist_state
+            .segment_byte_offset(variant, seg_idx)
+            .unwrap_or_else(|| self.coord.timeline().download_position());
+
+        fetch_offset >= anchor_offset
+    }
+
+    pub(crate) fn layout_variant(&self) -> VariantIndex {
+        self.segments.lock_sync().layout_variant()
+    }
+
+    pub(super) fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
+        self.playlist_state.num_segments(variant)
+    }
+
+    pub(crate) fn publish_download_error(&self, context: &str, error: &HlsError) {
+        debug!(?error, context, "hls downloader error");
+        // Network errors are reported through `DownloaderEvent::RequestFailed`
+        // — do not duplicate them on `HlsEvent::Error`.
+        let public = match error {
+            HlsError::Net(_) => return,
+            HlsError::PlaylistParse(msg) => PublicHlsError::Playlist(format!("{context}: {msg}")),
+            HlsError::KeyProcessing(msg) => PublicHlsError::Decryption(format!("{context}: {msg}")),
+            other => PublicHlsError::Other(format!("{context}: {other}")),
+        };
+        self.bus.publish(HlsEvent::Error { error: public });
     }
 
     /// Segment index the reader is currently inside, in the layout variant.
@@ -139,75 +198,6 @@ impl HlsScheduler {
 
     pub(crate) fn reset_cursor(&mut self, segment_index: SegmentIndex) {
         self.cursor.reset_fill(segment_index);
-    }
-
-    pub(crate) fn advance_current_segment_index(&mut self, segment_index: SegmentIndex) {
-        self.cursor.advance_fill_to(segment_index);
-    }
-
-    pub(crate) fn rewind_current_segment_index(&mut self, segment_index: SegmentIndex) {
-        self.cursor.rewind_fill_to(segment_index);
-    }
-
-    pub(super) fn is_below_switch_floor(
-        &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-    ) -> bool {
-        if !self.coord.had_midstream_switch.load(Ordering::Acquire) {
-            return false;
-        }
-        let layout = self.segments.lock_sync().layout_variant();
-        if variant == layout {
-            return false;
-        }
-        let current_variant = self.abr.current_variant_index();
-        variant == current_variant && segment_index < self.gap_scan_start_segment()
-    }
-
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "layout scan must hold the StreamIndex lock while item_range walks the current map"
-    )]
-    pub(super) fn switched_layout_anchor(&self) -> Option<(VariantIndex, u64)> {
-        let variant = self.abr.current_variant_index();
-        let anchor = {
-            let segments = self.segments.lock_sync();
-            let vs = segments.variant_segments(variant)?;
-            vs.iter().find_map(|(segment_index, _data)| {
-                segments
-                    .item_range((variant, segment_index))
-                    .map(|range| (segment_index, range.start))
-            })
-        };
-        let (segment_index, byte_offset) = anchor?;
-        ((segment_index > 0) || (byte_offset > 0)).then_some((variant, byte_offset))
-    }
-
-    pub(super) fn is_stale_cross_codec(&self, variant: VariantIndex, seg_idx: usize) -> bool {
-        let Some((current_variant, anchor_offset)) = self.switched_layout_anchor() else {
-            return false;
-        };
-        if variant == current_variant
-            || !is_cross_codec_switch(&self.playlist_state, current_variant, variant)
-        {
-            return false;
-        }
-
-        let fetch_offset = self
-            .playlist_state
-            .segment_byte_offset(variant, seg_idx)
-            .unwrap_or_else(|| self.coord.timeline().download_position());
-
-        fetch_offset >= anchor_offset
-    }
-
-    pub(crate) fn classify_variant_transition(
-        &self,
-        variant: usize,
-        segment_index: usize,
-    ) -> (bool, bool) {
-        classify_layout_transition(self.download_variant, variant, segment_index)
     }
 
     pub(super) fn reset_for_seek_epoch(
@@ -276,6 +266,23 @@ impl HlsScheduler {
         }
     }
 
+    pub(crate) fn rewind_current_segment_index(&mut self, segment_index: SegmentIndex) {
+        self.cursor.rewind_fill_to(segment_index);
+    }
+
+    pub(super) fn segment_resources_available(&self, data: &SegmentData) -> bool {
+        if data.init_len > 0
+            && let Some(ref init_url) = data.init_url
+            && !self
+                .backend
+                .contains_range(&ResourceKey::from_url(init_url), 0..data.init_len)
+        {
+            return false;
+        }
+        self.backend
+            .contains_range(&ResourceKey::from_url(&data.media_url), 0..data.media_len)
+    }
+
     pub(crate) fn switch_needs_init(
         &self,
         variant: usize,
@@ -290,33 +297,26 @@ impl HlsScheduler {
         previous != variant && is_cross_codec_switch(&self.playlist_state, previous, variant)
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "layout scan must hold the StreamIndex lock while item_range walks the current map"
+    )]
+    pub(super) fn switched_layout_anchor(&self) -> Option<(VariantIndex, u64)> {
+        let variant = self.abr.current_variant_index();
+        let anchor = {
+            let segments = self.segments.lock_sync();
+            let vs = segments.variant_segments(variant)?;
+            vs.iter().find_map(|(segment_index, _data)| {
+                segments
+                    .item_range((variant, segment_index))
+                    .map(|range| (segment_index, range.start))
+            })
+        };
+        let (segment_index, byte_offset) = anchor?;
+        ((segment_index > 0) || (byte_offset > 0)).then_some((variant, byte_offset))
+    }
+
     pub(crate) fn variant_has_init(&self, variant: usize) -> bool {
         self.playlist_state.init_url(variant).is_some()
-    }
-
-    pub(crate) fn publish_download_error(&self, context: &str, error: &HlsError) {
-        debug!(?error, context, "hls downloader error");
-        // Network errors are reported through `DownloaderEvent::RequestFailed`
-        // — do not duplicate them on `HlsEvent::Error`.
-        let public = match error {
-            HlsError::Net(_) => return,
-            HlsError::PlaylistParse(msg) => PublicHlsError::Playlist(format!("{context}: {msg}")),
-            HlsError::KeyProcessing(msg) => PublicHlsError::Decryption(format!("{context}: {msg}")),
-            other => PublicHlsError::Other(format!("{context}: {other}")),
-        };
-        self.bus.publish(HlsEvent::Error { error: public });
-    }
-
-    pub(super) fn segment_resources_available(&self, data: &SegmentData) -> bool {
-        if data.init_len > 0
-            && let Some(ref init_url) = data.init_url
-            && !self
-                .backend
-                .contains_range(&ResourceKey::from_url(init_url), 0..data.init_len)
-        {
-            return false;
-        }
-        self.backend
-            .contains_range(&ResourceKey::from_url(&data.media_url), 0..data.media_len)
     }
 }

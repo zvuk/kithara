@@ -29,8 +29,8 @@ impl MemorySource {
     #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
         Self {
-            timeline: Timeline::new(),
             data,
+            timeline: Timeline::new(),
             report_len: true,
         }
     }
@@ -39,28 +39,27 @@ impl MemorySource {
     #[must_use]
     pub fn without_len(data: Vec<u8>) -> Self {
         Self {
-            timeline: Timeline::new(),
             data,
+            timeline: Timeline::new(),
             report_len: false,
         }
     }
 }
 
 impl Source for MemorySource {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+    fn len(&self) -> Option<u64> {
+        if self.report_len {
+            Some(self.data.len() as u64)
+        } else {
+            None
+        }
     }
 
-    fn wait_range(
-        &mut self,
-        range: Range<u64>,
-        timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome> {
-        let _ = timeout;
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if range.start >= self.data.len() as u64 {
-            Ok(WaitOutcome::Eof)
+            SourcePhase::Eof
         } else {
-            Ok(WaitOutcome::Ready)
+            SourcePhase::Ready
         }
     }
 
@@ -78,19 +77,20 @@ impl Source for MemorySource {
         Ok(ReadOutcome::Bytes(count))
     }
 
-    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        if range.start >= self.data.len() as u64 {
-            SourcePhase::Eof
-        } else {
-            SourcePhase::Ready
-        }
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
-    fn len(&self) -> Option<u64> {
-        if self.report_len {
-            Some(self.data.len() as u64)
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        let _ = timeout;
+        if range.start >= self.data.len() as u64 {
+            Ok(WaitOutcome::Eof)
         } else {
-            None
+            Ok(WaitOutcome::Ready)
         }
     }
 }
@@ -105,8 +105,8 @@ pub struct MemStream;
 
 impl StreamType for MemStream {
     type Config = MemStreamConfig;
-    type Source = MemorySource;
     type Events = ();
+    type Source = MemorySource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         config
@@ -125,8 +125,8 @@ pub struct UnknownLenStream;
 
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
-    type Source = MemorySource;
     type Events = ();
+    type Source = MemorySource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         config

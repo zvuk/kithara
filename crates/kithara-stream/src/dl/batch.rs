@@ -104,8 +104,8 @@ fn fail_request(bus: Option<&EventBus>, request_id: RequestId, err: &NetError, r
     if let Some(bus) = bus {
         bus.publish(DownloaderEvent::RequestFailed {
             request_id,
-            error: err.clone(),
             retryable,
+            error: err.clone(),
         });
     }
 }
@@ -309,8 +309,8 @@ async fn establish(
     let resp_headers = byte_stream.headers.clone();
     let body = BodyStream::from_http(byte_stream, cancel.clone(), chunk_timeout);
     Ok(FetchResponse {
-        headers: resp_headers,
         body,
+        headers: resp_headers,
     })
 }
 

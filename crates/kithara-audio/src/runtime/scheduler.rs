@@ -268,8 +268,8 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
 
         if elapsed > Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
             observer.on_event(SchedulerEvent::SlowTick {
-                slot: slot.id,
                 elapsed,
+                slot: slot.id,
             });
         }
 

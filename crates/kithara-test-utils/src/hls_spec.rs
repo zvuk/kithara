@@ -190,18 +190,18 @@ where
 
     Ok(ResolvedHlsSpec {
         variant_count,
-        segments_per_variant: spec.segments_per_variant,
-        segment_size: spec.segment_size,
-        segment_duration_secs: spec.segment_duration_secs,
         data_mode,
         init_mode,
         variant_bandwidths,
-        delay_rules: spec.delay_rules,
         encryption,
-        head_reported_segment_size: spec.head_reported_segment_size,
         key_data,
         packaged_audio,
         cache_key,
+        segments_per_variant: spec.segments_per_variant,
+        segment_size: spec.segment_size,
+        segment_duration_secs: spec.segment_duration_secs,
+        delay_rules: spec.delay_rules,
+        head_reported_segment_size: spec.head_reported_segment_size,
     })
 }
 
@@ -399,15 +399,15 @@ fn resolve_packaged_audio(
     }
 
     Ok(ResolvedPackagedAudioSpec {
+        timescale,
+        variants,
         codec: packaged.codec,
         container: ContainerFormat::Fmp4,
         sample_rate: packaged.sample_rate,
         channels: packaged.channels,
-        timescale,
         segments_per_variant: spec.segments_per_variant,
         segment_duration_secs: spec.segment_duration_secs,
         include_sidx: packaged.include_sidx,
-        variants,
     })
 }
 

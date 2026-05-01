@@ -102,10 +102,10 @@ impl AudioPlayer {
         );
         let key_options = build_key_options(config.key_options);
         Arc::new(Self {
-            queue: Arc::new(Queue::new(queue_config)),
             downloader,
-            store: config.store,
             key_options,
+            queue: Arc::new(Queue::new(queue_config)),
+            store: config.store,
             observer: Mutex::new(None),
             event_bridge: Mutex::new(None),
             items: Arc::new(Mutex::new(HashMap::new())),
@@ -422,11 +422,6 @@ impl AudioPlayer {
 
 /// Internal methods not exported across FFI.
 impl AudioPlayer {
-    #[expect(dead_code, reason = "reserved for future event bridge extensions")]
-    pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
-        self.observer.lock_sync().clone()
-    }
-
     /// Build a [`TrackSource::Config`] from the item's fields. Also
     /// attaches a scoped bus so the item's per-resource event bridge
     /// captures events published during `Resource::new`
@@ -468,6 +463,11 @@ impl AudioPlayer {
         }
 
         Ok(TrackSource::Config(Box::new(config)))
+    }
+
+    #[expect(dead_code, reason = "reserved for future event bridge extensions")]
+    pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
+        self.observer.lock_sync().clone()
     }
 }
 

@@ -218,10 +218,10 @@ mod tests {
         let preload_notify = Arc::new(Notify::new());
 
         let reg = TrackRegistration {
-            source: Box::new(source),
             outlet,
-            preload_notify: Arc::clone(&preload_notify),
             preload_chunks,
+            source: Box::new(source),
+            preload_notify: Arc::clone(&preload_notify),
             service_class: ServiceClass::Audible,
         };
         (reg, inlet, preload_notify)

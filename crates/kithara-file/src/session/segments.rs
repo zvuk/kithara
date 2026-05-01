@@ -28,6 +28,29 @@ pub(crate) struct FileSegmentIndex {
 }
 
 impl FileSegmentIndex {
+    pub(crate) fn init_range(&self) -> Range<u64> {
+        self.init_range.clone()
+    }
+
+    pub(crate) fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+        self.segments
+            .iter()
+            .find(|desc| desc.byte_range.start >= byte_offset)
+            .cloned()
+    }
+
+    pub(crate) fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.segments
+            .iter()
+            .find(|desc| t < desc.decode_time.saturating_add(desc.duration))
+            .or_else(|| self.segments.last())
+            .cloned()
+    }
+
+    pub(crate) fn segment_count(&self) -> u32 {
+        u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
+    }
+
     /// Try to derive a fragmented-mp4 index from the given file bytes.
     ///
     /// Returns `None` when:
@@ -105,29 +128,6 @@ impl FileSegmentIndex {
             init_range,
             segments,
         })
-    }
-
-    pub(crate) fn init_range(&self) -> Range<u64> {
-        self.init_range.clone()
-    }
-
-    pub(crate) fn segment_count(&self) -> u32 {
-        u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
-    }
-
-    pub(crate) fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.segments
-            .iter()
-            .find(|desc| t < desc.decode_time.saturating_add(desc.duration))
-            .or_else(|| self.segments.last())
-            .cloned()
-    }
-
-    pub(crate) fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
-        self.segments
-            .iter()
-            .find(|desc| desc.byte_range.start >= byte_offset)
-            .cloned()
     }
 }
 

@@ -65,9 +65,9 @@ pub(super) async fn fetch_plan(
         init_url,
         media,
         media_cached,
+        duration,
         segment: plan.segment,
         variant: plan.variant,
-        duration,
         seek_epoch: plan.seek_epoch,
     })
 }

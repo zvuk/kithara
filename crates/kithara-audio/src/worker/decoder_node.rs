@@ -46,6 +46,7 @@ impl DecoderNode {
     pub(crate) fn from_registration(_track_id: TrackId, reg: TrackRegistration) -> Self {
         let seek_epoch = reg.source.timeline().seek_epoch();
         Self {
+            seek_epoch,
             source: reg.source,
             outlet: reg.outlet,
             service_class: reg.service_class,
@@ -53,7 +54,6 @@ impl DecoderNode {
             preload_chunks: reg.preload_chunks,
             chunks_sent: 0,
             preloaded: false,
-            seek_epoch,
             eof_sent: false,
         }
     }

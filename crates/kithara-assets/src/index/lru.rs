@@ -367,8 +367,8 @@ impl LruState {
         }
 
         Self {
-            clock: file.clock,
             by_root,
+            clock: file.clock,
         }
     }
 
@@ -394,9 +394,9 @@ impl LruState {
         }
 
         LruIndexFile {
+            entries,
             version: 1,
             clock: self.clock,
-            entries,
         }
     }
 

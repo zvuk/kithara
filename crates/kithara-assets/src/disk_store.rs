@@ -197,9 +197,9 @@ impl DiskAssetStore {
             Resource::open_with_observer(
                 cancel.clone(),
                 MmapOptions {
+                    mode,
                     path: target.to_path_buf(),
                     initial_len: None,
-                    mode,
                 },
                 Some(Arc::clone(&observer) as Arc<dyn AvailabilityObserver>),
             )
@@ -228,8 +228,8 @@ impl DiskAssetStore {
             self.cancel.clone(),
             MmapOptions {
                 path,
-                initial_len: None,
                 mode,
+                initial_len: None,
             },
             Some(self.scoped_observer(key)),
         )?;
@@ -302,11 +302,11 @@ impl DiskAssetStore {
         deleter: Arc<dyn AssetDeleter>,
     ) -> Self {
         Self {
-            root_dir: root_dir.into(),
-            asset_root: asset_root.into(),
             cancel,
             availability,
             deleter,
+            root_dir: root_dir.into(),
+            asset_root: asset_root.into(),
         }
     }
 }

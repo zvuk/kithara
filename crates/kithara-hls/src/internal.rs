@@ -80,12 +80,12 @@ pub fn make_test_source_with_backend(
         backend,
         segments,
         playlist_state,
+        segmented_view,
         bus: EventBus::new(DEFAULT_EVENT_BUS_CAPACITY),
         variant_fence: None,
         _hls_peer: None,
         _peer_handle: None,
         reader_segment: Arc::new(AtomicUsize::new(0)),
-        segmented_view,
     }
 }
 

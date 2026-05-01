@@ -81,17 +81,17 @@ pub(crate) struct PlayerNodeProcessor {
 }
 
 impl PlayerNodeProcessor {
+    /// Minimum position (seconds) before seeking is allowed on fade-in.
+    const FADE_IN_SEEK_THRESHOLD: f64 = 0.5;
+
     /// Maximum number of concurrent tracks per player node.
     const MAX_TRACKS: usize = 4;
-
-    /// Number of scratch buffers for stereo processing.
-    const SCRATCH_BUF_COUNT: usize = 4;
 
     /// Minimum stereo channel count for output processing.
     const MIN_STEREO: usize = 2;
 
-    /// Minimum position (seconds) before seeking is allowed on fade-in.
-    const FADE_IN_SEEK_THRESHOLD: f64 = 0.5;
+    /// Number of scratch buffers for stereo processing.
+    const SCRATCH_BUF_COUNT: usize = 4;
 
     /// Create a new processor with the given command receiver and shared state.
     pub(crate) fn new(
@@ -104,12 +104,68 @@ impl PlayerNodeProcessor {
 
         Self {
             cmd_rx,
-            crossfade: CrossfadeSettings::default(),
             sample_rate,
             scratch_bufs,
             shared_state,
+            crossfade: CrossfadeSettings::default(),
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
+        }
+    }
+
+    /// Update fade duration for all tracks.
+    fn apply_fade_duration(&mut self, duration: f32) {
+        self.crossfade.duration = duration;
+        for (_, track) in self.tracks.iter_mut() {
+            track.update_fade_duration(duration, self.sample_rate);
+        }
+    }
+
+    /// Apply seek to active tracks.
+    fn apply_seek(&mut self, seconds: f64, seek_epoch: u64) {
+        if seek_epoch != self.shared_state.seek_epoch.load(Ordering::SeqCst) {
+            return;
+        }
+
+        for (_, track) in self.tracks.iter_mut() {
+            match track.state() {
+                TrackState::FadingIn | TrackState::Playing => {
+                    track.seek(seconds);
+                    track.play();
+                }
+                TrackState::FadingOut => {
+                    track.stop();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Evict tracks that have reached a terminal state (`Finished` or
+    /// `Failed`).
+    ///
+    /// Uses a stack-allocated array instead of `Vec` since `Self::MAX_TRACKS` is 4,
+    /// avoiding heap allocation on every `process()` call.
+    fn cleanup_terminal_tracks(&mut self) {
+        let mut terminal_indices: [Option<Index>; Self::MAX_TRACKS] = [None; Self::MAX_TRACKS];
+        let mut count = 0;
+
+        for (idx, track) in self.tracks.iter() {
+            if track.state().is_terminal() && count < Self::MAX_TRACKS {
+                terminal_indices[count] = Some(idx);
+                count += 1;
+            }
+        }
+
+        for idx in terminal_indices[..count].iter().flatten() {
+            if let Some(track) = self.tracks.remove_by_index(*idx) {
+                let src = Arc::clone(track.src());
+                self.shared_state
+                    .notification_tx
+                    .lock_sync()
+                    .try_push(PlayerNotification::TrackUnloaded(src))
+                    .ok();
+            }
         }
     }
 
@@ -157,46 +213,44 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Load a new track into the arena.
-    fn load_track(&mut self, resource: Arc<Mutex<PlayerResource>>, src: Arc<str>) {
-        if self.tracks.remove(&src).is_some() {
-            self.shared_state
-                .notification_tx
-                .lock_sync()
-                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(&src)))
-                .ok();
-        }
+    /// Evict tracks to make room when at capacity.
+    ///
+    /// Tracks are evicted in priority order: `Finished` first, then `FadingOut`,
+    /// `Preloading`, `Paused`, `FadingIn`, and `Playing` last. If all tracks are in the
+    /// same state (e.g. all Playing), eviction order is non-deterministic
+    /// because `HashMap` iteration order is undefined.
+    fn evict_tracks_if_needed(&mut self) {
+        while self.tracks.len() >= Self::MAX_TRACKS {
+            let eviction_candidate = self
+                .tracks
+                .iter_keys()
+                .min_by_key(|(_, idx)| {
+                    self.tracks
+                        .get_by_index(**idx)
+                        .map_or(0, |t| eviction_priority(t.state()))
+                })
+                .map(|(key, idx)| {
+                    let state = self.tracks.get_by_index(*idx).map(PlayerTrack::state);
+                    (Arc::clone(key), state)
+                });
 
-        self.evict_tracks_if_needed();
-
-        if let Ok(res) = resource.try_lock() {
-            res.set_host_sample_rate(self.sample_rate);
-        }
-
-        let track = PlayerTrack::new(
-            resource,
-            Arc::clone(&src),
-            self.crossfade.duration,
-            self.sample_rate,
-            self.crossfade.fade_curve(),
-        );
-        self.tracks.insert(Arc::clone(&src), track);
-
-        self.shared_state
-            .notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackLoaded(src))
-            .ok();
-    }
-
-    /// Unload a track from the arena.
-    fn unload_track(&mut self, src: &Arc<str>) {
-        if self.tracks.remove(src).is_some() {
-            self.shared_state
-                .notification_tx
-                .lock_sync()
-                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(src)))
-                .ok();
+            if let Some((key, state)) = eviction_candidate {
+                if state == Some(TrackState::Playing) {
+                    warn!(
+                        src = &*key,
+                        "evicting a Playing track to make room for a new track"
+                    );
+                }
+                if self.tracks.remove(&key).is_some() {
+                    self.shared_state
+                        .notification_tx
+                        .lock_sync()
+                        .try_push(PlayerNotification::TrackUnloaded(key))
+                        .ok();
+                }
+            } else {
+                break;
+            }
         }
     }
 
@@ -265,116 +319,36 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Evict tracks to make room when at capacity.
-    ///
-    /// Tracks are evicted in priority order: `Finished` first, then `FadingOut`,
-    /// `Preloading`, `Paused`, `FadingIn`, and `Playing` last. If all tracks are in the
-    /// same state (e.g. all Playing), eviction order is non-deterministic
-    /// because `HashMap` iteration order is undefined.
-    fn evict_tracks_if_needed(&mut self) {
-        while self.tracks.len() >= Self::MAX_TRACKS {
-            let eviction_candidate = self
-                .tracks
-                .iter_keys()
-                .min_by_key(|(_, idx)| {
-                    self.tracks
-                        .get_by_index(**idx)
-                        .map_or(0, |t| eviction_priority(t.state()))
-                })
-                .map(|(key, idx)| {
-                    let state = self.tracks.get_by_index(*idx).map(PlayerTrack::state);
-                    (Arc::clone(key), state)
-                });
-
-            if let Some((key, state)) = eviction_candidate {
-                if state == Some(TrackState::Playing) {
-                    warn!(
-                        src = &*key,
-                        "evicting a Playing track to make room for a new track"
-                    );
-                }
-                if self.tracks.remove(&key).is_some() {
-                    self.shared_state
-                        .notification_tx
-                        .lock_sync()
-                        .try_push(PlayerNotification::TrackUnloaded(key))
-                        .ok();
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Apply seek to active tracks.
-    fn apply_seek(&mut self, seconds: f64, seek_epoch: u64) {
-        if seek_epoch != self.shared_state.seek_epoch.load(Ordering::SeqCst) {
-            return;
+    /// Load a new track into the arena.
+    fn load_track(&mut self, resource: Arc<Mutex<PlayerResource>>, src: Arc<str>) {
+        if self.tracks.remove(&src).is_some() {
+            self.shared_state
+                .notification_tx
+                .lock_sync()
+                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(&src)))
+                .ok();
         }
 
-        for (_, track) in self.tracks.iter_mut() {
-            match track.state() {
-                TrackState::FadingIn | TrackState::Playing => {
-                    track.seek(seconds);
-                    track.play();
-                }
-                TrackState::FadingOut => {
-                    track.stop();
-                }
-                _ => {}
-            }
-        }
-    }
+        self.evict_tracks_if_needed();
 
-    /// Update fade duration for all tracks.
-    fn apply_fade_duration(&mut self, duration: f32) {
-        self.crossfade.duration = duration;
-        for (_, track) in self.tracks.iter_mut() {
-            track.update_fade_duration(duration, self.sample_rate);
-        }
-    }
-
-    /// Evict tracks that have reached a terminal state (`Finished` or
-    /// `Failed`).
-    ///
-    /// Uses a stack-allocated array instead of `Vec` since `Self::MAX_TRACKS` is 4,
-    /// avoiding heap allocation on every `process()` call.
-    fn cleanup_terminal_tracks(&mut self) {
-        let mut terminal_indices: [Option<Index>; Self::MAX_TRACKS] = [None; Self::MAX_TRACKS];
-        let mut count = 0;
-
-        for (idx, track) in self.tracks.iter() {
-            if track.state().is_terminal() && count < Self::MAX_TRACKS {
-                terminal_indices[count] = Some(idx);
-                count += 1;
-            }
+        if let Ok(res) = resource.try_lock() {
+            res.set_host_sample_rate(self.sample_rate);
         }
 
-        for idx in terminal_indices[..count].iter().flatten() {
-            if let Some(track) = self.tracks.remove_by_index(*idx) {
-                let src = Arc::clone(track.src());
-                self.shared_state
-                    .notification_tx
-                    .lock_sync()
-                    .try_push(PlayerNotification::TrackUnloaded(src))
-                    .ok();
-            }
-        }
-    }
+        let track = PlayerTrack::new(
+            resource,
+            Arc::clone(&src),
+            self.crossfade.duration,
+            self.sample_rate,
+            self.crossfade.fade_curve(),
+        );
+        self.tracks.insert(Arc::clone(&src), track);
 
-    /// Update position and duration from the leading track.
-    fn update_position_duration(&self) {
-        for (_, track) in self.tracks.iter() {
-            if track.state().is_leading() {
-                self.shared_state
-                    .position
-                    .store(track.position(), Ordering::Relaxed);
-                self.shared_state
-                    .duration
-                    .store(track.duration(), Ordering::Relaxed);
-                break;
-            }
-        }
+        self.shared_state
+            .notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackLoaded(src))
+            .ok();
     }
 
     /// Render audio for all active tracks into the output buffers.
@@ -433,6 +407,32 @@ impl PlayerNodeProcessor {
         }
 
         playback_started
+    }
+
+    /// Unload a track from the arena.
+    fn unload_track(&mut self, src: &Arc<str>) {
+        if self.tracks.remove(src).is_some() {
+            self.shared_state
+                .notification_tx
+                .lock_sync()
+                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(src)))
+                .ok();
+        }
+    }
+
+    /// Update position and duration from the leading track.
+    fn update_position_duration(&self) {
+        for (_, track) in self.tracks.iter() {
+            if track.state().is_leading() {
+                self.shared_state
+                    .position
+                    .store(track.position(), Ordering::Relaxed);
+                self.shared_state
+                    .duration
+                    .store(track.duration(), Ordering::Relaxed);
+                break;
+            }
+        }
     }
 }
 
@@ -574,6 +574,22 @@ mod tests {
     }
 
     impl PcmReader for SampleRateTrackingReader {
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+
         fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
             Ok(ReadOutcome::Pending {
                 reason: PendingReason::Buffering,
@@ -598,29 +614,13 @@ mod tests {
             })
         }
 
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn position(&self) -> Duration {
-            Duration::ZERO
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(60))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
-        }
-
         fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
             self.recorded_host_rate
                 .store(sample_rate.get(), AtomicOrdering::Relaxed);
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
         }
     }
 
@@ -890,6 +890,7 @@ mod tests {
         }
 
         let reader = SeekTrackingReader {
+            seek_log,
             spec: PcmSpec {
                 channels: 2,
                 sample_rate: 44_100,
@@ -900,7 +901,6 @@ mod tests {
                 artwork: None,
                 title: Some("Tracking".to_owned()),
             },
-            seek_log,
             bus: EventBus::default(),
         };
 
@@ -961,6 +961,22 @@ mod tests {
     }
 
     impl PcmReader for TransientStallReader {
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn position(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+
         fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
             for sample in buf.iter_mut() {
                 *sample = 0.0;
@@ -990,22 +1006,6 @@ mod tests {
 
         fn spec(&self) -> PcmSpec {
             self.spec
-        }
-
-        fn position(&self) -> Duration {
-            Duration::from_secs(10)
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(60))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
         }
     }
 
@@ -1047,8 +1047,8 @@ mod tests {
             .seek_epoch
             .store(seek_epoch, Ordering::SeqCst);
         tx.try_push(PlayerCmd::Seek {
-            seconds: 30.0,
             seek_epoch,
+            seconds: 30.0,
         })
         .ok();
         processor.drain_commands();
@@ -1160,6 +1160,22 @@ mod tests {
     }
 
     impl PcmReader for TerminalFailReader {
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn position(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+
         fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
             Err(Self::fail())
         }
@@ -1180,22 +1196,6 @@ mod tests {
 
         fn spec(&self) -> PcmSpec {
             self.spec
-        }
-
-        fn position(&self) -> Duration {
-            Duration::from_secs(10)
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(60))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
         }
     }
 

@@ -8,81 +8,23 @@ use super::{helpers::first_missing_segment, state::HlsScheduler};
 use crate::{HlsError, coord::SegmentRequest};
 
 impl HlsScheduler {
-    pub(crate) fn next_valid_demand_request(&mut self) -> Option<SegmentRequest> {
-        loop {
-            let req = self.coord.take_segment_request()?;
-            let current_epoch = self.coord.timeline().seek_epoch();
-            if req.seek_epoch == current_epoch {
-                if req.seek_epoch != self.active_seek_epoch {
-                    self.reset_for_seek_epoch(req.seek_epoch, req.variant, req.segment_index);
-                }
-                return Some(req);
-            }
-
-            debug!(
-                req_epoch = req.seek_epoch,
-                current_epoch,
-                variant = req.variant,
-                segment_index = req.segment_index,
-                "dropping stale on-demand request"
-            );
-            self.bus.publish(HlsEvent::StaleRequestDropped {
-                seek_epoch: req.seek_epoch,
-                current_epoch,
-                variant: req.variant,
-                segment_index: req.segment_index,
-            });
-            self.coord.clear_pending_segment_request(req);
-            self.coord.condvar.notify_all();
-        }
-    }
-
-    pub(crate) fn num_segments_for_plan(&mut self, variant: usize) -> Option<usize> {
-        if let Some(value) = self.num_segments(variant) {
-            return Some(value);
-        }
-
-        self.publish_download_error(
-            "missing variant in playlist state",
-            &HlsError::VariantNotFound(format!("variant {variant}")),
-        );
-        self.coord.condvar.notify_all();
-        None
-    }
-
-    pub(crate) fn handle_tail_state(&mut self, variant: usize, num_segments: usize) -> bool {
-        if self.current_segment_index() < num_segments {
-            return false;
-        }
-
-        let timeline_seek_epoch = self.coord.timeline().seek_epoch();
-        if timeline_seek_epoch != self.active_seek_epoch {
+    fn finalize_tail_state(&mut self) -> bool {
+        let stream_end = self.effective_total_bytes().unwrap_or(0);
+        let playback_at_end =
+            stream_end == 0 || self.coord.timeline().byte_position() >= stream_end;
+        if !playback_at_end {
             self.coord.timeline().set_eof(false);
             self.coord.condvar.notify_all();
-            return false;
+            return true;
         }
 
-        // Always check for invalidated/missing segments at tail — not just
-        // after midstream switches. LRU eviction or DRM re-processing can
-        // invalidate committed segments behind the cursor.
-        let rewind_variant = if self.coord.had_midstream_switch.load(Ordering::Acquire) {
-            self.rewind_reference_variant(variant)
-        } else {
-            variant
-        };
-        if self.rewind_to_first_missing_segment(rewind_variant, num_segments) {
-            return false;
+        if !self.coord.timeline().eof() {
+            debug!("reached end of playlist");
+            self.coord.timeline().set_eof(true);
+            self.bus.publish(HlsEvent::EndOfStream);
         }
-
-        let layout = self.layout_variant();
-        if layout != variant && self.handle_abr_done_with_layout(variant, layout, num_segments) {
-            return false;
-        }
-        if layout == variant {
-            self.filling_layout_gap = false;
-        }
-
-        self.finalize_tail_state()
+        self.coord.condvar.notify_all();
+        true
     }
 
     fn handle_abr_done_with_layout(
@@ -139,23 +81,105 @@ impl HlsScheduler {
         false
     }
 
-    fn finalize_tail_state(&mut self) -> bool {
-        let stream_end = self.effective_total_bytes().unwrap_or(0);
-        let playback_at_end =
-            stream_end == 0 || self.coord.timeline().byte_position() >= stream_end;
-        if !playback_at_end {
-            self.coord.timeline().set_eof(false);
-            self.coord.condvar.notify_all();
-            return true;
+    pub(crate) fn handle_tail_state(&mut self, variant: usize, num_segments: usize) -> bool {
+        if self.current_segment_index() < num_segments {
+            return false;
         }
 
-        if !self.coord.timeline().eof() {
-            debug!("reached end of playlist");
-            self.coord.timeline().set_eof(true);
-            self.bus.publish(HlsEvent::EndOfStream);
+        let timeline_seek_epoch = self.coord.timeline().seek_epoch();
+        if timeline_seek_epoch != self.active_seek_epoch {
+            self.coord.timeline().set_eof(false);
+            self.coord.condvar.notify_all();
+            return false;
         }
+
+        // Always check for invalidated/missing segments at tail — not just
+        // after midstream switches. LRU eviction or DRM re-processing can
+        // invalidate committed segments behind the cursor.
+        let rewind_variant = if self.coord.had_midstream_switch.load(Ordering::Acquire) {
+            self.rewind_reference_variant(variant)
+        } else {
+            variant
+        };
+        if self.rewind_to_first_missing_segment(rewind_variant, num_segments) {
+            return false;
+        }
+
+        let layout = self.layout_variant();
+        if layout != variant && self.handle_abr_done_with_layout(variant, layout, num_segments) {
+            return false;
+        }
+        if layout == variant {
+            self.filling_layout_gap = false;
+        }
+
+        self.finalize_tail_state()
+    }
+
+    /// Apply the seek-no-switch invariant: lock the ABR state while a
+    /// seek is pending, unlock when it clears. Returns the current
+    /// variant — the Controller owns all decide/apply logic.
+    pub(crate) fn make_abr_decision(&mut self) -> AbrDecision {
+        let seek_pending = self.coord.timeline().is_seek_pending();
+        match (self.abr.is_locked(), seek_pending) {
+            (false, true) => self.abr.lock(),
+            (true, false) => self.abr.unlock(),
+            _ => {}
+        }
+
+        let current_variant = self.abr.current_variant_index();
+        let reason = if self.abr.is_locked() {
+            kithara_events::AbrReason::Locked
+        } else {
+            kithara_events::AbrReason::AlreadyOptimal
+        };
+        AbrDecision {
+            reason,
+            target_variant_index: current_variant,
+            changed: false,
+        }
+    }
+
+    pub(crate) fn next_valid_demand_request(&mut self) -> Option<SegmentRequest> {
+        loop {
+            let req = self.coord.take_segment_request()?;
+            let current_epoch = self.coord.timeline().seek_epoch();
+            if req.seek_epoch == current_epoch {
+                if req.seek_epoch != self.active_seek_epoch {
+                    self.reset_for_seek_epoch(req.seek_epoch, req.variant, req.segment_index);
+                }
+                return Some(req);
+            }
+
+            debug!(
+                req_epoch = req.seek_epoch,
+                current_epoch,
+                variant = req.variant,
+                segment_index = req.segment_index,
+                "dropping stale on-demand request"
+            );
+            self.bus.publish(HlsEvent::StaleRequestDropped {
+                current_epoch,
+                seek_epoch: req.seek_epoch,
+                variant: req.variant,
+                segment_index: req.segment_index,
+            });
+            self.coord.clear_pending_segment_request(req);
+            self.coord.condvar.notify_all();
+        }
+    }
+
+    pub(crate) fn num_segments_for_plan(&mut self, variant: usize) -> Option<usize> {
+        if let Some(value) = self.num_segments(variant) {
+            return Some(value);
+        }
+
+        self.publish_download_error(
+            "missing variant in playlist state",
+            &HlsError::VariantNotFound(format!("variant {variant}")),
+        );
         self.coord.condvar.notify_all();
-        true
+        None
     }
 
     fn rewind_reference_variant(&self, fallback_variant: usize) -> usize {
@@ -261,29 +285,5 @@ impl HlsScheduler {
 
         let current = self.abr.current_variant_index();
         variant != current
-    }
-
-    /// Apply the seek-no-switch invariant: lock the ABR state while a
-    /// seek is pending, unlock when it clears. Returns the current
-    /// variant — the Controller owns all decide/apply logic.
-    pub(crate) fn make_abr_decision(&mut self) -> AbrDecision {
-        let seek_pending = self.coord.timeline().is_seek_pending();
-        match (self.abr.is_locked(), seek_pending) {
-            (false, true) => self.abr.lock(),
-            (true, false) => self.abr.unlock(),
-            _ => {}
-        }
-
-        let current_variant = self.abr.current_variant_index();
-        let reason = if self.abr.is_locked() {
-            kithara_events::AbrReason::Locked
-        } else {
-            kithara_events::AbrReason::AlreadyOptimal
-        };
-        AbrDecision {
-            target_variant_index: current_variant,
-            reason,
-            changed: false,
-        }
     }
 }

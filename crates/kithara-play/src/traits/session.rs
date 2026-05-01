@@ -46,6 +46,26 @@ pub struct SessionOptions {
 pub trait AudioSession: MaybeSend + MaybeSync + 'static {
     fn category(&self) -> SessionCategory;
 
+    fn current_route(&self) -> RouteDescription;
+
+    fn io_buffer_duration(&self) -> Duration;
+
+    fn is_active(&self) -> bool;
+
+    fn is_other_audio_playing(&self) -> bool;
+
+    fn mode(&self) -> SessionMode;
+
+    fn output_channels(&self) -> u16;
+
+    fn output_latency(&self) -> Duration;
+
+    fn output_volume(&self) -> f32;
+
+    fn sample_rate(&self) -> f64;
+
+    fn set_active(&self, active: bool) -> Result<(), PlayError>;
+
     fn set_category(&self, category: SessionCategory) -> Result<(), PlayError>;
 
     fn set_category_with_options(
@@ -55,31 +75,11 @@ pub trait AudioSession: MaybeSend + MaybeSync + 'static {
         options: SessionOptions,
     ) -> Result<(), PlayError>;
 
-    fn mode(&self) -> SessionMode;
-
     fn set_mode(&self, mode: SessionMode) -> Result<(), PlayError>;
-
-    fn is_active(&self) -> bool;
-
-    fn set_active(&self, active: bool) -> Result<(), PlayError>;
-
-    fn sample_rate(&self) -> f64;
-
-    fn set_preferred_sample_rate(&self, rate: f64) -> Result<(), PlayError>;
-
-    fn output_channels(&self) -> u16;
-
-    fn set_preferred_output_channels(&self, count: u16) -> Result<(), PlayError>;
-
-    fn output_latency(&self) -> Duration;
-
-    fn io_buffer_duration(&self) -> Duration;
 
     fn set_preferred_io_buffer_duration(&self, duration: Duration) -> Result<(), PlayError>;
 
-    fn output_volume(&self) -> f32;
+    fn set_preferred_output_channels(&self, count: u16) -> Result<(), PlayError>;
 
-    fn current_route(&self) -> RouteDescription;
-
-    fn is_other_audio_playing(&self) -> bool;
+    fn set_preferred_sample_rate(&self, rate: f64) -> Result<(), PlayError>;
 }

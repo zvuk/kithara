@@ -15,21 +15,21 @@ impl Headers {
         }
     }
 
-    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
-        self.inner.insert(key.into(), value.into());
-    }
-
     pub fn get(&self, key: &str) -> Option<&str> {
         self.inner.get(key).map(String::as_str)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
+        self.inner.insert(key.into(), value.into());
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 }
 

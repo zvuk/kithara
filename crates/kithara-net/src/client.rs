@@ -96,13 +96,6 @@ impl HttpClient {
     /// # Errors
     ///
     /// Returns [`NetError`] on HTTP failure or network error.
-    pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream> {
-        <Self as Net>::stream(self, url, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure or network error.
     pub async fn get_range(
         &self,
         url: Url,
@@ -155,6 +148,13 @@ impl HttpClient {
 
         Ok(resp)
     }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure or network error.
+    pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream> {
+        <Self as Net>::stream(self, url, headers).await
+    }
 }
 
 impl std::fmt::Debug for HttpClient {
@@ -173,17 +173,6 @@ impl Net for HttpClient {
         let req = self.inner.get(url.clone());
         let resp = self.send_checked(req, headers, url, false).await?;
         resp.bytes().await.map_err(NetError::from)
-    }
-
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    async fn stream(
-        &self,
-        url: Url,
-        headers: Option<Headers>,
-    ) -> Result<crate::ByteStream, NetError> {
-        let req = self.inner.get(url.clone());
-        let resp = self.send_checked(req, headers, url, false).await?;
-        Ok(Self::response_to_stream(resp))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -262,5 +251,16 @@ impl Net for HttpClient {
         }
 
         Ok(out)
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    async fn stream(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+    ) -> Result<crate::ByteStream, NetError> {
+        let req = self.inner.get(url.clone());
+        let resp = self.send_checked(req, headers, url, false).await?;
+        Ok(Self::response_to_stream(resp))
     }
 }

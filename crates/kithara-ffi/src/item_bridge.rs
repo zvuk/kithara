@@ -17,9 +17,6 @@ pub(crate) struct ItemEventBridge {
 }
 
 impl ItemEventBridge {
-    /// Threshold for suppressing redundant duration/buffered updates (seconds).
-    const UPDATE_THRESHOLD: f64 = 0.01;
-
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
@@ -29,51 +26,25 @@ impl ItemEventBridge {
     /// Bit shift width for extracting the high 32 bits of a u64.
     const U64_HIGH_SHIFT: u32 = 32;
 
-    /// Spawn a task that translates resource events into item callbacks.
-    pub(crate) fn spawn(
-        rx: kithara_events::EventReceiver,
-        observer: Arc<dyn ItemObserver>,
-        duration_seconds: Option<f64>,
-        cancel: CancellationToken,
-    ) -> Self {
-        observer.on_event(FfiItemEvent::StatusChanged {
-            status: FfiItemStatus::ReadyToPlay,
-        });
-        if let Some(duration) = duration_seconds {
-            observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
-        }
-        Self::spawn_event_task(rx, observer, duration_seconds, cancel.clone());
-        Self { cancel }
-    }
+    /// Threshold for suppressing redundant duration/buffered updates (seconds).
+    const UPDATE_THRESHOLD: f64 = 0.01;
 
-    fn spawn_event_task(
-        mut rx: kithara_events::EventReceiver,
-        observer: Arc<dyn ItemObserver>,
-        mut duration_seconds: Option<f64>,
-        cancel: CancellationToken,
-    ) {
-        crate::FFI_RUNTIME.spawn(async move {
-            let mut last_buffered = None;
-            let mut variants: Vec<crate::types::FfiVariant> = Vec::new();
-            loop {
-                tokio::select! {
-                    () = cancel.cancelled() => break,
-                    event = rx.recv() => {
-                        match event {
-                            Ok(event) => Self::dispatch(
-                                &observer,
-                                &event,
-                                &mut duration_seconds,
-                                &mut last_buffered,
-                                &mut variants,
-                            ),
-                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                            Err(broadcast::error::RecvError::Closed) => break,
-                        }
-                    }
-                }
-            }
-        });
+    fn buffered_seconds_from_event(event: &Event, duration_seconds: Option<f64>) -> Option<f64> {
+        let duration_seconds = duration_seconds?;
+        match event {
+            // Bytes consumed by the reader. Reader-side proxy for
+            // "the player has data up to this point". Not sink-truth.
+            Event::File(FileEvent::ReadProgress {
+                position,
+                total: Some(total),
+            })
+            | Event::Hls(HlsEvent::ReadProgress {
+                position,
+                total: Some(total),
+            }) => Self::scaled_seconds(*position, *total, duration_seconds),
+            Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => Some(duration_seconds),
+            _ => None,
+        }
     }
 
     fn dispatch(
@@ -109,48 +80,6 @@ impl ItemEventBridge {
                 error: error.to_string(),
             });
         }
-    }
-
-    fn duration_from_event(event: &Event) -> Option<f64> {
-        match event {
-            Event::Audio(AudioEvent::PlaybackProgress {
-                total_ms: Some(total_ms),
-                ..
-            }) => Some(Self::u64_to_f64(*total_ms)? / Self::MS_PER_SECOND),
-            _ => None,
-        }
-    }
-
-    fn buffered_seconds_from_event(event: &Event, duration_seconds: Option<f64>) -> Option<f64> {
-        let duration_seconds = duration_seconds?;
-        match event {
-            // Bytes consumed by the reader. Reader-side proxy for
-            // "the player has data up to this point". Not sink-truth.
-            Event::File(FileEvent::ReadProgress {
-                position,
-                total: Some(total),
-            })
-            | Event::Hls(HlsEvent::ReadProgress {
-                position,
-                total: Some(total),
-            }) => Self::scaled_seconds(*position, *total, duration_seconds),
-            Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => Some(duration_seconds),
-            _ => None,
-        }
-    }
-
-    fn scaled_seconds(progress: u64, total: u64, duration_seconds: f64) -> Option<f64> {
-        if total == 0 {
-            return None;
-        }
-        let ratio = Self::u64_to_f64(progress)? / Self::u64_to_f64(total)?;
-        Some((duration_seconds * ratio).clamp(0.0, duration_seconds))
-    }
-
-    fn u64_to_f64(value: u64) -> Option<f64> {
-        let hi = u32::try_from(value >> Self::U64_HIGH_SHIFT).ok()?;
-        let lo = u32::try_from(value & u64::from(u32::MAX)).ok()?;
-        Some(f64::from(hi) * Self::U32_MAX_PLUS_ONE + f64::from(lo))
     }
 
     #[expect(
@@ -220,6 +149,16 @@ impl ItemEventBridge {
         }
     }
 
+    fn duration_from_event(event: &Event) -> Option<f64> {
+        match event {
+            Event::Audio(AudioEvent::PlaybackProgress {
+                total_ms: Some(total_ms),
+                ..
+            }) => Some(Self::u64_to_f64(*total_ms)? / Self::MS_PER_SECOND),
+            _ => None,
+        }
+    }
+
     fn error_from_event(event: &Event) -> Option<FfiError> {
         match event {
             Event::File(FileEvent::Error { error }) => Some(FfiError::ItemFailed {
@@ -235,6 +174,67 @@ impl ItemEventBridge {
             }
             _ => None,
         }
+    }
+
+    fn scaled_seconds(progress: u64, total: u64, duration_seconds: f64) -> Option<f64> {
+        if total == 0 {
+            return None;
+        }
+        let ratio = Self::u64_to_f64(progress)? / Self::u64_to_f64(total)?;
+        Some((duration_seconds * ratio).clamp(0.0, duration_seconds))
+    }
+
+    /// Spawn a task that translates resource events into item callbacks.
+    pub(crate) fn spawn(
+        rx: kithara_events::EventReceiver,
+        observer: Arc<dyn ItemObserver>,
+        duration_seconds: Option<f64>,
+        cancel: CancellationToken,
+    ) -> Self {
+        observer.on_event(FfiItemEvent::StatusChanged {
+            status: FfiItemStatus::ReadyToPlay,
+        });
+        if let Some(duration) = duration_seconds {
+            observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
+        }
+        Self::spawn_event_task(rx, observer, duration_seconds, cancel.clone());
+        Self { cancel }
+    }
+
+    fn spawn_event_task(
+        mut rx: kithara_events::EventReceiver,
+        observer: Arc<dyn ItemObserver>,
+        mut duration_seconds: Option<f64>,
+        cancel: CancellationToken,
+    ) {
+        crate::FFI_RUNTIME.spawn(async move {
+            let mut last_buffered = None;
+            let mut variants: Vec<crate::types::FfiVariant> = Vec::new();
+            loop {
+                tokio::select! {
+                    () = cancel.cancelled() => break,
+                    event = rx.recv() => {
+                        match event {
+                            Ok(event) => Self::dispatch(
+                                &observer,
+                                &event,
+                                &mut duration_seconds,
+                                &mut last_buffered,
+                                &mut variants,
+                            ),
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn u64_to_f64(value: u64) -> Option<f64> {
+        let hi = u32::try_from(value >> Self::U64_HIGH_SHIFT).ok()?;
+        let lo = u32::try_from(value & u64::from(u32::MAX)).ok()?;
+        Some(f64::from(hi) * Self::U32_MAX_PLUS_ONE + f64::from(lo))
     }
 }
 

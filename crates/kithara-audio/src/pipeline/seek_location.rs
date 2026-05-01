@@ -38,8 +38,8 @@ impl SeekLocation {
         )]
         let variant = anchor.variant_index.map(|v| v as u32);
         Self::Byte {
-            offset: anchor.byte_offset,
             variant,
+            offset: anchor.byte_offset,
         }
     }
 

@@ -116,14 +116,6 @@ impl HlsSegmentView {
         (end > start).then_some(start..end)
     }
 
-    pub(crate) fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        let variant = self.current_variant();
-        let (segment_index, _, _) = self.playlist_state.find_seek_point_for_time(variant, t)?;
-        // Already routed through `descriptor_for_segment` so the
-        // committed-range preference applies here too.
-        self.descriptor_for_segment(variant, segment_index)
-    }
-
     pub(crate) fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
         let variant = self.current_variant();
         let segment_index = self
@@ -140,6 +132,14 @@ impl HlsSegmentView {
         self.descriptor_for_segment(variant, actual_index)
     }
 
+    pub(crate) fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        let variant = self.current_variant();
+        let (segment_index, _, _) = self.playlist_state.find_seek_point_for_time(variant, t)?;
+        // Already routed through `descriptor_for_segment` so the
+        // committed-range preference applies here too.
+        self.descriptor_for_segment(variant, segment_index)
+    }
+
     pub(crate) fn segment_count(&self) -> Option<u32> {
         let variant = self.current_variant();
         let count = self.playlist_state.num_segments(variant)?;
@@ -152,21 +152,21 @@ impl SegmentLayout for HlsSegmentView {
         Self::init_segment_range(self)
     }
 
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        Self::segment_at_time(self, t)
+    fn len(&self) -> Option<u64> {
+        let variant = self.current_variant();
+        self.playlist_state.total_variant_size(variant)
     }
 
     fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
         Self::segment_after_byte(self, byte_offset)
     }
 
-    fn segment_count(&self) -> Option<u32> {
-        Self::segment_count(self)
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        Self::segment_at_time(self, t)
     }
 
-    fn len(&self) -> Option<u64> {
-        let variant = self.current_variant();
-        self.playlist_state.total_variant_size(variant)
+    fn segment_count(&self) -> Option<u32> {
+        Self::segment_count(self)
     }
 }
 

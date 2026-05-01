@@ -213,9 +213,9 @@ impl FrameCodec for AppleCodec {
 
         Ok(Self {
             converter,
-            input_state: Box::new(ConverterInputState::new()),
             spec,
             frames_per_packet,
+            input_state: Box::new(ConverterInputState::new()),
         })
     }
 
@@ -251,8 +251,8 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             let cookie = (!track.extra_data.is_empty()).then(|| track.extra_data.clone());
             Ok(AppleInputFormat {
                 asbd,
-                frames_per_packet: Consts::AAC_FRAMES_PER_PACKET,
                 cookie,
+                frames_per_packet: Consts::AAC_FRAMES_PER_PACKET,
             })
         }
         AudioCodec::Flac => {

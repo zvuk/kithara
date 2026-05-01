@@ -33,8 +33,12 @@ impl TestServerState {
         })
     }
 
-    pub(crate) fn insert_signal(&self, request: SignalRequest) -> String {
-        self.insert(StoredToken::Signal(request))
+    pub(crate) fn get_hls(&self, token: &str) -> Option<Arc<GeneratedHls>> {
+        let store = self.tokens.read().expect("token store poisoned");
+        match store.get(token) {
+            Some(StoredToken::Hls(hls)) => Some(Arc::clone(hls)),
+            _ => None,
+        }
     }
 
     pub(crate) fn get_signal(&self, token: &str) -> Option<SignalRequest> {
@@ -43,6 +47,38 @@ impl TestServerState {
             Some(StoredToken::Signal(request)) => Some(request.clone()),
             _ => None,
         }
+    }
+
+    fn insert(&self, value: StoredToken) -> String {
+        let token = Uuid::new_v4().to_string();
+        let mut store = self.tokens.write().expect("token store poisoned");
+        store.insert(token.clone(), value);
+        token
+    }
+
+    fn insert_hls(&self, spec: ResolvedHlsSpec) -> Result<String, HlsSpecError> {
+        let hls = self.load_hls(spec)?;
+        Ok(self.insert(StoredToken::Hls(hls)))
+    }
+
+    pub(crate) fn insert_hls_spec(&self, spec: HlsSpec) -> Result<String, HlsSpecError> {
+        let resolved = self.resolve_hls_spec(spec)?;
+        self.insert_hls(resolved)
+    }
+
+    pub(crate) fn insert_signal(&self, request: SignalRequest) -> String {
+        self.insert(StoredToken::Signal(request))
+    }
+
+    pub(crate) fn load_hls(
+        &self,
+        spec: ResolvedHlsSpec,
+    ) -> Result<Arc<GeneratedHls>, HlsSpecError> {
+        load_hls(&self.hls_cache, spec)
+    }
+
+    pub(crate) fn parse_hls_spec(&self, encoded: &str) -> Result<ResolvedHlsSpec, HlsSpecError> {
+        parse_hls_spec_with(encoded, |key| self.resolve_hls_blob(key))
     }
 
     pub(crate) fn register_hls_blob(&self, bytes: &[u8]) -> String {
@@ -54,39 +90,6 @@ impl TestServerState {
         key
     }
 
-    pub(crate) fn insert_hls_spec(&self, spec: HlsSpec) -> Result<String, HlsSpecError> {
-        let resolved = self.resolve_hls_spec(spec)?;
-        self.insert_hls(resolved)
-    }
-
-    pub(crate) fn parse_hls_spec(&self, encoded: &str) -> Result<ResolvedHlsSpec, HlsSpecError> {
-        parse_hls_spec_with(encoded, |key| self.resolve_hls_blob(key))
-    }
-
-    pub(crate) fn resolve_hls_spec(&self, spec: HlsSpec) -> Result<ResolvedHlsSpec, HlsSpecError> {
-        resolve_hls_spec_with(spec, |key| self.resolve_hls_blob(key))
-    }
-
-    pub(crate) fn get_hls(&self, token: &str) -> Option<Arc<GeneratedHls>> {
-        let store = self.tokens.read().expect("token store poisoned");
-        match store.get(token) {
-            Some(StoredToken::Hls(hls)) => Some(Arc::clone(hls)),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn load_hls(
-        &self,
-        spec: ResolvedHlsSpec,
-    ) -> Result<Arc<GeneratedHls>, HlsSpecError> {
-        load_hls(&self.hls_cache, spec)
-    }
-
-    fn insert_hls(&self, spec: ResolvedHlsSpec) -> Result<String, HlsSpecError> {
-        let hls = self.load_hls(spec)?;
-        Ok(self.insert(StoredToken::Hls(hls)))
-    }
-
     fn resolve_hls_blob(&self, key: &str) -> Result<Arc<Vec<u8>>, HlsSpecError> {
         let blobs = self.hls_blobs.read().expect("hls blob store poisoned");
         blobs
@@ -95,10 +98,7 @@ impl TestServerState {
             .ok_or_else(|| HlsSpecError::MissingBlob(key.to_owned()))
     }
 
-    fn insert(&self, value: StoredToken) -> String {
-        let token = Uuid::new_v4().to_string();
-        let mut store = self.tokens.write().expect("token store poisoned");
-        store.insert(token.clone(), value);
-        token
+    pub(crate) fn resolve_hls_spec(&self, spec: HlsSpec) -> Result<ResolvedHlsSpec, HlsSpecError> {
+        resolve_hls_spec_with(spec, |key| self.resolve_hls_blob(key))
     }
 }

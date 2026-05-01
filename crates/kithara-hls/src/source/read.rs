@@ -11,43 +11,18 @@ use crate::{
 };
 
 impl HlsSource {
-    pub(crate) fn range_ready_from_segments(
+    /// Check committed `StreamIndex` for the segment covering `range_start`.
+    /// Returns `Some(segment_index)` if a request should be issued.
+    pub(super) fn committed_segment_for_offset(
         &self,
-        segments: &StreamIndex,
-        range: &Range<u64>,
-    ) -> bool {
-        let Some(seg_ref) = segments.find_at_offset(range.start) else {
-            tracing::trace!(
-                range_start = range.start,
-                layout = segments.layout_variant(),
-                "range_ready: find_at_offset=None"
-            );
-            return false;
-        };
-
-        let Some(data) = seg_ref.data else {
-            tracing::trace!(
-                seg = seg_ref.segment_index,
-                variant = seg_ref.variant,
-                range_start = range.start,
-                "range_ready: reserved slot, no committed data yet"
-            );
-            return false;
-        };
-
-        let seg_end = seg_ref.byte_offset + data.total_len();
-        let range_end = range.end.min(seg_end);
-        let local_start = range.start.saturating_sub(seg_ref.byte_offset);
-        let local_end = range_end.saturating_sub(seg_ref.byte_offset);
-
-        self.init_range_ready(seg_ref.segment_index, data, local_start, local_end)
-            && self.media_range_ready(
-                seg_ref.segment_index,
-                seg_ref.variant,
-                data,
-                local_start,
-                local_end,
-            )
+        range_start: u64,
+        variant: VariantIndex,
+    ) -> Option<SegmentIndex> {
+        self.segments
+            .lock_sync()
+            .find_at_offset(range_start)
+            .filter(|seg_ref| seg_ref.variant == variant && seg_ref.data.is_some())
+            .map(|seg_ref| seg_ref.segment_index)
     }
 
     fn init_range_ready(
@@ -107,6 +82,45 @@ impl HlsSource {
             return false;
         }
         true
+    }
+
+    pub(crate) fn range_ready_from_segments(
+        &self,
+        segments: &StreamIndex,
+        range: &Range<u64>,
+    ) -> bool {
+        let Some(seg_ref) = segments.find_at_offset(range.start) else {
+            tracing::trace!(
+                range_start = range.start,
+                layout = segments.layout_variant(),
+                "range_ready: find_at_offset=None"
+            );
+            return false;
+        };
+
+        let Some(data) = seg_ref.data else {
+            tracing::trace!(
+                seg = seg_ref.segment_index,
+                variant = seg_ref.variant,
+                range_start = range.start,
+                "range_ready: reserved slot, no committed data yet"
+            );
+            return false;
+        };
+
+        let seg_end = seg_ref.byte_offset + data.total_len();
+        let range_end = range.end.min(seg_end);
+        let local_start = range.start.saturating_sub(seg_ref.byte_offset);
+        let local_end = range_end.saturating_sub(seg_ref.byte_offset);
+
+        self.init_range_ready(seg_ref.segment_index, data, local_start, local_end)
+            && self.media_range_ready(
+                seg_ref.segment_index,
+                seg_ref.variant,
+                data,
+                local_start,
+                local_end,
+            )
     }
 
     /// Read from a loaded segment.
@@ -185,19 +199,5 @@ impl HlsSource {
 
         let bytes_read = resource.read_at(media_offset, buf)?;
         Ok(Some(bytes_read))
-    }
-
-    /// Check committed `StreamIndex` for the segment covering `range_start`.
-    /// Returns `Some(segment_index)` if a request should be issued.
-    pub(super) fn committed_segment_for_offset(
-        &self,
-        range_start: u64,
-        variant: VariantIndex,
-    ) -> Option<SegmentIndex> {
-        self.segments
-            .lock_sync()
-            .find_at_offset(range_start)
-            .filter(|seg_ref| seg_ref.variant == variant && seg_ref.data.is_some())
-            .map(|seg_ref| seg_ref.segment_index)
     }
 }

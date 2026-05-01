@@ -40,30 +40,6 @@ pub struct FileSource {
 }
 
 impl FileSource {
-    /// Create a source for a local/cached file (no downloads needed).
-    pub(crate) fn local(
-        res: AssetResource,
-        coord: Arc<FileCoord>,
-        bus: EventBus,
-        backend: Arc<AssetStore>,
-        key: ResourceKey,
-    ) -> Self {
-        let inner = Arc::new(FileInner::new(
-            FileInnerParams {
-                backend,
-                bus,
-                key,
-                res,
-                cancel: CancellationToken::new(),
-                coord: Arc::clone(&coord),
-                headers: None,
-                url: Url::parse("file:///local").expect("valid url"),
-            },
-            FilePhase::Complete,
-        ));
-        Self { coord, inner }
-    }
-
     /// Try to populate the lazy fragmented-mp4 segment index from the
     /// fully cached file bytes. No-op when the file is still
     /// downloading or the index is already set.
@@ -87,6 +63,30 @@ impl FileSource {
         // can ignore the rejection.
         let _ = self.inner.segment_index.set(index);
         self.inner.segment_index.get()
+    }
+
+    /// Create a source for a local/cached file (no downloads needed).
+    pub(crate) fn local(
+        res: AssetResource,
+        coord: Arc<FileCoord>,
+        bus: EventBus,
+        backend: Arc<AssetStore>,
+        key: ResourceKey,
+    ) -> Self {
+        let inner = Arc::new(FileInner::new(
+            FileInnerParams {
+                backend,
+                bus,
+                key,
+                res,
+                cancel: CancellationToken::new(),
+                coord: Arc::clone(&coord),
+                headers: None,
+                url: Url::parse("file:///local").expect("valid url"),
+            },
+            FilePhase::Complete,
+        ));
+        Self { coord, inner }
     }
 
     /// Create a source for a remote file and spawn download tasks.
@@ -138,6 +138,13 @@ impl FileSource {
 }
 
 impl kithara_stream::Source for FileSource {
+    fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>> {
+        self.ensure_segment_index()?;
+        Some(Arc::new(FileSegmentLayout {
+            inner: Arc::clone(&self.inner),
+        }))
+    }
+
     fn demand_range(&self, range: Range<u64>) {
         if self.inner.res.contains_range(range.clone()) {
             return;
@@ -222,13 +229,6 @@ impl kithara_stream::Source for FileSource {
         self.coord.timeline()
     }
 
-    fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>> {
-        self.ensure_segment_index()?;
-        Some(Arc::new(FileSegmentLayout {
-            inner: Arc::clone(&self.inner),
-        }))
-    }
-
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn wait_range(
         &mut self,
@@ -289,19 +289,19 @@ impl kithara_stream::SegmentLayout for FileSegmentLayout {
         self.segment_index().map(FileSegmentIndex::init_range)
     }
 
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.segment_index()?.segment_at_time(t)
+    fn len(&self) -> Option<u64> {
+        self.inner.res.len()
     }
 
     fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
         self.segment_index()?.segment_after_byte(byte_offset)
     }
 
-    fn segment_count(&self) -> Option<u32> {
-        Some(self.segment_index()?.segment_count())
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.segment_index()?.segment_at_time(t)
     }
 
-    fn len(&self) -> Option<u64> {
-        self.inner.res.len()
+    fn segment_count(&self) -> Option<u32> {
+        Some(self.segment_index()?.segment_count())
     }
 }

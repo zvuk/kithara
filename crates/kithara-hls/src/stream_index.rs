@@ -73,15 +73,23 @@ impl VariantSegments {
         Self::default()
     }
 
-    /// Insert or replace a committed segment.
-    pub fn insert(&mut self, segment_index: SegmentIndex, data: SegmentData) {
-        self.segments.insert(
-            segment_index,
-            SegmentSlot {
-                available: true,
-                data,
-            },
-        );
+    /// Remove all segments.
+    pub fn clear(&mut self) {
+        self.segments.clear();
+    }
+
+    /// Whether a segment is committed.
+    #[must_use]
+    pub fn contains(&self, segment_index: SegmentIndex) -> bool {
+        self.segments
+            .get(&segment_index)
+            .is_some_and(|slot| slot.available)
+    }
+
+    /// First committed segment (lowest index).
+    #[must_use]
+    pub fn first(&self) -> Option<(SegmentIndex, &SegmentData)> {
+        self.iter().next()
     }
 
     /// Get segment data by index.
@@ -96,6 +104,17 @@ impl VariantSegments {
     #[must_use]
     fn get_stored(&self, segment_index: SegmentIndex) -> Option<&SegmentData> {
         self.segments.get(&segment_index).map(|slot| &slot.data)
+    }
+
+    /// Insert or replace a committed segment.
+    pub fn insert(&mut self, segment_index: SegmentIndex, data: SegmentData) {
+        self.segments.insert(
+            segment_index,
+            SegmentSlot {
+                data,
+                available: true,
+            },
+        );
     }
 
     /// Mark a segment unavailable while preserving its last known lengths.
@@ -116,42 +135,10 @@ impl VariantSegments {
             .is_some_and(|slot| slot.available)
     }
 
-    /// Whether a segment is committed.
+    /// Whether there are no committed segments.
     #[must_use]
-    pub fn contains(&self, segment_index: SegmentIndex) -> bool {
-        self.segments
-            .get(&segment_index)
-            .is_some_and(|slot| slot.available)
-    }
-
-    /// Remove all segments.
-    pub fn clear(&mut self) {
-        self.segments.clear();
-    }
-
-    /// First committed segment (lowest index).
-    #[must_use]
-    pub fn first(&self) -> Option<(SegmentIndex, &SegmentData)> {
-        self.iter().next()
-    }
-
-    /// Last committed segment (highest index).
-    #[must_use]
-    pub fn last(&self) -> Option<(SegmentIndex, &SegmentData)> {
-        self.iter().next_back()
-    }
-
-    /// Highest segment index ever stored in this variant, regardless of
-    /// current availability.
-    ///
-    /// Unlike [`last`], this includes segments whose `available` flag
-    /// was flipped off by LRU eviction — the metadata still lives in
-    /// the map. Callers use this to distinguish "peer fetched past
-    /// this segment and the data was later evicted" from "peer never
-    /// fetched this segment at all" (the stranded-layout case).
-    #[must_use]
-    pub fn max_stored_index(&self) -> Option<SegmentIndex> {
-        self.segments.last_key_value().map(|(&k, _)| k)
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
     }
 
     /// Iterate committed segments in order.
@@ -166,16 +153,29 @@ impl VariantSegments {
         self.segments.iter().map(|(&k, slot)| (k, slot))
     }
 
+    /// Last committed segment (highest index).
+    #[must_use]
+    pub fn last(&self) -> Option<(SegmentIndex, &SegmentData)> {
+        self.iter().next_back()
+    }
+
     /// Number of committed segments.
     #[must_use]
     pub fn len(&self) -> usize {
         self.iter().count()
     }
 
-    /// Whether there are no committed segments.
+    /// Highest segment index ever stored in this variant, regardless of
+    /// current availability.
+    ///
+    /// Unlike [`last`], this includes segments whose `available` flag
+    /// was flipped off by LRU eviction — the metadata still lives in
+    /// the map. Callers use this to distinguish "peer fetched past
+    /// this segment and the data was later evicted" from "peer never
+    /// fetched this segment at all" (the stranded-layout case).
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.segments.is_empty()
+    pub fn max_stored_index(&self) -> Option<SegmentIndex> {
+        self.segments.last_key_value().map(|(&k, _)| k)
     }
 }
 
@@ -235,11 +235,11 @@ impl StreamIndex {
     #[must_use]
     pub fn new(num_variants: usize, num_segments: usize) -> Self {
         Self {
+            num_segments,
             variants: (0..num_variants).map(|_| VariantSegments::new()).collect(),
             variant_byte_maps: (0..num_variants).map(|_| RangeMap::new()).collect(),
             layout_variant: 0,
             expected_sizes: vec![Vec::new(); num_variants],
-            num_segments,
         }
     }
 
@@ -355,9 +355,9 @@ impl StreamIndex {
             .and_then(|vs| vs.get_stored(seg_idx));
         Some(SegmentRef {
             variant,
+            data,
             segment_index: seg_idx,
             byte_offset: range.start,
-            data,
         })
     }
 

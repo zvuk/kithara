@@ -30,11 +30,11 @@ pub(crate) struct PlayerResource {
 }
 
 impl PlayerResource {
-    /// Number of stereo output channels.
-    const STEREO_CHANNELS: usize = 2;
-
     /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
     const BUFFER_DURATION_DIVISOR: usize = 5;
+
+    /// Number of stereo output channels.
+    const STEREO_CHANNELS: usize = 2;
 
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
@@ -66,10 +66,20 @@ impl PlayerResource {
         Self {
             resource,
             channel_buffers,
+            src,
             write_len: 0,
             write_pos: 0,
-            src,
         }
+    }
+
+    /// Total duration in seconds. Returns 0.0 if unknown.
+    pub(crate) fn duration(&self) -> f64 {
+        self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
+    }
+
+    /// Current playback position in seconds.
+    pub(crate) fn position(&self) -> f64 {
+        self.resource.position().as_secs_f64()
     }
 
     /// Read PCM frames into the output buffers for the given range.
@@ -193,22 +203,6 @@ impl PlayerResource {
         }
     }
 
-    /// Current playback position in seconds.
-    pub(crate) fn position(&self) -> f64 {
-        self.resource.position().as_secs_f64()
-    }
-
-    /// Total duration in seconds. Returns 0.0 if unknown.
-    pub(crate) fn duration(&self) -> f64 {
-        self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
-    }
-
-    /// Source identifier for this resource.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
-    pub(crate) fn src(&self) -> &Arc<str> {
-        &self.src
-    }
-
     /// Set the target sample rate of the audio host.
     pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         self.resource.set_host_sample_rate(sample_rate);
@@ -222,6 +216,12 @@ impl PlayerResource {
     /// Update the scheduling priority hint for the shared worker.
     pub(crate) fn set_service_class(&self, class: ServiceClass) {
         self.resource.set_service_class(class);
+    }
+
+    /// Source identifier for this resource.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
+    pub(crate) fn src(&self) -> &Arc<str> {
+        &self.src
     }
 }
 
@@ -272,6 +272,22 @@ mod tests {
     }
 
     impl PcmReader for PendingReader {
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(1))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+
         fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
             Ok(ReadOutcome::Pending {
                 reason: kithara_audio::PendingReason::Buffering,
@@ -298,22 +314,6 @@ mod tests {
 
         fn spec(&self) -> PcmSpec {
             self.spec
-        }
-
-        fn position(&self) -> Duration {
-            Duration::ZERO
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(1))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
         }
     }
 

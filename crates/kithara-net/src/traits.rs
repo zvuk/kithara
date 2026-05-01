@@ -50,19 +50,19 @@ impl ByteStream {
         Self { headers, inner }
     }
 
-    /// Create a `ByteStream` with empty headers (for tests or non-HTTP sources).
-    #[must_use]
-    pub fn without_headers(inner: RawByteStream) -> Self {
-        Self {
-            headers: Headers::new(),
-            inner,
-        }
-    }
-
     /// Consume the wrapper, returning just the raw byte stream.
     #[must_use]
     pub fn into_inner(self) -> RawByteStream {
         self.inner
+    }
+
+    /// Create a `ByteStream` with empty headers (for tests or non-HTTP sources).
+    #[must_use]
+    pub fn without_headers(inner: RawByteStream) -> Self {
+        Self {
+            inner,
+            headers: Headers::new(),
+        }
     }
 }
 
@@ -91,9 +91,6 @@ pub trait Net: MaybeSend + MaybeSync {
     /// Get all bytes from a URL
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError>;
 
-    /// Stream bytes from a URL
-    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError>;
-
     /// Get a range of bytes from a URL
     async fn get_range(
         &self,
@@ -107,14 +104,12 @@ pub trait Net: MaybeSend + MaybeSync {
     /// This is intended for lightweight metadata probes (e.g. `Content-Length`,
     /// `Accept-Ranges`, `Content-Type`). Implementations should return response headers.
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError>;
+
+    /// Stream bytes from a URL
+    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError>;
 }
 
 pub trait NetExt: Net + Sized {
-    /// Add timeout layer
-    fn with_timeout(self, timeout: Duration) -> TimeoutNet<Self> {
-        TimeoutNet::new(self, timeout)
-    }
-
     /// Add retry layer
     fn with_retry(
         self,
@@ -122,6 +117,11 @@ pub trait NetExt: Net + Sized {
         cancel: CancellationToken,
     ) -> RetryNet<Self, DefaultRetryPolicy> {
         RetryNet::new(self, DefaultRetryPolicy::new(policy), cancel)
+    }
+
+    /// Add timeout layer
+    fn with_timeout(self, timeout: Duration) -> TimeoutNet<Self> {
+        TimeoutNet::new(self, timeout)
     }
 }
 

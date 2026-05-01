@@ -27,16 +27,16 @@ impl DefaultRetryPolicy {
         Self { policy }
     }
 
+    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
+        self.policy.delay_for_attempt(attempt)
+    }
+
     pub fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
         if attempt >= self.policy.max_retries {
             return false;
         }
 
         error.is_retryable()
-    }
-
-    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        self.policy.delay_for_attempt(attempt)
     }
 }
 
@@ -99,11 +99,6 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
             .await
     }
 
-    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        self.retry_loop(|| self.inner.stream(url.clone(), headers.clone()))
-            .await
-    }
-
     async fn get_range(
         &self,
         url: Url,
@@ -121,26 +116,31 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
         self.retry_loop(|| self.inner.head(url.clone(), headers.clone()))
             .await
     }
+
+    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
+        self.retry_loop(|| self.inner.stream(url.clone(), headers.clone()))
+            .await
+    }
 }
 
 #[cfg_attr(test, unimock(api = RetryPolicyMock))]
 pub trait RetryPolicyTrait: Send + Sync {
-    fn should_retry(&self, error: &NetError, attempt: u32) -> bool;
     fn delay_for_attempt(&self, attempt: u32) -> Duration;
     fn max_attempts(&self) -> u32;
+    fn should_retry(&self, error: &NetError, attempt: u32) -> bool;
 }
 
 impl RetryPolicyTrait for DefaultRetryPolicy {
-    fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
-        self.should_retry(error, attempt)
-    }
-
     fn delay_for_attempt(&self, attempt: u32) -> Duration {
         self.delay_for_attempt(attempt)
     }
 
     fn max_attempts(&self) -> u32 {
         self.policy.max_retries
+    }
+
+    fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
+        self.should_retry(error, attempt)
     }
 }
 
@@ -168,9 +168,9 @@ mod tests {
 
     fn fast_retry_policy(max_retries: u32) -> RetryPolicy {
         RetryPolicy {
+            max_retries,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
-            max_retries,
         }
     }
 

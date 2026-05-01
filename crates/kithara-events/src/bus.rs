@@ -52,30 +52,15 @@ impl EventBus {
         senders.push(tx);
         Self {
             registry,
-            scope: BusScope::root(id),
             senders,
+            scope: BusScope::root(id),
         }
     }
 
-    /// Create a child scope sharing the same topic registry.
-    ///
-    /// Events published to the child are visible to all ancestors.
-    /// Subscribing to the child only receives events from its subtree.
+    /// This bus's unique id.
     #[must_use]
-    pub fn scoped(&self) -> Self {
-        let id = next_bus_id();
-        let (tx, _) = broadcast::channel(self.registry.capacity);
-        self.registry.topics.insert(id, tx.clone());
-        let scope = self.scope.child(id);
-        // Cache senders: self (new) + ancestors (from parent's cache).
-        let mut senders = SmallVec::with_capacity(self.senders.len() + 1);
-        senders.push(tx);
-        senders.extend(self.senders.iter().cloned());
-        Self {
-            registry: Arc::clone(&self.registry),
-            scope,
-            senders,
-        }
+    pub fn id(&self) -> u64 {
+        self.scope.id()
     }
 
     /// Publish an event to this scope and all ancestor scopes.
@@ -96,6 +81,33 @@ impl EventBus {
         let _ = self.senders[len - 1].send(event);
     }
 
+    /// This bus's scope.
+    #[must_use]
+    pub fn scope(&self) -> &BusScope {
+        &self.scope
+    }
+
+    /// Create a child scope sharing the same topic registry.
+    ///
+    /// Events published to the child are visible to all ancestors.
+    /// Subscribing to the child only receives events from its subtree.
+    #[must_use]
+    pub fn scoped(&self) -> Self {
+        let id = next_bus_id();
+        let (tx, _) = broadcast::channel(self.registry.capacity);
+        self.registry.topics.insert(id, tx.clone());
+        let scope = self.scope.child(id);
+        // Cache senders: self (new) + ancestors (from parent's cache).
+        let mut senders = SmallVec::with_capacity(self.senders.len() + 1);
+        senders.push(tx);
+        senders.extend(self.senders.iter().cloned());
+        Self {
+            scope,
+            senders,
+            registry: Arc::clone(&self.registry),
+        }
+    }
+
     /// Subscribe to events in this bus's scope.
     ///
     /// A root bus sees all events (its own + all descendants).
@@ -104,18 +116,6 @@ impl EventBus {
     #[must_use]
     pub fn subscribe(&self) -> crate::EventReceiver {
         crate::EventReceiver::new(self.senders[0].subscribe())
-    }
-
-    /// This bus's unique id.
-    #[must_use]
-    pub fn id(&self) -> u64 {
-        self.scope.id()
-    }
-
-    /// This bus's scope.
-    #[must_use]
-    pub fn scope(&self) -> &BusScope {
-        &self.scope
     }
 }
 

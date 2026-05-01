@@ -245,6 +245,7 @@ impl ResourceConfig {
         };
 
         Ok(Self {
+            src,
             #[cfg(feature = "hls")]
             initial_abr_mode: AbrMode::default(),
             bus: None,
@@ -267,7 +268,6 @@ impl ResourceConfig {
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             decoder_backend: DecoderBackend::default(),
             resampler_quality: ResamplerQuality::default(),
-            src,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
             #[cfg(any(feature = "file", feature = "hls"))]
@@ -276,44 +276,6 @@ impl ResourceConfig {
             flush_hub: None,
             worker: None,
         })
-    }
-
-    /// Set a shared downloader for the underlying stream.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_downloader(mut self, dl: Downloader) -> Self {
-        self.downloader = Some(dl);
-        self
-    }
-
-    /// Set a shared [`FlushHub`] for the underlying `AssetStore`.
-    /// When omitted, each store gets its own no-worker hub.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
-        self.flush_hub = Some(hub);
-        self
-    }
-
-    /// Set name for cache disambiguation.
-    #[must_use]
-    pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
-    /// Set format hint (file extension like "mp3", "wav").
-    #[must_use]
-    pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
-
-    /// Set shared audio worker for cooperative multi-track decoding.
-    #[must_use]
-    pub fn with_worker(mut self, worker: AudioWorkerHandle) -> Self {
-        self.worker = Some(worker);
-        self
     }
 
     /// Convert into an `AudioConfig<File>`.
@@ -469,6 +431,44 @@ impl ResourceConfig {
         }
 
         Ok(config)
+    }
+
+    /// Set a shared downloader for the underlying stream.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[must_use]
+    pub fn with_downloader(mut self, dl: Downloader) -> Self {
+        self.downloader = Some(dl);
+        self
+    }
+
+    /// Set a shared [`FlushHub`] for the underlying `AssetStore`.
+    /// When omitted, each store gets its own no-worker hub.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[must_use]
+    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
+        self.flush_hub = Some(hub);
+        self
+    }
+
+    /// Set format hint (file extension like "mp3", "wav").
+    #[must_use]
+    pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    /// Set name for cache disambiguation.
+    #[must_use]
+    pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Set shared audio worker for cooperative multi-track decoding.
+    #[must_use]
+    pub fn with_worker(mut self, worker: AudioWorkerHandle) -> Self {
+        self.worker = Some(worker);
+        self
     }
 }
 

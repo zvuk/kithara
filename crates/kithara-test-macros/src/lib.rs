@@ -37,6 +37,17 @@ struct TestArgs {
 }
 
 impl TestArgs {
+    fn check_exclusive(a: bool, a_name: &str, b: bool, b_name: &str) -> syn::Result<()> {
+        if a && b {
+            Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("`{a_name}` and `{b_name}` are mutually exclusive"),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     fn validate(&mut self) -> syn::Result<()> {
         Self::check_exclusive(self.is_tokio, "tokio", self.is_wasm_only, "wasm")?;
         Self::check_exclusive(self.is_wasm_only, "wasm", self.is_native_only, "native")?;
@@ -60,17 +71,6 @@ impl TestArgs {
         }
 
         Ok(())
-    }
-
-    fn check_exclusive(a: bool, a_name: &str, b: bool, b_name: &str) -> syn::Result<()> {
-        if a && b {
-            Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                format!("`{a_name}` and `{b_name}` are mutually exclusive"),
-            ))
-        } else {
-            Ok(())
-        }
     }
 }
 
@@ -222,9 +222,9 @@ fn extract_params(func: &ItemFn) -> Vec<ParamInfo> {
                 ParamKind::Fixture
             };
             Some(ParamInfo {
+                kind,
                 name: pi.ident.clone(),
                 ty: pt.ty.clone(),
-                kind,
                 mutability: pi.mutability,
             })
         })

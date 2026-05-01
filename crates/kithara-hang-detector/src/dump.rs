@@ -10,10 +10,10 @@ use serde::Serialize;
 /// fires. The default `label` returns `None`, letting the detector
 /// fall back to its own constructor label.
 pub trait HangDump {
-    fn to_json(&self) -> String;
     fn label(&self) -> Option<&str> {
         None
     }
+    fn to_json(&self) -> String;
 }
 
 impl<T: Serialize> HangDump for T {

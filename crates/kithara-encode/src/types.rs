@@ -4,10 +4,10 @@ const DEFAULT_LOSSY_BIT_RATE: u64 = 128_000;
 
 /// PCM source for encoder requests.
 pub trait PcmSource: Send + Sync {
-    fn sample_rate(&self) -> u32;
     fn channels(&self) -> u16;
-    fn total_byte_len(&self) -> Option<usize>;
     fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize;
+    fn sample_rate(&self) -> u32;
+    fn total_byte_len(&self) -> Option<usize>;
 }
 
 /// Target container/codec for byte-oriented encoding.
@@ -50,20 +50,20 @@ impl BytesEncodeTarget {
     }
 
     #[must_use]
+    pub const fn default_bit_rate(self) -> Option<u64> {
+        match self {
+            Self::Mp3 | Self::Aac | Self::M4a => Some(DEFAULT_LOSSY_BIT_RATE),
+            Self::Flac => None,
+        }
+    }
+
+    #[must_use]
     pub const fn extension(self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
             Self::Flac => "flac",
             Self::Aac => "aac",
             Self::M4a => "m4a",
-        }
-    }
-
-    #[must_use]
-    pub const fn default_bit_rate(self) -> Option<u64> {
-        match self {
-            Self::Mp3 | Self::Aac | Self::M4a => Some(DEFAULT_LOSSY_BIT_RATE),
-            Self::Flac => None,
         }
     }
 

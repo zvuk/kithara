@@ -100,9 +100,9 @@ impl HlsReaderHooks {
         }
         let resolved = self.resolve(cursor);
         self.bus.publish(HlsEvent::ReaderSeek {
+            seek_epoch,
             from_offset: self.initial_cursor,
             to_offset: cursor,
-            seek_epoch,
             variant: resolved.map(|(v, _, _)| v),
             segment_index: resolved.map(|(_, s, _)| s),
             byte_in_segment: resolved.map(|(_, _, b)| b),
@@ -198,9 +198,9 @@ impl DecoderHooks for HlsReaderHooks {
         let resolved = self.resolve(to);
         let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
         self.bus.publish(HlsEvent::ReaderSeek {
+            seek_epoch,
             from_offset: from,
             to_offset: to,
-            seek_epoch,
             variant: resolved.map(|(v, _, _)| v),
             segment_index: resolved.map(|(_, s, _)| s),
             byte_in_segment: resolved.map(|(_, _, b)| b),

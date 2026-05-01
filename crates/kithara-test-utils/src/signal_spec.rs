@@ -251,10 +251,10 @@ fn normalize_signal_spec(
 
     Ok(ResolvedSignalSpec {
         kind,
-        sample_rate: payload.sample_rate,
-        channels: payload.channels,
         length,
         sine_freq_hz,
+        sample_rate: payload.sample_rate,
+        channels: payload.channels,
     })
 }
 

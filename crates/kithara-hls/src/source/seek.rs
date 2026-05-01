@@ -6,6 +6,117 @@ use super::{core::HlsSource, types::SeekLayout};
 use crate::{HlsError, playlist::PlaylistAccess, stream_index::VariantSegments};
 
 impl HlsSource {
+    fn apply_layout_plan(
+        &mut self,
+        layout: &SeekLayout,
+        variant: usize,
+        segment_index: usize,
+        seek_epoch: u64,
+        anchor: &SourceSeekAnchor,
+    ) {
+        match *layout {
+            SeekLayout::Preserve => {
+                // Keep segments — byte layout valid, decoder seeks in place.
+                // layout_variant stays unchanged. ABR switch (if pending) is
+                // handled after seek via format_change detection.
+                trace!(
+                    seek_epoch,
+                    variant,
+                    segment_index,
+                    byte_offset = anchor.byte_offset,
+                    "seek plan: Preserve — keeping StreamIndex"
+                );
+            }
+            SeekLayout::Reset => {
+                // Switch layout variant — decoder will be recreated.
+                let mut segments = self.segments.lock_sync();
+                segments.set_layout_variant(variant);
+                // Sync expected sizes for the target variant so
+                // rebuild_variant_byte_map can reserve correct gap offsets.
+                if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
+                    segments.set_expected_sizes(variant, sizes);
+                }
+                drop(segments);
+                self.coord.timeline().set_download_position(0);
+                debug!(
+                    seek_epoch,
+                    variant,
+                    segment_index,
+                    byte_offset = anchor.byte_offset,
+                    "seek plan: Reset — switched layout variant"
+                );
+            }
+        }
+    }
+
+    /// Apply the seek plan: update positions, optionally clear segments.
+    pub(super) fn apply_seek_plan(&mut self, anchor: &SourceSeekAnchor, layout: &SeekLayout) {
+        let variant = anchor.variant_index.unwrap_or(0);
+        let segment_index = anchor.segment_index.unwrap_or(0) as usize;
+        let seek_epoch = self.coord.timeline().seek_epoch();
+        let previous_hint = self.current_segment_index().unwrap_or(0);
+
+        trace!(
+            target: "hls_seek_diag",
+            seek_epoch,
+            variant,
+            target_segment_index = segment_index,
+            target_byte_offset = anchor.byte_offset,
+            previous_hint,
+            layout = ?layout,
+            "apply_seek_plan: enter"
+        );
+
+        // Always: drain stale requests. The authoritative post-seek demand
+        // is issued later from `commit_seek_landing(...)` once the decoder
+        // tells us where it actually landed.
+        self.coord.clear_segment_requests();
+
+        self.apply_layout_plan(layout, variant, segment_index, seek_epoch, anchor);
+
+        // Do not commit reader position here. The authoritative post-seek
+        // byte position is whatever the decoder actually lands on after
+        // `decoder.seek(...)` drives the underlying `Read + Seek` stream.
+        self.coord.reader_advanced.notify_one();
+        self.coord.condvar.notify_all();
+
+        if previous_hint != segment_index {
+            self.bus.publish(kithara_events::HlsEvent::Seek {
+                seek_epoch,
+                variant,
+                stage: "seek_anchor_set_hint",
+                offset: anchor.byte_offset,
+                from_segment_index: previous_hint,
+                to_segment_index: segment_index,
+            });
+        }
+
+        trace!(
+            seek_epoch,
+            target_ms = ?anchor.segment_start,
+            variant,
+            segment_index,
+            byte_offset = anchor.byte_offset,
+            "seek_time_anchor: resolved seek anchor"
+        );
+    }
+
+    /// Classify a seek as Preserve or Reset.
+    ///
+    /// Preserve only when the anchor stays inside the current layout variant.
+    /// Cross-variant seek is always Reset — byte spaces are per-variant and
+    /// non-convertible, so a shared codec is not enough: Preserve would leave
+    /// the layout pinned at the old variant while `anchor.byte_offset` lives
+    /// in the new variant's space, stranding `wait_range` on a segment that
+    /// will never be fetched (post-ABR-switch seek hang).
+    pub(super) fn classify_seek(&self, anchor: &SourceSeekAnchor) -> SeekLayout {
+        let target_variant = anchor.variant_index.unwrap_or(0);
+        match self.current_layout_variant() {
+            Some(current) if current == target_variant => SeekLayout::Preserve,
+            _ => SeekLayout::Reset,
+        }
+    }
+
     pub(super) fn resolve_seek_anchor(
         &self,
         position: Duration,
@@ -106,116 +217,5 @@ impl HlsSource {
             .with_segment_end(segment_end)
             .with_segment_index(segment_index)
             .with_variant_index(variant))
-    }
-
-    /// Classify a seek as Preserve or Reset.
-    ///
-    /// Preserve only when the anchor stays inside the current layout variant.
-    /// Cross-variant seek is always Reset — byte spaces are per-variant and
-    /// non-convertible, so a shared codec is not enough: Preserve would leave
-    /// the layout pinned at the old variant while `anchor.byte_offset` lives
-    /// in the new variant's space, stranding `wait_range` on a segment that
-    /// will never be fetched (post-ABR-switch seek hang).
-    pub(super) fn classify_seek(&self, anchor: &SourceSeekAnchor) -> SeekLayout {
-        let target_variant = anchor.variant_index.unwrap_or(0);
-        match self.current_layout_variant() {
-            Some(current) if current == target_variant => SeekLayout::Preserve,
-            _ => SeekLayout::Reset,
-        }
-    }
-
-    /// Apply the seek plan: update positions, optionally clear segments.
-    pub(super) fn apply_seek_plan(&mut self, anchor: &SourceSeekAnchor, layout: &SeekLayout) {
-        let variant = anchor.variant_index.unwrap_or(0);
-        let segment_index = anchor.segment_index.unwrap_or(0) as usize;
-        let seek_epoch = self.coord.timeline().seek_epoch();
-        let previous_hint = self.current_segment_index().unwrap_or(0);
-
-        trace!(
-            target: "hls_seek_diag",
-            seek_epoch,
-            variant,
-            target_segment_index = segment_index,
-            target_byte_offset = anchor.byte_offset,
-            previous_hint,
-            layout = ?layout,
-            "apply_seek_plan: enter"
-        );
-
-        // Always: drain stale requests. The authoritative post-seek demand
-        // is issued later from `commit_seek_landing(...)` once the decoder
-        // tells us where it actually landed.
-        self.coord.clear_segment_requests();
-
-        self.apply_layout_plan(layout, variant, segment_index, seek_epoch, anchor);
-
-        // Do not commit reader position here. The authoritative post-seek
-        // byte position is whatever the decoder actually lands on after
-        // `decoder.seek(...)` drives the underlying `Read + Seek` stream.
-        self.coord.reader_advanced.notify_one();
-        self.coord.condvar.notify_all();
-
-        if previous_hint != segment_index {
-            self.bus.publish(kithara_events::HlsEvent::Seek {
-                stage: "seek_anchor_set_hint",
-                seek_epoch,
-                variant,
-                offset: anchor.byte_offset,
-                from_segment_index: previous_hint,
-                to_segment_index: segment_index,
-            });
-        }
-
-        trace!(
-            seek_epoch,
-            target_ms = ?anchor.segment_start,
-            variant,
-            segment_index,
-            byte_offset = anchor.byte_offset,
-            "seek_time_anchor: resolved seek anchor"
-        );
-    }
-
-    fn apply_layout_plan(
-        &mut self,
-        layout: &SeekLayout,
-        variant: usize,
-        segment_index: usize,
-        seek_epoch: u64,
-        anchor: &SourceSeekAnchor,
-    ) {
-        match *layout {
-            SeekLayout::Preserve => {
-                // Keep segments — byte layout valid, decoder seeks in place.
-                // layout_variant stays unchanged. ABR switch (if pending) is
-                // handled after seek via format_change detection.
-                trace!(
-                    seek_epoch,
-                    variant,
-                    segment_index,
-                    byte_offset = anchor.byte_offset,
-                    "seek plan: Preserve — keeping StreamIndex"
-                );
-            }
-            SeekLayout::Reset => {
-                // Switch layout variant — decoder will be recreated.
-                let mut segments = self.segments.lock_sync();
-                segments.set_layout_variant(variant);
-                // Sync expected sizes for the target variant so
-                // rebuild_variant_byte_map can reserve correct gap offsets.
-                if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
-                    segments.set_expected_sizes(variant, sizes);
-                }
-                drop(segments);
-                self.coord.timeline().set_download_position(0);
-                debug!(
-                    seek_epoch,
-                    variant,
-                    segment_index,
-                    byte_offset = anchor.byte_offset,
-                    "seek plan: Reset — switched layout variant"
-                );
-            }
-        }
     }
 }

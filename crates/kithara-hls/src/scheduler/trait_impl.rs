@@ -56,25 +56,26 @@ impl HlsScheduler {
         }
 
         self.coord.clear_pending_segment_request(SegmentRequest {
-            segment_index: seg_idx,
             variant,
             seek_epoch,
+            segment_index: seg_idx,
         });
 
         self.commit_segment(variant, seg_idx, media, init_len, init_url, duration);
     }
 
-    /// Returns true if the fetch is stale and was dropped.
-    fn reject_stale_fetch(
+    fn drop_pending(
         &mut self,
         variant: VariantIndex,
         seg_idx: usize,
         seek_epoch: kithara_events::SeekEpoch,
-    ) -> bool {
-        if self.reject_if_stale_epoch(variant, seg_idx, seek_epoch) {
-            return true;
-        }
-        self.reject_if_stale_geometry(variant, seg_idx, seek_epoch)
+    ) {
+        self.coord.clear_pending_segment_request(SegmentRequest {
+            variant,
+            seek_epoch,
+            segment_index: seg_idx,
+        });
+        self.coord.condvar.notify_all();
     }
 
     fn reject_if_stale_epoch(
@@ -135,17 +136,16 @@ impl HlsScheduler {
         false
     }
 
-    fn drop_pending(
+    /// Returns true if the fetch is stale and was dropped.
+    fn reject_stale_fetch(
         &mut self,
         variant: VariantIndex,
         seg_idx: usize,
         seek_epoch: kithara_events::SeekEpoch,
-    ) {
-        self.coord.clear_pending_segment_request(SegmentRequest {
-            segment_index: seg_idx,
-            variant,
-            seek_epoch,
-        });
-        self.coord.condvar.notify_all();
+    ) -> bool {
+        if self.reject_if_stale_epoch(variant, seg_idx, seek_epoch) {
+            return true;
+        }
+        self.reject_if_stale_geometry(variant, seg_idx, seek_epoch)
     }
 }

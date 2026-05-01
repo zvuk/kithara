@@ -175,12 +175,12 @@ impl MemAssetStore {
         deleter: Arc<dyn AssetDeleter>,
     ) -> Self {
         Self {
-            asset_root: asset_root.into(),
             cancel,
             mem_resource_capacity,
             availability,
             active_resources,
             deleter,
+            asset_root: asset_root.into(),
         }
     }
 }

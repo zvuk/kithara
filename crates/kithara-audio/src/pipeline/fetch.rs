@@ -47,8 +47,8 @@ impl<C> Fetch<C> {
     pub fn data(data: C, epoch: u64) -> Self {
         Self {
             data,
-            kind: FetchKind::Data,
             epoch,
+            kind: FetchKind::Data,
         }
     }
 
@@ -61,8 +61,8 @@ impl<C> Fetch<C> {
     pub fn failure(data: C, epoch: u64) -> Self {
         Self {
             data,
-            kind: FetchKind::Failure,
             epoch,
+            kind: FetchKind::Failure,
         }
     }
 
@@ -92,8 +92,8 @@ impl<C> Fetch<C> {
     pub fn natural_eof(data: C, epoch: u64) -> Self {
         Self {
             data,
-            kind: FetchKind::NaturalEof,
             epoch,
+            kind: FetchKind::NaturalEof,
         }
     }
 }

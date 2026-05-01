@@ -34,11 +34,11 @@ impl TestPcmReader {
         let total_frames = (f64::from(spec.sample_rate) * duration_secs) as u64;
         Self {
             spec,
+            total_frames,
             metadata: TrackMetadata {
                 title: Some("Mock".to_owned()),
                 ..TrackMetadata::default()
             },
-            total_frames,
             position_frames: 0,
             bus: EventBus::default(),
         }
@@ -95,8 +95,8 @@ impl PcmReader for TestPcmReader {
         let position = self.frames_to_duration(self.position_frames);
         if channels == 0 || buf.is_empty() {
             return Ok(ReadOutcome::Pending {
-                reason: PendingReason::Buffering,
                 position,
+                reason: PendingReason::Buffering,
             });
         }
         let remaining_samples = (self.total_frames - self.position_frames) * channels;
@@ -129,15 +129,15 @@ impl PcmReader for TestPcmReader {
         let position = self.frames_to_duration(self.position_frames);
         if output.is_empty() {
             return Ok(ReadOutcome::Pending {
-                reason: PendingReason::Buffering,
                 position,
+                reason: PendingReason::Buffering,
             });
         }
         let channels = usize::from(self.spec.channels);
         if channels == 0 || output.len() < channels {
             return Ok(ReadOutcome::Pending {
-                reason: PendingReason::Buffering,
                 position,
+                reason: PendingReason::Buffering,
             });
         }
         let frames_per_channel = output[0].len();

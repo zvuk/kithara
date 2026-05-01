@@ -147,13 +147,50 @@ impl PlayerImpl {
         }
     }
 
-    /// Shared audio worker handle for this player's engine.
+    /// Get action to perform when the current item ends.
+    pub fn action_at_item_end(&self) -> ActionAtItemEnd {
+        *self.action_at_item_end.lock_sync()
+    }
+
+    /// Advance to the next item in the queue.
     ///
-    /// Clone and pass to [`ResourceConfig::with_worker`] so resources
-    /// loaded into this player share a single decode thread.
+    /// Does nothing if the current item is already the last one.
+    pub fn advance_to_next_item(&self) {
+        let items = self.items.lock_sync();
+        let current = self.current_index.load(Ordering::Relaxed);
+        if current + 1 < items.len() {
+            self.current_index.store(current + 1, Ordering::Relaxed);
+            drop(items);
+            self.bus.publish(PlayerEvent::CurrentItemChanged);
+            debug!(new_index = current + 1, "advanced to next item");
+        }
+    }
+
+    /// Apply effective volume to the current slot (per-instance).
+    fn apply_effective_volume(&self, volume: f32) {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
+            debug!(volume, "apply_effective_volume: no slot allocated yet");
+            return;
+        };
+        self.set_slot_volume_logged(slot_id, volume);
+    }
+
+    /// Root event bus for this player.
+    ///
+    /// Use `bus().scoped()` to create a child scope for a resource.
     #[must_use]
-    pub fn worker(&self) -> &AudioWorkerHandle {
-        self.engine.worker()
+    pub fn bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    /// Get player configuration.
+    pub fn config(&self) -> &PlayerConfig {
+        &self.config
+    }
+
+    /// Get crossfade duration in seconds.
+    pub fn crossfade_duration(&self) -> f32 {
+        self.crossfade_duration.load(Ordering::Relaxed)
     }
 
     /// ABR handle of the currently loaded item.
@@ -165,15 +202,225 @@ impl PlayerImpl {
         self.active_abr.lock_sync().clone()
     }
 
-    /// Runtime handle captured by this player's engine.
-    ///
-    /// Use when building a shared
-    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
-    /// land on the same runtime the audio engine observes, then pass the
-    /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
+    /// Current item index in the queue.
+    pub fn current_index(&self) -> usize {
+        self.current_index.load(Ordering::Relaxed)
+    }
+
+    /// Default playback rate used by `play()` and `select_item()`.
+    pub fn default_rate(&self) -> f32 {
+        self.default_rate.load(Ordering::Relaxed)
+    }
+
+    /// Drain audio-thread notifications for the active slot.
+    pub fn drain_notifications(&self) -> Vec<String> {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
+            return Vec::new();
+        };
+        let Some(state) = self.engine.slot_shared_state(slot_id) else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::new();
+        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
+            out.push(format!("{notification:?}"));
+        }
+        out
+    }
+
+    /// Current media duration in seconds.
+    pub fn duration_seconds(&self) -> Option<f64> {
+        let slot_id = (*self.current_slot.lock_sync())?;
+        let state = self.engine.slot_shared_state(slot_id)?;
+        Some(state.duration.load(Ordering::Relaxed))
+    }
+
+    /// Get a reference to the underlying engine.
+    pub fn engine(&self) -> &EngineImpl {
+        &self.engine
+    }
+
+    /// Ensure the audio engine is started.
+    fn ensure_engine_started(&self) -> Result<(), PlayError> {
+        if !self.engine.is_running() {
+            self.engine.start()?;
+        }
+        Ok(())
+    }
+
+    /// Ensure we have an active slot, allocating one if needed.
+    fn ensure_slot(&self) -> Result<SlotId, PlayError> {
+        let mut slot = self.current_slot.lock_sync();
+        if let Some(id) = *slot {
+            return Ok(id);
+        }
+        let id = self.engine.allocate_slot()?;
+        *slot = Some(id);
+        drop(slot);
+        let effective = if self.is_muted() { 0.0 } else { self.volume() };
+        self.engine.set_slot_volume(id, effective)?;
+        Ok(id)
+    }
+
+    /// Number of EQ bands available for this player.
+    pub fn eq_band_count(&self) -> usize {
+        self.config.eq_layout.len()
+    }
+
+    /// Get EQ gain for a band in dB.
+    pub fn eq_gain(&self, band: usize) -> Option<f32> {
+        let slot_id = (*self.current_slot.lock_sync())?;
+        self.engine.slot_eq(slot_id).and_then(|eq| eq.gain(band))
+    }
+
+    /// Move `current_index` past the end of the queue, marking that
+    /// playback has consumed the last entry and there is no current item.
+    /// Used by `Queue::advance_to_next` when navigation runs out of
+    /// playable slots so `current()` reports `None` instead of pinning
+    /// the just-finished track forever.
+    pub fn finish_queue(&self) {
+        let len = self.items.lock_sync().len();
+        self.current_index.store(len, Ordering::Relaxed);
+        self.bus.publish(PlayerEvent::CurrentItemChanged);
+        debug!(new_index = len, "queue finished");
+    }
+
+    /// Default initial ABR mode used when preparing new HLS resources.
     #[must_use]
-    pub fn runtime(&self) -> Option<&RuntimeHandle> {
-        self.engine.runtime()
+    pub fn initial_abr_mode(&self) -> AbrMode {
+        self.config.initial_abr_mode
+    }
+
+    /// Insert a resource at a specific position, or append to the end.
+    pub fn insert(&self, resource: Resource, at_position: Option<usize>) {
+        let mut items = self.items.lock_sync();
+        let pos = at_position.map_or(items.len(), |i| i.min(items.len()));
+        items.insert(pos, Some(resource));
+        debug!(count = items.len(), pos, "item inserted");
+    }
+
+    /// Returns `true` if the player is muted.
+    pub fn is_muted(&self) -> bool {
+        self.muted.load(Ordering::Relaxed)
+    }
+
+    /// Returns `true` if the player is in playing state.
+    pub fn is_playing(&self) -> bool {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
+            return false;
+        };
+        let Some(state) = self.engine.slot_shared_state(slot_id) else {
+            return false;
+        };
+        state.playing.load(Ordering::Relaxed)
+    }
+
+    /// Get the number of items in the queue (including consumed items).
+    pub fn item_count(&self) -> usize {
+        self.items.lock_sync().len()
+    }
+
+    /// Load the current item into the slot, push initial commands, and
+    /// publish status + rate events.
+    fn kick_off_playback(&self, rate: f32) {
+        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
+        self.load_current_item();
+        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
+        let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+
+        self.set_status(PlayerStatus::ReadyToPlay);
+        self.bus.publish(PlayerEvent::CurrentItemChanged);
+        self.bus.publish(PlayerEvent::RateChanged { rate });
+    }
+
+    /// Load the current queue item into the active slot.
+    ///
+    /// Takes the resource out of the queue (replacing with `None`), wraps it
+    /// in [`PlayerResource`], and sends `LoadTrack` + `FadeIn` to the processor.
+    fn load_current_item(&self) {
+        let mut items = self.items.lock_sync();
+        let index = self.current_index.load(Ordering::Relaxed);
+        if index >= items.len() {
+            return;
+        }
+
+        // Take the resource out of the queue (if not already consumed).
+        let Some(resource) = items[index].take() else {
+            return; // Already loaded
+        };
+
+        // Snapshot the resource's ABR handle — `None` for non-adaptive
+        // sources. Runtime `set_abr_mode` / `set_preferred_peak_bitrate`
+        // route through this handle until the current item changes.
+        *self.active_abr.lock_sync() = resource.abr_handle();
+
+        // Propagate current playback rate to the resource's audio pipeline.
+        let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
+        resource.set_playback_rate(current_rate);
+
+        // Propagate host sample rate so the resampler is already initialised
+        // with the correct ratio.  Without this, the resampler starts in
+        // passthrough (host_sr = 0) and is recreated on the first worker
+        // step when the real host rate becomes visible — the expensive
+        // `make_sincs` call blocks the worker thread and starves other
+        // tracks during crossfade.
+        let host_sr = self.engine.master_sample_rate();
+        if let Some(sr) = std::num::NonZeroU32::new(host_sr) {
+            resource.set_host_sample_rate(sr);
+        }
+
+        let src = Arc::clone(resource.src());
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);
+        let arc_resource = Arc::new(Mutex::new(player_resource));
+        drop(items);
+
+        // Send LoadTrack and FadeIn to the processor.
+        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
+            resource: arc_resource,
+            src: Arc::clone(&src),
+        });
+        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(src)));
+    }
+
+    /// Pause playback (sets rate to 0.0).
+    pub fn pause(&self) {
+        self.rate.store(0.0, Ordering::Relaxed);
+        let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+        self.bus.publish(PlayerEvent::RateChanged { rate: 0.0 });
+        debug!("pause");
+    }
+
+    /// Start playback at the configured default rate.
+    pub fn play(&self) {
+        let rate = self.default_rate().max(MIN_PLAYBACK_RATE);
+        self.rate.store(rate, Ordering::Relaxed);
+        self.playback_rate_shared.store(rate, Ordering::Relaxed);
+
+        if !self.prepare_playback_slot() {
+            return;
+        }
+
+        self.kick_off_playback(rate);
+        debug!(rate, "play");
+    }
+
+    /// Insert a resource at the end and immediately crossfade to it.
+    pub fn play_resource(&self, resource: Resource) -> Result<(), PlayError> {
+        self.insert(resource, None);
+        let index = self.item_count().saturating_sub(1);
+        self.select_item(index, true)
+    }
+
+    /// Get shared playback rate atomic for the audio pipeline.
+    pub fn playback_rate_shared(&self) -> &Arc<AtomicF32> {
+        &self.playback_rate_shared
+    }
+
+    /// Current playback position in seconds.
+    pub fn position_seconds(&self) -> Option<f64> {
+        let slot_id = (*self.current_slot.lock_sync())?;
+        let state = self.engine.slot_shared_state(slot_id)?;
+        Some(state.position.load(Ordering::Relaxed))
     }
 
     /// Apply shared worker, host sample rate, ABR, and bus to a resource
@@ -205,36 +452,64 @@ impl PlayerImpl {
         }
     }
 
-    /// Get the number of items in the queue (including consumed items).
-    pub fn item_count(&self) -> usize {
-        self.items.lock_sync().len()
+    /// Ensure engine is started and a slot is allocated. Logs failures and
+    /// returns `false` if either step fails (caller should bail out).
+    fn prepare_playback_slot(&self) -> bool {
+        if let Err(e) = self.ensure_engine_started() {
+            warn!(?e, "failed to start engine");
+            return false;
+        }
+        if let Err(e) = self.ensure_slot() {
+            warn!(?e, "failed to allocate slot");
+            return false;
+        }
+        true
     }
 
-    /// Replace a consumed (or existing) resource at the given index.
-    ///
-    /// Use this to re-load a track that was previously played and consumed
-    /// by [`load_current_item`]. Does nothing if `index` is out of bounds.
-    pub fn replace_item(&self, index: usize, resource: Resource) {
-        let mut items = self.items.lock_sync();
-        if index < items.len() {
-            items[index] = Some(resource);
-            drop(items);
-            debug!(index, "item replaced");
+    /// Diagnostic: number of times the audio processor's `process()` has been called.
+    pub fn process_count(&self) -> u64 {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
+            return 0;
+        };
+        let Some(state) = self.engine.slot_shared_state(slot_id) else {
+            return 0;
+        };
+        state.process_count.load(Ordering::Relaxed)
+    }
+
+    /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
+    /// when a track finishes via EOF.
+    pub fn process_notifications(&self) {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
+            return;
+        };
+        let Some(state) = self.engine.slot_shared_state(slot_id) else {
+            return;
+        };
+
+        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
+            match notification {
+                PlayerNotification::TrackPlaybackStopped(_) => {
+                    self.bus.publish(PlayerEvent::ItemDidPlayToEnd);
+                }
+                other => {
+                    tracing::trace!(?other, "unhandled player notification");
+                }
+            }
         }
     }
 
-    /// Pre-allocate empty slots so `replace_item` can fill them by index.
-    pub fn reserve_slots(&self, count: usize) {
-        self.items.lock_sync().resize_with(count, || None);
-        debug!(count, "slots reserved");
+    /// Current playback rate (0.0 = paused).
+    pub fn rate(&self) -> f32 {
+        self.rate.load(Ordering::Relaxed)
     }
 
-    /// Insert a resource at a specific position, or append to the end.
-    pub fn insert(&self, resource: Resource, at_position: Option<usize>) {
-        let mut items = self.items.lock_sync();
-        let pos = at_position.map_or(items.len(), |i| i.min(items.len()));
-        items.insert(pos, Some(resource));
-        debug!(count = items.len(), pos, "item inserted");
+    /// Remove all items from the queue.
+    pub fn remove_all_items(&self) {
+        self.items.lock_sync().clear();
+        self.current_index.store(0, Ordering::Relaxed);
+        self.set_status(PlayerStatus::Unknown);
+        debug!("all items removed");
     }
 
     /// Remove item at index. Returns the removed resource, or `None` if out of bounds
@@ -257,221 +532,49 @@ impl PlayerImpl {
         removed
     }
 
-    /// Remove all items from the queue.
-    pub fn remove_all_items(&self) {
-        self.items.lock_sync().clear();
-        self.current_index.store(0, Ordering::Relaxed);
-        self.set_status(PlayerStatus::Unknown);
-        debug!("all items removed");
-    }
-
-    /// Start playback at the configured default rate.
-    pub fn play(&self) {
-        let rate = self.default_rate().max(MIN_PLAYBACK_RATE);
-        self.rate.store(rate, Ordering::Relaxed);
-        self.playback_rate_shared.store(rate, Ordering::Relaxed);
-
-        if !self.prepare_playback_slot() {
-            return;
-        }
-
-        self.kick_off_playback(rate);
-        debug!(rate, "play");
-    }
-
-    /// Ensure engine is started and a slot is allocated. Logs failures and
-    /// returns `false` if either step fails (caller should bail out).
-    fn prepare_playback_slot(&self) -> bool {
-        if let Err(e) = self.ensure_engine_started() {
-            warn!(?e, "failed to start engine");
-            return false;
-        }
-        if let Err(e) = self.ensure_slot() {
-            warn!(?e, "failed to allocate slot");
-            return false;
-        }
-        true
-    }
-
-    /// Load the current item into the slot, push initial commands, and
-    /// publish status + rate events.
-    fn kick_off_playback(&self, rate: f32) {
-        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
-        self.load_current_item();
-        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
-
-        self.set_status(PlayerStatus::ReadyToPlay);
-        self.bus.publish(PlayerEvent::CurrentItemChanged);
-        self.bus.publish(PlayerEvent::RateChanged { rate });
-    }
-
-    /// Pause playback (sets rate to 0.0).
-    pub fn pause(&self) {
-        self.rate.store(0.0, Ordering::Relaxed);
-        let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
-        self.bus.publish(PlayerEvent::RateChanged { rate: 0.0 });
-        debug!("pause");
-    }
-
-    /// Current playback rate (0.0 = paused).
-    pub fn rate(&self) -> f32 {
-        self.rate.load(Ordering::Relaxed)
-    }
-
-    /// Set playback rate.
+    /// Replace a consumed (or existing) resource at the given index.
     ///
-    /// Updates the local rate and propagates to the audio pipeline resampler
-    /// via `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
-    pub fn set_rate(&self, rate: f32) {
-        let clamped = rate.max(MIN_PLAYBACK_RATE);
-        self.rate.store(clamped, Ordering::Relaxed);
-        self.playback_rate_shared.store(clamped, Ordering::Relaxed);
-        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));
-        self.bus.publish(PlayerEvent::RateChanged { rate: clamped });
-    }
-
-    /// Get shared playback rate atomic for the audio pipeline.
-    pub fn playback_rate_shared(&self) -> &Arc<AtomicF32> {
-        &self.playback_rate_shared
-    }
-
-    /// Default playback rate used by `play()` and `select_item()`.
-    pub fn default_rate(&self) -> f32 {
-        self.default_rate.load(Ordering::Relaxed)
-    }
-
-    /// Set the default playback rate used by `play()` and `select_item()`.
-    pub fn set_default_rate(&self, rate: f32) {
-        self.default_rate.store(rate, Ordering::Relaxed);
-    }
-
-    /// Get current volume (0.0..=1.0).
-    pub fn volume(&self) -> f32 {
-        self.volume.load(Ordering::Relaxed)
-    }
-
-    /// Set volume, clamped to `0.0..=1.0`.
-    ///
-    /// Applies to this player's slot only (per-instance volume).
-    pub fn set_volume(&self, volume: f32) {
-        let clamped = volume.clamp(0.0, 1.0);
-        self.volume.store(clamped, Ordering::Relaxed);
-        if !self.is_muted() {
-            self.apply_effective_volume(clamped);
-        }
-        self.bus
-            .publish(PlayerEvent::VolumeChanged { volume: clamped });
-    }
-
-    /// Get process-wide session ducking mode.
-    pub fn session_ducking(&self) -> SessionDuckingMode {
-        EngineImpl::session_ducking()
-    }
-
-    /// Set process-wide session ducking mode.
-    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        EngineImpl::set_session_ducking(mode)
-    }
-
-    /// Returns `true` if the player is muted.
-    pub fn is_muted(&self) -> bool {
-        self.muted.load(Ordering::Relaxed)
-    }
-
-    /// Set muted state.
-    ///
-    /// Applies to this player's slot only (per-instance mute).
-    pub fn set_muted(&self, muted: bool) {
-        self.muted.store(muted, Ordering::Relaxed);
-        let effective = if muted { 0.0 } else { self.volume() };
-        self.apply_effective_volume(effective);
-        self.bus.publish(PlayerEvent::MuteChanged { muted });
-    }
-
-    /// Current item index in the queue.
-    pub fn current_index(&self) -> usize {
-        self.current_index.load(Ordering::Relaxed)
-    }
-
-    /// Advance to the next item in the queue.
-    ///
-    /// Does nothing if the current item is already the last one.
-    pub fn advance_to_next_item(&self) {
-        let items = self.items.lock_sync();
-        let current = self.current_index.load(Ordering::Relaxed);
-        if current + 1 < items.len() {
-            self.current_index.store(current + 1, Ordering::Relaxed);
+    /// Use this to re-load a track that was previously played and consumed
+    /// by [`load_current_item`]. Does nothing if `index` is out of bounds.
+    pub fn replace_item(&self, index: usize, resource: Resource) {
+        let mut items = self.items.lock_sync();
+        if index < items.len() {
+            items[index] = Some(resource);
             drop(items);
-            self.bus.publish(PlayerEvent::CurrentItemChanged);
-            debug!(new_index = current + 1, "advanced to next item");
+            debug!(index, "item replaced");
         }
     }
 
-    /// Move `current_index` past the end of the queue, marking that
-    /// playback has consumed the last entry and there is no current item.
-    /// Used by `Queue::advance_to_next` when navigation runs out of
-    /// playable slots so `current()` reports `None` instead of pinning
-    /// the just-finished track forever.
-    pub fn finish_queue(&self) {
-        let len = self.items.lock_sync().len();
-        self.current_index.store(len, Ordering::Relaxed);
-        self.bus.publish(PlayerEvent::CurrentItemChanged);
-        debug!(new_index = len, "queue finished");
+    /// Pre-allocate empty slots so `replace_item` can fill them by index.
+    pub fn reserve_slots(&self, count: usize) {
+        self.items.lock_sync().resize_with(count, || None);
+        debug!(count, "slots reserved");
     }
 
-    /// Get current player status.
-    pub fn status(&self) -> PlayerStatus {
-        *self.status.lock_sync()
+    /// Reset EQ gains to 0 dB for all bands.
+    pub fn reset_eq(&self) -> Result<(), PlayError> {
+        let slot_id = (*self.current_slot.lock_sync())
+            .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
+        let eq = self
+            .engine
+            .slot_eq(slot_id)
+            .ok_or_else(|| PlayError::Internal("eq state not found".into()))?;
+        eq.reset();
+        for band in 0..eq.len() {
+            self.engine.set_master_eq_gain(band, 0.0)?;
+        }
+        Ok(())
     }
 
-    /// Set action to perform when the current item ends.
-    pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
-        *self.action_at_item_end.lock_sync() = action;
-    }
-
-    /// Get action to perform when the current item ends.
-    pub fn action_at_item_end(&self) -> ActionAtItemEnd {
-        *self.action_at_item_end.lock_sync()
-    }
-
-    /// Set crossfade duration in seconds.
-    pub fn set_crossfade_duration(&self, seconds: f32) {
-        let clamped = seconds.max(0.0);
-        self.crossfade_duration.store(clamped, Ordering::Relaxed);
-        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(clamped));
-    }
-
-    /// Get crossfade duration in seconds.
-    pub fn crossfade_duration(&self) -> f32 {
-        self.crossfade_duration.load(Ordering::Relaxed)
-    }
-
-    /// Subscribe to player events.
+    /// Runtime handle captured by this player's engine.
     ///
-    /// Returns an [`EventReceiver`](kithara_events::EventReceiver) that delivers
-    /// all events published to this player's root bus (player events, engine
-    /// events, and resource events from all items).
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
-        self.bus.subscribe()
-    }
-
-    /// Root event bus for this player.
-    ///
-    /// Use `bus().scoped()` to create a child scope for a resource.
+    /// Use when building a shared
+    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
+    /// land on the same runtime the audio engine observes, then pass the
+    /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
     #[must_use]
-    pub fn bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    /// Get player configuration.
-    pub fn config(&self) -> &PlayerConfig {
-        &self.config
-    }
-
-    /// Get a reference to the underlying engine.
-    pub fn engine(&self) -> &EngineImpl {
-        &self.engine
+    pub fn runtime(&self) -> Option<&RuntimeHandle> {
+        self.engine.runtime()
     }
 
     /// Seek active tracks to position in seconds.
@@ -499,8 +602,8 @@ impl PlayerImpl {
         let target = std::time::Duration::from_secs_f64(target_secs);
 
         self.send_to_slot(PlayerCmd::Seek {
-            seconds: target_secs,
             seek_epoch,
+            seconds: target_secs,
         })?;
 
         Ok(match self.duration_seconds() {
@@ -513,136 +616,6 @@ impl PlayerImpl {
                 landed_at: target,
             },
         })
-    }
-
-    /// Current playback position in seconds.
-    pub fn position_seconds(&self) -> Option<f64> {
-        let slot_id = (*self.current_slot.lock_sync())?;
-        let state = self.engine.slot_shared_state(slot_id)?;
-        Some(state.position.load(Ordering::Relaxed))
-    }
-
-    /// Current media duration in seconds.
-    pub fn duration_seconds(&self) -> Option<f64> {
-        let slot_id = (*self.current_slot.lock_sync())?;
-        let state = self.engine.slot_shared_state(slot_id)?;
-        Some(state.duration.load(Ordering::Relaxed))
-    }
-
-    /// Diagnostic: number of times the audio processor's `process()` has been called.
-    pub fn process_count(&self) -> u64 {
-        let Some(slot_id) = *self.current_slot.lock_sync() else {
-            return 0;
-        };
-        let Some(state) = self.engine.slot_shared_state(slot_id) else {
-            return 0;
-        };
-        state.process_count.load(Ordering::Relaxed)
-    }
-
-    /// Returns `true` if the player is in playing state.
-    pub fn is_playing(&self) -> bool {
-        let Some(slot_id) = *self.current_slot.lock_sync() else {
-            return false;
-        };
-        let Some(state) = self.engine.slot_shared_state(slot_id) else {
-            return false;
-        };
-        state.playing.load(Ordering::Relaxed)
-    }
-
-    /// Pump audio backend/runtime state.
-    pub fn tick(&self) -> Result<(), PlayError> {
-        self.engine.tick()
-    }
-
-    /// Drain audio-thread notifications for the active slot.
-    pub fn drain_notifications(&self) -> Vec<String> {
-        let Some(slot_id) = *self.current_slot.lock_sync() else {
-            return Vec::new();
-        };
-        let Some(state) = self.engine.slot_shared_state(slot_id) else {
-            return Vec::new();
-        };
-
-        let mut out = Vec::new();
-        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
-            out.push(format!("{notification:?}"));
-        }
-        out
-    }
-
-    /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
-    /// when a track finishes via EOF.
-    pub fn process_notifications(&self) {
-        let Some(slot_id) = *self.current_slot.lock_sync() else {
-            return;
-        };
-        let Some(state) = self.engine.slot_shared_state(slot_id) else {
-            return;
-        };
-
-        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
-            match notification {
-                PlayerNotification::TrackPlaybackStopped(_) => {
-                    self.bus.publish(PlayerEvent::ItemDidPlayToEnd);
-                }
-                other => {
-                    tracing::trace!(?other, "unhandled player notification");
-                }
-            }
-        }
-    }
-
-    /// Number of EQ bands available for this player.
-    pub fn eq_band_count(&self) -> usize {
-        self.config.eq_layout.len()
-    }
-
-    /// Get EQ gain for a band in dB.
-    pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        let slot_id = (*self.current_slot.lock_sync())?;
-        self.engine.slot_eq(slot_id).and_then(|eq| eq.gain(band))
-    }
-
-    /// Set EQ gain for a band in dB.
-    pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let slot_id = (*self.current_slot.lock_sync())
-            .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
-        let eq = self
-            .engine
-            .slot_eq(slot_id)
-            .ok_or_else(|| PlayError::Internal("eq state not found".into()))?;
-        let clamped = eq.set_gain(band, gain_db)?;
-        self.engine.set_master_eq_gain(band, clamped)
-    }
-
-    /// Reset EQ gains to 0 dB for all bands.
-    pub fn reset_eq(&self) -> Result<(), PlayError> {
-        let slot_id = (*self.current_slot.lock_sync())
-            .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
-        let eq = self
-            .engine
-            .slot_eq(slot_id)
-            .ok_or_else(|| PlayError::Internal("eq state not found".into()))?;
-        eq.reset();
-        for band in 0..eq.len() {
-            self.engine.set_master_eq_gain(band, 0.0)?;
-        }
-        Ok(())
-    }
-
-    /// Default initial ABR mode used when preparing new HLS resources.
-    #[must_use]
-    pub fn initial_abr_mode(&self) -> AbrMode {
-        self.config.initial_abr_mode
-    }
-
-    /// Change the default initial ABR mode for resources configured
-    /// after this call. Existing tracks' modes are untouched — use
-    /// `PeerHandle::abr().set_mode(...)` to override a live track.
-    pub fn set_initial_abr_mode(&mut self, mode: AbrMode) {
-        self.config.initial_abr_mode = mode;
     }
 
     /// Select and load a queue item by index, using the configured
@@ -695,11 +668,89 @@ impl PlayerImpl {
         Ok(())
     }
 
-    /// Insert a resource at the end and immediately crossfade to it.
-    pub fn play_resource(&self, resource: Resource) -> Result<(), PlayError> {
-        self.insert(resource, None);
-        let index = self.item_count().saturating_sub(1);
-        self.select_item(index, true)
+    /// Send a command to the current slot's processor.
+    fn send_to_slot(&self, cmd: PlayerCmd) -> Result<(), PlayError> {
+        let slot_id = (*self.current_slot.lock_sync())
+            .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
+        self.engine.send_slot_cmd(slot_id, cmd)
+    }
+
+    /// Get process-wide session ducking mode.
+    pub fn session_ducking(&self) -> SessionDuckingMode {
+        EngineImpl::session_ducking()
+    }
+
+    /// Set action to perform when the current item ends.
+    pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
+        *self.action_at_item_end.lock_sync() = action;
+    }
+
+    /// Set crossfade duration in seconds.
+    pub fn set_crossfade_duration(&self, seconds: f32) {
+        let clamped = seconds.max(0.0);
+        self.crossfade_duration.store(clamped, Ordering::Relaxed);
+        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(clamped));
+    }
+
+    /// Set the default playback rate used by `play()` and `select_item()`.
+    pub fn set_default_rate(&self, rate: f32) {
+        self.default_rate.store(rate, Ordering::Relaxed);
+    }
+
+    /// Set EQ gain for a band in dB.
+    pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
+        let slot_id = (*self.current_slot.lock_sync())
+            .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
+        let eq = self
+            .engine
+            .slot_eq(slot_id)
+            .ok_or_else(|| PlayError::Internal("eq state not found".into()))?;
+        let clamped = eq.set_gain(band, gain_db)?;
+        self.engine.set_master_eq_gain(band, clamped)
+    }
+
+    /// Change the default initial ABR mode for resources configured
+    /// after this call. Existing tracks' modes are untouched — use
+    /// `PeerHandle::abr().set_mode(...)` to override a live track.
+    pub fn set_initial_abr_mode(&mut self, mode: AbrMode) {
+        self.config.initial_abr_mode = mode;
+    }
+
+    /// Set muted state.
+    ///
+    /// Applies to this player's slot only (per-instance mute).
+    pub fn set_muted(&self, muted: bool) {
+        self.muted.store(muted, Ordering::Relaxed);
+        let effective = if muted { 0.0 } else { self.volume() };
+        self.apply_effective_volume(effective);
+        self.bus.publish(PlayerEvent::MuteChanged { muted });
+    }
+
+    /// Set playback rate.
+    ///
+    /// Updates the local rate and propagates to the audio pipeline resampler
+    /// via `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
+    pub fn set_rate(&self, rate: f32) {
+        let clamped = rate.max(MIN_PLAYBACK_RATE);
+        self.rate.store(clamped, Ordering::Relaxed);
+        self.playback_rate_shared.store(clamped, Ordering::Relaxed);
+        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));
+        self.bus.publish(PlayerEvent::RateChanged { rate: clamped });
+    }
+
+    /// Set process-wide session ducking mode.
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        EngineImpl::set_session_ducking(mode)
+    }
+
+    /// Set volume on an allocated slot, logging success at debug and any
+    /// error at warn. Extracted to keep `apply_effective_volume` below the
+    /// cognitive-complexity threshold.
+    fn set_slot_volume_logged(&self, slot_id: SlotId, volume: f32) {
+        debug!(volume, ?slot_id, "applying effective volume to slot");
+        if let Err(e) = self.engine.set_slot_volume(slot_id, volume) {
+            warn!(?e, volume, "failed to set slot volume");
+        }
     }
 
     /// Internal: set status and emit event if changed.
@@ -713,52 +764,36 @@ impl PlayerImpl {
         }
     }
 
-    /// Ensure the audio engine is started.
-    fn ensure_engine_started(&self) -> Result<(), PlayError> {
-        if !self.engine.is_running() {
-            self.engine.start()?;
+    /// Set volume, clamped to `0.0..=1.0`.
+    ///
+    /// Applies to this player's slot only (per-instance volume).
+    pub fn set_volume(&self, volume: f32) {
+        let clamped = volume.clamp(0.0, 1.0);
+        self.volume.store(clamped, Ordering::Relaxed);
+        if !self.is_muted() {
+            self.apply_effective_volume(clamped);
         }
-        Ok(())
+        self.bus
+            .publish(PlayerEvent::VolumeChanged { volume: clamped });
     }
 
-    /// Ensure we have an active slot, allocating one if needed.
-    fn ensure_slot(&self) -> Result<SlotId, PlayError> {
-        let mut slot = self.current_slot.lock_sync();
-        if let Some(id) = *slot {
-            return Ok(id);
-        }
-        let id = self.engine.allocate_slot()?;
-        *slot = Some(id);
-        drop(slot);
-        let effective = if self.is_muted() { 0.0 } else { self.volume() };
-        self.engine.set_slot_volume(id, effective)?;
-        Ok(id)
+    /// Get current player status.
+    pub fn status(&self) -> PlayerStatus {
+        *self.status.lock_sync()
     }
 
-    /// Apply effective volume to the current slot (per-instance).
-    fn apply_effective_volume(&self, volume: f32) {
-        let Some(slot_id) = *self.current_slot.lock_sync() else {
-            debug!(volume, "apply_effective_volume: no slot allocated yet");
-            return;
-        };
-        self.set_slot_volume_logged(slot_id, volume);
+    /// Subscribe to player events.
+    ///
+    /// Returns an [`EventReceiver`](kithara_events::EventReceiver) that delivers
+    /// all events published to this player's root bus (player events, engine
+    /// events, and resource events from all items).
+    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+        self.bus.subscribe()
     }
 
-    /// Set volume on an allocated slot, logging success at debug and any
-    /// error at warn. Extracted to keep `apply_effective_volume` below the
-    /// cognitive-complexity threshold.
-    fn set_slot_volume_logged(&self, slot_id: SlotId, volume: f32) {
-        debug!(volume, ?slot_id, "applying effective volume to slot");
-        if let Err(e) = self.engine.set_slot_volume(slot_id, volume) {
-            warn!(?e, volume, "failed to set slot volume");
-        }
-    }
-
-    /// Send a command to the current slot's processor.
-    fn send_to_slot(&self, cmd: PlayerCmd) -> Result<(), PlayError> {
-        let slot_id = (*self.current_slot.lock_sync())
-            .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
-        self.engine.send_slot_cmd(slot_id, cmd)
+    /// Pump audio backend/runtime state.
+    pub fn tick(&self) -> Result<(), PlayError> {
+        self.engine.tick()
     }
 
     /// Load the item at `index` if it is the current item and a slot is active.
@@ -770,53 +805,18 @@ impl PlayerImpl {
         }
     }
 
-    /// Load the current queue item into the active slot.
+    /// Get current volume (0.0..=1.0).
+    pub fn volume(&self) -> f32 {
+        self.volume.load(Ordering::Relaxed)
+    }
+
+    /// Shared audio worker handle for this player's engine.
     ///
-    /// Takes the resource out of the queue (replacing with `None`), wraps it
-    /// in [`PlayerResource`], and sends `LoadTrack` + `FadeIn` to the processor.
-    fn load_current_item(&self) {
-        let mut items = self.items.lock_sync();
-        let index = self.current_index.load(Ordering::Relaxed);
-        if index >= items.len() {
-            return;
-        }
-
-        // Take the resource out of the queue (if not already consumed).
-        let Some(resource) = items[index].take() else {
-            return; // Already loaded
-        };
-
-        // Snapshot the resource's ABR handle — `None` for non-adaptive
-        // sources. Runtime `set_abr_mode` / `set_preferred_peak_bitrate`
-        // route through this handle until the current item changes.
-        *self.active_abr.lock_sync() = resource.abr_handle();
-
-        // Propagate current playback rate to the resource's audio pipeline.
-        let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
-        resource.set_playback_rate(current_rate);
-
-        // Propagate host sample rate so the resampler is already initialised
-        // with the correct ratio.  Without this, the resampler starts in
-        // passthrough (host_sr = 0) and is recreated on the first worker
-        // step when the real host rate becomes visible — the expensive
-        // `make_sincs` call blocks the worker thread and starves other
-        // tracks during crossfade.
-        let host_sr = self.engine.master_sample_rate();
-        if let Some(sr) = std::num::NonZeroU32::new(host_sr) {
-            resource.set_host_sample_rate(sr);
-        }
-
-        let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);
-        let arc_resource = Arc::new(Mutex::new(player_resource));
-        drop(items);
-
-        // Send LoadTrack and FadeIn to the processor.
-        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
-            resource: arc_resource,
-            src: Arc::clone(&src),
-        });
-        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(src)));
+    /// Clone and pass to [`ResourceConfig::with_worker`] so resources
+    /// loaded into this player share a single decode thread.
+    #[must_use]
+    pub fn worker(&self) -> &AudioWorkerHandle {
+        self.engine.worker()
     }
 }
 
@@ -829,12 +829,12 @@ impl crate::traits::dj::eq::Equalizer for PlayerImpl {
         self.eq_gain(band)
     }
 
-    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        self.set_eq_gain(band, gain_db)
-    }
-
     fn reset(&self) -> Result<(), PlayError> {
         self.reset_eq()
+    }
+
+    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
+        self.set_eq_gain(band, gain_db)
     }
 }
 

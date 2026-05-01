@@ -120,14 +120,14 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
         let meta = PcmMeta {
             end_timestamp,
             timestamp,
+            frames,
+            frame_offset,
+            source_bytes,
             segment_index: self.stream_ctx.as_ref().and_then(|ctx| ctx.segment_index()),
             source_byte_offset: None,
             variant_index: self.stream_ctx.as_ref().and_then(|ctx| ctx.variant_index()),
             spec: self.spec,
-            frames,
             epoch: self.epoch,
-            frame_offset,
-            source_bytes,
         };
         PcmChunk::new(meta, buf)
     }
@@ -216,9 +216,9 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
                 self.frame_offset = frame_offset_for(reported_landed_at, self.spec.sample_rate);
                 self.resync_frame_offset_to_pts = true;
                 Ok(DecoderSeekOutcome::Landed {
+                    landed_byte,
                     landed_at: reported_landed_at,
                     landed_frame: self.frame_offset,
-                    landed_byte,
                 })
             }
             DemuxSeekOutcome::PastEof { duration } => {
@@ -470,9 +470,9 @@ mod hook_tests {
                 }) => {
                     self.held = data;
                     Ok(DemuxOutcome::Frame(Frame {
-                        data: &self.held,
                         pts,
                         duration,
+                        data: &self.held,
                     }))
                 }
                 Some(StubOutcome::Pending(reason)) => Ok(DemuxOutcome::Pending(reason)),

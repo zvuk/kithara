@@ -60,17 +60,17 @@ pub struct ProbeEvent {
 }
 
 impl ProbeEvent {
-    /// Read a `u64` field (`segment_index`, `request_id`, …).
-    #[must_use]
-    pub fn u64(&self, key: &str) -> Option<u64> {
-        self.fields.get(key).copied()
-    }
-
     /// The `probe` discriminator field (e.g. `"enqueued"`,
     /// `"fetch_cmd_emitted"`).
     #[must_use]
     pub fn probe_name(&self) -> Option<&str> {
         self.string_fields.get("probe").map(String::as_str)
+    }
+
+    /// Read a `u64` field (`segment_index`, `request_id`, …).
+    #[must_use]
+    pub fn u64(&self, key: &str) -> Option<u64> {
+        self.fields.get(key).copied()
     }
 }
 
@@ -119,6 +119,15 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    /// Filter snapshot by `probe = ...` discriminator.
+    #[must_use]
+    pub fn events_with_probe(&self, name: &str) -> Vec<ProbeEvent> {
+        self.snapshot()
+            .into_iter()
+            .filter(|e| e.probe_name() == Some(name))
+            .collect()
+    }
+
     /// All events recorded since this `Recorder` was created.
     #[must_use]
     pub fn snapshot(&self) -> Vec<ProbeEvent> {
@@ -128,15 +137,6 @@ impl Recorder {
             .iter()
             .filter(|e| e.at >= self.start_at)
             .cloned()
-            .collect()
-    }
-
-    /// Filter snapshot by `probe = ...` discriminator.
-    #[must_use]
-    pub fn events_with_probe(&self, name: &str) -> Vec<ProbeEvent> {
-        self.snapshot()
-            .into_iter()
-            .filter(|e| e.probe_name() == Some(name))
             .collect()
     }
 
@@ -178,8 +178,13 @@ struct ProbeVisitor {
 }
 
 impl Visit for ProbeVisitor {
-    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        self.numeric.insert(field.name().to_string(), value);
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.numeric
+            .insert(field.name().to_string(), u64::from(value));
+    }
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.strings
+            .insert(field.name().to_string(), format!("{value:?}"));
     }
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
         if value >= 0 {
@@ -187,16 +192,11 @@ impl Visit for ProbeVisitor {
                 .insert(field.name().to_string(), u64::try_from(value).unwrap_or(0));
         }
     }
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.numeric
-            .insert(field.name().to_string(), u64::from(value));
-    }
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         self.strings
             .insert(field.name().to_string(), value.to_string());
     }
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.strings
-            .insert(field.name().to_string(), format!("{value:?}"));
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.numeric.insert(field.name().to_string(), value);
     }
 }

@@ -44,13 +44,42 @@ impl HlsCoord {
         Self {
             abr_state,
             cancel,
+            timeline,
             condvar: Condvar::new(),
             had_midstream_switch: AtomicBool::new(false),
             reader_advanced: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
-            timeline,
             demand: DemandSlot::new(),
         }
+    }
+
+    pub(crate) fn clear_pending_segment_request(&self, request: SegmentRequest) {
+        if self.demand.peek() == Some(request) {
+            self.demand.clear();
+        }
+    }
+
+    pub(crate) fn clear_segment_requests(&self) {
+        self.demand.clear();
+    }
+
+    pub(crate) fn enqueue_segment_request(&self, request: SegmentRequest) -> bool {
+        let inserted = self.demand.submit(request);
+        self.reader_advanced.notify_one();
+        inserted
+    }
+
+    pub fn peek_segment_request(&self) -> Option<SegmentRequest> {
+        self.demand.peek()
+    }
+
+    pub fn take_segment_request(&self) -> Option<SegmentRequest> {
+        self.demand.take()
+    }
+
+    #[must_use]
+    pub(crate) fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
     /// Read the current variant index from the shared ABR state.
@@ -60,34 +89,5 @@ impl HlsCoord {
     #[must_use]
     pub fn variant_index(&self) -> usize {
         self.abr_state.current_variant_index()
-    }
-
-    pub(crate) fn enqueue_segment_request(&self, request: SegmentRequest) -> bool {
-        let inserted = self.demand.submit(request);
-        self.reader_advanced.notify_one();
-        inserted
-    }
-
-    pub(crate) fn clear_pending_segment_request(&self, request: SegmentRequest) {
-        if self.demand.peek() == Some(request) {
-            self.demand.clear();
-        }
-    }
-
-    pub fn take_segment_request(&self) -> Option<SegmentRequest> {
-        self.demand.take()
-    }
-
-    pub fn peek_segment_request(&self) -> Option<SegmentRequest> {
-        self.demand.peek()
-    }
-
-    pub(crate) fn clear_segment_requests(&self) {
-        self.demand.clear();
-    }
-
-    #[must_use]
-    pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
     }
 }

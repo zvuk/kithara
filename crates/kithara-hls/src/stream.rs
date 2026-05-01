@@ -53,11 +53,15 @@ fn make_invalidation_callback(
 
 impl StreamType for Hls {
     type Config = HlsConfig;
-    type Source = HlsSource;
     type Events = EventBus;
+    type Source = HlsSource;
 
-    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
-        config.bus.clone()
+    fn build_stream_context(source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
+        Arc::new(HlsStreamContext::new(
+            timeline,
+            Arc::clone(&source.segments),
+            Arc::clone(&source.coord.abr_state),
+        ))
     }
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
@@ -170,12 +174,8 @@ impl StreamType for Hls {
         Ok(source)
     }
 
-    fn build_stream_context(source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(HlsStreamContext::new(
-            timeline,
-            Arc::clone(&source.segments),
-            Arc::clone(&source.coord.abr_state),
-        ))
+    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
+        config.bus.clone()
     }
 }
 
@@ -293,9 +293,9 @@ fn build_abr_variants(
                 kithara_events::VariantDuration::Segmented(durations)
             };
             kithara_events::AbrVariant {
+                duration,
                 variant_index: v.id.0,
                 bandwidth_bps: v.bandwidth.unwrap_or(0),
-                duration,
             }
         })
         .collect()

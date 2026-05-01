@@ -61,6 +61,25 @@ pub struct FetchCmd {
 }
 
 impl FetchCmd {
+    /// HTTP GET command for the given URL.
+    #[must_use]
+    pub fn get(url: Url) -> Self {
+        Self::with_method(RequestMethod::Get, url)
+    }
+
+    /// HTTP HEAD command for the given URL.
+    #[must_use]
+    pub fn head(url: Url) -> Self {
+        Self::with_method(RequestMethod::Head, url)
+    }
+
+    /// Set the per-command completion handler (streaming path).
+    #[must_use]
+    pub fn on_complete(mut self, cb: OnCompleteFn) -> Self {
+        self.on_complete = Some(cb);
+        self
+    }
+
     /// Build a [`FetchCmd`] with the given method and URL; all other
     /// fields start unset.
     fn with_method(method: RequestMethod, url: Url) -> Self {
@@ -76,36 +95,17 @@ impl FetchCmd {
         }
     }
 
-    /// HTTP GET command for the given URL.
+    /// Set the per-request response validator.
     #[must_use]
-    pub fn get(url: Url) -> Self {
-        Self::with_method(RequestMethod::Get, url)
-    }
-
-    /// HTTP HEAD command for the given URL.
-    #[must_use]
-    pub fn head(url: Url) -> Self {
-        Self::with_method(RequestMethod::Head, url)
+    pub fn with_validator(mut self, f: fn(&Headers) -> NetResult<()>) -> Self {
+        self.validator = Some(f);
+        self
     }
 
     /// Set the per-command body writer (streaming path).
     #[must_use]
     pub fn writer(mut self, w: WriterFn) -> Self {
         self.writer = Some(w);
-        self
-    }
-
-    /// Set the per-command completion handler (streaming path).
-    #[must_use]
-    pub fn on_complete(mut self, cb: OnCompleteFn) -> Self {
-        self.on_complete = Some(cb);
-        self
-    }
-
-    /// Set the per-request response validator.
-    #[must_use]
-    pub fn with_validator(mut self, f: fn(&Headers) -> NetResult<()>) -> Self {
-        self.validator = Some(f);
         self
     }
 }

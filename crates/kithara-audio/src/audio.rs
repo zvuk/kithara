@@ -236,8 +236,8 @@ impl<S> Audio<S> {
         });
 
         self.emit_audio_event(AudioEvent::SeekComplete {
-            position: (*self).position(),
             seek_epoch,
+            position: (*self).position(),
         });
         let _ = self.timeline.clear_pending_seek_epoch(seek_epoch);
     }
@@ -509,12 +509,12 @@ impl<S> Audio<S> {
                 "pcm channel closed / producer failed",
             ))),
             ConsumerPhase::SeekPending { .. } => Ok(ReadOutcome::Pending {
-                reason: PendingReason::SeekInProgress,
                 position,
+                reason: PendingReason::SeekInProgress,
             }),
             _ => Ok(ReadOutcome::Pending {
-                reason: PendingReason::Buffering,
                 position,
+                reason: PendingReason::Buffering,
             }),
         }
     }
@@ -652,8 +652,8 @@ impl<S> Audio<S> {
                     "Audio::seek PastEof contract: target={position:?} < duration={duration:?}",
                 );
                 Ok(SeekOutcome::PastEof {
-                    target: position,
                     duration,
+                    target: position,
                 })
             }
             // Audio-level seek dispatches asynchronously through the
@@ -868,6 +868,15 @@ where
         });
 
         Ok(Self {
+            timeline,
+            metadata,
+            bus,
+            host_sample_rate,
+            playback_rate,
+            preload_notify,
+            notify_waiting,
+            reader_wake,
+            abr_handle,
             pcm_rx: data_rx,
             _epoch: epoch,
             validator: EpochValidator::new(),
@@ -875,21 +884,12 @@ where
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
-            timeline,
-            metadata,
-            bus,
             cancel: Some(cancel),
             pcm_pool: pool.clone(),
-            host_sample_rate,
-            playback_rate,
-            preload_notify,
             preloaded: false,
-            notify_waiting,
             track_id: Some(track_id),
             worker: Some(worker),
-            reader_wake,
             is_standalone_worker: is_standalone,
-            abr_handle,
             _marker: PhantomData,
         })
     }
@@ -1166,12 +1166,12 @@ impl<S: Send> PcmReader for Audio<S> {
                     "pcm channel closed / producer failed",
                 ))),
                 ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
-                    reason: PendingReason::SeekInProgress,
                     position,
+                    reason: PendingReason::SeekInProgress,
                 }),
                 _ => Ok(ChunkOutcome::Pending {
-                    reason: PendingReason::Buffering,
                     position,
+                    reason: PendingReason::Buffering,
                 }),
             };
         };
@@ -1245,13 +1245,13 @@ impl<S: Send> PcmReader for Audio<S> {
                 }
                 let Some(actual) = NonZeroUsize::new(actual_frames) else {
                     return Ok(ReadOutcome::Pending {
-                        reason: PendingReason::Buffering,
                         position,
+                        reason: PendingReason::Buffering,
                     });
                 };
                 Ok(ReadOutcome::Frames {
-                    count: actual,
                     position,
+                    count: actual,
                 })
             }
         }

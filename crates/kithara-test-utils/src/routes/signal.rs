@@ -235,8 +235,8 @@ fn build_encoded_response_for_signal<S: signal::SignalFn + Sync>(
         }
     };
     let request = BytesEncodeRequest {
-        pcm: &pcm,
         target,
+        pcm: &pcm,
         bit_rate: None,
     };
 
@@ -288,10 +288,10 @@ fn stream_wav<S: signal::SignalFn>(signal: S, spec: &ResolvedSignalSpec) -> Body
         None,
     )));
     let state = InfiniteWavState {
+        chunk_size,
         header: Some(header),
         pcm: SignalPcm::new(signal, spec.sample_rate, channels, SignalLength::Infinite),
         offset: 0,
-        chunk_size,
     };
     let stream = stream::unfold(state, |mut state| async move {
         if let Some(header) = state.header.take() {

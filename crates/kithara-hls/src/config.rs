@@ -108,12 +108,6 @@ impl HlsConfig {
         }
     }
 
-    /// Set name for cache disambiguation.
-    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
     /// Set shared downloader.
     ///
     /// When not provided, the HLS path will create a private downloader
@@ -127,6 +121,12 @@ impl HlsConfig {
     #[must_use]
     pub fn with_downloader(mut self, dl: Downloader) -> Self {
         self.downloader = Some(dl);
+        self
+    }
+
+    /// Set name for cache disambiguation.
+    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
+        self.name = Some(name.into());
         self
     }
 }

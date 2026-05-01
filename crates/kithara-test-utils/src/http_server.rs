@@ -27,6 +27,12 @@ impl TestHttpServer {
         Self::bind("127.0.0.1:0", router).await
     }
 
+    /// Base URL of this server.
+    #[must_use]
+    pub fn base_url(&self) -> &Url {
+        &self.base_url
+    }
+
     /// Spawn `router` on the given address (e.g. `"127.0.0.1:3444"`).
     ///
     /// # Panics
@@ -76,9 +82,18 @@ impl TestHttpServer {
         tokio_sleep(Duration::from_millis(100)).await;
 
         Self {
+            done_rx,
             base_url: Url::parse(&format!("http://{}", addr)).expect("parse base URL"),
             shutdown_tx: Some(shutdown_tx),
-            done_rx,
+        }
+    }
+
+    /// Wait until the server task completes.
+    pub async fn completion(&mut self) {
+        while !*self.done_rx.borrow_and_update() {
+            if self.done_rx.changed().await.is_err() {
+                break;
+            }
         }
     }
 
@@ -90,21 +105,6 @@ impl TestHttpServer {
     #[must_use]
     pub fn url(&self, path: &str) -> Url {
         self.base_url.join(path).expect("join server URL path")
-    }
-
-    /// Base URL of this server.
-    #[must_use]
-    pub fn base_url(&self) -> &Url {
-        &self.base_url
-    }
-
-    /// Wait until the server task completes.
-    pub async fn completion(&mut self) {
-        while !*self.done_rx.borrow_and_update() {
-            if self.done_rx.changed().await.is_err() {
-                break;
-            }
-        }
     }
 }
 

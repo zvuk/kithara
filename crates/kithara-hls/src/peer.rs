@@ -66,45 +66,19 @@ impl HlsPeer {
     pub(crate) fn new(timeline: Timeline, initial_mode: AbrMode) -> Self {
         kithara_probes::register_probes();
         Self {
+            timeline,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
             wake_cancel: CancellationToken::new(),
-            timeline,
             abr: Arc::new(AbrState::new(Vec::new(), initial_mode)),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             committed_segment: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    /// Fill in the variant list after the master playlist is parsed.
-    pub(crate) fn set_abr_variants(&self, variants: Vec<AbrVariant>) {
-        self.abr.set_variants(variants);
-    }
-
     /// Shared ABR state for the scheduler's lock/unlock and seek routing.
     pub(crate) fn abr(&self) -> &Arc<AbrState> {
         &self.abr
-    }
-
-    /// Shared cursor tracking the segment the reader is currently consuming.
-    pub(crate) fn reader_segment_cursor(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.reader_segment)
-    }
-
-    /// Shared counter of segments the scheduler has committed — one past the
-    /// highest index ever committed on the current variant.
-    pub(crate) fn committed_segment_cursor(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.committed_segment)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_last_committed_segment(&self, count: usize) {
-        self.committed_segment.store(count, Ordering::Release);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_reader_segment(&self, idx: usize) {
-        self.reader_segment.store(idx, Ordering::Release);
     }
 
     pub(crate) fn activate(self: &Arc<Self>, scheduler: HlsScheduler, loader: Arc<SegmentLoader>) {
@@ -157,6 +131,32 @@ impl HlsPeer {
         });
     }
 
+    /// Shared counter of segments the scheduler has committed — one past the
+    /// highest index ever committed on the current variant.
+    pub(crate) fn committed_segment_cursor(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.committed_segment)
+    }
+
+    /// Shared cursor tracking the segment the reader is currently consuming.
+    pub(crate) fn reader_segment_cursor(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.reader_segment)
+    }
+
+    /// Fill in the variant list after the master playlist is parsed.
+    pub(crate) fn set_abr_variants(&self, variants: Vec<AbrVariant>) {
+        self.abr.set_variants(variants);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_committed_segment(&self, count: usize) {
+        self.committed_segment.store(count, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_reader_segment(&self, idx: usize) {
+        self.reader_segment.store(idx, Ordering::Release);
+    }
+
     /// Release the stashed [`HlsState`] and cancel the waker task.
     ///
     /// Must be called when the owning [`HlsSource`] drops, otherwise
@@ -184,14 +184,6 @@ impl Drop for HlsPeer {
 }
 
 impl Abr for HlsPeer {
-    fn variants(&self) -> Vec<AbrVariant> {
-        self.abr.variants_snapshot()
-    }
-
-    fn state(&self) -> Option<Arc<AbrState>> {
-        Some(Arc::clone(&self.abr))
-    }
-
     fn progress(&self) -> Option<AbrProgressSnapshot> {
         let current = self.abr.current_variant_index();
         let variants = self.abr.variants_snapshot();
@@ -212,20 +204,17 @@ impl Abr for HlsPeer {
             download_head_playback_time,
         })
     }
+
+    fn state(&self) -> Option<Arc<AbrState>> {
+        Some(Arc::clone(&self.abr))
+    }
+
+    fn variants(&self) -> Vec<AbrVariant> {
+        self.abr.variants_snapshot()
+    }
 }
 
 impl Peer for HlsPeer {
-    /// Priority reflects the audio FSM's decode-activity flag on the
-    /// shared `Timeline`. Cheap, lock-free — called by Registry on
-    /// every `poll_peers` pass.
-    fn priority(&self) -> RequestPriority {
-        if self.timeline.is_playing() {
-            RequestPriority::High
-        } else {
-            RequestPriority::Low
-        }
-    }
-
     #[expect(
         clippy::cognitive_complexity,
         reason = "HLS scheduler poll_next is inherently complex"
@@ -342,6 +331,17 @@ impl Peer for HlsPeer {
             cmds.len()
         );
         Poll::Ready(Some(cmds))
+    }
+
+    /// Priority reflects the audio FSM's decode-activity flag on the
+    /// shared `Timeline`. Cheap, lock-free — called by Registry on
+    /// every `poll_peers` pass.
+    fn priority(&self) -> RequestPriority {
+        if self.timeline.is_playing() {
+            RequestPriority::High
+        } else {
+            RequestPriority::Low
+        }
     }
 }
 
@@ -482,8 +482,8 @@ fn resolve_same_epoch_demand(
     }
     let variant_override = (req.variant != sched.download_variant).then_some(req.variant);
     DemandResult::Demand {
-        segment: req.segment_index,
         variant_override,
+        segment: req.segment_index,
     }
 }
 
@@ -714,9 +714,9 @@ fn build_batch(
                     seg_idx,
                     batch_i,
                     seek_epoch,
-                    prepared: &prepared,
                     cached_len,
                     plan_need_init,
+                    prepared: &prepared,
                 },
             );
             continue;
@@ -1061,8 +1061,8 @@ mod tests {
 
     struct Consts;
     impl Consts {
-        const NUM_VARIANTS: usize = 2;
         const NUM_SEGMENTS: usize = 40;
+        const NUM_VARIANTS: usize = 2;
     }
 
     fn make_variant_state(id: usize) -> VariantState {
@@ -1182,8 +1182,8 @@ mod tests {
             variant,
             seg_idx,
             SegmentData {
-                init_len: 0,
                 media_len,
+                init_len: 0,
                 init_url: None,
                 media_url: url,
             },

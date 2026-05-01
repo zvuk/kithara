@@ -11,23 +11,43 @@ use crate::{
     unimock::unimock(api = PlayerItemMock)
 )]
 pub trait PlayerItem: MaybeSend + MaybeSync + 'static {
-    fn status(&self) -> ItemStatus;
+    fn asset_duration(&self) -> MediaTime;
 
-    fn error(&self) -> Option<String>;
+    fn asset_is_playable(&self) -> bool;
 
-    fn duration(&self) -> MediaTime;
+    fn asset_metadata(&self) -> crate::metadata::Metadata;
+
+    fn asset_url(&self) -> Option<url::Url>;
+
+    fn can_play_fast_forward(&self) -> bool;
+
+    fn can_play_reverse(&self) -> bool;
+
+    fn can_step_backward(&self) -> bool;
+
+    fn can_step_forward(&self) -> bool;
+
+    fn cancel_pending_seeks(&self);
 
     fn current_time(&self) -> MediaTime;
 
-    fn loaded_time_ranges(&self) -> Vec<TimeRange>;
+    fn duration(&self) -> MediaTime;
 
-    fn seekable_time_ranges(&self) -> Vec<TimeRange>;
+    fn error(&self) -> Option<String>;
 
-    fn is_playback_likely_to_keep_up(&self) -> bool;
+    fn is_playback_buffer_empty(&self) -> bool;
 
     fn is_playback_buffer_full(&self) -> bool;
 
-    fn is_playback_buffer_empty(&self) -> bool;
+    fn is_playback_likely_to_keep_up(&self) -> bool;
+
+    fn loaded_time_ranges(&self) -> Vec<TimeRange>;
+
+    fn preferred_forward_buffer_duration(&self) -> Duration;
+
+    fn preferred_peak_bitrate(&self) -> f64;
+
+    fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64;
 
     fn seek(&self, to: MediaTime) -> Result<(), PlayError>;
 
@@ -38,37 +58,17 @@ pub trait PlayerItem: MaybeSend + MaybeSync + 'static {
         tolerance_after: MediaTime,
     ) -> Result<(), PlayError>;
 
-    fn cancel_pending_seeks(&self);
-
-    fn step_by_count(&self, count: i32);
-
-    fn can_play_fast_forward(&self) -> bool;
-
-    fn can_play_reverse(&self) -> bool;
-
-    fn can_step_forward(&self) -> bool;
-
-    fn can_step_backward(&self) -> bool;
-
-    fn preferred_forward_buffer_duration(&self) -> Duration;
+    fn seekable_time_ranges(&self) -> Vec<TimeRange>;
 
     fn set_preferred_forward_buffer_duration(&self, duration: Duration);
 
-    fn preferred_peak_bitrate(&self) -> f64;
-
     fn set_preferred_peak_bitrate(&self, bitrate: f64);
-
-    fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64;
 
     fn set_preferred_peak_bitrate_for_expensive_networks(&self, bitrate: f64);
 
-    fn asset_url(&self) -> Option<url::Url>;
+    fn status(&self) -> ItemStatus;
 
-    fn asset_duration(&self) -> MediaTime;
-
-    fn asset_is_playable(&self) -> bool;
-
-    fn asset_metadata(&self) -> crate::metadata::Metadata;
+    fn step_by_count(&self, count: i32);
 }
 
 #[cfg(test)]

@@ -133,19 +133,27 @@ pub trait StreamType: MaybeSend + 'static {
     /// Configuration for this stream type.
     type Config: Default + MaybeSend;
 
-    /// Source implementing `Source`.
-    type Source: Source;
-
-    /// Create the source from configuration.
-    ///
-    /// May also start background tasks (downloader) internally.
-    fn create(config: Self::Config) -> impl Future<Output = Result<Self::Source, SourceError>>;
-
     /// Event bus type carried by the stream config.
     ///
     /// Concrete stream types set this to `kithara_events::EventBus`.
     /// `Audio::new()` constrains `T::Events = EventBus` to extract it.
     type Events: Clone + MaybeSend + MaybeSync + 'static;
+
+    /// Source implementing `Source`.
+    type Source: Source;
+
+    /// Build a `StreamContext` from the source and shared byte position.
+    ///
+    /// Default returns `NullStreamContext` (no segment/variant info).
+    /// HLS overrides with `HlsStreamContext` carrying segment/variant atomics.
+    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
+        Arc::new(crate::NullStreamContext::new(timeline))
+    }
+
+    /// Create the source from configuration.
+    ///
+    /// May also start background tasks (downloader) internally.
+    fn create(config: Self::Config) -> impl Future<Output = Result<Self::Source, SourceError>>;
 
     /// Extract the event bus from config (if set).
     ///
@@ -154,14 +162,6 @@ pub trait StreamType: MaybeSend + 'static {
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         let _ = config;
         None
-    }
-
-    /// Build a `StreamContext` from the source and shared byte position.
-    ///
-    /// Default returns `NullStreamContext` (no segment/variant info).
-    /// HLS overrides with `HlsStreamContext` carrying segment/variant atomics.
-    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(crate::NullStreamContext::new(timeline))
     }
 }
 
@@ -188,19 +188,39 @@ impl<T: StreamType> Stream<T> {
         Ok(Self { source })
     }
 
+    pub fn is_empty(&self) -> Option<bool> {
+        self.len().map(|len| len == 0)
+    }
+
     /// Get current read position.
     pub fn position(&self) -> u64 {
         self.source.timeline().byte_position()
     }
 
-    /// Get stream timeline.
-    pub fn timeline(&self) -> Timeline {
-        self.source.timeline()
+    /// Resolve a deterministic time-based seek anchor.
+    ///
+    /// Returns `None` for sources without segmented time mapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source failed to resolve the anchor.
+    pub fn seek_time_anchor(
+        &mut self,
+        position: Duration,
+    ) -> Result<Option<SourceSeekAnchor>, io::Error> {
+        self.source
+            .seek_time_anchor(position)
+            .map_err(|e| IoError::other(e.to_string()))
     }
 
     /// Get shared reference to inner source.
     pub fn source(&self) -> &T::Source {
         &self.source
+    }
+
+    /// Get stream timeline.
+    pub fn timeline(&self) -> Timeline {
+        self.source.timeline()
     }
 
     delegate::delegate! {
@@ -238,26 +258,6 @@ impl<T: StreamType> Stream<T> {
             /// Optional segment-layout handle for segment-aware decoders.
             pub fn as_segment_layout(&self) -> Option<Arc<dyn crate::SegmentLayout>>;
         }
-    }
-
-    pub fn is_empty(&self) -> Option<bool> {
-        self.len().map(|len| len == 0)
-    }
-
-    /// Resolve a deterministic time-based seek anchor.
-    ///
-    /// Returns `None` for sources without segmented time mapping.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the source failed to resolve the anchor.
-    pub fn seek_time_anchor(
-        &mut self,
-        position: Duration,
-    ) -> Result<Option<SourceSeekAnchor>, io::Error> {
-        self.source
-            .seek_time_anchor(position)
-            .map_err(|e| IoError::other(e.to_string()))
     }
 }
 
@@ -512,9 +512,9 @@ mod tests {
             data: Vec<u8>,
         ) -> Self {
             Self {
-                anchor: None,
                 timeline,
                 data,
+                anchor: None,
                 reads: reads.into_iter().collect(),
                 waits: waits.into_iter().collect(),
             }
@@ -522,16 +522,12 @@ mod tests {
     }
 
     impl Source for ScriptSource {
-        fn timeline(&self) -> Timeline {
-            self.timeline.clone()
+        fn len(&self) -> Option<u64> {
+            Some(self.data.len() as u64)
         }
 
-        fn wait_range(
-            &mut self,
-            _range: Range<u64>,
-            _timeout: Option<Duration>,
-        ) -> crate::StreamResult<WaitOutcome> {
-            Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
+        fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+            SourcePhase::Waiting
         }
 
         fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
@@ -553,19 +549,23 @@ mod tests {
             }
         }
 
-        fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-            SourcePhase::Waiting
-        }
-
-        fn len(&self) -> Option<u64> {
-            Some(self.data.len() as u64)
-        }
-
         fn seek_time_anchor(
             &mut self,
             _position: Duration,
         ) -> crate::StreamResult<Option<SourceSeekAnchor>> {
             Ok(self.anchor)
+        }
+
+        fn timeline(&self) -> Timeline {
+            self.timeline.clone()
+        }
+
+        fn wait_range(
+            &mut self,
+            _range: Range<u64>,
+            _timeout: Option<Duration>,
+        ) -> crate::StreamResult<WaitOutcome> {
+            Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
         }
     }
 
@@ -599,6 +599,19 @@ mod tests {
     }
 
     impl Source for SeekDuringWaitSource {
+        fn len(&self) -> Option<u64> {
+            Some(4)
+        }
+
+        fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+            SourcePhase::Ready
+        }
+
+        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
+            self.read_calls += 1;
+            Ok(bytes(4))
+        }
+
         fn timeline(&self) -> Timeline {
             self.timeline.clone()
         }
@@ -610,19 +623,6 @@ mod tests {
         ) -> crate::StreamResult<WaitOutcome> {
             let _ = self.timeline.initiate_seek(Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
-        }
-
-        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
-            self.read_calls += 1;
-            Ok(bytes(4))
-        }
-
-        fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-            SourcePhase::Ready
-        }
-
-        fn len(&self) -> Option<u64> {
-            Some(4)
         }
     }
 

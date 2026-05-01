@@ -44,9 +44,9 @@ impl EncodeTarget {
 
         let target = match request.target {
             BytesEncodeTarget::Mp3 => Self {
+                bit_rate,
                 ext: "mp3",
                 mime: "audio/mpeg",
-                bit_rate,
                 option_pairs: &[("b", "128k")],
             },
             BytesEncodeTarget::Flac => Self {
@@ -56,15 +56,15 @@ impl EncodeTarget {
                 option_pairs: &[("compression_level", "5")],
             },
             BytesEncodeTarget::Aac => Self {
+                bit_rate,
                 ext: "aac",
                 mime: "audio/aac",
-                bit_rate,
                 option_pairs: &[("b", "128k")],
             },
             BytesEncodeTarget::M4a => Self {
+                bit_rate,
                 ext: "m4a",
                 mime: "audio/mp4",
-                bit_rate,
                 option_pairs: &[("b", "128k")],
             },
         };
@@ -200,6 +200,13 @@ impl DirectEncoder {
         Ok(Self { encoder, filter })
     }
 
+    fn receive_and_process_encoded_packets(
+        &mut self,
+        octx: &mut av_format::context::Output,
+    ) -> Result<(), FfmpegError> {
+        write_encoded_packets(&mut self.encoder, octx)
+    }
+
     fn receive_and_process_filtered_frames(
         &mut self,
         octx: &mut av_format::context::Output,
@@ -207,13 +214,6 @@ impl DirectEncoder {
         drain_filtered_frames(&mut self.filter, &mut self.encoder, |encoder| {
             write_encoded_packets(encoder, octx)
         })
-    }
-
-    fn receive_and_process_encoded_packets(
-        &mut self,
-        octx: &mut av_format::context::Output,
-    ) -> Result<(), FfmpegError> {
-        write_encoded_packets(&mut self.encoder, octx)
     }
 }
 
@@ -258,8 +258,8 @@ mod tests {
 
         for target in cases {
             let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
-                pcm: &pcm,
                 target,
+                pcm: &pcm,
                 bit_rate: None,
             })
             .unwrap_or_else(|error| panic!("encode_bytes({target:?}) failed: {error}"));

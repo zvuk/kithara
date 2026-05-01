@@ -64,11 +64,11 @@ pub mod offline {
     }
 
     impl OfflinePlayer {
-        /// Offline audio block size in frames.
-        const OFFLINE_BLOCK_FRAMES: u32 = 512;
-
         /// Capacity of the player command ring buffer.
         const CMD_RINGBUF_CAPACITY: usize = 64;
+
+        /// Offline audio block size in frames.
+        const OFFLINE_BLOCK_FRAMES: u32 = 512;
 
         /// Create an offline player with stereo output at the given sample rate.
         ///
@@ -111,19 +111,6 @@ pub mod offline {
             }
         }
 
-        /// Render `frames` of audio. Returns interleaved stereo output.
-        ///
-        /// # Panics
-        ///
-        /// Panics if the graph update or backend access fails.
-        pub fn render(&mut self, frames: usize) -> Vec<f32> {
-            self.ctx.update().expect("graph update");
-            self.ctx
-                .active_backend_mut()
-                .expect("backend active")
-                .render(frames)
-        }
-
         /// Load a resource as a track and trigger `FadeIn` crossfade.
         ///
         /// # Panics
@@ -154,6 +141,19 @@ pub mod offline {
         /// Number of times `process()` was called.
         pub fn process_count(&self) -> u64 {
             self.shared_state.process_count.load(Ordering::Relaxed)
+        }
+
+        /// Render `frames` of audio. Returns interleaved stereo output.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the graph update or backend access fails.
+        pub fn render(&mut self, frames: usize) -> Vec<f32> {
+            self.ctx.update().expect("graph update");
+            self.ctx
+                .active_backend_mut()
+                .expect("backend active")
+                .render(frames)
         }
 
         /// Send a seek command to the processor.

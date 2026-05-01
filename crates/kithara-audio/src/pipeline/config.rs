@@ -89,6 +89,7 @@ impl<T: StreamType> AudioConfig<T> {
     /// Create config with stream config and default audio settings.
     pub fn new(stream: T::Config) -> Self {
         Self {
+            stream,
             byte_pool: None,
             hint: None,
             host_sample_rate: None,
@@ -99,7 +100,6 @@ impl<T: StreamType> AudioConfig<T> {
             decoder_backend: DecoderBackend::default(),
             preload_chunks: Self::DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
-            stream,
             bus: None,
             effects: Vec::new(),
             worker: None,

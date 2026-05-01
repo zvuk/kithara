@@ -56,14 +56,14 @@ pub(crate) enum TrackState {
 }
 
 impl TrackState {
-    /// Whether the track is producing audible audio.
-    pub(crate) fn is_playing(self) -> bool {
-        matches!(self, Self::Playing | Self::FadingIn | Self::FadingOut)
-    }
-
     /// Whether the track is the "leading" track (playing or fading in).
     pub(crate) fn is_leading(self) -> bool {
         matches!(self, Self::Playing | Self::FadingIn)
+    }
+
+    /// Whether the track is producing audible audio.
+    pub(crate) fn is_playing(self) -> bool {
+        matches!(self, Self::Playing | Self::FadingIn | Self::FadingOut)
     }
 
     /// Whether the track has reached a terminal state and should be evicted
@@ -136,6 +136,160 @@ impl PlayerTrack {
         // Push initial ServiceClass::Warm for the Preloading state.
         track.update_service_class(TrackState::Preloading);
         track
+    }
+
+    /// Check position-based notifications.
+    fn check_notifications(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        let position = self.observed_position;
+        let duration = self.observed_duration;
+
+        if duration <= 0.0 {
+            return;
+        }
+
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
+        )]
+        let pos = position as f32;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
+        )]
+        let dur = duration as f32;
+        let fade = DEFAULT_FADE_DURATION;
+
+        // TrackAboutToEnd
+        if !self.notified_about_to_end {
+            let threshold = (dur * DEFAULT_TRACK_END_THRESHOLD) - fade;
+            if pos >= threshold.max(0.0) {
+                notification_tx
+                    .lock_sync()
+                    .try_push(PlayerNotification::TrackAboutToEnd(Arc::clone(&self.src)))
+                    .ok();
+                self.notified_about_to_end = true;
+            }
+        }
+
+        // TrackRequested
+        if !self.notified_track_requested {
+            let threshold = dur - fade;
+            if pos >= threshold.max(0.0)
+                && notification_tx
+                    .lock_sync()
+                    .try_push(PlayerNotification::TrackRequested(Arc::clone(&self.src)))
+                    .is_ok()
+            {
+                self.notified_track_requested = true;
+            }
+        }
+    }
+
+    /// Current duration in seconds.
+    ///
+    /// Source of truth is `PlayerResource` (`Timeline` underneath).
+    /// Uses snapshot fallback only if lock is temporarily unavailable.
+    pub(crate) fn duration(&self) -> f64 {
+        self.resource
+            .try_lock()
+            .ok()
+            .map_or(self.observed_duration, |resource| resource.duration())
+    }
+
+    /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
+    pub(crate) fn fade_in(&mut self) {
+        self.set_state(TrackState::FadingIn);
+        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
+        self.notified_about_to_end = false;
+        self.notified_track_requested = false;
+    }
+
+    /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
+    pub(crate) fn fade_out(&mut self) {
+        self.set_state(TrackState::FadingOut);
+        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
+    }
+
+    /// Handle natural end-of-stream (decoder reached duration).
+    fn handle_eof(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.state.is_terminal() {
+            return;
+        }
+        self.set_state(TrackState::Finished);
+        notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
+                &self.src,
+            )))
+            .ok();
+    }
+
+    /// Handle unrecoverable producer failure (pcm channel closed, decoder fault).
+    ///
+    /// Sets state to `Failed` and emits `TrackError`. Distinct from natural
+    /// EOF so the queue can differentiate "track played to end" from "track
+    /// aborted due to failure".
+    fn handle_failure(
+        &mut self,
+        err: PlayError,
+        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
+    ) {
+        if self.state.is_terminal() {
+            return;
+        }
+        tracing::warn!(
+            src = %self.src,
+            error = %err,
+            "PlayerTrack: terminal producer failure — aborting track"
+        );
+        self.set_state(TrackState::Failed);
+        notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackError(Arc::clone(&self.src), err))
+            .ok();
+    }
+
+    /// Emit notification when state changes.
+    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if !self.state_dirty {
+            return;
+        }
+        let notification = match self.state {
+            TrackState::Preloading => PlayerNotification::TrackLoaded(Arc::clone(&self.src)),
+            TrackState::FadingIn => PlayerNotification::TrackFadingIn(Arc::clone(&self.src)),
+            TrackState::FadingOut => PlayerNotification::TrackFadingOut(Arc::clone(&self.src)),
+            TrackState::Playing => PlayerNotification::TrackPlaybackStarted(Arc::clone(&self.src)),
+            TrackState::Paused => PlayerNotification::TrackPlaybackPaused(Arc::clone(&self.src)),
+            TrackState::Finished => PlayerNotification::TrackPlaybackStopped(Arc::clone(&self.src)),
+            // `Failed` notifications are emitted by `handle_failure` directly
+            // (carrying the `PlayError`); `notify_state_change` has no error
+            // value to forward, so skip the dirty flag reset for this branch.
+            TrackState::Failed => return,
+        };
+
+        if notification_tx.lock_sync().try_push(notification).is_ok() {
+            self.state_dirty = false;
+        }
+    }
+
+    /// Instantly start playing at full volume.
+    pub(crate) fn play(&mut self) {
+        self.set_state(TrackState::Playing);
+        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
+        self.mix.reset_to_target();
+        self.notified_about_to_end = false;
+        self.notified_track_requested = false;
+    }
+
+    /// Current position in seconds.
+    ///
+    /// Source of truth is `PlayerResource` (`Timeline` underneath).
+    /// Uses snapshot fallback only if lock is temporarily unavailable.
+    pub(crate) fn position(&self) -> f64 {
+        self.resource
+            .try_lock()
+            .ok()
+            .map_or(self.observed_position, |resource| resource.position())
     }
 
     /// Read audio from this track into scratch/mix buffers.
@@ -224,130 +378,21 @@ impl PlayerTrack {
         }
     }
 
-    /// Handle natural end-of-stream (decoder reached duration).
-    fn handle_eof(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.state.is_terminal() {
-            return;
-        }
-        self.set_state(TrackState::Finished);
-        notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
-                &self.src,
-            )))
-            .ok();
+    /// Reference to the underlying shared resource.
+    pub(crate) fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
+        &self.resource
     }
 
-    /// Handle unrecoverable producer failure (pcm channel closed, decoder fault).
-    ///
-    /// Sets state to `Failed` and emits `TrackError`. Distinct from natural
-    /// EOF so the queue can differentiate "track played to end" from "track
-    /// aborted due to failure".
-    fn handle_failure(
-        &mut self,
-        err: PlayError,
-        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
-    ) {
-        if self.state.is_terminal() {
-            return;
-        }
-        tracing::warn!(
-            src = %self.src,
-            error = %err,
-            "PlayerTrack: terminal producer failure — aborting track"
-        );
-        self.set_state(TrackState::Failed);
-        notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackError(Arc::clone(&self.src), err))
-            .ok();
-    }
-
-    /// Check position-based notifications.
-    fn check_notifications(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        let position = self.observed_position;
-        let duration = self.observed_duration;
-
-        if duration <= 0.0 {
-            return;
-        }
-
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
-        )]
-        let pos = position as f32;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
-        )]
-        let dur = duration as f32;
-        let fade = DEFAULT_FADE_DURATION;
-
-        // TrackAboutToEnd
-        if !self.notified_about_to_end {
-            let threshold = (dur * DEFAULT_TRACK_END_THRESHOLD) - fade;
-            if pos >= threshold.max(0.0) {
-                notification_tx
-                    .lock_sync()
-                    .try_push(PlayerNotification::TrackAboutToEnd(Arc::clone(&self.src)))
-                    .ok();
-                self.notified_about_to_end = true;
-            }
-        }
-
-        // TrackRequested
-        if !self.notified_track_requested {
-            let threshold = dur - fade;
-            if pos >= threshold.max(0.0)
-                && notification_tx
-                    .lock_sync()
-                    .try_push(PlayerNotification::TrackRequested(Arc::clone(&self.src)))
-                    .is_ok()
-            {
-                self.notified_track_requested = true;
-            }
+    /// Seek the underlying resource.
+    pub(crate) fn seek(&mut self, seconds: f64) {
+        if let Ok(mut resource) = self.resource.try_lock() {
+            resource.seek(seconds);
         }
     }
 
-    /// Transition state after a fade completes.
-    ///
-    /// `FadingIn` → `Playing` (track is now audible).
-    /// `FadingOut` → `Finished` (track is silent and should be cleaned up).
-    ///
-    /// Using `Finished` instead of `Paused` ensures `cleanup_finished_tracks()`
-    /// removes the track from the arena. Previously `Paused` left the track
-    /// in the arena indefinitely, leaking resources on every crossfade.
-    fn update_state_after_fade(&mut self) {
-        let new_state = match self.state {
-            TrackState::FadingIn => TrackState::Playing,
-            TrackState::FadingOut => TrackState::Finished,
-            current => current,
-        };
-        self.set_state(new_state);
-    }
-
-    /// Emit notification when state changes.
-    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if !self.state_dirty {
-            return;
-        }
-        let notification = match self.state {
-            TrackState::Preloading => PlayerNotification::TrackLoaded(Arc::clone(&self.src)),
-            TrackState::FadingIn => PlayerNotification::TrackFadingIn(Arc::clone(&self.src)),
-            TrackState::FadingOut => PlayerNotification::TrackFadingOut(Arc::clone(&self.src)),
-            TrackState::Playing => PlayerNotification::TrackPlaybackStarted(Arc::clone(&self.src)),
-            TrackState::Paused => PlayerNotification::TrackPlaybackPaused(Arc::clone(&self.src)),
-            TrackState::Finished => PlayerNotification::TrackPlaybackStopped(Arc::clone(&self.src)),
-            // `Failed` notifications are emitted by `handle_failure` directly
-            // (carrying the `PlayError`); `notify_state_change` has no error
-            // value to forward, so skip the dirty flag reset for this branch.
-            TrackState::Failed => return,
-        };
-
-        if notification_tx.lock_sync().try_push(notification).is_ok() {
-            self.state_dirty = false;
-        }
+    /// Update the fade curve used for future fade operations.
+    pub(crate) fn set_fade_curve(&mut self, curve: FadeCurve) {
+        self.fade_curve = curve;
     }
 
     /// Set the track state and mark as dirty.
@@ -360,6 +405,38 @@ impl PlayerTrack {
             self.state_dirty = true;
             self.update_service_class(new_state);
         }
+    }
+
+    /// Source identifier.
+    pub(crate) fn src(&self) -> &Arc<str> {
+        &self.src
+    }
+
+    /// Current track state.
+    pub(crate) fn state(&self) -> TrackState {
+        self.state
+    }
+
+    /// Instantly stop (silent, finished state).
+    pub(crate) fn stop(&mut self) {
+        self.set_state(TrackState::Finished);
+        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
+        self.mix.reset_to_target();
+    }
+
+    /// Re-create the `MixDSP` with a new fade duration.
+    pub(crate) fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
+        let fade_conf = SmootherConfig {
+            smooth_seconds: fade_duration,
+            settle_epsilon: DEFAULT_SETTLE_EPSILON,
+        };
+        // Preserve audible/inaudible state
+        let target_mix = if self.state.is_leading() {
+            Mix::FULLY_DRY
+        } else {
+            Mix::FULLY_WET
+        };
+        self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
     }
 
     /// Map track state to worker scheduling priority and push the update.
@@ -381,98 +458,21 @@ impl PlayerTrack {
         }
     }
 
-    /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
-    pub(crate) fn fade_in(&mut self) {
-        self.set_state(TrackState::FadingIn);
-        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
-        self.notified_about_to_end = false;
-        self.notified_track_requested = false;
-    }
-
-    /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
-    pub(crate) fn fade_out(&mut self) {
-        self.set_state(TrackState::FadingOut);
-        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
-    }
-
-    /// Instantly start playing at full volume.
-    pub(crate) fn play(&mut self) {
-        self.set_state(TrackState::Playing);
-        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
-        self.mix.reset_to_target();
-        self.notified_about_to_end = false;
-        self.notified_track_requested = false;
-    }
-
-    /// Instantly stop (silent, finished state).
-    pub(crate) fn stop(&mut self) {
-        self.set_state(TrackState::Finished);
-        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
-        self.mix.reset_to_target();
-    }
-
-    /// Seek the underlying resource.
-    pub(crate) fn seek(&mut self, seconds: f64) {
-        if let Ok(mut resource) = self.resource.try_lock() {
-            resource.seek(seconds);
-        }
-    }
-
-    /// Current position in seconds.
+    /// Transition state after a fade completes.
     ///
-    /// Source of truth is `PlayerResource` (`Timeline` underneath).
-    /// Uses snapshot fallback only if lock is temporarily unavailable.
-    pub(crate) fn position(&self) -> f64 {
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_position, |resource| resource.position())
-    }
-
-    /// Current duration in seconds.
+    /// `FadingIn` → `Playing` (track is now audible).
+    /// `FadingOut` → `Finished` (track is silent and should be cleaned up).
     ///
-    /// Source of truth is `PlayerResource` (`Timeline` underneath).
-    /// Uses snapshot fallback only if lock is temporarily unavailable.
-    pub(crate) fn duration(&self) -> f64 {
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_duration, |resource| resource.duration())
-    }
-
-    /// Current track state.
-    pub(crate) fn state(&self) -> TrackState {
-        self.state
-    }
-
-    /// Source identifier.
-    pub(crate) fn src(&self) -> &Arc<str> {
-        &self.src
-    }
-
-    /// Reference to the underlying shared resource.
-    pub(crate) fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
-        &self.resource
-    }
-
-    /// Re-create the `MixDSP` with a new fade duration.
-    pub(crate) fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
-        let fade_conf = SmootherConfig {
-            smooth_seconds: fade_duration,
-            settle_epsilon: DEFAULT_SETTLE_EPSILON,
+    /// Using `Finished` instead of `Paused` ensures `cleanup_finished_tracks()`
+    /// removes the track from the arena. Previously `Paused` left the track
+    /// in the arena indefinitely, leaking resources on every crossfade.
+    fn update_state_after_fade(&mut self) {
+        let new_state = match self.state {
+            TrackState::FadingIn => TrackState::Playing,
+            TrackState::FadingOut => TrackState::Finished,
+            current => current,
         };
-        // Preserve audible/inaudible state
-        let target_mix = if self.state.is_leading() {
-            Mix::FULLY_DRY
-        } else {
-            Mix::FULLY_WET
-        };
-        self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
-    }
-
-    /// Update the fade curve used for future fade operations.
-    pub(crate) fn set_fade_curve(&mut self, curve: FadeCurve) {
-        self.fade_curve = curve;
+        self.set_state(new_state);
     }
 }
 

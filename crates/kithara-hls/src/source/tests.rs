@@ -191,9 +191,9 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
     playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            segment_sizes: segment_sizes.to_vec(),
             offsets,
             total,
+            segment_sizes: segment_sizes.to_vec(),
         },
     );
     let parsed = parsed_variants(1);
@@ -234,9 +234,9 @@ fn set_variant_size_map(state: &PlaylistState, variant: usize, segment_sizes: &[
     state.set_size_map(
         variant,
         VariantSizeMap {
-            segment_sizes: segment_sizes.to_vec(),
             offsets,
             total,
+            segment_sizes: segment_sizes.to_vec(),
         },
     );
 }
@@ -974,13 +974,13 @@ fn read_media_segment_checked_reads_active_resource_in_ephemeral_mode() {
 
     let media_len = b"media_data".len() as u64;
     let seg = ReadSegment {
+        media_len,
+        media_url,
         variant: 0,
         segment_index: 0,
         byte_offset: 0,
         init_len: 0,
-        media_len,
         init_url: None,
-        media_url,
     };
     let mut buf = vec![0u8; media_len as usize];
 
@@ -1007,10 +1007,10 @@ fn read_at_does_not_advance_timeline_position() {
         0,
         0,
         SegmentData {
-            init_len: 0,
             media_len,
-            init_url: None,
             media_url,
+            init_len: 0,
+            init_url: None,
         },
     );
     source.coord.timeline().set_byte_position(0);
@@ -1113,10 +1113,10 @@ fn wait_range_allows_short_read_when_range_crosses_known_eof() {
         0,
         0,
         SegmentData {
+            media_url,
             init_len: 0,
             media_len: SEG_SIZE,
             init_url: None,
-            media_url,
         },
     );
 
@@ -1188,10 +1188,10 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
             0,
             index,
             SegmentData {
+                media_url,
                 init_len: 0,
                 media_len: payload.len() as u64,
                 init_url: None,
-                media_url,
             },
         );
         segments.push(payload);

@@ -200,8 +200,8 @@ where
             byte_recorder,
             cancel,
             inner,
-            live: Arc::new(Mutex::new(HashMap::new())),
             pins,
+            live: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -445,8 +445,8 @@ where
         if !self.is_active() {
             return Ok(LeaseResource {
                 inner,
-                _lease: LeaseGuard { inner: None },
                 mode,
+                _lease: LeaseGuard { inner: None },
                 asset_root: self.inner.asset_root().to_string(),
                 byte_recorder: None,
                 drop_token: matches!(mode, AccessMode::Write).then(|| Arc::new(())),
@@ -466,8 +466,8 @@ where
 
         Ok(LeaseResource {
             inner,
-            _lease: lease,
             mode,
+            _lease: lease,
             asset_root: self.inner.asset_root().to_string(),
             byte_recorder: self.byte_recorder.clone(),
             drop_token: matches!(mode, AccessMode::Write).then(|| Arc::new(())),

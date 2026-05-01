@@ -183,12 +183,12 @@ impl ResamplerParams {
     pub fn new(host_sample_rate: Arc<AtomicU32>, source_sample_rate: u32, channels: usize) -> Self {
         Self {
             channels,
-            chunk_size: ResamplerProcessor::DEFAULT_CHUNK_SIZE,
             host_sample_rate,
+            source_sample_rate,
+            chunk_size: ResamplerProcessor::DEFAULT_CHUNK_SIZE,
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             pool: None,
             quality: ResamplerQuality::default(),
-            source_sample_rate,
         }
     }
 }

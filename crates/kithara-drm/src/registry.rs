@@ -23,6 +23,18 @@ pub enum DomainMatcher {
 }
 
 impl DomainMatcher {
+    fn matches(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
+        match self {
+            Self::Exact(domain) => host == *domain,
+            Self::Wildcard(suffix) => {
+                host.ends_with(suffix.as_str())
+                    && host.len() > suffix.len()
+                    && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+            }
+        }
+    }
+
     /// Parse a pattern string into a [`DomainMatcher`].
     ///
     /// `"*.example.com"` → [`DomainMatcher::Wildcard`],
@@ -34,18 +46,6 @@ impl DomainMatcher {
             || Self::Exact(lower.clone()),
             |suffix| Self::Wildcard(suffix.to_string()),
         )
-    }
-
-    fn matches(&self, host: &str) -> bool {
-        let host = host.to_ascii_lowercase();
-        match self {
-            Self::Exact(domain) => host == *domain,
-            Self::Wildcard(suffix) => {
-                host.ends_with(suffix.as_str())
-                    && host.len() > suffix.len()
-                    && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
-            }
-        }
     }
 }
 
@@ -85,11 +85,11 @@ impl KeyProcessorRule {
         I: IntoIterator<Item = P>,
     {
         Self {
+            processor,
             matchers: patterns
                 .into_iter()
                 .map(|p| DomainMatcher::parse(p.as_ref()))
                 .collect(),
-            processor,
             headers: None,
             query_params: None,
         }

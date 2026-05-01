@@ -31,12 +31,12 @@ pub enum FfiError {
 
 pub type FfiResult<T> = Result<T, FfiError>;
 impl FfiError {
-    const ERROR_CODE_INTERNAL: i32 = 0;
-    const ERROR_CODE_NOT_READY: i32 = 1;
-    const ERROR_CODE_ITEM_FAILED: i32 = 2;
-    const ERROR_CODE_SEEK_FAILED: i32 = 3;
     const ERROR_CODE_ENGINE_NOT_RUNNING: i32 = 4;
+    const ERROR_CODE_INTERNAL: i32 = 0;
     const ERROR_CODE_INVALID_ARGUMENT: i32 = 5;
+    const ERROR_CODE_ITEM_FAILED: i32 = 2;
+    const ERROR_CODE_NOT_READY: i32 = 1;
+    const ERROR_CODE_SEEK_FAILED: i32 = 3;
 
     #[must_use]
     pub fn observer_code(&self) -> i32 {

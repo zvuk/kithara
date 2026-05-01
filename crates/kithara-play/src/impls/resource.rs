@@ -65,6 +65,26 @@ impl Resource {
         }
     }
 
+    /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
+    #[must_use]
+    pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.inner.abr_handle()
+    }
+
+    /// Get total duration (if known).
+    #[must_use]
+    pub fn duration(&self) -> Option<Duration> {
+        self.inner.duration()
+    }
+
+    /// Get a reference to the underlying `EventBus`.
+    ///
+    /// Useful for passing to downstream components that also publish events.
+    #[must_use]
+    pub fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+
     /// Create a resource from any `PcmReader`.
     ///
     /// The resource shares the reader's event bus directly.
@@ -116,33 +136,46 @@ impl Resource {
         // propagate here.
         let _ = audio.preload();
         Ok(Self {
-            inner: Box::new(audio),
             bus,
             src,
+            inner: Box::new(audio),
         })
     }
 
-    /// Source identifier for this resource.
+    /// Get track metadata.
     #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        &self.src
+    pub fn metadata(&self) -> &TrackMetadata {
+        self.inner.metadata()
     }
 
-    /// Subscribe to unified events.
+    /// Read the next decoded chunk with full metadata.
     ///
-    /// Returns a receiver for all events published to the bus,
-    /// including audio, file, and HLS events.
-    #[must_use]
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
-        self.bus.subscribe()
+    /// # Errors
+    /// Propagated from the underlying `PcmReader` on decoder / channel failure.
+    pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        self.inner.next_chunk()
     }
 
-    /// Get a reference to the underlying `EventBus`.
-    ///
-    /// Useful for passing to downstream components that also publish events.
+    /// Get current playback position.
     #[must_use]
-    pub fn event_bus(&self) -> &EventBus {
-        &self.bus
+    pub fn position(&self) -> Duration {
+        self.inner.position()
+    }
+
+    /// Wait for first decoded chunk to be available, then move it to internal buffer.
+    ///
+    /// After preload completes, the first `read()` returns data without blocking.
+    /// Safe to call multiple times (no-op if already preloaded).
+    ///
+    /// # Errors
+    /// Propagated from the underlying `PcmReader::preload` if the
+    /// producer channel closed or the initial fill hit a decoder
+    /// failure.
+    pub async fn preload(&mut self) -> Result<(), DecodeError> {
+        if let Some(notify) = self.inner.preload_notify() {
+            notify.notified().await;
+        }
+        self.inner.preload()
     }
 
     /// Read interleaved PCM samples.
@@ -164,14 +197,6 @@ impl Resource {
         self.inner.read_planar(output)
     }
 
-    /// Read the next decoded chunk with full metadata.
-    ///
-    /// # Errors
-    /// Propagated from the underlying `PcmReader` on decoder / channel failure.
-    pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        self.inner.next_chunk()
-    }
-
     /// Seek to position.
     ///
     /// # Errors
@@ -180,30 +205,6 @@ impl Resource {
     /// stream does not support seeking.
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         self.inner.seek(position)
-    }
-
-    /// Get current PCM specification.
-    #[must_use]
-    pub fn spec(&self) -> PcmSpec {
-        self.inner.spec()
-    }
-
-    /// Get current playback position.
-    #[must_use]
-    pub fn position(&self) -> Duration {
-        self.inner.position()
-    }
-
-    /// Get total duration (if known).
-    #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        self.inner.duration()
-    }
-
-    /// Get track metadata.
-    #[must_use]
-    pub fn metadata(&self) -> &TrackMetadata {
-        self.inner.metadata()
     }
 
     /// Set the target sample rate of the audio host.
@@ -227,25 +228,24 @@ impl Resource {
         self.inner.set_service_class(class);
     }
 
-    /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
+    /// Get current PCM specification.
     #[must_use]
-    pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.inner.abr_handle()
+    pub fn spec(&self) -> PcmSpec {
+        self.inner.spec()
     }
-    /// Wait for first decoded chunk to be available, then move it to internal buffer.
+
+    /// Source identifier for this resource.
+    #[must_use]
+    pub fn src(&self) -> &Arc<str> {
+        &self.src
+    }
+    /// Subscribe to unified events.
     ///
-    /// After preload completes, the first `read()` returns data without blocking.
-    /// Safe to call multiple times (no-op if already preloaded).
-    ///
-    /// # Errors
-    /// Propagated from the underlying `PcmReader::preload` if the
-    /// producer channel closed or the initial fill hit a decoder
-    /// failure.
-    pub async fn preload(&mut self) -> Result<(), DecodeError> {
-        if let Some(notify) = self.inner.preload_notify() {
-            notify.notified().await;
-        }
-        self.inner.preload()
+    /// Returns a receiver for all events published to the bus,
+    /// including audio, file, and HLS events.
+    #[must_use]
+    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+        self.bus.subscribe()
     }
 }
 

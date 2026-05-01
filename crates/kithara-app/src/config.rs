@@ -75,6 +75,8 @@ impl AppConfig {
     #[must_use]
     pub fn new(downloader: Downloader, flush_hub: Arc<FlushHub>) -> Self {
         Self {
+            downloader,
+            flush_hub,
             tracks: Self::DEFAULT_TRACKS
                 .iter()
                 .map(ToString::to_string)
@@ -85,8 +87,6 @@ impl AppConfig {
             log_directives: Vec::new(),
             palette: Palette::default(),
             danger_accept_invalid_certs: true,
-            downloader,
-            flush_hub,
         }
     }
 

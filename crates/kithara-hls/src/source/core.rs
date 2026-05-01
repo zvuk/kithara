@@ -70,24 +70,21 @@ impl Drop for HlsSource {
 }
 
 impl HlsSource {
-    /// Set the peer handle (called after the peer is activated).
-    pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
-        self._peer_handle = Some(handle);
-    }
-
-    /// Store the `Arc<HlsPeer>` so `Drop` can tear down its state and
-    /// break the `Registry → HlsPeer → HlsState::loader → PeerHandle`
-    /// reference cycle.
-    pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
-        self._hls_peer = Some(peer);
-    }
-
-    /// Current variant for source operations (read, seek, demand).
-    ///
-    /// Always uses `layout_variant` — ABR only affects playback via
-    /// `media_info()` → `format_change` detection → layout switch.
-    pub(super) fn resolve_current_variant(&self) -> VariantIndex {
-        self.segments.lock_sync().layout_variant()
+    pub(super) fn byte_offset_for_segment(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+    ) -> Option<u64> {
+        let segments = self.segments.lock_sync();
+        if let Some(range) = segments.item_range((variant, segment_index)) {
+            return Some(range.start);
+        }
+        let layout_offset =
+            segments.layout_offset_for_segment(segment_index, self.playlist_state.as_ref());
+        drop(segments);
+        self.playlist_state
+            .segment_byte_offset(variant, segment_index)
+            .or(layout_offset)
     }
 
     pub(crate) fn can_cross_variant_without_reset(
@@ -153,45 +150,29 @@ impl HlsSource {
             .map(|(_, seg_idx)| seg_idx)
     }
 
-    pub(super) fn layout_segment_for_offset(
-        &self,
-        offset: u64,
-    ) -> Option<(VariantIndex, SegmentIndex)> {
-        self.segments
+    pub(super) fn effective_total_bytes(&self) -> Option<u64> {
+        let total = self
+            .segments
             .lock_sync()
-            .segment_for_offset(offset, self.playlist_state.as_ref())
+            .effective_total(self.playlist_state.as_ref());
+        (total > 0).then_some(total)
     }
 
-    pub(super) fn byte_offset_for_segment(
+    fn find_segment_for_offset(
         &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-    ) -> Option<u64> {
-        let segments = self.segments.lock_sync();
-        if let Some(range) = segments.item_range((variant, segment_index)) {
-            return Some(range.start);
+        range_start: u64,
+    ) -> Option<(VariantIndex, SegmentIndex, &'static str)> {
+        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
+            return Some((variant, segment_index, "layout_segment_for_offset"));
         }
-        let layout_offset =
-            segments.layout_offset_for_segment(segment_index, self.playlist_state.as_ref());
-        drop(segments);
-        self.playlist_state
-            .segment_byte_offset(variant, segment_index)
-            .or(layout_offset)
-    }
-
-    pub(super) fn metadata_range_for_segment(
-        &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-    ) -> Option<Range<u64>> {
-        let start = self
+        let variant = self.resolve_current_variant();
+        if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
+            return Some((variant, segment_index, "committed_segment_for_offset"));
+        }
+        let segment_index = self
             .playlist_state
-            .segment_byte_offset(variant, segment_index)?;
-        let end = self
-            .playlist_state
-            .segment_byte_offset(variant, segment_index + 1)
-            .or_else(|| self.playlist_state.total_variant_size(variant))?;
-        (end > start).then_some(start..end)
+            .find_segment_at_offset(variant, range_start)?;
+        Some((variant, segment_index, "playlist.find_segment_at_offset"))
     }
 
     pub(super) fn init_segment_range_for_variant(
@@ -231,14 +212,6 @@ impl HlsSource {
         self.metadata_range_for_segment(variant, 0)
     }
 
-    pub(super) fn effective_total_bytes(&self) -> Option<u64> {
-        let total = self
-            .segments
-            .lock_sync()
-            .effective_total(self.playlist_state.as_ref());
-        (total > 0).then_some(total)
-    }
-
     pub(super) fn is_past_eof(&self, segments: &StreamIndex, range: &Range<u64>) -> bool {
         let known_total = segments.effective_total(self.playlist_state.as_ref());
         let loaded_total = segments.max_end_offset();
@@ -248,6 +221,44 @@ impl HlsSource {
         }
 
         true
+    }
+
+    pub(super) fn layout_segment_for_offset(
+        &self,
+        offset: u64,
+    ) -> Option<(VariantIndex, SegmentIndex)> {
+        self.segments
+            .lock_sync()
+            .segment_for_offset(offset, self.playlist_state.as_ref())
+    }
+
+    pub(super) fn loaded_segment_ready(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+    ) -> bool {
+        let segments = self.segments.lock_sync();
+        if !segments.is_visible(variant, segment_index) {
+            return false;
+        }
+        segments
+            .range_for(variant, segment_index)
+            .is_some_and(|range| self.range_ready_from_segments(&segments, &range))
+    }
+
+    pub(super) fn metadata_range_for_segment(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+    ) -> Option<Range<u64>> {
+        let start = self
+            .playlist_state
+            .segment_byte_offset(variant, segment_index)?;
+        let end = self
+            .playlist_state
+            .segment_byte_offset(variant, segment_index + 1)
+            .or_else(|| self.playlist_state.total_variant_size(variant))?;
+        (end > start).then_some(start..end)
     }
 
     pub(super) fn push_segment_request(
@@ -262,6 +273,24 @@ impl HlsSource {
                 variant,
                 seek_epoch,
             })
+    }
+
+    /// Hand a resolved `(variant, segment_index)` pair off to the
+    /// coord's demand slot for the given seek epoch. The probe records
+    /// the (`seek_epoch`, `segment_index`, `offset`) tuple at the
+    /// precise point the offset-driven path commits a request to the
+    /// queue, so `probe_capture` consumers can match this against the
+    /// scheduler's `fetch_cmd_emitted` for the same epoch+segment.
+    #[kithara::probe(seek_epoch, segment_index, offset)]
+    fn queue_resolved_segment_request(
+        &self,
+        seek_epoch: u64,
+        segment_index: SegmentIndex,
+        variant: VariantIndex,
+        offset: u64,
+    ) -> bool {
+        let _ = offset;
+        self.push_segment_request(variant, segment_index, seek_epoch)
     }
 
     /// Try to resolve and enqueue a segment request for `range_start`.
@@ -297,39 +326,12 @@ impl HlsSource {
         self.queue_resolved_segment_request(seek_epoch, segment_index, variant, range_start)
     }
 
-    /// Hand a resolved `(variant, segment_index)` pair off to the
-    /// coord's demand slot for the given seek epoch. The probe records
-    /// the (`seek_epoch`, `segment_index`, `offset`) tuple at the
-    /// precise point the offset-driven path commits a request to the
-    /// queue, so `probe_capture` consumers can match this against the
-    /// scheduler's `fetch_cmd_emitted` for the same epoch+segment.
-    #[kithara::probe(seek_epoch, segment_index, offset)]
-    fn queue_resolved_segment_request(
-        &self,
-        seek_epoch: u64,
-        segment_index: SegmentIndex,
-        variant: VariantIndex,
-        offset: u64,
-    ) -> bool {
-        let _ = offset;
-        self.push_segment_request(variant, segment_index, seek_epoch)
-    }
-
-    fn find_segment_for_offset(
-        &self,
-        range_start: u64,
-    ) -> Option<(VariantIndex, SegmentIndex, &'static str)> {
-        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
-            return Some((variant, segment_index, "layout_segment_for_offset"));
-        }
-        let variant = self.resolve_current_variant();
-        if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
-            return Some((variant, segment_index, "committed_segment_for_offset"));
-        }
-        let segment_index = self
-            .playlist_state
-            .find_segment_at_offset(variant, range_start)?;
-        Some((variant, segment_index, "playlist.find_segment_at_offset"))
+    /// Current variant for source operations (read, seek, demand).
+    ///
+    /// Always uses `layout_variant` — ABR only affects playback via
+    /// `media_info()` → `format_change` detection → layout switch.
+    pub(super) fn resolve_current_variant(&self) -> VariantIndex {
+        self.segments.lock_sync().layout_variant()
     }
 
     pub(super) fn resolve_segment_for_offset(
@@ -344,18 +346,16 @@ impl HlsSource {
             .find_segment_at_offset(variant, range_start)
     }
 
-    pub(super) fn loaded_segment_ready(
-        &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-    ) -> bool {
-        let segments = self.segments.lock_sync();
-        if !segments.is_visible(variant, segment_index) {
-            return false;
-        }
-        segments
-            .range_for(variant, segment_index)
-            .is_some_and(|range| self.range_ready_from_segments(&segments, &range))
+    /// Store the `Arc<HlsPeer>` so `Drop` can tear down its state and
+    /// break the `Registry → HlsPeer → HlsState::loader → PeerHandle`
+    /// reference cycle.
+    pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
+        self._hls_peer = Some(peer);
+    }
+
+    /// Set the peer handle (called after the peer is activated).
+    pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
+        self._peer_handle = Some(handle);
     }
 }
 
@@ -401,6 +401,8 @@ pub(crate) fn build_pair(
     };
 
     let downloader = HlsScheduler {
+        look_ahead_segments,
+        committed_segment,
         active_seek_epoch: 0,
         backend: backend.clone(),
         playlist_state: Arc::clone(&playlist_state),
@@ -411,7 +413,6 @@ pub(crate) fn build_pair(
         coord: Arc::clone(&coord),
         segments: Arc::clone(&segments),
         bus: bus.clone(),
-        look_ahead_segments,
         prefetch_count: config.download_batch_size.max(1),
         download_variant: initial_variant,
         filling_layout_gap: false,
@@ -419,7 +420,6 @@ pub(crate) fn build_pair(
         announced_cached_count: HashMap::new(),
         populated_cached_count: HashMap::new(),
         in_flight_segments: HashSet::new(),
-        committed_segment,
     };
 
     let segmented_view = HlsSegmentView::new(Arc::clone(&playlist_state), Arc::clone(&segments));
@@ -430,11 +430,11 @@ pub(crate) fn build_pair(
         segments,
         playlist_state,
         bus,
+        reader_segment,
+        segmented_view,
         variant_fence: None,
         _hls_peer: None,
         _peer_handle: None,
-        reader_segment,
-        segmented_view,
     };
 
     (downloader, source)

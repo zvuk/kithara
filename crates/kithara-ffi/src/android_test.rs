@@ -40,37 +40,37 @@ use tracing::{error, info};
 
 struct Consts;
 impl Consts {
-    // Result codes returned by `nativeRunOfflineCapture`.
-    const RC_OK: jlong = 0;
-    const RC_STRING_READ: jlong = 1;
-    const RC_RUNTIME_BUILD: jlong = 2;
-    const RC_AUDIO_BUILD: jlong = 3;
-    const RC_OUTPUT_OPEN: jlong = 4;
-    const RC_OUTPUT_WRITE: jlong = 5;
-    const RC_HEADER_REWRITE: jlong = 6;
-
+    const BITS_PER_SAMPLE: u16 = 32;
+    const BLOCK_FRAMES: usize = 512;
+    const CHANNELS: u16 = 2;
+    const FMT_ERR_DEFAULT_CFG: jlong = -2;
+    const FMT_ERR_NO_DEVICE: jlong = -1;
+    const FMT_ERR_SUPPORTED_CFGS: jlong = -3;
     // Default cpal sample format codes surfaced by `nativeProbeAndroidAudio`.
     // Mirrored in `Kithara.Test.SampleFormat` (Kotlin).
     const FMT_F32: jlong = 0;
+
+    const FMT_F64: jlong = 9;
     const FMT_I16: jlong = 1;
-    const FMT_U16: jlong = 2;
-    const FMT_I8: jlong = 3;
     const FMT_I32: jlong = 4;
     const FMT_I64: jlong = 5;
-    const FMT_U8: jlong = 6;
+    const FMT_I8: jlong = 3;
+    const FMT_OTHER: jlong = 10;
+    const FMT_U16: jlong = 2;
     const FMT_U32: jlong = 7;
     const FMT_U64: jlong = 8;
-    const FMT_F64: jlong = 9;
-    const FMT_OTHER: jlong = 10;
-    const FMT_ERR_NO_DEVICE: jlong = -1;
-    const FMT_ERR_DEFAULT_CFG: jlong = -2;
-    const FMT_ERR_SUPPORTED_CFGS: jlong = -3;
+    const FMT_U8: jlong = 6;
+    const RC_AUDIO_BUILD: jlong = 3;
+    const RC_HEADER_REWRITE: jlong = 6;
+    // Result codes returned by `nativeRunOfflineCapture`.
+    const RC_OK: jlong = 0;
+    const RC_OUTPUT_OPEN: jlong = 4;
 
+    const RC_OUTPUT_WRITE: jlong = 5;
+    const RC_RUNTIME_BUILD: jlong = 2;
+    const RC_STRING_READ: jlong = 1;
     // WAV output parameters for `nativeRunOfflineCapture`.
     const SAMPLE_RATE: u32 = 44_100;
-    const BLOCK_FRAMES: usize = 512;
-    const CHANNELS: u16 = 2;
-    const BITS_PER_SAMPLE: u16 = 32;
     const WAV_FMT_CHUNK_SIZE: u32 = 16;
     const WAV_FORMAT_IEEE_FLOAT: u16 = 3;
     const WAV_HEADER_BYTES: u32 = 36;

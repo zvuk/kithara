@@ -96,8 +96,8 @@ mod dump_tests {
 
 struct Consts;
 impl Consts {
-    const LOOP_BREAK_COUNT_3: i32 = 3;
     const LOOP_BREAK_COUNT_2: i32 = 2;
+    const LOOP_BREAK_COUNT_3: i32 = 3;
 }
 
 #[kithara::test]

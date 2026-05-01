@@ -229,8 +229,8 @@ impl<T: StreamType> StreamAudioSource<T> {
     ) -> Self {
         let timeline = shared_stream.timeline();
         let session = DecoderSession {
-            base_offset: 0,
             decoder,
+            base_offset: 0,
             media_info: initial_media_info,
         };
         // Initial FSM state is Decoding — mark this Timeline as actively
@@ -240,15 +240,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         Self {
             shared_stream,
             session,
-            state: TrackState::Decoding,
             decoder_factory,
             epoch,
+            effects,
+            timeline,
+            state: TrackState::Decoding,
             chunks_decoded: 0,
             total_samples: 0,
             last_spec: None,
             emit: None,
-            effects,
-            timeline,
         }
     }
 
@@ -496,13 +496,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             byte_range_end,
         );
         self.update_state(TrackState::AwaitingResume(ResumeState {
+            anchor_offset,
             recover_attempts: 0,
             seek: SeekContext {
                 epoch,
                 target: position,
             },
             skip: None,
-            anchor_offset,
         }));
     }
 
@@ -733,10 +733,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         let pos = kithara_stream::ChunkPosition {
             sample_rate,
             frame_offset,
+            end_position_ns,
             frames: 0,
             source_bytes: 0,
             source_byte_offset: None,
-            end_position_ns,
         };
         self.timeline.commit_seek_landed(&pos);
     }
@@ -1015,14 +1015,14 @@ impl<T: StreamType> StreamAudioSource<T> {
             // with the original `ApplySeek` context so the FSM resumes the
             // same seek once the source is ready.
             let applying = ApplySeekState {
-                mode: seek_mode,
                 request,
+                mode: seek_mode,
             };
             let phase = self.source_phase_for_wait_context(&WaitContext::ApplySeek(applying));
             let reason = map_source_phase(phase).unwrap_or(WaitingReason::Waiting);
             self.update_state(TrackState::WaitingForSource {
-                context: WaitContext::ApplySeek(applying),
                 reason,
+                context: WaitContext::ApplySeek(applying),
             });
             self.submit_demand_for_current_state();
             return false;
@@ -1441,11 +1441,11 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.timeline
                 .commit_seek_landed(&kithara_stream::ChunkPosition {
                     sample_rate,
+                    end_position_ns,
                     frame_offset: end_frame,
                     frames: 0,
                     source_bytes: 0,
                     source_byte_offset: None,
-                    end_position_ns,
                 });
             self.timeline.complete_seek(epoch);
             self.timeline.clear_seek_pending(epoch);
@@ -1647,8 +1647,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             RecreateNext::AnchorSeek { request, anchor } => {
                 reset_effects(&mut self.effects);
                 self.update_state(TrackState::ApplyingSeek(ApplySeekState {
-                    mode: SeekMode::Anchor(anchor),
                     request,
+                    mode: SeekMode::Anchor(anchor),
                 }));
                 if self.apply_time_anchor_seek(request, anchor) {
                     // Mirror what `step_applying_seek` does on `applied = true`
@@ -1738,8 +1738,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             let phase = self.source_phase_for_wait_context(&WaitContext::ApplySeek(applying));
             if let Some(reason) = map_source_phase(phase) {
                 self.update_state(TrackState::WaitingForSource {
-                    context: WaitContext::ApplySeek(applying),
                     reason,
+                    context: WaitContext::ApplySeek(applying),
                 });
                 return TrackStep::Blocked(reason);
             }
@@ -1825,8 +1825,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             let phase = self.shared_stream.phase();
             if let Some(reason) = map_source_phase(phase) {
                 self.update_state(TrackState::WaitingForSource {
-                    context: WaitContext::Playback,
                     reason,
+                    context: WaitContext::Playback,
                 });
                 return TrackStep::Blocked(reason);
             }
@@ -1888,8 +1888,8 @@ impl<T: StreamType> StreamAudioSource<T> {
                     _ => return TrackStep::StateChanged,
                 };
                 self.update_state(TrackState::WaitingForSource {
-                    context: WaitContext::Seek(request),
                     reason,
+                    context: WaitContext::Seek(request),
                 });
                 return TrackStep::Blocked(reason);
             }
@@ -1986,8 +1986,8 @@ impl<T: StreamType> StreamAudioSource<T> {
                 }
             };
             self.update_state(TrackState::WaitingForSource {
-                context: WaitContext::Recreation(recreate),
                 reason,
+                context: WaitContext::Recreation(recreate),
             });
             self.submit_demand_for_current_state();
             return TrackStep::Blocked(reason);

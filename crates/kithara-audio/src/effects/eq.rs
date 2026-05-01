@@ -160,10 +160,10 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
                 FilterKind::Peaking
             };
             EqBandConfig {
-                frequency: Consts::LOG_FREQ_BASE.powf(log_min + i as f32 * log_step),
                 q_factor,
-                gain_db: 0.0,
                 kind,
+                frequency: Consts::LOG_FREQ_BASE.powf(log_min + i as f32 * log_step),
+                gain_db: 0.0,
             }
         })
         .collect()
@@ -367,9 +367,9 @@ impl IsolatorEq {
             hps,
             ap_filters,
             ap_offsets,
-            lp_scratch: vec![0.0; xover_count],
             gains,
             crossover_freqs,
+            lp_scratch: vec![0.0; xover_count],
             sample_rate: sr,
             smooth_coeff: compute_smooth_coeff(sr),
             block_counter: 0,

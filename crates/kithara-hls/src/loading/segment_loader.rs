@@ -79,60 +79,52 @@ impl SegmentLoader {
         }
     }
 
-    pub fn set_key_manager(&mut self, km: Arc<KeyManager>) {
-        self.key_manager = Some(km);
+    /// Validate a raw AES-128 key and build a [`DecryptContext`].
+    fn build_decrypt_context(raw_key: &[u8], iv: [u8; AES_KEY_LEN]) -> HlsResult<DecryptContext> {
+        if raw_key.len() != AES_KEY_LEN {
+            return Err(HlsError::KeyProcessing(format!(
+                "invalid AES-128 key length: {}",
+                raw_key.len()
+            )));
+        }
+        let mut key_bytes = [0u8; AES_KEY_LEN];
+        key_bytes.copy_from_slice(&raw_key[..AES_KEY_LEN]);
+        Ok(DecryptContext::new(key_bytes, iv))
     }
 
-    /// Start fetching a segment via the unified [`PeerHandle`].
+    /// Complete a media segment after body has been written by the
+    /// Downloader (via `on_chunk`).
     ///
-    /// Returns `(bytes, was_cached)`:
-    /// - `was_cached == true` — resource was already committed in the
-    ///   disk cache; no network round-trip occurred.
-    /// - `was_cached == false` — fetch went through
-    ///   `PeerHandle::execute` and the response body stream was
-    ///   written into the `AssetResource` chunk by chunk.
-    ///
-    /// When `decrypt_ctx` is `Some`, the resource is opened with a
-    /// decrypt context; decryption happens on the fly inside
-    /// `AssetResource::write_at` via the `ProcessingAssets` layer.
+    /// Commits the resource and returns segment metadata.
     ///
     /// # Errors
-    /// Returns an error when the cache lookup or network fetch fails.
-    pub async fn start_fetch(
+    /// Returns an error when commit fails or zero bytes were written.
+    pub fn complete_media(
         &self,
-        url: &Url,
-        decrypt_ctx: Option<DecryptContext>,
-    ) -> HlsResult<(u64, bool)> {
-        match self.try_cached_fetch(url, decrypt_ctx)? {
-            CachedOrPending::Cached(len) => Ok((len, true)),
-            CachedOrPending::Pending(res) => {
-                trace!(url = %url, "start_fetch: downloading via PeerHandle");
-                let bytes = self.download_stream_via_downloader(url, &res).await?;
-                Ok((bytes, false))
-            }
-        }
-    }
-
-    /// Resolve whether `url` is already cached. On hit returns the
-    /// committed length; on miss returns an acquired resource ready
-    /// for network download.
-    fn try_cached_fetch(
-        &self,
-        url: &Url,
-        decrypt_ctx: Option<DecryptContext>,
-    ) -> HlsResult<CachedOrPending> {
-        let key = ResourceKey::from_url(url);
-        if let Some(len) = self.backend.final_len(&key) {
-            trace!(url = %url, len, "start_fetch: cache hit via AssetStore availability index");
-            return Ok(CachedOrPending::Cached(len));
+        prepared: &PreparedMedia,
+        bytes_written: u64,
+    ) -> HlsResult<SegmentMeta> {
+        if bytes_written == 0 && prepared.cached_len.is_none() {
+            return Err(HlsError::SegmentNotFound(format!(
+                "0 bytes downloaded for {}",
+                prepared.url,
+            )));
         }
 
-        let res = self.backend.acquire_resource_with_ctx(&key, decrypt_ctx)?;
-        if let Some(len) = committed_len(&res) {
-            trace!(url = %url, len, "start_fetch: cache hit");
-            return Ok(CachedOrPending::Cached(len));
-        }
-        Ok(CachedOrPending::Pending(Box::new(res)))
+        let len = if let Some(cached) = prepared.cached_len {
+            cached
+        } else if let Some(ref res) = prepared.resource {
+            res.commit(Some(bytes_written)).map_err(HlsError::from)?;
+            res.len().unwrap_or(bytes_written)
+        } else {
+            bytes_written
+        };
+
+        Ok(SegmentMeta {
+            len,
+            url: prepared.url.clone(),
+            duration: prepared.duration,
+        })
     }
 
     /// Stream a fetch into an `AssetResource` via [`PeerHandle`].
@@ -170,79 +162,6 @@ impl SegmentLoader {
         Ok(res.len().unwrap_or(total))
     }
 
-    /// Prepare AES-128 decryption inputs.
-    ///
-    /// Returns `Ok(None)` when the segment is unencrypted or uses an
-    /// unsupported method. Returns `Ok(Some(...))` with the resolved
-    /// [`KeyManager`], derived IV, and absolute key URL when a DRM key
-    /// fetch/lookup is required. Returns `Err` when the segment is
-    /// encrypted but no [`KeyManager`] has been configured.
-    fn prepare_decrypt_inputs(
-        &self,
-        key: Option<&SegmentKey>,
-        segment_url: &Url,
-        sequence: u64,
-    ) -> HlsResult<Option<DecryptInputs<'_>>> {
-        let Some(seg_key) = key else {
-            return Ok(None);
-        };
-        if !matches!(seg_key.method, EncryptionMethod::Aes128) {
-            return Ok(None);
-        }
-        let Some(ref key_info) = seg_key.key_info else {
-            return Ok(None);
-        };
-        let Some(ref km) = self.key_manager else {
-            return Err(HlsError::KeyProcessing(
-                "encrypted segment but no KeyManager configured".to_string(),
-            ));
-        };
-
-        let iv = KeyManager::derive_iv(key_info, sequence);
-        let key_url = KeyManager::resolve_key_url(key_info, segment_url)?;
-        Ok(Some((km, iv, key_url)))
-    }
-
-    /// Validate a raw AES-128 key and build a [`DecryptContext`].
-    fn build_decrypt_context(raw_key: &[u8], iv: [u8; AES_KEY_LEN]) -> HlsResult<DecryptContext> {
-        if raw_key.len() != AES_KEY_LEN {
-            return Err(HlsError::KeyProcessing(format!(
-                "invalid AES-128 key length: {}",
-                raw_key.len()
-            )));
-        }
-        let mut key_bytes = [0u8; AES_KEY_LEN];
-        key_bytes.copy_from_slice(&raw_key[..AES_KEY_LEN]);
-        Ok(DecryptContext::new(key_bytes, iv))
-    }
-
-    /// Resolve decryption context for a segment.
-    ///
-    /// Returns `Some(DecryptContext)` for AES-128 encrypted segments,
-    /// `None` for unencrypted segments or unsupported methods.
-    async fn resolve_decrypt_context(
-        &self,
-        key: Option<&SegmentKey>,
-        segment_url: &Url,
-        sequence: u64,
-    ) -> HlsResult<Option<DecryptContext>> {
-        let Some((km, iv, key_url)) = self.prepare_decrypt_inputs(key, segment_url, sequence)?
-        else {
-            return Ok(None);
-        };
-
-        let raw_key = km.get_raw_key(&key_url, Some(iv)).await?;
-        let ctx = Self::build_decrypt_context(&raw_key, iv)?;
-
-        debug!(
-            url = %segment_url,
-            sequence,
-            "resolved DRM context for segment"
-        );
-
-        Ok(Some(ctx))
-    }
-
     /// Download init segment for a variant. No race recovery needed —
     /// `OnceCell` guarantees exactly one caller performs the download.
     async fn fetch_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {
@@ -277,6 +196,21 @@ impl SegmentLoader {
         })
     }
 
+    /// Read init segment metadata from cache (no network I/O).
+    ///
+    /// Returns `None` if the init segment hasn't been pre-fetched yet
+    /// or if the resource was evicted from the ephemeral LRU.
+    #[must_use]
+    pub fn get_init_segment_cached(&self, variant: usize) -> Option<SegmentMeta> {
+        let meta = self.init_segments.get(&variant)?.get()?.clone();
+        if self.backend.is_ephemeral()
+            && !self.backend.has_resource(&ResourceKey::from_url(&meta.url))
+        {
+            return None;
+        }
+        Some(meta)
+    }
+
     /// Load init segment with deduplication via `OnceCell`.
     ///
     /// First caller downloads, concurrent callers wait on the same cell.
@@ -309,23 +243,37 @@ impl SegmentLoader {
         Ok(meta.clone())
     }
 
-    /// Synchronous DRM context resolution using pre-fetched keys.
+    /// Prepare AES-128 decryption inputs.
     ///
-    /// Reads key bytes from [`AssetStore`] (disk cache). Returns `None`
-    /// for unencrypted segments.
-    fn resolve_decrypt_context_sync(
+    /// Returns `Ok(None)` when the segment is unencrypted or uses an
+    /// unsupported method. Returns `Ok(Some(...))` with the resolved
+    /// [`KeyManager`], derived IV, and absolute key URL when a DRM key
+    /// fetch/lookup is required. Returns `Err` when the segment is
+    /// encrypted but no [`KeyManager`] has been configured.
+    fn prepare_decrypt_inputs(
         &self,
         key: Option<&SegmentKey>,
         segment_url: &Url,
         sequence: u64,
-    ) -> HlsResult<Option<DecryptContext>> {
-        let Some((km, iv, key_url)) = self.prepare_decrypt_inputs(key, segment_url, sequence)?
-        else {
+    ) -> HlsResult<Option<DecryptInputs<'_>>> {
+        let Some(seg_key) = key else {
             return Ok(None);
         };
+        if !matches!(seg_key.method, EncryptionMethod::Aes128) {
+            return Ok(None);
+        }
+        let Some(ref key_info) = seg_key.key_info else {
+            return Ok(None);
+        };
+        let Some(ref km) = self.key_manager else {
+            return Err(HlsError::KeyProcessing(
+                "encrypted segment but no KeyManager configured".to_string(),
+            ));
+        };
 
-        let raw_key = km.get_cached_key(&key_url)?;
-        Ok(Some(Self::build_decrypt_context(&raw_key, iv)?))
+        let iv = KeyManager::derive_iv(key_info, sequence);
+        let key_url = KeyManager::resolve_key_url(key_info, segment_url)?;
+        Ok(Some((km, iv, key_url)))
     }
 
     /// Synchronous media segment preparation using pre-fetched data.
@@ -398,21 +346,6 @@ impl SegmentLoader {
         })
     }
 
-    /// Read init segment metadata from cache (no network I/O).
-    ///
-    /// Returns `None` if the init segment hasn't been pre-fetched yet
-    /// or if the resource was evicted from the ephemeral LRU.
-    #[must_use]
-    pub fn get_init_segment_cached(&self, variant: usize) -> Option<SegmentMeta> {
-        let meta = self.init_segments.get(&variant)?.get()?.clone();
-        if self.backend.is_ephemeral()
-            && !self.backend.has_resource(&ResourceKey::from_url(&meta.url))
-        {
-            return None;
-        }
-        Some(meta)
-    }
-
     /// Read init segment bytes from the asset store into `buf`.
     ///
     /// Returns number of bytes read, or `None` if the init segment
@@ -429,39 +362,106 @@ impl SegmentLoader {
         Some(n)
     }
 
-    /// Complete a media segment after body has been written by the
-    /// Downloader (via `on_chunk`).
+    /// Resolve decryption context for a segment.
     ///
-    /// Commits the resource and returns segment metadata.
-    ///
-    /// # Errors
-    /// Returns an error when commit fails or zero bytes were written.
-    pub fn complete_media(
+    /// Returns `Some(DecryptContext)` for AES-128 encrypted segments,
+    /// `None` for unencrypted segments or unsupported methods.
+    async fn resolve_decrypt_context(
         &self,
-        prepared: &PreparedMedia,
-        bytes_written: u64,
-    ) -> HlsResult<SegmentMeta> {
-        if bytes_written == 0 && prepared.cached_len.is_none() {
-            return Err(HlsError::SegmentNotFound(format!(
-                "0 bytes downloaded for {}",
-                prepared.url,
-            )));
-        }
-
-        let len = if let Some(cached) = prepared.cached_len {
-            cached
-        } else if let Some(ref res) = prepared.resource {
-            res.commit(Some(bytes_written)).map_err(HlsError::from)?;
-            res.len().unwrap_or(bytes_written)
-        } else {
-            bytes_written
+        key: Option<&SegmentKey>,
+        segment_url: &Url,
+        sequence: u64,
+    ) -> HlsResult<Option<DecryptContext>> {
+        let Some((km, iv, key_url)) = self.prepare_decrypt_inputs(key, segment_url, sequence)?
+        else {
+            return Ok(None);
         };
 
-        Ok(SegmentMeta {
-            url: prepared.url.clone(),
-            duration: prepared.duration,
-            len,
-        })
+        let raw_key = km.get_raw_key(&key_url, Some(iv)).await?;
+        let ctx = Self::build_decrypt_context(&raw_key, iv)?;
+
+        debug!(
+            url = %segment_url,
+            sequence,
+            "resolved DRM context for segment"
+        );
+
+        Ok(Some(ctx))
+    }
+
+    /// Synchronous DRM context resolution using pre-fetched keys.
+    ///
+    /// Reads key bytes from [`AssetStore`] (disk cache). Returns `None`
+    /// for unencrypted segments.
+    fn resolve_decrypt_context_sync(
+        &self,
+        key: Option<&SegmentKey>,
+        segment_url: &Url,
+        sequence: u64,
+    ) -> HlsResult<Option<DecryptContext>> {
+        let Some((km, iv, key_url)) = self.prepare_decrypt_inputs(key, segment_url, sequence)?
+        else {
+            return Ok(None);
+        };
+
+        let raw_key = km.get_cached_key(&key_url)?;
+        Ok(Some(Self::build_decrypt_context(&raw_key, iv)?))
+    }
+
+    pub fn set_key_manager(&mut self, km: Arc<KeyManager>) {
+        self.key_manager = Some(km);
+    }
+
+    /// Start fetching a segment via the unified [`PeerHandle`].
+    ///
+    /// Returns `(bytes, was_cached)`:
+    /// - `was_cached == true` — resource was already committed in the
+    ///   disk cache; no network round-trip occurred.
+    /// - `was_cached == false` — fetch went through
+    ///   `PeerHandle::execute` and the response body stream was
+    ///   written into the `AssetResource` chunk by chunk.
+    ///
+    /// When `decrypt_ctx` is `Some`, the resource is opened with a
+    /// decrypt context; decryption happens on the fly inside
+    /// `AssetResource::write_at` via the `ProcessingAssets` layer.
+    ///
+    /// # Errors
+    /// Returns an error when the cache lookup or network fetch fails.
+    pub async fn start_fetch(
+        &self,
+        url: &Url,
+        decrypt_ctx: Option<DecryptContext>,
+    ) -> HlsResult<(u64, bool)> {
+        match self.try_cached_fetch(url, decrypt_ctx)? {
+            CachedOrPending::Cached(len) => Ok((len, true)),
+            CachedOrPending::Pending(res) => {
+                trace!(url = %url, "start_fetch: downloading via PeerHandle");
+                let bytes = self.download_stream_via_downloader(url, &res).await?;
+                Ok((bytes, false))
+            }
+        }
+    }
+
+    /// Resolve whether `url` is already cached. On hit returns the
+    /// committed length; on miss returns an acquired resource ready
+    /// for network download.
+    fn try_cached_fetch(
+        &self,
+        url: &Url,
+        decrypt_ctx: Option<DecryptContext>,
+    ) -> HlsResult<CachedOrPending> {
+        let key = ResourceKey::from_url(url);
+        if let Some(len) = self.backend.final_len(&key) {
+            trace!(url = %url, len, "start_fetch: cache hit via AssetStore availability index");
+            return Ok(CachedOrPending::Cached(len));
+        }
+
+        let res = self.backend.acquire_resource_with_ctx(&key, decrypt_ctx)?;
+        if let Some(len) = committed_len(&res) {
+            trace!(url = %url, len, "start_fetch: cache hit");
+            return Ok(CachedOrPending::Cached(len));
+        }
+        Ok(CachedOrPending::Pending(Box::new(res)))
     }
 }
 

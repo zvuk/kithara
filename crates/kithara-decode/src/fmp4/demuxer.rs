@@ -114,9 +114,9 @@ impl Fmp4SegmentDemuxer {
             track_info,
             source,
             segments,
+            duration,
             next_byte: 0,
             cursor: None,
-            duration,
         })
     }
 }
@@ -222,11 +222,11 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
         CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
     };
     TrackInfo {
+        extra_data,
+        duration,
         codec: init.codec,
         sample_rate: init.sample_rate,
         channels: init.channels,
-        extra_data,
-        duration,
     }
 }
 

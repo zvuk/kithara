@@ -394,10 +394,10 @@ fn collect_frames(
             }
 
             out.push(Fmp4Frame {
-                offset: start,
-                size: size as usize,
                 decode_time,
                 duration,
+                offset: start,
+                size: size as usize,
             });
 
             byte_cursor = byte_cursor.saturating_add(u64::from(size));

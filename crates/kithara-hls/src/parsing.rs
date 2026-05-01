@@ -192,18 +192,18 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                 let container = detect_container_from_uri(&uri);
 
                 CodecInfo {
-                    codecs: Some(c),
                     audio_codec,
                     container,
+                    codecs: Some(c),
                 }
             });
 
             VariantStream {
-                id: VariantId(index),
                 uri,
                 bandwidth,
-                name: None,
                 codec,
+                id: VariantId(index),
+                name: None,
             }
         })
         .collect();
@@ -574,9 +574,9 @@ audio_flac.m3u8"
         #[case] name: Option<String>,
     ) {
         let variant = VariantStream {
+            bandwidth,
             id: VariantId(id as usize),
             uri: uri.to_string(),
-            bandwidth,
             name: name.clone(),
             codec: None,
         };

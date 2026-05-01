@@ -651,8 +651,8 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let (decoder, _logs) = infinite_decoder_loose(PcmSpec::default(), stop);
         let session = DecoderSession {
-            base_offset: 1024,
             decoder,
+            base_offset: 1024,
             media_info: Some(media_info),
         };
         assert_eq!(session.base_offset, 1024);

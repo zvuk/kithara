@@ -83,11 +83,11 @@ where
         Self {
             inner,
             cfg,
-            seen: Arc::new(Mutex::new(HashSet::new())),
             cancel,
             lru,
             pins,
             deleter,
+            seen: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 

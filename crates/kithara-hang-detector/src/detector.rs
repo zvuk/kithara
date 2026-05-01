@@ -58,12 +58,20 @@ impl<C: HangDump> HangDetector<C> {
         }
     }
 
-    /// Override the dump directory with highest precedence (beats both
-    /// `KITHARA_HANG_DUMP_DIR` and `std::env::temp_dir()`).
-    #[must_use]
-    pub fn with_dump_dir(mut self, dir: PathBuf) -> Self {
-        self.dump_dir = Some(dir);
-        self
+    fn fire_dump(&mut self) {
+        if self.fired {
+            return;
+        }
+        self.fired = true;
+        match self.ctx.as_ref() {
+            Some(ctx) => write_dump(self.label, ctx, self.dump_dir.as_deref()),
+            None => write_dump(self.label, &NoContext, self.dump_dir.as_deref()),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.deadline = Instant::now() + self.timeout;
+        self.fired = false;
     }
 
     /// Progress check without updating the stored context. Keeps whatever
@@ -104,20 +112,12 @@ impl<C: HangDump> HangDetector<C> {
         self.tick();
     }
 
-    pub fn reset(&mut self) {
-        self.deadline = Instant::now() + self.timeout;
-        self.fired = false;
-    }
-
-    fn fire_dump(&mut self) {
-        if self.fired {
-            return;
-        }
-        self.fired = true;
-        match self.ctx.as_ref() {
-            Some(ctx) => write_dump(self.label, ctx, self.dump_dir.as_deref()),
-            None => write_dump(self.label, &NoContext, self.dump_dir.as_deref()),
-        }
+    /// Override the dump directory with highest precedence (beats both
+    /// `KITHARA_HANG_DUMP_DIR` and `std::env::temp_dir()`).
+    #[must_use]
+    pub fn with_dump_dir(mut self, dir: PathBuf) -> Self {
+        self.dump_dir = Some(dir);
+        self
     }
 }
 
@@ -134,10 +134,7 @@ impl<C: HangDump> HangDetector<C> {
     }
 
     #[inline(always)]
-    #[must_use]
-    pub fn with_dump_dir(self, _dir: std::path::PathBuf) -> Self {
-        self
-    }
+    pub fn reset(&mut self) {}
 
     #[inline(always)]
     pub fn tick(&mut self) {}
@@ -146,7 +143,10 @@ impl<C: HangDump> HangDetector<C> {
     pub fn tick_with(&mut self, _ctx: C) {}
 
     #[inline(always)]
-    pub fn reset(&mut self) {}
+    #[must_use]
+    pub fn with_dump_dir(self, _dir: std::path::PathBuf) -> Self {
+        self
+    }
 }
 
 #[must_use]

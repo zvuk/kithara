@@ -70,18 +70,10 @@ impl PlayerNode {
         }
     }
 
-    /// Create a player node wired to the given command channel and shared state.
-    pub(crate) fn with_channel(
-        cmd_rx: HeapCons<PlayerCmd>,
-        shared_state: Arc<SharedPlayerState>,
-        pcm_pool: PcmPool,
-    ) -> Self {
-        Self {
-            active: true,
-            cmd_rx: Arc::new(Mutex::new(Some(cmd_rx))),
-            pcm_pool,
-            shared_state,
-        }
+    /// Get a reference to the command receiver.
+    #[expect(dead_code, reason = "accessor for future use")]
+    pub(crate) fn cmd_rx(&self) -> &Arc<Mutex<Option<HeapCons<PlayerCmd>>>> {
+        &self.cmd_rx
     }
 
     /// Get a reference to the shared player state.
@@ -90,24 +82,23 @@ impl PlayerNode {
         &self.shared_state
     }
 
-    /// Get a reference to the command receiver.
-    #[expect(dead_code, reason = "accessor for future use")]
-    pub(crate) fn cmd_rx(&self) -> &Arc<Mutex<Option<HeapCons<PlayerCmd>>>> {
-        &self.cmd_rx
+    /// Create a player node wired to the given command channel and shared state.
+    pub(crate) fn with_channel(
+        cmd_rx: HeapCons<PlayerCmd>,
+        shared_state: Arc<SharedPlayerState>,
+        pcm_pool: PcmPool,
+    ) -> Self {
+        Self {
+            pcm_pool,
+            shared_state,
+            active: true,
+            cmd_rx: Arc::new(Mutex::new(Some(cmd_rx))),
+        }
     }
 }
 
 impl AudioNode for PlayerNode {
     type Configuration = EmptyConfig;
-
-    fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
-            .debug_name("Player")
-            .channel_config(ChannelConfig {
-                num_inputs: ChannelCount::ZERO,
-                num_outputs: ChannelCount::STEREO,
-            })
-    }
 
     fn construct_processor(
         &self,
@@ -125,6 +116,15 @@ impl AudioNode for PlayerNode {
             sample_rate,
             &self.pcm_pool,
         )
+    }
+
+    fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
+        AudioNodeInfo::new()
+            .debug_name("Player")
+            .channel_config(ChannelConfig {
+                num_inputs: ChannelCount::ZERO,
+                num_outputs: ChannelCount::STEREO,
+            })
     }
 }
 

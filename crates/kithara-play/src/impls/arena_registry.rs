@@ -12,14 +12,6 @@ impl<K, V> ArenaRegistry<K, V>
 where
     K: Clone + Eq + Hash,
 {
-    pub(crate) fn with_capacity(cap: usize) -> Self {
-        Self {
-            by_index: HashMap::with_capacity(cap),
-            by_key: HashMap::with_capacity(cap),
-            values: Arena::with_capacity(cap),
-        }
-    }
-
     pub(crate) fn clear(&mut self) {
         self.by_index.clear();
         self.by_key.clear();
@@ -35,6 +27,10 @@ where
         self.values.get(idx)
     }
 
+    pub(crate) fn get_by_index(&self, idx: Index) -> Option<&V> {
+        self.values.get(idx)
+    }
+
     pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
@@ -42,10 +38,6 @@ where
     {
         let idx = *self.by_key.get(key)?;
         self.values.get_mut(idx)
-    }
-
-    pub(crate) fn get_by_index(&self, idx: Index) -> Option<&V> {
-        self.values.get(idx)
     }
 
     pub(crate) fn insert(&mut self, key: K, value: V) {
@@ -89,5 +81,13 @@ where
         let key = self.by_index.remove(&idx)?;
         self.by_key.remove(&key);
         self.values.remove(idx)
+    }
+
+    pub(crate) fn with_capacity(cap: usize) -> Self {
+        Self {
+            by_index: HashMap::with_capacity(cap),
+            by_key: HashMap::with_capacity(cap),
+            values: Arena::with_capacity(cap),
+        }
     }
 }

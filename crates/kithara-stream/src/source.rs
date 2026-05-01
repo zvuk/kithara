@@ -174,6 +174,180 @@ impl SourceSeekAnchor {
 )]
 #[expect(clippy::len_without_is_empty)]
 pub trait Source: Send + Sync + 'static {
+    /// Current ABR handle for runtime mode/bandwidth control.
+    ///
+    /// Adaptive sources (HLS) return the peer's `AbrHandle` so callers —
+    /// queue, FFI, UI — can switch variant or cap bandwidth mid-playback.
+    /// Non-adaptive sources (File) keep the default `None`.
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        None
+    }
+
+    /// Optional shared segment-layout handle for segment-aware decoders.
+    ///
+    /// Segment-aware decoders (fMP4 segment demuxer) call this once at
+    /// open to grab a lock-free, Arc-shareable view over the segment
+    /// table — independent of the byte cursor passed to the decoder
+    /// through `Read + Seek`. Default `None` for non-segmented sources.
+    fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
+        None
+    }
+
+    /// Clear variant fence, allowing reads from the next variant.
+    ///
+    /// Called when the decoder is recreated after ABR switch.
+    /// Default no-op for non-HLS sources.
+    fn clear_variant_fence(&mut self) {}
+
+    /// Commit the actual post-seek landing after `decoder.seek(...)`.
+    ///
+    /// Segmented sources can use this hook to reconcile source-local state
+    /// with the authoritative landed reader position in [`Timeline`].
+    ///
+    /// Default no-op for sources that do not need post-seek reconciliation.
+    fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
+
+    /// Switch layout to the ABR target variant.
+    ///
+    /// Must be called right before decoder recreation so the new decoder
+    /// reads from the correct variant's byte map. Separate from
+    /// `format_change_segment_range()` to avoid switching layout while
+    /// the old decoder is still reading.
+    fn commit_variant_layout(&mut self) {}
+
+    /// Get current segment byte range.
+    ///
+    /// For segmented sources (HLS), returns `Some(range)` of the current segment.
+    /// For non-segmented sources (File), returns `None`.
+    /// Used by decoder to detect segment boundaries for format change handling.
+    fn current_segment_range(&self) -> Option<Range<u64>> {
+        None
+    }
+
+    /// Signal that the given byte range will be needed soon.
+    ///
+    /// Non-blocking hint that allows the source to enqueue background
+    /// fetch requests without entering the blocking [`wait_range`](Self::wait_range)
+    /// path.  Called by the audio worker FSM when it discovers that a
+    /// range is not ready and cannot block to wait for it.
+    ///
+    /// Segmented sources (HLS) use this to issue on-demand segment
+    /// requests that wake the downloader.  Non-segmented sources
+    /// (File) keep the default no-op because their downloader fetches
+    /// sequentially and does not need explicit demand signals.
+    fn demand_range(&self, _range: Range<u64>) {}
+
+    /// Get byte range of the first segment with current format after a format change.
+    ///
+    /// For HLS ABR switch: returns the first segment of the new variant which contains
+    /// init data (ftyp/moov). This is where the decoder should be recreated.
+    ///
+    /// Returns `None` if no format change occurred or for non-segmented sources.
+    fn format_change_segment_range(&self) -> Option<Range<u64>> {
+        None
+    }
+
+    /// Total length if known.
+    ///
+    /// Streaming sources may block briefly until the HTTP response headers
+    /// arrive (Content-Length discovery).
+    fn len(&self) -> Option<u64>;
+
+    /// Create a callback that wakes blocked `wait_range()` without holding
+    /// the `SharedStream` mutex.
+    ///
+    /// The returned closure captures only the underlying condvar/notify
+    /// primitive, so calling it from the main thread cannot deadlock even
+    /// when the worker thread holds the `SharedStream` lock inside `read()`.
+    ///
+    /// Default returns `None` (no blocking waits to wake).
+    fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
+        None
+    }
+
+    /// Get media info if available.
+    fn media_info(&self) -> Option<MediaInfo> {
+        None
+    }
+
+    /// Wake any blocked `wait_range()` calls.
+    ///
+    /// Called after `Timeline::initiate_seek()` to ensure immediate response
+    /// from threads sleeping on condvars. Default no-op for sources without
+    /// blocking waits.
+    fn notify_waiting(&self) {}
+
+    /// Overall source readiness at the current timeline position.
+    ///
+    /// Uses the source's internal knowledge of chunk/segment boundaries
+    /// to determine if the next read operation can proceed without blocking.
+    ///
+    /// Unlike `phase_at(range)` which checks a specific byte range,
+    /// this method lets the source decide the appropriate granularity.
+    ///
+    /// Default checks a single byte at the current position.
+    /// HLS overrides with segment-aware logic, File with 32KB-window logic.
+    fn phase(&self) -> SourcePhase {
+        let pos = self.timeline().byte_position();
+        self.phase_at(pos..pos.saturating_add(1))
+    }
+
+    /// Point-in-time snapshot of the source phase for the given range.
+    ///
+    /// Returns the current [`SourcePhase`] without blocking. Used internally
+    /// by `wait_range()` implementations for fast-path dispatch.
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+
+    /// Read data at offset into buffer.
+    ///
+    /// Returns [`ReadOutcome::Bytes`] with a non-zero byte count on
+    /// progress, [`ReadOutcome::Pending`] with a typed
+    /// [`PendingReason`] when no progress is possible this call (seek
+    /// pending, variant fence, eviction), or [`ReadOutcome::Eof`] at
+    /// natural end-of-stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the read fails or the source is in an invalid state.
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
+
+    /// Resolve `position` to a source-specific seek anchor.
+    ///
+    /// Segmented sources (HLS) should map time to a deterministic segment
+    /// boundary and byte offset. Non-segmented sources return `Ok(None)`.
+    ///
+    /// The caller is expected to set stream position to `byte_offset` and
+    /// perform decoder reset/recreation using this anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source cannot resolve the anchor.
+    fn seek_time_anchor(&mut self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+        Ok(None)
+    }
+
+    /// Set current seek epoch for stale request invalidation.
+    ///
+    /// HLS uses this to drop in-flight network/segment requests that belong
+    /// to previous seeks. Non-seek-aware sources keep the default no-op.
+    fn set_seek_epoch(&mut self, _seek_epoch: u64) {}
+
+    /// Build a fresh reader-side hooks instance.
+    ///
+    /// Returned by Source-impls that want to expose reader-side events
+    /// (`HlsSource`, `FileSource`). The audio pipeline takes the hook
+    /// at decoder creation/recreation time and threads it into the
+    /// `HookedDecoder` wrapper. Default `None` keeps mock and test
+    /// sources unhooked.
+    ///
+    /// `take_*` is a misnomer: each call must return a **fresh** hook
+    /// instance, because decoder recreation (ABR / format change)
+    /// rebuilds the wrapper and the new hook needs a clean state
+    /// cursor.
+    fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks> {
+        None
+    }
+
     /// Get shared playback timeline.
     ///
     /// Timeline is the single source of truth for playback state across all
@@ -201,180 +375,6 @@ pub trait Source: Send + Sync + 'static {
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome>;
-
-    /// Read data at offset into buffer.
-    ///
-    /// Returns [`ReadOutcome::Bytes`] with a non-zero byte count on
-    /// progress, [`ReadOutcome::Pending`] with a typed
-    /// [`PendingReason`] when no progress is possible this call (seek
-    /// pending, variant fence, eviction), or [`ReadOutcome::Eof`] at
-    /// natural end-of-stream.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the read fails or the source is in an invalid state.
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
-
-    /// Point-in-time snapshot of the source phase for the given range.
-    ///
-    /// Returns the current [`SourcePhase`] without blocking. Used internally
-    /// by `wait_range()` implementations for fast-path dispatch.
-    fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-
-    /// Overall source readiness at the current timeline position.
-    ///
-    /// Uses the source's internal knowledge of chunk/segment boundaries
-    /// to determine if the next read operation can proceed without blocking.
-    ///
-    /// Unlike `phase_at(range)` which checks a specific byte range,
-    /// this method lets the source decide the appropriate granularity.
-    ///
-    /// Default checks a single byte at the current position.
-    /// HLS overrides with segment-aware logic, File with 32KB-window logic.
-    fn phase(&self) -> SourcePhase {
-        let pos = self.timeline().byte_position();
-        self.phase_at(pos..pos.saturating_add(1))
-    }
-
-    /// Total length if known.
-    ///
-    /// Streaming sources may block briefly until the HTTP response headers
-    /// arrive (Content-Length discovery).
-    fn len(&self) -> Option<u64>;
-
-    /// Get media info if available.
-    fn media_info(&self) -> Option<MediaInfo> {
-        None
-    }
-
-    /// Current ABR handle for runtime mode/bandwidth control.
-    ///
-    /// Adaptive sources (HLS) return the peer's `AbrHandle` so callers —
-    /// queue, FFI, UI — can switch variant or cap bandwidth mid-playback.
-    /// Non-adaptive sources (File) keep the default `None`.
-    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        None
-    }
-
-    /// Get current segment byte range.
-    ///
-    /// For segmented sources (HLS), returns `Some(range)` of the current segment.
-    /// For non-segmented sources (File), returns `None`.
-    /// Used by decoder to detect segment boundaries for format change handling.
-    fn current_segment_range(&self) -> Option<Range<u64>> {
-        None
-    }
-
-    /// Get byte range of the first segment with current format after a format change.
-    ///
-    /// For HLS ABR switch: returns the first segment of the new variant which contains
-    /// init data (ftyp/moov). This is where the decoder should be recreated.
-    ///
-    /// Returns `None` if no format change occurred or for non-segmented sources.
-    fn format_change_segment_range(&self) -> Option<Range<u64>> {
-        None
-    }
-
-    /// Clear variant fence, allowing reads from the next variant.
-    ///
-    /// Called when the decoder is recreated after ABR switch.
-    /// Default no-op for non-HLS sources.
-    fn clear_variant_fence(&mut self) {}
-
-    /// Switch layout to the ABR target variant.
-    ///
-    /// Must be called right before decoder recreation so the new decoder
-    /// reads from the correct variant's byte map. Separate from
-    /// `format_change_segment_range()` to avoid switching layout while
-    /// the old decoder is still reading.
-    fn commit_variant_layout(&mut self) {}
-
-    /// Wake any blocked `wait_range()` calls.
-    ///
-    /// Called after `Timeline::initiate_seek()` to ensure immediate response
-    /// from threads sleeping on condvars. Default no-op for sources without
-    /// blocking waits.
-    fn notify_waiting(&self) {}
-
-    /// Create a callback that wakes blocked `wait_range()` without holding
-    /// the `SharedStream` mutex.
-    ///
-    /// The returned closure captures only the underlying condvar/notify
-    /// primitive, so calling it from the main thread cannot deadlock even
-    /// when the worker thread holds the `SharedStream` lock inside `read()`.
-    ///
-    /// Default returns `None` (no blocking waits to wake).
-    fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
-        None
-    }
-
-    /// Set current seek epoch for stale request invalidation.
-    ///
-    /// HLS uses this to drop in-flight network/segment requests that belong
-    /// to previous seeks. Non-seek-aware sources keep the default no-op.
-    fn set_seek_epoch(&mut self, _seek_epoch: u64) {}
-
-    /// Signal that the given byte range will be needed soon.
-    ///
-    /// Non-blocking hint that allows the source to enqueue background
-    /// fetch requests without entering the blocking [`wait_range`](Self::wait_range)
-    /// path.  Called by the audio worker FSM when it discovers that a
-    /// range is not ready and cannot block to wait for it.
-    ///
-    /// Segmented sources (HLS) use this to issue on-demand segment
-    /// requests that wake the downloader.  Non-segmented sources
-    /// (File) keep the default no-op because their downloader fetches
-    /// sequentially and does not need explicit demand signals.
-    fn demand_range(&self, _range: Range<u64>) {}
-
-    /// Resolve `position` to a source-specific seek anchor.
-    ///
-    /// Segmented sources (HLS) should map time to a deterministic segment
-    /// boundary and byte offset. Non-segmented sources return `Ok(None)`.
-    ///
-    /// The caller is expected to set stream position to `byte_offset` and
-    /// perform decoder reset/recreation using this anchor.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the source cannot resolve the anchor.
-    fn seek_time_anchor(&mut self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
-        Ok(None)
-    }
-
-    /// Commit the actual post-seek landing after `decoder.seek(...)`.
-    ///
-    /// Segmented sources can use this hook to reconcile source-local state
-    /// with the authoritative landed reader position in [`Timeline`].
-    ///
-    /// Default no-op for sources that do not need post-seek reconciliation.
-    fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
-
-    /// Build a fresh reader-side hooks instance.
-    ///
-    /// Returned by Source-impls that want to expose reader-side events
-    /// (`HlsSource`, `FileSource`). The audio pipeline takes the hook
-    /// at decoder creation/recreation time and threads it into the
-    /// `HookedDecoder` wrapper. Default `None` keeps mock and test
-    /// sources unhooked.
-    ///
-    /// `take_*` is a misnomer: each call must return a **fresh** hook
-    /// instance, because decoder recreation (ABR / format change)
-    /// rebuilds the wrapper and the new hook needs a clean state
-    /// cursor.
-    fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks> {
-        None
-    }
-
-    /// Optional shared segment-layout handle for segment-aware decoders.
-    ///
-    /// Segment-aware decoders (fMP4 segment demuxer) call this once at
-    /// open to grab a lock-free, Arc-shareable view over the segment
-    /// table — independent of the byte cursor passed to the decoder
-    /// through `Read + Seek`. Default `None` for non-segmented sources.
-    fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
-        None
-    }
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented
@@ -396,21 +396,21 @@ pub trait SegmentLayout: Send + Sync + 'static {
     /// announced.
     fn init_segment_range(&self) -> Option<Range<u64>>;
 
-    /// Locate the segment whose `[decode_time, decode_time + duration)`
-    /// covers `t`. Resolves against the source's *current layout
-    /// variant* — same variant `init_segment_range` describes.
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor>;
+    /// Total byte length across all segments. Used to compute total
+    /// duration when the source can't provide a direct value.
+    fn len(&self) -> Option<u64>;
 
     /// Next segment whose byte range starts at or after `byte_offset`.
     /// Used for sequential play after the current segment is consumed.
     fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor>;
 
+    /// Locate the segment whose `[decode_time, decode_time + duration)`
+    /// covers `t`. Resolves against the source's *current layout
+    /// variant* — same variant `init_segment_range` describes.
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor>;
+
     /// Total number of segments in the current layout variant.
     fn segment_count(&self) -> Option<u32>;
-
-    /// Total byte length across all segments. Used to compute total
-    /// duration when the source can't provide a direct value.
-    fn len(&self) -> Option<u64>;
 }
 
 #[cfg(test)]

@@ -87,14 +87,14 @@ impl PlayerState {
         let band_count = eq_layout.len();
         Self {
             eq_layout,
+            pcm_pool,
+            player_id,
             master_eq_memo: None,
             master_eq_node_id: None,
             master_volume: 1.0,
             master_vol_pan_memo: None,
             master_vol_pan_node_id: None,
             next_slot_id: 1,
-            pcm_pool,
-            player_id,
             shared_eq: SharedEq::new(band_count),
             slots: Vec::new(),
             started: false,
@@ -117,14 +117,15 @@ struct SessionState<B: AudioBackend> {
 }
 
 impl<B: AudioBackend> SessionState<B> {
-    /// Default sample rate hint for the audio session.
-    const DEFAULT_SAMPLE_RATE: u32 = 44_100;
-
     /// Capacity of the session command ring buffer.
     const CMD_RINGBUF_CAPACITY: usize = 64;
 
+    /// Default sample rate hint for the audio session.
+    const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+
     fn new(start_stream_fn: StartStreamFn<B>) -> Self {
         Self {
+            start_stream_fn,
             ctx: None,
             next_player_id: 1,
             players: Vec::new(),
@@ -132,7 +133,6 @@ impl<B: AudioBackend> SessionState<B> {
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
-            start_stream_fn,
         }
     }
 }
@@ -219,20 +219,14 @@ impl SessionClient {
     /// Capacity of the player command ring buffer within a slot.
     const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
-        let mut pending = msg;
-        loop {
-            match self.cmd_tx.lock_sync().try_push(pending) {
-                Ok(()) => {
-                    self.engine_thread.unpark();
-                    return Ok(());
-                }
-                Err(returned) => {
-                    pending = returned;
-                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
-                }
+    pub(crate) fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
+        match self.call_ok(Cmd::AllocateSlot { player_id })? {
+            Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
+                Ok((slot_id, cmd_tx, shared_state, eq))
             }
+            _ => Err(PlayError::Internal(
+                "unexpected reply for session allocate slot".into(),
+            )),
         }
     }
 
@@ -290,23 +284,29 @@ impl SessionClient {
         Ok(reply)
     }
 
-    pub(crate) fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
-        match self.call_ok(Cmd::AllocateSlot { player_id })? {
-            Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
-                Ok((slot_id, cmd_tx, shared_state, eq))
-            }
-            _ => Err(PlayError::Internal(
-                "unexpected reply for session allocate slot".into(),
-            )),
-        }
-    }
-
     pub(crate) fn ducking(&self) -> Result<SessionDuckingMode, PlayError> {
         match self.call_ok(Cmd::SessionDucking)? {
             Reply::SessionDucking(mode) => Ok(mode),
             _ => Err(PlayError::Internal(
                 "unexpected reply for session ducking query".into(),
             )),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
+        let mut pending = msg;
+        loop {
+            match self.cmd_tx.lock_sync().try_push(pending) {
+                Ok(()) => {
+                    self.engine_thread.unpark();
+                    return Ok(());
+                }
+                Err(returned) => {
+                    pending = returned;
+                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
+                }
+            }
         }
     }
 
@@ -440,8 +440,8 @@ fn spawn_session_client<B: AudioBackend + Send + 'static>(
     });
     let engine_thread = handle.thread().clone();
     Arc::new(SessionClient {
-        cmd_tx: Mutex::new(cmd_tx),
         engine_thread,
+        cmd_tx: Mutex::new(cmd_tx),
     })
 }
 
@@ -927,8 +927,8 @@ pub(crate) fn try_init_offline_session() -> Result<(), String> {
     });
     let engine_thread = handle.thread().clone();
     let client = Arc::new(SessionClient {
-        cmd_tx: Mutex::new(cmd_tx),
         engine_thread,
+        cmd_tx: Mutex::new(cmd_tx),
     });
     session_holder::SESSION_CLIENT.set(client).map_err(|_| {
         "session client already initialized — call init_offline_backend() \

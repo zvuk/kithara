@@ -39,16 +39,16 @@ impl<S: signal::SignalFn> SignalSource<S> {
         }
     }
 
+    fn is_past_eof(&self, offset: u64) -> bool {
+        self.total_byte_len().is_some_and(|total| offset >= total)
+    }
+
     fn total_byte_len(&self) -> Option<u64> {
         let header_len = self.header.size();
 
         self.pcm
             .total_pcm_byte_len()
             .map(|data_len| (data_len + header_len) as u64)
-    }
-
-    fn is_past_eof(&self, offset: u64) -> bool {
-        self.total_byte_len().is_some_and(|total| offset >= total)
     }
 }
 
@@ -58,19 +58,25 @@ impl<S: signal::SignalFn> SignalSource<S> {
 pub struct SignalSourceError;
 
 impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+    fn len(&self) -> Option<u64> {
+        self.total_byte_len()
     }
 
-    fn wait_range(
-        &mut self,
-        range: Range<u64>,
-        _timeout: Option<Duration>,
-    ) -> StreamResult<WaitOutcome> {
+    fn media_info(&self) -> Option<MediaInfo> {
+        Some(
+            MediaInfo::default()
+                .with_channels(self.pcm.channels())
+                .with_codec(AudioCodec::Pcm)
+                .with_container(ContainerFormat::Wav)
+                .with_sample_rate(self.pcm.sample_rate()),
+        )
+    }
+
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if self.is_past_eof(range.start) {
-            Ok(WaitOutcome::Eof)
+            SourcePhase::Eof
         } else {
-            Ok(WaitOutcome::Ready)
+            SourcePhase::Ready
         }
     }
 
@@ -107,26 +113,20 @@ impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
         Ok(ReadOutcome::Bytes(count))
     }
 
-    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        _timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
         if self.is_past_eof(range.start) {
-            SourcePhase::Eof
+            Ok(WaitOutcome::Eof)
         } else {
-            SourcePhase::Ready
+            Ok(WaitOutcome::Ready)
         }
-    }
-
-    fn len(&self) -> Option<u64> {
-        self.total_byte_len()
-    }
-
-    fn media_info(&self) -> Option<MediaInfo> {
-        Some(
-            MediaInfo::default()
-                .with_channels(self.pcm.channels())
-                .with_codec(AudioCodec::Pcm)
-                .with_container(ContainerFormat::Wav)
-                .with_sample_rate(self.pcm.sample_rate()),
-        )
     }
 }
 
@@ -135,6 +135,8 @@ pub struct SignalStream<S: signal::SignalFn>(std::marker::PhantomData<S>);
 
 impl<S: signal::SignalFn + Sync> StreamType for SignalStream<S> {
     type Config = SignalStreamConfig<S>;
+    type Events = ();
+
     type Source = SignalSource<S>;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
@@ -142,8 +144,6 @@ impl<S: signal::SignalFn + Sync> StreamType for SignalStream<S> {
             .source
             .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
-
-    type Events = ();
 }
 
 /// Configuration for [`SignalStream`].

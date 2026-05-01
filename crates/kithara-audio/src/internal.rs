@@ -264,14 +264,14 @@ pub mod source {
         offset: u64,
     ) -> RecreateState {
         RecreateState {
+            media_info,
+            offset,
             attempt: 0,
             cause: RecreateCause::VariantSwitch,
-            media_info,
             next: RecreateNext::Seek(SeekRequest {
                 attempt: 0,
                 seek: SeekContext { target, epoch },
             }),
-            offset,
         }
     }
 
@@ -296,8 +296,8 @@ pub mod source {
         source.0.state = match kind {
             RecreateKind::Decoder => TrackState::RecreatingDecoder(state),
             RecreateKind::WaitingFor(reason) => TrackState::WaitingForSource {
-                context: WaitContext::Recreation(state),
                 reason,
+                context: WaitContext::Recreation(state),
             },
         };
     }

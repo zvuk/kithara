@@ -621,14 +621,6 @@ struct TaggedPriorityPeer {
 
 impl Abr for TaggedPriorityPeer {}
 impl Peer for TaggedPriorityPeer {
-    fn priority(&self) -> RequestPriority {
-        if self.timeline.is_playing() {
-            RequestPriority::High
-        } else {
-            RequestPriority::Low
-        }
-    }
-
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         let mut rem = self.remaining.lock_sync();
         if *rem == 0 {
@@ -655,6 +647,14 @@ impl Peer for TaggedPriorityPeer {
             cx.waker().wake_by_ref();
         }
         Poll::Ready(Some(cmds))
+    }
+
+    fn priority(&self) -> RequestPriority {
+        if self.timeline.is_playing() {
+            RequestPriority::High
+        } else {
+            RequestPriority::Low
+        }
     }
 }
 
@@ -710,9 +710,9 @@ async fn active_peer_completes_before_preload_under_contention() {
     let timeline_preload = crate::Timeline::new();
     // preload stays PLAYING=false (default)
     let preload = Arc::new(TaggedPriorityPeer {
+        url,
         timeline: timeline_preload,
         remaining: Mutex::new(CMDS_PER_PEER),
-        url,
         completion_log: Arc::clone(&completion_log),
         completion_counter: Arc::clone(&completion_counter),
         tag: PeerTag::Preload,
@@ -807,9 +807,9 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
         tag: PeerTag::Active,
     });
     let b = Arc::new(TaggedPriorityPeer {
+        url,
         timeline: crate::Timeline::new(),
         remaining: Mutex::new(CMDS_PER_PEER),
-        url,
         completion_log: Arc::clone(&completion_log),
         completion_counter: Arc::clone(&completion_counter),
         tag: PeerTag::Preload,

@@ -144,8 +144,8 @@ pub(crate) fn connect<T>(
     (
         Outlet {
             producer,
-            overflow: None,
             wake,
+            overflow: None,
         },
         Inlet { consumer },
     )

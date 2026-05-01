@@ -160,6 +160,10 @@ impl Registry {
         idx
     }
 
+    fn has_slot_work(&self) -> bool {
+        self.slots.iter().any(|s| !s.is_empty())
+    }
+
     /// Poll all peers: drain `cmd_rx` channels and call `poll_next`.
     /// Route each command to the correct slot. Returns per-peer counters
     /// so [`tick`](Self::tick) can classify forward motion.
@@ -228,13 +232,13 @@ impl Registry {
                         let internal = InternalCmd {
                             cmd,
                             cancel,
+                            request_id,
+                            enqueued_at,
                             priority: cmd_prio,
                             response: ResponseTarget::Streaming,
                             peer: Some(idx),
                             bus: bus.clone(),
                             peer_id: entry.peer_id,
-                            request_id,
-                            enqueued_at,
                         };
                         let entry_slot = SlotEntry {
                             cmd: internal,
@@ -276,6 +280,48 @@ impl Registry {
         }
 
         stats
+    }
+
+    /// Check `peer.priority()` for each command in slots,
+    /// move to the correct slot if priority changed.
+    pub(super) fn reschedule(&mut self) {
+        let mut moves: Vec<(usize, usize, usize)> = Vec::new();
+        let mut cancels: Vec<(usize, usize)> = Vec::new();
+
+        for slot_idx in 0..SLOT_COUNT {
+            for (i, slot_entry) in self.slots[slot_idx].iter().enumerate() {
+                let cmd = &slot_entry.cmd;
+                let Some(peer_idx) = cmd.peer else {
+                    continue;
+                };
+                let Some(entry) = self.peers.get(peer_idx) else {
+                    cancels.push((slot_idx, i));
+                    continue;
+                };
+                let correct_slot = slot_index(entry.peer.priority(), cmd.priority);
+                if correct_slot != slot_idx {
+                    moves.push((slot_idx, i, correct_slot));
+                }
+            }
+        }
+
+        cancels.sort_by(|a, b| b.1.cmp(&a.1));
+        for (slot_idx, i) in cancels {
+            if let Some(slot_entry) = self.slots[slot_idx].remove(i) {
+                let SlotEntry { cmd, peer_cancel } = slot_entry;
+                super::batch::deliver_cancelled_with_event(cmd, &peer_cancel);
+            }
+        }
+
+        moves.sort_by(|a, b| b.1.cmp(&a.1));
+        for (from_slot, i, to_slot) in moves {
+            if let Some(slot_entry) = self.slots[from_slot].remove(i) {
+                self.slots[to_slot].push_back(slot_entry);
+                if to_slot <= 1 {
+                    self.urgent_notify.notify_one();
+                }
+            }
+        }
     }
 
     /// Single tick: poll peers, process urgent, then demand with throttle.
@@ -365,52 +411,6 @@ impl Registry {
             aggregate,
             dispatched,
         )
-    }
-
-    fn has_slot_work(&self) -> bool {
-        self.slots.iter().any(|s| !s.is_empty())
-    }
-
-    /// Check `peer.priority()` for each command in slots,
-    /// move to the correct slot if priority changed.
-    pub(super) fn reschedule(&mut self) {
-        let mut moves: Vec<(usize, usize, usize)> = Vec::new();
-        let mut cancels: Vec<(usize, usize)> = Vec::new();
-
-        for slot_idx in 0..SLOT_COUNT {
-            for (i, slot_entry) in self.slots[slot_idx].iter().enumerate() {
-                let cmd = &slot_entry.cmd;
-                let Some(peer_idx) = cmd.peer else {
-                    continue;
-                };
-                let Some(entry) = self.peers.get(peer_idx) else {
-                    cancels.push((slot_idx, i));
-                    continue;
-                };
-                let correct_slot = slot_index(entry.peer.priority(), cmd.priority);
-                if correct_slot != slot_idx {
-                    moves.push((slot_idx, i, correct_slot));
-                }
-            }
-        }
-
-        cancels.sort_by(|a, b| b.1.cmp(&a.1));
-        for (slot_idx, i) in cancels {
-            if let Some(slot_entry) = self.slots[slot_idx].remove(i) {
-                let SlotEntry { cmd, peer_cancel } = slot_entry;
-                super::batch::deliver_cancelled_with_event(cmd, &peer_cancel);
-            }
-        }
-
-        moves.sort_by(|a, b| b.1.cmp(&a.1));
-        for (from_slot, i, to_slot) in moves {
-            if let Some(slot_entry) = self.slots[from_slot].remove(i) {
-                self.slots[to_slot].push_back(slot_entry);
-                if to_slot <= 1 {
-                    self.urgent_notify.notify_one();
-                }
-            }
-        }
     }
 }
 

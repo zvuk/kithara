@@ -60,9 +60,9 @@ impl HlsScheduler {
         };
 
         let data = SegmentData {
-            init_len: actual_init_len,
             media_len,
             init_url,
+            init_len: actual_init_len,
             media_url: media.url.clone(),
         };
 

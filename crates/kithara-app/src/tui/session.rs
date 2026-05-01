@@ -67,9 +67,9 @@ impl UiSession {
         terminal.hide_cursor()?;
 
         let mut session = Self {
-            _raw: raw,
             dashboard,
             terminal,
+            _raw: raw,
         };
         session.stick_to_bottom()?;
         session.park_cursor_above_dashboard()?;

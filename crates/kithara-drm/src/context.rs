@@ -17,11 +17,11 @@ pub struct DecryptContext {
 }
 
 impl DecryptContext {
-    /// AES-128 key length in bytes.
-    const KEY_LEN_128: usize = 16;
-
     /// AES initialization vector length in bytes.
     const IV_LEN: usize = 16;
+
+    /// AES-128 key length in bytes.
+    const KEY_LEN_128: usize = 16;
 
     /// Create a new decryption context.
     #[must_use]

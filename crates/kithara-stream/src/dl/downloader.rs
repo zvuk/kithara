@@ -123,18 +123,18 @@ impl Downloader {
         let abr = AbrController::new(config.abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
-                client: HttpClient::new(config.net),
-                cancel: config.cancel,
                 chunk_timeout,
                 soft_timeout,
                 runtime,
+                abr,
+                client: HttpClient::new(config.net),
+                cancel: config.cancel,
                 max_concurrent: config.max_concurrent,
                 demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
                 fetch_waker: Arc::new(AtomicWaker::new()),
                 register_tx: tx,
                 register_rx: Mutex::new(Some(rx)),
-                abr,
                 next_request_id: std::sync::atomic::AtomicU64::new(1),
             }),
         }
@@ -144,6 +144,24 @@ impl Downloader {
     #[must_use]
     pub fn abr_controller(&self) -> &Arc<AbrController> {
         &self.inner.abr
+    }
+
+    /// Ensure the download loop is running (lazy spawn on first register
+    /// in an async-capable context).
+    fn ensure_spawned(&self) {
+        let handle = self
+            .inner
+            .runtime
+            .clone()
+            .or_else(|| tokio::runtime::Handle::try_current().ok());
+        let Some(handle) = handle else {
+            return;
+        };
+        let Some(rx) = self.inner.register_rx.lock_sync().take() else {
+            return;
+        };
+        let this = self.clone();
+        handle.spawn(async move { this.run(rx).await });
     }
 
     /// Register a peer and return its [`PeerHandle`].
@@ -165,30 +183,12 @@ impl Downloader {
         let entry = RegisteredPeerEntry {
             peer,
             cmd_rx,
+            peer_id,
             cancel: cancel.clone(),
             bus: Arc::clone(&bus),
-            peer_id,
         };
         let _ = self.inner.register_tx.send(entry);
         PeerHandle::new(Arc::clone(&self.inner), cancel, cmd_tx, bus, abr_handle)
-    }
-
-    /// Ensure the download loop is running (lazy spawn on first register
-    /// in an async-capable context).
-    fn ensure_spawned(&self) {
-        let handle = self
-            .inner
-            .runtime
-            .clone()
-            .or_else(|| tokio::runtime::Handle::try_current().ok());
-        let Some(handle) = handle else {
-            return;
-        };
-        let Some(rx) = self.inner.register_rx.lock_sync().take() else {
-            return;
-        };
-        let this = self.clone();
-        handle.spawn(async move { this.run(rx).await });
     }
 
     /// Download loop.

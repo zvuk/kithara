@@ -21,18 +21,6 @@ impl TestServerHelper {
         }
     }
 
-    /// Build an arbitrary URL on this server.
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        join_server_url(&self.base_url, path)
-    }
-
-    /// Base URL of this server.
-    #[must_use]
-    pub fn base_url(&self) -> &Url {
-        &self.base_url
-    }
-
     /// Build a URL for a static test asset.
     #[must_use]
     pub fn asset(&self, name: &str) -> Url {
@@ -40,28 +28,10 @@ impl TestServerHelper {
         self.url(&format!("/assets/{trimmed}"))
     }
 
-    /// Build a URL for `/signal/sawtooth/...`.
+    /// Base URL of this server.
     #[must_use]
-    pub async fn sawtooth(&self, spec: &SignalSpec) -> Url {
-        self.signal_url(SignalKind::Sawtooth, spec).await
-    }
-
-    /// Build a URL for `/signal/sawtooth-desc/...`.
-    #[must_use]
-    pub async fn sawtooth_descending(&self, spec: &SignalSpec) -> Url {
-        self.signal_url(SignalKind::SawtoothDescending, spec).await
-    }
-
-    /// Build a URL for `/signal/sine/...`.
-    #[must_use]
-    pub async fn sine(&self, spec: &SignalSpec, freq_hz: f64) -> Url {
-        self.signal_url(SignalKind::Sine { freq_hz }, spec).await
-    }
-
-    /// Build a URL for `/signal/silence/...`.
-    #[must_use]
-    pub async fn silence(&self, spec: &SignalSpec) -> Url {
-        self.signal_url(SignalKind::Silence, spec).await
+    pub fn base_url(&self) -> &Url {
+        &self.base_url
     }
 
     pub async fn create_hls(
@@ -86,6 +56,18 @@ impl TestServerHelper {
         Ok(CreatedHls::new(self.base_url.clone(), token))
     }
 
+    /// Build a URL for `/signal/sawtooth/...`.
+    #[must_use]
+    pub async fn sawtooth(&self, spec: &SignalSpec) -> Url {
+        self.signal_url(SignalKind::Sawtooth, spec).await
+    }
+
+    /// Build a URL for `/signal/sawtooth-desc/...`.
+    #[must_use]
+    pub async fn sawtooth_descending(&self, spec: &SignalSpec) -> Url {
+        self.signal_url(SignalKind::SawtoothDescending, spec).await
+    }
+
     async fn signal_url(&self, kind: SignalKind, spec: &SignalSpec) -> Url {
         let path = signal_path(kind, spec);
         let prefix = format!("/signal/{}/", kind.path_segment());
@@ -107,6 +89,24 @@ impl TestServerHelper {
             token,
             spec.format.path_ext()
         ))
+    }
+
+    /// Build a URL for `/signal/silence/...`.
+    #[must_use]
+    pub async fn silence(&self, spec: &SignalSpec) -> Url {
+        self.signal_url(SignalKind::Silence, spec).await
+    }
+
+    /// Build a URL for `/signal/sine/...`.
+    #[must_use]
+    pub async fn sine(&self, spec: &SignalSpec, freq_hz: f64) -> Url {
+        self.signal_url(SignalKind::Sine { freq_hz }, spec).await
+    }
+
+    /// Build an arbitrary URL on this server.
+    #[must_use]
+    pub fn url(&self, path: &str) -> Url {
+        join_server_url(&self.base_url, path)
     }
 }
 
