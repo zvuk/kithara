@@ -18,7 +18,7 @@ use kithara_stream::{ReaderChunkSignal, ReaderSeekSignal, SharedHooks, StreamCon
 
 use crate::{
     codec::FrameCodec,
-    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame},
+    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     error::DecodeResult,
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
@@ -119,8 +119,18 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
         }
     }
 
-    fn build_chunk(&mut self, buf: PcmBuf, frames: u32, frame: &Frame) -> PcmChunk {
-        let timestamp = frame.pts;
+    /// Build the output `PcmChunk` from a just-filled pool buffer plus
+    /// the demuxed frame's metadata. Inlined fields (rather than taking
+    /// `&Frame<'_>`) so the caller can release the demuxer borrow before
+    /// invoking this — needed because `Frame<'_>` borrows into the
+    /// demuxer state and would conflict with `&mut self` here.
+    fn build_chunk(
+        &mut self,
+        buf: PcmBuf,
+        frames: u32,
+        timestamp: Duration,
+        source_bytes: u64,
+    ) -> PcmChunk {
         let chunk_secs = if self.spec.sample_rate > 0 {
             f64::from(frames) / f64::from(self.spec.sample_rate)
         } else {
@@ -146,43 +156,45 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
             frames,
             epoch: self.epoch,
             frame_offset,
-            source_bytes: u64::try_from(frame.data.len()).unwrap_or(u64::MAX),
+            source_bytes,
         };
         PcmChunk::new(meta, buf)
     }
 
-    fn skip_frame_for_pending_target(&mut self, frame: &Frame) -> bool {
-        let Some(target) = self.pending_seek_target else {
-            return false;
-        };
-        let frame_end = frame.pts.saturating_add(frame.duration);
-        if frame_end <= target {
-            return true;
-        }
-        self.pending_seek_target = None;
-        false
-    }
-
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
-            match self.demuxer.next_frame()? {
-                DemuxOutcome::Frame(frame) => {
-                    if self.skip_frame_for_pending_target(&frame) {
-                        continue;
-                    }
-                    let mut buf = self.pool.get();
-                    let frames = self.codec.decode_frame(&frame.data, frame.pts, &mut buf)?;
-                    if frames == 0 {
-                        continue;
-                    }
-                    let chunk = self.build_chunk(buf, frames, &frame);
-                    return Ok(DecoderChunkOutcome::Chunk(chunk));
-                }
+            // `Frame<'_>` borrows into `self.demuxer`'s internal state
+            // (Symphonia `Packet`, fmp4 segment buffer). We carefully
+            // touch only disjoint fields (`self.pool`, `self.codec`,
+            // `self.pending_seek_target`) directly while the frame is
+            // alive — going through `&mut self` methods would conflict.
+            let frame = match self.demuxer.next_frame()? {
+                DemuxOutcome::Frame(frame) => frame,
                 DemuxOutcome::Pending(reason) => {
                     return Ok(DecoderChunkOutcome::Pending(reason));
                 }
                 DemuxOutcome::Eof => return Ok(DecoderChunkOutcome::Eof),
+            };
+            // Inline `skip_frame_for_pending_target` to keep the demuxer
+            // borrow live alongside the codec call below.
+            if let Some(target) = self.pending_seek_target {
+                let frame_end = frame.pts.saturating_add(frame.duration);
+                if frame_end <= target {
+                    continue;
+                }
+                self.pending_seek_target = None;
             }
+            let mut buf = self.pool.get();
+            let frames = self.codec.decode_frame(frame.data, frame.pts, &mut buf)?;
+            if frames == 0 {
+                continue;
+            }
+            let pts = frame.pts;
+            let source_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
+            // `frame.data` borrow ends here — NLL releases the demuxer
+            // borrow so `build_chunk(&mut self, ...)` can run.
+            let chunk = self.build_chunk(buf, frames, pts, source_bytes);
+            return Ok(DecoderChunkOutcome::Chunk(chunk));
         }
     }
 
@@ -385,7 +397,7 @@ mod hook_tests {
 
     use super::*;
     use crate::{
-        demuxer::{DemuxOutcome, DemuxSeekOutcome, TrackInfo},
+        demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
         traits::Decoder,
     };
 
@@ -420,13 +432,29 @@ mod hook_tests {
         }
     }
 
+    /// Owned variant of `DemuxOutcome` used to seed the stub. Kept
+    /// separate so the borrowed `DemuxOutcome<'_>` returned by
+    /// `next_frame` can be backed by the stub's own buffer.
+    enum StubOutcome {
+        Frame {
+            data: Vec<u8>,
+            pts: Duration,
+            duration: Duration,
+        },
+        Pending(PendingReason),
+    }
+
     /// Stub demuxer + codec pair driven by canned outcomes. Exists only so
     /// hook tests can construct a `UniversalDecoder` without needing a real
     /// container/codec.
     struct StubDemuxer {
-        next: Vec<DemuxOutcome>,
+        next: Vec<StubOutcome>,
         seek: Vec<DemuxSeekOutcome>,
         track: TrackInfo,
+        /// Current frame's owned bytes — live so the returned
+        /// `Frame<'_>` slice has somewhere to point. Replaced on each
+        /// `next_frame` call.
+        held: Vec<u8>,
     }
 
     impl Demuxer for StubDemuxer {
@@ -436,8 +464,23 @@ mod hook_tests {
         fn duration(&self) -> Option<Duration> {
             None
         }
-        fn next_frame(&mut self) -> DecodeResult<DemuxOutcome> {
-            Ok(self.next.pop().unwrap_or(DemuxOutcome::Eof))
+        fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+            match self.next.pop() {
+                Some(StubOutcome::Frame {
+                    data,
+                    pts,
+                    duration,
+                }) => {
+                    self.held = data;
+                    Ok(DemuxOutcome::Frame(Frame {
+                        data: &self.held,
+                        pts,
+                        duration,
+                    }))
+                }
+                Some(StubOutcome::Pending(reason)) => Ok(DemuxOutcome::Pending(reason)),
+                None => Ok(DemuxOutcome::Eof),
+            }
         }
         fn seek(&mut self, _pos: Duration) -> DecodeResult<DemuxSeekOutcome> {
             Ok(self.seek.pop().unwrap_or(DemuxSeekOutcome::PastEof {
@@ -511,13 +554,14 @@ mod hook_tests {
     fn next_chunk_emits_chunk_signal() {
         let log = Arc::new(Mutex::new(CallLog::default()));
         let demuxer = StubDemuxer {
-            next: vec![DemuxOutcome::Frame(Frame {
+            next: vec![StubOutcome::Frame {
                 data: vec![0u8; 4],
                 pts: Duration::ZERO,
                 duration: Duration::from_millis(20),
-            })],
+            }],
             seek: Vec::new(),
             track: empty_track(),
+            held: Vec::new(),
         };
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.next_chunk().unwrap();
@@ -528,9 +572,10 @@ mod hook_tests {
     fn next_chunk_emits_pending_signal() {
         let log = Arc::new(Mutex::new(CallLog::default()));
         let demuxer = StubDemuxer {
-            next: vec![DemuxOutcome::Pending(PendingReason::SeekPending)],
+            next: vec![StubOutcome::Pending(PendingReason::SeekPending)],
             seek: Vec::new(),
             track: empty_track(),
+            held: Vec::new(),
         };
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.next_chunk().unwrap();
@@ -547,6 +592,7 @@ mod hook_tests {
                 landed_byte: Some(123),
             }],
             track: empty_track(),
+            held: Vec::new(),
         };
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.seek(Duration::from_secs(1)).unwrap();
@@ -562,6 +608,7 @@ mod hook_tests {
                 duration: Duration::from_secs(10),
             }],
             track: empty_track(),
+            held: Vec::new(),
         };
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.seek(Duration::from_secs(15)).unwrap();

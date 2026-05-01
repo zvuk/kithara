@@ -32,13 +32,17 @@ pub(crate) trait Demuxer: Send {
     /// total, mp4 `mvhd`, …); `None` for live or unbounded streams.
     fn duration(&self) -> Option<Duration>;
 
-    /// Pull the next demuxed frame.
+    /// Pull the next demuxed frame, borrowing the bytes from internal
+    /// demuxer state. The caller must consume the frame (typically by
+    /// passing it to a [`crate::codec::FrameCodec`]) before calling
+    /// `next_frame` again — the `Frame<'_>` borrow scope ends with the
+    /// next mutable call on `self`.
     ///
     /// # Errors
     ///
     /// Surfaces parser-level failures verbatim. Source-level pending
     /// states return `Ok(DemuxOutcome::Pending(_))`.
-    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome>;
+    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>>;
 
     /// Seek the demuxer to `target` time.
     ///
@@ -70,13 +74,16 @@ pub(crate) struct TrackInfo {
     pub duration: Option<Duration>,
 }
 
-/// One demuxed audio frame.
-#[derive(Debug, Clone)]
+/// One demuxed audio frame, borrowed from the demuxer's internal state.
+/// The borrow lifetime is tied to the `&mut self` of the producing
+/// `next_frame` call — the codec layer consumes it on the same loop
+/// iteration, so the lifetime never escapes [`Demuxer::next_frame`].
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-pub(crate) struct Frame {
-    /// Raw frame bytes — owned so the caller can reuse / queue them
-    /// without holding the demuxer's internal buffer.
-    pub data: Vec<u8>,
+pub(crate) struct Frame<'a> {
+    /// Raw frame bytes — slice into the demuxer's owned buffer (mp4
+    /// segment, Symphonia `Packet`, etc.). Zero-copy: never cloned.
+    pub data: &'a [u8],
     /// Presentation time of this frame.
     pub pts: Duration,
     /// Frame duration.
@@ -85,9 +92,9 @@ pub(crate) struct Frame {
 
 /// Result of a [`Demuxer::next_frame`] call.
 #[derive(Debug)]
-pub(crate) enum DemuxOutcome {
+pub(crate) enum DemuxOutcome<'a> {
     /// One frame demuxed. Caller routes it to the codec layer.
-    Frame(Frame),
+    Frame(Frame<'a>),
     /// No frame available right now — caller should re-poll later.
     Pending(PendingReason),
     /// Natural end of stream.

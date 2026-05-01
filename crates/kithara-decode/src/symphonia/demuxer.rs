@@ -56,6 +56,12 @@ pub(crate) struct SymphoniaDemuxer {
     /// the demuxer is built through that path; absent for synthetic
     /// readers in unit tests.
     byte_pos_handle: Option<Arc<AtomicU64>>,
+    /// Latest packet handed to [`Demuxer::next_frame`]. Held so the
+    /// returned `Frame<'_>` can borrow the packet's `Box<[u8]>` payload
+    /// directly — Symphonia owns the allocation, we don't clone it.
+    /// Replaced (and the previous packet dropped) on every successful
+    /// `next_frame` call.
+    current_packet: Option<symphonia::core::packet::Packet>,
 }
 
 impl SymphoniaDemuxer {
@@ -127,6 +133,7 @@ impl SymphoniaDemuxer {
             native_params,
             time_base,
             byte_pos_handle,
+            current_packet: None,
         })
     }
 
@@ -177,7 +184,10 @@ impl Demuxer for SymphoniaDemuxer {
         self.track_info.duration
     }
 
-    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome> {
+    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
+        // Drop the previous packet first so the new one is the only
+        // borrow source the returned `Frame<'_>` ties into.
+        self.current_packet = None;
         loop {
             let packet = match self.format_reader.next_packet() {
                 Ok(Some(p)) => p,
@@ -196,8 +206,10 @@ impl Demuxer for SymphoniaDemuxer {
             }
             let pts = self.ts_to_duration(packet.pts());
             let duration = self.dur_to_duration(packet.dur());
+            self.current_packet = Some(packet);
+            let data: &[u8] = &self.current_packet.as_ref().expect("just stored").data;
             return Ok(DemuxOutcome::Frame(Frame {
-                data: packet.data.to_vec(),
+                data,
                 pts,
                 duration,
             }));

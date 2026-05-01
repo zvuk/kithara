@@ -135,7 +135,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
         self.duration
     }
 
-    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome> {
+    fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         loop {
             match self.ensure_cursor() {
                 EnsureCursor::Ready => {}
@@ -147,23 +147,37 @@ impl Demuxer for Fmp4SegmentDemuxer {
                 FillStatus::Pending(reason) => return Ok(DemuxOutcome::Pending(reason)),
             }
 
-            let cursor = self
-                .cursor
-                .as_mut()
-                .expect("cursor present after ensure_cursor");
-            let frames_state = cursor.frames.as_mut().expect("frames present after Ready");
-            let frame_idx = frames_state.next_index;
-            if frame_idx >= frames_state.frames.len() {
+            // First scope: take a mutable cursor borrow only long enough
+            // to advance `next_index`. Releasing it here lets us either
+            // null out `self.cursor` (when finished) or re-borrow the
+            // cursor immutably for the data slice — without the slice
+            // borrow holding a phantom `&mut self.cursor` alive across
+            // `self.cursor = None`.
+            let frame_meta = {
+                let cursor = self
+                    .cursor
+                    .as_mut()
+                    .expect("cursor present after ensure_cursor");
+                let frames_state = cursor.frames.as_mut().expect("frames present after Ready");
+                let frame_idx = frames_state.next_index;
+                if frame_idx >= frames_state.frames.len() {
+                    None
+                } else {
+                    let frame = frames_state.frames[frame_idx];
+                    frames_state.next_index = frame_idx + 1;
+                    Some(frame)
+                }
+            };
+            let Some(frame) = frame_meta else {
                 self.cursor = None;
                 continue;
-            }
-            let frame = frames_state.frames[frame_idx];
-            frames_state.next_index = frame_idx + 1;
-            let frame_data = cursor.read.buffer[frame.offset..frame.offset + frame.size].to_vec();
+            };
+            let cursor = self.cursor.as_ref().expect("cursor still present");
             let pts = ticks_to_duration(frame.decode_time, self.init.timescale);
             let dur = ticks_to_duration(u64::from(frame.duration), self.init.timescale);
+            let data: &[u8] = &cursor.read.buffer[frame.offset..frame.offset + frame.size];
             return Ok(DemuxOutcome::Frame(Frame {
-                data: frame_data,
+                data,
                 pts,
                 duration: dur,
             }));
