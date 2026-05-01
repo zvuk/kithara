@@ -157,29 +157,74 @@ test-all: test test-doc
 ast-grep-blocking:
     @just ast-grep
 
-# Run all linters scoped to a crate / path / workspace.
+# Run all linters scoped to a crate / path / workspace. With
+# `--autofix`, run each tool's autofix first (where available), then
+# re-validate.
 # Argument parsing is in `cargo xtask scope`; filter list is in
 # `cargo xtask ast-grep`. This recipe is a thin orchestrator.
 #
-#   just audit                              # whole workspace
+#   just audit                              # whole workspace, report only
+#   just audit --autofix                    # apply every available autofix, then re-validate
 #   just audit kithara-queue                # crate by name
 #   just audit crates/kithara-abr/src       # path inside a crate
 #   just audit tests tests/bench            # one or more workspace paths
 #   just audit ./xtask/src                  # leading ./ ok
+#   just audit --autofix kithara-queue      # autofix scoped to one crate
+#
+# Autofix pipeline order matters and runs before the read-only audit:
+#   1. fmt — establish a stable baseline.
+#   2. clippy --fix — initial pass; may remove imports.
+#   3. typos --fix — operates on identifiers in stable text.
+#   4. ast-grep --fix — textual rewrites.
+#   5. xtask lint --fix — reorders struct fields / trait items; this
+#      can break clippy's `inconsistent_struct_constructor` if a
+#      shorthand init relied on the previous field order.
+#   6. clippy --fix again — catch any inconsistencies introduced by
+#      step 5.
+#   7. fmt again — clean up whitespace from byte-range swaps.
+#   8. audit — read-only re-validation.
+#
+# Autofix implicitly passes `--allow-dirty` to each tool: a single fix
+# step would otherwise dirty the tree and block subsequent steps. Use
+# the per-tool recipes (`just clippy-fix`, `cargo xtask typos --fix`,
+# `cargo xtask ast-grep --fix`, `cargo xtask lint --fix`) when you
+# want the dirty-tree safety net.
 audit *ARGS:
     #!/usr/bin/env bash
     set -uo pipefail
     section() { echo; echo "── $1"; }
 
+    # Strip the recipe-level `--autofix` flag before forwarding the
+    # remainder to scope resolution.
+    autofix=0
+    scope_args=()
+    for a in {{ARGS}}; do
+        if [[ "$a" == "--autofix" ]]; then
+            autofix=1
+        else
+            scope_args+=("$a")
+        fi
+    done
+
+    if [[ $autofix -eq 1 ]]; then
+        section "autofix: fmt";              cargo +nightly fmt --all
+        section "autofix: clippy (1/2)";     cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
+        section "autofix: typos";            cargo xtask typos --fix --allow-dirty
+        section "autofix: ast-grep";         cargo xtask ast-grep --fix --allow-dirty
+        section "autofix: xtask lint";       cargo xtask lint --fix --allow-dirty
+        section "autofix: clippy (2/2)";     cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
+        section "autofix: fmt cleanup";      cargo +nightly fmt --all
+    fi
+
     # Validate scope tokens up front so a typo doesn't silently fall back to
     # a workspace-wide audit. `cargo xtask scope` exits non-zero on bad scope.
-    if ! XTASK_FLAGS=$(cargo xtask scope --for=xtask {{ARGS}}); then exit 2; fi
-    CLIPPY_FLAGS=$(cargo xtask scope --for=clippy {{ARGS}})
-    FMT_FLAGS=$(cargo xtask scope --for=fmt {{ARGS}})
-    AST_GREP_PATHS=$(cargo xtask scope --for=ast-grep {{ARGS}})
-    TYPOS_PATHS=$(cargo xtask scope --for=typos {{ARGS}})
-    SIMILARITY_PATHS=$(cargo xtask scope --for=similarity {{ARGS}})
-    ORPHANS_FLAGS=$(cargo xtask scope --for=orphans {{ARGS}})
+    if ! XTASK_FLAGS=$(cargo xtask scope --for=xtask "${scope_args[@]}"); then exit 2; fi
+    CLIPPY_FLAGS=$(cargo xtask scope --for=clippy "${scope_args[@]}")
+    FMT_FLAGS=$(cargo xtask scope --for=fmt "${scope_args[@]}")
+    AST_GREP_PATHS=$(cargo xtask scope --for=ast-grep "${scope_args[@]}")
+    TYPOS_PATHS=$(cargo xtask scope --for=typos "${scope_args[@]}")
+    SIMILARITY_PATHS=$(cargo xtask scope --for=similarity "${scope_args[@]}")
+    ORPHANS_FLAGS=$(cargo xtask scope --for=orphans "${scope_args[@]}")
 
     fail=0
     section "fmt-check";    cargo +nightly fmt $FMT_FLAGS --check || fail=1
@@ -196,34 +241,6 @@ audit *ARGS:
 
     echo
     [[ $fail -eq 0 ]] && echo "audit: OK" || { echo "audit: FAILED"; exit 1; }
-
-# Apply every available autofix and re-run `just audit` to show what
-# remains. Implicitly passes --allow-dirty to each tool: a single fix
-# step would otherwise dirty the tree and block subsequent steps. Use
-# the per-tool recipes (`just clippy-fix`, `just typos --fix`,
-# `just ast-grep --fix`) when you want the dirty-tree safety net.
-#
-# Pipeline order matters:
-#   1. fmt — establish a stable baseline.
-#   2. clippy --fix — initial pass; may remove imports.
-#   3. typos --fix — operates on identifiers in stable text.
-#   4. ast-grep --fix — textual rewrites.
-#   5. xtask lint --fix — reorders struct fields / trait items; this
-#      can break clippy's `inconsistent_struct_constructor` if a
-#      shorthand init relied on the previous field order.
-#   6. clippy --fix again — catch any inconsistencies introduced by
-#      step 5.
-#   7. fmt again — clean up whitespace from byte-range swaps.
-#   8. audit — re-validate.
-audit-fix:
-    just fmt
-    cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
-    cargo xtask typos --fix --allow-dirty
-    cargo xtask ast-grep --fix --allow-dirty
-    cargo xtask lint --fix --allow-dirty
-    cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
-    just fmt
-    just audit
 
 # --- internal: xtask self-tests ---
 
