@@ -4498,6 +4498,7 @@ dependencies = [
  "crossbeam-queue",
  "delegate",
  "derivative",
+ "derive_setters",
  "hotpath",
  "kithara-bufpool",
  "kithara-platform",

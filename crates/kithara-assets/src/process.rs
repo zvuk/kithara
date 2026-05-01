@@ -442,7 +442,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
+    use kithara_storage::{MmapOptions, MmapResource, Resource};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
@@ -461,15 +461,7 @@ mod tests {
         let path = dir.path().join("test.bin");
         let cancel = CancellationToken::new();
 
-        let res = Resource::open(
-            cancel,
-            MmapOptions {
-                path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .unwrap();
+        let res = Resource::open(cancel, MmapOptions::new(path)).unwrap();
         res.write_at(0, content).unwrap();
         // Don't commit here - let the test control when commit happens
         (res, dir)
@@ -1041,15 +1033,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("cancel.bin");
         let cancel = CancellationToken::new();
-        let resource: MmapResource = Resource::open(
-            cancel.clone(),
-            MmapOptions {
-                path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .unwrap();
+        let resource: MmapResource =
+            Resource::open(cancel.clone(), MmapOptions::new(path)).unwrap();
         resource.write_at(0, &[1u8; 16]).unwrap();
 
         let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());

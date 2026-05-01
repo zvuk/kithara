@@ -598,11 +598,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
             CancellationToken::new(),
-            MmapOptions {
-                path: dir.path().join("availability.bin"),
-                initial_len: Some(4096),
-                mode: OpenMode::ReadWrite,
-            },
+            MmapOptions::new(dir.path().join("availability.bin"))
+                .with_initial_len(4096)
+                .with_mode(OpenMode::ReadWrite),
         )
         .unwrap();
         let atomic = Atomic::new(res);
@@ -628,11 +626,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
             CancellationToken::new(),
-            MmapOptions {
-                path: dir.path().join("availability.bin"),
-                initial_len: None,
-                mode: OpenMode::ReadWrite,
-            },
+            MmapOptions::new(dir.path().join("availability.bin")).with_mode(OpenMode::ReadWrite),
         )
         .unwrap();
         let atomic = Atomic::new(res);
@@ -647,11 +641,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
             CancellationToken::new(),
-            MmapOptions {
-                path: dir.path().join("availability.bin"),
-                initial_len: Some(4096),
-                mode: OpenMode::ReadWrite,
-            },
+            MmapOptions::new(dir.path().join("availability.bin"))
+                .with_initial_len(4096)
+                .with_mode(OpenMode::ReadWrite),
         )
         .unwrap();
         let atomic = Atomic::new(res);

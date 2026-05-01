@@ -158,6 +158,7 @@ impl ResamplerKind {
 /// Contains all values needed to construct a [`ResamplerProcessor`].
 #[derive(Setters)]
 #[setters(prefix = "with_")]
+#[non_exhaustive]
 pub struct ResamplerParams {
     /// Shared atomic for dynamic host sample rate tracking.
     pub host_sample_rate: Arc<AtomicU32>,

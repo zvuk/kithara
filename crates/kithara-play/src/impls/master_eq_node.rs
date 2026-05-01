@@ -116,11 +116,12 @@ fn bands_from_params(params: &MasterEqNode) -> Vec<EqBandConfig> {
     params
         .bands
         .iter()
-        .map(|b| EqBandConfig {
-            frequency: b.frequency,
-            q_factor: b.q_factor,
-            gain_db: b.gain_db,
-            kind: b.kind.into(),
+        .map(|b| {
+            EqBandConfig::default()
+                .with_frequency(b.frequency)
+                .with_q_factor(b.q_factor)
+                .with_gain_db(b.gain_db)
+                .with_kind(b.kind.into())
         })
         .collect()
 }

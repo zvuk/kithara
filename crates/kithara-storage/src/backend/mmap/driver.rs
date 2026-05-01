@@ -7,6 +7,7 @@
 use std::{fmt, fs, ops::Range, path::PathBuf};
 
 use crossbeam_queue::SegQueue;
+use derive_setters::Setters;
 use kithara_platform::Mutex;
 use mmap_io::MemoryMappedFile;
 use rangemap::RangeSet;
@@ -21,14 +22,29 @@ use crate::{
 };
 
 /// Options for opening a [`MmapResource`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, Setters)]
+#[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct MmapOptions {
     /// Open mode controlling read/write behavior for existing files.
     pub mode: OpenMode,
     /// Initial file size for new files. Ignored for existing files.
     pub initial_len: Option<u64>,
     /// Path to the backing file.
+    #[setters(skip)]
     pub path: PathBuf,
+}
+
+impl MmapOptions {
+    /// Create options for the given backing-file path. Other fields
+    /// take their default values; override via `with_*` setters.
+    #[must_use]
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            ..Self::default()
+        }
+    }
 }
 
 /// Mmap state machine.

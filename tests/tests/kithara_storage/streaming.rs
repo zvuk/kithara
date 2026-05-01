@@ -8,7 +8,7 @@ use kithara::storage::MemResource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
-use kithara::storage::{MmapOptions, MmapResource, OpenMode};
+use kithara::storage::{MmapOptions, MmapResource};
 use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
 use kithara_platform::{
     thread,
@@ -54,15 +54,11 @@ fn open_mmap_at(
     initial_len: Option<u64>,
     cancel: CancellationToken,
 ) -> MmapResource {
-    Resource::open(
-        cancel,
-        MmapOptions {
-            path,
-            initial_len,
-            mode: OpenMode::Auto,
-        },
-    )
-    .expect("open should succeed")
+    let mut opts = MmapOptions::new(path);
+    if let Some(len) = initial_len {
+        opts = opts.with_initial_len(len);
+    }
+    Resource::open(cancel, opts).expect("open should succeed")
 }
 
 /// Helper to read bytes from resource into a new Vec.

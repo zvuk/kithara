@@ -1,7 +1,7 @@
 #[cfg(target_arch = "wasm32")]
 use kithara::storage::MemResource;
 #[cfg(not(target_arch = "wasm32"))]
-use kithara::storage::{MmapOptions, MmapResource, OpenMode, Resource};
+use kithara::storage::{MmapOptions, MmapResource, Resource};
 use kithara::{
     bufpool::BytePool,
     storage::{ResourceExt, StorageError},
@@ -35,15 +35,7 @@ fn open_test_resource(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn open_mmap_at(path: std::path::PathBuf, cancel: CancellationToken) -> MmapResource {
-    Resource::open(
-        cancel,
-        MmapOptions {
-            path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .expect("open should succeed")
+    Resource::open(cancel, MmapOptions::new(path)).expect("open should succeed")
 }
 
 #[kithara::test(

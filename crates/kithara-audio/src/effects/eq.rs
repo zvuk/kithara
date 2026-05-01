@@ -11,6 +11,7 @@
 
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
 use derivative::Derivative;
+use derive_setters::Setters;
 use kithara_decode::PcmChunk;
 
 use crate::AudioEffect;
@@ -105,8 +106,10 @@ impl From<u8> for FilterKind {
 }
 
 /// Configuration for a single EQ band.
-#[derive(Debug, Clone, Copy, Derivative, PartialEq)]
+#[derive(Debug, Clone, Copy, Derivative, PartialEq, Setters)]
 #[derivative(Default)]
+#[setters(prefix = "with_")]
+#[non_exhaustive]
 pub struct EqBandConfig {
     /// Filter type label for this band.
     pub kind: FilterKind,

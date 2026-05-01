@@ -196,11 +196,7 @@ impl DiskAssetStore {
             };
             Resource::open_with_observer(
                 cancel.clone(),
-                MmapOptions {
-                    mode,
-                    path: target.to_path_buf(),
-                    initial_len: None,
-                },
+                MmapOptions::new(target.to_path_buf()).with_mode(mode),
                 Some(Arc::clone(&observer) as Arc<dyn AvailabilityObserver>),
             )
         })?;
@@ -210,11 +206,9 @@ impl DiskAssetStore {
     fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
         Ok(Resource::open(
             self.cancel.clone(),
-            MmapOptions {
-                path,
-                initial_len: Some(INDEX_INITIAL_SIZE),
-                mode: OpenMode::ReadWrite,
-            },
+            MmapOptions::new(path)
+                .with_initial_len(INDEX_INITIAL_SIZE)
+                .with_mode(OpenMode::ReadWrite),
         )?)
     }
 
@@ -226,11 +220,7 @@ impl DiskAssetStore {
     ) -> AssetsResult<MmapResource> {
         let resource = Resource::open_with_observer(
             self.cancel.clone(),
-            MmapOptions {
-                path,
-                mode,
-                initial_len: None,
-            },
+            MmapOptions::new(path).with_mode(mode),
             Some(self.scoped_observer(key)),
         )?;
         // Seed aggregate from the driver's initial state for files
