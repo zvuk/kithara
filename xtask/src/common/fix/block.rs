@@ -30,6 +30,12 @@ pub(crate) enum ExpansionError {
     SpanOutOfRange { range: Range<usize>, src_len: usize },
     /// Item spans were not given in source order.
     ItemsOutOfOrder,
+    /// Two adjacent block ranges overlap after trivia expansion. This
+    /// happens when one item's span (as reported by syn) extends past
+    /// the start of the next item — usually attribute or doc-comment
+    /// spans behaving unexpectedly. Skipping the scope keeps the source
+    /// safe.
+    OverlappingBlocks { a: Range<usize>, b: Range<usize> },
 }
 
 /// Compute block ranges for a sequence of sibling items inside a single
@@ -73,25 +79,37 @@ pub(crate) fn expand_blocks(
     let mut blocks: Vec<BlockRange> = Vec::with_capacity(item_spans.len());
 
     for (i, span) in item_spans.iter().enumerate() {
-        let lower = if i == 0 {
-            scope_bytes.start
-        } else {
-            // Lower bound is the trailing-trivia end of the previous item;
-            // we'll patch it below once we know it. For now use the previous
-            // item's bare end.
-            item_spans[i - 1].end
-        };
+        // Trailing trivia is computed first because the *next* item's
+        // leading expansion uses this item's trailing-end as a hard
+        // lower bound. Doing it the other way round (or reusing the
+        // bare item span) would let two neighbours both claim the
+        // same comment, producing overlapping blocks.
         let upper = if i + 1 < item_spans.len() {
             item_spans[i + 1].start
         } else {
             scope_bytes.end
         };
-        let leading_start = expand_leading(src, span.start, lower);
         let trailing_end = expand_trailing(src, span.end, upper);
+        let lower = blocks.last().map_or(scope_bytes.start, |b| b.bytes.end);
+        let leading_start = expand_leading(src, span.start, lower);
         blocks.push(BlockRange {
             bytes: leading_start..trailing_end,
             item_bytes: span.clone(),
         });
+    }
+
+    // Detect overlap between adjacent expanded blocks. Should not
+    // happen with the lower-bound discipline above, but real-world
+    // code can still trip pathological cases (e.g. spans of attributes
+    // on inherent impls reaching past the syn-reported start of the
+    // next item). Surface the case rather than producing broken edits.
+    for pair in blocks.windows(2) {
+        if pair[0].bytes.end > pair[1].bytes.start {
+            return Err(ExpansionError::OverlappingBlocks {
+                a: pair[0].bytes.clone(),
+                b: pair[1].bytes.clone(),
+            });
+        }
     }
 
     // Detect floating comments in the gaps that did not get absorbed by

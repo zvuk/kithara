@@ -11,11 +11,15 @@
 //! Tuple-struct expressions (`Foo(a, b)`) and explicit-position struct exprs
 //! (`Foo { 0: a, 1: b }`) are skipped — they have no name to sort by.
 
-use std::{cmp::Ordering, ops::Range};
+use std::{cmp::Ordering, collections::HashSet, ops::Range};
 
 use anyhow::Result;
 use proc_macro2::Span;
-use syn::{ExprStruct, FieldValue, Member, spanned::Spanned, visit::Visit};
+use syn::{
+    ExprStruct, FieldValue, Member,
+    spanned::Spanned,
+    visit::{self, Visit},
+};
 
 use super::{Check, Context};
 use crate::{
@@ -108,7 +112,7 @@ impl<'ast> Visit<'ast> for FixVisitor<'_, '_> {
                 e.path.span().start().line
             ));
         }
-        syn::visit::visit_expr_struct(self, e);
+        visit::visit_expr_struct(self, e);
     }
 }
 
@@ -130,6 +134,17 @@ fn try_fix_expr_struct(
         // and shuffle only the named fields, which is doable but adds
         // surface area for marginal value — skip for now.
         return Err("contains `..base` rest".to_string());
+    }
+
+    // Detect use-def conflicts: a shorthand field `x` evaluates as
+    // moving/borrowing the binding `x` from the surrounding scope. If
+    // any explicit field's expression also references `x` (e.g.
+    // `Self { spec: pcm.spec(), pcm }`), reordering shorthand to come
+    // first would move `pcm` before `pcm.spec()` runs — a compile
+    // error. Skip the literal in that case; the developer can either
+    // rewrite to fully-explicit form or live with the report.
+    if has_shorthand_use_def_conflict(&e.fields) {
+        return Err("shorthand field is moved before another field reads it".to_string());
     }
 
     let actual: Vec<InitKey> = e
@@ -202,7 +217,7 @@ struct InitVisitor<'a> {
 impl<'ast> Visit<'ast> for InitVisitor<'_> {
     fn visit_expr_struct(&mut self, e: &'ast ExprStruct) {
         check_expr_struct(self.cfg, self.rel, e, self.out);
-        syn::visit::visit_expr_struct(self, e);
+        visit::visit_expr_struct(self, e);
     }
 }
 
@@ -293,6 +308,61 @@ fn check_expr_struct(
          expected [{expected_summary}], found [{actual_summary}]"
     );
     out.push(Violation::warn(ID, key, msg));
+}
+
+/// True iff some shorthand field name is referenced by another field's
+/// explicit expression. In that case, moving the shorthand first would
+/// move/borrow the value before the explicit expression runs, which is
+/// a compile error or behaviour change. The check is conservative: it
+/// only inspects identifier references, not field-access paths or
+/// method-call receivers (those start with the same identifier).
+fn has_shorthand_use_def_conflict(
+    fields: &syn::punctuated::Punctuated<FieldValue, syn::Token![,]>,
+) -> bool {
+    let shorthand_names: HashSet<String> = fields
+        .iter()
+        .filter(|fv| fv.colon_token.is_none())
+        .filter_map(|fv| match &fv.member {
+            Member::Named(id) => Some(id.to_string()),
+            Member::Unnamed(_) => None,
+        })
+        .collect();
+    if shorthand_names.is_empty() {
+        return false;
+    }
+    for fv in fields.iter().filter(|fv| fv.colon_token.is_some()) {
+        let mut v = IdentScanner {
+            names: &shorthand_names,
+            found: false,
+        };
+        v.visit_expr(&fv.expr);
+        if v.found {
+            return true;
+        }
+    }
+    false
+}
+
+struct IdentScanner<'a> {
+    names: &'a HashSet<String>,
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for IdentScanner<'_> {
+    fn visit_path(&mut self, p: &'ast syn::Path) {
+        // Match a leading single-segment ident: `foo`, `foo.bar()`,
+        // `foo[0]`, etc. all parse with `foo` as the path's first
+        // segment. Multi-segment paths like `Self::new()` or
+        // `crate::foo` cannot reference a local binding, so skip.
+        if let Some(first) = p.segments.first()
+            && p.leading_colon.is_none()
+            && self.names.contains(&first.ident.to_string())
+        {
+            self.found = true;
+            return;
+        }
+        visit::visit_path(self, p);
+    }
 }
 
 fn type_span_start_line(e: &ExprStruct) -> usize {
@@ -486,5 +556,45 @@ fn main() {
         let (after_second, skipped2) = run_fix(&after_first);
         assert_eq!(after_first, after_second, "I2: idempotency violated");
         assert!(skipped2.is_empty());
+    }
+
+    #[test]
+    fn shorthand_use_def_conflict_is_skipped() {
+        // `pcm` would be moved by the shorthand field; reordering it
+        // first would break `spec: pcm.spec()` which still needs the
+        // borrow. Skipped to keep the source compiling.
+        let src = "\
+fn make(pcm: Pcm) -> Self {
+    Self {
+        spec: pcm.spec(),
+        pcm,
+    }
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert_eq!(out, src, "must not reorder when a use-def conflict exists");
+        assert!(
+            skipped.iter().any(|s| s.contains("moved before")),
+            "skipped: {skipped:?}"
+        );
+    }
+
+    #[test]
+    fn unrelated_shorthand_still_swapped() {
+        // `value` is shorthand but no explicit field reads it; safe to
+        // pull to the front.
+        let src = "\
+fn make(value: u32, label: String) -> Self {
+    Self {
+        label: label.clone(),
+        value,
+    }
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        let value_pos = out.find("value,").expect("value");
+        let label_pos = out.find("label: label.clone()").expect("label");
+        assert!(value_pos < label_pos, "shorthand first:\n{out}");
     }
 }
