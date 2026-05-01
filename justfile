@@ -19,6 +19,13 @@ fmt-check:
 clippy:
     cargo clippy --workspace -- -D warnings
 
+# Apply clippy's machine-applicable suggestions in place. Refuses to run
+# on a dirty working tree by default — pass --allow-dirty to override.
+#   just clippy-fix
+#   just clippy-fix --allow-dirty
+clippy-fix *ARGS:
+    cargo clippy --fix --workspace --all-targets {{ARGS}} -- -D warnings
+
 # Type-check the workspace (also used as MSRV gate in CI).
 check:
     cargo check --workspace
@@ -189,6 +196,22 @@ audit *ARGS:
 
     echo
     [[ $fail -eq 0 ]] && echo "audit: OK" || { echo "audit: FAILED"; exit 1; }
+
+# Apply every available autofix and re-run `just audit` to show what
+# remains. Implicitly passes --allow-dirty to each tool: a single fix
+# step would otherwise dirty the tree and block subsequent steps. Use
+# the per-tool recipes (`just clippy-fix`, `just typos --fix`,
+# `just ast-grep --fix`) when you want the dirty-tree safety net.
+#
+# Pipeline order (fmt → clippy → typos → ast-grep → re-audit) matters:
+# clippy --fix can remove imports that typos would otherwise complain
+# about, and ast-grep fixes are textual so they go last.
+audit-fix:
+    just fmt
+    cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
+    cargo xtask typos --fix --allow-dirty
+    cargo xtask ast-grep --fix --allow-dirty
+    just audit
 
 # --- internal: xtask self-tests ---
 

@@ -10,3 +10,10 @@ rule:
     - not:
         inside:
           pattern: "impl $TRAIT for $TYPE { $$$ }"
+# Intentionally no `fix:` block. ast-grep replaces only the matched
+# `function_item` node; if the no-op is preceded by a doc comment
+# (`/// stub`) or outer line comment (`// remove later`), removing the
+# fn would leave those comments orphaned. That breaks the I1 invariant
+# documented in xtask/src/common/fix/README.md. The fix has to be made
+# manually so the human decides whether the surrounding comment should
+# also be deleted or rewired to another item.
