@@ -19,9 +19,9 @@ use super::probe::{
 };
 use crate::{
     Decoder,
-    backend::BoxedSource,
     error::{DecodeError, DecodeResult},
     hooks::HookedDecoder,
+    traits::BoxedSource,
 };
 
 /// Explicit backend selection for [`DecoderFactory`].

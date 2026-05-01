@@ -15,12 +15,11 @@ use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use crate::{
-    backend::BoxedSource,
     codec::FrameCodec,
     demuxer::Demuxer,
     fmp4::Fmp4SegmentDemuxer,
     symphonia::SymphoniaCodec,
-    traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
+    traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     universal::UniversalDecoder,
 };
 

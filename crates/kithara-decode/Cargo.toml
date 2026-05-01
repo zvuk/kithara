@@ -51,10 +51,9 @@ android = []
 # factory only uses the compiled hardware backend — no fallback.
 symphonia = ["dep:symphonia"]
 test-utils = ["unimock"]
-internal = []
 
 [dev-dependencies]
-kithara-decode = { path = ".", default-features = false, features = ["internal", "symphonia"] }
+kithara-decode = { path = ".", default-features = false, features = ["symphonia"] }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-utils = { workspace = true }

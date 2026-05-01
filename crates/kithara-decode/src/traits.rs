@@ -171,6 +171,11 @@ pub trait DecoderInput: Read + Seek + Send + Sync {
 
 impl<T: Read + Seek + Send + Sync + ?Sized> DecoderInput for T {}
 
+/// Boxed [`DecoderInput`] alias used by demuxer constructors. The factory
+/// dispatch path materialises the input as a `BoxedSource` so concrete
+/// demuxers don't have to be generic over the byte source.
+pub(crate) type BoxedSource = Box<dyn DecoderInput>;
+
 /// Trait for runtime-polymorphic audio decoders.
 ///
 /// This trait is used by kithara-audio for dynamic dispatch when the

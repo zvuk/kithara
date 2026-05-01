@@ -2,7 +2,7 @@
 //!
 //! Bypasses Symphonia's whole-stream `IsoMp4Reader` to avoid the prefix
 //! walk that broke HLS seeks (see `kithara-decode` crate README §2). Each
-//! HLS segment is fetched independently through a [`crate::backend::BoxedSource`]
+//! HLS segment is fetched independently through a [`crate::traits::BoxedSource`]
 //! cursor, demuxed in memory via [`super::parsing`], and frames are
 //! emitted one at a time. Segment layout (init range, decode-time → segment
 //! mapping) comes from a [`SegmentLayout`] handle — the same one HLS /
@@ -18,9 +18,9 @@ use super::{
     source_io::{FillStatus, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
-    backend::BoxedSource,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
     error::{DecodeError, DecodeResult},
+    traits::BoxedSource,
 };
 
 struct SegmentCursor {

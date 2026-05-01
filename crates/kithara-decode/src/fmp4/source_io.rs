@@ -6,9 +6,8 @@ use std::{
 use kithara_stream::{PendingReason, StreamReadError};
 
 use crate::{
-    backend::BoxedSource,
     error::{DecodeError, DecodeResult},
-    traits::InputReadOutcome,
+    traits::{BoxedSource, InputReadOutcome},
 };
 
 fn map_stream_err(err: StreamReadError) -> DecodeError {

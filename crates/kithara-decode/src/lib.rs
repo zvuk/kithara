@@ -19,7 +19,6 @@
 //! let decoder = DecoderFactory::create_from_media_info(source, &media_info, config)?;
 //! ```
 
-mod backend;
 mod codec;
 mod demuxer;
 mod error;
@@ -32,9 +31,6 @@ mod symphonia;
 mod traits;
 mod types;
 mod universal;
-
-#[cfg(feature = "internal")]
-pub mod internal;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
