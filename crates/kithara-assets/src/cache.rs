@@ -556,7 +556,7 @@ mod tests {
                     asset_root,
                     CancellationToken::new(),
                     None,
-                    crate::byte_pool(),
+                    &crate::BytePool::default(),
                 ),
             }
         }
@@ -617,7 +617,7 @@ mod tests {
             dir,
             "test_asset",
             CancellationToken::new(),
-            crate::byte_pool(),
+            &crate::BytePool::default(),
         ));
         CachedAssets::new(disk, capacity, None)
     }
@@ -628,7 +628,7 @@ mod tests {
             dir,
             "",
             CancellationToken::new(),
-            crate::byte_pool(),
+            &crate::BytePool::default(),
         ));
         CachedAssets::new(disk, NonZeroUsize::new(5).unwrap(), None)
     }

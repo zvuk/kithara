@@ -58,7 +58,7 @@ pub use error::{AssetsError, AssetsResult};
 pub use index::{EvictConfig, FlushHub, FlushPolicy};
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
-pub use kithara_bufpool::{BytePool, byte_pool};
+pub use kithara_bufpool::BytePool;
 pub use process::ProcessChunkFn;
 pub use state::AssetResourceState;
 pub use store::{AssetResource, AssetStoreBuilder, OnInvalidatedFn, StoreOptions};

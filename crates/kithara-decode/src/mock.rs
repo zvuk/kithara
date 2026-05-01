@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use kithara_bufpool::pcm_pool;
+use kithara_bufpool::PcmPool;
 use unimock::{MockFn, Unimock, matching};
 
 pub use crate::traits::DecoderMock;
@@ -156,7 +156,7 @@ fn build_infinite_decoder(
                     spec,
                     ..Default::default()
                 },
-                pcm_pool().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
+                PcmPool::default().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
             )))
         },
         Vec::new(),

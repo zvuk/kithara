@@ -9,7 +9,7 @@
 
 use bytes::Bytes;
 use kithara_assets::{AssetStore, ResourceKey};
-use kithara_bufpool::byte_pool;
+use kithara_bufpool::BytePool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
@@ -71,7 +71,7 @@ fn try_read_cached(
     let Ok(res) = backend.open_resource(key) else {
         return Ok(None);
     };
-    let mut buf = byte_pool().get();
+    let mut buf = BytePool::default().get();
     let n = res.read_into(&mut buf)?;
     if n == 0 {
         return Ok(None);

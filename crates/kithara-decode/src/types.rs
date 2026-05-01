@@ -1,7 +1,7 @@
 use std::{fmt, sync::Arc, time::Duration};
 
 use derivative::Derivative;
-use kithara_bufpool::{PcmBuf, pcm_pool};
+use kithara_bufpool::{PcmBuf, PcmPool};
 
 /// Audio track metadata extracted from Symphonia tags.
 ///
@@ -122,7 +122,7 @@ pub struct PcmMeta {
 #[derive(Debug, Derivative)]
 #[derivative(Default)]
 pub struct PcmChunk {
-    #[derivative(Default(value = "pcm_pool().get()"))]
+    #[derivative(Default(value = "PcmPool::default().get()"))]
     pub pcm: PcmBuf,
     pub meta: PcmMeta,
 }
@@ -133,7 +133,7 @@ impl Clone for PcmChunk {
     /// Each clone gets its own [`PcmBuf`] from the global pool,
     /// so both original and clone recycle independently on drop.
     fn clone(&self) -> Self {
-        let mut new_pcm = pcm_pool().get();
+        let mut new_pcm = PcmPool::default().get();
         new_pcm.extend_from_slice(&self.pcm);
         Self {
             pcm: new_pcm,
@@ -177,7 +177,7 @@ mod tests {
                 spec,
                 ..Default::default()
             },
-            pcm_pool().attach(pcm),
+            PcmPool::default().attach(pcm),
         )
     }
 

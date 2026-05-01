@@ -1,17 +1,17 @@
 id: perf.no-global-pool-accessor
 message: |
-  Calling the global `byte_pool()` / `pcm_pool()` accessor from a
-  library crate. Pools are an injected dependency: the top of the
-  application builds one `BytePool` and one `PcmPool` and passes
-  them down through config structs or constructor arguments.
-  Library code must read the pool from `self`/`cfg`, not reach into
-  the global singleton.
+  Constructing a default `BytePool` / `PcmPool` from a library crate.
+  Pools are an injected dependency: the top of the application builds
+  one `BytePool` and one `PcmPool` and passes them down through
+  config structs or constructor arguments. Library code must read
+  the pool from `self`/`cfg`, not call `BytePool::default()` /
+  `PcmPool::default()` directly.
 
-      // ❌  let buf = byte_pool().get_with(...);
+      // ❌  let buf = BytePool::default().get_with(...);
       // ✅  let buf = self.byte_pool.get_with(...);
       // ✅  let buf = cfg.pcm_pool.get_with(...);
 
-  The global accessors stay available for the very top layer (main /
+  `Default::default()` stays available for the very top layer (main /
   FFI entrypoint / test fixtures) where building the singleton is
   the right thing to do.
 severity: warning
@@ -34,7 +34,7 @@ ignores:
   - "**/tests.rs"
 rule:
   any:
-    - pattern: "byte_pool()"
-    - pattern: "pcm_pool()"
-    - pattern: "kithara_bufpool::byte_pool()"
-    - pattern: "kithara_bufpool::pcm_pool()"
+    - pattern: "BytePool::default()"
+    - pattern: "PcmPool::default()"
+    - pattern: "kithara_bufpool::BytePool::default()"
+    - pattern: "kithara_bufpool::PcmPool::default()"

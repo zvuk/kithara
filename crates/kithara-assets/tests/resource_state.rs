@@ -2,7 +2,7 @@ use std::{collections::HashSet, num::NonZeroUsize, path::Path, sync::Arc};
 
 use kithara_assets::{
     AssetResourceState, AssetStoreBuilder, EvictConfig, ProcessChunkFn, ResourceKey,
-    internal::{DiskAssetStore, PinsIndex, byte_pool},
+    internal::{BytePool, DiskAssetStore, PinsIndex},
 };
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceExt;
@@ -20,8 +20,13 @@ fn xor_process_fn() -> ProcessChunkFn<u8> {
 }
 
 fn load_pins(root_dir: &Path) -> HashSet<String> {
-    let disk = DiskAssetStore::new(root_dir, "pins", CancellationToken::new(), byte_pool());
-    PinsIndex::open(&disk, byte_pool())
+    let disk = DiskAssetStore::new(
+        root_dir,
+        "pins",
+        CancellationToken::new(),
+        &BytePool::default(),
+    );
+    PinsIndex::open(&disk, &BytePool::default())
         .and_then(|index| index.load())
         .unwrap_or_default()
 }

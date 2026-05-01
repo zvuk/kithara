@@ -671,7 +671,7 @@ impl AudioEffect for EqEffect {
 mod tests {
     use std::f32::consts::PI;
 
-    use kithara_bufpool::pcm_pool;
+    use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
 
@@ -683,7 +683,7 @@ mod tests {
                 spec,
                 ..Default::default()
             },
-            pcm_pool().attach(pcm),
+            PcmPool::default().attach(pcm),
         )
     }
 

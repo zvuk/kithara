@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use kithara_bufpool::{PcmPool, pcm_pool};
+use kithara_bufpool::PcmPool;
 use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
 #[cfg(target_arch = "wasm32")]
@@ -777,7 +777,7 @@ where
         } = config;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
-        let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::byte_pool().clone());
+        let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
         let initial_byte_len = stream.len().unwrap_or(0);
@@ -790,7 +790,7 @@ where
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
         let stream_ctx = shared_stream.build_stream_context();
 
-        let pool = pool.get_or_insert_with(|| pcm_pool().clone());
+        let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),
             initial_media_info.clone(),
@@ -1309,7 +1309,7 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
-            pcm_pool: pcm_pool().clone(),
+            pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_notify: Arc::new(Notify::new()),
@@ -1367,7 +1367,7 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
-            pcm_pool: pcm_pool().clone(),
+            pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_notify: Arc::new(Notify::new()),

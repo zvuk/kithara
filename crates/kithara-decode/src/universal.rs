@@ -278,7 +278,7 @@ mod smoke_tests {
 
     use std::io::Cursor;
 
-    use kithara_bufpool::pcm_pool;
+    use kithara_bufpool::PcmPool;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
     use symphonia::core::{
@@ -329,8 +329,15 @@ mod smoke_tests {
         let demuxer = build_mp3_demuxer();
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open(&track_info).expect("MP3 codec should open");
-        let mut decoder =
-            UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None, None);
+        let mut decoder = UniversalDecoder::new(
+            demuxer,
+            codec,
+            PcmPool::default().clone(),
+            0,
+            None,
+            None,
+            None,
+        );
 
         let mut got_chunk = false;
         for _ in 0..16 {
@@ -354,8 +361,15 @@ mod smoke_tests {
         let demuxer = build_mp3_demuxer();
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open(&track_info).expect("MP3 codec should open");
-        let mut decoder =
-            UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None, None);
+        let mut decoder = UniversalDecoder::new(
+            demuxer,
+            codec,
+            PcmPool::default().clone(),
+            0,
+            None,
+            None,
+            None,
+        );
 
         for _ in 0..4 {
             let _ = decoder
@@ -389,7 +403,7 @@ mod hook_tests {
 
     use std::sync::{Arc, Mutex};
 
-    use kithara_bufpool::pcm_pool;
+    use kithara_bufpool::PcmPool;
     use kithara_stream::{
         DecoderHooks, PendingReason, ReaderChunkSignal, ReaderSeekSignal, SharedHooks,
     };
@@ -542,7 +556,7 @@ mod hook_tests {
         UniversalDecoder::new(
             demuxer,
             codec,
-            pcm_pool().clone(),
+            PcmPool::default().clone(),
             0,
             None,
             None,

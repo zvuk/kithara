@@ -484,7 +484,7 @@ mod tests {
             dir.path().join("cache"),
             "_",
             CancellationToken::new(),
-            crate::byte_pool(),
+            &crate::BytePool::default(),
         );
 
         let key = ResourceKey::absolute(&file_path);

@@ -302,7 +302,7 @@ mod tests {
             "test_asset",
             CancellationToken::new(),
             None,
-            crate::byte_pool(),
+            &crate::BytePool::default(),
         )
     }
 

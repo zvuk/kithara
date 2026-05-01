@@ -96,7 +96,7 @@ pub mod offline {
             let player_node = PlayerNode::with_channel(
                 cmd_rx,
                 Arc::clone(&shared_state),
-                kithara_bufpool::pcm_pool().clone(),
+                kithara_bufpool::PcmPool::default().clone(),
             );
             let node_id = ctx.add_node(player_node, None);
             let graph_out = ctx.graph_out_node_id();
@@ -118,7 +118,11 @@ pub mod offline {
         /// Panics if the command channel is full.
         pub fn load_and_fadein(&mut self, resource: crate::Resource, src: &str) {
             let src: Arc<str> = Arc::from(src);
-            let pr = PlayerResource::new(resource, Arc::clone(&src), kithara_bufpool::pcm_pool());
+            let pr = PlayerResource::new(
+                resource,
+                Arc::clone(&src),
+                &kithara_bufpool::PcmPool::default(),
+            );
             self.cmd_tx
                 .try_push(PlayerCmd::LoadTrack {
                     resource: Arc::new(Mutex::new(pr)),

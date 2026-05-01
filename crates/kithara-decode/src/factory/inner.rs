@@ -74,8 +74,8 @@ impl std::fmt::Display for DecoderBackend {
 /// chain (player → `AudioConfig` → `DecoderConfig`). The `None` arm is
 /// a last-resort fallback for unit tests that don't care about pool
 /// budgets and for legacy call sites that haven't been threaded yet;
-/// it routes to the process-global `kithara_bufpool::pcm_pool()` /
-/// `byte_pool()`. Don't construct fresh `PcmPool::new` / `BytePool::new`
+/// it routes to the process-global `PcmPool::default()` /
+/// `BytePool::default()`. Don't construct fresh `PcmPool::new` / `BytePool::new`
 /// inside library components — that fragments the heap into many small
 /// per-component pools and defeats recycling.
 #[derive(Clone, Derivative)]
@@ -86,7 +86,7 @@ pub struct DecoderConfig {
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Raw byte buffer pool, propagated from the host. `None` falls
-    /// back to `kithara_bufpool::byte_pool()`.
+    /// back to `BytePool::default()`.
     pub byte_pool: Option<BytePool>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     ///
@@ -100,7 +100,7 @@ pub struct DecoderConfig {
     /// [`UniversalDecoder`]: crate::universal::UniversalDecoder
     pub hooks: Option<SharedHooks>,
     /// PCM buffer pool, propagated from the host. `None` falls back to
-    /// `kithara_bufpool::pcm_pool()`.
+    /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,
     /// Optional segment-layout handle over the underlying source. When
     /// present, fMP4 AAC / FLAC streams dispatch through the
@@ -309,7 +309,7 @@ fn create_fmp4_segment_apple(
     let pool = config
         .pcm_pool
         .clone()
-        .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
+        .unwrap_or_else(|| PcmPool::default().clone());
     let decoder = UniversalDecoder::new(
         demuxer,
         codec,
@@ -366,7 +366,7 @@ fn create_fmp4_segment_android(
     let pool = config
         .pcm_pool
         .clone()
-        .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
+        .unwrap_or_else(|| PcmPool::default().clone());
     let decoder = UniversalDecoder::new(
         demuxer,
         codec,
@@ -431,7 +431,7 @@ fn create_file_symphonia_universal(
     let pool = config
         .pcm_pool
         .clone()
-        .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
+        .unwrap_or_else(|| PcmPool::default().clone());
     let decoder = UniversalDecoder::new(
         demuxer,
         codec_impl,
@@ -482,7 +482,7 @@ fn create_fmp4_segment_symphonia(
             let pool = config
                 .pcm_pool
                 .clone()
-                .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
+                .unwrap_or_else(|| PcmPool::default().clone());
             let decoder = UniversalDecoder::new(
                 demuxer,
                 codec,

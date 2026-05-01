@@ -5,7 +5,7 @@ use std::env;
 use std::{fmt, hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use derive_setters::Setters;
-use kithara_bufpool::{BytePool, byte_pool};
+use kithara_bufpool::BytePool;
 use kithara_storage::StorageResource;
 use tokio_util::sync::CancellationToken;
 
@@ -345,7 +345,7 @@ where
             .process_fn
             .expect("process_fn is required for AssetStoreBuilder");
 
-        let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
+        let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
 
         // FlushHub coordinates flushes for all three on-disk indexes.
         // Either reuse a caller-supplied hub (shared across stores) or
@@ -432,7 +432,7 @@ where
         let process_fn = self
             .process_fn
             .expect("process_fn is required for AssetStoreBuilder");
-        let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
+        let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
 
         let asset_root_clone = asset_root.clone();
         // Symmetric to the disk builder: single deleter shared by

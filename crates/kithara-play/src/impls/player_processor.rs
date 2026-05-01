@@ -548,7 +548,7 @@ mod tests {
         let (tx, rx) = HeapRb::<PlayerCmd>::new(32).split();
         let sample_rate = NonZeroU32::new(44100).expect("non-zero");
         let processor =
-            PlayerNodeProcessor::new(rx, shared_state, sample_rate, kithara_bufpool::pcm_pool());
+            PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
         (processor, tx)
     }
 
@@ -637,14 +637,14 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
-            kithara_bufpool::pcm_pool(),
+            &PcmPool::default(),
         )));
 
         let shared_state = make_shared_state();
         let (tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
         let sample_rate = NonZeroU32::new(host_rate).expect("non-zero");
         let mut processor =
-            PlayerNodeProcessor::new(rx, shared_state, sample_rate, kithara_bufpool::pcm_pool());
+            PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
 
         let mut tx = tx;
         tx.try_push(PlayerCmd::LoadTrack {
@@ -819,7 +819,7 @@ mod tests {
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
-            kithara_bufpool::pcm_pool(),
+            &PcmPool::default(),
         )))
     }
 
@@ -908,7 +908,7 @@ mod tests {
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
-            kithara_bufpool::pcm_pool(),
+            &PcmPool::default(),
         )))
     }
 
@@ -1021,7 +1021,7 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
-            kithara_bufpool::pcm_pool(),
+            &PcmPool::default(),
         )));
 
         let (mut processor, mut tx) = make_processor();
@@ -1096,7 +1096,7 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
-            kithara_bufpool::pcm_pool(),
+            &PcmPool::default(),
         )));
 
         let sample_rate = NonZeroU32::new(44_100).expect("non-zero");
@@ -1211,7 +1211,7 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
-            kithara_bufpool::pcm_pool(),
+            &PcmPool::default(),
         )));
 
         let (mut processor, mut tx) = make_processor();
@@ -1270,7 +1270,7 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
-            kithara_bufpool::pcm_pool(),
+            &PcmPool::default(),
         )));
 
         let sample_rate = NonZeroU32::new(44_100).expect("non-zero");

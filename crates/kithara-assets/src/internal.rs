@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-pub use kithara_bufpool::{BytePool, byte_pool};
+pub use kithara_bufpool::BytePool;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(target_arch = "wasm32")]

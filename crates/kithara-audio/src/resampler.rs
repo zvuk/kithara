@@ -14,7 +14,7 @@ use std::{
 use audioadapter_buffers::direct::SequentialSliceOfVecs;
 use derive_setters::Setters;
 use fast_interleave::{deinterleave_variable, interleave_variable};
-use kithara_bufpool::{PcmBuf, PcmPool, pcm_pool};
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use portable_atomic::AtomicF32;
 use rubato::{
@@ -270,7 +270,7 @@ impl ResamplerProcessor {
             input_buffer: smallvec_new_vecs(channels),
             output_spec,
             playback_rate: params.playback_rate,
-            pool: params.pool.unwrap_or_else(|| pcm_pool().clone()),
+            pool: params.pool.unwrap_or_else(|| PcmPool::default().clone()),
             quality: params.quality,
             resampler: None,
             source_rate,
@@ -885,7 +885,7 @@ impl AudioEffect for ResamplerProcessor {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::pcm_pool;
+    use kithara_bufpool::PcmPool;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -896,7 +896,7 @@ mod tests {
                 spec,
                 ..Default::default()
             },
-            pcm_pool().attach(pcm),
+            PcmPool::default().attach(pcm),
         )
     }
 

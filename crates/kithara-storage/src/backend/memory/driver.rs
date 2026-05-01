@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use kithara_bufpool::{PooledOwned, byte_pool};
+use kithara_bufpool::{BytePool, PooledOwned};
 use kithara_platform::Mutex;
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
@@ -40,7 +40,7 @@ pub(super) struct MemState {
 
 /// In-memory storage driver backed by a growable byte pool buffer.
 ///
-/// Uses [`byte_pool()`](kithara_bufpool::byte_pool) for memory management
+/// Uses [`BytePool::default()`](kithara_bufpool::byte_pool) for memory management
 /// with byte budget enforcement. Data is never evicted —
 /// [`valid_window()`](crate::DriverIo::valid_window) returns `None`.
 ///
@@ -63,7 +63,7 @@ impl Driver for MemDriver {
     type Options = MemOptions;
 
     fn open(opts: MemOptions) -> StorageResult<(Self, DriverState)> {
-        let mut buf = byte_pool().get();
+        let mut buf = BytePool::default().get();
 
         let (len, init_state) = if let Some(data) = opts.initial_data {
             let data_len = data.len();

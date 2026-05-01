@@ -13,7 +13,7 @@ use std::{
 };
 
 use kithara_audio::internal::source::*;
-use kithara_bufpool::pcm_pool;
+use kithara_bufpool::PcmPool;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, PcmChunk, PcmMeta,
     PcmSpec,
@@ -261,7 +261,7 @@ fn make_chunk(spec: PcmSpec, num_samples: usize) -> PcmChunk {
             spec,
             ..Default::default()
         },
-        pcm_pool().attach(vec![0.5; num_samples]),
+        PcmPool::default().attach(vec![0.5; num_samples]),
     )
 }
 
@@ -2111,7 +2111,7 @@ impl Decoder for EncodedDecoder {
                                 spec: self.spec,
                                 ..Default::default()
                             },
-                            pcm_pool().attach(pcm),
+                            PcmPool::default().attach(pcm),
                         )))
                     };
                 }
@@ -2162,7 +2162,7 @@ impl Decoder for EncodedDecoder {
                 spec: self.spec,
                 ..Default::default()
             },
-            pcm_pool().attach(pcm),
+            PcmPool::default().attach(pcm),
         )))
     }
 

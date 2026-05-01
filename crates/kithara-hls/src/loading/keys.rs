@@ -119,7 +119,7 @@ impl KeyManager {
             .backend
             .open_resource(&cache_key)
             .map_err(|e| HlsError::KeyProcessing(format!("key not in cache: {url} — {e}")))?;
-        let mut buf = kithara_bufpool::byte_pool().get();
+        let mut buf = kithara_bufpool::BytePool::default().get();
         let n = res.read_into(&mut buf).map_err(|e| {
             HlsError::KeyProcessing(format!("failed to read cached key: {url} — {e}"))
         })?;

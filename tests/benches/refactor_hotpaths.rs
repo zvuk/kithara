@@ -23,7 +23,7 @@ use criterion::{BatchSize, Criterion, SamplingMode, black_box, criterion_group, 
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioEffect, ResamplerQuality},
-    bufpool::pcm_pool,
+    bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
@@ -84,7 +84,7 @@ fn make_chunk(sample_rate: u32, channels: u16, frames: usize) -> PcmChunk {
             },
             ..Default::default()
         },
-        pcm_pool().attach(make_pcm(frames, usize::from(channels))),
+        PcmPool::default().attach(make_pcm(frames, usize::from(channels))),
     )
 }
 

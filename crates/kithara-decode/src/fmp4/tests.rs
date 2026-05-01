@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use kithara_bufpool::pcm_pool;
+use kithara_bufpool::PcmPool;
 use kithara_platform::time::Duration;
 use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
@@ -154,7 +154,15 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
     let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
     let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("build demuxer");
     let codec = SymphoniaCodec::open(demuxer.track_info()).expect("open codec");
-    let decoder = UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None, None);
+    let decoder = UniversalDecoder::new(
+        demuxer,
+        codec,
+        PcmPool::default().clone(),
+        0,
+        None,
+        None,
+        None,
+    );
     (decoder, reads, record)
 }
 

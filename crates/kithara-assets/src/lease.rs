@@ -540,7 +540,7 @@ mod tests {
     fn make_pins_disk(dir: &Path) -> PinsIndex {
         let path = dir.join("_index").join("pins.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        PinsIndex::with_persist_at(path, CancellationToken::new(), crate::byte_pool())
+        PinsIndex::with_persist_at(path, CancellationToken::new(), &crate::BytePool::default())
     }
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
@@ -548,7 +548,7 @@ mod tests {
             dir,
             "test_asset",
             CancellationToken::new(),
-            crate::byte_pool(),
+            &crate::BytePool::default(),
         ));
         let pins = make_pins_disk(dir);
         LeaseAssets::new(disk, CancellationToken::new(), pins)
@@ -560,7 +560,7 @@ mod tests {
             dir,
             "",
             CancellationToken::new(),
-            crate::byte_pool(),
+            &crate::BytePool::default(),
         ));
         let pins = make_pins_disk(dir);
         LeaseAssets::new(disk, CancellationToken::new(), pins)
@@ -572,7 +572,8 @@ mod tests {
         if !path.exists() {
             return HashSet::new();
         }
-        let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), crate::byte_pool());
+        let idx =
+            PinsIndex::with_persist_at(path, CancellationToken::new(), &crate::BytePool::default());
         idx.snapshot()
     }
 

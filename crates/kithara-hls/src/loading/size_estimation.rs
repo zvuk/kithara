@@ -31,7 +31,7 @@ pub(crate) async fn estimate_size_maps(
     headers: Option<&kithara_net::Headers>,
 ) {
     let num_variants = playlist_state.num_variants();
-    let mut buf = kithara_bufpool::byte_pool().get();
+    let mut buf = kithara_bufpool::BytePool::default().get();
 
     for variant in 0..num_variants {
         estimate_variant_size_map(

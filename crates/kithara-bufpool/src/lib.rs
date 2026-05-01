@@ -13,13 +13,16 @@
 //! ## Example
 //!
 //! ```
-//! use kithara_bufpool::pcm_pool;
+//! use kithara_bufpool::PcmPool;
 //!
-//! // Get buffer from the global PCM pool
-//! let mut buf = pcm_pool().get();
+//! // Build (or fetch the singleton) at the top of the app and pass it down
+//! // through your config structs. Library code should not call
+//! // `PcmPool::default()` directly — read the pool from injected config.
+//! let pool = PcmPool::default();
+//! let mut buf = pool.get();
 //! buf.resize(1024, 0.0);
 //! // Use buf...
-//! // Automatically returned to pool on drop
+//! // Automatically returned to the pool on drop.
 //! ```
 
 #![forbid(unsafe_code)]
@@ -31,7 +34,7 @@ mod pool;
 #[cfg(feature = "internal")]
 pub mod internal;
 
-pub use global::{BytePool, PcmBuf, PcmPool, byte_pool, pcm_pool};
+pub use global::{BytePool, PcmBuf, PcmPool};
 pub use growth::BudgetExhausted;
 // Low-level pool internals (used by type aliases above; prefer BytePool/PcmPool/PcmBuf)
 #[doc(hidden)]

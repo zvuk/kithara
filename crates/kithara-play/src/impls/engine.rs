@@ -15,7 +15,7 @@ use std::sync::{
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
-use kithara_bufpool::{PcmPool, pcm_pool};
+use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
@@ -118,7 +118,7 @@ impl EngineImpl {
         let resolved_pool = config
             .pcm_pool
             .clone()
-            .unwrap_or_else(|| pcm_pool().clone());
+            .unwrap_or_else(|| PcmPool::default().clone());
         let session = session_client();
 
         Self {

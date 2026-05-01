@@ -4,7 +4,7 @@ use std::{fs, path::Path};
 
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
-    bufpool::byte_pool,
+    bufpool::BytePool,
     storage::ResourceExt,
 };
 use kithara_assets::{index::schema::ArchivedPinsIndexFile, internal::schema::PinsIndexFile};
@@ -13,7 +13,7 @@ use kithara_test_utils::temp_dir;
 
 /// Helper to read bytes from resource into a pooled buffer
 fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
-    let mut buf = byte_pool().get_with(|b| b.resize(len, 0));
+    let mut buf = BytePool::default().get_with(|b| b.resize(len, 0));
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf[..n].to_vec()
 }
@@ -93,7 +93,7 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
 
     res.write_all(&payload).unwrap();
 
-    let mut read_back = byte_pool().get();
+    let mut read_back = BytePool::default().get();
     res.read_into(&mut read_back).unwrap();
     assert_eq!(&*read_back, &payload[..]);
 
@@ -127,7 +127,7 @@ fn atomic_resource_persistence(
     }
 
     let res = store.open_resource(&key).unwrap();
-    let mut buf = byte_pool().get();
+    let mut buf = BytePool::default().get();
     res.read_into(&mut buf).unwrap();
     assert_eq!(&*buf, payload);
 }
@@ -181,7 +181,7 @@ fn mixed_resource_persistence_across_reopen(temp_dir: kithara_test_utils::TestTe
     }
 
     let atomic = store.open_resource(&atomic_key).unwrap();
-    let mut atomic_read = byte_pool().get();
+    let mut atomic_read = BytePool::default().get();
     atomic.read_into(&mut atomic_read).unwrap();
     assert_eq!(&*atomic_read, &atomic_payload[..]);
 
@@ -214,7 +214,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
     let reader = thread::spawn(move || {
         let res = store_reader.open_resource(&key_reader).unwrap();
         res.wait_range(0..payload_len_reader).unwrap();
-        let mut buf = byte_pool().get_with(|b| b.resize(payload_len_reader as usize, 0));
+        let mut buf = BytePool::default().get_with(|b| b.resize(payload_len_reader as usize, 0));
         let n = res.read_at(0, &mut buf).unwrap();
         buf.truncate(n);
         buf.to_vec()
@@ -260,7 +260,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
 
     let playlist = store.acquire_resource(&playlist_key).unwrap();
     playlist.write_all(&playlist_bytes).unwrap();
-    let mut playlist_read = byte_pool().get();
+    let mut playlist_read = BytePool::default().get();
     playlist.read_into(&mut playlist_read).unwrap();
     assert_eq!(&*playlist_read, &playlist_bytes[..]);
 
@@ -334,7 +334,7 @@ fn atomic_resource_roundtrip_with_different_paths(
 
     res.write_all(&payload).unwrap();
 
-    let mut read_back = byte_pool().get();
+    let mut read_back = BytePool::default().get();
     res.read_into(&mut read_back).unwrap();
     assert_eq!(&*read_back, &payload[..]);
 }
@@ -403,7 +403,7 @@ fn multiple_resources_same_asset_root_independently_accessible(
 
     // Verify each resource independently
     for (res, expected_data) in resources {
-        let mut read_back = byte_pool().get();
+        let mut read_back = BytePool::default().get();
         res.read_into(&mut read_back).unwrap();
         assert_eq!(&*read_back, &expected_data[..]);
     }
@@ -462,7 +462,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
         let store = asset_store_with_root(&temp_dir, "asset-alpha");
         let key = ResourceKey::new("data.bin");
         let res = store.acquire_resource(&key).unwrap();
-        let mut buf = byte_pool().get();
+        let mut buf = BytePool::default().get();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, payloads[0], "asset-alpha data should be intact");
     }
@@ -476,7 +476,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
         let store = asset_store_with_root(&temp_dir, "asset-gamma");
         let key = ResourceKey::new("data.bin");
         let res = store.acquire_resource(&key).unwrap();
-        let mut buf = byte_pool().get();
+        let mut buf = BytePool::default().get();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, payloads[2], "asset-gamma data should be intact");
     }
@@ -581,7 +581,7 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_test_utils::TestTemp
         let store = asset_store_with_root(&temp_dir, "existing-asset");
         let key = ResourceKey::new("data.bin");
         let res = store.open_resource(&key).unwrap();
-        let mut buf = byte_pool().get();
+        let mut buf = BytePool::default().get();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, b"existing data");
     }
