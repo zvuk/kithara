@@ -21,7 +21,6 @@ fn test_decoder_config_default() {
     let config = DecoderConfig::default();
     assert_eq!(config.backend, DecoderBackend::Symphonia);
     assert!(config.byte_len_handle.is_none());
-    assert!(config.gapless);
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -31,18 +30,11 @@ fn test_decoder_config_custom() {
     let config = DecoderConfig {
         backend: DecoderBackend::Apple,
         byte_len_handle: Some(Arc::clone(&handle)),
-        gapless: false,
         hint: Some("mp3".to_string()),
-        stream_ctx: None,
-        segment_layout: None,
-        epoch: 0,
-        pcm_pool: None,
-        byte_pool: None,
-        hooks: None,
+        ..DecoderConfig::default()
     };
     assert_eq!(config.backend, DecoderBackend::Apple);
     assert!(config.byte_len_handle.is_some());
-    assert!(!config.gapless);
     assert_eq!(config.hint, Some("mp3".to_string()));
 }
 

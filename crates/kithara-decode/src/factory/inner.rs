@@ -68,20 +68,25 @@ impl std::fmt::Display for DecoderBackend {
 }
 
 /// Configuration for `DecoderFactory`.
+///
+/// `pcm_pool` / `byte_pool` are intentionally `Option<_>` — the
+/// production discipline is to propagate one pool down the entire host
+/// chain (player → `AudioConfig` → `DecoderConfig`). The `None` arm is
+/// a last-resort fallback for unit tests that don't care about pool
+/// budgets and for legacy call sites that haven't been threaded yet;
+/// it routes to the process-global `kithara_bufpool::pcm_pool()` /
+/// `byte_pool()`. Don't construct fresh `PcmPool::new` / `BytePool::new`
+/// inside library components — that fragments the heap into many small
+/// per-component pools and defeats recycling.
 #[derive(Clone, Derivative)]
 #[derivative(Default)]
 pub struct DecoderConfig {
-    /// Which decoder backend to use. See [`DecoderBackend`]. Default
-    /// is [`DecoderBackend::Auto`].
+    /// Which decoder backend to use. See [`DecoderBackend`].
     pub backend: DecoderBackend,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
-    /// Optional byte buffer pool override.
-    ///
-    /// Used by backends that need a reusable raw byte buffer (e.g. the
-    /// Apple fMP4 reader loads the container into a pooled slice and
-    /// slices packets out without per-packet allocations).  When `None`,
-    /// the global `kithara_bufpool::byte_pool()` is used.
+    /// Raw byte buffer pool, propagated from the host. `None` falls
+    /// back to `kithara_bufpool::byte_pool()`.
     pub byte_pool: Option<BytePool>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     ///
@@ -94,9 +99,8 @@ pub struct DecoderConfig {
     ///
     /// [`UniversalDecoder`]: crate::universal::UniversalDecoder
     pub hooks: Option<SharedHooks>,
-    /// Optional PCM buffer pool override.
-    ///
-    /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
+    /// PCM buffer pool, propagated from the host. `None` falls back to
+    /// `kithara_bufpool::pcm_pool()`.
     pub pcm_pool: Option<PcmPool>,
     /// Stream context for segment/variant metadata.
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
@@ -106,9 +110,6 @@ pub struct DecoderConfig {
     /// whole-stream container parser, side-stepping prefix walks during
     /// forward seek.
     pub segment_layout: Option<Arc<dyn SegmentLayout>>,
-    /// Enable gapless playback.
-    #[derivative(Default(value = "true"))]
-    pub gapless: bool,
     /// Epoch counter for decoder recreation tracking.
     pub epoch: u64,
 }
