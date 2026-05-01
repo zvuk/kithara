@@ -100,6 +100,7 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 /// ```
 #[derive(Clone, Setters)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct ResourceConfig {
     /// Initial ABR mode passed to the HLS stream. The shared
     /// `AbrController` lives on the `Downloader` and runs per-sample

@@ -16,6 +16,7 @@ use crate::{drm, theme::Palette};
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Debug)]
 #[setters(prefix = "with_")]
+#[non_exhaustive]
 pub struct AppConfig {
     /// Shared `AssetStore` flush coordinator for every track. Built
     /// once in `main` so all tracks coalesce their on-disk index

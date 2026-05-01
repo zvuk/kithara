@@ -27,6 +27,7 @@ use crate::{
 /// Combines stream config and audio pipeline settings into a single builder.
 #[derive(Setters)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct AudioConfig<T: StreamType> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
     pub stream: T::Config,
