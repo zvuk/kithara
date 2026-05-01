@@ -1,0 +1,38 @@
+id: rust.no-expect-bare-string
+message: |
+  `.expect("…")` whose message does not start with one of the structured
+  prefixes that signal *why* the unwrap is sound:
+
+    - `BUG:`        — invariant truly cannot be violated; if it was, that
+                      is a bug (not a runtime error caller can recover from);
+    - `invariant:`  — same intent, more verbose form;
+    - `SAFETY:`     — unwrap of an `unsafe`-driven contract.
+
+  A bare `.expect("oops")` reads as "I gave up handling this" — the next
+  reader cannot tell whether the panic is intended or a leftover. Either
+  recover with `?` / `match`, or annotate the message with a structured
+  prefix so the panic-site is auditable.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-test-macros/**"
+  - "crates/kithara-hang-detector-macros/**"
+  - "crates/kithara-wasm-macros/**"
+  - "crates/kithara-probe-macros/**"
+rule:
+  all:
+    - pattern: $RECV.expect($MSG)
+    - has:
+        field: arguments
+        has:
+          kind: string_literal
+    - not:
+        regex: '\.expect\s*\(\s*"(?:BUG:|invariant:|SAFETY:)'

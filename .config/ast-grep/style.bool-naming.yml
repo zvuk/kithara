@@ -1,0 +1,43 @@
+id: style.bool-naming
+message: |
+  Public boolean function or struct field without a predicate-style prefix
+  (`is_`, `has_`, `should_`, `can_`, `will_`, `was_`, `were_`, `did_`).
+  At call sites the predicate prefix lets the reader parse `if track.muted()`
+  vs `if track.is_muted()` correctly without consulting the type.
+
+  Prefer:
+    - `pub fn ready(&self) -> bool`     → `pub fn is_ready(&self) -> bool`
+    - `pub fn has_value(...) -> bool`   (already good)
+    - `pub fn permitted() -> bool`      → `pub fn is_permitted()` /
+                                          `can_*` / `should_*`.
+    - `pub muted: bool`                 → `pub is_muted: bool` /
+                                          `pub muted: Mute` (typed enum).
+
+  Verbs that already read like predicates (`contains`, `matches`, `starts_with`,
+  `ends_with`, `accepts`, `supports`, `requires`, `allows`, `equals`, `intersects`,
+  `overlaps`, `exists`) are accepted as-is.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-test-macros/**"
+  - "crates/kithara-hang-detector-macros/**"
+  - "crates/kithara-wasm-macros/**"
+  - "crates/kithara-probe-macros/**"
+rule:
+  any:
+    # `pub fn name(...) -> bool` without a predicate-style identifier prefix.
+    - all:
+        - kind: function_item
+        - regex: 'pub fn \w+\([^)]*\)\s*->\s*bool\b'
+        - not:
+            regex: 'pub fn (is_|has_|should_|can_|will_|was_|were_|did_|are_|allow_|allows|contains|matches|starts_with|ends_with|accepts|supports|requires|equals|intersects|overlaps|exists|fits|owns|covers|holds|needs|wants)'
+    # `pub field: bool` without a predicate-style prefix.
+    - all:
+        - kind: field_declaration
+        - regex: 'pub \w+\s*:\s*bool\b'
+        - not:
+            regex: 'pub (is_|has_|should_|can_|will_|was_|were_|did_|are_)'

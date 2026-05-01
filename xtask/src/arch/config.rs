@@ -91,6 +91,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) generic_param_count: GenericParamCountThreshold,
     #[serde(default)]
+    pub(crate) no_lib_statics: NoLibStaticsThreshold,
+    #[serde(default)]
     pub(crate) flat_directory: FlatDirectoryThreshold,
     #[serde(default)]
     pub(crate) max_nesting: MaxNestingThreshold,
@@ -278,6 +280,33 @@ pub(crate) struct FnArgCountThreshold {
 impl Default for FnArgCountThreshold {
     fn default() -> Self {
         Self { warn: 5 }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NoLibStaticsThreshold {
+    /// Crate names exempt from the rule. App / FFI / wasm / xtask / test
+    /// support crates legitimately own singletons; lib crates do not.
+    #[serde(default)]
+    pub(crate) exempt_crates: Vec<String>,
+}
+
+impl Default for NoLibStaticsThreshold {
+    fn default() -> Self {
+        Self {
+            exempt_crates: vec![
+                "kithara-app".to_string(),
+                "kithara-ffi".to_string(),
+                "kithara-wasm".to_string(),
+                "xtask".to_string(),
+                "kithara-test-utils".to_string(),
+                "kithara-test-macros".to_string(),
+                "kithara-hang-detector-macros".to_string(),
+                "kithara-wasm-macros".to_string(),
+                "kithara-probe-macros".to_string(),
+            ],
+        }
     }
 }
 

@@ -334,6 +334,15 @@ schema_version = 1
 "crates/kithara-test-utils/src/signal_pcm.rs" = 1
 "crates/kithara-test-utils/src/test_server.rs" = 1
 
+[no_lib_statics]
+"crates/kithara-audio/src/worker/handle.rs::static AUDIO_WORKER_ID" = 1
+"crates/kithara-events/src/scope.rs::static BUS_ID_COUNTER" = 1
+"crates/kithara-platform/src/thread.rs::static ACTIVE_NAMED_THREADS" = 1
+"crates/kithara-play/src/impls/session_engine.rs::static RX" = 1
+"crates/kithara-play/src/impls/session_engine.rs::static SESSION_CLIENT" = 1
+"crates/kithara-play/src/impls/session_engine.rs::static TX" = 1
+"crates/kithara-probes/src/wire.rs::static REGISTERED" = 1
+
 [pub_struct_open_fields]
 "crates/kithara-abr/src/controller/core.rs::AbrSettings" = 1
 "crates/kithara-abr/src/state/decision.rs::AbrDecision" = 1

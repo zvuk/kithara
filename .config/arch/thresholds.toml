@@ -85,6 +85,24 @@ warn = 5
 warn_params = 3
 warn_where = 4
 
+[no_lib_statics]
+# Hidden globals (`static`, `OnceLock`/`OnceCell`/`LazyLock`/`Lazy` typed
+# constants, `lazy_static!`) declared at item scope inside library crates.
+# App / FFI / wasm / xtask / test-support crates may legitimately own
+# singletons; lib crates accept them as injected dependencies (see
+# `feedback_pools_via_config_not_global` in user memory).
+exempt_crates = [
+    "kithara-app",
+    "kithara-ffi",
+    "kithara-wasm",
+    "xtask",
+    "kithara-test-utils",
+    "kithara-test-macros",
+    "kithara-hang-detector-macros",
+    "kithara-wasm-macros",
+    "kithara-probe-macros",
+]
+
 [shared_state]
 warn = 3
 deny = 5

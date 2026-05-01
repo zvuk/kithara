@@ -1,0 +1,30 @@
+id: rust.no-debug-prints
+message: |
+  `dbg!` / `println!` / `eprintln!` left in production code. Per AGENTS.md:
+  "Use `tracing`, not `println!` or `dbg!`, in production code". Replace
+  with the appropriate `tracing::{trace,debug,info,warn,error}!` call.
+
+  Tests, examples, and `xtask` build tooling can keep `println!` /
+  `eprintln!` because they target a developer terminal, not a runtime log
+  pipeline. `dbg!` is never appropriate in committed code — it is for
+  investigation, not for staying.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/examples/**"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-test-macros/**"
+rule:
+  any:
+    - pattern: dbg!($$$)
+    - pattern: println!($$$)
+    - pattern: eprintln!($$$)
+    - pattern: print!($$$)
+    - pattern: eprint!($$$)

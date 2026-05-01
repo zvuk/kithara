@@ -1,0 +1,41 @@
+id: style.no-vague-type-suffix
+message: |
+  Type/trait name ends in a vague suffix (`Manager`, `Helper`, `Util`,
+  `Service`, `Handler`, `Wrapper`, `Provider`). These suffixes describe
+  generic responsibility ("does stuff"), not the actual contract — they
+  hide what the type *is* and grow into god-objects over time.
+
+  Per AGENTS.md: "Choose the simplest and shortest names that still
+  describe the real meaning". Replace the suffix with something that
+  names the contract:
+    - `ConnectionManager`  → `ConnectionPool` / `Connections`
+    - `RequestHandler`     → `RequestRouter` / a `fn handle_request`
+    - `LoggerService`      → `Logger`
+    - `ConfigProvider`     → `ConfigSource` / `Config`
+    - `ErrorWrapper`       → use the error type directly or rename
+                              the variant it actually represents.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-test-macros/**"
+  - "crates/kithara-hang-detector-macros/**"
+  - "crates/kithara-wasm-macros/**"
+  - "crates/kithara-probe-macros/**"
+rule:
+  any:
+    - all:
+        - kind: struct_item
+        - regex: 'struct\s+\w*(Manager|Helper|Util|Utils|Service|Handler|Wrapper|Provider)\b'
+    - all:
+        - kind: enum_item
+        - regex: 'enum\s+\w*(Manager|Helper|Util|Utils|Service|Handler|Wrapper|Provider)\b'
+    - all:
+        - kind: trait_item
+        - regex: 'trait\s+\w*(Manager|Helper|Util|Utils|Service|Handler|Wrapper|Provider)\b'
+    - all:
+        - kind: type_item
+        - regex: 'type\s+\w*(Manager|Helper|Util|Utils|Service|Handler|Wrapper|Provider)\b'

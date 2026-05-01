@@ -1,0 +1,30 @@
+id: style.narrow-pub-inputs
+message: |
+  Public function parameter takes a wider type than it needs. The narrower
+  borrowed shape lets callers pass a literal or a slice of any backing
+  storage without a temporary allocation:
+
+    - `&String` → `&str`
+    - `&Vec<T>` → `&[T]`
+    - `&Box<T>` → `&T`
+    - `&PathBuf` → `&Path`
+    - `&CString` → `&CStr`
+    - `&OsString` → `&OsStr`
+
+  Owned `String`/`Vec` parameters are fine when the function intends to
+  take ownership. This rule only flags the borrowed-but-too-wide form.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-test-macros/**"
+  - "crates/kithara-hang-detector-macros/**"
+  - "crates/kithara-wasm-macros/**"
+  - "crates/kithara-probe-macros/**"
+rule:
+  all:
+    - kind: function_item
+    - regex: 'pub(?:\([^)]*\))?\s+(?:async\s+)?(?:unsafe\s+)?(?:extern\s+(?:"[^"]*"\s+)?)?fn\s+\w+\s*(?:<[^>]*>)?\s*\([^)]*?\b\w+\s*:\s*&(?:mut\s+)?(?:String|Vec<[^>]+>|Box<[^>]+>|PathBuf|CString|OsString)\b'
