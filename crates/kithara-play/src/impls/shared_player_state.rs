@@ -26,24 +26,24 @@ const NOTIFICATION_RINGBUF_CAPACITY: usize = 32;
 pub(crate) struct SharedPlayerState {
     /// Whether playback is active.
     pub(crate) playing: AtomicBool,
-    /// Current seek epoch used to invalidate stale seek requests.
-    pub(crate) seek_epoch: AtomicU64,
-    /// Last observed playback position snapshot in seconds.
-    ///
-    /// Source of truth is the per-track `Timeline` in the audio pipeline.
-    pub(crate) position: AtomicF64,
     /// Last observed total duration snapshot in seconds.
     ///
     /// Source of truth is the per-track `Timeline` in the audio pipeline.
     pub(crate) duration: AtomicF64,
+    /// Last observed playback position snapshot in seconds.
+    ///
+    /// Source of truth is the per-track `Timeline` in the audio pipeline.
+    pub(crate) position: AtomicF64,
     /// Current sample rate from the audio stream.
     pub(crate) sample_rate: AtomicU32,
     /// Diagnostic: how many times `process()` has been called on the audio thread.
     pub(crate) process_count: AtomicU64,
-    /// Sender for processor-to-main-thread notifications.
-    pub(crate) notification_tx: Mutex<HeapProd<PlayerNotification>>,
+    /// Current seek epoch used to invalidate stale seek requests.
+    pub(crate) seek_epoch: AtomicU64,
     /// Receiver for processor-to-main-thread notifications.
     pub(crate) notification_rx: Mutex<HeapCons<PlayerNotification>>,
+    /// Sender for processor-to-main-thread notifications.
+    pub(crate) notification_tx: Mutex<HeapProd<PlayerNotification>>,
 }
 
 impl SharedPlayerState {

@@ -46,16 +46,8 @@ pub type OnInvalidatedFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 #[derive(Clone, Setters)]
 #[setters(prefix = "with_", strip_option)]
 pub struct StoreOptions {
-    /// Directory for persistent cache storage (required).
-    pub cache_dir: PathBuf,
     /// In-memory LRU cache capacity for opened resources.
     pub cache_capacity: Option<NonZeroUsize>,
-    /// Use ephemeral (in-memory) storage instead of disk.
-    ///
-    /// When `true`, the asset store uses `MemAssetStore` instead of
-    /// `DiskAssetStore`. Data is never written to disk.
-    /// Default: `false`.
-    pub ephemeral: bool,
     /// Shared flush coordinator for the on-disk indexes (`pins.bin`,
     /// `lru.bin`, `availability.bin`).
     ///
@@ -74,6 +66,14 @@ pub struct StoreOptions {
     /// Called when a cached resource is invalidated (displaced from LRU cache).
     #[setters(skip)]
     pub on_invalidated: Option<OnInvalidatedFn>,
+    /// Directory for persistent cache storage (required).
+    pub cache_dir: PathBuf,
+    /// Use ephemeral (in-memory) storage instead of disk.
+    ///
+    /// When `true`, the asset store uses `MemAssetStore` instead of
+    /// `DiskAssetStore`. Data is never written to disk.
+    /// Default: `false`.
+    pub ephemeral: bool,
 }
 
 impl fmt::Debug for StoreOptions {
@@ -124,17 +124,6 @@ impl StoreOptions {
         }
     }
 
-    /// Reuse an externally-owned [`FlushHub`] for the on-disk indexes.
-    ///
-    /// Several stores can share the same hub — useful when one
-    /// process owns multiple [`AssetStore`]s and wants a single
-    /// background flush worker covering them all.
-    #[must_use]
-    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
-        self.flush_hub = Some(hub);
-        self
-    }
-
     /// Effective LRU cache capacity (explicit or default).
     #[must_use]
     pub fn effective_cache_capacity(&self) -> NonZeroUsize {
@@ -149,6 +138,17 @@ impl StoreOptions {
             max_assets: self.max_assets,
             max_bytes: self.max_bytes,
         }
+    }
+
+    /// Reuse an externally-owned [`FlushHub`] for the on-disk indexes.
+    ///
+    /// Several stores can share the same hub — useful when one
+    /// process owns multiple [`AssetStore`]s and wants a single
+    /// background flush worker covering them all.
+    #[must_use]
+    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
+        self.flush_hub = Some(hub);
+        self
     }
 }
 
@@ -211,9 +211,9 @@ pub(crate) type MemStore<Ctx = ()> =
 /// - `LeaseAssets` provides RAII pinning for opened resources (outermost)
 /// - `ProcessingAssets` (if configured) wraps resources for transformation
 pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
+    asset_root: Option<String>,
     cache_capacity: Option<NonZeroUsize>,
     cancel: Option<CancellationToken>,
-    ephemeral: bool,
     evict_config: Option<EvictConfig>,
     flush_hub: Option<Arc<FlushHub>>,
     mem_resource_capacity: Option<usize>,
@@ -221,7 +221,7 @@ pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()
     pool: Option<BytePool>,
     process_fn: Option<ProcessChunkFn<Ctx>>,
     root_dir: Option<PathBuf>,
-    asset_root: Option<String>,
+    ephemeral: bool,
 }
 
 impl Default for AssetStoreBuilder<()> {
@@ -261,6 +261,16 @@ impl<Ctx> AssetStoreBuilder<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + fmt::Debug + 'static,
 {
+    /// Set the asset root identifier (e.g. from `asset_root_for_url`).
+    ///
+    /// Pass `None` when the store will only be used with absolute keys
+    /// (e.g. local file playback). Relative keys will fail with `InvalidKey`
+    /// when `asset_root` is `None`.
+    pub fn asset_root(mut self, asset_root: Option<&str>) -> Self {
+        self.asset_root = asset_root.map(str::to_string);
+        self
+    }
+
     /// Build the storage backend.
     ///
     /// Returns `AssetStore::Disk` for persistent storage or
@@ -300,81 +310,6 @@ where
                 }
             }
         }
-    }
-
-    /// Set the root directory for the asset store.
-    pub fn root_dir<P: Into<PathBuf>>(mut self, root: P) -> Self {
-        self.root_dir = Some(root.into());
-        self
-    }
-
-    /// Set the asset root identifier (e.g. from `asset_root_for_url`).
-    ///
-    /// Pass `None` when the store will only be used with absolute keys
-    /// (e.g. local file playback). Relative keys will fail with `InvalidKey`
-    /// when `asset_root` is `None`.
-    pub fn asset_root(mut self, asset_root: Option<&str>) -> Self {
-        self.asset_root = asset_root.map(str::to_string);
-        self
-    }
-
-    #[must_use]
-    pub fn evict_config(mut self, cfg: EvictConfig) -> Self {
-        self.evict_config = Some(cfg);
-        self
-    }
-
-    #[must_use]
-    pub fn cancel(mut self, cancel: CancellationToken) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-
-    /// Set capacity of each in-memory resource for ephemeral backend.
-    #[must_use]
-    pub fn mem_resource_capacity(mut self, capacity: usize) -> Self {
-        self.mem_resource_capacity = Some(capacity);
-        self
-    }
-
-    /// Set the in-memory LRU cache capacity for opened resources.
-    #[must_use]
-    pub fn cache_capacity(mut self, capacity: NonZeroUsize) -> Self {
-        self.cache_capacity = Some(capacity);
-        self
-    }
-
-    /// Set the buffer pool (created at application startup and shared).
-    #[must_use]
-    pub fn pool(mut self, pool: BytePool) -> Self {
-        self.pool = Some(pool);
-        self
-    }
-
-    /// Reuse an externally-owned [`FlushHub`] for the on-disk indexes.
-    /// See [`StoreOptions::with_flush_hub`].
-    #[must_use]
-    pub fn flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
-        self.flush_hub = Some(hub);
-        self
-    }
-
-    /// Set callback invoked when a cached resource is invalidated.
-    #[must_use]
-    pub fn on_invalidated(mut self, callback: OnInvalidatedFn) -> Self {
-        self.on_invalidated = Some(callback);
-        self
-    }
-
-    /// Use ephemeral (in-memory) storage instead of disk.
-    ///
-    /// When `true`, `build()` returns `AssetStore::Mem` with auto-eviction
-    /// (LRU cache removes underlying data on eviction).
-    /// Default: `false`.
-    #[must_use]
-    pub fn ephemeral(mut self, ephemeral: bool) -> Self {
-        self.ephemeral = ephemeral;
-        self
     }
 
     /// Build disk-backed asset store with its own unshared
@@ -558,6 +493,71 @@ where
             Some(hooked_on_invalidated),
         ));
         LeaseAssets::new(cached, cancel, pins)
+    }
+
+    /// Set the in-memory LRU cache capacity for opened resources.
+    #[must_use]
+    pub fn cache_capacity(mut self, capacity: NonZeroUsize) -> Self {
+        self.cache_capacity = Some(capacity);
+        self
+    }
+
+    #[must_use]
+    pub fn cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Use ephemeral (in-memory) storage instead of disk.
+    ///
+    /// When `true`, `build()` returns `AssetStore::Mem` with auto-eviction
+    /// (LRU cache removes underlying data on eviction).
+    /// Default: `false`.
+    #[must_use]
+    pub fn ephemeral(mut self, ephemeral: bool) -> Self {
+        self.ephemeral = ephemeral;
+        self
+    }
+
+    #[must_use]
+    pub fn evict_config(mut self, cfg: EvictConfig) -> Self {
+        self.evict_config = Some(cfg);
+        self
+    }
+
+    /// Reuse an externally-owned [`FlushHub`] for the on-disk indexes.
+    /// See [`StoreOptions::with_flush_hub`].
+    #[must_use]
+    pub fn flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
+        self.flush_hub = Some(hub);
+        self
+    }
+
+    /// Set capacity of each in-memory resource for ephemeral backend.
+    #[must_use]
+    pub fn mem_resource_capacity(mut self, capacity: usize) -> Self {
+        self.mem_resource_capacity = Some(capacity);
+        self
+    }
+
+    /// Set callback invoked when a cached resource is invalidated.
+    #[must_use]
+    pub fn on_invalidated(mut self, callback: OnInvalidatedFn) -> Self {
+        self.on_invalidated = Some(callback);
+        self
+    }
+
+    /// Set the buffer pool (created at application startup and shared).
+    #[must_use]
+    pub fn pool(mut self, pool: BytePool) -> Self {
+        self.pool = Some(pool);
+        self
+    }
+
+    /// Set the root directory for the asset store.
+    pub fn root_dir<P: Into<PathBuf>>(mut self, root: P) -> Self {
+        self.root_dir = Some(root.into());
+        self
     }
 }
 

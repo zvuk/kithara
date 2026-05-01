@@ -35,12 +35,19 @@ use crate::{
 /// Byte-level availability state for a single resource.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Availability {
-    pub(crate) ranges: RangeSet<u64>,
     pub(crate) final_len: Option<u64>,
+    pub(crate) ranges: RangeSet<u64>,
     pub(crate) committed: bool,
 }
 
 impl Availability {
+    fn contains(&self, range: &Range<u64>) -> bool {
+        if range.start >= range.end {
+            return true;
+        }
+        self.ranges.gaps(range).next().is_none()
+    }
+
     fn insert(&mut self, range: Range<u64>) {
         if range.start >= range.end {
             return;
@@ -55,13 +62,6 @@ impl Availability {
             self.ranges.insert(0..final_len);
         }
     }
-
-    fn contains(&self, range: &Range<u64>) -> bool {
-        if range.start >= range.end {
-            return true;
-        }
-        self.ranges.gaps(range).next().is_none()
-    }
 }
 
 /// Opaque handle to the aggregate byte availability index.
@@ -75,25 +75,25 @@ type AssetMap = DashMap<String, Arc<DashMap<String, Arc<Mutex<Availability>>>>>;
 struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
     assets: AssetMap,
-    /// Disk-backed persist target. Set once via
-    /// [`AvailabilityIndex::enable_persistence`]; later flushes reuse
-    /// the cached `Atomic<MmapResource>` handle.
-    persist: OnceLock<AvailabilityPersist>,
+    /// `true` when the in-memory aggregate has uncommitted writes
+    /// since the last successful flush.
+    dirty: AtomicBool,
     /// Set by [`AvailabilityIndex::attach_to`]. While `None`,
     /// `ScopedAvailabilityObserver` falls back to the legacy
     /// "explicit checkpoint only" contract — every observer event
     /// just marks `dirty` so the next call to
     /// [`AvailabilityIndex::flush`] writes the snapshot.
     hub: OnceLock<Arc<FlushHub>>,
-    /// `true` when the in-memory aggregate has uncommitted writes
-    /// since the last successful flush.
-    dirty: AtomicBool,
+    /// Disk-backed persist target. Set once via
+    /// [`AvailabilityIndex::enable_persistence`]; later flushes reuse
+    /// the cached `Atomic<MmapResource>` handle.
+    persist: OnceLock<AvailabilityPersist>,
 }
 
 struct AvailabilityPersist {
-    path: PathBuf,
     cancel: CancellationToken,
     res: OnceLock<Atomic<MmapResource>>,
+    path: PathBuf,
 }
 
 impl AvailabilityIndex {
@@ -115,6 +115,47 @@ impl AvailabilityIndex {
             return;
         }
         hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
+    }
+
+    pub(crate) fn available_ranges(&self, asset_root: &str, key: &ResourceKey) -> RangeSet<u64> {
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        if let Some(asset) = self.inner.assets.get(root)
+            && let Some(arc) = asset.get(path)
+        {
+            return arc.lock_sync().ranges.clone();
+        }
+        RangeSet::new()
+    }
+
+    /// Drop every per-resource entry recorded under `asset_root`.
+    ///
+    /// Used by deletion paths that wipe an entire asset directory at
+    /// once (`DiskAssetStore::delete_asset`, `MemAssetStore::delete_asset`,
+    /// the LRU evictor's `delete_asset_dir`). Without this, stale
+    /// `final_len` / `ranges` survive on the index map and
+    /// `contains_range` answers `true` for bytes that no longer exist
+    /// on disk — producing the HLS hang pinned by
+    /// `red_test_delete_asset_strands_availability_index`.
+    pub(crate) fn clear_root(&self, asset_root: &str) {
+        self.inner.assets.remove(asset_root);
+    }
+
+    pub(crate) fn contains_range(
+        &self,
+        asset_root: &str,
+        key: &ResourceKey,
+        range: Range<u64>,
+    ) -> bool {
+        if range.start >= range.end {
+            return true;
+        }
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        if let Some(asset) = self.inner.assets.get(root)
+            && let Some(arc) = asset.get(path)
+        {
+            return arc.lock_sync().contains(&range);
+        }
+        false
     }
 
     /// Enable disk persistence rooted at `path`. Hydrates the
@@ -153,6 +194,16 @@ impl AvailabilityIndex {
         });
     }
 
+    pub(crate) fn final_len(&self, asset_root: &str, key: &ResourceKey) -> Option<u64> {
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        if let Some(asset) = self.inner.assets.get(root)
+            && let Some(arc) = asset.get(path)
+        {
+            return arc.lock_sync().final_len;
+        }
+        None
+    }
+
     /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
     /// when a hub is attached, or runs the inline serialise+write path
     /// otherwise.
@@ -165,88 +216,6 @@ impl AvailabilityIndex {
             .hub
             .get()
             .map_or_else(|| Flushable::flush(&*self.inner), |hub| hub.flush_now())
-    }
-
-    pub(crate) fn record_write(&self, asset_root: &str, key: &ResourceKey, range: Range<u64>) {
-        if range.start >= range.end {
-            return;
-        }
-        let (root, path) = Self::resolve_refs(asset_root, key);
-        let arc = self.insert_or_get_entry(root, path);
-        arc.lock_sync().insert(range);
-        self.inner.dirty.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn record_commit(&self, asset_root: &str, key: &ResourceKey, final_len: u64) {
-        let (root, path) = Self::resolve_refs(asset_root, key);
-        let arc = self.insert_or_get_entry(root, path);
-        arc.lock_sync().mark_committed(final_len);
-        self.inner.dirty.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn available_ranges(&self, asset_root: &str, key: &ResourceKey) -> RangeSet<u64> {
-        let (root, path) = Self::resolve_refs(asset_root, key);
-        if let Some(asset) = self.inner.assets.get(root)
-            && let Some(arc) = asset.get(path)
-        {
-            return arc.lock_sync().ranges.clone();
-        }
-        RangeSet::new()
-    }
-
-    pub(crate) fn contains_range(
-        &self,
-        asset_root: &str,
-        key: &ResourceKey,
-        range: Range<u64>,
-    ) -> bool {
-        if range.start >= range.end {
-            return true;
-        }
-        let (root, path) = Self::resolve_refs(asset_root, key);
-        if let Some(asset) = self.inner.assets.get(root)
-            && let Some(arc) = asset.get(path)
-        {
-            return arc.lock_sync().contains(&range);
-        }
-        false
-    }
-
-    pub(crate) fn final_len(&self, asset_root: &str, key: &ResourceKey) -> Option<u64> {
-        let (root, path) = Self::resolve_refs(asset_root, key);
-        if let Some(asset) = self.inner.assets.get(root)
-            && let Some(arc) = asset.get(path)
-        {
-            return arc.lock_sync().final_len;
-        }
-        None
-    }
-
-    pub(crate) fn remove(&self, asset_root: &str, key: &ResourceKey) {
-        let (root, path) = Self::resolve_refs(asset_root, key);
-        if let Some(asset) = self.inner.assets.get(root) {
-            asset.remove(path);
-        }
-    }
-
-    /// Drop every per-resource entry recorded under `asset_root`.
-    ///
-    /// Used by deletion paths that wipe an entire asset directory at
-    /// once (`DiskAssetStore::delete_asset`, `MemAssetStore::delete_asset`,
-    /// the LRU evictor's `delete_asset_dir`). Without this, stale
-    /// `final_len` / `ranges` survive on the index map and
-    /// `contains_range` answers `true` for bytes that no longer exist
-    /// on disk — producing the HLS hang pinned by
-    /// `red_test_delete_asset_strands_availability_index`.
-    pub(crate) fn clear_root(&self, asset_root: &str) {
-        self.inner.assets.remove(asset_root);
-    }
-
-    fn resolve_refs<'a>(asset_root: &'a str, key: &'a ResourceKey) -> (&'a str, &'a str) {
-        match key {
-            ResourceKey::Relative(path) => (asset_root, path.as_str()),
-            ResourceKey::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
-        }
     }
 
     fn insert_or_get_entry(&self, asset_root: &str, path: &str) -> Arc<Mutex<Availability>> {
@@ -329,13 +298,40 @@ impl AvailabilityIndex {
     pub(crate) fn persist_to<R: ResourceExt>(&self, res: &Atomic<R>) -> AssetsResult<()> {
         write_aggregate(&self.inner, res, false)
     }
+
+    pub(crate) fn record_commit(&self, asset_root: &str, key: &ResourceKey, final_len: u64) {
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        let arc = self.insert_or_get_entry(root, path);
+        arc.lock_sync().mark_committed(final_len);
+        self.inner.dirty.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn record_write(&self, asset_root: &str, key: &ResourceKey, range: Range<u64>) {
+        if range.start >= range.end {
+            return;
+        }
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        let arc = self.insert_or_get_entry(root, path);
+        arc.lock_sync().insert(range);
+        self.inner.dirty.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn remove(&self, asset_root: &str, key: &ResourceKey) {
+        let (root, path) = Self::resolve_refs(asset_root, key);
+        if let Some(asset) = self.inner.assets.get(root) {
+            asset.remove(path);
+        }
+    }
+
+    fn resolve_refs<'a>(asset_root: &'a str, key: &'a ResourceKey) -> (&'a str, &'a str) {
+        match key {
+            ResourceKey::Relative(path) => (asset_root, path.as_str()),
+            ResourceKey::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
+        }
+    }
 }
 
 impl Flushable for InnerIndex {
-    fn name(&self) -> &'static str {
-        "availability"
-    }
-
     fn dirty(&self) -> &AtomicBool {
         &self.dirty
     }
@@ -346,6 +342,10 @@ impl Flushable for InnerIndex {
 
     fn flush_durable(&self) -> AssetsResult<()> {
         self.flush_with_durability(true)
+    }
+
+    fn name(&self) -> &'static str {
+        "availability"
     }
 }
 
@@ -422,22 +422,30 @@ impl std::fmt::Debug for AvailabilityIndex {
 /// `kithara_storage::AvailabilityObserver` implementation scoped to a
 /// single `ResourceKey`.
 pub(crate) struct ScopedAvailabilityObserver {
-    asset_root: String,
-    key: ResourceKey,
     index: AvailabilityIndex,
+    key: ResourceKey,
+    asset_root: String,
 }
 
 impl ScopedAvailabilityObserver {
     pub(crate) fn new(asset_root: String, key: ResourceKey, index: AvailabilityIndex) -> Arc<Self> {
         Arc::new(Self {
-            asset_root,
-            key,
             index,
+            key,
+            asset_root,
         })
     }
 }
 
 impl AvailabilityObserver for ScopedAvailabilityObserver {
+    fn on_commit(&self, final_len: u64) {
+        self.index
+            .record_commit(&self.asset_root, &self.key, final_len);
+        if let Some(hub) = self.index.inner.hub.get() {
+            hub.signal();
+        }
+    }
+
     fn on_write(&self, range: Range<u64>) {
         self.index.record_write(&self.asset_root, &self.key, range);
         // `record_write` already set `dirty`. Don't run a sync flush
@@ -446,14 +454,6 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
         // behaviour: no runtime → no auto-flush). When a worker is
         // attached, ping it so the dirty bit becomes a debounced
         // background flush.
-        if let Some(hub) = self.index.inner.hub.get() {
-            hub.signal();
-        }
-    }
-
-    fn on_commit(&self, final_len: u64) {
-        self.index
-            .record_commit(&self.asset_root, &self.key, final_len);
         if let Some(hub) = self.index.inner.hub.get() {
             hub.signal();
         }

@@ -52,13 +52,9 @@ impl<C> Fetch<C> {
         }
     }
 
-    /// Explicit natural-EOF marker.
-    pub fn natural_eof(data: C, epoch: u64) -> Self {
-        Self {
-            data,
-            kind: FetchKind::NaturalEof,
-            epoch,
-        }
+    /// Get the epoch.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Explicit failure marker (distinct from natural EOF).
@@ -92,9 +88,13 @@ impl<C> Fetch<C> {
         !matches!(self.kind, FetchKind::Data)
     }
 
-    /// Get the epoch.
-    pub fn epoch(&self) -> u64 {
-        self.epoch
+    /// Explicit natural-EOF marker.
+    pub fn natural_eof(data: C, epoch: u64) -> Self {
+        Self {
+            data,
+            kind: FetchKind::NaturalEof,
+            epoch,
+        }
     }
 }
 
@@ -114,15 +114,15 @@ impl EpochValidator {
         Self { epoch: 0 }
     }
 
+    /// Check if a fetch result matches the current epoch.
+    pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
+        item.epoch == self.epoch
+    }
+
     /// Increment epoch (called on seek). Returns new epoch.
     pub fn next_epoch(&mut self) -> u64 {
         self.epoch = self.epoch.wrapping_add(1);
         self.epoch
-    }
-
-    /// Check if a fetch result matches the current epoch.
-    pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
-        item.epoch == self.epoch
     }
 }
 

@@ -61,22 +61,31 @@ impl std::fmt::Debug for LruIndex {
 }
 
 struct LruInner {
+    dirty: AtomicBool,
     state: Mutex<LruState>,
-    persist: Option<LruPersist>,
     /// Set by [`LruIndex::attach_to`]. While `None`, mutators flush
     /// inline through [`Flushable::flush`] — matches the historical
     /// inline-flush behaviour for ad-hoc tests.
     hub: OnceLock<Arc<FlushHub>>,
-    dirty: AtomicBool,
+    persist: Option<LruPersist>,
 }
 
 struct LruPersist {
-    path: PathBuf,
     cancel: CancellationToken,
     res: OnceLock<Atomic<MmapResource>>,
+    path: PathBuf,
 }
 
 impl LruIndex {
+    /// Bind this index to a [`FlushHub`] for coordinated flushing.
+    /// Called once per index instance; subsequent calls are no-ops.
+    pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
+        if self.inner.hub.set(Arc::clone(hub)).is_err() {
+            return;
+        }
+        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
+    }
+
     /// Construct an ephemeral index (mem backend mode).
     pub(crate) fn ephemeral() -> Self {
         Self {
@@ -87,6 +96,87 @@ impl LruIndex {
                 dirty: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Compute eviction candidates in LRU order (oldest first) under
+    /// the given config. Pure in-memory read — never fails.
+    pub(crate) fn eviction_candidates(
+        &self,
+        cfg: &EvictConfig,
+        pinned: &HashSet<String>,
+    ) -> Vec<String> {
+        let st = self.inner.state.lock_sync();
+        st.eviction_candidates(cfg, pinned)
+    }
+
+    /// Remove an asset from the index (eviction or full deletion).
+    ///
+    /// Same durability contract as [`Self::touch`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`AssetsError`] when the on-disk flush fails.
+    pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<()> {
+        let removed = {
+            let mut st = self.inner.state.lock_sync();
+            st.remove(asset_root)
+        };
+        if removed {
+            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
+        }
+        Ok(())
+    }
+
+    /// Return total bytes across all assets (best-effort).
+    pub(crate) fn total_bytes_best_effort(&self) -> u64 {
+        self.inner
+            .state
+            .lock_sync()
+            .by_root
+            .values()
+            .filter_map(|e| e.bytes)
+            .sum()
+    }
+
+    /// Touch (mark as most-recent) an asset. Returns `true` if a new
+    /// entry was created.
+    ///
+    /// Disk-backed instances flush the snapshot synchronously before
+    /// returning; an `Err` here means the touch is **not** durable.
+    /// Ephemeral instances cannot fail.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`AssetsError`] when the on-disk flush fails.
+    pub(crate) fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
+        let created = {
+            let mut st = self.inner.state.lock_sync();
+            st.touch(asset_root, bytes_hint)
+        };
+        signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
+        Ok(created)
+    }
+
+    /// Update the cached size of an existing entry without bumping the
+    /// LRU clock. Use when the byte total changes but recency must not
+    /// (e.g. segment commits add bytes to an already-tracked asset).
+    ///
+    /// Returns `true` if the entry existed and the byte total actually
+    /// changed; only that path triggers a flush. If no entry exists or
+    /// the value is identical, this is a pure read.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`AssetsError`] when the on-disk flush fails.
+    pub(crate) fn update_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<bool> {
+        let changed = {
+            let mut st = self.inner.state.lock_sync();
+            st.update_bytes(asset_root, bytes)
+        };
+        if changed {
+            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
+        }
+        Ok(changed)
     }
 
     /// Construct a disk-backed index rooted at `path`.
@@ -119,103 +209,9 @@ impl LruIndex {
             }),
         }
     }
-
-    /// Bind this index to a [`FlushHub`] for coordinated flushing.
-    /// Called once per index instance; subsequent calls are no-ops.
-    pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
-        if self.inner.hub.set(Arc::clone(hub)).is_err() {
-            return;
-        }
-        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
-    }
-
-    /// Touch (mark as most-recent) an asset. Returns `true` if a new
-    /// entry was created.
-    ///
-    /// Disk-backed instances flush the snapshot synchronously before
-    /// returning; an `Err` here means the touch is **not** durable.
-    /// Ephemeral instances cannot fail.
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`AssetsError`] when the on-disk flush fails.
-    pub(crate) fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
-        let created = {
-            let mut st = self.inner.state.lock_sync();
-            st.touch(asset_root, bytes_hint)
-        };
-        signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
-        Ok(created)
-    }
-
-    /// Remove an asset from the index (eviction or full deletion).
-    ///
-    /// Same durability contract as [`Self::touch`].
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`AssetsError`] when the on-disk flush fails.
-    pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<()> {
-        let removed = {
-            let mut st = self.inner.state.lock_sync();
-            st.remove(asset_root)
-        };
-        if removed {
-            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
-        }
-        Ok(())
-    }
-
-    /// Update the cached size of an existing entry without bumping the
-    /// LRU clock. Use when the byte total changes but recency must not
-    /// (e.g. segment commits add bytes to an already-tracked asset).
-    ///
-    /// Returns `true` if the entry existed and the byte total actually
-    /// changed; only that path triggers a flush. If no entry exists or
-    /// the value is identical, this is a pure read.
-    ///
-    /// # Errors
-    ///
-    /// Propagates [`AssetsError`] when the on-disk flush fails.
-    pub(crate) fn update_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<bool> {
-        let changed = {
-            let mut st = self.inner.state.lock_sync();
-            st.update_bytes(asset_root, bytes)
-        };
-        if changed {
-            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
-        }
-        Ok(changed)
-    }
-
-    /// Compute eviction candidates in LRU order (oldest first) under
-    /// the given config. Pure in-memory read — never fails.
-    pub(crate) fn eviction_candidates(
-        &self,
-        cfg: &EvictConfig,
-        pinned: &HashSet<String>,
-    ) -> Vec<String> {
-        let st = self.inner.state.lock_sync();
-        st.eviction_candidates(cfg, pinned)
-    }
-
-    /// Return total bytes across all assets (best-effort).
-    pub(crate) fn total_bytes_best_effort(&self) -> u64 {
-        self.inner
-            .state
-            .lock_sync()
-            .by_root
-            .values()
-            .filter_map(|e| e.bytes)
-            .sum()
-    }
 }
 
 impl Flushable for LruInner {
-    fn name(&self) -> &'static str {
-        "lru"
-    }
-
     fn dirty(&self) -> &AtomicBool {
         &self.dirty
     }
@@ -226,6 +222,10 @@ impl Flushable for LruInner {
 
     fn flush_durable(&self) -> AssetsResult<()> {
         self.flush_with_durability(true)
+    }
+
+    fn name(&self) -> &'static str {
+        "lru"
     }
 }
 
@@ -301,55 +301,11 @@ fn write_state(res: &Atomic<MmapResource>, state: &LruState, durable: bool) -> A
 /// In-memory state of the LRU index.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LruState {
-    clock: u64,
     by_root: HashMap<String, LruEntry>,
+    clock: u64,
 }
 
 impl LruState {
-    pub(crate) fn len(&self) -> usize {
-        self.by_root.len()
-    }
-
-    /// Returns `true` if the entry was present and removed.
-    pub(crate) fn remove(&mut self, asset_root: &str) -> bool {
-        self.by_root.remove(asset_root).is_some()
-    }
-
-    /// Touch an asset in-memory.
-    pub(crate) fn touch(&mut self, asset_root: &str, bytes_hint: Option<u64>) -> bool {
-        self.clock = self.clock.saturating_add(1);
-
-        if let Some(e) = self.by_root.get_mut(asset_root) {
-            e.last_touch = self.clock;
-            if let Some(b) = bytes_hint {
-                e.bytes = Some(b);
-            }
-            false
-        } else {
-            self.by_root.insert(
-                asset_root.to_string(),
-                LruEntry {
-                    last_touch: self.clock,
-                    bytes: bytes_hint,
-                },
-            );
-            true
-        }
-    }
-
-    /// Returns `true` if the entry exists and `bytes` actually changed.
-    /// Does NOT touch the clock — recency stays exactly where it was.
-    pub(crate) fn update_bytes(&mut self, asset_root: &str, bytes: u64) -> bool {
-        let Some(entry) = self.by_root.get_mut(asset_root) else {
-            return false;
-        };
-        if entry.bytes == Some(bytes) {
-            return false;
-        }
-        entry.bytes = Some(bytes);
-        true
-    }
-
     pub(crate) fn eviction_candidates(
         &self,
         cfg: &EvictConfig,
@@ -416,6 +372,15 @@ impl LruState {
         }
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.by_root.len()
+    }
+
+    /// Returns `true` if the entry was present and removed.
+    pub(crate) fn remove(&mut self, asset_root: &str) -> bool {
+        self.by_root.remove(asset_root).is_some()
+    }
+
     fn to_file(&self) -> LruIndexFile {
         let mut entries = BTreeMap::new();
         for (root, entry) in &self.by_root {
@@ -433,6 +398,41 @@ impl LruState {
             clock: self.clock,
             entries,
         }
+    }
+
+    /// Touch an asset in-memory.
+    pub(crate) fn touch(&mut self, asset_root: &str, bytes_hint: Option<u64>) -> bool {
+        self.clock = self.clock.saturating_add(1);
+
+        if let Some(e) = self.by_root.get_mut(asset_root) {
+            e.last_touch = self.clock;
+            if let Some(b) = bytes_hint {
+                e.bytes = Some(b);
+            }
+            false
+        } else {
+            self.by_root.insert(
+                asset_root.to_string(),
+                LruEntry {
+                    last_touch: self.clock,
+                    bytes: bytes_hint,
+                },
+            );
+            true
+        }
+    }
+
+    /// Returns `true` if the entry exists and `bytes` actually changed.
+    /// Does NOT touch the clock — recency stays exactly where it was.
+    pub(crate) fn update_bytes(&mut self, asset_root: &str, bytes: u64) -> bool {
+        let Some(entry) = self.by_root.get_mut(asset_root) else {
+            return false;
+        };
+        if entry.bytes == Some(bytes) {
+            return false;
+        }
+        entry.bytes = Some(bytes);
+        true
     }
 }
 
@@ -503,6 +503,6 @@ mod tests {
 
 #[derive(Clone, Debug)]
 struct LruEntry {
-    last_touch: u64,
     bytes: Option<u64>,
+    last_touch: u64,
 }

@@ -64,13 +64,13 @@ impl From<HlsSpecError> for CreateHlsError {
 
 #[derive(Clone, Debug)]
 pub struct CreatedHls {
-    base_url: Url,
     token: String,
+    base_url: Url,
 }
 
 impl CreatedHls {
     pub(crate) fn new(base_url: Url, token: String) -> Self {
-        Self { base_url, token }
+        Self { token, base_url }
     }
 
     #[must_use]
@@ -116,9 +116,9 @@ impl CreatedHls {
 
 #[derive(Debug, Clone)]
 pub struct HlsFixtureBuilder {
-    spec: HlsSpec,
     data: HlsFixtureData,
     init: HlsFixtureInit,
+    spec: HlsSpec,
 }
 
 #[derive(Debug, Clone)]

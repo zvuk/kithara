@@ -155,8 +155,8 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
 
 #[derive(Default)]
 struct FieldOpts {
-    skip: bool,
     rename: Option<String>,
+    skip: bool,
 }
 
 fn parse_field_opts(field: &Field) -> syn::Result<FieldOpts> {

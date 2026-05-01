@@ -49,10 +49,10 @@ pub(crate) fn load_hls(
 }
 
 pub(crate) struct GeneratedHls {
+    body: MaterializedHlsBody,
     spec: ResolvedHlsSpec,
     master_playlist: String,
     media_playlists: Vec<String>,
-    body: MaterializedHlsBody,
 }
 
 enum MaterializedDataMode {
@@ -81,10 +81,10 @@ impl GeneratedHls {
             .collect();
 
         Ok(Self {
+            body,
             spec,
             master_playlist,
             media_playlists,
-            body,
         })
     }
 

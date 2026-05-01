@@ -20,11 +20,11 @@ use crate::traits::{PcmReader, PendingReason, ReadOutcome, SeekOutcome};
 /// Produces a constant sample value (0.5), tracks seek position and reports
 /// [`ReadOutcome::Eof`] once the total-frame budget is consumed.
 pub struct TestPcmReader {
+    bus: EventBus,
     spec: PcmSpec,
     metadata: TrackMetadata,
-    total_frames: u64,
     position_frames: u64,
-    bus: EventBus,
+    total_frames: u64,
 }
 
 impl TestPcmReader {
@@ -44,6 +44,16 @@ impl TestPcmReader {
         }
     }
 
+    fn at_natural_end(&self) -> bool {
+        self.position_frames >= self.total_frames
+    }
+
+    fn eof_outcome(&self) -> ReadOutcome {
+        ReadOutcome::Eof {
+            position: self.frames_to_duration(self.position_frames),
+        }
+    }
+
     /// Get a reference to the event bus for publishing mock events.
     #[must_use]
     pub fn event_bus(&self) -> &EventBus {
@@ -56,21 +66,27 @@ impl TestPcmReader {
         }
         Duration::from_secs_f64(frames as f64 / f64::from(self.spec.sample_rate))
     }
-
-    fn at_natural_end(&self) -> bool {
-        self.position_frames >= self.total_frames
-    }
-
-    fn eof_outcome(&self) -> ReadOutcome {
-        ReadOutcome::Eof {
-            position: self.frames_to_duration(self.position_frames),
-        }
-    }
 }
 
 const SAMPLE_VALUE: f32 = 0.5;
 
 impl PcmReader for TestPcmReader {
+    fn duration(&self) -> Option<Duration> {
+        Some(self.frames_to_duration(self.total_frames))
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+
+    fn position(&self) -> Duration {
+        self.frames_to_duration(self.position_frames)
+    }
+
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         if self.at_natural_end() {
             return Ok(self.eof_outcome());
@@ -161,21 +177,5 @@ impl PcmReader for TestPcmReader {
 
     fn spec(&self) -> PcmSpec {
         self.spec
-    }
-
-    fn position(&self) -> Duration {
-        self.frames_to_duration(self.position_frames)
-    }
-
-    fn duration(&self) -> Option<Duration> {
-        Some(self.frames_to_duration(self.total_frames))
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
     }
 }

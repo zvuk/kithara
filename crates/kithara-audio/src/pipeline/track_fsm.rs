@@ -49,15 +49,15 @@ pub(crate) enum TrackState {
 /// Context for a pending seek, carried through multiple states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SeekContext {
-    pub epoch: u64,
     pub target: Duration,
+    pub epoch: u64,
 }
 
 /// Stateful seek request tracked across retries and waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SeekRequest {
-    pub attempt: u8,
     pub seek: SeekContext,
+    pub attempt: u8,
 }
 
 /// Seek application mode resolved before touching the decoder.
@@ -70,12 +70,12 @@ pub(crate) struct ApplySeekState {
 /// Resume state after a seek has been applied to the decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResumeState {
-    pub recover_attempts: u8,
-    pub seek: SeekContext,
-    pub skip: Option<Duration>,
     /// Anchor byte offset from the seek — used for readiness checks and demand
     /// when the decoder's stream position differs from the `StreamIndex` layout.
     pub anchor_offset: Option<u64>,
+    pub skip: Option<Duration>,
+    pub seek: SeekContext,
+    pub recover_attempts: u8,
 }
 
 /// What to do once decoder recreation succeeds.
@@ -104,11 +104,11 @@ pub(crate) enum RecreateNext {
 /// Decoder recreation task tracked by the FSM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecreateState {
-    pub attempt: u8,
-    pub cause: RecreateCause,
     pub media_info: MediaInfo,
+    pub cause: RecreateCause,
     pub next: RecreateNext,
     pub offset: u64,
+    pub attempt: u8,
 }
 
 /// What caused us to enter `WaitingForSource`.
@@ -179,9 +179,9 @@ pub(crate) enum TrackFailure {
 /// Created whole — never partially mutated. On recreation failure
 /// the old session remains untouched.
 pub(crate) struct DecoderSession {
-    pub base_offset: u64,
     pub decoder: Box<dyn Decoder>,
     pub media_info: Option<MediaInfo>,
+    pub base_offset: u64,
 }
 
 /// Result of a single `step_track()` call.

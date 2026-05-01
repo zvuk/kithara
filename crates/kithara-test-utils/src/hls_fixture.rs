@@ -14,10 +14,10 @@ use crate::{
 /// Prefer [`PackagedTestServer`] or `HlsFixtureBuilder::packaged_audio_*` for new
 /// audio HLS tests.
 pub struct TestServer {
-    _helper: TestServerHelper,
-    plain: CreatedHls,
-    init: CreatedHls,
     encrypted: CreatedHls,
+    init: CreatedHls,
+    plain: CreatedHls,
+    _helper: TestServerHelper,
 }
 
 impl TestServer {
@@ -187,23 +187,23 @@ pub fn test_media_playlist_encrypted(_variant: usize) -> String {
 
 /// AES-128 encryption configuration for configurable HLS fixtures.
 pub struct EncryptionConfig {
-    pub key: [u8; 16],
     pub iv: Option<[u8; 16]>,
+    pub key: [u8; 16],
 }
 
 /// Configuration for [`HlsTestServer`].
 pub struct HlsTestServerConfig {
-    pub variant_count: usize,
-    pub segments_per_variant: usize,
-    pub segment_size: usize,
-    pub segment_duration_secs: f64,
     pub custom_data: Option<Arc<Vec<u8>>>,
     pub custom_data_per_variant: Option<Vec<Arc<Vec<u8>>>>,
+    pub encryption: Option<EncryptionConfig>,
+    pub head_reported_segment_size: Option<usize>,
     pub init_data_per_variant: Option<Vec<Arc<Vec<u8>>>>,
     pub variant_bandwidths: Option<Vec<u64>>,
     pub delay_rules: Vec<DelayRule>,
-    pub encryption: Option<EncryptionConfig>,
-    pub head_reported_segment_size: Option<usize>,
+    pub segment_duration_secs: f64,
+    pub segment_size: usize,
+    pub segments_per_variant: usize,
+    pub variant_count: usize,
 }
 
 impl Default for HlsTestServerConfig {
@@ -229,9 +229,9 @@ impl Default for HlsTestServerConfig {
 /// This server keeps the historical test-pattern byte contract and therefore
 /// remains the right choice for `expected_byte_at()`-style assertions.
 pub struct HlsTestServer {
-    _helper: TestServerHelper,
-    config: HlsTestServerConfig,
     created: CreatedHls,
+    config: HlsTestServerConfig,
+    _helper: TestServerHelper,
 }
 
 impl HlsTestServer {
@@ -341,9 +341,9 @@ impl HlsTestServer {
 
 /// Preferred packaged-audio fixture for new synthetic HLS audio tests.
 pub struct PackagedTestServer {
-    _helper: TestServerHelper,
-    plain: CreatedHls,
     encrypted: CreatedHls,
+    plain: CreatedHls,
+    _helper: TestServerHelper,
 }
 
 impl PackagedTestServer {
@@ -429,8 +429,8 @@ pub mod packaged {
 
 /// Compatibility-only ABR fixture backed by the unified synthetic stream routes.
 pub struct AbrTestServer {
-    _helper: TestServerHelper,
     created: CreatedHls,
+    _helper: TestServerHelper,
 }
 
 impl AbrTestServer {

@@ -17,30 +17,6 @@ use crate::{drm, theme::Palette};
 #[derivative(Debug)]
 #[setters(prefix = "with_")]
 pub struct AppConfig {
-    /// Audio file URLs or paths to play.
-    #[setters(skip)]
-    pub tracks: Vec<String>,
-    /// DRM key processing registry. Populated via
-    /// [`drm::make_key_registry`](crate::drm::make_key_registry) or
-    /// built directly by the embedding app. Carries the
-    /// domain-scoped rules — processor + headers (incl. auth) +
-    /// query params — that HLS applies to key fetches.
-    pub key_registry: KeyProcessorRegistry,
-    /// Crossfade duration in seconds.
-    pub crossfade_seconds: f32,
-    /// Number of EQ bands for the UI.
-    pub eq_band_count: usize,
-    /// Log filter directives.
-    pub log_directives: Vec<String>,
-    /// Color palette for the UI.
-    pub palette: Palette,
-    /// Accept invalid TLS certificates (self-signed, expired). Test servers only.
-    pub danger_accept_invalid_certs: bool,
-    /// Shared HTTP downloader for every track. Built once in `main` so
-    /// the whole app reuses one HTTP pool and runtime context.
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
-    pub downloader: Downloader,
     /// Shared `AssetStore` flush coordinator for every track. Built
     /// once in `main` so all tracks coalesce their on-disk index
     /// flushes through a single hub — analogous to [`Self::downloader`]
@@ -48,6 +24,30 @@ pub struct AppConfig {
     #[setters(skip)]
     #[derivative(Debug = "ignore")]
     pub flush_hub: Arc<FlushHub>,
+    /// Shared HTTP downloader for every track. Built once in `main` so
+    /// the whole app reuses one HTTP pool and runtime context.
+    #[setters(skip)]
+    #[derivative(Debug = "ignore")]
+    pub downloader: Downloader,
+    /// DRM key processing registry. Populated via
+    /// [`drm::make_key_registry`](crate::drm::make_key_registry) or
+    /// built directly by the embedding app. Carries the
+    /// domain-scoped rules — processor + headers (incl. auth) +
+    /// query params — that HLS applies to key fetches.
+    pub key_registry: KeyProcessorRegistry,
+    /// Color palette for the UI.
+    pub palette: Palette,
+    /// Log filter directives.
+    pub log_directives: Vec<String>,
+    /// Audio file URLs or paths to play.
+    #[setters(skip)]
+    pub tracks: Vec<String>,
+    /// Accept invalid TLS certificates (self-signed, expired). Test servers only.
+    pub danger_accept_invalid_certs: bool,
+    /// Crossfade duration in seconds.
+    pub crossfade_seconds: f32,
+    /// Number of EQ bands for the UI.
+    pub eq_band_count: usize,
 }
 
 impl AppConfig {

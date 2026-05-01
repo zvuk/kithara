@@ -72,6 +72,51 @@ pub(crate) struct OwnedCodec {
 unsafe impl Send for OwnedCodec {}
 
 impl OwnedCodec {
+    /// Create + configure + start an `AMediaCodec` from a freshly built
+    /// `AMediaFormat`. Bypasses `AMediaExtractor` — used by the
+    /// codec-only path (`crate::codec::android::AndroidCodec`).
+    pub(crate) fn create_with_format(
+        mime: &std::ffi::CStr,
+        format: &OwnedFormat,
+    ) -> Result<Self, AndroidBackendError> {
+        let codec_raw =
+            NonNull::new(unsafe { ffi::AMediaCodec_createDecoderByType(mime.as_ptr()) })
+                .ok_or_else(|| {
+                    AndroidBackendError::operation(
+                        "codec-create-decoder",
+                        format!("mime={} returned null", mime.to_string_lossy()),
+                    )
+                })?;
+        let mut codec = Self {
+            raw: codec_raw,
+            started: false,
+        };
+        let status = unsafe {
+            ffi::AMediaCodec_configure(
+                codec.raw(),
+                format.raw(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if status != MEDIA_STATUS_OK {
+            return Err(AndroidBackendError::operation(
+                "codec-configure",
+                format!("mime={} status={status}", mime.to_string_lossy()),
+            ));
+        }
+        let status = unsafe { ffi::AMediaCodec_start(codec.raw()) };
+        if status != MEDIA_STATUS_OK {
+            return Err(AndroidBackendError::operation(
+                "codec-start",
+                format!("mime={} status={status}", mime.to_string_lossy()),
+            ));
+        }
+        codec.started = true;
+        Ok(codec)
+    }
+
     pub(crate) fn dequeue_input_buffer(
         &mut self,
         timeout_us: i64,
@@ -201,51 +246,6 @@ impl OwnedCodec {
             ));
         }
         Ok(())
-    }
-
-    /// Create + configure + start an `AMediaCodec` from a freshly built
-    /// `AMediaFormat`. Bypasses `AMediaExtractor` — used by the
-    /// codec-only path (`crate::codec::android::AndroidCodec`).
-    pub(crate) fn create_with_format(
-        mime: &std::ffi::CStr,
-        format: &OwnedFormat,
-    ) -> Result<Self, AndroidBackendError> {
-        let codec_raw =
-            NonNull::new(unsafe { ffi::AMediaCodec_createDecoderByType(mime.as_ptr()) })
-                .ok_or_else(|| {
-                    AndroidBackendError::operation(
-                        "codec-create-decoder",
-                        format!("mime={} returned null", mime.to_string_lossy()),
-                    )
-                })?;
-        let mut codec = Self {
-            raw: codec_raw,
-            started: false,
-        };
-        let status = unsafe {
-            ffi::AMediaCodec_configure(
-                codec.raw(),
-                format.raw(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        if status != MEDIA_STATUS_OK {
-            return Err(AndroidBackendError::operation(
-                "codec-configure",
-                format!("mime={} status={status}", mime.to_string_lossy()),
-            ));
-        }
-        let status = unsafe { ffi::AMediaCodec_start(codec.raw()) };
-        if status != MEDIA_STATUS_OK {
-            return Err(AndroidBackendError::operation(
-                "codec-start",
-                format!("mime={} status={status}", mime.to_string_lossy()),
-            ));
-        }
-        codec.started = true;
-        Ok(codec)
     }
 
     pub(crate) fn output_format(&self) -> Result<OwnedFormat, AndroidBackendError> {

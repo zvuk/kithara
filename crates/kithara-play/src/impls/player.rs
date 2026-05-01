@@ -54,23 +54,23 @@ pub struct PlayerConfig {
     /// When `None`, a default root bus is created.
     #[setters(skip)]
     pub bus: Option<EventBus>,
+    /// PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
+    /// PCM pool is used.
+    pub pcm_pool: Option<PcmPool>,
+    /// EQ band layout. Default: 10-band log-spaced.
+    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
+    pub eq_layout: Vec<EqBandConfig>,
     /// Crossfade duration in seconds. Default: 1.0.
     #[derivative(Default(value = "1.0"))]
     pub crossfade_duration: f32,
     /// Default playback rate (1.0 = normal). Default: 1.0.
     #[derivative(Default(value = "1.0"))]
     pub default_rate: f32,
-    /// EQ band layout. Default: 10-band log-spaced.
-    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
-    pub eq_layout: Vec<EqBandConfig>,
     /// Maximum concurrent slots in the engine. Default: 4.
     #[derivative(Default(value = "4"))]
     pub max_slots: usize,
-    /// PCM buffer pool for audio-thread scratch buffers.
-    ///
-    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
-    /// PCM pool is used.
-    pub pcm_pool: Option<PcmPool>,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -80,32 +80,32 @@ pub struct PlayerConfig {
 /// allocated. The current queue item is taken out of the queue, wrapped in
 /// [`PlayerResource`], and sent to the processor via `PlayerCmd::LoadTrack`.
 pub struct PlayerImpl {
-    config: PlayerConfig,
-
-    action_at_item_end: Mutex<ActionAtItemEnd>,
-    bus: EventBus,
-    crossfade_duration: AtomicF32,
-    current_index: AtomicUsize,
-    current_slot: Mutex<Option<SlotId>>,
-    default_rate: AtomicF32,
-    /// Items drop before engine — Audio tracks unregister from worker
-    /// while it is still alive.
-    items: Mutex<Vec<Option<Resource>>>,
-    muted: AtomicBool,
-    pcm_pool: PcmPool,
     /// Shared playback rate propagated to the audio pipeline resampler.
     playback_rate_shared: Arc<AtomicF32>,
-    rate: AtomicF32,
-    status: Mutex<PlayerStatus>,
-    volume: AtomicF32,
 
+    muted: AtomicBool,
+    crossfade_duration: AtomicF32,
+    default_rate: AtomicF32,
+    rate: AtomicF32,
+    volume: AtomicF32,
+    current_index: AtomicUsize,
+    /// Engine drops last — worker shutdown happens after all tracks unregister.
+    engine: EngineImpl,
+    bus: EventBus,
+    action_at_item_end: Mutex<ActionAtItemEnd>,
     /// ABR handle for the currently loaded item, when the item is adaptive
     /// (HLS). Populated by [`load_current_item`]; drained when the item
     /// is replaced. Exposes runtime `set_mode` / `set_max_bandwidth_bps`.
     active_abr: Mutex<Option<kithara_abr::AbrHandle>>,
+    current_slot: Mutex<Option<SlotId>>,
+    /// Items drop before engine — Audio tracks unregister from worker
+    /// while it is still alive.
+    items: Mutex<Vec<Option<Resource>>>,
+    status: Mutex<PlayerStatus>,
 
-    /// Engine drops last — worker shutdown happens after all tracks unregister.
-    engine: EngineImpl,
+    pcm_pool: PcmPool,
+
+    config: PlayerConfig,
 }
 
 impl PlayerImpl {

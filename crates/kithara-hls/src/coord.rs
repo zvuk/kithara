@@ -24,18 +24,18 @@ pub struct HlsCoord {
     /// while writes are gated behind `pub(crate)` `apply()` inside
     /// `kithara-abr` — HLS cannot bypass the controller.
     pub abr_state: Arc<AbrState>,
-    pub cancel: CancellationToken,
-    pub condvar: Condvar,
-    pub had_midstream_switch: AtomicBool,
     /// `Arc<Notify>` so the handle can be cloned out to components that
     /// need an owned `'static` wake primitive (e.g. a future
     /// `Stream<Item = FetchCmd>` adapter that registers the notify in
     /// its own `poll_next` context). All existing `.notify_one()` and
     /// `.notified()` calls continue to work via `Deref` to [`Notify`].
     pub reader_advanced: Arc<Notify>,
+    pub had_midstream_switch: AtomicBool,
     pub stopped: AtomicBool,
-    timeline: Timeline,
+    pub cancel: CancellationToken,
+    pub condvar: Condvar,
     demand: DemandSlot<SegmentRequest>,
+    timeline: Timeline,
 }
 
 impl HlsCoord {

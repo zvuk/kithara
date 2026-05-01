@@ -74,26 +74,6 @@ fn is_default_init_mode(value: &InitMode) -> bool {
 #[serde(deny_unknown_fields)]
 pub struct HlsSpec {
     #[serde(
-        default = "default_variant_count",
-        skip_serializing_if = "is_default_variant_count"
-    )]
-    pub variant_count: usize,
-    #[serde(
-        default = "default_segments_per_variant",
-        skip_serializing_if = "is_default_segments_per_variant"
-    )]
-    pub segments_per_variant: usize,
-    #[serde(
-        default = "default_segment_size",
-        skip_serializing_if = "is_default_segment_size"
-    )]
-    pub segment_size: usize,
-    #[serde(
-        default = "default_segment_duration_secs",
-        skip_serializing_if = "is_default_segment_duration_secs"
-    )]
-    pub segment_duration_secs: f64,
-    #[serde(
         default = "default_data_mode",
         skip_serializing_if = "is_default_data_mode"
     )]
@@ -104,19 +84,39 @@ pub struct HlsSpec {
     )]
     pub init_mode: InitMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub variant_bandwidths: Option<Vec<u64>>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub delay_rules: Vec<DelayRule>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption: Option<EncryptionRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_reported_segment_size: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_hex: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_blob_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_hex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packaged_audio: Option<PackagedAudioRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_bandwidths: Option<Vec<u64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delay_rules: Vec<DelayRule>,
+    #[serde(
+        default = "default_segment_duration_secs",
+        skip_serializing_if = "is_default_segment_duration_secs"
+    )]
+    pub segment_duration_secs: f64,
+    #[serde(
+        default = "default_segment_size",
+        skip_serializing_if = "is_default_segment_size"
+    )]
+    pub segment_size: usize,
+    #[serde(
+        default = "default_segments_per_variant",
+        skip_serializing_if = "is_default_segments_per_variant"
+    )]
+    pub segments_per_variant: usize,
+    #[serde(
+        default = "default_variant_count",
+        skip_serializing_if = "is_default_variant_count"
+    )]
+    pub variant_count: usize,
 }
 
 impl Default for HlsSpec {

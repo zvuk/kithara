@@ -24,6 +24,10 @@ impl<W> CrlfWriter<W> {
 }
 
 impl<W: Write> Write for CrlfWriter<W> {
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         const CRLF_OVERHEAD: usize = 8;
 
@@ -41,10 +45,6 @@ impl<W: Write> Write for CrlfWriter<W> {
 
         self.inner.write_all(&out)?;
         Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
     }
 }
 

@@ -61,25 +61,25 @@ type StartStreamFn<B> = fn(&mut FirewheelCtx<B>, u32) -> Result<(), String>;
 
 #[derive(Debug)]
 struct SlotNodes {
-    slot_id: SlotId,
-    player_node_id: NodeID,
     vol_pan_memo: Memo<VolumePanNode>,
+    player_node_id: NodeID,
     vol_pan_node_id: NodeID,
+    slot_id: SlotId,
 }
 
 struct PlayerState {
-    eq_layout: Vec<EqBandConfig>,
     master_eq_memo: Option<Memo<MasterEqNode>>,
     master_eq_node_id: Option<NodeID>,
-    master_volume: f32,
     master_vol_pan_memo: Option<Memo<VolumePanNode>>,
     master_vol_pan_node_id: Option<NodeID>,
-    next_slot_id: u64,
     pcm_pool: PcmPool,
     player_id: PlayerId,
     shared_eq: SharedEq,
+    eq_layout: Vec<EqBandConfig>,
     slots: Vec<SlotNodes>,
     started: bool,
+    master_volume: f32,
+    next_slot_id: u64,
 }
 
 impl PlayerState {
@@ -104,16 +104,16 @@ impl PlayerState {
 
 struct SessionState<B: AudioBackend> {
     ctx: Option<FirewheelCtx<B>>,
-    next_player_id: PlayerId,
-    players: Vec<PlayerState>,
-    sample_rate_hint: u32,
-    session_ducking: SessionDuckingMode,
     session_output_memo: Option<Memo<VolumePanNode>>,
     session_output_node_id: Option<NodeID>,
+    next_player_id: PlayerId,
+    session_ducking: SessionDuckingMode,
     /// Backend-specific stream starter baked in at engine-thread spawn
     /// time. Lets [`ensure_ctx`] start the stream without knowing `B`
     /// concretely.
     start_stream_fn: StartStreamFn<B>,
+    players: Vec<PlayerState>,
+    sample_rate_hint: u32,
 }
 
 impl<B: AudioBackend> SessionState<B> {

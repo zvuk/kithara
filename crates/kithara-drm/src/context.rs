@@ -10,10 +10,10 @@
 /// (used for playlists, keys, init segments).
 #[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct DecryptContext {
-    /// AES-128 key (16 bytes).
-    pub key: [u8; Self::KEY_LEN_128],
     /// Initialization vector (16 bytes).
     pub iv: [u8; Self::IV_LEN],
+    /// AES-128 key (16 bytes).
+    pub key: [u8; Self::KEY_LEN_128],
 }
 
 impl DecryptContext {
@@ -26,6 +26,6 @@ impl DecryptContext {
     /// Create a new decryption context.
     #[must_use]
     pub fn new(key: [u8; Self::KEY_LEN_128], iv: [u8; Self::IV_LEN]) -> Self {
-        Self { key, iv }
+        Self { iv, key }
     }
 }

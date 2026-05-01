@@ -27,9 +27,9 @@ use crate::{
 /// Records every absolute byte offset hit by `Read::read` so tests can
 /// assert no-prefix-read invariants.
 struct InstrumentedSource {
-    inner: Cursor<Vec<u8>>,
     reads: Arc<Mutex<Vec<Range<u64>>>>,
     record: Arc<AtomicBool>,
+    inner: Cursor<Vec<u8>>,
 }
 
 impl std::io::Read for InstrumentedSource {
@@ -54,13 +54,26 @@ impl Seek for InstrumentedSource {
 
 #[derive(Clone)]
 struct FakeSegmented {
-    init_range: Range<u64>,
     segments: Arc<Vec<SegmentDescriptor>>,
+    init_range: Range<u64>,
 }
 
 impl SegmentLayout for FakeSegmented {
     fn init_segment_range(&self) -> Option<Range<u64>> {
         Some(self.init_range.clone())
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.segments.last().map(|s| s.byte_range.end)
+    }
+
+    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
+        for desc in self.segments.iter() {
+            if desc.byte_range.start >= byte_offset {
+                return Some(desc.clone());
+            }
+        }
+        None
     }
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
@@ -73,21 +86,8 @@ impl SegmentLayout for FakeSegmented {
         self.segments.last().cloned()
     }
 
-    fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
-        for desc in self.segments.iter() {
-            if desc.byte_range.start >= byte_offset {
-                return Some(desc.clone());
-            }
-        }
-        None
-    }
-
     fn segment_count(&self) -> Option<u32> {
         u32::try_from(self.segments.len()).ok()
-    }
-
-    fn len(&self) -> Option<u64> {
-        self.segments.last().map(|s| s.byte_range.end)
     }
 }
 

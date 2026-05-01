@@ -21,8 +21,8 @@ pub(crate) enum PackagedMuxError {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PackagedVariantData {
-    pub(crate) rfc6381_codec: Cow<'static, str>,
     pub(crate) init_segment: Arc<Vec<u8>>,
+    pub(crate) rfc6381_codec: Cow<'static, str>,
     pub(crate) media_segments: Vec<Arc<Vec<u8>>>,
     pub(crate) segment_durations_secs: Vec<f64>,
 }
@@ -89,8 +89,8 @@ pub(crate) fn mux_audio_track(
     ));
 
     Ok(PackagedVariantData {
-        rfc6381_codec,
         init_segment,
+        rfc6381_codec,
         media_segments,
         segment_durations_secs,
     })

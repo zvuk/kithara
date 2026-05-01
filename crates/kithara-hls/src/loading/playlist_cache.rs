@@ -40,8 +40,6 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 /// the same master/media `OnceCell` buckets and configured headers/URLs.
 #[derive(Clone)]
 pub struct PlaylistCache {
-    backend: AssetStore<DecryptContext>,
-    downloader: PeerHandle,
     /// Cache-wide config (headers, master URL, base URL override). Held
     /// behind `Arc<RwLock<...>>` so clones see the same builder
     /// mutations.
@@ -51,13 +49,15 @@ pub struct PlaylistCache {
     /// fine-grained locks keep parallel variants out of each other's
     /// critical sections.
     media: Arc<DashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>,
+    backend: AssetStore<DecryptContext>,
+    downloader: PeerHandle,
 }
 
 #[derive(Default, Clone)]
 struct PlaylistConfig {
+    base_url: Option<Url>,
     headers: Option<Headers>,
     master_url: Option<Url>,
-    base_url: Option<Url>,
 }
 
 impl PlaylistCache {

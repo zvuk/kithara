@@ -107,11 +107,6 @@ impl RetryPolicy {
 #[derive(Clone, Debug, Derivative)]
 #[derivative(Default)]
 pub struct NetOptions {
-    /// Max idle connections per host. Enables HTTP keep-alive connection
-    /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
-    /// Set to 0 to disable pooling.
-    #[derivative(Default(value = "8"))]
-    pub pool_max_idle_per_host: usize,
     /// Maximum allowed inactivity between consecutive read operations.
     /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
     /// "The timeout applies to each read operation, and resets after a
@@ -144,6 +139,11 @@ pub struct NetOptions {
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
     pub insecure: bool,
+    /// Max idle connections per host. Enables HTTP keep-alive connection
+    /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
+    /// Set to 0 to disable pooling.
+    #[derivative(Default(value = "8"))]
+    pub pool_max_idle_per_host: usize,
 }
 
 #[cfg(test)]

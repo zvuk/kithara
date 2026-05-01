@@ -74,66 +74,6 @@ impl Drop for AppleCodec {
 }
 
 impl FrameCodec for AppleCodec {
-    fn open(track: &TrackInfo) -> DecodeResult<Self> {
-        let AppleInputFormat {
-            asbd: input_format,
-            frames_per_packet,
-            cookie,
-        } = build_input_format(track)?;
-        let output_format = build_pcm_output_format(track.sample_rate, track.channels);
-
-        let mut converter: AudioConverterRef = ptr::null_mut();
-        // SAFETY: input/output formats are valid stack values; `converter`
-        // is a writable out-pointer.
-        let status = unsafe { AudioConverterNew(&input_format, &output_format, &mut converter) };
-        if status != Consts::noErr {
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!("AudioConverterNew failed: {}", os_status_to_string(status)),
-            ))));
-        }
-
-        if let Some(cookie) = cookie.as_ref().filter(|c| !c.is_empty()) {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "magic cookie length fits in u32 for valid configs"
-            )]
-            // SAFETY: `converter` was just successfully created above and
-            // is owned by us; `cookie` is a readable byte slice.
-            let status = unsafe {
-                AudioConverterSetProperty(
-                    converter,
-                    Consts::kAudioConverterDecompressionMagicCookie,
-                    cookie.len() as UInt32,
-                    cookie.as_ptr() as *const c_void,
-                )
-            };
-            // AAC AudioConverter rejects DecompressionMagicCookie with
-            // 'NoDataNow' — it doesn't consume a cookie, ESDS metadata
-            // arrives through the ASBD path. Log + continue, mirroring
-            // the legacy `AppleDecoder::apply_magic_cookie` semantics.
-            if status != Consts::noErr {
-                tracing::warn!(
-                    status,
-                    err = %os_status_to_string(status),
-                    cookie_size = cookie.len(),
-                    "AppleCodec: AudioConverterSetProperty(MagicCookie) returned non-zero (continuing)",
-                );
-            }
-        }
-
-        let spec = PcmSpec {
-            channels: track.channels,
-            sample_rate: track.sample_rate,
-        };
-
-        Ok(Self {
-            converter,
-            input_state: Box::new(ConverterInputState::new()),
-            spec,
-            frames_per_packet,
-        })
-    }
-
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
@@ -219,6 +159,66 @@ impl FrameCodec for AppleCodec {
         self.input_state.clear();
     }
 
+    fn open(track: &TrackInfo) -> DecodeResult<Self> {
+        let AppleInputFormat {
+            asbd: input_format,
+            frames_per_packet,
+            cookie,
+        } = build_input_format(track)?;
+        let output_format = build_pcm_output_format(track.sample_rate, track.channels);
+
+        let mut converter: AudioConverterRef = ptr::null_mut();
+        // SAFETY: input/output formats are valid stack values; `converter`
+        // is a writable out-pointer.
+        let status = unsafe { AudioConverterNew(&input_format, &output_format, &mut converter) };
+        if status != Consts::noErr {
+            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+                format!("AudioConverterNew failed: {}", os_status_to_string(status)),
+            ))));
+        }
+
+        if let Some(cookie) = cookie.as_ref().filter(|c| !c.is_empty()) {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "magic cookie length fits in u32 for valid configs"
+            )]
+            // SAFETY: `converter` was just successfully created above and
+            // is owned by us; `cookie` is a readable byte slice.
+            let status = unsafe {
+                AudioConverterSetProperty(
+                    converter,
+                    Consts::kAudioConverterDecompressionMagicCookie,
+                    cookie.len() as UInt32,
+                    cookie.as_ptr() as *const c_void,
+                )
+            };
+            // AAC AudioConverter rejects DecompressionMagicCookie with
+            // 'NoDataNow' — it doesn't consume a cookie, ESDS metadata
+            // arrives through the ASBD path. Log + continue, mirroring
+            // the legacy `AppleDecoder::apply_magic_cookie` semantics.
+            if status != Consts::noErr {
+                tracing::warn!(
+                    status,
+                    err = %os_status_to_string(status),
+                    cookie_size = cookie.len(),
+                    "AppleCodec: AudioConverterSetProperty(MagicCookie) returned non-zero (continuing)",
+                );
+            }
+        }
+
+        let spec = PcmSpec {
+            channels: track.channels,
+            sample_rate: track.sample_rate,
+        };
+
+        Ok(Self {
+            converter,
+            input_state: Box::new(ConverterInputState::new()),
+            spec,
+            frames_per_packet,
+        })
+    }
+
     fn spec(&self) -> PcmSpec {
         self.spec
     }
@@ -228,8 +228,8 @@ impl FrameCodec for AppleCodec {
 /// estimate, optional magic cookie.
 struct AppleInputFormat {
     asbd: AudioStreamBasicDescription,
-    frames_per_packet: u32,
     cookie: Option<Vec<u8>>,
+    frames_per_packet: u32,
 }
 
 /// Build the input ASBD + cookie + frames-per-packet for the given track.

@@ -23,16 +23,10 @@ use bitflags::bitflags;
 /// `From<&PcmMeta> for ChunkPosition` in `kithara-decode`.
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkPosition {
-    pub sample_rate: u32,
-    /// Absolute frame offset of the *first* frame in the chunk.
-    pub frame_offset: u64,
-    /// Number of frames the chunk covers.
-    pub frames: u64,
-    /// Source bytes the chunk decoded from (decoder ground truth).
-    pub source_bytes: u64,
     /// Absolute byte offset of the chunk's source data when the
     /// decoder reports it (Apple `mStartOffset`, Android API 28+).
     pub source_byte_offset: Option<u64>,
+    pub sample_rate: u32,
     /// Decoder-reported wall-clock position **after** the chunk has
     /// been emitted (or, for [`Timeline::commit_seek_landed`], the
     /// landed position). Authoritative — derived from the decoder's
@@ -40,6 +34,12 @@ pub struct ChunkPosition {
     /// never recomputes `frames * 1e9 / sample_rate`. Always strictly
     /// greater than (or equal to, for seek landings) the chunk start.
     pub end_position_ns: u64,
+    /// Absolute frame offset of the *first* frame in the chunk.
+    pub frame_offset: u64,
+    /// Number of frames the chunk covers.
+    pub frames: u64,
+    /// Source bytes the chunk decoded from (decoder ground truth).
+    pub source_bytes: u64,
 }
 
 bitflags! {
@@ -67,33 +67,33 @@ bitflags! {
 #[derive(Clone, Debug)]
 pub struct Timeline {
     byte_position: Arc<AtomicU64>,
-    committed_position_ns: Arc<AtomicU64>,
     /// Frame end (exclusive) of the last consumed slice — the consumer's
     /// playhead in frame space. Single source of truth for "where is the
     /// consumer in the stream"; both `committed_position_ns` (UI) and
     /// the per-chunk consumption offset (`Audio::read`) are derived
     /// from it. Decoder-driven via [`Self::advance_committed_to`].
     committed_frame_end: Arc<AtomicU64>,
+    committed_position_ns: Arc<AtomicU64>,
+    download_position: Arc<AtomicU64>,
+    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `EOF`, `PLAYING`.
+    flags: Arc<AtomicU8>,
     /// Sample rate (Hz) of the most recently committed chunk; lets
     /// readers convert `committed_frame_end` ↔ `committed_position`
     /// without external state.
     last_sample_rate: Arc<AtomicU64>,
-    download_position: Arc<AtomicU64>,
     pending_seek_epoch: Arc<AtomicU64>,
-    total_duration_ns: Arc<AtomicU64>,
 
+    // Seek coordinator fields (GStreamer FLUSH_START/STOP pattern)
+    seek_epoch: Arc<AtomicU64>,
+
+    seek_target_ns: Arc<AtomicU64>,
     /// Byte offset at the start of the most recent `Stream::read()` call.
     /// Used by `StreamContext::segment_index()` to resolve which segment
     /// the last-read data belongs to — `byte_position` has already advanced
     /// past the data boundary by the time the decoder queries metadata.
     segment_position: Arc<AtomicU64>,
 
-    // Seek coordinator fields (GStreamer FLUSH_START/STOP pattern)
-    seek_epoch: Arc<AtomicU64>,
-    seek_target_ns: Arc<AtomicU64>,
-
-    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `EOF`, `PLAYING`.
-    flags: Arc<AtomicU8>,
+    total_duration_ns: Arc<AtomicU64>,
 }
 
 impl Timeline {

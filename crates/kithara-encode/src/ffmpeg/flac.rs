@@ -98,12 +98,12 @@ impl FlacFFmpegEncoder {
 }
 
 struct PacketCollectingEncoder {
-    filter: ffmpeg::filter::Graph,
     encoder: AudioEncoder,
-    codec_config: Vec<u8>,
+    filter: ffmpeg::filter::Graph,
+    timestamp_origin: Option<i64>,
     encoder_time_base: Rational,
     target_time_base: Rational,
-    timestamp_origin: Option<i64>,
+    codec_config: Vec<u8>,
     units: Vec<EncodedAccessUnit>,
 }
 

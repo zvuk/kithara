@@ -102,14 +102,14 @@ pub struct DecoderConfig {
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `kithara_bufpool::pcm_pool()`.
     pub pcm_pool: Option<PcmPool>,
-    /// Stream context for segment/variant metadata.
-    pub stream_ctx: Option<Arc<dyn StreamContext>>,
     /// Optional segment-layout handle over the underlying source. When
     /// present, fMP4 AAC / FLAC streams dispatch through the
     /// segment-by-segment demuxer (`Fmp4SegmentDemuxer`) instead of the
     /// whole-stream container parser, side-stepping prefix walks during
     /// forward seek.
     pub segment_layout: Option<Arc<dyn SegmentLayout>>,
+    /// Stream context for segment/variant metadata.
+    pub stream_ctx: Option<Arc<dyn StreamContext>>,
     /// Epoch counter for decoder recreation tracking.
     pub epoch: u64,
 }

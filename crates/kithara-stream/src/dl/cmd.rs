@@ -34,30 +34,30 @@ pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
 #[non_exhaustive]
 #[derive(Setters)]
 pub struct FetchCmd {
+    /// Epoch cancel token from the Peer. When set, the Downloader
+    /// combines it with the track-level cancel via [`CancelGroup`].
+    pub cancel: Option<CancellationToken>,
+    /// Additional HTTP headers for this request.
+    pub headers: Option<Headers>,
+    /// Streaming path completion handler. `None` for channel path (`execute`/`batch`).
+    #[setters(skip)]
+    pub on_complete: Option<OnCompleteFn>,
+    /// Optional byte range (HTTP Range request).
+    pub range: Option<RangeSpec>,
+    /// Optional per-request response validator.
+    /// Called with the response headers after a successful HTTP response.
+    /// Return `Err` to reject the response before the body is consumed.
+    #[setters(skip)]
+    pub validator: Option<ResponseValidator>,
+    /// Streaming path body writer. `None` for channel path (`execute`/`batch`).
+    #[setters(skip)]
+    pub writer: Option<WriterFn>,
     /// HTTP method (default: [`RequestMethod::Get`]).
     #[setters(skip)]
     pub method: RequestMethod,
     /// URL to fetch.
     #[setters(skip)]
     pub url: Url,
-    /// Optional byte range (HTTP Range request).
-    pub range: Option<RangeSpec>,
-    /// Additional HTTP headers for this request.
-    pub headers: Option<Headers>,
-    /// Epoch cancel token from the Peer. When set, the Downloader
-    /// combines it with the track-level cancel via [`CancelGroup`].
-    pub cancel: Option<CancellationToken>,
-    /// Streaming path body writer. `None` for channel path (`execute`/`batch`).
-    #[setters(skip)]
-    pub writer: Option<WriterFn>,
-    /// Streaming path completion handler. `None` for channel path (`execute`/`batch`).
-    #[setters(skip)]
-    pub on_complete: Option<OnCompleteFn>,
-    /// Optional per-request response validator.
-    /// Called with the response headers after a successful HTTP response.
-    /// Return `Err` to reject the response before the body is consumed.
-    #[setters(skip)]
-    pub validator: Option<ResponseValidator>,
 }
 
 impl FetchCmd {

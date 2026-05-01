@@ -36,6 +36,15 @@ impl ResourceKey {
         Self::Absolute(path.into())
     }
 
+    /// Returns the absolute path if this is an Absolute key.
+    #[must_use]
+    pub fn as_absolute_path(&self) -> Option<&Path> {
+        match self {
+            Self::Absolute(p) => Some(p),
+            Self::Relative(_) => None,
+        }
+    }
+
     /// Extracts a unique relative key from a URL.
     ///
     /// Includes query parameters when present so that URLs differing only
@@ -57,15 +66,6 @@ impl ResourceKey {
     #[must_use]
     pub fn is_absolute(&self) -> bool {
         matches!(self, Self::Absolute(_))
-    }
-
-    /// Returns the absolute path if this is an Absolute key.
-    #[must_use]
-    pub fn as_absolute_path(&self) -> Option<&Path> {
-        match self {
-            Self::Absolute(p) => Some(p),
-            Self::Relative(_) => None,
-        }
     }
 }
 

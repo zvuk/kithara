@@ -44,13 +44,13 @@ pub(crate) struct PlayerNode {
     #[diff(skip)]
     cmd_rx: Arc<Mutex<Option<HeapCons<PlayerCmd>>>>,
 
-    /// PCM buffer pool for scratch buffer allocation.
-    #[diff(skip)]
-    pcm_pool: PcmPool,
-
     /// Shared atomic state for position, duration, notifications, etc.
     #[diff(skip)]
     shared_state: Arc<SharedPlayerState>,
+
+    /// PCM buffer pool for scratch buffer allocation.
+    #[diff(skip)]
+    pcm_pool: PcmPool,
 }
 
 impl PlayerNode {

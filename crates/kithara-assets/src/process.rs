@@ -62,11 +62,11 @@ pub type ProcessChunkFn<Ctx> =
 /// and notifies, and `wait_range`/`read_at` block on the gate so
 /// callers cannot see "ready bytes" until processing has finished.
 pub struct ProcessedResource<R, Ctx> {
-    inner: R,
+    readiness: Arc<ReadinessGate>,
+    pool: BytePool,
     ctx: Option<Ctx>,
     process: ProcessChunkFn<Ctx>,
-    pool: BytePool,
-    readiness: Arc<ReadinessGate>,
+    inner: R,
 }
 
 /// Pairs a `processed` flag with a [`Condvar`] so readers can block
@@ -76,8 +76,8 @@ pub struct ProcessedResource<R, Ctx> {
 /// guard is only ever held inside [`ReadinessGate::wait_until_ready`]
 /// or the brief flip in [`ReadinessGate::mark_ready`].
 struct ReadinessGate {
-    processed: Mutex<bool>,
     cv: Condvar,
+    processed: Mutex<bool>,
 }
 
 impl ReadinessGate {
@@ -92,16 +92,16 @@ impl ReadinessGate {
         *self.processed.lock_sync()
     }
 
-    /// Mark the gate ready and wake every waiter.
-    fn mark_ready(&self) {
-        *self.processed.lock_sync() = true;
-        self.cv.notify_all();
-    }
-
     /// Reset to "not ready" — used by [`ProcessedResource::reactivate`]
     /// when the inner resource is reopened for fresh writes.
     fn mark_pending(&self) {
         *self.processed.lock_sync() = false;
+    }
+
+    /// Mark the gate ready and wake every waiter.
+    fn mark_ready(&self) {
+        *self.processed.lock_sync() = true;
+        self.cv.notify_all();
     }
 
     /// Block the caller until `processed` becomes `true` or
@@ -189,10 +189,6 @@ where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,
     Ctx: Clone + Send + Sync + Debug,
 {
-    fn is_readable(&self) -> bool {
-        self.ctx.is_none() || self.readiness.is_ready()
-    }
-
     /// Whether further waiting is pointless because the inner
     /// resource will never produce processed bytes.
     ///
@@ -206,6 +202,10 @@ where
             self.inner.status(),
             ResourceStatus::Failed(_) | ResourceStatus::Cancelled
         )
+    }
+
+    fn is_readable(&self) -> bool {
+        self.ctx.is_none() || self.readiness.is_ready()
     }
 
     /// Process content chunk-by-chunk and write back to disk.
@@ -261,64 +261,6 @@ where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,
     Ctx: Clone + Send + Sync + Debug + 'static,
 {
-    delegate::delegate! {
-        to self.inner {
-            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-            fn fail(&self, reason: String);
-            fn path(&self) -> Option<&Path>;
-            fn len(&self) -> Option<u64>;
-            fn status(&self) -> ResourceStatus;
-            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
-        }
-    }
-
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        let outcome = self.inner.wait_range(range)?;
-        // No active processor → bytes-on-disk readiness *is* readiness.
-        // Forward the inner outcome unchanged. Same for `Eof` /
-        // `Interrupted`: those terminal/control variants do not depend
-        // on processing.
-        if self.ctx.is_none() || outcome != WaitOutcome::Ready {
-            return Ok(outcome);
-        }
-        // Active processor: inner reports Ready as soon as bytes hit
-        // disk via write_at, but those bytes are still encrypted
-        // until commit() runs process_and_write. Block on the
-        // readiness gate so the caller cannot race past processing
-        // into a NotReadable read.
-        let aborted = !self.readiness.wait_until_ready(&|| self.inner_terminal());
-        if aborted {
-            return Ok(WaitOutcome::Interrupted);
-        }
-        Ok(WaitOutcome::Ready)
-    }
-
-    fn reactivate(&self) -> StorageResult<()> {
-        // Reactivation reopens the inner resource for fresh writes (LRU
-        // slot reuse). Flip the gate to Pending **before** touching
-        // `inner.reactivate` so `is_readable()` cannot lie during the
-        // window where the inner has been reopened but the next commit
-        // has not yet rerun the processor — otherwise a concurrent
-        // reader sees `processed = true` while the inner is mid-truncate
-        // and reads half-overwritten bytes. The flag is restored to
-        // Ready by the next successful commit.
-        if self.ctx.is_some() {
-            self.readiness.mark_pending();
-        }
-        self.inner.reactivate()
-    }
-
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        if !self.is_readable() {
-            return Err(StorageError::NotReadable);
-        }
-        self.inner.read_at(offset, buf)
-    }
-
-    fn contains_range(&self, range: Range<u64>) -> bool {
-        self.is_readable() && self.inner.contains_range(range)
-    }
-
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         // Process on commit (once) if ctx is present.
         // Use the actual processed length (may differ due to padding removal).
@@ -344,6 +286,64 @@ where
         }
         inner_result
     }
+
+    fn contains_range(&self, range: Range<u64>) -> bool {
+        self.is_readable() && self.inner.contains_range(range)
+    }
+
+    fn reactivate(&self) -> StorageResult<()> {
+        // Reactivation reopens the inner resource for fresh writes (LRU
+        // slot reuse). Flip the gate to Pending **before** touching
+        // `inner.reactivate` so `is_readable()` cannot lie during the
+        // window where the inner has been reopened but the next commit
+        // has not yet rerun the processor — otherwise a concurrent
+        // reader sees `processed = true` while the inner is mid-truncate
+        // and reads half-overwritten bytes. The flag is restored to
+        // Ready by the next successful commit.
+        if self.ctx.is_some() {
+            self.readiness.mark_pending();
+        }
+        self.inner.reactivate()
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        if !self.is_readable() {
+            return Err(StorageError::NotReadable);
+        }
+        self.inner.read_at(offset, buf)
+    }
+
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        let outcome = self.inner.wait_range(range)?;
+        // No active processor → bytes-on-disk readiness *is* readiness.
+        // Forward the inner outcome unchanged. Same for `Eof` /
+        // `Interrupted`: those terminal/control variants do not depend
+        // on processing.
+        if self.ctx.is_none() || outcome != WaitOutcome::Ready {
+            return Ok(outcome);
+        }
+        // Active processor: inner reports Ready as soon as bytes hit
+        // disk via write_at, but those bytes are still encrypted
+        // until commit() runs process_and_write. Block on the
+        // readiness gate so the caller cannot race past processing
+        // into a NotReadable read.
+        let aborted = !self.readiness.wait_until_ready(&|| self.inner_terminal());
+        if aborted {
+            return Ok(WaitOutcome::Interrupted);
+        }
+        Ok(WaitOutcome::Ready)
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+            fn fail(&self, reason: String);
+            fn path(&self) -> Option<&Path>;
+            fn len(&self) -> Option<u64>;
+            fn status(&self) -> ResourceStatus;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+        }
+    }
 }
 
 /// Decorator that applies processing to resources based on context.
@@ -359,8 +359,8 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     inner: Arc<A>,
-    process: ProcessChunkFn<Ctx>,
     pool: BytePool,
+    process: ProcessChunkFn<Ctx>,
 }
 
 impl<A, Ctx> ProcessingAssets<A, Ctx>
@@ -372,8 +372,8 @@ where
     pub fn new(inner: Arc<A>, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
         Self {
             inner,
-            process,
             pool,
+            process,
         }
     }
 
@@ -389,9 +389,25 @@ where
     A::Context: Default,
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    type Res = ProcessedResource<A::Res, Ctx>;
     type Context = Ctx;
     type IndexRes = A::IndexRes;
+    type Res = ProcessedResource<A::Res, Ctx>;
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        Ok(self.wrap(self.inner.acquire_resource(key)?, ctx))
+    }
+
+    fn open_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        Ok(self.wrap(self.inner.open_resource(key)?, ctx))
+    }
 
     delegate::delegate! {
         to self.inner {
@@ -404,22 +420,6 @@ where
             fn delete_asset(&self) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
-    }
-
-    fn open_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        Ok(self.wrap(self.inner.open_resource(key)?, ctx))
-    }
-
-    fn acquire_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        Ok(self.wrap(self.inner.acquire_resource(key)?, ctx))
     }
 }
 

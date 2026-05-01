@@ -36,8 +36,8 @@ type DecryptInputs<'a> = (&'a Arc<KeyManager>, [u8; AES_KEY_LEN], Url);
 /// Segment metadata (data is on disk, not in memory).
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
-    pub url: Url,
     pub duration: Option<Duration>,
+    pub url: Url,
     pub len: u64,
 }
 
@@ -50,15 +50,15 @@ pub struct SegmentMeta {
 /// media playlists through a shared [`PlaylistCache`].
 #[derive(Clone)]
 pub struct SegmentLoader {
-    downloader: PeerHandle,
-    backend: AssetStore<DecryptContext>,
-    headers: Option<Headers>,
-    cache: PlaylistCache,
-    key_manager: Option<Arc<KeyManager>>,
     // Init segment deduplication: first caller downloads, others wait
     // on OnceCell. `DashMap` provides fine-grained locking so parallel
     // variants do not serialize on a single `RwLock`.
     init_segments: Arc<DashMap<usize, Arc<OnceCell<SegmentMeta>>>>,
+    backend: AssetStore<DecryptContext>,
+    headers: Option<Headers>,
+    key_manager: Option<Arc<KeyManager>>,
+    downloader: PeerHandle,
+    cache: PlaylistCache,
 }
 
 impl SegmentLoader {
@@ -487,12 +487,12 @@ enum CachedOrPending {
 /// and no fetch is needed. Otherwise, `resource` holds the open
 /// `AssetResource` for the Downloader to write into via `on_chunk`.
 pub struct PreparedMedia {
-    /// Segment URL.
-    pub url: Url,
-    /// Segment duration from the playlist.
-    pub duration: Option<Duration>,
     /// Set when cached — no fetch needed.
     pub cached_len: Option<u64>,
+    /// Segment duration from the playlist.
+    pub duration: Option<Duration>,
     /// Open resource for writing. `None` when cached.
     pub resource: Option<AssetResource<DecryptContext>>,
+    /// Segment URL.
+    pub url: Url,
 }

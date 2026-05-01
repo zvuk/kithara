@@ -68,9 +68,9 @@ pub enum StreamReadOutcome {
 /// target is invalid for this stream, not a decoder state corruption).
 #[derive(Debug, Clone, Copy)]
 pub struct StreamSeekPastEof {
-    pub new_pos: u64,
-    pub len: u64,
     pub current_pos: u64,
+    pub len: u64,
+    pub new_pos: u64,
 }
 
 impl fmt::Display for StreamSeekPastEof {

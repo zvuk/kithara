@@ -24,18 +24,25 @@ use crate::{
 /// to drain that slot before producing more, so the decoder itself is
 /// stateless with respect to parked chunks.
 pub(crate) struct DecoderNode {
+    preload_notify: Arc<Notify>,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     outlet: Outlet<Fetch<PcmChunk>>,
     service_class: ServiceClass,
-    preload_notify: Arc<Notify>,
-    preload_chunks: usize,
-    chunks_sent: usize,
+    eof_sent: bool,
     preloaded: bool,
     seek_epoch: u64,
-    eof_sent: bool,
+    chunks_sent: usize,
+    preload_chunks: usize,
 }
 
 impl DecoderNode {
+    fn complete_preload(&mut self) {
+        if !self.preloaded {
+            self.preload_notify.notify_one();
+            self.preloaded = true;
+        }
+    }
+
     pub(crate) fn from_registration(_track_id: TrackId, reg: TrackRegistration) -> Self {
         let seek_epoch = reg.source.timeline().seek_epoch();
         Self {
@@ -62,13 +69,6 @@ impl DecoderNode {
         }
     }
 
-    fn complete_preload(&mut self) {
-        if !self.preloaded {
-            self.preload_notify.notify_one();
-            self.preloaded = true;
-        }
-    }
-
     fn sync_seek_epoch(&mut self) {
         let current = self.source.timeline().seek_epoch();
         if current == self.seek_epoch {
@@ -85,6 +85,14 @@ impl DecoderNode {
 }
 
 impl Node for DecoderNode {
+    fn on_cancel(&mut self) {
+        self.complete_preload();
+    }
+
+    fn service_class(&self) -> ServiceClass {
+        self.service_class
+    }
+
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();
 
@@ -161,14 +169,6 @@ impl Node for DecoderNode {
                 }
             }
         }
-    }
-
-    fn service_class(&self) -> ServiceClass {
-        self.service_class
-    }
-
-    fn on_cancel(&mut self) {
-        self.complete_preload();
     }
 }
 

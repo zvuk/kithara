@@ -16,18 +16,6 @@ use crate::{demuxer::TrackInfo, error::DecodeResult, types::PcmSpec};
 /// through the injected `PcmPool`, which keeps the hot path zero-alloc
 /// once the pool is warm.
 pub(crate) trait FrameCodec: Send + 'static {
-    /// Construct a codec from track-level metadata produced by the
-    /// demuxer (`extra_data` carries codec-specific config such as AAC
-    /// `AudioSpecificConfig` or FLAC `STREAMINFO`).
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`crate::DecodeError`] when the codec rejects the
-    /// track (unsupported codec id, malformed extra-data, etc.).
-    fn open(track: &TrackInfo) -> DecodeResult<Self>
-    where
-        Self: Sized;
-
     /// Decode one demuxed frame, writing interleaved f32 samples into
     /// `out` (which the caller acquired from the shared `PcmPool`).
     /// Returns the frame count actually written (each frame is
@@ -54,6 +42,18 @@ pub(crate) trait FrameCodec: Send + 'static {
 
     /// Reset internal codec state — called after seek.
     fn flush(&mut self);
+
+    /// Construct a codec from track-level metadata produced by the
+    /// demuxer (`extra_data` carries codec-specific config such as AAC
+    /// `AudioSpecificConfig` or FLAC `STREAMINFO`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`crate::DecodeError`] when the codec rejects the
+    /// track (unsupported codec id, malformed extra-data, etc.).
+    fn open(track: &TrackInfo) -> DecodeResult<Self>
+    where
+        Self: Sized;
 
     /// PCM output specification.
     fn spec(&self) -> PcmSpec;

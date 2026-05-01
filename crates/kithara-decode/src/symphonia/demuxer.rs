@@ -40,17 +40,12 @@ use crate::{
 
 /// Demuxer adapter over Symphonia's [`FormatReader`].
 pub(crate) struct SymphoniaDemuxer {
-    format_reader: Box<dyn FormatReader>,
-    track_id: u32,
-    track_info: TrackInfo,
     /// Native Symphonia codec parameters for the audio track. Carried so
     /// the matching [`SymphoniaCodec::open_native`] path can build a
     /// decoder for codecs whose generic [`AudioCodec`] enum representation
     /// loses information (PCM bit-depth/endianness, ADPCM dialect).
     native_params: AudioCodecParameters,
-    /// Time base used to translate packet timestamps into wall-clock
-    /// [`std::time::Duration`].
-    time_base: Option<TimeBase>,
+    format_reader: Box<dyn FormatReader>,
     /// Live byte cursor of the underlying media source. Populated by
     /// the [`super::super::symphonia::adapter::ReadSeekAdapter`] when
     /// the demuxer is built through that path; absent for synthetic
@@ -62,41 +57,26 @@ pub(crate) struct SymphoniaDemuxer {
     /// Replaced (and the previous packet dropped) on every successful
     /// `next_frame` call.
     current_packet: Option<symphonia::core::packet::Packet>,
+    /// Time base used to translate packet timestamps into wall-clock
+    /// [`std::time::Duration`].
+    time_base: Option<TimeBase>,
+    track_info: TrackInfo,
+    track_id: u32,
 }
 
 impl SymphoniaDemuxer {
-    /// Build a demuxer for a file-like source: probe the container if
-    /// no [`ContainerFormat`] hint is provided, otherwise wire the
-    /// matching reader directly. Returns a [`SymphoniaDemuxer`] plus the
-    /// bootstrap byte-length handle (so the factory can keep updating it
-    /// across the decoder's lifetime).
-    ///
-    /// # Errors
-    ///
-    /// Surfaces probe-side errors verbatim ([`DecodeError::Backend`])
-    /// and missing-track errors ([`DecodeError::ProbeFailed`]).
-    pub(crate) fn open_file<R>(
-        source: R,
-        hint: Option<String>,
-        container: Option<ContainerFormat>,
-        byte_len_handle: Option<Arc<AtomicU64>>,
-    ) -> DecodeResult<(Self, Arc<AtomicU64>)>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        let config = SymphoniaConfig {
-            byte_len_handle,
-            hint,
+    fn current_byte(&self) -> Option<u64> {
+        self.byte_pos_handle
+            .as_ref()
+            .map(|h| h.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    fn dur_to_duration(&self, dur: symphonia::core::units::Duration) -> Duration {
+        let Some(tb) = self.time_base else {
+            return Duration::ZERO;
         };
-        let format_opts = FormatOptions::default();
-        let bootstrap: ReaderBootstrap = if let Some(container) = container {
-            new_direct(source, &config, container, format_opts)?
-        } else {
-            probe_with_seek(source, &config, format_opts, false)?
-        };
-        let len_handle = bootstrap.byte_len_handle.clone();
-        let demuxer = Self::from_reader(bootstrap.format_reader, Some(bootstrap.byte_pos_handle))?;
-        Ok((demuxer, len_handle))
+        let ts = Timestamp::new(i64::try_from(dur.get()).unwrap_or(i64::MAX));
+        tb.calc_time(ts).map_or(Duration::ZERO, time_to_duration)
     }
 
     /// Build from an already-constructed `FormatReader`.
@@ -150,10 +130,38 @@ impl SymphoniaDemuxer {
         &self.native_params
     }
 
-    fn current_byte(&self) -> Option<u64> {
-        self.byte_pos_handle
-            .as_ref()
-            .map(|h| h.load(std::sync::atomic::Ordering::Acquire))
+    /// Build a demuxer for a file-like source: probe the container if
+    /// no [`ContainerFormat`] hint is provided, otherwise wire the
+    /// matching reader directly. Returns a [`SymphoniaDemuxer`] plus the
+    /// bootstrap byte-length handle (so the factory can keep updating it
+    /// across the decoder's lifetime).
+    ///
+    /// # Errors
+    ///
+    /// Surfaces probe-side errors verbatim ([`DecodeError::Backend`])
+    /// and missing-track errors ([`DecodeError::ProbeFailed`]).
+    pub(crate) fn open_file<R>(
+        source: R,
+        hint: Option<String>,
+        container: Option<ContainerFormat>,
+        byte_len_handle: Option<Arc<AtomicU64>>,
+    ) -> DecodeResult<(Self, Arc<AtomicU64>)>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        let config = SymphoniaConfig {
+            byte_len_handle,
+            hint,
+        };
+        let format_opts = FormatOptions::default();
+        let bootstrap: ReaderBootstrap = if let Some(container) = container {
+            new_direct(source, &config, container, format_opts)?
+        } else {
+            probe_with_seek(source, &config, format_opts, false)?
+        };
+        let len_handle = bootstrap.byte_len_handle.clone();
+        let demuxer = Self::from_reader(bootstrap.format_reader, Some(bootstrap.byte_pos_handle))?;
+        Ok((demuxer, len_handle))
     }
 
     fn ts_to_duration(&self, ts: Timestamp) -> Duration {
@@ -165,21 +173,9 @@ impl SymphoniaDemuxer {
         };
         time_to_duration(time)
     }
-
-    fn dur_to_duration(&self, dur: symphonia::core::units::Duration) -> Duration {
-        let Some(tb) = self.time_base else {
-            return Duration::ZERO;
-        };
-        let ts = Timestamp::new(i64::try_from(dur.get()).unwrap_or(i64::MAX));
-        tb.calc_time(ts).map_or(Duration::ZERO, time_to_duration)
-    }
 }
 
 impl Demuxer for SymphoniaDemuxer {
-    fn track_info(&self) -> &TrackInfo {
-        &self.track_info
-    }
-
     fn duration(&self) -> Option<Duration> {
         self.track_info.duration
     }
@@ -210,8 +206,8 @@ impl Demuxer for SymphoniaDemuxer {
             let data: &[u8] = &self.current_packet.as_ref().expect("just stored").data;
             return Ok(DemuxOutcome::Frame(Frame {
                 data,
-                pts,
                 duration,
+                pts,
             }));
         }
     }
@@ -240,6 +236,10 @@ impl Demuxer for SymphoniaDemuxer {
             landed_byte: self.current_byte(),
         })
     }
+
+    fn track_info(&self) -> &TrackInfo {
+        &self.track_info
+    }
 }
 
 fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> DecodeResult<TrackInfo> {
@@ -264,10 +264,10 @@ fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> Decod
 
     Ok(TrackInfo {
         codec,
-        sample_rate,
-        channels,
-        extra_data,
         duration,
+        extra_data,
+        channels,
+        sample_rate,
     })
 }
 

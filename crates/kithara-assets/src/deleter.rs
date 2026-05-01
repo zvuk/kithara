@@ -23,16 +23,6 @@ use crate::{error::AssetsResult, key::ResourceKey};
 /// Trait implemented by the disk and mem backends to expose a single
 /// canonical removal channel. See module docs for the contract.
 pub(crate) trait AssetDeleter: Send + Sync + std::fmt::Debug {
-    /// Remove a single resource identified by (`asset_root`, `key`).
-    ///
-    /// Disk impl: `fs::remove_file` of the resolved path, then
-    /// `availability.remove(asset_root, key)`.
-    ///
-    /// Mem impl: drop the matching `active_resources` entry (only when
-    /// `asset_root` matches the backend's own root — mem backends are
-    /// scoped to a single `asset_root`), then `availability.remove`.
-    fn remove_resource(&self, asset_root: &str, key: &ResourceKey) -> AssetsResult<()>;
-
     /// Remove an entire `asset_root` worth of state.
     ///
     /// Disk impl: `fs::remove_dir_all(root_dir/asset_root)`, then
@@ -47,4 +37,14 @@ pub(crate) trait AssetDeleter: Send + Sync + std::fmt::Debug {
     /// per-resource handles for a foreign `asset_root` live in a
     /// different mem backend instance and are unreachable from here.
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
+
+    /// Remove a single resource identified by (`asset_root`, `key`).
+    ///
+    /// Disk impl: `fs::remove_file` of the resolved path, then
+    /// `availability.remove(asset_root, key)`.
+    ///
+    /// Mem impl: drop the matching `active_resources` entry (only when
+    /// `asset_root` matches the backend's own root — mem backends are
+    /// scoped to a single `asset_root`), then `availability.remove`.
+    fn remove_resource(&self, asset_root: &str, key: &ResourceKey) -> AssetsResult<()>;
 }

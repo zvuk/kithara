@@ -43,10 +43,10 @@ use syn::{
 };
 
 struct WatchdogArgs {
-    name: Option<LitStr>,
-    timeout: Option<Expr>,
     ctx: Option<Type>,
     dump_dir: Option<Expr>,
+    name: Option<LitStr>,
+    timeout: Option<Expr>,
 }
 
 impl Parse for WatchdogArgs {
@@ -89,10 +89,10 @@ impl Parse for WatchdogArgs {
         }
 
         Ok(Self {
-            name,
-            timeout,
             ctx,
             dump_dir,
+            name,
+            timeout,
         })
     }
 }

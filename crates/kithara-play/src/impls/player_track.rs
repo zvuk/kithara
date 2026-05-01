@@ -88,21 +88,21 @@ pub(crate) enum TrackTransition {
 /// and notification logic for a single loaded track.
 pub(crate) struct PlayerTrack {
     resource: Arc<Mutex<PlayerResource>>,
+    src: Arc<str>,
+    fade_curve: FadeCurve,
+    mix: MixDSP,
     state: TrackState,
-    state_dirty: bool,
     notified_about_to_end: bool,
     notified_track_requested: bool,
-    mix: MixDSP,
-    fade_curve: FadeCurve,
-    /// Last observed playback position snapshot.
-    ///
-    /// This is a fallback value only. Source of truth is `PlayerResource`.
-    observed_position: f64,
+    state_dirty: bool,
     /// Last observed duration snapshot.
     ///
     /// This is a fallback value only. Source of truth is `PlayerResource`.
     observed_duration: f64,
-    src: Arc<str>,
+    /// Last observed playback position snapshot.
+    ///
+    /// This is a fallback value only. Source of truth is `PlayerResource`.
+    observed_position: f64,
 }
 
 impl PlayerTrack {

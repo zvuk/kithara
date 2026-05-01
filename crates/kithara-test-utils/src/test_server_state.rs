@@ -13,9 +13,9 @@ use crate::{
 };
 
 pub(crate) struct TestServerState {
-    tokens: RwLock<HashMap<String, StoredToken>>,
     hls_cache: GeneratedHlsCache,
     hls_blobs: RwLock<HashMap<String, Arc<Vec<u8>>>>,
+    tokens: RwLock<HashMap<String, StoredToken>>,
 }
 
 #[derive(Clone)]

@@ -34,23 +34,23 @@ use crate::{
 /// FFI-facing audio player.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayer {
+    /// Swift-owned items indexed by `TrackId`. Populated by [`insert`],
+    /// drained by [`remove`] / [`remove_all_items`]. Lets [`items`] return
+    /// the same `AudioPlayerItem` instances that Swift handed in (preserves
+    /// identity + active per-item observer wiring).
+    items: Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
     queue: Arc<Queue>,
     /// Shared downloader for every track created through this player.
     /// Pinned to `FFI_RUNTIME` so its async tasks land on a runtime that
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
-    /// Shared storage options (cache dir, etc.) applied to every item.
-    store: StoreOptions,
     /// Immutable [`KeyOptions`] built once from [`FfiPlayerConfig`].
     key_options: KeyOptions,
-    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     event_bridge: Mutex<Option<EventBridge>>,
-    /// Swift-owned items indexed by `TrackId`. Populated by [`insert`],
-    /// drained by [`remove`] / [`remove_all_items`]. Lets [`items`] return
-    /// the same `AudioPlayerItem` instances that Swift handed in (preserves
-    /// identity + active per-item observer wiring).
-    items: Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
+    /// Shared storage options (cache dir, etc.) applied to every item.
+    store: StoreOptions,
 }
 
 /// Convert the FFI-level [`crate::types::FfiKeyOptions`] into a

@@ -8,20 +8,20 @@ pub struct Rgb(pub u8, pub u8, pub u8);
 /// to their framework-specific color types via [`From`].
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
+    /// Accent color (active elements, highlights).
+    pub accent: Rgb,
     /// Main background.
     pub bg: Rgb,
     /// Panel / elevated surface background.
     pub bg_panel: Rgb,
-    /// Accent color (active elements, highlights).
-    pub accent: Rgb,
-    /// Muted / inactive text.
-    pub muted: Rgb,
-    /// Primary text.
-    pub text: Rgb,
-    /// Success indicator.
-    pub success: Rgb,
     /// Danger indicator.
     pub danger: Rgb,
+    /// Muted / inactive text.
+    pub muted: Rgb,
+    /// Success indicator.
+    pub success: Rgb,
+    /// Primary text.
+    pub text: Rgb,
     /// Warning indicator.
     pub warning: Rgb,
 }
@@ -94,13 +94,13 @@ pub(crate) mod gui {
     /// Resolved iced color palette.
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct GuiPalette {
+        pub accent: Color,
         pub bg: Color,
         pub bg_panel: Color,
-        pub accent: Color,
-        pub muted: Color,
-        pub text: Color,
-        pub success: Color,
         pub danger: Color,
+        pub muted: Color,
+        pub success: Color,
+        pub text: Color,
         pub warning: Color,
     }
 
@@ -135,9 +135,9 @@ pub(crate) mod tui {
     /// Resolved ratatui color palette.
     #[derive(Debug, Clone, Copy)]
     pub struct TuiPalette {
+        pub accent: Color,
         pub bg: Color,
         pub bg_panel: Color,
-        pub accent: Color,
         pub danger: Color,
         pub muted: Color,
         pub text: Color,

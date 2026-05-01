@@ -6,9 +6,9 @@ use crate::PcmSource;
 
 /// Interleaved PCM buffer: each frame repeats one 16-bit little-endian sawtooth sample per channel.
 pub(crate) struct SawtoothPcmFixture {
-    sample_rate: u32,
-    channels: u16,
     bytes: Vec<u8>,
+    channels: u16,
+    sample_rate: u32,
 }
 
 impl SawtoothPcmFixture {
@@ -27,9 +27,9 @@ impl SawtoothPcmFixture {
             }
         }
         Self {
-            sample_rate,
-            channels,
             bytes,
+            channels,
+            sample_rate,
         }
     }
 

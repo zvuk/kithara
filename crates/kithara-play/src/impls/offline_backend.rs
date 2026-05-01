@@ -24,8 +24,8 @@ pub struct OfflineBackend {
 /// Configuration for the offline backend.
 #[derive(Clone)]
 pub struct OfflineConfig {
-    pub sample_rate: u32,
     pub block_frames: u32,
+    pub sample_rate: u32,
 }
 
 impl Default for OfflineConfig {

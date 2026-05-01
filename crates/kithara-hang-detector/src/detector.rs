@@ -28,19 +28,19 @@ use crate::dump::{HangDump, NoContext};
 /// `RuntimeError: unreachable` which kills the Web Worker).
 #[cfg(not(feature = "disable-hang-detector"))]
 pub struct HangDetector<C: HangDump = NoContext> {
-    deadline: Instant,
     label: &'static str,
     timeout: Duration,
+    deadline: Instant,
     /// Last context snapshot moved in via [`Self::tick_with`]. Read
     /// only when the deadline fires; otherwise untouched.
     ctx: Option<C>,
     /// Explicit dump directory set via [`Self::with_dump_dir`]. Wins
     /// over `KITHARA_HANG_DUMP_DIR` and `std::env::temp_dir()`.
     dump_dir: Option<PathBuf>,
+    _marker: PhantomData<C>,
     /// Set after the dump for the current hang window has been
     /// written. Cleared by [`Self::reset`].
     fired: bool,
-    _marker: PhantomData<C>,
 }
 
 #[cfg(not(feature = "disable-hang-detector"))]

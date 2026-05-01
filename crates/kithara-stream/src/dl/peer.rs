@@ -64,50 +64,50 @@ pub(super) enum ResponseTarget {
 /// `CancelReason::PeerCancel` without holding a reference back into
 /// the Registry.
 pub(super) struct SlotEntry {
-    pub(super) cmd: InternalCmd,
     pub(super) peer_cancel: CancellationToken,
+    pub(super) cmd: InternalCmd,
 }
 
 /// Per-peer command sent through the channel to the downloader loop.
 pub(super) struct InternalCmd {
-    pub(super) cmd: FetchCmd,
-    pub(super) cancel: CancelGroup,
-    pub(super) priority: RequestPriority,
-    pub(super) response: ResponseTarget,
-    /// Arena index of the owning peer. `None` when sent from `PeerHandle`
-    /// (filled in by Registry on receipt).
-    pub(super) peer: Option<thunderdome::Index>,
-    /// Bus of the peer that issued this command. Downloader publishes
-    /// per-fetch `DownloaderEvent`s here.
-    pub(super) bus: Option<EventBus>,
     /// ABR peer identifier for bandwidth accounting after fetch completes.
     pub(super) peer_id: AbrPeerId,
-    /// Stable id allocated by the Downloader on enqueue. Carried in
-    /// every `DownloaderEvent` for this fetch's lifecycle so subscribers
-    /// can correlate Enqueued → Started → Completed/Failed/Cancelled.
-    pub(super) request_id: kithara_events::RequestId,
+    pub(super) cancel: CancelGroup,
+    pub(super) cmd: FetchCmd,
     /// Wall-clock instant the cmd was placed into a priority slot.
     /// Used to compute `RequestStarted::wait_in_queue` later in the
     /// pipeline.
     pub(super) enqueued_at: kithara_platform::time::Instant,
+    /// Bus of the peer that issued this command. Downloader publishes
+    /// per-fetch `DownloaderEvent`s here.
+    pub(super) bus: Option<EventBus>,
+    /// Arena index of the owning peer. `None` when sent from `PeerHandle`
+    /// (filled in by Registry on receipt).
+    pub(super) peer: Option<thunderdome::Index>,
+    /// Stable id allocated by the Downloader on enqueue. Carried in
+    /// every `DownloaderEvent` for this fetch's lifecycle so subscribers
+    /// can correlate Enqueued → Started → Completed/Failed/Cancelled.
+    pub(super) request_id: kithara_events::RequestId,
+    pub(super) priority: RequestPriority,
+    pub(super) response: ResponseTarget,
 }
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
 struct PeerInner {
+    /// ABR side of the double registration. Keeps the peer registered
+    /// with the shared `AbrController` until the last `PeerHandle` drops
+    /// (the handle's `Drop` calls `controller.unregister`).
+    abr: AbrHandle,
     /// Keeps `DownloaderInner` (`HttpClient`, cancel, runtime) alive
     /// for this peer's lifetime.
     _pool: Arc<DownloaderInner>,
-    cancel: CancellationToken,
-    cmd_tx: mpsc::Sender<InternalCmd>,
     /// Shared with the Registry's `PeerEntry`. Writing through
     /// [`PeerHandle::with_bus`] immediately makes the new bus visible
     /// to both the handle's own imperative path and the Registry's
     /// proactive `poll_next` path.
     bus: Arc<RwLock<Option<EventBus>>>,
-    /// ABR side of the double registration. Keeps the peer registered
-    /// with the shared `AbrController` until the last `PeerHandle` drops
-    /// (the handle's `Drop` calls `controller.unregister`).
-    abr: AbrHandle,
+    cancel: CancellationToken,
+    cmd_tx: mpsc::Sender<InternalCmd>,
 }
 
 impl Drop for PeerInner {

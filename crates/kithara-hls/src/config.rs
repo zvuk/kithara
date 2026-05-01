@@ -46,47 +46,15 @@ pub struct HlsConfig {
     /// `Downloader` drives per-sample decisions; this field only seeds
     /// the initial variant.
     pub initial_abr_mode: AbrMode,
+    /// Encryption key handling configuration.
+    pub keys: KeyOptions,
     /// Base URL for resolving relative playlist/segment URLs.
     pub base_url: Option<Url>,
-    /// Cancellation token for graceful shutdown.
-    pub cancel: Option<CancellationToken>,
-    /// Capacity of the event bus channel (used when `bus` is not provided).
-    #[derivative(Default(value = "kithara_events::DEFAULT_EVENT_BUS_CAPACITY"))]
-    pub event_channel_capacity: usize,
     /// Event bus (optional - if not provided, one is created internally).
     #[setters(rename = "with_events")]
     pub bus: Option<EventBus>,
-    /// Encryption key handling configuration.
-    pub keys: KeyOptions,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
-    /// - `None` — no backpressure, download as fast as possible
-    pub look_ahead_bytes: Option<u64>,
-    /// Max segments to download per step.
-    ///
-    /// Higher values reduce per-step overhead (ABR decisions happen per-batch)
-    /// but reduce ABR reactivity. Default: 3.
-    #[derivative(Default(value = "3"))]
-    pub download_batch_size: usize,
-    /// Optional name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (e.g. differ only in
-    /// query parameters), setting a unique `name` ensures each gets its own
-    /// cache directory.
-    #[setters(skip)]
-    pub name: Option<String>,
-    /// Additional HTTP headers to include in all requests.
-    pub headers: Option<Headers>,
-    /// Buffer pool (shared across all components, created if not provided).
-    pub pool: Option<BytePool>,
-    /// Storage configuration.
-    pub store: StoreOptions,
-    /// Master playlist URL.
-    #[derivative(Default(
-        value = "Url::parse(\"http://localhost/stream.m3u8\").expect(\"valid default URL\")"
-    ))]
-    pub url: Url,
+    /// Cancellation token for graceful shutdown.
+    pub cancel: Option<CancellationToken>,
     /// Shared downloader (created lazily if not provided).
     ///
     /// Currently unread — added ahead of the phase02 HLS migration that
@@ -96,6 +64,38 @@ pub struct HlsConfig {
     #[setters(skip)]
     #[derivative(Debug = "ignore")]
     pub downloader: Option<Downloader>,
+    /// Additional HTTP headers to include in all requests.
+    pub headers: Option<Headers>,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    ///
+    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
+    /// - `None` — no backpressure, download as fast as possible
+    pub look_ahead_bytes: Option<u64>,
+    /// Optional name for cache disambiguation.
+    ///
+    /// When multiple URLs share the same canonical form (e.g. differ only in
+    /// query parameters), setting a unique `name` ensures each gets its own
+    /// cache directory.
+    #[setters(skip)]
+    pub name: Option<String>,
+    /// Buffer pool (shared across all components, created if not provided).
+    pub pool: Option<BytePool>,
+    /// Storage configuration.
+    pub store: StoreOptions,
+    /// Master playlist URL.
+    #[derivative(Default(
+        value = "Url::parse(\"http://localhost/stream.m3u8\").expect(\"valid default URL\")"
+    ))]
+    pub url: Url,
+    /// Max segments to download per step.
+    ///
+    /// Higher values reduce per-step overhead (ABR decisions happen per-batch)
+    /// but reduce ABR reactivity. Default: 3.
+    #[derivative(Default(value = "3"))]
+    pub download_batch_size: usize,
+    /// Capacity of the event bus channel (used when `bus` is not provided).
+    #[derivative(Default(value = "kithara_events::DEFAULT_EVENT_BUS_CAPACITY"))]
+    pub event_channel_capacity: usize,
 }
 
 impl HlsConfig {

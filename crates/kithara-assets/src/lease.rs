@@ -27,9 +27,9 @@ enum AccessMode {
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 
 struct LiveResource {
+    state: Mutex<AssetResourceState>,
     key: ResourceKey,
     registry: Weak<Mutex<HashMap<ResourceKey, Weak<Self>>>>,
-    state: Mutex<AssetResourceState>,
 }
 
 impl LiveResource {
@@ -83,10 +83,10 @@ pub struct LeaseAssets<A>
 where
     A: Assets,
 {
-    byte_recorder: Option<Arc<dyn ByteRecorder>>,
-    cancel: CancellationToken,
     inner: Arc<A>,
     live: Arc<Mutex<HashMap<ResourceKey, Weak<LiveResource>>>>,
+    cancel: CancellationToken,
+    byte_recorder: Option<Arc<dyn ByteRecorder>>,
     /// Shared pins index — same instance held by `EvictAssets` and
     /// `DiskAssetDeleter`. Mutations (`add` / `remove`) flush
     /// immediately via the index's internal best-effort persistence.
@@ -112,28 +112,6 @@ where
         Self::with_byte_recorder(inner, cancel, None, pins)
     }
 
-    /// Create with byte recorder for asset-size tracking.
-    pub(crate) fn with_byte_recorder(
-        inner: Arc<A>,
-        cancel: CancellationToken,
-        byte_recorder: Option<Arc<dyn ByteRecorder>>,
-        pins: PinsIndex,
-    ) -> Self {
-        Self {
-            byte_recorder,
-            cancel,
-            inner,
-            live: Arc::new(Mutex::new(HashMap::new())),
-            pins,
-        }
-    }
-
-    fn is_active(&self) -> bool {
-        self.inner
-            .capabilities()
-            .contains(crate::base::Capabilities::LEASE)
-    }
-
     /// Persist the current pins snapshot to disk (best-effort).
     ///
     /// Mutations through [`PinsIndex::add`] / [`PinsIndex::remove`]
@@ -150,6 +128,35 @@ where
             return Ok(());
         }
         self.pins.flush()
+    }
+
+    fn is_active(&self) -> bool {
+        self.inner
+            .capabilities()
+            .contains(crate::base::Capabilities::LEASE)
+    }
+
+    fn open_live_resource(&self, key: &ResourceKey, status: ResourceStatus) -> Arc<LiveResource> {
+        let next = AssetResourceState::from(status);
+        let mut registry = self.live.lock_sync();
+        if let Some(existing) = registry.get(key).and_then(Weak::upgrade) {
+            let preserve_live = matches!(
+                existing.snapshot(),
+                AssetResourceState::Active | AssetResourceState::Failed(_)
+            ) && matches!(next, AssetResourceState::Committed { .. });
+            if !preserve_live {
+                existing.set(next);
+            }
+            return existing;
+        }
+
+        let live = Arc::new(LiveResource::new(
+            key.clone(),
+            Arc::downgrade(&self.live),
+            next,
+        ));
+        registry.insert(key.clone(), Arc::downgrade(&live));
+        live
     }
 
     fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard> {
@@ -182,42 +189,35 @@ where
         })
     }
 
-    fn open_live_resource(&self, key: &ResourceKey, status: ResourceStatus) -> Arc<LiveResource> {
-        let next = AssetResourceState::from(status);
-        let mut registry = self.live.lock_sync();
-        if let Some(existing) = registry.get(key).and_then(Weak::upgrade) {
-            let preserve_live = matches!(
-                existing.snapshot(),
-                AssetResourceState::Active | AssetResourceState::Failed(_)
-            ) && matches!(next, AssetResourceState::Committed { .. });
-            if !preserve_live {
-                existing.set(next);
-            }
-            return existing;
+    /// Create with byte recorder for asset-size tracking.
+    pub(crate) fn with_byte_recorder(
+        inner: Arc<A>,
+        cancel: CancellationToken,
+        byte_recorder: Option<Arc<dyn ByteRecorder>>,
+        pins: PinsIndex,
+    ) -> Self {
+        Self {
+            byte_recorder,
+            cancel,
+            inner,
+            live: Arc::new(Mutex::new(HashMap::new())),
+            pins,
         }
-
-        let live = Arc::new(LiveResource::new(
-            key.clone(),
-            Arc::downgrade(&self.live),
-            next,
-        ));
-        registry.insert(key.clone(), Arc::downgrade(&live));
-        live
     }
 }
 
 /// Resource wrapper that combines lease guard with byte recording on commit.
 #[derive(Clone)]
 pub struct LeaseResource<R: ResourceExt, L> {
-    inner: R,
-    _lease: L,
     mode: AccessMode,
-    asset_root: String,
+    _lease: L,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
     drop_token: Option<Arc<()>>,
     live: Option<Arc<LiveResource>>,
     remove: Option<RemoveFn>,
     resource_key: Option<ResourceKey>,
+    inner: R,
+    asset_root: String,
 }
 
 impl<R, L> Debug for LeaseResource<R, L>
@@ -246,15 +246,15 @@ impl<R, L> LeaseResource<crate::cache::CachedResource<R>, L>
 where
     R: ResourceExt + Clone + Send + Sync + Debug + 'static,
 {
-    /// Pin the underlying cached resource so it is never evicted.
-    pub fn retain(self) -> Self {
-        self.inner.set_retained();
-        self
-    }
-
     /// Unpin the underlying cached resource.
     pub fn release(self) -> Self {
         self.inner.set_released();
+        self
+    }
+
+    /// Pin the underlying cached resource so it is never evicted.
+    pub fn retain(self) -> Self {
+        self.inner.set_retained();
         self
     }
 }
@@ -264,23 +264,6 @@ where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,
     L: Send + Sync + Clone + 'static,
 {
-    delegate::delegate! {
-        to self.inner {
-            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-            fn path(&self) -> Option<&Path>;
-            fn len(&self) -> Option<u64>;
-            fn status(&self) -> ResourceStatus;
-            fn contains_range(&self, range: Range<u64>) -> bool;
-            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
-        }
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.write_guard("write_at");
-        self.inner.write_at(offset, data)
-    }
-
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.write_guard("commit");
         self.inner.commit(final_len)?;
@@ -315,6 +298,23 @@ where
             live.set(AssetResourceState::Active);
         }
         Ok(())
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.write_guard("write_at");
+        self.inner.write_at(offset, data)
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+            fn path(&self) -> Option<&Path>;
+            fn len(&self) -> Option<u64>;
+            fn status(&self) -> ResourceStatus;
+            fn contains_range(&self, range: Range<u64>) -> bool;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+        }
     }
 }
 
@@ -351,19 +351,29 @@ impl<A> Assets for LeaseAssets<A>
 where
     A: Assets,
 {
-    type Res = LeaseResource<A::Res, LeaseGuard>;
     type Context = A::Context;
     type IndexRes = A::IndexRes;
+    type Res = LeaseResource<A::Res, LeaseGuard>;
 
-    delegate::delegate! {
-        to self.inner {
-            fn capabilities(&self) -> crate::base::Capabilities;
-            fn root_dir(&self) -> &Path;
-            fn asset_root(&self) -> &str;
-            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-            fn delete_asset(&self) -> AssetsResult<()>;
-        }
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        self.wrap_resource(key, ctx, AccessMode::Write)
+    }
+
+    fn open_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        self.wrap_resource(key, ctx, AccessMode::Read)
+    }
+
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        self.live.lock_sync().remove(key);
+        self.inner.remove_resource(key)
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
@@ -383,25 +393,15 @@ where
         self.inner.resource_state(key)
     }
 
-    fn open_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        self.wrap_resource(key, ctx, AccessMode::Read)
-    }
-
-    fn acquire_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        self.wrap_resource(key, ctx, AccessMode::Write)
-    }
-
-    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.live.lock_sync().remove(key);
-        self.inner.remove_resource(key)
+    delegate::delegate! {
+        to self.inner {
+            fn capabilities(&self) -> crate::base::Capabilities;
+            fn root_dir(&self) -> &Path;
+            fn asset_root(&self) -> &str;
+            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn delete_asset(&self) -> AssetsResult<()>;
+        }
     }
 }
 
@@ -409,17 +409,29 @@ impl<A> LeaseAssets<A>
 where
     A: Assets,
 {
-    fn wrap_resource(
+    /// Open a resource through the explicit mutable-access alias.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the inner store cannot open the resource.
+    pub fn acquire_resource(
+        &self,
+        key: &ResourceKey,
+    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
+        self.acquire_resource_with_ctx(key, None)
+    }
+
+    /// Open a resource with context through the explicit mutable-access alias.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the inner store cannot open the resource.
+    pub fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
         ctx: Option<A::Context>,
-        mode: AccessMode,
     ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        let inner = match mode {
-            AccessMode::Read => self.inner.open_resource_with_ctx(key, ctx)?,
-            AccessMode::Write => self.inner.acquire_resource_with_ctx(key, ctx)?,
-        };
-        self.wrap_opened_resource(key, inner, mode)
+        self.wrap_resource(key, ctx, AccessMode::Write)
     }
 
     fn wrap_opened_resource(
@@ -465,29 +477,17 @@ where
         })
     }
 
-    /// Open a resource through the explicit mutable-access alias.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the inner store cannot open the resource.
-    pub fn acquire_resource(
-        &self,
-        key: &ResourceKey,
-    ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        self.acquire_resource_with_ctx(key, None)
-    }
-
-    /// Open a resource with context through the explicit mutable-access alias.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the inner store cannot open the resource.
-    pub fn acquire_resource_with_ctx(
+    fn wrap_resource(
         &self,
         key: &ResourceKey,
         ctx: Option<A::Context>,
+        mode: AccessMode,
     ) -> AssetsResult<LeaseResource<A::Res, LeaseGuard>> {
-        self.wrap_resource(key, ctx, AccessMode::Write)
+        let inner = match mode {
+            AccessMode::Read => self.inner.open_resource_with_ctx(key, ctx)?,
+            AccessMode::Write => self.inner.acquire_resource_with_ctx(key, ctx)?,
+        };
+        self.wrap_opened_resource(key, inner, mode)
     }
 }
 

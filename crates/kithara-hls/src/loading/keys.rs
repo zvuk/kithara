@@ -30,11 +30,6 @@ use crate::{HlsError, HlsResult};
 /// host is looked up in the registry to pick the matching rule.
 #[derive(Clone)]
 pub struct KeyManager {
-    downloader: PeerHandle,
-    backend: AssetStore<DecryptContext>,
-    /// Cache-wide headers (typically equal to `HlsConfig::headers`).
-    base_headers: Option<Headers>,
-    key_registry: Option<KeyProcessorRegistry>,
     /// In-memory store of decrypted keys for rule-matched URLs.
     ///
     /// Rule-matched (DRM) key responses are seed-dependent: the server
@@ -46,6 +41,11 @@ pub struct KeyManager {
     /// the lifetime of the stream — `get_cached_key` stays zero-I/O
     /// on the segment hot path.
     decrypted_keys: Arc<Mutex<HashMap<Url, Bytes>>>,
+    backend: AssetStore<DecryptContext>,
+    /// Cache-wide headers (typically equal to `HlsConfig::headers`).
+    base_headers: Option<Headers>,
+    key_registry: Option<KeyProcessorRegistry>,
+    downloader: PeerHandle,
 }
 
 impl KeyManager {

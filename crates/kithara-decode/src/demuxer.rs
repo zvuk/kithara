@@ -25,9 +25,6 @@ use crate::error::DecodeResult;
 /// and emit raw codec frames with timing metadata. The codec layer
 /// ([`crate::codec::FrameCodec`]) consumes those frames into PCM.
 pub(crate) trait Demuxer: Send {
-    /// Track-level metadata exposed by the container.
-    fn track_info(&self) -> &TrackInfo;
-
     /// Total duration if the container can compute one (HLS playlist
     /// total, mp4 `mvhd`, …); `None` for live or unbounded streams.
     fn duration(&self) -> Option<Duration>;
@@ -54,6 +51,9 @@ pub(crate) trait Demuxer: Send {
     ///
     /// Surfaces parser-level seek failures verbatim.
     fn seek(&mut self, target: Duration) -> DecodeResult<DemuxSeekOutcome>;
+
+    /// Track-level metadata exposed by the container.
+    fn track_info(&self) -> &TrackInfo;
 }
 
 /// Track-level metadata produced by [`Demuxer::track_info`].
@@ -62,16 +62,16 @@ pub(crate) trait Demuxer: Send {
 pub(crate) struct TrackInfo {
     /// Audio codec carried by this track.
     pub codec: AudioCodec,
-    /// Decoded sample rate (Hz).
-    pub sample_rate: u32,
-    /// Channel count.
-    pub channels: u16,
+    /// Total track duration if available.
+    pub duration: Option<Duration>,
     /// Codec-specific extra data — `AudioSpecificConfig` (AAC),
     /// `STREAMINFO` (FLAC), `esds` cookie (Apple), etc. Empty when the
     /// codec needs no extra data.
     pub extra_data: Vec<u8>,
-    /// Total track duration if available.
-    pub duration: Option<Duration>,
+    /// Channel count.
+    pub channels: u16,
+    /// Decoded sample rate (Hz).
+    pub sample_rate: u32,
 }
 
 /// One demuxed audio frame, borrowed from the demuxer's internal state.
@@ -84,10 +84,10 @@ pub(crate) struct Frame<'a> {
     /// Raw frame bytes — slice into the demuxer's owned buffer (mp4
     /// segment, Symphonia `Packet`, etc.). Zero-copy: never cloned.
     pub data: &'a [u8],
-    /// Presentation time of this frame.
-    pub pts: Duration,
     /// Frame duration.
     pub duration: Duration,
+    /// Presentation time of this frame.
+    pub pts: Duration,
 }
 
 /// Result of a [`Demuxer::next_frame`] call.

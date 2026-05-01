@@ -28,19 +28,30 @@ use crate::{
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
 /// dispatch path — no per-backend duplication.
 pub(crate) struct UniversalDecoder<D: Demuxer, C: FrameCodec> {
-    demuxer: D,
     codec: C,
-    spec: PcmSpec,
-    duration: Option<Duration>,
-    pool: PcmPool,
-    epoch: u64,
+    demuxer: D,
     byte_len_handle: Option<Arc<AtomicU64>>,
-    stream_ctx: Option<Arc<dyn StreamContext>>,
+    duration: Option<Duration>,
     /// Reader-side observer hooks. `None` skips the lock entirely on the
     /// hot path; `Some(_)` emits per-chunk / per-seek signals after the
     /// inner outcome resolves. Folded in from the former `HookedDecoder`
     /// decorator — every decoder is hookable now.
     hooks: Option<SharedHooks>,
+    /// When `Some`, frames whose decode-time end is `<= target` are
+    /// dropped before the next chunk is emitted. Cleared after the
+    /// first frame past the target is consumed. Lets `seek(target)`
+    /// land precisely at `target` instead of at the granule boundary.
+    pending_seek_target: Option<Duration>,
+    stream_ctx: Option<Arc<dyn StreamContext>>,
+    pool: PcmPool,
+    spec: PcmSpec,
+    /// Set on every seek; the next emitted chunk re-anchors
+    /// `frame_offset` to its own pts so that the chunk-level invariant
+    /// `frame_offset / sample_rate ≈ timestamp` holds even when the
+    /// demuxer snapped to a packet boundary inside / behind the
+    /// requested seek target.
+    resync_frame_offset_to_pts: bool,
+    epoch: u64,
     /// Cumulative frame counter. Anchored to `landed_at` on seek (so the
     /// next chunk's `frame_offset / sample_rate ≈ timestamp`) and
     /// incremented by `decoded.frames` per emitted chunk. Tracking it
@@ -48,17 +59,6 @@ pub(crate) struct UniversalDecoder<D: Demuxer, C: FrameCodec> {
     /// chunk recomputes `floor(pts * sample_rate)` from a `Duration`
     /// nanosecond value.
     frame_offset: u64,
-    /// When `Some`, frames whose decode-time end is `<= target` are
-    /// dropped before the next chunk is emitted. Cleared after the
-    /// first frame past the target is consumed. Lets `seek(target)`
-    /// land precisely at `target` instead of at the granule boundary.
-    pending_seek_target: Option<Duration>,
-    /// Set on every seek; the next emitted chunk re-anchors
-    /// `frame_offset` to its own pts so that the chunk-level invariant
-    /// `frame_offset / sample_rate ≈ timestamp` holds even when the
-    /// demuxer snapped to a packet boundary inside / behind the
-    /// requested seek target.
-    resync_frame_offset_to_pts: bool,
 }
 
 impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
@@ -87,35 +87,6 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
             frame_offset: 0,
             pending_seek_target: None,
             resync_frame_offset_to_pts: false,
-        }
-    }
-
-    fn emit_chunk_signal(&self, outcome: &DecoderChunkOutcome) {
-        let Some(hooks) = self.hooks.as_ref() else {
-            return;
-        };
-        let signal = match outcome {
-            DecoderChunkOutcome::Chunk(_) => ReaderChunkSignal::Chunk,
-            DecoderChunkOutcome::Pending(reason) => ReaderChunkSignal::Pending(*reason),
-            DecoderChunkOutcome::Eof => ReaderChunkSignal::Eof,
-        };
-        if let Ok(mut h) = hooks.lock() {
-            h.on_chunk(signal);
-        }
-    }
-
-    fn emit_seek_signal(&self, outcome: &DecoderSeekOutcome) {
-        let Some(hooks) = self.hooks.as_ref() else {
-            return;
-        };
-        let signal = match outcome {
-            DecoderSeekOutcome::Landed { landed_byte, .. } => ReaderSeekSignal::Landed {
-                landed_byte: *landed_byte,
-            },
-            DecoderSeekOutcome::PastEof { .. } => ReaderSeekSignal::PastEof,
-        };
-        if let Ok(mut h) = hooks.lock() {
-            h.on_seek(signal);
         }
     }
 
@@ -159,6 +130,35 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
             source_bytes,
         };
         PcmChunk::new(meta, buf)
+    }
+
+    fn emit_chunk_signal(&self, outcome: &DecoderChunkOutcome) {
+        let Some(hooks) = self.hooks.as_ref() else {
+            return;
+        };
+        let signal = match outcome {
+            DecoderChunkOutcome::Chunk(_) => ReaderChunkSignal::Chunk,
+            DecoderChunkOutcome::Pending(reason) => ReaderChunkSignal::Pending(*reason),
+            DecoderChunkOutcome::Eof => ReaderChunkSignal::Eof,
+        };
+        if let Ok(mut h) = hooks.lock() {
+            h.on_chunk(signal);
+        }
+    }
+
+    fn emit_seek_signal(&self, outcome: &DecoderSeekOutcome) {
+        let Some(hooks) = self.hooks.as_ref() else {
+            return;
+        };
+        let signal = match outcome {
+            DecoderSeekOutcome::Landed { landed_byte, .. } => ReaderSeekSignal::Landed {
+                landed_byte: *landed_byte,
+            },
+            DecoderSeekOutcome::PastEof { .. } => ReaderSeekSignal::PastEof,
+        };
+        if let Ok(mut h) = hooks.lock() {
+            h.on_seek(signal);
+        }
     }
 
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -448,19 +448,16 @@ mod hook_tests {
     /// hook tests can construct a `UniversalDecoder` without needing a real
     /// container/codec.
     struct StubDemuxer {
-        next: Vec<StubOutcome>,
-        seek: Vec<DemuxSeekOutcome>,
         track: TrackInfo,
         /// Current frame's owned bytes — live so the returned
         /// `Frame<'_>` slice has somewhere to point. Replaced on each
         /// `next_frame` call.
         held: Vec<u8>,
+        next: Vec<StubOutcome>,
+        seek: Vec<DemuxSeekOutcome>,
     }
 
     impl Demuxer for StubDemuxer {
-        fn track_info(&self) -> &TrackInfo {
-            &self.track
-        }
         fn duration(&self) -> Option<Duration> {
             None
         }
@@ -487,6 +484,9 @@ mod hook_tests {
                 duration: Duration::ZERO,
             }))
         }
+        fn track_info(&self) -> &TrackInfo {
+            &self.track
+        }
     }
 
     struct StubCodec {
@@ -494,9 +494,6 @@ mod hook_tests {
     }
 
     impl FrameCodec for StubCodec {
-        fn open(_track: &TrackInfo) -> DecodeResult<Self> {
-            unreachable!("stub codec is hand-built")
-        }
         fn decode_frame(
             &mut self,
             _bytes: &[u8],
@@ -513,6 +510,9 @@ mod hook_tests {
             Ok(1)
         }
         fn flush(&mut self) {}
+        fn open(_track: &TrackInfo) -> DecodeResult<Self> {
+            unreachable!("stub codec is hand-built")
+        }
         fn spec(&self) -> PcmSpec {
             self.spec
         }
@@ -646,9 +646,6 @@ mod pool_budget_tests {
     }
 
     impl FrameCodec for ConstFrameCodec {
-        fn open(_track: &TrackInfo) -> DecodeResult<Self> {
-            unreachable!("hand-built")
-        }
         fn decode_frame(
             &mut self,
             _bytes: &[u8],
@@ -665,6 +662,9 @@ mod pool_budget_tests {
             Ok(self.frames_per_call)
         }
         fn flush(&mut self) {}
+        fn open(_track: &TrackInfo) -> DecodeResult<Self> {
+            unreachable!("hand-built")
+        }
         fn spec(&self) -> PcmSpec {
             self.spec
         }

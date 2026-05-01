@@ -103,28 +103,28 @@ pub struct PackagedEncodeRequest<'a> {
 
 #[derive(Debug, Clone)]
 pub struct EncodedBytes {
-    pub bytes: Vec<u8>,
     pub content_type: &'static str,
     pub media_info: MediaInfo,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EncodedAccessUnit {
     pub bytes: Vec<u8>,
-    pub pts: u64,
-    pub dts: u64,
-    pub duration: u32,
     pub is_sync: bool,
+    pub duration: u32,
+    pub dts: u64,
+    pub pts: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct EncodedTrack {
     pub media_info: MediaInfo,
+    pub access_units: Vec<EncodedAccessUnit>,
+    pub codec_config: Vec<u8>,
     pub timescale: u32,
     pub bit_rate: u64,
-    pub codec_config: Vec<u8>,
     pub packets_per_segment: usize,
-    pub access_units: Vec<EncodedAccessUnit>,
 }
 
 #[cfg(test)]

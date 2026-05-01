@@ -32,13 +32,13 @@ const INDEX_INITIAL_SIZE: u64 = 4096;
 /// Each `DiskAssetStore` is scoped to a single `asset_root`.
 #[derive(Clone, Debug)]
 pub struct DiskAssetStore {
-    root_dir: PathBuf,
-    asset_root: String,
-    cancel: CancellationToken,
-    availability: AvailabilityIndex,
     /// Single canonical removal channel. Synchronises FS deletion with
     /// the [`AvailabilityIndex`]. See [`crate::deleter`] module docs.
     deleter: Arc<dyn AssetDeleter>,
+    availability: AvailabilityIndex,
+    cancel: CancellationToken,
+    root_dir: PathBuf,
+    asset_root: String,
 }
 
 /// Disk-backed [`AssetDeleter`].
@@ -55,10 +55,10 @@ pub struct DiskAssetStore {
 /// [`crate::deleter`] for normative wording.
 #[derive(Debug)]
 pub(crate) struct DiskAssetDeleter {
-    root_dir: PathBuf,
     availability: AvailabilityIndex,
-    pins: crate::index::PinsIndex,
     lru: crate::index::LruIndex,
+    root_dir: PathBuf,
+    pins: crate::index::PinsIndex,
 }
 
 impl DiskAssetDeleter {
@@ -69,15 +69,28 @@ impl DiskAssetDeleter {
         lru: crate::index::LruIndex,
     ) -> Self {
         Self {
-            root_dir,
             availability,
-            pins,
             lru,
+            root_dir,
+            pins,
         }
     }
 }
 
 impl AssetDeleter for DiskAssetDeleter {
+    fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
+        // Asset-level removal: FS + every index that ties state to
+        // this asset_root must be cleared. We attempt **all** of
+        // them even on partial failure so the index that did manage
+        // to update isn't left out of sync; the first error wins
+        // for the return value.
+        let fs_result = delete_asset_dir(&self.root_dir, asset_root).map_err(AssetsError::from);
+        self.availability.clear_root(asset_root);
+        let pins_result = self.pins.remove(asset_root).map(|_| ());
+        let lru_result = self.lru.remove(asset_root);
+        fs_result.and(pins_result).and(lru_result)
+    }
+
     fn remove_resource(&self, asset_root: &str, key: &ResourceKey) -> AssetsResult<()> {
         let path = match key {
             ResourceKey::Relative(rel) => {
@@ -97,19 +110,6 @@ impl AssetDeleter for DiskAssetDeleter {
         // so they are untouched by a single-resource removal.
         self.availability.remove(asset_root, key);
         result
-    }
-
-    fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
-        // Asset-level removal: FS + every index that ties state to
-        // this asset_root must be cleared. We attempt **all** of
-        // them even on partial failure so the index that did manage
-        // to update isn't left out of sync; the first error wins
-        // for the return value.
-        let fs_result = delete_asset_dir(&self.root_dir, asset_root).map_err(AssetsError::from);
-        self.availability.clear_root(asset_root);
-        let pins_result = self.pins.remove(asset_root).map(|_| ());
-        let lru_result = self.lru.remove(asset_root);
-        fs_result.and(pins_result).and(lru_result)
     }
 }
 
@@ -143,66 +143,9 @@ impl DiskAssetStore {
         Self::with_availability_and_deleter(root_dir, asset_root, cancel, availability, deleter)
     }
 
-    /// Like [`DiskAssetStore::new`] but shares the given aggregate
-    /// availability handle. Observer callbacks fired by this store's
-    /// resources mutate the shared handle, so queries through the
-    /// owning [`crate::AssetStore`] see the updates immediately.
-    ///
-    /// Disk persistence (load + later flush) is driven by
-    /// [`AvailabilityIndex::enable_persistence`], which the production
-    /// builder calls before constructing the store. Without it, the
-    /// aggregate stays in-memory only.
-    ///
-    /// The `deleter` parameter is the canonical removal channel —
-    /// every path that physically deletes a resource (own or foreign)
-    /// goes through it, see [`crate::deleter`]. Production callers
-    /// share one [`Arc<dyn AssetDeleter>`] between the store and the
-    /// LRU evictor; tests construct a fresh deleter via
-    /// [`Self::new`].
-    pub(crate) fn with_availability_and_deleter<P: Into<PathBuf>, S: Into<String>>(
-        root_dir: P,
-        asset_root: S,
-        cancel: CancellationToken,
-        availability: AvailabilityIndex,
-        deleter: Arc<dyn AssetDeleter>,
-    ) -> Self {
-        Self {
-            root_dir: root_dir.into(),
-            asset_root: asset_root.into(),
-            cancel,
-            availability,
-            deleter,
-        }
-    }
-
-    #[must_use]
-    pub fn root_dir(&self) -> &Path {
-        &self.root_dir
-    }
-
     #[must_use]
     pub fn asset_root(&self) -> &str {
         &self.asset_root
-    }
-
-    fn resource_path(&self, key: &ResourceKey) -> AssetsResult<PathBuf> {
-        match key {
-            ResourceKey::Relative(rel) => {
-                let asset_root =
-                    sanitize_rel(&self.asset_root).map_err(|()| AssetsError::InvalidKey)?;
-                let rel_path = sanitize_rel(rel).map_err(|()| AssetsError::InvalidKey)?;
-                Ok(self.root_dir.join(asset_root).join(rel_path))
-            }
-            ResourceKey::Absolute(path) => Ok(path.clone()),
-        }
-    }
-
-    fn pins_index_path(&self) -> PathBuf {
-        self.root_dir.join("_index").join("pins.bin")
-    }
-
-    fn lru_index_path(&self) -> PathBuf {
-        self.root_dir.join("_index").join("lru.bin")
     }
 
     /// Persist the current [`AvailabilityIndex`] snapshot to
@@ -220,54 +163,8 @@ impl DiskAssetStore {
         self.availability.flush()
     }
 
-    fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
-        crate::index::ScopedAvailabilityObserver::new(
-            self.asset_root.clone(),
-            key.clone(),
-            self.availability.clone(),
-        )
-    }
-
-    fn open_storage_resource(
-        &self,
-        key: &ResourceKey,
-        path: PathBuf,
-        mode: OpenMode,
-    ) -> AssetsResult<MmapResource> {
-        let resource = Resource::open_with_observer(
-            self.cancel.clone(),
-            MmapOptions {
-                path,
-                initial_len: None,
-                mode,
-            },
-            Some(self.scoped_observer(key)),
-        )?;
-        // Seed aggregate from the driver's initial state for files
-        // already committed on disk. `MmapDriver::open` populates
-        // `available = 0..file_len` for existing files, so a caller
-        // that never goes through `write_at` / `commit` (e.g. a
-        // pre-existing packaged fixture) would otherwise be invisible
-        // to `AssetStore::contains_range`. Closes landmine L2 for
-        // everything that flows through this open path.
-        if let ResourceStatus::Committed {
-            final_len: Some(len),
-        } = resource.status()
-        {
-            self.availability.record_commit(&self.asset_root, key, len);
-        }
-        Ok(resource)
-    }
-
-    fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
-        Ok(Resource::open(
-            self.cancel.clone(),
-            MmapOptions {
-                path,
-                initial_len: Some(INDEX_INITIAL_SIZE),
-                mode: OpenMode::ReadWrite,
-            },
-        )?)
+    fn lru_index_path(&self) -> PathBuf {
+        self.root_dir.join("_index").join("lru.bin")
     }
 
     /// Open a fresh segment as an `AtomicChunked<MmapResource>`. The
@@ -309,44 +206,115 @@ impl DiskAssetStore {
         })?;
         Ok(chunked)
     }
-}
 
-impl Assets for DiskAssetStore {
-    type Res = StorageResource;
-    type Context = ();
-    type IndexRes = MmapResource;
+    fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
+        Ok(Resource::open(
+            self.cancel.clone(),
+            MmapOptions {
+                path,
+                initial_len: Some(INDEX_INITIAL_SIZE),
+                mode: OpenMode::ReadWrite,
+            },
+        )?)
+    }
 
-    fn capabilities(&self) -> Capabilities {
-        if self.asset_root.is_empty() {
-            // Local-file mode: absolute keys only, no decorators.
-            Capabilities::PROCESSING
-        } else {
-            Capabilities::all()
+    fn open_storage_resource(
+        &self,
+        key: &ResourceKey,
+        path: PathBuf,
+        mode: OpenMode,
+    ) -> AssetsResult<MmapResource> {
+        let resource = Resource::open_with_observer(
+            self.cancel.clone(),
+            MmapOptions {
+                path,
+                initial_len: None,
+                mode,
+            },
+            Some(self.scoped_observer(key)),
+        )?;
+        // Seed aggregate from the driver's initial state for files
+        // already committed on disk. `MmapDriver::open` populates
+        // `available = 0..file_len` for existing files, so a caller
+        // that never goes through `write_at` / `commit` (e.g. a
+        // pre-existing packaged fixture) would otherwise be invisible
+        // to `AssetStore::contains_range`. Closes landmine L2 for
+        // everything that flows through this open path.
+        if let ResourceStatus::Committed {
+            final_len: Some(len),
+        } = resource.status()
+        {
+            self.availability.record_commit(&self.asset_root, key, len);
+        }
+        Ok(resource)
+    }
+
+    fn pins_index_path(&self) -> PathBuf {
+        self.root_dir.join("_index").join("pins.bin")
+    }
+
+    fn resource_path(&self, key: &ResourceKey) -> AssetsResult<PathBuf> {
+        match key {
+            ResourceKey::Relative(rel) => {
+                let asset_root =
+                    sanitize_rel(&self.asset_root).map_err(|()| AssetsError::InvalidKey)?;
+                let rel_path = sanitize_rel(rel).map_err(|()| AssetsError::InvalidKey)?;
+                Ok(self.root_dir.join(asset_root).join(rel_path))
+            }
+            ResourceKey::Absolute(path) => Ok(path.clone()),
         }
     }
 
-    fn root_dir(&self) -> &Path {
+    #[must_use]
+    pub fn root_dir(&self) -> &Path {
         &self.root_dir
     }
 
-    fn asset_root(&self) -> &str {
-        &self.asset_root
+    fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
+        crate::index::ScopedAvailabilityObserver::new(
+            self.asset_root.clone(),
+            key.clone(),
+            self.availability.clone(),
+        )
     }
 
-    fn open_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        _ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        let path = self.resource_path(key)?;
-        if !path.exists() {
-            return Err(IoError::new(ErrorKind::NotFound, "resource missing").into());
+    /// Like [`DiskAssetStore::new`] but shares the given aggregate
+    /// availability handle. Observer callbacks fired by this store's
+    /// resources mutate the shared handle, so queries through the
+    /// owning [`crate::AssetStore`] see the updates immediately.
+    ///
+    /// Disk persistence (load + later flush) is driven by
+    /// [`AvailabilityIndex::enable_persistence`], which the production
+    /// builder calls before constructing the store. Without it, the
+    /// aggregate stays in-memory only.
+    ///
+    /// The `deleter` parameter is the canonical removal channel —
+    /// every path that physically deletes a resource (own or foreign)
+    /// goes through it, see [`crate::deleter`]. Production callers
+    /// share one [`Arc<dyn AssetDeleter>`] between the store and the
+    /// LRU evictor; tests construct a fresh deleter via
+    /// [`Self::new`].
+    pub(crate) fn with_availability_and_deleter<P: Into<PathBuf>, S: Into<String>>(
+        root_dir: P,
+        asset_root: S,
+        cancel: CancellationToken,
+        availability: AvailabilityIndex,
+        deleter: Arc<dyn AssetDeleter>,
+    ) -> Self {
+        Self {
+            root_dir: root_dir.into(),
+            asset_root: asset_root.into(),
+            cancel,
+            availability,
+            deleter,
         }
-        // Re-open of an already-committed resource: passthrough mode
-        // (no atomicity needed — bytes are durable on disk).
-        let mmap = self.open_storage_resource(key, path, OpenMode::ReadOnly)?;
-        Ok(mmap.into())
     }
+}
+
+impl Assets for DiskAssetStore {
+    type Context = ();
+    type IndexRes = MmapResource;
+    type Res = StorageResource;
 
     fn acquire_resource_with_ctx(
         &self,
@@ -374,24 +342,16 @@ impl Assets for DiskAssetStore {
         Ok(StorageResource::from(chunked))
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<MmapResource> {
-        let path = self.pins_index_path();
-        self.open_index_resource(path)
+    fn asset_root(&self) -> &str {
+        &self.asset_root
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<MmapResource> {
-        let path = self.lru_index_path();
-        self.open_index_resource(path)
-    }
-
-    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        let path = self.resource_path(key)?;
-        match fs::metadata(path) {
-            Ok(metadata) => Ok(AssetResourceState::Committed {
-                final_len: Some(metadata.len()),
-            }),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(AssetResourceState::Missing),
-            Err(error) => Err(error.into()),
+    fn capabilities(&self) -> Capabilities {
+        if self.asset_root.is_empty() {
+            // Local-file mode: absolute keys only, no decorators.
+            Capabilities::PROCESSING
+        } else {
+            Capabilities::all()
         }
     }
 
@@ -406,9 +366,49 @@ impl Assets for DiskAssetStore {
         self.deleter.delete_asset(&self.asset_root)
     }
 
+    fn open_lru_index_resource(&self) -> AssetsResult<MmapResource> {
+        let path = self.lru_index_path();
+        self.open_index_resource(path)
+    }
+
+    fn open_pins_index_resource(&self) -> AssetsResult<MmapResource> {
+        let path = self.pins_index_path();
+        self.open_index_resource(path)
+    }
+
+    fn open_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        _ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        let path = self.resource_path(key)?;
+        if !path.exists() {
+            return Err(IoError::new(ErrorKind::NotFound, "resource missing").into());
+        }
+        // Re-open of an already-committed resource: passthrough mode
+        // (no atomicity needed — bytes are durable on disk).
+        let mmap = self.open_storage_resource(key, path, OpenMode::ReadOnly)?;
+        Ok(mmap.into())
+    }
+
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
         // Single canonical removal channel, see `delete_asset` above.
         self.deleter.remove_resource(&self.asset_root, key)
+    }
+
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        let path = self.resource_path(key)?;
+        match fs::metadata(path) {
+            Ok(metadata) => Ok(AssetResourceState::Committed {
+                final_len: Some(metadata.len()),
+            }),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(AssetResourceState::Missing),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn root_dir(&self) -> &Path {
+        &self.root_dir
     }
 }
 

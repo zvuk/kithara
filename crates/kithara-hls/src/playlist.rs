@@ -18,14 +18,14 @@ use crate::{
 /// Per-segment parsed data (from media playlist).
 #[derive(Debug, Clone)]
 pub struct SegmentState {
-    /// Segment index within the variant's media playlist.
-    pub index: SegmentIndex,
-    /// Absolute URL of the segment.
-    pub url: Url,
     /// Duration of the segment.
     pub duration: Duration,
     /// Encryption key for this segment (if encrypted).
     pub key: Option<SegmentKey>,
+    /// Segment index within the variant's media playlist.
+    pub index: SegmentIndex,
+    /// Absolute URL of the segment.
+    pub url: Url,
 }
 
 /// Per-variant size information (from HEAD requests or download).
@@ -35,11 +35,11 @@ pub struct SegmentState {
 /// size into the segment-0 total.
 #[derive(Debug, Clone)]
 pub struct VariantSizeMap {
+    /// Cumulative byte offsets. `offsets[0]` = 0, `offsets[i]` = sum of `segment_sizes[0..i]`.
+    pub offsets: Vec<u64>,
     /// Per-segment total sizes in bytes. `segment_sizes[0]` includes the
     /// init segment size for fMP4 variants.
     pub segment_sizes: Vec<u64>,
-    /// Cumulative byte offsets. `offsets[0]` = 0, `offsets[i]` = sum of `segment_sizes[0..i]`.
-    pub offsets: Vec<u64>,
     /// Total size of the variant (init + all segments).
     pub total: u64,
 }
@@ -47,10 +47,6 @@ pub struct VariantSizeMap {
 /// Per-variant parsed data.
 #[derive(Debug)]
 pub struct VariantState {
-    /// Variant index in the master playlist.
-    pub id: VariantIndex,
-    /// Absolute URL of the variant's media playlist.
-    pub uri: Url,
     /// Advertised bandwidth in bits per second.
     pub bandwidth: Option<u64>,
     /// Audio codec (parsed from CODECS attribute).
@@ -59,10 +55,14 @@ pub struct VariantState {
     pub container: Option<ContainerFormat>,
     /// Absolute URL of the init segment (fMP4 only).
     pub init_url: Option<Url>,
-    /// Parsed segments from the media playlist.
-    pub segments: Vec<SegmentState>,
     /// Size map (populated after HEAD requests or first download).
     pub size_map: Option<VariantSizeMap>,
+    /// Absolute URL of the variant's media playlist.
+    pub uri: Url,
+    /// Variant index in the master playlist.
+    pub id: VariantIndex,
+    /// Parsed segments from the media playlist.
+    pub segments: Vec<SegmentState>,
 }
 
 // PlaylistState

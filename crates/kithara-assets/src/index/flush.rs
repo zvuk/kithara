@@ -56,7 +56,6 @@ use crate::error::AssetsResult;
 /// clear pending work. `flush()` must be idempotent — replaying after a
 /// successful flush should be a no-op or write the same bytes.
 pub(crate) trait Flushable: Send + Sync {
-    fn name(&self) -> &'static str;
     fn dirty(&self) -> &AtomicBool;
     /// Best-effort flush. Atomic at the directory-entry level (POSIX
     /// rename), but does NOT `sync_data` — payload pages may still be
@@ -74,6 +73,7 @@ pub(crate) trait Flushable: Send + Sync {
     fn flush_durable(&self) -> AssetsResult<()> {
         self.flush()
     }
+    fn name(&self) -> &'static str;
 }
 
 /// Tunables for [`FlushHub`].
@@ -84,14 +84,14 @@ pub struct FlushPolicy {
     /// produces a single flush. Ignored when `force_every_n_ops` is
     /// reached.
     pub debounce: Duration,
+    /// Cancel-token poll interval. The worker wakes from `cv.wait_for`
+    /// at least this often to check for shutdown.
+    pub poll_interval: Duration,
     /// Cap on coalescing: if `signal()` is called this many times
     /// without a flush, the worker bypasses `debounce` and flushes
     /// immediately. Protects against sustained bursts that would
     /// otherwise grow the in-memory backlog without bound.
     pub force_every_n_ops: NonZeroUsize,
-    /// Cancel-token poll interval. The worker wakes from `cv.wait_for`
-    /// at least this often to check for shutdown.
-    pub poll_interval: Duration,
 }
 
 impl Default for FlushPolicy {
@@ -123,11 +123,11 @@ struct HubState {
 /// See module docs for the worker / sync-fallback semantics.
 pub struct FlushHub {
     cancel: CancellationToken,
-    policy: FlushPolicy,
-    state: Mutex<HubState>,
     cv: Condvar,
+    policy: FlushPolicy,
     flush_lock: Mutex<()>,
     sources: Mutex<Vec<Weak<dyn Flushable>>>,
+    state: Mutex<HubState>,
     worker: OnceLock<JoinHandle<()>>,
 }
 
@@ -145,85 +145,6 @@ impl FlushHub {
             sources: Mutex::new(Vec::new()),
             worker: OnceLock::new(),
         })
-    }
-
-    /// Convenience: [`Self::new`] followed by [`Self::start_worker`].
-    #[must_use]
-    pub fn with_worker(cancel: CancellationToken, policy: FlushPolicy) -> Arc<Self> {
-        let hub = Self::new(cancel, policy);
-        hub.start_worker();
-        hub
-    }
-
-    /// Spawn the background flush worker (idempotent). Subsequent
-    /// `signal()` calls coalesce mutations through `policy.debounce`
-    /// before flushing.
-    pub fn start_worker(self: &Arc<Self>) {
-        let hub = Arc::clone(self);
-        self.worker
-            .get_or_init(|| spawn_named("kithara-flush-hub", move || hub.run()));
-    }
-
-    /// Whether a background worker is attached.
-    #[must_use]
-    pub fn has_worker(&self) -> bool {
-        self.worker.get().is_some()
-    }
-
-    /// Register an index for background-driven flushing. The hub holds
-    /// a `Weak`: if the index is dropped, the slot is GC'd on the next
-    /// `flush_dirty` pass.
-    pub(crate) fn register(self: &Arc<Self>, source: Weak<dyn Flushable>) {
-        self.sources.lock_sync().push(source);
-    }
-
-    /// Count registered sources whose owning index is still alive.
-    ///
-    /// Drops dead `Weak` entries while counting, so this is also the
-    /// canonical way to verify that a destroyed `AssetStore` was GC'd
-    /// from the registry.
-    #[must_use]
-    pub fn live_source_count(&self) -> usize {
-        let mut g = self.sources.lock_sync();
-        g.retain(|w| w.strong_count() > 0);
-        g.len()
-    }
-
-    /// Wake the worker. Bumps the operation counter so a sustained
-    /// burst eventually bypasses the debounce. No-op when no worker is
-    /// attached — the helper [`signal_or_flush_sync`] is the canonical
-    /// entry point for mutators and routes through `flush_now()`
-    /// instead.
-    pub(crate) fn signal(self: &Arc<Self>) {
-        {
-            let mut s = self.state.lock_sync();
-            s.pending = true;
-            s.op_count = s.op_count.saturating_add(1);
-        }
-        self.cv.notify_one();
-    }
-
-    /// Synchronously flush every dirty source. Serialises with the
-    /// worker through `flush_lock`, so concurrent worker invocations
-    /// see the same dirty set exactly once.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first per-source flush error encountered (others
-    /// are logged through `tracing::warn!` and the source's `dirty`
-    /// flag is restored so the next cycle retries).
-    pub fn flush_now(&self) -> AssetsResult<()> {
-        let _g = self.flush_lock.lock_sync();
-        {
-            let mut s = self.state.lock_sync();
-            s.pending = false;
-            s.op_count = 0;
-        }
-        // `flush_now` is the explicit-checkpoint path — caller wants
-        // post-return durability, so route through `flush_durable`
-        // (sync_data + atomic rename). The background worker uses the
-        // cheaper non-durable variant.
-        self.flush_dirty(/* durable */ true)
     }
 
     fn flush_dirty(&self, durable: bool) -> AssetsResult<()> {
@@ -255,6 +176,54 @@ impl FlushHub {
             }
         }
         first_err.map_or(Ok(()), Err)
+    }
+
+    /// Synchronously flush every dirty source. Serialises with the
+    /// worker through `flush_lock`, so concurrent worker invocations
+    /// see the same dirty set exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first per-source flush error encountered (others
+    /// are logged through `tracing::warn!` and the source's `dirty`
+    /// flag is restored so the next cycle retries).
+    pub fn flush_now(&self) -> AssetsResult<()> {
+        let _g = self.flush_lock.lock_sync();
+        {
+            let mut s = self.state.lock_sync();
+            s.pending = false;
+            s.op_count = 0;
+        }
+        // `flush_now` is the explicit-checkpoint path — caller wants
+        // post-return durability, so route through `flush_durable`
+        // (sync_data + atomic rename). The background worker uses the
+        // cheaper non-durable variant.
+        self.flush_dirty(/* durable */ true)
+    }
+
+    /// Whether a background worker is attached.
+    #[must_use]
+    pub fn has_worker(&self) -> bool {
+        self.worker.get().is_some()
+    }
+
+    /// Count registered sources whose owning index is still alive.
+    ///
+    /// Drops dead `Weak` entries while counting, so this is also the
+    /// canonical way to verify that a destroyed `AssetStore` was GC'd
+    /// from the registry.
+    #[must_use]
+    pub fn live_source_count(&self) -> usize {
+        let mut g = self.sources.lock_sync();
+        g.retain(|w| w.strong_count() > 0);
+        g.len()
+    }
+
+    /// Register an index for background-driven flushing. The hub holds
+    /// a `Weak`: if the index is dropped, the slot is GC'd on the next
+    /// `flush_dirty` pass.
+    pub(crate) fn register(self: &Arc<Self>, source: Weak<dyn Flushable>) {
+        self.sources.lock_sync().push(source);
     }
 
     fn run(self: Arc<Self>) {
@@ -314,6 +283,37 @@ impl FlushHub {
             // explicit `flush_now` (= `checkpoint()`) caller.
             let _ = self.flush_dirty(/* durable */ false);
         }
+    }
+
+    /// Wake the worker. Bumps the operation counter so a sustained
+    /// burst eventually bypasses the debounce. No-op when no worker is
+    /// attached — the helper [`signal_or_flush_sync`] is the canonical
+    /// entry point for mutators and routes through `flush_now()`
+    /// instead.
+    pub(crate) fn signal(self: &Arc<Self>) {
+        {
+            let mut s = self.state.lock_sync();
+            s.pending = true;
+            s.op_count = s.op_count.saturating_add(1);
+        }
+        self.cv.notify_one();
+    }
+
+    /// Spawn the background flush worker (idempotent). Subsequent
+    /// `signal()` calls coalesce mutations through `policy.debounce`
+    /// before flushing.
+    pub fn start_worker(self: &Arc<Self>) {
+        let hub = Arc::clone(self);
+        self.worker
+            .get_or_init(|| spawn_named("kithara-flush-hub", move || hub.run()));
+    }
+
+    /// Convenience: [`Self::new`] followed by [`Self::start_worker`].
+    #[must_use]
+    pub fn with_worker(cancel: CancellationToken, policy: FlushPolicy) -> Arc<Self> {
+        let hub = Self::new(cancel, policy);
+        hub.start_worker();
+        hub
     }
 }
 
@@ -377,8 +377,8 @@ mod tests {
     struct CountingSource {
         name: &'static str,
         dirty: AtomicBool,
-        flushes: AtomicUsize,
         durable_flushes: AtomicUsize,
+        flushes: AtomicUsize,
     }
 
     impl CountingSource {
@@ -391,19 +391,16 @@ mod tests {
             })
         }
 
-        fn flush_count(&self) -> usize {
-            self.flushes.load(Ordering::Acquire)
-        }
-
         fn durable_flush_count(&self) -> usize {
             self.durable_flushes.load(Ordering::Acquire)
+        }
+
+        fn flush_count(&self) -> usize {
+            self.flushes.load(Ordering::Acquire)
         }
     }
 
     impl Flushable for CountingSource {
-        fn name(&self) -> &'static str {
-            self.name
-        }
         fn dirty(&self) -> &AtomicBool {
             &self.dirty
         }
@@ -414,6 +411,9 @@ mod tests {
         fn flush_durable(&self) -> AssetsResult<()> {
             self.durable_flushes.fetch_add(1, Ordering::AcqRel);
             Ok(())
+        }
+        fn name(&self) -> &'static str {
+            self.name
         }
     }
 

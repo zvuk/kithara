@@ -6,11 +6,11 @@
 /// observed in Instruments traces (512 ms / 30 s).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SubscriptionConfig {
+    /// Global keyboard listener for Delete/Backspace shortcuts.
+    pub keyboard: bool,
     /// Time tick interval in milliseconds that drives position/state sync
     /// with the queue. Lower interval = more responsive but more CPU.
     pub tick_interval_ms: u64,
-    /// Global keyboard listener for Delete/Backspace shortcuts.
-    pub keyboard: bool,
 }
 
 /// Time-tick interval while a track is actively playing.

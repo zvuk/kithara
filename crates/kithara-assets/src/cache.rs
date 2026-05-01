@@ -20,9 +20,9 @@ use crate::{
 /// LRU cache so it is never evicted.
 #[derive(Clone)]
 pub struct CachedResource<R> {
+    pinned: Arc<Mutex<HashSet<ResourceKey>>>,
     inner: R,
     key: ResourceKey,
-    pinned: Arc<Mutex<HashSet<ResourceKey>>>,
 }
 
 impl<R: fmt::Debug> fmt::Debug for CachedResource<R> {
@@ -32,14 +32,10 @@ impl<R: fmt::Debug> fmt::Debug for CachedResource<R> {
 }
 
 impl<R> CachedResource<R> {
-    /// Pin this resource in the LRU cache (by-ref, for use inside wrappers).
-    pub(crate) fn set_retained(&self) {
-        self.pinned.lock_sync().insert(self.key.clone());
-    }
-
-    /// Unpin this resource (by-ref, for use inside wrappers).
-    pub(crate) fn set_released(&self) {
-        self.pinned.lock_sync().remove(&self.key);
+    /// Unpin this resource, making it eligible for LRU eviction.
+    pub fn release(self) -> Self {
+        self.set_released();
+        self
     }
 
     /// Pin this resource in the LRU cache. It will not be evicted
@@ -49,10 +45,14 @@ impl<R> CachedResource<R> {
         self
     }
 
-    /// Unpin this resource, making it eligible for LRU eviction.
-    pub fn release(self) -> Self {
-        self.set_released();
-        self
+    /// Unpin this resource (by-ref, for use inside wrappers).
+    pub(crate) fn set_released(&self) {
+        self.pinned.lock_sync().remove(&self.key);
+    }
+
+    /// Pin this resource in the LRU cache (by-ref, for use inside wrappers).
+    pub(crate) fn set_retained(&self) {
+        self.pinned.lock_sync().insert(self.key.clone());
     }
 }
 
@@ -118,10 +118,10 @@ where
     A: Assets,
 {
     inner: Arc<A>,
-    cache: SharedCache<A>,
     pinned: Arc<Mutex<HashSet<ResourceKey>>>,
     capacity: NonZeroUsize,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
+    cache: SharedCache<A>,
 }
 
 impl<A> fmt::Debug for CachedAssets<A>
@@ -154,46 +154,43 @@ where
         }
     }
 
-    #[must_use]
-    pub fn inner(&self) -> &A {
-        &self.inner
-    }
-
-    fn is_active(&self) -> bool {
-        self.inner.capabilities().contains(Capabilities::CACHE)
-    }
-
-    fn wrap(&self, key: &ResourceKey, inner: A::Res) -> CachedResource<A::Res> {
-        CachedResource {
-            inner,
-            key: key.clone(),
-            pinned: Arc::clone(&self.pinned),
-        }
-    }
-
-    fn open_index_resource<F>(
+    fn cache_entry(
         &self,
-        cache_key: CacheKey<A::Context>,
-        load: F,
-    ) -> AssetsResult<A::IndexRes>
-    where
-        F: FnOnce() -> AssetsResult<A::IndexRes>,
-    {
-        if !self.is_active() {
-            return load();
+        cache: &mut CacheMap<A>,
+        key: CacheKey<A::Context>,
+        entry: CacheEntry<A::Res, A::IndexRes>,
+    ) -> Vec<ResourceKey> {
+        let mut invalidated = Vec::new();
+
+        let effective = self.capacity.get() + self.pinned_cache_count(cache);
+
+        while cache.len() >= effective {
+            let Some((displaced_key, displaced_entry)) = self.pop_evictable(cache) else {
+                break;
+            };
+            if let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(_)) =
+                (displaced_key, displaced_entry)
+            {
+                invalidated.push(resource_key);
+            }
         }
 
-        let mut cache = self.cache.lock_sync();
-
-        if let Some(CacheEntry::Index(res)) = cache.peek(&cache_key) {
-            return Ok(res.clone());
+        // Grow underlying LRU storage when pinned entries push the
+        // actual count beyond `lru::LruCache::cap()`.
+        if cache.len() >= cache.cap().get() {
+            let grow = NonZeroUsize::new(cache.len() + 1)
+                .expect("cache overflow capacity must stay non-zero");
+            cache.resize(grow);
         }
 
-        let res = load()?;
-        let _ = self.cache_entry(&mut cache, cache_key, CacheEntry::Index(res.clone()));
-        drop(cache);
+        if let Some((displaced_key, displaced_entry)) = cache.push(key, entry)
+            && let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(_)) =
+                (displaced_key, displaced_entry)
+        {
+            invalidated.push(resource_key);
+        }
 
-        Ok(res)
+        invalidated
     }
 
     fn cached_state(&self, key: &ResourceKey) -> Option<AssetResourceState> {
@@ -250,11 +247,22 @@ where
         committed
     }
 
-    fn is_protected_resource(entry: &CacheEntry<A::Res, A::IndexRes>) -> bool {
+    /// Compatibility helper for callers that only care about committed resources.
+    #[must_use]
+    pub fn has_resource(&self, key: &ResourceKey) -> bool {
         matches!(
-            entry,
-            CacheEntry::Resource(res) if matches!(res.status(), ResourceStatus::Active)
+            self.resource_state(key),
+            Ok(AssetResourceState::Committed { .. })
         )
+    }
+
+    #[must_use]
+    pub fn inner(&self) -> &A {
+        &self.inner
+    }
+
+    fn is_active(&self) -> bool {
+        self.inner.capabilities().contains(Capabilities::CACHE)
     }
 
     fn is_pinned_key(&self, key: &CacheKey<A::Context>) -> bool {
@@ -262,6 +270,49 @@ where
             CacheKey::Resource(resource_key, _) => self.pinned.lock_sync().contains(resource_key),
             _ => false,
         }
+    }
+
+    fn is_protected_resource(entry: &CacheEntry<A::Res, A::IndexRes>) -> bool {
+        matches!(
+            entry,
+            CacheEntry::Resource(res) if matches!(res.status(), ResourceStatus::Active)
+        )
+    }
+
+    fn open_index_resource<F>(
+        &self,
+        cache_key: CacheKey<A::Context>,
+        load: F,
+    ) -> AssetsResult<A::IndexRes>
+    where
+        F: FnOnce() -> AssetsResult<A::IndexRes>,
+    {
+        if !self.is_active() {
+            return load();
+        }
+
+        let mut cache = self.cache.lock_sync();
+
+        if let Some(CacheEntry::Index(res)) = cache.peek(&cache_key) {
+            return Ok(res.clone());
+        }
+
+        let res = load()?;
+        let _ = self.cache_entry(&mut cache, cache_key, CacheEntry::Index(res.clone()));
+        drop(cache);
+
+        Ok(res)
+    }
+
+    fn pinned_cache_count(&self, cache: &CacheMap<A>) -> usize {
+        let pinned = self.pinned.lock_sync();
+        cache
+            .iter()
+            .filter(|(k, e)| {
+                Self::is_protected_resource(e)
+                    || matches!(k, CacheKey::Resource(rk, _) if pinned.contains(rk))
+            })
+            .count()
     }
 
     fn pop_evictable(&self, cache: &mut CacheMap<A>) -> Option<CacheItem<A>> {
@@ -277,63 +328,12 @@ where
         cache.pop(&key).map(|entry| (key, entry))
     }
 
-    fn pinned_cache_count(&self, cache: &CacheMap<A>) -> usize {
-        let pinned = self.pinned.lock_sync();
-        cache
-            .iter()
-            .filter(|(k, e)| {
-                Self::is_protected_resource(e)
-                    || matches!(k, CacheKey::Resource(rk, _) if pinned.contains(rk))
-            })
-            .count()
-    }
-
-    fn cache_entry(
-        &self,
-        cache: &mut CacheMap<A>,
-        key: CacheKey<A::Context>,
-        entry: CacheEntry<A::Res, A::IndexRes>,
-    ) -> Vec<ResourceKey> {
-        let mut invalidated = Vec::new();
-
-        let effective = self.capacity.get() + self.pinned_cache_count(cache);
-
-        while cache.len() >= effective {
-            let Some((displaced_key, displaced_entry)) = self.pop_evictable(cache) else {
-                break;
-            };
-            if let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(_)) =
-                (displaced_key, displaced_entry)
-            {
-                invalidated.push(resource_key);
-            }
+    fn wrap(&self, key: &ResourceKey, inner: A::Res) -> CachedResource<A::Res> {
+        CachedResource {
+            inner,
+            key: key.clone(),
+            pinned: Arc::clone(&self.pinned),
         }
-
-        // Grow underlying LRU storage when pinned entries push the
-        // actual count beyond `lru::LruCache::cap()`.
-        if cache.len() >= cache.cap().get() {
-            let grow = NonZeroUsize::new(cache.len() + 1)
-                .expect("cache overflow capacity must stay non-zero");
-            cache.resize(grow);
-        }
-
-        if let Some((displaced_key, displaced_entry)) = cache.push(key, entry)
-            && let (CacheKey::Resource(resource_key, _), CacheEntry::Resource(_)) =
-                (displaced_key, displaced_entry)
-        {
-            invalidated.push(resource_key);
-        }
-
-        invalidated
-    }
-
-    /// Compatibility helper for callers that only care about committed resources.
-    #[must_use]
-    pub fn has_resource(&self, key: &ResourceKey) -> bool {
-        matches!(
-            self.resource_state(key),
-            Ok(AssetResourceState::Committed { .. })
-        )
     }
 }
 
@@ -341,28 +341,94 @@ impl<A> Assets for CachedAssets<A>
 where
     A: Assets,
 {
-    type Res = CachedResource<A::Res>;
     type Context = A::Context;
     type IndexRes = A::IndexRes;
+    type Res = CachedResource<A::Res>;
 
-    delegate::delegate! {
-        to self.inner {
-            fn capabilities(&self) -> Capabilities;
-            fn root_dir(&self) -> &Path;
-            fn asset_root(&self) -> &str;
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        if !self.is_active() {
+            return Ok(self.wrap(key, self.inner.acquire_resource_with_ctx(key, ctx)?));
         }
+
+        let cache_key = CacheKey::Resource(key.clone(), ctx.clone());
+        let mut cache = self.cache.lock_sync();
+
+        if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
+            // Cache-hit on an already-committed resource must NOT
+            // reactivate: reactivation flips `processed=false` /
+            // `committed=false` on the SHARED `ProcessedResource`,
+            // which poisons any concurrent reader holding a cloned Arc
+            // (reader.read_at fires "processed resource is not readable
+            // before commit" as a hard StorageError::Failed → decoder
+            // FSM → Failed). The already-committed data is exactly what
+            // the caller wants: just return a clone. See
+            // red_test_drm_small_cache_writer_reactivate_poisons_concurrent_reader.
+            //
+            // Only reactivate when the cached resource is not
+            // Committed — that's the legitimate "LRU slot reuse" case.
+            let res = res.clone();
+            if !matches!(res.status(), ResourceStatus::Committed { .. }) {
+                res.reactivate()?;
+            }
+            drop(cache);
+            return Ok(self.wrap(key, res));
+        }
+
+        let res = self.inner.acquire_resource_with_ctx(key, ctx)?;
+        let displaced = self.cache_entry(&mut cache, cache_key, CacheEntry::Resource(res.clone()));
+        let on_invalidated = self.on_invalidated.clone();
+        drop(cache);
+
+        if let Some(cb) = on_invalidated {
+            for displaced_key in displaced {
+                cb(&displaced_key);
+            }
+        }
+
+        Ok(self.wrap(key, res))
     }
 
-    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        if !self.is_active() {
-            return self.inner.resource_state(key);
+    fn delete_asset(&self) -> AssetsResult<()> {
+        // Clear resource caches for this asset (keep index entries)
+        {
+            let mut cache = self.cache.lock_sync();
+
+            // Collect keys to remove (LruCache doesn't have retain())
+            let keys_to_remove: Vec<CacheKey<A::Context>> = cache
+                .iter()
+                .filter_map(|(k, _)| {
+                    if !matches!(
+                        k,
+                        CacheKey::<A::Context>::PinsIndex | CacheKey::<A::Context>::LruIndex
+                    ) {
+                        Some(k.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Remove collected keys
+            for key in keys_to_remove {
+                cache.pop(&key);
+            }
         }
 
-        if let Some(state) = self.cached_state(key) {
-            return Ok(state);
-        }
+        self.inner.delete_asset()
+    }
 
-        self.inner.resource_state(key)
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+        self.open_index_resource(CacheKey::LruIndex, || self.inner.open_lru_index_resource())
+    }
+
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+        self.open_index_resource(CacheKey::PinsIndex, || {
+            self.inner.open_pins_index_resource()
+        })
     }
 
     fn open_resource_with_ctx(
@@ -422,92 +488,6 @@ where
         Ok(self.wrap(key, res))
     }
 
-    fn acquire_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        if !self.is_active() {
-            return Ok(self.wrap(key, self.inner.acquire_resource_with_ctx(key, ctx)?));
-        }
-
-        let cache_key = CacheKey::Resource(key.clone(), ctx.clone());
-        let mut cache = self.cache.lock_sync();
-
-        if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
-            // Cache-hit on an already-committed resource must NOT
-            // reactivate: reactivation flips `processed=false` /
-            // `committed=false` on the SHARED `ProcessedResource`,
-            // which poisons any concurrent reader holding a cloned Arc
-            // (reader.read_at fires "processed resource is not readable
-            // before commit" as a hard StorageError::Failed → decoder
-            // FSM → Failed). The already-committed data is exactly what
-            // the caller wants: just return a clone. See
-            // red_test_drm_small_cache_writer_reactivate_poisons_concurrent_reader.
-            //
-            // Only reactivate when the cached resource is not
-            // Committed — that's the legitimate "LRU slot reuse" case.
-            let res = res.clone();
-            if !matches!(res.status(), ResourceStatus::Committed { .. }) {
-                res.reactivate()?;
-            }
-            drop(cache);
-            return Ok(self.wrap(key, res));
-        }
-
-        let res = self.inner.acquire_resource_with_ctx(key, ctx)?;
-        let displaced = self.cache_entry(&mut cache, cache_key, CacheEntry::Resource(res.clone()));
-        let on_invalidated = self.on_invalidated.clone();
-        drop(cache);
-
-        if let Some(cb) = on_invalidated {
-            for displaced_key in displaced {
-                cb(&displaced_key);
-            }
-        }
-
-        Ok(self.wrap(key, res))
-    }
-
-    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        self.open_index_resource(CacheKey::PinsIndex, || {
-            self.inner.open_pins_index_resource()
-        })
-    }
-
-    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        self.open_index_resource(CacheKey::LruIndex, || self.inner.open_lru_index_resource())
-    }
-
-    fn delete_asset(&self) -> AssetsResult<()> {
-        // Clear resource caches for this asset (keep index entries)
-        {
-            let mut cache = self.cache.lock_sync();
-
-            // Collect keys to remove (LruCache doesn't have retain())
-            let keys_to_remove: Vec<CacheKey<A::Context>> = cache
-                .iter()
-                .filter_map(|(k, _)| {
-                    if !matches!(
-                        k,
-                        CacheKey::<A::Context>::PinsIndex | CacheKey::<A::Context>::LruIndex
-                    ) {
-                        Some(k.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // Remove collected keys
-            for key in keys_to_remove {
-                cache.pop(&key);
-            }
-        }
-
-        self.inner.delete_asset()
-    }
-
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
         // Remove from cache (all contexts)
         {
@@ -528,6 +508,26 @@ where
         // Also unpin when removing
         self.pinned.lock_sync().remove(key);
         self.inner.remove_resource(key)
+    }
+
+    fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        if !self.is_active() {
+            return self.inner.resource_state(key);
+        }
+
+        if let Some(state) = self.cached_state(key) {
+            return Ok(state);
+        }
+
+        self.inner.resource_state(key)
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn capabilities(&self) -> Capabilities;
+            fn root_dir(&self) -> &Path;
+            fn asset_root(&self) -> &str;
+        }
     }
 }
 
@@ -563,20 +563,36 @@ mod tests {
     }
 
     impl Assets for ContextMemStore {
-        type Res = StorageResource;
         type Context = u8;
         type IndexRes = kithara_storage::MemResource;
+        type Res = StorageResource;
+
+        fn acquire_resource_with_ctx(
+            &self,
+            key: &ResourceKey,
+            _ctx: Option<Self::Context>,
+        ) -> AssetsResult<Self::Res> {
+            self.inner.acquire_resource(key)
+        }
+
+        fn asset_root(&self) -> &str {
+            self.inner.asset_root()
+        }
 
         fn capabilities(&self) -> Capabilities {
             self.inner.capabilities()
         }
 
-        fn root_dir(&self) -> &Path {
-            self.inner.root_dir()
+        fn delete_asset(&self) -> AssetsResult<()> {
+            self.inner.delete_asset()
         }
 
-        fn asset_root(&self) -> &str {
-            self.inner.asset_root()
+        fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+            self.inner.open_lru_index_resource()
+        }
+
+        fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+            self.inner.open_pins_index_resource()
         }
 
         fn open_resource_with_ctx(
@@ -587,28 +603,12 @@ mod tests {
             self.inner.open_resource(key)
         }
 
-        fn acquire_resource_with_ctx(
-            &self,
-            key: &ResourceKey,
-            _ctx: Option<Self::Context>,
-        ) -> AssetsResult<Self::Res> {
-            self.inner.acquire_resource(key)
-        }
-
-        fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-            self.inner.open_pins_index_resource()
-        }
-
-        fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-            self.inner.open_lru_index_resource()
-        }
-
         fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
             self.inner.resource_state(key)
         }
 
-        fn delete_asset(&self) -> AssetsResult<()> {
-            self.inner.delete_asset()
+        fn root_dir(&self) -> &Path {
+            self.inner.root_dir()
         }
     }
 

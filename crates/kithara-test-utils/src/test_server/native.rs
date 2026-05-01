@@ -16,8 +16,8 @@ use crate::{
 
 /// In-process unified test server with RAII shutdown.
 pub struct TestServerHelper {
-    server: TestHttpServer,
     state: Arc<TestServerState>,
+    server: TestHttpServer,
 }
 
 impl TestServerHelper {
@@ -25,7 +25,7 @@ impl TestServerHelper {
     pub async fn new() -> Self {
         let state = TestServerState::new();
         let server = TestHttpServer::new(router(Arc::clone(&state))).await;
-        Self { server, state }
+        Self { state, server }
     }
 
     /// Build an arbitrary URL on this server.

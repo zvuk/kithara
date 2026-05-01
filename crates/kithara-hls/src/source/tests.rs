@@ -755,8 +755,8 @@ fn demand_range_queues_request_for_unloaded_offset() {
     playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            segment_sizes,
             offsets,
+            segment_sizes,
             total,
         },
     );
@@ -847,8 +847,8 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     source.playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            segment_sizes,
             offsets,
+            segment_sizes,
             total,
         },
     );
@@ -1043,8 +1043,8 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
     playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            segment_sizes,
             offsets,
+            segment_sizes,
             total,
         },
     );

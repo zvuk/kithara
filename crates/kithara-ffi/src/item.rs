@@ -29,10 +29,6 @@ use crate::{
 /// FFI-facing audio player item with UUID identity.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayerItem {
-    id: Uuid,
-    config: FfiItemConfig,
-    event_bridge: Mutex<Option<ItemEventBridge>>,
-    observer: Mutex<Option<Arc<dyn ItemObserver>>>,
     /// Scoped event bus — set by `AudioPlayer::insert` so per-resource
     /// events (Hls/File/Audio) published during `Resource::new` are
     /// captured even when [`set_observer`] is called later.
@@ -41,6 +37,10 @@ pub struct AudioPlayerItem {
     /// accepts the source. `None` before insert, `None` again after
     /// `remove`.
     pub(crate) track_id: Mutex<Option<TrackId>>,
+    config: FfiItemConfig,
+    event_bridge: Mutex<Option<ItemEventBridge>>,
+    observer: Mutex<Option<Arc<dyn ItemObserver>>>,
+    id: Uuid,
 }
 
 /// Methods exported across the FFI boundary.

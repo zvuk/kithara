@@ -31,20 +31,7 @@ use crate::{
 /// that cancels in-flight fetches when the source is dropped.
 pub struct HlsSource {
     pub(crate) coord: Arc<HlsCoord>,
-    pub(crate) backend: AssetStore<DecryptContext>,
-    pub(crate) segments: Arc<Mutex<StreamIndex>>,
     pub(crate) playlist_state: Arc<PlaylistState>,
-    pub(crate) bus: EventBus,
-    /// Variant fence: auto-detected on first read, blocks cross-variant reads.
-    pub(crate) variant_fence: Option<VariantIndex>,
-    /// HLS peer. Cloned from the Downloader's registry; `Drop` tears down
-    /// its [`HlsState`] so the stashed [`SegmentLoader`]'s internal
-    /// `PeerHandle` clones release `PeerInner.cancel`, letting the
-    /// registry remove its own `Arc<HlsPeer>`. Without this the whole
-    /// peer graph leaks until the Downloader itself is dropped.
-    pub(crate) _hls_peer: Option<Arc<HlsPeer>>,
-    /// Peer handle. Dropped with this source, cancelling the peer.
-    pub(crate) _peer_handle: Option<kithara_stream::dl::PeerHandle>,
     /// Shared with `HlsPeer::reader_segment` — `read_at` updates this
     /// cursor after each successful read so `HlsPeer::progress` can report
     /// `reader_playback_time` to the ABR controller.
@@ -55,6 +42,19 @@ pub struct HlsSource {
     /// segment byte ranges and decode-time mappings without holding a
     /// reference back to `HlsSource`.
     pub(crate) segmented_view: Arc<HlsSegmentView>,
+    pub(crate) segments: Arc<Mutex<StreamIndex>>,
+    pub(crate) backend: AssetStore<DecryptContext>,
+    pub(crate) bus: EventBus,
+    /// HLS peer. Cloned from the Downloader's registry; `Drop` tears down
+    /// its [`HlsState`] so the stashed [`SegmentLoader`]'s internal
+    /// `PeerHandle` clones release `PeerInner.cancel`, letting the
+    /// registry remove its own `Arc<HlsPeer>`. Without this the whole
+    /// peer graph leaks until the Downloader itself is dropped.
+    pub(crate) _hls_peer: Option<Arc<HlsPeer>>,
+    /// Peer handle. Dropped with this source, cancelling the peer.
+    pub(crate) _peer_handle: Option<kithara_stream::dl::PeerHandle>,
+    /// Variant fence: auto-detected on first read, blocks cross-variant reads.
+    pub(crate) variant_fence: Option<VariantIndex>,
 }
 
 impl Drop for HlsSource {

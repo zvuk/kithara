@@ -27,140 +27,140 @@ use crate::theme::gui::GuiPalette;
 
 struct Consts;
 impl Consts {
-    // Layout
-    const OUTER_PADDING: f32 = 18.0;
-    const SECTION_PADDING: f32 = 12.0;
-    const SECTION_SPACING: f32 = 12.0;
-    const COMPACT_SPACING: f32 = 6.0;
-    const ELEMENT_SPACING: f32 = 10.0;
-    const SEEK_BAR_PADDING_Y: f32 = 4.0;
-    const SEEK_BAR_PADDING_X: f32 = 8.0;
-    const TRANSPORT_PADDING_Y: f32 = 2.0;
-    const TRANSPORT_PADDING_X: f32 = 8.0;
-    const TRANSPORT_BUTTON_SPACING: f32 = 20.0;
-    const TABS_PADDING_Y: f32 = 4.0;
-    const TAB_CONTENT_PADDING_Y: f32 = 8.0;
-    const TAB_CONTENT_PADDING_X: f32 = 8.0;
-    const PLAYLIST_ITEM_PADDING_Y: f32 = 8.0;
-    const PLAYLIST_ITEM_PADDING_X: f32 = 10.0;
-    const EQ_BAND_SPACING: f32 = 26.0;
-    const EQ_RESET_PADDING_Y: f32 = 4.0;
-    const EQ_RESET_PADDING_X: f32 = 8.0;
-    const EQ_SPACING: f32 = 8.0;
-    const DJ_SPACING: f32 = 10.0;
-    const SETTINGS_SPACING: f32 = 8.0;
-    const MAIN_BUTTON_PADDING: f32 = 14.0;
-
-    // Sizes
-    const LOGO_SIZE: f32 = 48.0;
-    const TITLE_FONT: f32 = 28.0;
-    const SUBTITLE_FONT: f32 = 12.0;
-    const TITLE_SPACING: f32 = 2.0;
-    const MUSIC_NOTE_SIZE: f32 = 20.0;
-    const TRACK_NAME_FONT: f32 = 22.0;
-    const CAPTION_FONT: f32 = 14.0;
-    const SMALL_FONT: f32 = 13.0;
-    const TRANSPORT_ICON_SIZE: f32 = 30.0;
-    const TRANSPORT_ICON_PADDING: f32 = 8.0;
-    const TOGGLE_ICON_SIZE: f32 = 22.0;
-    const TOGGLE_ICON_PADDING: f32 = 6.0;
-    const MAIN_TRANSPORT_ICON_SIZE: f32 = 35.0;
-    const TAB_ICON_SIZE: f32 = 18.0;
-    const UNDERLINE_HEIGHT: f32 = 2.0;
-    const VOLUME_ICON_SIZE: f32 = 20.0;
-    const EQ_SLIDER_HEIGHT: f32 = 190.0;
-    const EQ_LABEL_FONT: f32 = 14.0;
-    const EQ_RESET_FONT: f32 = 12.0;
-    const EQ_VALUE_FONT: f32 = 13.0;
-    const HEADING_FONT: f32 = 16.0;
-    const PLAYLIST_INDEX_FONT: f32 = 13.0;
-    const PLAYLIST_TRACK_FONT: f32 = 15.0;
-    const PLAYLIST_SPACING: f32 = 6.0;
-    const PLAYLIST_MAX_NAME_CHARS: usize = 40;
-    const DJ_LABEL_FONT: f32 = 13.0;
-    const DJ_SPACER_HEIGHT: f32 = 8.0;
-    const DJ_HINT_FONT: f32 = 13.0;
-    const SETTINGS_BODY_FONT: f32 = 13.0;
-    const EMPTY_PLAYLIST_FONT: f32 = 14.0;
-
+    const ABR_BUTTON_PADDING_X: u16 = 6;
     // ABR button
     const ABR_BUTTON_PADDING_Y: u16 = 2;
-    const ABR_BUTTON_PADDING_X: u16 = 6;
-
-    // Slider
-    const SLIDER_RAIL_WIDTH: f32 = 4.0;
-    const SLIDER_RAIL_RADIUS: f32 = 4.0;
-    const SLIDER_HANDLE_RADIUS: f32 = 7.0;
-    const SLIDER_HANDLE_BORDER: f32 = 1.0;
-
-    // EQ range
-    const EQ_MIN_DB: f32 = -24.0;
-    const EQ_MAX_DB: f32 = 6.0;
-    const EQ_STEP: f32 = 0.5;
-    const EQ_ZERO_THRESHOLD: f32 = 0.05;
-
-    // Crossfade range
-    const CROSSFADE_MAX: f32 = 30.0;
-    const CROSSFADE_STEP: f32 = 0.5;
-
-    // Volume
-    const VOLUME_MUTE_THRESHOLD: f32 = 0.01;
-    const VOLUME_LOW_THRESHOLD: f32 = 0.5;
-    const VOLUME_STEP_SIZE: f32 = 0.01;
-    const VOLUME_PERCENT_SCALE: f32 = 100.0;
-
-    // Seek
-    const SEEK_STEP: f32 = 0.1;
-
-    // Border
-    const BORDER_RADIUS: f32 = 12.0;
-    const BORDER_RADIUS_SECTION: f32 = 10.0;
-    const BORDER_RADIUS_BUTTON: f32 = 8.0;
-    const BORDER_RADIUS_PILL: f32 = 4.0;
-    const BORDER_WIDTH: f32 = 1.0;
-    const BORDER_RADIUS_CIRCLE: f32 = 100.0;
-
     // Alpha values
     const ALPHA_ACCENT_BORDER: f32 = 0.25;
-    const ALPHA_SECTION_BG: f32 = 0.45;
-    const ALPHA_SECTION_BORDER: f32 = 0.2;
+    const ALPHA_GHOST_DISABLED: f32 = 0.3;
     const ALPHA_GHOST_HOVER: f32 = 0.85;
     const ALPHA_GHOST_PRESSED: f32 = 0.2;
-    const ALPHA_GHOST_DISABLED: f32 = 0.3;
+    const ALPHA_MAIN_BORDER: f32 = 0.2;
+    const ALPHA_MAIN_DISABLED: f32 = 0.4;
     const ALPHA_MAIN_HOVER: f32 = 0.95;
     const ALPHA_MAIN_PRESSED: f32 = 0.75;
-    const ALPHA_MAIN_DISABLED: f32 = 0.4;
-    const ALPHA_MAIN_BORDER: f32 = 0.2;
-    const ALPHA_TAB_ACTIVE_BASE: f32 = 0.12;
-    const ALPHA_TAB_ACTIVE_HOVER: f32 = 0.2;
-    const ALPHA_TAB_ACTIVE_PRESSED: f32 = 0.28;
-    const ALPHA_TAB_INACTIVE_HOVER: f32 = 0.8;
-    const ALPHA_TAB_INACTIVE_PRESSED: f32 = 0.12;
-    const ALPHA_TAB_DISABLED: f32 = 0.2;
     const ALPHA_PLAYLIST_CURRENT: f32 = 0.18;
     const ALPHA_PLAYLIST_CURRENT_HOVER: f32 = 0.24;
     const ALPHA_PLAYLIST_CURRENT_PRESSED: f32 = 0.32;
+    const ALPHA_PLAYLIST_DISABLED: f32 = 0.25;
     const ALPHA_PLAYLIST_INACTIVE_HOVER: f32 = 0.75;
     const ALPHA_PLAYLIST_INACTIVE_PRESSED: f32 = 0.14;
-    const ALPHA_PLAYLIST_DISABLED: f32 = 0.25;
+    const ALPHA_SECTION_BG: f32 = 0.45;
+    const ALPHA_SECTION_BORDER: f32 = 0.2;
     const ALPHA_SLIDER_ACTIVE_RAIL: f32 = 0.95;
     const ALPHA_SLIDER_DRAGGED_RAIL: f32 = 0.85;
-    const ALPHA_SLIDER_INACTIVE_RAIL: f32 = 0.35;
     const ALPHA_SLIDER_HANDLE_BORDER: f32 = 0.65;
+    const ALPHA_SLIDER_INACTIVE_RAIL: f32 = 0.35;
 
-    // Time
-    const SECONDS_PER_MINUTE: u32 = 60;
+    const ALPHA_TAB_ACTIVE_BASE: f32 = 0.12;
+    const ALPHA_TAB_ACTIVE_HOVER: f32 = 0.2;
+    const ALPHA_TAB_ACTIVE_PRESSED: f32 = 0.28;
+    const ALPHA_TAB_DISABLED: f32 = 0.2;
+    const ALPHA_TAB_INACTIVE_HOVER: f32 = 0.8;
+    const ALPHA_TAB_INACTIVE_PRESSED: f32 = 0.12;
+    const BLINK_DIVISOR: u8 = 5;
+    const BLINK_PERIOD: u64 = 2;
+    // Border
+    const BORDER_RADIUS: f32 = 12.0;
+    const BORDER_RADIUS_BUTTON: f32 = 8.0;
+    const BORDER_RADIUS_CIRCLE: f32 = 100.0;
+    const BORDER_RADIUS_PILL: f32 = 4.0;
+    const BORDER_RADIUS_SECTION: f32 = 10.0;
+    const BORDER_WIDTH: f32 = 1.0;
+    const CAPTION_FONT: f32 = 14.0;
+    const COMPACT_SPACING: f32 = 6.0;
+    // Crossfade range
+    const CROSSFADE_MAX: f32 = 30.0;
+    const CROSSFADE_STEP: f32 = 0.5;
+    const DJ_HINT_FONT: f32 = 13.0;
+    const DJ_LABEL_FONT: f32 = 13.0;
+    const DJ_SPACER_HEIGHT: f32 = 8.0;
+    const DJ_SPACING: f32 = 10.0;
+    const ELEMENT_SPACING: f32 = 10.0;
+    const EMPTY_PLAYLIST_FONT: f32 = 14.0;
+    const EQ_BAND_SPACING: f32 = 26.0;
+    const EQ_LABEL_FONT: f32 = 14.0;
+    const EQ_MAX_DB: f32 = 6.0;
+    // EQ range
+    const EQ_MIN_DB: f32 = -24.0;
+    const EQ_RESET_FONT: f32 = 12.0;
+    const EQ_RESET_PADDING_X: f32 = 8.0;
 
+    const EQ_RESET_PADDING_Y: f32 = 4.0;
     // EQ band count threshold for simple labels
     const EQ_SIMPLE_LABEL_THRESHOLD: usize = 3;
 
-    const BLINK_DIVISOR: u8 = 5;
-    const BLINK_PERIOD: u64 = 2;
+    const EQ_SLIDER_HEIGHT: f32 = 190.0;
+    const EQ_SPACING: f32 = 8.0;
+    const EQ_STEP: f32 = 0.5;
+    const EQ_VALUE_FONT: f32 = 13.0;
 
+    const EQ_ZERO_THRESHOLD: f32 = 0.05;
+    const HEADING_FONT: f32 = 16.0;
+    // Sizes
+    const LOGO_SIZE: f32 = 48.0;
+    const MAIN_BUTTON_PADDING: f32 = 14.0;
+
+    const MAIN_TRANSPORT_ICON_SIZE: f32 = 35.0;
+    const MUSIC_NOTE_SIZE: f32 = 20.0;
+
+    // Layout
+    const OUTER_PADDING: f32 = 18.0;
+    const PLAYLIST_INDEX_FONT: f32 = 13.0;
+    const PLAYLIST_ITEM_PADDING_X: f32 = 10.0;
+    const PLAYLIST_ITEM_PADDING_Y: f32 = 8.0;
+
+    const PLAYLIST_MAX_NAME_CHARS: usize = 40;
+
+    const PLAYLIST_SPACING: f32 = 6.0;
+    const PLAYLIST_TRACK_FONT: f32 = 15.0;
+    const PLAYRATE_PADDING_X: u16 = 6;
     // Playrate pill buttons
     const PLAYRATE_PADDING_Y: u16 = 3;
-    const PLAYRATE_PADDING_X: u16 = 6;
     const PLAYRATE_SPACING: f32 = 4.0;
+    // Time
+    const SECONDS_PER_MINUTE: u32 = 60;
+
+    const SECTION_PADDING: f32 = 12.0;
+    const SECTION_SPACING: f32 = 12.0;
+    const SEEK_BAR_PADDING_X: f32 = 8.0;
+    const SEEK_BAR_PADDING_Y: f32 = 4.0;
+    // Seek
+    const SEEK_STEP: f32 = 0.1;
+    const SETTINGS_BODY_FONT: f32 = 13.0;
+    const SETTINGS_SPACING: f32 = 8.0;
+    const SLIDER_HANDLE_BORDER: f32 = 1.0;
+    const SLIDER_HANDLE_RADIUS: f32 = 7.0;
+    const SLIDER_RAIL_RADIUS: f32 = 4.0;
+    // Slider
+    const SLIDER_RAIL_WIDTH: f32 = 4.0;
+    const SMALL_FONT: f32 = 13.0;
+    const SUBTITLE_FONT: f32 = 12.0;
+    const TABS_PADDING_Y: f32 = 4.0;
+    const TAB_CONTENT_PADDING_X: f32 = 8.0;
+    const TAB_CONTENT_PADDING_Y: f32 = 8.0;
+    const TAB_ICON_SIZE: f32 = 18.0;
+    const TITLE_FONT: f32 = 28.0;
+    const TITLE_SPACING: f32 = 2.0;
+    const TOGGLE_ICON_PADDING: f32 = 6.0;
+    const TOGGLE_ICON_SIZE: f32 = 22.0;
+    const TRACK_NAME_FONT: f32 = 22.0;
+    const TRANSPORT_BUTTON_SPACING: f32 = 20.0;
+    const TRANSPORT_ICON_PADDING: f32 = 8.0;
+    const TRANSPORT_ICON_SIZE: f32 = 30.0;
+    const TRANSPORT_PADDING_X: f32 = 8.0;
+
+    const TRANSPORT_PADDING_Y: f32 = 2.0;
+
+    const UNDERLINE_HEIGHT: f32 = 2.0;
+
+    const VOLUME_ICON_SIZE: f32 = 20.0;
+    const VOLUME_LOW_THRESHOLD: f32 = 0.5;
+
+    // Volume
+    const VOLUME_MUTE_THRESHOLD: f32 = 0.01;
+    const VOLUME_PERCENT_SCALE: f32 = 100.0;
+    const VOLUME_STEP_SIZE: f32 = 0.01;
 }
 
 pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {

@@ -27,40 +27,21 @@ use crate::{
 
 /// HLS downloader: fetches segments and maintains ABR state.
 pub(crate) struct HlsScheduler {
-    pub(crate) active_seek_epoch: SeekEpoch,
-    /// Direct disk-cache access — no `FetchManager` wrapper.
-    pub(crate) backend: AssetStore<DecryptContext>,
-    pub(crate) playlist_state: Arc<PlaylistState>,
-    pub(crate) cursor: DownloadCursor<SegmentIndex>,
-    pub(crate) force_init_for_seek: bool,
-    pub(crate) sent_init_for_variant: HashSet<VariantIndex>,
     /// Shared ABR state — same `Arc` the owning `HlsPeer` exposes via
     /// `Abr::state()`. Lock/unlock drives the seek-no-switch invariant;
     /// `current_variant_index()` is the source of truth for the scheduler.
     pub(crate) abr: Arc<AbrState>,
+    /// One past the highest segment index ever committed — shared with the
+    /// owning `HlsPeer::committed_segment` cursor so `HlsPeer::progress`
+    /// can expose `download_head_playback_time` to the ABR controller.
+    pub(crate) committed_segment: Arc<AtomicUsize>,
     pub(crate) coord: Arc<HlsCoord>,
+    pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) segments: Arc<kithara_platform::Mutex<StreamIndex>>,
+    /// Direct disk-cache access — no `FetchManager` wrapper.
+    pub(crate) backend: AssetStore<DecryptContext>,
+    pub(crate) cursor: DownloadCursor<SegmentIndex>,
     pub(crate) bus: EventBus,
-    /// Backpressure threshold (segments ahead of reader). None = no limit.
-    /// For ephemeral backends, derived from cache capacity to prevent
-    /// evicting segments the reader still needs.
-    pub(crate) look_ahead_segments: Option<usize>,
-    /// Max segments to download in parallel per batch.
-    pub(crate) prefetch_count: usize,
-    /// Variant the downloader is currently targeting. Used for transition
-    /// classification instead of shared `layout_variant` to avoid racing
-    /// with the decoder thread.
-    pub(crate) download_variant: VariantIndex,
-    /// True while `poll_next` is filling a layout-variant gap after ABR moved
-    /// to a different variant. Prevents ABR from overriding the variant
-    /// on subsequent `poll_next` cycles (avoids hot loop: ABR cached commit
-    /// → tail gap detect → reset → ABR override → repeat).
-    pub(crate) filling_layout_gap: bool,
-    /// After a demand, caps cursor advancement so prefetch doesn't evict
-    /// the demanded segment from an ephemeral LRU. Set to
-    /// `demand_seg + look_ahead_segments` when a demand is processed;
-    /// cleared on the next seek (new epoch) or when reader advances past.
-    pub(crate) demand_throttle_until: Option<usize>,
     /// Highest cached-segment count already announced via
     /// `SegmentComplete { cached: true }` per variant. Prevents
     /// `apply_cached_segment_progress` from re-publishing the same events
@@ -84,10 +65,29 @@ pub(crate) struct HlsScheduler {
     /// `AssetResource`). Cleared on new seek epoch (the old epoch's
     /// cancel token drops any in-flight fetches).
     pub(crate) in_flight_segments: HashSet<(VariantIndex, SegmentIndex)>,
-    /// One past the highest segment index ever committed — shared with the
-    /// owning `HlsPeer::committed_segment` cursor so `HlsPeer::progress`
-    /// can expose `download_head_playback_time` to the ABR controller.
-    pub(crate) committed_segment: Arc<AtomicUsize>,
+    pub(crate) sent_init_for_variant: HashSet<VariantIndex>,
+    /// After a demand, caps cursor advancement so prefetch doesn't evict
+    /// the demanded segment from an ephemeral LRU. Set to
+    /// `demand_seg + look_ahead_segments` when a demand is processed;
+    /// cleared on the next seek (new epoch) or when reader advances past.
+    pub(crate) demand_throttle_until: Option<usize>,
+    /// Backpressure threshold (segments ahead of reader). None = no limit.
+    /// For ephemeral backends, derived from cache capacity to prevent
+    /// evicting segments the reader still needs.
+    pub(crate) look_ahead_segments: Option<usize>,
+    pub(crate) active_seek_epoch: SeekEpoch,
+    /// Variant the downloader is currently targeting. Used for transition
+    /// classification instead of shared `layout_variant` to avoid racing
+    /// with the decoder thread.
+    pub(crate) download_variant: VariantIndex,
+    /// True while `poll_next` is filling a layout-variant gap after ABR moved
+    /// to a different variant. Prevents ABR from overriding the variant
+    /// on subsequent `poll_next` cycles (avoids hot loop: ABR cached commit
+    /// → tail gap detect → reset → ABR override → repeat).
+    pub(crate) filling_layout_gap: bool,
+    pub(crate) force_init_for_seek: bool,
+    /// Max segments to download in parallel per batch.
+    pub(crate) prefetch_count: usize,
 }
 
 /// Maximum initial segment index for verbose logging.

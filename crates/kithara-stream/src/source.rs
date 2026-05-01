@@ -20,13 +20,13 @@ use crate::{Timeline, error::StreamResult, media::MediaInfo};
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SegmentDescriptor {
-    /// Byte range in the source's virtual stream.
-    pub byte_range: Range<u64>,
     /// Absolute decode time at the start of this segment (cumulative
     /// EXTINF over preceding segments).
     pub decode_time: Duration,
     /// Segment duration (EXTINF).
     pub duration: Duration,
+    /// Byte range in the source's virtual stream.
+    pub byte_range: Range<u64>,
     /// Segment index within the variant.
     pub segment_index: u32,
     /// Variant the descriptor was resolved against.
@@ -43,9 +43,9 @@ impl SegmentDescriptor {
         variant_index: usize,
     ) -> Self {
         Self {
-            byte_range,
             decode_time,
             duration,
+            byte_range,
             segment_index,
             variant_index,
         }
@@ -140,11 +140,11 @@ pub enum ReadOutcome {
 #[setters(prefix = "with_", strip_option)]
 #[non_exhaustive]
 pub struct SourceSeekAnchor {
-    pub byte_offset: u64,
     pub segment_start: Duration,
     pub segment_end: Option<Duration>,
     pub segment_index: Option<u32>,
     pub variant_index: Option<usize>,
+    pub byte_offset: u64,
 }
 
 impl SourceSeekAnchor {
@@ -154,8 +154,8 @@ impl SourceSeekAnchor {
     #[must_use]
     pub fn new(byte_offset: u64, segment_start: Duration) -> Self {
         Self {
-            byte_offset,
             segment_start,
+            byte_offset,
             ..Self::default()
         }
     }

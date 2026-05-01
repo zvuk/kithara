@@ -48,15 +48,15 @@ use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 /// One recorded probe event.
 #[derive(Clone, Debug)]
 pub struct ProbeEvent {
-    /// Target string of the captured tracing event (e.g.
-    /// `"kithara_stream_probe"`, `"kithara_hls_probe"`).
-    pub target: String,
-    /// Wall-clock timestamp of the probe firing.
-    pub at: Instant,
     /// Numeric / boolean fields, keyed by name.
     pub fields: HashMap<String, u64>,
     /// Field values that arrived as strings (e.g. `probe = "enqueued"`).
     pub string_fields: HashMap<String, String>,
+    /// Wall-clock timestamp of the probe firing.
+    pub at: Instant,
+    /// Target string of the captured tracing event (e.g.
+    /// `"kithara_stream_probe"`, `"kithara_hls_probe"`).
+    pub target: String,
 }
 
 impl ProbeEvent {
@@ -114,8 +114,8 @@ pub fn install() -> Recorder {
 /// Per-test snapshot handle.
 #[derive(Clone)]
 pub struct Recorder {
-    log: SharedLog,
     start_at: Instant,
+    log: SharedLog,
 }
 
 impl Recorder {

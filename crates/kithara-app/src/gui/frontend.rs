@@ -49,8 +49,8 @@ pub fn init_tracing() -> Result<(), FrontendError> {
 
 /// GUI frontend using iced.
 pub struct GuiFrontend {
-    palette: gui::GuiPalette,
     config: AppConfig,
+    palette: gui::GuiPalette,
 }
 
 impl Frontend for GuiFrontend {
@@ -59,11 +59,6 @@ impl Frontend for GuiFrontend {
             palette: config.palette.into(),
             config: config.clone(),
         })
-    }
-
-    fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
-        // iced handles window setup internally.
-        Ok(())
     }
 
     fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError> {
@@ -92,6 +87,11 @@ impl Frontend for GuiFrontend {
 
     fn shutdown(&mut self) -> Result<(), FrontendError> {
         // iced handles cleanup internally.
+        Ok(())
+    }
+
+    fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
+        // iced handles window setup internally.
         Ok(())
     }
 }

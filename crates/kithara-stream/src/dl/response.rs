@@ -17,10 +17,10 @@ use kithara_platform::{
 /// Response from a fetch — headers available immediately, body as
 /// async stream.
 pub struct FetchResponse {
-    /// HTTP response headers.
-    pub headers: Headers,
     /// Body as an async byte stream.
     pub body: BodyStream,
+    /// HTTP response headers.
+    pub headers: Headers,
 }
 
 impl std::fmt::Debug for FetchResponse {

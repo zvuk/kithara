@@ -42,10 +42,12 @@ pub struct EvictAssets<A>
 where
     A: Assets,
 {
+    /// Single canonical removal channel — see [`crate::deleter`].
+    deleter: Arc<dyn AssetDeleter>,
     inner: Arc<A>,
-    cfg: EvictConfig,
     seen: Arc<Mutex<HashSet<String>>>,
     cancel: CancellationToken,
+    cfg: EvictConfig,
     /// Shared LRU index — same instance held by `DiskAssetDeleter` so
     /// LRU bookkeeping and disk-side deletion stay in sync.
     lru: LruIndex,
@@ -53,8 +55,6 @@ where
     /// pin/unpin lifecycle and by `DiskAssetDeleter` for full-asset
     /// removal cleanup.
     pins: PinsIndex,
-    /// Single canonical removal channel — see [`crate::deleter`].
-    deleter: Arc<dyn AssetDeleter>,
 }
 
 impl<A: Assets> fmt::Debug for EvictAssets<A> {
@@ -89,38 +89,6 @@ where
             pins,
             deleter,
         }
-    }
-
-    fn is_active(&self) -> bool {
-        self.inner
-            .capabilities()
-            .contains(crate::base::Capabilities::EVICT)
-    }
-
-    /// Record asset size for byte-based eviction.
-    ///
-    /// Uses [`LruIndex::update_bytes`] — only the byte counter is
-    /// adjusted. Recency (LRU clock) is not bumped because the asset
-    /// already had its access tracked when the resource was opened;
-    /// re-bumping per segment commit would coalesce all bytes-bearing
-    /// assets to the same logical-time tail and skew eviction order.
-    /// If the asset is unknown to the LRU (e.g. evicted concurrently)
-    /// this is a no-op.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the LRU index cannot persist the
-    /// update — caller must decide whether the lost durability is
-    /// acceptable for its scenario (the [`ByteRecorder`] adapter
-    /// downgrades it to a `tracing::warn`).
-    pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
-        if !self.is_active() {
-            return Ok(());
-        }
-        tracing::debug!(asset_root = %asset_root, bytes, "Recording asset bytes");
-        self.lru.update_bytes(asset_root, bytes)?;
-        tracing::debug!(asset_root = %asset_root, bytes, "Asset bytes recorded");
-        Ok(())
     }
 
     /// Check if byte limit is exceeded and run eviction if needed.
@@ -160,6 +128,12 @@ where
         log_eviction_outcome(cand, self.deleter.delete_asset(cand));
     }
 
+    fn is_active(&self) -> bool {
+        self.inner
+            .capabilities()
+            .contains(crate::base::Capabilities::EVICT)
+    }
+
     fn mark_seen(&self, asset_root: &str) -> bool {
         let mut g = self.seen.lock_sync();
         g.insert(asset_root.to_string())
@@ -188,6 +162,32 @@ where
         }
     }
 
+    /// Record asset size for byte-based eviction.
+    ///
+    /// Uses [`LruIndex::update_bytes`] — only the byte counter is
+    /// adjusted. Recency (LRU clock) is not bumped because the asset
+    /// already had its access tracked when the resource was opened;
+    /// re-bumping per segment commit would coalesce all bytes-bearing
+    /// assets to the same logical-time tail and skew eviction order.
+    /// If the asset is unknown to the LRU (e.g. evicted concurrently)
+    /// this is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the LRU index cannot persist the
+    /// update — caller must decide whether the lost durability is
+    /// acceptable for its scenario (the [`ByteRecorder`] adapter
+    /// downgrades it to a `tracing::warn`).
+    pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
+        if !self.is_active() {
+            return Ok(());
+        }
+        tracing::debug!(asset_root = %asset_root, bytes, "Recording asset bytes");
+        self.lru.update_bytes(asset_root, bytes)?;
+        tracing::debug!(asset_root = %asset_root, bytes, "Asset bytes recorded");
+        Ok(())
+    }
+
     fn touch_and_maybe_evict(&self, asset_root: &str, bytes_hint: Option<u64>) {
         if !self.is_active() || self.cancel.is_cancelled() {
             return;
@@ -211,9 +211,27 @@ impl<A> Assets for EvictAssets<A>
 where
     A: Assets,
 {
-    type Res = A::Res;
     type Context = A::Context;
     type IndexRes = A::IndexRes;
+    type Res = A::Res;
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        self.touch_and_maybe_evict(self.inner.asset_root(), None);
+        self.inner.acquire_resource_with_ctx(key, ctx)
+    }
+
+    fn open_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        self.touch_and_maybe_evict(self.inner.asset_root(), None);
+        self.inner.open_resource_with_ctx(key, ctx)
+    }
 
     delegate::delegate! {
         to self.inner {
@@ -226,24 +244,6 @@ where
             fn delete_asset(&self) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
-    }
-
-    fn open_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        self.touch_and_maybe_evict(self.inner.asset_root(), None);
-        self.inner.open_resource_with_ctx(key, ctx)
-    }
-
-    fn acquire_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        self.touch_and_maybe_evict(self.inner.asset_root(), None);
-        self.inner.acquire_resource_with_ctx(key, ctx)
     }
 }
 

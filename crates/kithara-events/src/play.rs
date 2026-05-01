@@ -63,9 +63,9 @@ impl SlotId {
 #[derive(Clone, Copy, Debug, Derivative, PartialEq)]
 #[derivative(Default)]
 pub struct MediaTime {
-    value: i64,
     #[derivative(Default(value = "1"))]
     timescale: i32,
+    value: i64,
 }
 
 impl MediaTime {
@@ -84,7 +84,7 @@ impl MediaTime {
 
     #[must_use]
     pub fn new(value: i64, timescale: i32) -> Self {
-        Self { value, timescale }
+        Self { timescale, value }
     }
 
     #[must_use]
@@ -197,14 +197,14 @@ impl ops::Sub for MediaTime {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct TimeRange {
-    pub start: Duration,
     pub duration: Duration,
+    pub start: Duration,
 }
 
 impl TimeRange {
     #[must_use]
     pub fn new(start: Duration, duration: Duration) -> Self {
-        Self { start, duration }
+        Self { duration, start }
     }
 
     #[must_use]
@@ -271,9 +271,9 @@ pub enum RouteChangeReason {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct BpmInfo {
-    pub bpm: f64,
-    pub confidence: f32,
     pub first_beat_offset: Duration,
+    pub confidence: f32,
+    pub bpm: f64,
 }
 
 #[derive(Clone, Debug)]

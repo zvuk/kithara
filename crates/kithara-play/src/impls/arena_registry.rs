@@ -3,9 +3,9 @@ use std::{borrow::Borrow, collections::HashMap, hash::Hash};
 use thunderdome::{Arena, Index};
 
 pub(crate) struct ArenaRegistry<K, V> {
+    values: Arena<V>,
     by_index: HashMap<Index, K>,
     by_key: HashMap<K, Index>,
-    values: Arena<V>,
 }
 
 impl<K, V> ArenaRegistry<K, V>

@@ -71,13 +71,13 @@ pub(crate) enum PlayerCmd {
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
 pub(crate) struct PlayerNodeProcessor {
-    cmd_rx: HeapCons<PlayerCmd>,
-    crossfade: CrossfadeSettings,
-    sample_rate: NonZeroU32,
-    scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
     shared_state: Arc<SharedPlayerState>,
     tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
+    crossfade: CrossfadeSettings,
+    cmd_rx: HeapCons<PlayerCmd>,
+    sample_rate: NonZeroU32,
     tracks_transitions: VecDeque<TrackTransition>,
+    scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
 }
 
 impl PlayerNodeProcessor {
@@ -554,10 +554,10 @@ mod tests {
 
     /// Reader that records the last `host_sample_rate` set via `set_host_sample_rate`.
     struct SampleRateTrackingReader {
-        spec: PcmSpec,
-        meta: TrackMetadata,
         bus: EventBus,
+        spec: PcmSpec,
         recorded_host_rate: TestArc<AtomicU32>,
+        meta: TrackMetadata,
     }
 
     impl SampleRateTrackingReader {
@@ -918,10 +918,10 @@ mod tests {
     /// — alive but no data this tick. Permanent failures would surface
     /// as `Err(DecodeError)` (terminal, see `TerminalFailReader` below).
     struct TransientStallReader {
-        spec: PcmSpec,
-        meta: TrackMetadata,
         bus: EventBus,
+        spec: PcmSpec,
         stall_flag: TestArc<AtomicBool>,
+        meta: TrackMetadata,
     }
 
     impl TransientStallReader {
@@ -1137,9 +1137,9 @@ mod tests {
     /// Reader that always reports a terminal producer failure — models
     /// `ConsumerPhase::Failed` one-shot surfaced through the new API.
     struct TerminalFailReader {
+        bus: EventBus,
         spec: PcmSpec,
         meta: TrackMetadata,
-        bus: EventBus,
     }
 
     impl TerminalFailReader {

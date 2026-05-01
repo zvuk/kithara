@@ -27,8 +27,6 @@ use crate::{
 /// [`HlsSource::take_reader_hooks`](super::core::HlsSource::take_reader_hooks)
 /// and handed off to the audio pipeline at decoder-create time.
 pub(crate) struct HlsReaderHooks {
-    bus: EventBus,
-    segments: Arc<Mutex<StreamIndex>>,
     /// Shared atomic byte cursor — written by `Stream::read` /
     /// `Stream::seek`, read here at hook time. Single source of truth
     /// for "where the reader currently is".
@@ -36,14 +34,14 @@ pub(crate) struct HlsReaderHooks {
     /// Shared atomic seek epoch — read into the `ReaderSeek` payload
     /// for cross-event correlation.
     seek_epoch_handle: Arc<AtomicU64>,
+    segments: Arc<Mutex<StreamIndex>>,
+    bus: EventBus,
     /// `(variant, segment_index, bytes_accumulated_in_this_segment)`
     /// for the segment the reader is currently inside. `None` until
     /// the first chunk is observed (or after a `ReaderSeek` reset).
     state: Option<(VariantIndex, SegmentIndex, u64)>,
-    /// Cursor value at the previous `on_chunk` invocation. Used to
-    /// derive `bytes_read` per chunk via cursor delta — backends only
-    /// hand us a chunk signal, not a byte count.
-    last_cursor: u64,
+    /// Have we already published the construction-time `ReaderSeek`?
+    initial_seek_published: bool,
     /// Cursor at construction time. The first successful `on_chunk`
     /// uses this to synthesise a `ReaderSeek` event — a fresh
     /// `HlsReaderHooks` instance handed off to the audio pipeline
@@ -52,8 +50,10 @@ pub(crate) struct HlsReaderHooks {
     /// `inner.seek(...)` returned `Err(Interrupted)` and never
     /// produced a `DecoderSeekOutcome`.
     initial_cursor: u64,
-    /// Have we already published the construction-time `ReaderSeek`?
-    initial_seek_published: bool,
+    /// Cursor value at the previous `on_chunk` invocation. Used to
+    /// derive `bytes_read` per chunk via cursor delta — backends only
+    /// hand us a chunk signal, not a byte count.
+    last_cursor: u64,
 }
 
 impl HlsReaderHooks {

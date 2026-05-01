@@ -49,20 +49,20 @@ pub enum ResamplerQuality {
 }
 
 impl ResamplerQuality {
-    /// Sinc filter length for normal quality (64-tap).
-    const SINC_LEN_NORMAL: usize = 64;
-    /// Sinc filter length for good quality (128-tap).
-    const SINC_LEN_GOOD: usize = 128;
-    /// Sinc filter length for high quality (256-tap).
-    const SINC_LEN_HIGH: usize = 256;
-
-    /// Cutoff frequency ratio for sinc filters.
-    const SINC_CUTOFF: f32 = 0.95;
-
     /// Oversampling factor for good/high quality sinc filters.
     const OVERSAMPLING_HIGH: usize = 256;
     /// Oversampling factor for normal quality sinc filter.
     const OVERSAMPLING_NORMAL: usize = 128;
+    /// Cutoff frequency ratio for sinc filters.
+    const SINC_CUTOFF: f32 = 0.95;
+
+    /// Sinc filter length for good quality (128-tap).
+    const SINC_LEN_GOOD: usize = 128;
+
+    /// Sinc filter length for high quality (256-tap).
+    const SINC_LEN_HIGH: usize = 256;
+    /// Sinc filter length for normal quality (64-tap).
+    const SINC_LEN_NORMAL: usize = 64;
 
     fn sinc_params(self) -> SincInterpolationParameters {
         match self {
@@ -101,6 +101,20 @@ enum ResamplerKind {
 }
 
 impl ResamplerKind {
+    fn input_frames_next(&self) -> usize {
+        match self {
+            Self::Poly(r) | Self::Sinc(r) => r.input_frames_next(),
+            Self::Fft(r) => r.input_frames_next(),
+        }
+    }
+
+    fn output_frames_next(&self) -> usize {
+        match self {
+            Self::Poly(r) | Self::Sinc(r) => r.output_frames_next(),
+            Self::Fft(r) => r.output_frames_next(),
+        }
+    }
+
     fn process_into_buffer(
         &mut self,
         input: &[Vec<f32>],
@@ -131,20 +145,6 @@ impl ResamplerKind {
         }
     }
 
-    fn input_frames_next(&self) -> usize {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r.input_frames_next(),
-            Self::Fft(r) => r.input_frames_next(),
-        }
-    }
-
-    fn output_frames_next(&self) -> usize {
-        match self {
-            Self::Poly(r) | Self::Sinc(r) => r.output_frames_next(),
-            Self::Fft(r) => r.output_frames_next(),
-        }
-    }
-
     fn set_resample_ratio(&mut self, ratio: f64, ramp: bool) -> Result<(), rubato::ResampleError> {
         match self {
             Self::Poly(r) | Self::Sinc(r) => r.set_resample_ratio(ratio, ramp),
@@ -159,10 +159,6 @@ impl ResamplerKind {
 #[derive(Setters)]
 #[setters(prefix = "with_")]
 pub struct ResamplerParams {
-    /// Number of audio channels.
-    pub channels: usize,
-    /// Number of input frames per resampler processing block.
-    pub chunk_size: usize,
     /// Shared atomic for dynamic host sample rate tracking.
     pub host_sample_rate: Arc<AtomicU32>,
     /// Shared atomic for dynamic playback rate (1.0 = normal speed).
@@ -176,6 +172,10 @@ pub struct ResamplerParams {
     pub quality: ResamplerQuality,
     /// Initial source sample rate.
     pub source_sample_rate: u32,
+    /// Number of audio channels.
+    pub channels: usize,
+    /// Number of input frames per resampler processing block.
+    pub chunk_size: usize,
 }
 
 impl ResamplerParams {
@@ -200,43 +200,43 @@ impl ResamplerParams {
 /// When `host_sample_rate == 0` or equals `source_rate` and `playback_rate == 1.0`,
 /// operates in passthrough mode.
 pub struct ResamplerProcessor {
-    channels: usize,
-    chunk_size: usize,
-    current_playback_rate: f64,
-    current_ratio: f64,
     host_sample_rate: Arc<AtomicU32>,
-    /// Accumulated input buffer (planar format).
-    input_buffer: SmallVec<[Vec<f32>; 8]>,
-    output_spec: PcmSpec,
     /// Shared atomic for dynamic playback rate tracking.
     playback_rate: Arc<AtomicF32>,
-    /// Pool for interleave output buffers.
-    pool: PcmPool,
-    quality: ResamplerQuality,
-    resampler: Option<ResamplerKind>,
-    source_rate: u32,
-    // Reusable temporary buffers
-    temp_deinterleave: SmallVec<[Vec<f32>; 8]>,
-    temp_input_slice: SmallVec<[Vec<f32>; 8]>,
-    temp_output_all: SmallVec<[Vec<f32>; 8]>,
-    temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
     /// Most recently observed input `PcmMeta`. Carried over to each
     /// resampled output chunk so the timeline still gets the decoder's
     /// authoritative `timestamp` / `end_timestamp` after rate
     /// conversion (rubato changes frame counts but not wall-clock
     /// duration). `None` until the first input chunk arrives.
     last_input_meta: Option<PcmMeta>,
+    resampler: Option<ResamplerKind>,
+    /// Pool for interleave output buffers.
+    pool: PcmPool,
+    output_spec: PcmSpec,
+    quality: ResamplerQuality,
+    /// Accumulated input buffer (planar format).
+    input_buffer: SmallVec<[Vec<f32>; 8]>,
+    // Reusable temporary buffers
+    temp_deinterleave: SmallVec<[Vec<f32>; 8]>,
+    temp_input_slice: SmallVec<[Vec<f32>; 8]>,
+    temp_output_all: SmallVec<[Vec<f32>; 8]>,
+    temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
+    current_playback_rate: f64,
+    current_ratio: f64,
+    source_rate: u32,
+    channels: usize,
+    chunk_size: usize,
 }
 
 impl ResamplerProcessor {
     /// Default resampler chunk size in frames.
     const DEFAULT_CHUNK_SIZE: usize = 4096;
 
-    /// Maximum ratio adjustment factor for async resamplers.
-    const MAX_RATIO_ADJUSTMENT: f64 = 8.0;
-
     /// Sub-chunk count for FFT resampler.
     const FFT_SUB_CHUNKS: usize = 2;
+
+    /// Maximum ratio adjustment factor for async resamplers.
+    const MAX_RATIO_ADJUSTMENT: f64 = 8.0;
 
     /// Minimum playback rate to avoid division by zero or extreme ratios.
     const MIN_PLAYBACK_RATE: f64 = 0.01;
@@ -296,50 +296,36 @@ impl ResamplerProcessor {
         processor
     }
 
-    /// Flush remaining data from buffer (called at end of stream).
-    pub fn flush_buffer(&mut self) -> Option<PcmChunk> {
-        self.resampler.as_ref()?;
-
-        if self.input_buffer[0].is_empty() {
-            return None;
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    fn append_to_buffer(&mut self, interleaved: &[f32]) {
+        if interleaved.is_empty() {
+            return;
         }
 
-        let input_frames = self.resampler.as_ref()?.input_frames_next();
-        let channels = self.channels;
-        let buffered = self.input_buffer[0].len();
+        let frames = interleaved.len() / self.channels;
 
-        self.pad_input_for_flush(input_frames, buffered);
-
-        self.ensure_temp_buffers(channels);
-
-        let output_frames = {
-            let resampler = self.resampler.as_ref()?;
-            resampler.output_frames_next()
-        };
-
-        let result = {
-            let mut resampler = self.resampler.take()?;
-            let res = self.process_block(&mut resampler, input_frames, output_frames);
-            self.resampler = Some(resampler);
-            res
-        };
-
-        match result {
-            Ok(out_len) => self.build_flush_output(buffered, out_len),
-            Err(e) => {
-                trace!(err = %e, "Resampler flush error");
-                None
-            }
+        if self.temp_deinterleave.len() < self.channels {
+            self.temp_deinterleave.resize_with(self.channels, Vec::new);
         }
-    }
 
-    /// Pad input buffer with zeros so a final block can be processed.
-    fn pad_input_for_flush(&mut self, input_frames: usize, buffered: usize) {
-        let padding_needed = input_frames.saturating_sub(buffered);
-        for buf in &mut self.input_buffer {
-            buf.extend(iter::repeat_n(0.0, padding_needed));
+        // Resize each channel buffer to needed size (reuses existing capacity)
+        for buf in &mut self.temp_deinterleave[..self.channels] {
+            buf.resize(frames, 0.0);
         }
-        debug!(buffered, padding_needed, "Flushing resampler buffer");
+
+        // Use fast_interleave (SIMD-optimized) to deinterleave
+        let num_channels = NonZeroUsize::new(self.channels).expect("channels must be > 0");
+        deinterleave_variable(
+            interleaved,
+            num_channels,
+            &mut self.temp_deinterleave[..self.channels],
+            0..frames,
+        );
+
+        // Append deinterleaved data to existing input buffers
+        for ch in 0..self.channels {
+            self.input_buffer[ch].extend_from_slice(&self.temp_deinterleave[ch][..frames]);
+        }
     }
 
     /// Assemble the final `PcmChunk` from a successful flush `process_block`.
@@ -389,15 +375,6 @@ impl ResamplerProcessor {
         Some(PcmChunk::new(meta, interleaved))
     }
 
-    fn is_passthrough(&self) -> bool {
-        self.resampler.is_none()
-    }
-
-    fn should_passthrough(source_rate: u32, target_rate: u32, playback_rate: f64) -> bool {
-        (source_rate == target_rate || target_rate == 0)
-            && (playback_rate - 1.0).abs() < Self::PASSTHROUGH_TOLERANCE
-    }
-
     fn create_resampler(
         quality: ResamplerQuality,
         ratio: f64,
@@ -440,208 +417,6 @@ impl ResamplerProcessor {
                 )?;
                 Ok(ResamplerKind::Fft(Box::new(fft)))
             }
-        }
-    }
-
-    fn update_resampler_if_needed(&mut self) {
-        let target_rate = self.target_rate();
-        self.output_spec.sample_rate = target_rate;
-        let new_playback_rate =
-            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
-        let should_pt = Self::should_passthrough(self.source_rate, target_rate, new_playback_rate);
-        let currently_pt = self.is_passthrough();
-        let new_ratio = self.ratio_for_target(target_rate);
-        let ratio_changed = (new_ratio - self.current_ratio).abs() > Self::PASSTHROUGH_TOLERANCE;
-
-        if should_pt {
-            self.switch_to_passthrough(target_rate, currently_pt);
-            self.current_playback_rate = new_playback_rate;
-            return;
-        }
-
-        if self.try_update_ratio(target_rate, new_ratio, currently_pt, ratio_changed) {
-            self.current_playback_rate = new_playback_rate;
-            return;
-        }
-
-        if currently_pt || self.resampler.is_none() || ratio_changed {
-            self.recreate_resampler(target_rate, new_ratio);
-            self.current_playback_rate = new_playback_rate;
-        }
-    }
-
-    fn target_rate(&self) -> u32 {
-        let host_sr = self.host_sample_rate.load(Ordering::Relaxed);
-        if host_sr == 0 {
-            self.source_rate
-        } else {
-            host_sr
-        }
-    }
-
-    fn ratio_for_target(&self, target_rate: u32) -> f64 {
-        let rate =
-            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
-        if self.source_rate > 0 {
-            f64::from(target_rate) / (f64::from(self.source_rate) * rate)
-        } else {
-            1.0 / rate
-        }
-    }
-
-    fn switch_to_passthrough(&mut self, target_rate: u32, currently_pt: bool) {
-        if !currently_pt {
-            debug!(
-                source_rate = self.source_rate,
-                target_rate, "Resampler switching to passthrough"
-            );
-            self.resampler = None;
-        }
-        self.current_ratio = 1.0;
-        for buf in &mut self.input_buffer {
-            buf.clear();
-        }
-    }
-
-    fn try_update_ratio(
-        &mut self,
-        target_rate: u32,
-        new_ratio: f64,
-        currently_pt: bool,
-        ratio_changed: bool,
-    ) -> bool {
-        if currently_pt || !ratio_changed {
-            return false;
-        }
-        let Some(ref mut resampler) = self.resampler else {
-            return false;
-        };
-
-        // rubato 1.0.1 panics with ramp=true on both sinc (neon) and poly
-        // backends. Use instant transition; chunk boundary (~93ms) provides
-        // sufficient smoothness for playback rate changes.
-        match resampler.set_resample_ratio(new_ratio, false) {
-            Ok(()) => {
-                debug!(
-                    new_ratio,
-                    source_rate = self.source_rate,
-                    target_rate,
-                    "Resampler ratio updated dynamically"
-                );
-                self.current_ratio = new_ratio;
-                true
-            }
-            Err(e) => {
-                debug!(err = %e, "Failed to update ratio dynamically, recreating");
-                self.resampler = None;
-                false
-            }
-        }
-    }
-
-    fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
-        debug!(
-            new_ratio,
-            source_rate = self.source_rate,
-            target_rate,
-            quality = ?self.quality,
-            "Resampler activated"
-        );
-
-        match Self::create_resampler(
-            self.quality,
-            new_ratio,
-            self.chunk_size,
-            self.channels,
-            self.source_rate,
-            target_rate,
-        ) {
-            Ok(resampler) => {
-                self.resampler = Some(resampler);
-                self.current_ratio = new_ratio;
-                for buf in &mut self.input_buffer {
-                    buf.clear();
-                }
-            }
-            Err(e) => {
-                debug!(err = %e, "Failed to create resampler, staying in current mode");
-            }
-        }
-    }
-
-    fn ensure_temp_buffers(&mut self, channels: usize) {
-        if self.temp_input_slice.len() < channels {
-            self.temp_input_slice.resize_with(channels, Vec::new);
-        }
-        if self.temp_output_bufs.len() < channels {
-            self.temp_output_bufs.resize_with(channels, Vec::new);
-        }
-    }
-
-    fn process_block(
-        &mut self,
-        resampler: &mut ResamplerKind,
-        input_frames: usize,
-        output_frames: usize,
-    ) -> Result<usize, rubato::ResampleError> {
-        let channels = self.channels;
-
-        for ch in 0..channels {
-            self.temp_input_slice[ch].clear();
-            self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
-        }
-
-        for ch in 0..channels {
-            self.temp_output_bufs[ch].resize(output_frames, 0.0);
-        }
-
-        let (_, out_len) = resampler.process_into_buffer(
-            &self.temp_input_slice[..channels],
-            &mut self.temp_output_bufs[..channels],
-        )?;
-        Ok(out_len)
-    }
-
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn resample(&mut self, chunk: &PcmChunk) -> Option<PcmChunk> {
-        self.resampler.as_ref()?;
-
-        // Capture the input chunk's meta so the next resampled output
-        // carries the decoder's authoritative `timestamp` /
-        // `end_timestamp` instead of `Default::default()`.
-        self.last_input_meta = Some(chunk.meta);
-        self.append_to_buffer(&chunk.pcm);
-
-        let input_frames = self.resampler.as_ref()?.input_frames_next();
-        let channels = self.channels;
-
-        if self.input_buffer[0].len() < input_frames {
-            trace!(
-                buffered = self.input_buffer[0].len(),
-                needed = input_frames,
-                "Accumulating data"
-            );
-            return None;
-        }
-
-        self.ensure_temp_buffers(channels);
-        self.reset_output_accumulator(channels);
-
-        let loop_ok = self.drive_resample_loop(channels, input_frames);
-        if !loop_ok {
-            return None;
-        }
-
-        self.finalize_resample_chunk(input_frames)
-    }
-
-    /// Clear and resize the per-channel output accumulator used by `resample`.
-    fn reset_output_accumulator(&mut self, channels: usize) {
-        if self.temp_output_all.len() < channels {
-            self.temp_output_all.resize_with(channels, Vec::new);
-        }
-        for buf in &mut self.temp_output_all {
-            buf.clear();
         }
     }
 
@@ -688,6 +463,15 @@ impl ResamplerProcessor {
         true
     }
 
+    fn ensure_temp_buffers(&mut self, channels: usize) {
+        if self.temp_input_slice.len() < channels {
+            self.temp_input_slice.resize_with(channels, Vec::new);
+        }
+        if self.temp_output_bufs.len() < channels {
+            self.temp_output_bufs.resize_with(channels, Vec::new);
+        }
+    }
+
     /// Turn the accumulated planar output into an interleaved `PcmChunk`.
     fn finalize_resample_chunk(&self, input_frames: usize) -> Option<PcmChunk> {
         if self.temp_output_all[0].is_empty() {
@@ -720,35 +504,40 @@ impl ResamplerProcessor {
         Some(PcmChunk::new(meta, interleaved))
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn append_to_buffer(&mut self, interleaved: &[f32]) {
-        if interleaved.is_empty() {
-            return;
+    /// Flush remaining data from buffer (called at end of stream).
+    pub fn flush_buffer(&mut self) -> Option<PcmChunk> {
+        self.resampler.as_ref()?;
+
+        if self.input_buffer[0].is_empty() {
+            return None;
         }
 
-        let frames = interleaved.len() / self.channels;
+        let input_frames = self.resampler.as_ref()?.input_frames_next();
+        let channels = self.channels;
+        let buffered = self.input_buffer[0].len();
 
-        if self.temp_deinterleave.len() < self.channels {
-            self.temp_deinterleave.resize_with(self.channels, Vec::new);
-        }
+        self.pad_input_for_flush(input_frames, buffered);
 
-        // Resize each channel buffer to needed size (reuses existing capacity)
-        for buf in &mut self.temp_deinterleave[..self.channels] {
-            buf.resize(frames, 0.0);
-        }
+        self.ensure_temp_buffers(channels);
 
-        // Use fast_interleave (SIMD-optimized) to deinterleave
-        let num_channels = NonZeroUsize::new(self.channels).expect("channels must be > 0");
-        deinterleave_variable(
-            interleaved,
-            num_channels,
-            &mut self.temp_deinterleave[..self.channels],
-            0..frames,
-        );
+        let output_frames = {
+            let resampler = self.resampler.as_ref()?;
+            resampler.output_frames_next()
+        };
 
-        // Append deinterleaved data to existing input buffers
-        for ch in 0..self.channels {
-            self.input_buffer[ch].extend_from_slice(&self.temp_deinterleave[ch][..frames]);
+        let result = {
+            let mut resampler = self.resampler.take()?;
+            let res = self.process_block(&mut resampler, input_frames, output_frames);
+            self.resampler = Some(resampler);
+            res
+        };
+
+        match result {
+            Ok(out_len) => self.build_flush_output(buffered, out_len),
+            Err(e) => {
+                trace!(err = %e, "Resampler flush error");
+                None
+            }
         }
     }
 
@@ -775,6 +564,217 @@ impl ResamplerProcessor {
 
         result
     }
+
+    fn is_passthrough(&self) -> bool {
+        self.resampler.is_none()
+    }
+
+    /// Pad input buffer with zeros so a final block can be processed.
+    fn pad_input_for_flush(&mut self, input_frames: usize, buffered: usize) {
+        let padding_needed = input_frames.saturating_sub(buffered);
+        for buf in &mut self.input_buffer {
+            buf.extend(iter::repeat_n(0.0, padding_needed));
+        }
+        debug!(buffered, padding_needed, "Flushing resampler buffer");
+    }
+
+    fn process_block(
+        &mut self,
+        resampler: &mut ResamplerKind,
+        input_frames: usize,
+        output_frames: usize,
+    ) -> Result<usize, rubato::ResampleError> {
+        let channels = self.channels;
+
+        for ch in 0..channels {
+            self.temp_input_slice[ch].clear();
+            self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
+        }
+
+        for ch in 0..channels {
+            self.temp_output_bufs[ch].resize(output_frames, 0.0);
+        }
+
+        let (_, out_len) = resampler.process_into_buffer(
+            &self.temp_input_slice[..channels],
+            &mut self.temp_output_bufs[..channels],
+        )?;
+        Ok(out_len)
+    }
+
+    fn ratio_for_target(&self, target_rate: u32) -> f64 {
+        let rate =
+            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
+        if self.source_rate > 0 {
+            f64::from(target_rate) / (f64::from(self.source_rate) * rate)
+        } else {
+            1.0 / rate
+        }
+    }
+
+    fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
+        debug!(
+            new_ratio,
+            source_rate = self.source_rate,
+            target_rate,
+            quality = ?self.quality,
+            "Resampler activated"
+        );
+
+        match Self::create_resampler(
+            self.quality,
+            new_ratio,
+            self.chunk_size,
+            self.channels,
+            self.source_rate,
+            target_rate,
+        ) {
+            Ok(resampler) => {
+                self.resampler = Some(resampler);
+                self.current_ratio = new_ratio;
+                for buf in &mut self.input_buffer {
+                    buf.clear();
+                }
+            }
+            Err(e) => {
+                debug!(err = %e, "Failed to create resampler, staying in current mode");
+            }
+        }
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    fn resample(&mut self, chunk: &PcmChunk) -> Option<PcmChunk> {
+        self.resampler.as_ref()?;
+
+        // Capture the input chunk's meta so the next resampled output
+        // carries the decoder's authoritative `timestamp` /
+        // `end_timestamp` instead of `Default::default()`.
+        self.last_input_meta = Some(chunk.meta);
+        self.append_to_buffer(&chunk.pcm);
+
+        let input_frames = self.resampler.as_ref()?.input_frames_next();
+        let channels = self.channels;
+
+        if self.input_buffer[0].len() < input_frames {
+            trace!(
+                buffered = self.input_buffer[0].len(),
+                needed = input_frames,
+                "Accumulating data"
+            );
+            return None;
+        }
+
+        self.ensure_temp_buffers(channels);
+        self.reset_output_accumulator(channels);
+
+        let loop_ok = self.drive_resample_loop(channels, input_frames);
+        if !loop_ok {
+            return None;
+        }
+
+        self.finalize_resample_chunk(input_frames)
+    }
+
+    /// Clear and resize the per-channel output accumulator used by `resample`.
+    fn reset_output_accumulator(&mut self, channels: usize) {
+        if self.temp_output_all.len() < channels {
+            self.temp_output_all.resize_with(channels, Vec::new);
+        }
+        for buf in &mut self.temp_output_all {
+            buf.clear();
+        }
+    }
+
+    fn should_passthrough(source_rate: u32, target_rate: u32, playback_rate: f64) -> bool {
+        (source_rate == target_rate || target_rate == 0)
+            && (playback_rate - 1.0).abs() < Self::PASSTHROUGH_TOLERANCE
+    }
+
+    fn switch_to_passthrough(&mut self, target_rate: u32, currently_pt: bool) {
+        if !currently_pt {
+            debug!(
+                source_rate = self.source_rate,
+                target_rate, "Resampler switching to passthrough"
+            );
+            self.resampler = None;
+        }
+        self.current_ratio = 1.0;
+        for buf in &mut self.input_buffer {
+            buf.clear();
+        }
+    }
+
+    fn target_rate(&self) -> u32 {
+        let host_sr = self.host_sample_rate.load(Ordering::Relaxed);
+        if host_sr == 0 {
+            self.source_rate
+        } else {
+            host_sr
+        }
+    }
+
+    fn try_update_ratio(
+        &mut self,
+        target_rate: u32,
+        new_ratio: f64,
+        currently_pt: bool,
+        ratio_changed: bool,
+    ) -> bool {
+        if currently_pt || !ratio_changed {
+            return false;
+        }
+        let Some(ref mut resampler) = self.resampler else {
+            return false;
+        };
+
+        // rubato 1.0.1 panics with ramp=true on both sinc (neon) and poly
+        // backends. Use instant transition; chunk boundary (~93ms) provides
+        // sufficient smoothness for playback rate changes.
+        match resampler.set_resample_ratio(new_ratio, false) {
+            Ok(()) => {
+                debug!(
+                    new_ratio,
+                    source_rate = self.source_rate,
+                    target_rate,
+                    "Resampler ratio updated dynamically"
+                );
+                self.current_ratio = new_ratio;
+                true
+            }
+            Err(e) => {
+                debug!(err = %e, "Failed to update ratio dynamically, recreating");
+                self.resampler = None;
+                false
+            }
+        }
+    }
+
+    fn update_resampler_if_needed(&mut self) {
+        let target_rate = self.target_rate();
+        self.output_spec.sample_rate = target_rate;
+        let new_playback_rate =
+            f64::from(self.playback_rate.load(Ordering::Relaxed)).max(Self::MIN_PLAYBACK_RATE);
+        let should_pt = Self::should_passthrough(self.source_rate, target_rate, new_playback_rate);
+        let currently_pt = self.is_passthrough();
+        let new_ratio = self.ratio_for_target(target_rate);
+        let ratio_changed = (new_ratio - self.current_ratio).abs() > Self::PASSTHROUGH_TOLERANCE;
+
+        if should_pt {
+            self.switch_to_passthrough(target_rate, currently_pt);
+            self.current_playback_rate = new_playback_rate;
+            return;
+        }
+
+        if self.try_update_ratio(target_rate, new_ratio, currently_pt, ratio_changed) {
+            self.current_playback_rate = new_playback_rate;
+            return;
+        }
+
+        if currently_pt || self.resampler.is_none() || ratio_changed {
+            self.recreate_resampler(target_rate, new_ratio);
+            self.current_playback_rate = new_playback_rate;
+        }
+    }
 }
 
 /// Create a `SmallVec` of empty Vecs for each channel.
@@ -784,6 +784,15 @@ fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
 }
 
 impl ResamplerProcessor {
+    /// Apply incoming chunk spec changes in-place (channels first, then rate).
+    fn apply_source_spec_changes(&mut self, chunk_channels: usize, chunk_rate: u32) {
+        if chunk_channels != self.channels {
+            self.handle_channel_change(chunk_channels, chunk_rate);
+        } else if chunk_rate != self.source_rate {
+            self.handle_source_rate_change(chunk_rate);
+        }
+    }
+
     /// React to a changed channel count in incoming chunks (ABR switch).
     fn handle_channel_change(&mut self, chunk_channels: usize, chunk_rate: u32) {
         debug!(
@@ -822,15 +831,6 @@ impl ResamplerProcessor {
         }
     }
 
-    /// Apply incoming chunk spec changes in-place (channels first, then rate).
-    fn apply_source_spec_changes(&mut self, chunk_channels: usize, chunk_rate: u32) {
-        if chunk_channels != self.channels {
-            self.handle_channel_change(chunk_channels, chunk_rate);
-        } else if chunk_rate != self.source_rate {
-            self.handle_source_rate_change(chunk_rate);
-        }
-    }
-
     /// Passthrough path: take the chunk, stamp the current output spec, return it.
     fn passthrough_chunk(&self, mut chunk: PcmChunk) -> PcmChunk {
         trace!(
@@ -845,6 +845,10 @@ impl ResamplerProcessor {
 }
 
 impl AudioEffect for ResamplerProcessor {
+    fn flush(&mut self) -> Option<PcmChunk> {
+        self.flush_buffer()
+    }
+
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
         let chunk_rate = chunk.spec().sample_rate;
@@ -865,10 +869,6 @@ impl AudioEffect for ResamplerProcessor {
             "Resampling"
         );
         self.resample(&chunk)
-    }
-
-    fn flush(&mut self) -> Option<PcmChunk> {
-        self.flush_buffer()
     }
 
     fn reset(&mut self) {

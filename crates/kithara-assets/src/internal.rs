@@ -32,6 +32,15 @@ pub struct PinsIndex {
 }
 
 impl PinsIndex {
+    /// Load current pinned-asset set.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if reading from storage fails.
+    pub fn load(&self) -> AssetsResult<HashSet<String>> {
+        Ok(self.inner.snapshot())
+    }
+
     /// Open `pins.bin` through the given base assets store. Hydrates
     /// initial state from disk; mutations through `store` flush
     /// immediately.
@@ -47,15 +56,6 @@ impl PinsIndex {
         Ok(Self {
             inner: crate::index::PinsIndex::with_persist_at(path, CancellationToken::new(), pool),
         })
-    }
-
-    /// Load current pinned-asset set.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if reading from storage fails.
-    pub fn load(&self) -> AssetsResult<HashSet<String>> {
-        Ok(self.inner.snapshot())
     }
 
     /// Persist pinned-asset set, replacing any existing state.

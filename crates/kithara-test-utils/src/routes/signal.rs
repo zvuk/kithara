@@ -320,8 +320,8 @@ fn pcm_stream_chunk_size(channels: u16) -> usize {
 struct InfiniteWavState<S: signal::SignalFn> {
     header: Option<Bytes>,
     pcm: SignalPcm<S>,
-    offset: usize,
     chunk_size: usize,
+    offset: usize,
 }
 
 #[cfg(test)]

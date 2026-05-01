@@ -44,24 +44,24 @@ impl CodecConfig {
 #[derive(Debug, Clone)]
 pub(crate) struct Fmp4InitInfo {
     pub(crate) codec: AudioCodec,
-    pub(crate) timescale: u32,
-    pub(crate) sample_rate: u32,
-    pub(crate) channels: u16,
     pub(crate) config: CodecConfig,
+    pub(crate) channels: u16,
+    pub(crate) sample_rate: u32,
+    pub(crate) timescale: u32,
     pub(crate) track_id: u32,
 }
 
 /// Per-frame view into a single media segment's buffer.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Fmp4Frame {
+    /// Frame duration in ticks.
+    pub(crate) duration: u32,
+    /// Absolute decode time in `init.timescale` ticks.
+    pub(crate) decode_time: u64,
     /// Offset of frame bytes inside the segment buffer.
     pub(crate) offset: usize,
     /// Frame byte size.
     pub(crate) size: usize,
-    /// Absolute decode time in `init.timescale` ticks.
-    pub(crate) decode_time: u64,
-    /// Frame duration in ticks.
-    pub(crate) duration: u32,
 }
 
 /// Parse an `EXT-X-MAP` init segment.
@@ -117,10 +117,10 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
 
     Ok(Fmp4InitInfo {
         codec,
-        timescale,
-        sample_rate,
-        channels,
         config,
+        channels,
+        sample_rate,
+        timescale,
         track_id,
     })
 }

@@ -25,11 +25,11 @@ use crate::{
 
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
+    pub preload_notify: Arc<Notify>,
     pub source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     pub outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
-    pub preload_notify: Arc<Notify>,
-    pub preload_chunks: usize,
     pub service_class: ServiceClass,
+    pub preload_chunks: usize,
 }
 
 /// Clonable handle to a shared audio worker.
@@ -37,8 +37,8 @@ pub(crate) struct TrackRegistration {
 /// Multiple [`Audio`](crate::Audio) handles can share one worker by cloning
 /// the handle and passing it via [`AudioConfig`](crate::AudioConfig).
 pub struct AudioWorkerHandle {
-    inner: SchedulerHandle<Box<dyn crate::runtime::Node>>,
     id_gen: Arc<TrackIdGen>,
+    inner: SchedulerHandle<Box<dyn crate::runtime::Node>>,
 }
 
 impl Clone for AudioWorkerHandle {
@@ -81,24 +81,24 @@ impl AudioWorkerHandle {
         id
     }
 
-    /// Remove a track by ID.
-    pub(crate) fn unregister_track(&self, track_id: TrackId) {
-        self.inner.unregister(track_id);
-    }
-
     /// Update scheduling priority for a track.
     pub(crate) fn set_service_class(&self, track_id: TrackId, class: ServiceClass) {
         self.inner.set_service_class(track_id, class);
     }
 
-    /// Wake the worker (e.g. when new data arrives from downloader).
-    pub fn wake(&self) {
-        self.inner.wake();
-    }
-
     /// Request graceful shutdown and cancel the worker.
     pub fn shutdown(&self) {
         self.inner.shutdown();
+    }
+
+    /// Remove a track by ID.
+    pub(crate) fn unregister_track(&self, track_id: TrackId) {
+        self.inner.unregister(track_id);
+    }
+
+    /// Wake the worker (e.g. when new data arrives from downloader).
+    pub fn wake(&self) {
+        self.inner.wake();
     }
 }
 
@@ -138,10 +138,10 @@ mod tests {
 
     struct MockSource {
         timeline: Timeline,
-        chunks_to_produce: usize,
-        cursor: usize,
         ready: bool,
         should_panic: bool,
+        chunks_to_produce: usize,
+        cursor: usize,
     }
 
     impl MockSource {

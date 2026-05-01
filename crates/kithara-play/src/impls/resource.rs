@@ -33,8 +33,8 @@ use crate::impls::{config::ResourceConfig, source_type::SourceType};
 /// ```
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
-    bus: EventBus,
     src: Arc<str>,
+    bus: EventBus,
 }
 
 impl Resource {

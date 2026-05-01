@@ -89,14 +89,14 @@ pub(crate) struct FileInner {
     /// Codec discovered from the HTTP `Content-Type` header on first connect.
     /// Set at most once by the download driver.
     pub(crate) content_type_codec: OnceLock<AudioCodec>,
-    pub(crate) headers: Option<Headers>,
-    pub(crate) key: ResourceKey,
-    pub(crate) url: Url,
     /// Lazily-built fragmented-mp4 segment index. Populated on first
     /// segment-method call once the file is fully cached and parses
     /// as fragmented mp4. Stays empty for non-mp4 files, classic mp4
     /// (no `moof` chain), or while the file is still downloading.
     pub(crate) segment_index: OnceLock<FileSegmentIndex>,
+    pub(crate) headers: Option<Headers>,
+    pub(crate) key: ResourceKey,
+    pub(crate) url: Url,
 
     // --- mutable state (no Mutex needed) ---
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.

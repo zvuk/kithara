@@ -61,74 +61,23 @@ impl std::fmt::Debug for PinsIndex {
 }
 
 struct PinsInner {
+    dirty: AtomicBool,
     pins: Mutex<HashMap<String, NonZeroU32>>,
-    persist: Option<PinsPersist>,
     /// Set by [`FlushHub::register`]. While `None`, mutators flush
     /// synchronously through [`Flushable::flush`] directly — matches
     /// the historical inline-flush path for ad-hoc tests that never
     /// attach a hub.
     hub: OnceLock<Arc<FlushHub>>,
-    dirty: AtomicBool,
+    persist: Option<PinsPersist>,
 }
 
 struct PinsPersist {
-    path: PathBuf,
     cancel: CancellationToken,
     res: OnceLock<Atomic<MmapResource>>,
+    path: PathBuf,
 }
 
 impl PinsIndex {
-    /// Construct an ephemeral index (mem backend mode).
-    ///
-    /// State lives only as long as this `Arc` is reachable; nothing
-    /// is written to disk.
-    pub(crate) fn ephemeral() -> Self {
-        Self {
-            inner: Arc::new(PinsInner {
-                pins: Mutex::new(HashMap::new()),
-                persist: None,
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-            }),
-        }
-    }
-
-    /// Construct a disk-backed index rooted at `path`.
-    ///
-    /// If the file already exists and is non-empty, it is opened and
-    /// hydrated synchronously. Otherwise the disk file is **not**
-    /// materialised — it appears the first time [`Self::add`] /
-    /// [`Self::remove`] flush a real change.
-    pub(crate) fn with_persist_at(
-        path: PathBuf,
-        cancel: CancellationToken,
-        pool: &BytePool,
-    ) -> Self {
-        let (initial, opened) = hydrate_existing(&path, &cancel, pool);
-        Self {
-            inner: Arc::new(PinsInner {
-                pins: Mutex::new(initial),
-                persist: Some(PinsPersist {
-                    path,
-                    cancel,
-                    res: opened.map_or_else(OnceLock::new, |a| {
-                        let cell = OnceLock::new();
-                        cell.set(a)
-                            .unwrap_or_else(|_| unreachable!("freshly created cell"));
-                        cell
-                    }),
-                }),
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-            }),
-        }
-    }
-
-    /// Snapshot of currently pinned `asset_root`s (keys only — refcount stays internal).
-    pub(crate) fn snapshot(&self) -> HashSet<String> {
-        self.inner.pins.lock_sync().keys().cloned().collect()
-    }
-
     /// Pin an `asset_root`. Returns `true` on the 0→1 transition (newly pinned),
     /// `false` when an existing pin's refcount was incremented.
     ///
@@ -158,6 +107,51 @@ impl PinsIndex {
             signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
         }
         Ok(transitioned)
+    }
+
+    /// Bind this index to a [`FlushHub`] for coordinated flushing.
+    /// Called once per index instance; subsequent calls are no-ops.
+    pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
+        if self.inner.hub.set(Arc::clone(hub)).is_err() {
+            return;
+        }
+        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
+    }
+
+    /// Whether `asset_root` is currently pinned.
+    #[cfg(test)]
+    pub(crate) fn contains(&self, asset_root: &str) -> bool {
+        self.inner.pins.lock_sync().contains_key(asset_root)
+    }
+
+    /// Construct an ephemeral index (mem backend mode).
+    ///
+    /// State lives only as long as this `Arc` is reachable; nothing
+    /// is written to disk.
+    pub(crate) fn ephemeral() -> Self {
+        Self {
+            inner: Arc::new(PinsInner {
+                pins: Mutex::new(HashMap::new()),
+                persist: None,
+                hub: OnceLock::new(),
+                dirty: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
+    /// when a hub is attached (drains every dirty source) or runs the
+    /// inline serialise+write path otherwise. Used by explicit
+    /// checkpoint paths (`LeaseAssets::flush_pins`, `internal::*`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates the first per-source flush error encountered.
+    pub(crate) fn flush(&self) -> AssetsResult<()> {
+        self.inner
+            .hub
+            .get()
+            .map_or_else(|| Flushable::flush(&*self.inner), |hub| hub.flush_now())
     }
 
     /// Unpin an `asset_root`. Returns `true` on the 1→0 transition (entry
@@ -193,42 +187,44 @@ impl PinsIndex {
         Ok(transitioned)
     }
 
-    /// Whether `asset_root` is currently pinned.
-    #[cfg(test)]
-    pub(crate) fn contains(&self, asset_root: &str) -> bool {
-        self.inner.pins.lock_sync().contains_key(asset_root)
+    /// Snapshot of currently pinned `asset_root`s (keys only — refcount stays internal).
+    pub(crate) fn snapshot(&self) -> HashSet<String> {
+        self.inner.pins.lock_sync().keys().cloned().collect()
     }
 
-    /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
-    /// when a hub is attached (drains every dirty source) or runs the
-    /// inline serialise+write path otherwise. Used by explicit
-    /// checkpoint paths (`LeaseAssets::flush_pins`, `internal::*`).
+    /// Construct a disk-backed index rooted at `path`.
     ///
-    /// # Errors
-    ///
-    /// Propagates the first per-source flush error encountered.
-    pub(crate) fn flush(&self) -> AssetsResult<()> {
-        self.inner
-            .hub
-            .get()
-            .map_or_else(|| Flushable::flush(&*self.inner), |hub| hub.flush_now())
-    }
-
-    /// Bind this index to a [`FlushHub`] for coordinated flushing.
-    /// Called once per index instance; subsequent calls are no-ops.
-    pub(crate) fn attach_to(&self, hub: &Arc<FlushHub>) {
-        if self.inner.hub.set(Arc::clone(hub)).is_err() {
-            return;
+    /// If the file already exists and is non-empty, it is opened and
+    /// hydrated synchronously. Otherwise the disk file is **not**
+    /// materialised — it appears the first time [`Self::add`] /
+    /// [`Self::remove`] flush a real change.
+    pub(crate) fn with_persist_at(
+        path: PathBuf,
+        cancel: CancellationToken,
+        pool: &BytePool,
+    ) -> Self {
+        let (initial, opened) = hydrate_existing(&path, &cancel, pool);
+        Self {
+            inner: Arc::new(PinsInner {
+                pins: Mutex::new(initial),
+                persist: Some(PinsPersist {
+                    path,
+                    cancel,
+                    res: opened.map_or_else(OnceLock::new, |a| {
+                        let cell = OnceLock::new();
+                        cell.set(a)
+                            .unwrap_or_else(|_| unreachable!("freshly created cell"));
+                        cell
+                    }),
+                }),
+                hub: OnceLock::new(),
+                dirty: AtomicBool::new(false),
+            }),
         }
-        hub.register(Arc::downgrade(&self.inner) as Weak<dyn Flushable>);
     }
 }
 
 impl Flushable for PinsInner {
-    fn name(&self) -> &'static str {
-        "pins"
-    }
-
     fn dirty(&self) -> &AtomicBool {
         &self.dirty
     }
@@ -242,6 +238,10 @@ impl Flushable for PinsInner {
 
     fn flush_durable(&self) -> AssetsResult<()> {
         self.flush_with_durability(true)
+    }
+
+    fn name(&self) -> &'static str {
+        "pins"
     }
 }
 

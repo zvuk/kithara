@@ -611,12 +611,12 @@ enum PeerTag {
 /// tag when the response arrives. `priority()` reads the shared
 /// Timeline so a mid-stream flip of `set_playing` is observable.
 struct TaggedPriorityPeer {
-    timeline: crate::Timeline,
-    remaining: Mutex<usize>,
-    url: Url,
-    completion_log: Arc<Mutex<Vec<(PeerTag, usize)>>>,
     completion_counter: Arc<AtomicUsize>,
+    completion_log: Arc<Mutex<Vec<(PeerTag, usize)>>>,
+    remaining: Mutex<usize>,
     tag: PeerTag,
+    timeline: crate::Timeline,
+    url: Url,
 }
 
 impl Abr for TaggedPriorityPeer {}

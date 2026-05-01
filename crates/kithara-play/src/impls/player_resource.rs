@@ -22,11 +22,11 @@ use crate::impls::resource::Resource;
 /// reads from these buffers, avoiding direct interaction with the
 /// potentially-blocking decoder on every callback.
 pub(crate) struct PlayerResource {
+    src: Arc<str>,
     resource: Resource,
     channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
     write_len: usize,
     write_pos: usize,
-    src: Arc<str>,
 }
 
 impl PlayerResource {
@@ -257,8 +257,8 @@ mod tests {
 
     struct PendingReader {
         bus: EventBus,
-        meta: TrackMetadata,
         spec: PcmSpec,
+        meta: TrackMetadata,
     }
 
     impl PendingReader {

@@ -31,12 +31,12 @@ pub enum SessionMode {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct SessionOptions {
-    pub mix_with_others: bool,
-    pub duck_others: bool,
+    pub allow_air_play: bool,
     pub allow_bluetooth: bool,
     pub allow_bluetooth_a2dp: bool,
-    pub allow_air_play: bool,
     pub default_to_speaker: bool,
+    pub duck_others: bool,
+    pub mix_with_others: bool,
 }
 
 #[cfg_attr(

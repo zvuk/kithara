@@ -24,8 +24,8 @@ use crate::{
 };
 
 struct SegmentCursor {
-    read: SegmentReadState,
     frames: Option<DecodedFrames>,
+    read: SegmentReadState,
 }
 
 struct DecodedFrames {
@@ -35,16 +35,50 @@ struct DecodedFrames {
 
 /// fMP4 segment-aware demuxer.
 pub(crate) struct Fmp4SegmentDemuxer {
-    init: Fmp4InitInfo,
-    track_info: TrackInfo,
-    source: BoxedSource,
     segments: Arc<dyn SegmentLayout>,
-    next_byte: u64,
+    source: BoxedSource,
+    init: Fmp4InitInfo,
     cursor: Option<SegmentCursor>,
     duration: Option<Duration>,
+    track_info: TrackInfo,
+    next_byte: u64,
 }
 
 impl Fmp4SegmentDemuxer {
+    fn ensure_cursor(&mut self) -> EnsureCursor {
+        if self.cursor.is_some() {
+            return EnsureCursor::Ready;
+        }
+        let Some(desc) = self.segments.segment_after_byte(self.next_byte) else {
+            return EnsureCursor::Eof;
+        };
+        self.next_byte = desc.byte_range.end;
+        self.cursor = Some(SegmentCursor {
+            read: SegmentReadState::new(desc.byte_range),
+            frames: None,
+        });
+        EnsureCursor::Ready
+    }
+
+    fn fill_cursor(&mut self) -> DecodeResult<FillStatus> {
+        let cursor = self
+            .cursor
+            .as_mut()
+            .expect("ensure_cursor must run before fill_cursor");
+        if cursor.frames.is_some() {
+            return Ok(FillStatus::Ready);
+        }
+        let status = fill_segment_buffer(&mut self.source, &mut cursor.read)?;
+        if matches!(status, FillStatus::Ready) {
+            let frames = parse_segment_frames(&self.init, &cursor.read.buffer)?;
+            cursor.frames = Some(DecodedFrames {
+                frames,
+                next_index: 0,
+            });
+        }
+        Ok(status)
+    }
+
     /// Build a demuxer by fetching + parsing the init segment.
     ///
     /// `source` is the byte-level Read/Seek cursor; `segments` is the
@@ -85,40 +119,6 @@ impl Fmp4SegmentDemuxer {
             duration,
         })
     }
-
-    fn ensure_cursor(&mut self) -> EnsureCursor {
-        if self.cursor.is_some() {
-            return EnsureCursor::Ready;
-        }
-        let Some(desc) = self.segments.segment_after_byte(self.next_byte) else {
-            return EnsureCursor::Eof;
-        };
-        self.next_byte = desc.byte_range.end;
-        self.cursor = Some(SegmentCursor {
-            read: SegmentReadState::new(desc.byte_range),
-            frames: None,
-        });
-        EnsureCursor::Ready
-    }
-
-    fn fill_cursor(&mut self) -> DecodeResult<FillStatus> {
-        let cursor = self
-            .cursor
-            .as_mut()
-            .expect("ensure_cursor must run before fill_cursor");
-        if cursor.frames.is_some() {
-            return Ok(FillStatus::Ready);
-        }
-        let status = fill_segment_buffer(&mut self.source, &mut cursor.read)?;
-        if matches!(status, FillStatus::Ready) {
-            let frames = parse_segment_frames(&self.init, &cursor.read.buffer)?;
-            cursor.frames = Some(DecodedFrames {
-                frames,
-                next_index: 0,
-            });
-        }
-        Ok(status)
-    }
 }
 
 enum EnsureCursor {
@@ -127,10 +127,6 @@ enum EnsureCursor {
 }
 
 impl Demuxer for Fmp4SegmentDemuxer {
-    fn track_info(&self) -> &TrackInfo {
-        &self.track_info
-    }
-
     fn duration(&self) -> Option<Duration> {
         self.duration
     }
@@ -214,6 +210,10 @@ impl Demuxer for Fmp4SegmentDemuxer {
             landed_at,
             landed_byte: Some(landed_byte),
         })
+    }
+
+    fn track_info(&self) -> &TrackInfo {
+        &self.track_info
     }
 }
 

@@ -8,9 +8,9 @@ use crate::{error::PlayError, types::SlotId};
 #[derivative(Default)]
 #[non_exhaustive]
 pub struct BeatGrid {
+    pub offset: Duration,
     #[derivative(Default(value = "120.0"))]
     pub bpm: f64,
-    pub offset: Duration,
     #[derivative(Default(value = "4"))]
     pub beats_per_bar: u8,
 }

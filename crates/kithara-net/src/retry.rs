@@ -42,17 +42,17 @@ impl DefaultRetryPolicy {
 
 /// Retry decorator for Net implementations
 pub struct RetryNet<N, P> {
+    cancel: CancellationToken,
     inner: N,
     retry_policy: P,
-    cancel: CancellationToken,
 }
 
 impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
     pub fn new(inner: N, retry_policy: P, cancel: CancellationToken) -> Self {
         Self {
+            cancel,
             inner,
             retry_policy,
-            cancel,
         }
     }
 

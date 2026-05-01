@@ -36,21 +36,21 @@ impl std::fmt::Debug for Downloader {
 
 /// Peer registration entry sent to the download loop.
 pub(super) struct RegisteredPeerEntry {
-    pub(super) peer: Arc<dyn Peer>,
-    pub(super) cmd_rx: mpsc::Receiver<super::peer::InternalCmd>,
-    /// Handle's cancel token. Fires from `PeerInner::Drop` when the last
-    /// `PeerHandle` clone is released, letting the [`Registry`] drop the
-    /// peer entry (and its `Arc<dyn Peer>`).
-    pub(super) cancel: CancellationToken,
+    /// ABR peer identifier assigned at registration. The Registry stamps
+    /// every proactively-scheduled `InternalCmd` with this id so the
+    /// Downloader can credit bandwidth samples to the right peer.
+    pub(super) peer_id: AbrPeerId,
     /// Shared bus reference. Written by
     /// [`PeerHandle::with_bus`](super::peer::PeerHandle::with_bus), read
     /// by the Registry when dispatching fetches so that
     /// `DownloaderEvent::LoadSlow` lands on the owning track's bus.
     pub(super) bus: Arc<RwLock<Option<EventBus>>>,
-    /// ABR peer identifier assigned at registration. The Registry stamps
-    /// every proactively-scheduled `InternalCmd` with this id so the
-    /// Downloader can credit bandwidth samples to the right peer.
-    pub(super) peer_id: AbrPeerId,
+    pub(super) peer: Arc<dyn Peer>,
+    /// Handle's cancel token. Fires from `PeerInner::Drop` when the last
+    /// `PeerHandle` clone is released, letting the [`Registry`] drop the
+    /// peer entry (and its `Arc<dyn Peer>`).
+    pub(super) cancel: CancellationToken,
+    pub(super) cmd_rx: mpsc::Receiver<super::peer::InternalCmd>,
 }
 
 /// Shared inner state for the downloader.
@@ -58,27 +58,27 @@ pub(super) struct RegisteredPeerEntry {
 /// Both [`Downloader`] and [`PeerHandle`] hold an `Arc` to this; cloning
 /// either is just an Arc bump.
 pub(super) struct DownloaderInner {
-    pub(super) client: HttpClient,
-    pub(super) cancel: CancellationToken,
-    pub(super) chunk_timeout: Duration,
-    pub(super) soft_timeout: Duration,
-    pub(super) runtime: Option<tokio::runtime::Handle>,
-    pub(super) max_concurrent: usize,
-    pub(super) demand_throttle: Duration,
-    /// Global in-flight fetch counter. Limits total concurrent HTTP
-    /// connections across all peers and command types.
-    pub(super) inflight: Arc<AtomicUsize>,
-    /// Waker fired when a fetch task completes (inflight decremented).
-    /// Wakes `poll_fn` in `Registry::tick` so it can spawn more work.
-    pub(super) fetch_waker: Arc<AtomicWaker>,
-    /// Sender for registering new peers (cold path).
-    pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
-    /// Receiver — taken once by [`ensure_spawned`](Downloader::ensure_spawned).
-    pub(super) register_rx: Mutex<Option<mpsc::UnboundedReceiver<RegisteredPeerEntry>>>,
     /// Shared ABR controller. One per Downloader — peers register through
     /// `register()` and fetch-completion hooks call
     /// `controller.record_bandwidth(...)` automatically.
     pub(super) abr: Arc<AbrController>,
+    /// Waker fired when a fetch task completes (inflight decremented).
+    /// Wakes `poll_fn` in `Registry::tick` so it can spawn more work.
+    pub(super) fetch_waker: Arc<AtomicWaker>,
+    /// Global in-flight fetch counter. Limits total concurrent HTTP
+    /// connections across all peers and command types.
+    pub(super) inflight: Arc<AtomicUsize>,
+    pub(super) cancel: CancellationToken,
+    pub(super) chunk_timeout: Duration,
+    pub(super) demand_throttle: Duration,
+    pub(super) soft_timeout: Duration,
+    pub(super) client: HttpClient,
+    /// Receiver — taken once by [`ensure_spawned`](Downloader::ensure_spawned).
+    pub(super) register_rx: Mutex<Option<mpsc::UnboundedReceiver<RegisteredPeerEntry>>>,
+    pub(super) runtime: Option<tokio::runtime::Handle>,
+    /// Sender for registering new peers (cold path).
+    pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
+    pub(super) max_concurrent: usize,
     /// Monotonic source of [`kithara_events::RequestId`]s assigned to
     /// every command this Downloader accepts. Starts at 1 (`NonZero`
     /// invariant); never wraps in practice (`u64`).

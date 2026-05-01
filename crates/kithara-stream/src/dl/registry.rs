@@ -106,26 +106,26 @@ fn slot_index(peer_prio: RequestPriority, cmd_prio: RequestPriority) -> usize {
 
 /// Per-peer entry in the registry.
 struct PeerEntry {
-    peer: Arc<dyn Peer>,
-    cmd_rx: mpsc::Receiver<InternalCmd>,
-    peer_cancel: CancellationToken,
-    peer_done: bool,
-    /// Same Arc as the owning [`PeerHandle`]'s bus. Read-snapshot on
-    /// every proactive poll so `PeerHandle::with_bus` takes effect
-    /// immediately.
-    bus: Arc<RwLock<Option<EventBus>>>,
     /// ABR peer id stamped on every proactively-scheduled `InternalCmd`
     /// so the Downloader can credit bandwidth samples when the fetch
     /// completes.
     peer_id: AbrPeerId,
+    /// Same Arc as the owning [`PeerHandle`]'s bus. Read-snapshot on
+    /// every proactive poll so `PeerHandle::with_bus` takes effect
+    /// immediately.
+    bus: Arc<RwLock<Option<EventBus>>>,
+    peer: Arc<dyn Peer>,
+    peer_cancel: CancellationToken,
+    cmd_rx: mpsc::Receiver<InternalCmd>,
+    peer_done: bool,
 }
 
 /// Peer registry: owns peers, routes commands to priority slots,
 /// and drives batch execution.
 pub(super) struct Registry {
+    urgent_notify: Arc<Notify>,
     peers: Arena<PeerEntry>,
     slots: [VecDeque<SlotEntry>; SLOT_COUNT],
-    urgent_notify: Arc<Notify>,
 }
 
 impl Registry {

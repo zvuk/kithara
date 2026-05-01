@@ -23,48 +23,48 @@ use crate::theme::gui;
 /// Main GUI application state.
 pub(crate) struct Kithara {
     pub(crate) queue: Arc<Queue>,
+    pub(crate) shared_abr_variants: Arc<Mutex<Vec<(usize, String)>>>,
+    pub(crate) shared_variant_label: Arc<Mutex<String>>,
+
     pub(crate) palette: gui::GuiPalette,
-    pub(crate) tracks_snapshot: Vec<TrackEntry>,
-
-    // Playback state (synced from player on each tick).
-    pub(crate) playing: bool,
-    pub(crate) position: f32,
-    pub(crate) duration: f32,
-    pub(crate) volume: f32,
-
-    // Seek state.
-    pub(crate) seek_position: f32,
-    pub(crate) is_seeking: bool,
-
-    // EQ band gains in dB (one per band from eq_layout).
-    pub(crate) eq_bands: Vec<f32>,
-
-    // Playback rate.
-    pub(crate) selected_rate: f32,
-
-    // Crossfade duration in seconds.
-    pub(crate) crossfade: f32,
-
     // Track info.
     pub(crate) current_track_index: Option<usize>,
     /// Row highlighted by a single click — second click on same row
     /// commits playback. `None` when nothing is focused.
     pub(crate) selected_track_index: Option<usize>,
-    pub(crate) track_name: String,
-    pub(crate) variant_label: String,
-    pub(crate) shared_variant_label: Arc<Mutex<String>>,
-    pub(crate) shared_abr_variants: Arc<Mutex<Vec<(usize, String)>>>,
-    pub(crate) abr_variants: Vec<(usize, String)>,
-    pub(crate) abr_mode_is_auto: bool,
     /// Variant index selected by user in picker (`None` = auto).
     /// Updated immediately on click. Separate from `variant_label`
     /// which reflects the actually applied variant from `VariantApplied` event.
     pub(crate) selected_variant: Option<usize>,
 
+    pub(crate) track_name: String,
+    pub(crate) variant_label: String,
+
     // UI state.
     pub(crate) active_tab: Tab,
-    pub(crate) shuffle_enabled: bool,
+
+    pub(crate) abr_variants: Vec<(usize, String)>,
+
+    // EQ band gains in dB (one per band from eq_layout).
+    pub(crate) eq_bands: Vec<f32>,
+
+    pub(crate) tracks_snapshot: Vec<TrackEntry>,
+    pub(crate) abr_mode_is_auto: bool,
+    pub(crate) is_seeking: bool,
+    // Playback state (synced from player on each tick).
+    pub(crate) playing: bool,
     pub(crate) repeat_enabled: bool,
+    pub(crate) shuffle_enabled: bool,
+    // Crossfade duration in seconds.
+    pub(crate) crossfade: f32,
+    pub(crate) duration: f32,
+    pub(crate) position: f32,
+
+    // Seek state.
+    pub(crate) seek_position: f32,
+    // Playback rate.
+    pub(crate) selected_rate: f32,
+    pub(crate) volume: f32,
     pub(crate) blink_counter: u8,
 }
 
@@ -128,11 +128,6 @@ impl Kithara {
         (state, Task::none())
     }
 
-    /// The dark + gold theme.
-    pub(crate) fn theme(&self) -> Theme {
-        theme::kithara_theme(&self.palette)
-    }
-
     /// Time-tick subscription for player state sync plus keyboard. Tick
     /// interval scales with playback state to save CPU while idle — see
     /// [`subscription_config`] for rationale.
@@ -152,6 +147,11 @@ impl Kithara {
             }));
         }
         Subscription::batch(subs)
+    }
+
+    /// The dark + gold theme.
+    pub(crate) fn theme(&self) -> Theme {
+        theme::kithara_theme(&self.palette)
     }
 }
 

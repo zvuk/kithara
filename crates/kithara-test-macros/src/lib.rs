@@ -21,19 +21,19 @@ use syn::{
 
 #[derive(Default)]
 struct TestArgs {
-    is_tokio: bool,
-    is_wasm_only: bool,
-    is_native_only: bool,
-    is_browser: bool,
-    is_serial: bool,
-    is_selenium: bool,
-    is_multi_thread: bool,
     timeout: Option<Expr>,
+    tracing_filter: Option<String>,
     env_vars: Vec<(String, String)>,
     /// Substring patterns for soft-fail: if a panic message contains any of
     /// these (case-insensitive), the test prints a warning instead of failing.
     soft_fail_patterns: Vec<String>,
-    tracing_filter: Option<String>,
+    is_browser: bool,
+    is_multi_thread: bool,
+    is_native_only: bool,
+    is_selenium: bool,
+    is_serial: bool,
+    is_tokio: bool,
+    is_wasm_only: bool,
 }
 
 impl TestArgs {
@@ -193,10 +193,10 @@ enum ParamKind {
 }
 
 struct ParamInfo {
-    name: Ident,
     ty: Box<syn::Type>,
-    kind: ParamKind,
+    name: Ident,
     mutability: Option<Token![mut]>,
+    kind: ParamKind,
 }
 
 fn has_attr(attrs: &[Attribute], name: &str) -> bool {
@@ -1036,15 +1036,15 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
 
 /// Shared context for the `generate*` per-branch helpers.
 struct GenCtx<'a> {
-    args: &'a TestArgs,
-    params: &'a [ParamInfo],
-    remaining_attrs: &'a [&'a Attribute],
-    cases: &'a [Case],
-    is_async: bool,
-    vis: &'a syn::Visibility,
     fn_name: &'a Ident,
     ret_type: &'a syn::ReturnType,
+    args: &'a TestArgs,
+    vis: &'a syn::Visibility,
+    remaining_attrs: &'a [&'a Attribute],
+    cases: &'a [Case],
+    params: &'a [ParamInfo],
     body_stmts: &'a [syn::Stmt],
+    is_async: bool,
 }
 
 /// Case-name convention: `{fn_name}_{case.name}` or `{fn_name}_case_{i+1}`.

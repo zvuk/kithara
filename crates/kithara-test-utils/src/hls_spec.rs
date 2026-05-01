@@ -18,18 +18,18 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedHlsSpec {
-    pub(crate) variant_count: usize,
-    pub(crate) segments_per_variant: usize,
-    pub(crate) segment_size: usize,
-    pub(crate) segment_duration_secs: f64,
-    pub(crate) data_mode: ResolvedDataMode,
-    pub(crate) init_mode: ResolvedInitMode,
-    pub(crate) variant_bandwidths: Vec<u64>,
-    pub(crate) delay_rules: Vec<DelayRule>,
     pub(crate) encryption: Option<ResolvedEncryption>,
     pub(crate) head_reported_segment_size: Option<usize>,
     pub(crate) key_data: Option<Arc<Vec<u8>>>,
     pub(crate) packaged_audio: Option<ResolvedPackagedAudioSpec>,
+    pub(crate) data_mode: ResolvedDataMode,
+    pub(crate) init_mode: ResolvedInitMode,
+    pub(crate) delay_rules: Vec<DelayRule>,
+    pub(crate) variant_bandwidths: Vec<u64>,
+    pub(crate) segment_duration_secs: f64,
+    pub(crate) segment_size: usize,
+    pub(crate) segments_per_variant: usize,
+    pub(crate) variant_count: usize,
     cache_key: String,
 }
 
@@ -60,8 +60,8 @@ pub(crate) enum ResolvedInitMode {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedEncryption {
-    pub(crate) key: [u8; 16],
     pub(crate) iv: Option<[u8; 16]>,
+    pub(crate) key: [u8; 16],
     iv_hex: Option<String>,
 }
 
@@ -69,19 +69,19 @@ pub(crate) struct ResolvedEncryption {
 pub(crate) struct ResolvedPackagedAudioSpec {
     pub(crate) codec: AudioCodec,
     pub(crate) container: ContainerFormat,
-    pub(crate) sample_rate: u32,
+    pub(crate) variants: Vec<ResolvedPackagedVariant>,
+    pub(crate) include_sidx: bool,
+    pub(crate) segment_duration_secs: f64,
     pub(crate) channels: u16,
+    pub(crate) sample_rate: u32,
     pub(crate) timescale: u32,
     pub(crate) segments_per_variant: usize,
-    pub(crate) segment_duration_secs: f64,
-    pub(crate) include_sidx: bool,
-    pub(crate) variants: Vec<ResolvedPackagedVariant>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackagedVariant {
-    pub(crate) bit_rate: u64,
     pub(crate) signal: ResolvedPackagedSignal,
+    pub(crate) bit_rate: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -395,7 +395,7 @@ fn resolve_packaged_audio(
         {
             apply_variant_override(override_spec, &mut bit_rate, &mut signal);
         }
-        variants.push(ResolvedPackagedVariant { bit_rate, signal });
+        variants.push(ResolvedPackagedVariant { signal, bit_rate });
     }
 
     Ok(ResolvedPackagedAudioSpec {

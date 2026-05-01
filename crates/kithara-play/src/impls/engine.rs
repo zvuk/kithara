@@ -44,29 +44,29 @@ use crate::{
 #[derivative(Default)]
 #[setters(prefix = "with_", strip_option)]
 pub struct EngineConfig {
-    /// Number of output channels. Default: 2 (stereo).
-    #[derivative(Default(value = "2"))]
-    pub channels: u16,
-    /// EQ band layout per player. Default: 10-band log-spaced.
-    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
-    pub eq_layout: Vec<EqBandConfig>,
-    /// Maximum number of concurrent player slots. Default: 4.
-    #[derivative(Default(value = "4"))]
-    pub max_slots: usize,
     /// PCM buffer pool for audio-thread scratch buffers.
     ///
     /// When `None`, the global PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
+    /// EQ band layout per player. Default: 10-band log-spaced.
+    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
+    pub eq_layout: Vec<EqBandConfig>,
+    /// Number of output channels. Default: 2 (stereo).
+    #[derivative(Default(value = "2"))]
+    pub channels: u16,
     /// Sample rate passed to the runtime backend as a hint. Default: 44100.
     #[derivative(Default(value = "44100"))]
     pub sample_rate: u32,
+    /// Maximum number of concurrent player slots. Default: 4.
+    #[derivative(Default(value = "4"))]
+    pub max_slots: usize,
 }
 
 /// Handle for a slot, providing command channel and shared state.
 pub(crate) struct SlotHandle {
+    pub(crate) shared_state: Arc<SharedPlayerState>,
     pub(crate) cmd_tx: HeapProd<PlayerCmd>,
     pub(crate) eq: SharedEq,
-    pub(crate) shared_state: Arc<SharedPlayerState>,
 }
 
 /// Concrete [`Engine`] implementation backed by a process-wide session.
@@ -74,37 +74,37 @@ pub(crate) struct SlotHandle {
 /// Multiple `EngineImpl` instances share one CPAL/Firewheel stream while
 /// retaining independent per-player graph controls.
 pub struct EngineImpl {
-    config: EngineConfig,
-
-    /// Per-slot tracking (owned by the main side, mirrored).
-    active_slots: Mutex<Vec<SlotId>>,
-
-    /// Shared event bus (passed from `PlayerImpl`).
-    bus: EventBus,
-
-    /// Master output volume for this player instance (linear 0.0 ..= 1.0).
-    master_volume: AtomicF32,
-
-    /// Resolved PCM pool used when registering this player in the session.
-    pcm_pool: PcmPool,
-
-    /// Session player ID allocated lazily on first start.
-    player_id: Mutex<Option<PlayerId>>,
+    /// Process-wide shared session backend.
+    session: Arc<SessionClient>,
 
     /// Whether this engine/player instance is currently running.
     running: AtomicBool,
 
-    /// Process-wide shared session backend.
-    session: Arc<SessionClient>,
-
-    /// Per-slot command channels and shared state.
-    slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
+    /// Master output volume for this player instance (linear 0.0 ..= 1.0).
+    master_volume: AtomicF32,
 
     /// Shared audio worker for cooperative multi-track decoding.
     ///
     /// All tracks loaded by this engine share this single worker thread.
     worker: AudioWorkerHandle,
+
+    config: EngineConfig,
+
+    /// Shared event bus (passed from `PlayerImpl`).
+    bus: EventBus,
+
+    /// Per-slot tracking (owned by the main side, mirrored).
+    active_slots: Mutex<Vec<SlotId>>,
+
+    /// Session player ID allocated lazily on first start.
+    player_id: Mutex<Option<PlayerId>>,
+
+    /// Per-slot command channels and shared state.
+    slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
+
     runtime: Option<RuntimeHandle>,
+    /// Resolved PCM pool used when registering this player in the session.
+    pcm_pool: PcmPool,
 }
 
 impl EngineImpl {
@@ -318,9 +318,9 @@ impl Engine for EngineImpl {
         self.slot_registry.lock_sync().insert(
             slot_id,
             SlotHandle {
+                shared_state,
                 cmd_tx,
                 eq,
-                shared_state,
             },
         );
 

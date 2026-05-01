@@ -17,6 +17,12 @@ pub mod audio {
             self.current_chunk.is_some()
         }
 
+        #[cfg(any(test, feature = "test-utils"))]
+        #[must_use]
+        pub(crate) fn test_pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
+            self.pcm_rx()
+        }
+
         #[must_use]
         pub fn test_preload_notify(&self) -> Arc<Notify> {
             Arc::clone(&self.preload_notify)
@@ -25,12 +31,6 @@ pub mod audio {
         #[must_use]
         pub fn test_seek_epoch(&self) -> u64 {
             self.validator.epoch
-        }
-
-        #[cfg(any(test, feature = "test-utils"))]
-        #[must_use]
-        pub(crate) fn test_pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
-            self.pcm_rx()
         }
     }
 
@@ -269,7 +269,7 @@ pub mod source {
             media_info,
             next: RecreateNext::Seek(SeekRequest {
                 attempt: 0,
-                seek: SeekContext { epoch, target },
+                seek: SeekContext { target, epoch },
             }),
             offset,
         }

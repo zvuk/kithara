@@ -44,13 +44,13 @@ pub enum PendingReason {
 /// Audio processing effect in the chain (transforms PCM chunks).
 #[cfg_attr(any(test, feature = "test-utils"), unimock(api = AudioEffectMock))]
 pub trait AudioEffect: Send + 'static {
+    /// Flush remaining buffered data (called at end of stream).
+    fn flush(&mut self) -> Option<PcmChunk>;
+
     /// Process a PCM chunk, returning transformed output.
     ///
     /// Returns `None` if the effect is accumulating data (not enough for output yet).
     fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk>;
-
-    /// Flush remaining buffered data (called at end of stream).
-    fn flush(&mut self) -> Option<PcmChunk>;
 
     /// Reset internal state (called after seek).
     fn reset(&mut self);
@@ -155,6 +155,70 @@ pub enum ChunkOutcome {
 /// ```
 #[cfg_attr(any(test, feature = "test-utils"), unimock(api = PcmReaderMock))]
 pub trait PcmReader: Send {
+    /// Runtime ABR handle for the underlying stream.
+    ///
+    /// Adaptive readers (HLS) return `Some(handle)` so the queue/FFI can
+    /// drive `set_mode` / `set_max_bandwidth_bps` mid-playback. Default
+    /// `None` for non-adaptive readers (file, test fixtures).
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        None
+    }
+
+    /// Get total duration (if known).
+    fn duration(&self) -> Option<Duration>;
+
+    /// Access the unified event bus for subscribing to all pipeline events.
+    fn event_bus(&self) -> &EventBus;
+
+    /// Get track metadata.
+    fn metadata(&self) -> &TrackMetadata;
+
+    /// Read the next decoded chunk with full metadata.
+    ///
+    /// Returns [`ChunkOutcome::Chunk`] or [`ChunkOutcome::Eof`].
+    /// Decoder / channel failures surface as `Err(DecodeError)`.
+    /// Discards any partially-consumed chunk from previous
+    /// [`PcmReader::read`] calls.
+    ///
+    /// Default implementation reports immediate natural EOF — readers
+    /// without chunk-level support shouldn't be polled this way.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(DecodeError)` for terminal producer failures, same
+    /// semantics as [`Self::read`].
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        Ok(ChunkOutcome::Eof {
+            position: self.position(),
+        })
+    }
+
+    /// Get current playback position.
+    fn position(&self) -> Duration;
+
+    /// Preload initial chunks into internal buffers.
+    ///
+    /// After calling this, subsequent `read()` / `read_planar()` /
+    /// `next_chunk()` return immediately from buffered data without
+    /// blocking. `Err(DecodeError)` is reserved for setup failures
+    /// (e.g. the producer channel closed during preload). Natural EOF
+    /// encountered during preload is **not** surfaced here — the
+    /// subsequent `read` / `next_chunk` will return `Eof`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(DecodeError)` only on terminal setup failure
+    /// (closed PCM channel, backend error). Successful preload always
+    /// returns `Ok(())` even if the stream contains no data.
+    fn preload(&mut self) -> Result<(), DecodeError> {
+        Ok(())
+    }
+
+    /// Get notify for async preload (first chunk available).
+    fn preload_notify(&self) -> Option<Arc<Notify>> {
+        None
+    }
+
     /// Read interleaved PCM samples.
     ///
     /// After `preload()`, returns immediately from buffered data
@@ -199,30 +263,6 @@ pub trait PcmReader: Send {
     /// failure, decoder recreate failure, or terminal producer error.
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
 
-    /// Get the current PCM specification.
-    fn spec(&self) -> PcmSpec;
-
-    /// Get current playback position.
-    fn position(&self) -> Duration;
-
-    /// Get total duration (if known).
-    fn duration(&self) -> Option<Duration>;
-
-    /// Get track metadata.
-    fn metadata(&self) -> &TrackMetadata;
-
-    /// Access the unified event bus for subscribing to all pipeline events.
-    fn event_bus(&self) -> &EventBus;
-
-    /// Runtime ABR handle for the underlying stream.
-    ///
-    /// Adaptive readers (HLS) return `Some(handle)` so the queue/FFI can
-    /// drive `set_mode` / `set_max_bandwidth_bps` mid-playback. Default
-    /// `None` for non-adaptive readers (file, test fixtures).
-    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        None
-    }
-
     /// Set the target sample rate of the audio host.
     ///
     /// Used for dynamic updates when the host sample rate changes at runtime.
@@ -241,46 +281,6 @@ pub trait PcmReader: Send {
     /// are decoded first, then `Warm`, then `Idle`.
     fn set_service_class(&self, _class: ServiceClass) {}
 
-    /// Get notify for async preload (first chunk available).
-    fn preload_notify(&self) -> Option<Arc<Notify>> {
-        None
-    }
-
-    /// Preload initial chunks into internal buffers.
-    ///
-    /// After calling this, subsequent `read()` / `read_planar()` /
-    /// `next_chunk()` return immediately from buffered data without
-    /// blocking. `Err(DecodeError)` is reserved for setup failures
-    /// (e.g. the producer channel closed during preload). Natural EOF
-    /// encountered during preload is **not** surfaced here — the
-    /// subsequent `read` / `next_chunk` will return `Eof`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(DecodeError)` only on terminal setup failure
-    /// (closed PCM channel, backend error). Successful preload always
-    /// returns `Ok(())` even if the stream contains no data.
-    fn preload(&mut self) -> Result<(), DecodeError> {
-        Ok(())
-    }
-
-    /// Read the next decoded chunk with full metadata.
-    ///
-    /// Returns [`ChunkOutcome::Chunk`] or [`ChunkOutcome::Eof`].
-    /// Decoder / channel failures surface as `Err(DecodeError)`.
-    /// Discards any partially-consumed chunk from previous
-    /// [`PcmReader::read`] calls.
-    ///
-    /// Default implementation reports immediate natural EOF — readers
-    /// without chunk-level support shouldn't be polled this way.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(DecodeError)` for terminal producer failures, same
-    /// semantics as [`Self::read`].
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        Ok(ChunkOutcome::Eof {
-            position: self.position(),
-        })
-    }
+    /// Get the current PCM specification.
+    fn spec(&self) -> PcmSpec;
 }

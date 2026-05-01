@@ -23,13 +23,13 @@ pub(crate) enum SeekLayout {
 
 /// Snapshot of segment data needed for reading, copied out of the lock.
 pub(crate) struct ReadSegment {
-    pub(crate) variant: VariantIndex,
+    pub(crate) init_url: Option<Url>,
     pub(crate) segment_index: SegmentIndex,
+    pub(crate) media_url: Url,
+    pub(crate) variant: VariantIndex,
     pub(crate) byte_offset: u64,
     pub(crate) init_len: u64,
     pub(crate) media_len: u64,
-    pub(crate) init_url: Option<Url>,
-    pub(crate) media_url: Url,
 }
 
 impl ReadSegment {

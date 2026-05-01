@@ -32,34 +32,34 @@ use crate::{
 
 /// All mutable state behind a single Mutex.
 struct HlsState {
-    scheduler: HlsScheduler,
     loader: Arc<SegmentLoader>,
-    waker: Option<Waker>,
     epoch_cancel: CancellationToken,
+    scheduler: HlsScheduler,
+    waker: Option<Waker>,
 }
 
 /// HLS peer — one per track. Pre-init: `poll_next` returns Pending.
 /// After `activate()`: Downloader drives segment downloads via
 /// self-contained `FetchCmd` closures (`writer` + `on_complete`).
 pub(crate) struct HlsPeer {
-    state: Arc<Mutex<Option<HlsState>>>,
-    /// Waker stored before activation (`poll_next` called but state is None).
-    pending_waker: Mutex<Option<Waker>>,
-    /// Cancels the waker-forwarding micro-task on drop.
-    wake_cancel: CancellationToken,
-    /// Same Arc-clone as the one held by `HlsCoord` — reads from the
-    /// audio FSM are published here and observed by `priority()`.
-    timeline: Timeline,
     /// Per-peer ABR state owned by this peer, shared with the controller.
     abr: Arc<AbrState>,
+    /// One past the highest segment index the scheduler has committed on
+    /// the current variant. Updated by `HlsScheduler::commit_segment`.
+    committed_segment: Arc<AtomicUsize>,
     /// Highest segment index the reader has touched on the current variant.
     /// Updated by `HlsSource::read_at` after a successful read; consumed by
     /// `progress()` together with `committed_segment` to drive buffer-ahead
     /// decisions in the ABR controller.
     reader_segment: Arc<AtomicUsize>,
-    /// One past the highest segment index the scheduler has committed on
-    /// the current variant. Updated by `HlsScheduler::commit_segment`.
-    committed_segment: Arc<AtomicUsize>,
+    state: Arc<Mutex<Option<HlsState>>>,
+    /// Cancels the waker-forwarding micro-task on drop.
+    wake_cancel: CancellationToken,
+    /// Waker stored before activation (`poll_next` called but state is None).
+    pending_waker: Mutex<Option<Waker>>,
+    /// Same Arc-clone as the one held by `HlsCoord` — reads from the
+    /// audio FSM are published here and observed by `priority()`.
+    timeline: Timeline,
 }
 
 impl HlsPeer {
@@ -843,13 +843,13 @@ fn skip_planned_segment(
 }
 
 struct CachedCommit<'a> {
-    variant: usize,
-    seg_idx: usize,
-    batch_i: usize,
-    seek_epoch: u64,
     prepared: &'a PreparedMedia,
-    cached_len: u64,
     plan_need_init: bool,
+    cached_len: u64,
+    seek_epoch: u64,
+    batch_i: usize,
+    seg_idx: usize,
+    variant: usize,
 }
 
 fn commit_cached_segment(state: &mut HlsState, c: &CachedCommit<'_>) {

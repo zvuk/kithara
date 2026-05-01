@@ -28,9 +28,9 @@ pub(crate) fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
 #[derive(Clone, Debug, Derivative)]
 #[derivative(Default)]
 pub(crate) struct CrossfadeSettings {
+    pub curve: CrossfadeCurve,
     #[derivative(Default(value = "DEFAULT_CROSSFADE_DURATION"))]
     pub duration: f32,
-    pub curve: CrossfadeCurve,
 }
 
 impl CrossfadeSettings {

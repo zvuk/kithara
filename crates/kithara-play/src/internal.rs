@@ -58,9 +58,9 @@ pub mod offline {
     };
 
     pub struct OfflinePlayer {
+        shared_state: Arc<SharedPlayerState>,
         ctx: FirewheelCtx<OfflineBackend>,
         cmd_tx: ringbuf::HeapProd<PlayerCmd>,
-        shared_state: Arc<SharedPlayerState>,
     }
 
     impl OfflinePlayer {
@@ -105,9 +105,9 @@ pub mod offline {
             ctx.update().expect("initial graph update");
 
             Self {
+                shared_state,
                 ctx,
                 cmd_tx,
-                shared_state,
             }
         }
 

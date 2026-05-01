@@ -23,10 +23,10 @@ use crate::{
 };
 
 struct EncodeTarget {
+    option_pairs: &'static [(&'static str, &'static str)],
     ext: &'static str,
     mime: &'static str,
     bit_rate: Option<usize>,
-    option_pairs: &'static [(&'static str, &'static str)],
 }
 
 impl EncodeTarget {
@@ -128,8 +128,8 @@ fn encode_direct_pcm(
 }
 
 struct DirectEncoder {
-    filter: ffmpeg::filter::Graph,
     encoder: AudioEncoder,
+    filter: ffmpeg::filter::Graph,
 }
 
 impl DirectEncoder {
@@ -197,7 +197,7 @@ impl DirectEncoder {
 
         let filter = build_direct_filter(&encoder, sample_rate, channels)?;
 
-        Ok(Self { filter, encoder })
+        Ok(Self { encoder, filter })
     }
 
     fn receive_and_process_filtered_frames(

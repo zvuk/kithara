@@ -31,14 +31,14 @@ use crate::{
 /// by the compositor from the stream layout.
 #[derive(Debug, Clone)]
 pub struct SegmentData {
-    /// Size of the init segment in bytes (0 if no init).
-    pub init_len: u64,
-    /// Size of the media segment in bytes.
-    pub media_len: u64,
     /// Absolute URL of the init segment (fMP4 only).
     pub init_url: Option<Url>,
     /// Absolute URL of the media segment.
     pub media_url: Url,
+    /// Size of the init segment in bytes (0 if no init).
+    pub init_len: u64,
+    /// Size of the media segment in bytes.
+    pub media_len: u64,
 }
 
 impl SegmentData {
@@ -51,8 +51,8 @@ impl SegmentData {
 
 #[derive(Debug, Clone)]
 struct SegmentSlot {
-    available: bool,
     data: SegmentData,
+    available: bool,
 }
 
 // VariantSegments
@@ -192,14 +192,14 @@ impl VariantSegments {
 /// `data.is_some()`.
 #[derive(Debug)]
 pub struct SegmentRef<'a> {
-    /// Variant index in the master playlist.
-    pub variant: VariantIndex,
-    /// Segment index within the variant's media playlist.
-    pub segment_index: SegmentIndex,
-    /// Computed byte offset in the virtual stream.
-    pub byte_offset: u64,
     /// Committed segment data (sizes, URLs). `None` for reserved slots.
     pub data: Option<&'a SegmentData>,
+    /// Segment index within the variant's media playlist.
+    pub segment_index: SegmentIndex,
+    /// Variant index in the master playlist.
+    pub variant: VariantIndex,
+    /// Computed byte offset in the virtual stream.
+    pub byte_offset: u64,
 }
 
 // StreamIndex
@@ -210,18 +210,18 @@ pub struct SegmentRef<'a> {
 /// selects which byte map is active for the decoder. Switching variants never
 /// destroys data — committed segments persist across all variants.
 pub struct StreamIndex {
-    /// Per-variant committed segment data, indexed by variant number.
-    variants: Vec<VariantSegments>,
-    /// Per-variant byte-offset maps. `variant_byte_maps[v]` maps
-    /// `byte_offset → segment_index` for variant `v`. Only committed segments
-    /// appear. Updated on every commit/reconcile/invalidate.
-    variant_byte_maps: Vec<RangeMap<u64, SegmentIndex>>,
     /// Which variant's byte layout is currently active for the decoder.
     /// Changed when the decoder is recreated for a variant switch.
     layout_variant: VariantIndex,
     /// Expected total size per segment per variant (from `size_map` HEAD estimates).
     /// Used by `rebuild_variant_byte_map` to reserve space for uncommitted segments.
     expected_sizes: Vec<Vec<u64>>,
+    /// Per-variant byte-offset maps. `variant_byte_maps[v]` maps
+    /// `byte_offset → segment_index` for variant `v`. Only committed segments
+    /// appear. Updated on every commit/reconcile/invalidate.
+    variant_byte_maps: Vec<RangeMap<u64, SegmentIndex>>,
+    /// Per-variant committed segment data, indexed by variant number.
+    variants: Vec<VariantSegments>,
     /// Total number of segments in the playlist.
     num_segments: usize,
 }

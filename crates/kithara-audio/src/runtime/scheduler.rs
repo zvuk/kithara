@@ -35,9 +35,9 @@ pub(crate) enum SchedulerCmd<N> {
 
 /// A slot holding a node and its metadata.
 pub(crate) struct Slot<N> {
-    pub id: SlotId,
     pub node: N,
     pub service_class: ServiceClass,
+    pub id: SlotId,
     pub terminal: bool,
 }
 
@@ -61,9 +61,9 @@ impl<N> Clone for SchedulerHandle<N> {
 }
 
 struct SchedulerInner<N> {
-    cmd_tx: mpsc::Sender<SchedulerCmd<N>>,
     wake: Arc<SchedulerWake>,
     cancel: CancellationToken,
+    cmd_tx: mpsc::Sender<SchedulerCmd<N>>,
 }
 
 impl<N> SchedulerInner<N> {
@@ -94,12 +94,6 @@ impl<N: Node> SchedulerHandle<N> {
         self.inner.wake.wake();
     }
 
-    /// Remove a node by ID.
-    pub(crate) fn unregister(&self, id: SlotId) {
-        let _ = self.inner.cmd_tx.send_sync(SchedulerCmd::Unregister(id));
-        self.inner.wake.wake();
-    }
-
     /// Update scheduling priority for a node.
     pub(crate) fn set_service_class(&self, id: SlotId, class: ServiceClass) {
         let _ = self
@@ -109,14 +103,20 @@ impl<N: Node> SchedulerHandle<N> {
         self.inner.wake.wake();
     }
 
-    /// Wake the scheduler.
-    pub(crate) fn wake(&self) {
-        self.inner.wake.wake();
-    }
-
     /// Request graceful shutdown and cancel the scheduler.
     pub(crate) fn shutdown(&self) {
         self.inner.shutdown();
+    }
+
+    /// Remove a node by ID.
+    pub(crate) fn unregister(&self, id: SlotId) {
+        let _ = self.inner.cmd_tx.send_sync(SchedulerCmd::Unregister(id));
+        self.inner.wake.wake();
+    }
+
+    /// Wake the scheduler.
+    pub(crate) fn wake(&self) {
+        self.inner.wake.wake();
     }
 }
 
@@ -126,10 +126,10 @@ pub(crate) struct Scheduler<N, O> {
 }
 
 impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
+    const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
+    const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
     /// Threshold for warning about slow `tick` calls.
     const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
-    const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
-    const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
 
     /// Spawn a new scheduler thread and return a handle.
     #[must_use]
@@ -147,9 +147,9 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
 
         SchedulerHandle {
             inner: Arc::new(SchedulerInner {
-                cmd_tx,
                 wake,
                 cancel,
+                cmd_tx,
             }),
         }
     }
@@ -403,9 +403,9 @@ mod tests {
     }
 
     struct DummyNode {
-        ticks: usize,
-        max_ticks: usize,
         panic_at: Option<usize>,
+        max_ticks: usize,
+        ticks: usize,
     }
 
     impl Node for DummyNode {
@@ -429,12 +429,12 @@ mod tests {
     }
 
     impl Node for ServiceClassNode {
-        fn tick(&mut self) -> TickResult {
-            TickResult::Done
-        }
-
         fn service_class(&self) -> ServiceClass {
             self.service_class
+        }
+
+        fn tick(&mut self) -> TickResult {
+            TickResult::Done
         }
     }
 

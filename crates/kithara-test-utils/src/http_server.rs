@@ -12,9 +12,9 @@ use url::Url;
 
 /// Lightweight HTTP test server wrapper.
 pub struct TestHttpServer {
-    base_url: Url,
     shutdown_tx: Option<oneshot::Sender<()>>,
     done_rx: watch::Receiver<bool>,
+    base_url: Url,
 }
 
 impl TestHttpServer {

@@ -19,9 +19,9 @@ pub enum CrossfadeCurve {
 #[derivative(Default)]
 #[non_exhaustive]
 pub struct CrossfadeConfig {
+    pub curve: CrossfadeCurve,
     #[derivative(Default(value = "Duration::from_secs(5)"))]
     pub duration: Duration,
-    pub curve: CrossfadeCurve,
     pub beat_aligned: bool,
     pub cut_incoming_at: f32,
     #[derivative(Default(value = "1.0"))]

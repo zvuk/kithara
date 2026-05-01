@@ -15,10 +15,10 @@ use crate::{
 struct Consts;
 impl Consts {
     const CONTROL_POLL_MS: u64 = 50;
+    const MAX_DIGIT_TRACKS: usize = 9;
+    const PERCENT_SCALE: f32 = 100.0;
     const SEEK_STEP_SECONDS_F64: f64 = 5.0;
     const VOLUME_STEP: f32 = 0.05;
-    const PERCENT_SCALE: f32 = 100.0;
-    const MAX_DIGIT_TRACKS: usize = 9;
 }
 
 type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;

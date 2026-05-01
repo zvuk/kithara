@@ -52,16 +52,6 @@ pub(crate) struct SymphoniaCodec {
 }
 
 impl SymphoniaCodec {
-    /// Whether `SymphoniaCodec::open` can accept this codec via
-    /// [`TrackInfo`] alone. `AudioCodec::Pcm` / `AudioCodec::Adpcm` need
-    /// bit-depth + endianness which the generic enum does not encode —
-    /// the factory routes those through [`Self::open_native`] using the
-    /// demuxer's native `AudioCodecParameters` instead.
-    #[must_use]
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
-        !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
-    }
-
     /// Build a [`SymphoniaCodec`] from native Symphonia codec
     /// parameters. Used by the factory when wiring a
     /// [`crate::symphonia::SymphoniaDemuxer`] for PCM/ADPCM tracks where
@@ -92,36 +82,19 @@ impl SymphoniaCodec {
         };
         Ok(Self { decoder, spec })
     }
+
+    /// Whether `SymphoniaCodec::open` can accept this codec via
+    /// [`TrackInfo`] alone. `AudioCodec::Pcm` / `AudioCodec::Adpcm` need
+    /// bit-depth + endianness which the generic enum does not encode —
+    /// the factory routes those through [`Self::open_native`] using the
+    /// demuxer's native `AudioCodecParameters` instead.
+    #[must_use]
+    pub(crate) fn supports(codec: AudioCodec) -> bool {
+        !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
+    }
 }
 
 impl FrameCodec for SymphoniaCodec {
-    fn open(track: &TrackInfo) -> DecodeResult<Self> {
-        let (codec_id, profile) = map_codec(track.codec)?;
-        let mut params = AudioCodecParameters::new();
-        params
-            .for_codec(codec_id)
-            .with_sample_rate(track.sample_rate);
-        if let Some(profile) = profile {
-            params.with_profile(profile);
-        }
-        params.with_channels(Channels::Discrete(track.channels));
-        if !track.extra_data.is_empty() {
-            params.with_extra_data(track.extra_data.clone().into_boxed_slice());
-        }
-
-        let registry: &CodecRegistry = symphonia::default::get_codecs();
-        let opts = AudioDecoderOptions::default();
-        let decoder = registry
-            .make_audio_decoder(&params, &opts)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
-
-        let spec = PcmSpec {
-            channels: track.channels,
-            sample_rate: track.sample_rate,
-        };
-        Ok(Self { decoder, spec })
-    }
-
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
@@ -167,6 +140,33 @@ impl FrameCodec for SymphoniaCodec {
 
     fn flush(&mut self) {
         self.decoder.reset();
+    }
+
+    fn open(track: &TrackInfo) -> DecodeResult<Self> {
+        let (codec_id, profile) = map_codec(track.codec)?;
+        let mut params = AudioCodecParameters::new();
+        params
+            .for_codec(codec_id)
+            .with_sample_rate(track.sample_rate);
+        if let Some(profile) = profile {
+            params.with_profile(profile);
+        }
+        params.with_channels(Channels::Discrete(track.channels));
+        if !track.extra_data.is_empty() {
+            params.with_extra_data(track.extra_data.clone().into_boxed_slice());
+        }
+
+        let registry: &CodecRegistry = symphonia::default::get_codecs();
+        let opts = AudioDecoderOptions::default();
+        let decoder = registry
+            .make_audio_decoder(&params, &opts)
+            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+
+        let spec = PcmSpec {
+            channels: track.channels,
+            sample_rate: track.sample_rate,
+        };
+        Ok(Self { decoder, spec })
     }
 
     fn spec(&self) -> PcmSpec {

@@ -59,15 +59,15 @@ impl DomainMatcher {
 #[setters(prefix = "with_", strip_option)]
 #[non_exhaustive]
 pub struct KeyProcessorRule {
-    #[setters(skip)]
-    matchers: Vec<DomainMatcher>,
-    #[setters(skip)]
-    #[derivative(Debug(format_with = "fmt_processor"))]
-    processor: KeyProcessor,
     /// Headers appended to key requests that match this rule.
     pub headers: Option<HashMap<String, String>>,
     /// Query parameters appended to key URLs that match this rule.
     pub query_params: Option<HashMap<String, String>>,
+    #[setters(skip)]
+    #[derivative(Debug(format_with = "fmt_processor"))]
+    processor: KeyProcessor,
+    #[setters(skip)]
+    matchers: Vec<DomainMatcher>,
 }
 
 fn fmt_processor(_: &KeyProcessor, f: &mut fmt::Formatter) -> fmt::Result {

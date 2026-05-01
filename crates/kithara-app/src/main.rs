@@ -33,13 +33,13 @@ struct Args {
     #[arg(long, short, default_value = "auto")]
     mode: Mode,
 
+    /// Audio files or URLs to play.
+    tracks: Vec<String>,
+
     /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
     /// Enabled by default during testing phase.
     #[arg(long, default_value_t = true)]
     insecure: bool,
-
-    /// Audio files or URLs to play.
-    tracks: Vec<String>,
 }
 
 /// Application UI mode.

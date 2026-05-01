@@ -81,20 +81,23 @@ enum RecvOutcome {
 /// }
 /// ```
 pub struct Audio<S> {
-    /// PCM chunk receiver.
-    pcm_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
+    /// Notify for async preload (first chunk available).
+    pub(crate) preload_notify: Arc<Notify>,
 
-    /// Shared epoch counter with worker (kept alive for `Arc` shared ownership).
-    _epoch: Arc<AtomicU64>,
+    /// Consumer-side phase — replaces the old `eof: bool` flag.
+    pub(crate) consumer_phase: ConsumerPhase,
 
     /// Epoch validator for filtering stale chunks.
     pub(crate) validator: EpochValidator,
 
+    /// Current chunk being read (auto-recycles to pool on drop).
+    pub(crate) current_chunk: Option<PcmChunk>,
+
     /// Current audio specification (updated from chunks).
     pub(crate) spec: PcmSpec,
 
-    /// Current chunk being read (auto-recycles to pool on drop).
-    pub(crate) current_chunk: Option<PcmChunk>,
+    /// Shared stream timeline for committed playback position.
+    pub(crate) timeline: Timeline,
 
     /// How many frames of `current_chunk` have been served to the
     /// caller. Local consumer cursor — reset to 0 on every new chunk
@@ -106,23 +109,8 @@ pub struct Audio<S> {
     /// the timeline counters.
     pub(crate) current_chunk_consumed_frames: u64,
 
-    /// Consumer-side phase — replaces the old `eof: bool` flag.
-    pub(crate) consumer_phase: ConsumerPhase,
-
-    /// Shared stream timeline for committed playback position.
-    pub(crate) timeline: Timeline,
-
-    /// Track metadata (title, artist, album, artwork).
-    metadata: TrackMetadata,
-
-    /// Unified event bus.
-    bus: EventBus,
-
-    /// Cancellation token for graceful shutdown.
-    cancel: Option<CancellationToken>,
-
-    /// Shared pool for temporary interleaved buffers (used in `read_planar`).
-    pcm_pool: PcmPool,
+    /// Shared epoch counter with worker (kept alive for `Arc` shared ownership).
+    _epoch: Arc<AtomicU64>,
 
     /// Target sample rate of the audio host (shared for dynamic updates).
     /// 0 means "not set".
@@ -131,11 +119,21 @@ pub struct Audio<S> {
     /// Shared playback rate for timeline scaling (1.0 = normal speed).
     playback_rate: Arc<AtomicF32>,
 
-    /// Notify for async preload (first chunk available).
-    pub(crate) preload_notify: Arc<Notify>,
+    /// Wake handle for blocking PCM reads.
+    reader_wake: Arc<ThreadWake>,
 
-    /// Whether `preload()` has been called (enables non-blocking mode).
-    preloaded: bool,
+    /// Unified event bus.
+    bus: EventBus,
+
+    /// PCM chunk receiver.
+    pcm_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
+
+    /// Runtime ABR handle snapshot taken at construction — cloned from the
+    /// underlying stream's source. `None` for non-adaptive sources.
+    abr_handle: Option<kithara_abr::AbrHandle>,
+
+    /// Cancellation token for graceful shutdown.
+    cancel: Option<CancellationToken>,
 
     /// Callback to wake blocked `wait_range()` calls on seek.
     ///
@@ -149,29 +147,122 @@ pub struct Audio<S> {
     /// Worker handle for unregistration and optional shutdown.
     worker: Option<AudioWorkerHandle>,
 
-    /// Wake handle for blocking PCM reads.
-    reader_wake: Arc<ThreadWake>,
+    /// Shared pool for temporary interleaved buffers (used in `read_planar`).
+    pcm_pool: PcmPool,
+
+    /// Marker for source type.
+    _marker: PhantomData<S>,
+
+    /// Track metadata (title, artist, album, artwork).
+    metadata: TrackMetadata,
 
     /// Whether the worker was auto-created for this track (standalone mode).
     /// Standalone workers are shut down when the track is dropped.
     is_standalone_worker: bool,
 
-    /// Runtime ABR handle snapshot taken at construction — cloned from the
-    /// underlying stream's source. `None` for non-adaptive sources.
-    abr_handle: Option<kithara_abr::AbrHandle>,
-
-    /// Marker for source type.
-    _marker: PhantomData<S>,
+    /// Whether `preload()` has been called (enables non-blocking mode).
+    preloaded: bool,
 }
 
 // Public API for cpal/rodio compatibility
 
 impl<S> Audio<S> {
-    /// Backoff duration between receive attempts.
-    const RECV_BACKOFF: Duration = Duration::from_micros(100);
-
     /// Probe buffer size in bytes for initial stream detection.
     const PROBE_BUFFER_SIZE: usize = 1024;
+
+    /// Backoff duration between receive attempts.
+    const RECV_BACKOFF: Duration = Duration::from_micros(100);
+    fn close_channel_and_mark_eof(&mut self) -> Option<PcmChunk> {
+        self.consumer_phase = ConsumerPhase::Failed;
+        None
+    }
+
+    /// Get total duration of the audio stream.
+    ///
+    /// Returns `None` for streaming sources where duration is unknown.
+    #[must_use]
+    pub fn duration(&self) -> Option<Duration> {
+        self.timeline.total_duration()
+    }
+
+    fn emit_audio_event(&self, event: AudioEvent) {
+        self.bus.publish(event);
+    }
+
+    fn emit_playback_progress(&self) {
+        let position_ms_u128 = self.position().as_millis();
+        assert!(
+            position_ms_u128 <= u128::from(u64::MAX),
+            "position_ms={position_ms_u128} exceeds u64::MAX"
+        );
+        #[expect(clippy::cast_possible_truncation, reason = "asserted to fit u64 above")]
+        let position_ms = position_ms_u128 as u64;
+        let total_ms = self.timeline.total_duration().map(|duration| {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "millis fits in u64 for practical durations"
+            )]
+            {
+                duration.as_millis() as u64
+            }
+        });
+
+        self.emit_audio_event(AudioEvent::PlaybackProgress {
+            position_ms,
+            total_ms,
+            seek_epoch: self.validator.epoch,
+        });
+    }
+
+    fn emit_post_seek_output_commit(&mut self, meta: Option<PcmMeta>) {
+        let Some(seek_epoch) = self.timeline.pending_seek_epoch() else {
+            return;
+        };
+        if seek_epoch != self.validator.epoch {
+            return;
+        }
+
+        let variant = meta.as_ref().and_then(|m| m.variant_index);
+        let segment_index = meta.as_ref().and_then(|m| m.segment_index);
+
+        self.emit_audio_event(AudioEvent::SeekLifecycle {
+            stage: SeekLifecycleStage::OutputCommitted,
+            seek_epoch,
+            task_id: seek_epoch,
+            variant,
+            segment_index,
+            byte_range_start: None,
+            byte_range_end: None,
+        });
+
+        self.emit_audio_event(AudioEvent::SeekComplete {
+            position: (*self).position(),
+            seek_epoch,
+        });
+        let _ = self.timeline.clear_pending_seek_epoch(seek_epoch);
+    }
+
+    /// Receive next chunk and store it as `current_chunk`.
+    ///
+    /// Returns `true` if a chunk was received, `false` on EOF or no data.
+    pub(crate) fn fill_buffer(&mut self) -> bool {
+        let Some(chunk) = self.recv_valid_chunk() else {
+            return false;
+        };
+        self.spec = chunk.spec();
+        self.current_chunk = Some(chunk);
+        self.current_chunk_consumed_frames = 0;
+
+        // Transition to Playing on first chunk received.
+        if matches!(
+            self.consumer_phase,
+            ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
+        ) {
+            self.consumer_phase = ConsumerPhase::Playing;
+        }
+        true
+    }
+
     /// Whether non-blocking recv is active.
     ///
     /// Returns `false` after `seek()` until `preload()` is called again.
@@ -180,11 +271,25 @@ impl<S> Audio<S> {
         self.preloaded
     }
 
+    /// Get track metadata (title, artist, album, artwork).
+    #[must_use]
+    pub fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+
     /// Get reference to PCM receiver for direct channel access.
     #[must_use]
     #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
         &mut self.pcm_rx
+    }
+
+    /// Get current playback position.
+    ///
+    /// Calculated from samples read since last seek plus the seek base.
+    #[must_use]
+    pub fn position(&self) -> Duration {
+        self.timeline.committed_position()
     }
 
     /// Enable non-blocking mode for `read()` and prime the first chunk.
@@ -216,93 +321,25 @@ impl<S> Audio<S> {
         Ok(())
     }
 
-    /// Subscribe to audio events.
-    ///
-    /// Get current audio specification.
-    ///
-    /// Returns sample rate and channel count for audio output setup.
-    #[must_use]
-    pub fn spec(&self) -> PcmSpec {
-        self.spec
-    }
-
-    fn emit_playback_progress(&self) {
-        let position_ms_u128 = self.position().as_millis();
-        assert!(
-            position_ms_u128 <= u128::from(u64::MAX),
-            "position_ms={position_ms_u128} exceeds u64::MAX"
-        );
-        #[expect(clippy::cast_possible_truncation, reason = "asserted to fit u64 above")]
-        let position_ms = position_ms_u128 as u64;
-        let total_ms = self.timeline.total_duration().map(|duration| {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "millis fits in u64 for practical durations"
-            )]
-            {
-                duration.as_millis() as u64
-            }
-        });
-
-        self.emit_audio_event(AudioEvent::PlaybackProgress {
-            position_ms,
-            total_ms,
-            seek_epoch: self.validator.epoch,
-        });
-    }
-
-    fn emit_audio_event(&self, event: AudioEvent) {
-        self.bus.publish(event);
-    }
-
-    fn emit_post_seek_output_commit(&mut self, meta: Option<PcmMeta>) {
-        let Some(seek_epoch) = self.timeline.pending_seek_epoch() else {
-            return;
-        };
-        if seek_epoch != self.validator.epoch {
-            return;
+    fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> FetchOutcome {
+        if !self.validator.is_valid(&fetch) {
+            return FetchOutcome::Continue;
         }
 
-        let variant = meta.as_ref().and_then(|m| m.variant_index);
-        let segment_index = meta.as_ref().and_then(|m| m.segment_index);
-
-        self.emit_audio_event(AudioEvent::SeekLifecycle {
-            stage: SeekLifecycleStage::OutputCommitted,
-            seek_epoch,
-            task_id: seek_epoch,
-            variant,
-            segment_index,
-            byte_range_start: None,
-            byte_range_end: None,
-        });
-
-        self.emit_audio_event(AudioEvent::SeekComplete {
-            position: (*self).position(),
-            seek_epoch,
-        });
-        let _ = self.timeline.clear_pending_seek_epoch(seek_epoch);
-    }
-
-    /// Get current playback position.
-    ///
-    /// Calculated from samples read since last seek plus the seek base.
-    #[must_use]
-    pub fn position(&self) -> Duration {
-        self.timeline.committed_position()
-    }
-
-    /// Get total duration of the audio stream.
-    ///
-    /// Returns `None` for streaming sources where duration is unknown.
-    #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        self.timeline.total_duration()
-    }
-
-    /// Get track metadata (title, artist, album, artwork).
-    #[must_use]
-    pub fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
+        match fetch.kind {
+            FetchKind::NaturalEof => {
+                self.consumer_phase = ConsumerPhase::AtEof;
+                FetchOutcome::Return(None)
+            }
+            FetchKind::Failure => {
+                self.consumer_phase = ConsumerPhase::Failed;
+                FetchOutcome::Return(None)
+            }
+            FetchKind::Data => {
+                let chunk = fetch.into_inner();
+                FetchOutcome::Return(Some(chunk))
+            }
+        }
     }
 
     /// Read decoded PCM samples into buffer.
@@ -482,6 +519,81 @@ impl<S> Audio<S> {
         }
     }
 
+    fn recv_outcome(&mut self) -> RecvOutcome {
+        if self.use_nonblocking_recv() {
+            if let Some(fetch) = self.pcm_rx.try_pop() {
+                self.wake_worker();
+                return RecvOutcome::Item(fetch);
+            }
+            return RecvOutcome::Empty;
+        }
+
+        self.recv_outcome_blocking()
+    }
+
+    #[kithara_hang_detector::hang_watchdog]
+    fn recv_outcome_blocking(&mut self) -> RecvOutcome {
+        loop {
+            if let Some(fetch) = self.pcm_rx.try_pop() {
+                hang_reset!();
+                self.wake_worker();
+                return RecvOutcome::Item(fetch);
+            }
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+            {
+                hang_reset!();
+                return RecvOutcome::Closed;
+            }
+            self.wake_worker();
+            self.reader_wake.register_current();
+            if let Some(fetch) = self.pcm_rx.try_pop() {
+                hang_reset!();
+                self.wake_worker();
+                return RecvOutcome::Item(fetch);
+            }
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+            {
+                hang_reset!();
+                return RecvOutcome::Closed;
+            }
+            hang_tick!();
+            Self::wait_for_fetch();
+        }
+    }
+
+    #[kithara_hang_detector::hang_watchdog]
+    fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
+        if self.consumer_phase.is_terminal() {
+            return None;
+        }
+
+        loop {
+            match self.recv_outcome() {
+                RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
+                    FetchOutcome::Continue => {
+                        hang_tick!();
+                        continue;
+                    }
+                    FetchOutcome::Return(chunk) => {
+                        hang_reset!();
+                        return chunk;
+                    }
+                },
+                RecvOutcome::Empty => return None,
+                RecvOutcome::Closed => {
+                    hang_reset!();
+                    return self.close_channel_and_mark_eof();
+                }
+            }
+        }
+    }
+
     /// Seek to position in the audio stream.
     ///
     /// This method never blocks. Seek coordination flows entirely through
@@ -570,89 +682,24 @@ impl<S> Audio<S> {
         }
     }
 
-    /// Receive next valid chunk from channel, filtering stale chunks.
+    /// Subscribe to audio events.
     ///
-    /// After `preload()`, non-blocking. Before `preload()`, blocks on first call.
-    /// Returns `None` on EOF or channel close.
-    /// Wake the shared worker so it can fill the freed ringbuf slot.
-    fn wake_worker(&self) {
-        if let Some(ref worker) = self.worker {
-            worker.wake();
-        }
+    /// Get current audio specification.
+    ///
+    /// Returns sample rate and channel count for audio output setup.
+    #[must_use]
+    pub fn spec(&self) -> PcmSpec {
+        self.spec
     }
 
-    #[kithara_hang_detector::hang_watchdog]
-    fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
-        if self.consumer_phase.is_terminal() {
-            return None;
+    fn use_nonblocking_recv(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            true
         }
-
-        loop {
-            match self.recv_outcome() {
-                RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
-                    FetchOutcome::Continue => {
-                        hang_tick!();
-                        continue;
-                    }
-                    FetchOutcome::Return(chunk) => {
-                        hang_reset!();
-                        return chunk;
-                    }
-                },
-                RecvOutcome::Empty => return None,
-                RecvOutcome::Closed => {
-                    hang_reset!();
-                    return self.close_channel_and_mark_eof();
-                }
-            }
-        }
-    }
-
-    fn recv_outcome(&mut self) -> RecvOutcome {
-        if self.use_nonblocking_recv() {
-            if let Some(fetch) = self.pcm_rx.try_pop() {
-                self.wake_worker();
-                return RecvOutcome::Item(fetch);
-            }
-            return RecvOutcome::Empty;
-        }
-
-        self.recv_outcome_blocking()
-    }
-
-    #[kithara_hang_detector::hang_watchdog]
-    fn recv_outcome_blocking(&mut self) -> RecvOutcome {
-        loop {
-            if let Some(fetch) = self.pcm_rx.try_pop() {
-                hang_reset!();
-                self.wake_worker();
-                return RecvOutcome::Item(fetch);
-            }
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
-                hang_reset!();
-                return RecvOutcome::Closed;
-            }
-            self.wake_worker();
-            self.reader_wake.register_current();
-            if let Some(fetch) = self.pcm_rx.try_pop() {
-                hang_reset!();
-                self.wake_worker();
-                return RecvOutcome::Item(fetch);
-            }
-            if self
-                .cancel
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
-                hang_reset!();
-                return RecvOutcome::Closed;
-            }
-            hang_tick!();
-            Self::wait_for_fetch();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.preloaded
         }
     }
 
@@ -672,62 +719,15 @@ impl<S> Audio<S> {
         }
     }
 
-    fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> FetchOutcome {
-        if !self.validator.is_valid(&fetch) {
-            return FetchOutcome::Continue;
-        }
-
-        match fetch.kind {
-            FetchKind::NaturalEof => {
-                self.consumer_phase = ConsumerPhase::AtEof;
-                FetchOutcome::Return(None)
-            }
-            FetchKind::Failure => {
-                self.consumer_phase = ConsumerPhase::Failed;
-                FetchOutcome::Return(None)
-            }
-            FetchKind::Data => {
-                let chunk = fetch.into_inner();
-                FetchOutcome::Return(Some(chunk))
-            }
-        }
-    }
-
-    fn close_channel_and_mark_eof(&mut self) -> Option<PcmChunk> {
-        self.consumer_phase = ConsumerPhase::Failed;
-        None
-    }
-
-    fn use_nonblocking_recv(&self) -> bool {
-        #[cfg(target_arch = "wasm32")]
-        {
-            true
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.preloaded
-        }
-    }
-
-    /// Receive next chunk and store it as `current_chunk`.
+    /// Receive next valid chunk from channel, filtering stale chunks.
     ///
-    /// Returns `true` if a chunk was received, `false` on EOF or no data.
-    pub(crate) fn fill_buffer(&mut self) -> bool {
-        let Some(chunk) = self.recv_valid_chunk() else {
-            return false;
-        };
-        self.spec = chunk.spec();
-        self.current_chunk = Some(chunk);
-        self.current_chunk_consumed_frames = 0;
-
-        // Transition to Playing on first chunk received.
-        if matches!(
-            self.consumer_phase,
-            ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
-        ) {
-            self.consumer_phase = ConsumerPhase::Playing;
+    /// After `preload()`, non-blocking. Before `preload()`, blocks on first call.
+    /// Returns `None` on EOF or channel close.
+    /// Wake the shared worker so it can fill the freed ringbuf slot.
+    fn wake_worker(&self) {
+        if let Some(ref worker) = self.worker {
+            worker.wake();
         }
-        true
     }
 }
 
@@ -739,174 +739,6 @@ impl<T> Audio<Stream<T>>
 where
     T: StreamType<Events = EventBus>,
 {
-    fn resolve_event_bus(stream_config: &T::Config, config_bus: Option<EventBus>) -> EventBus {
-        T::event_bus(stream_config)
-            .or(config_bus)
-            .unwrap_or_default()
-    }
-
-    async fn create_stream_with_probe(
-        stream_config: T::Config,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Result<Stream<T>, DecodeError> {
-        let stream = Self::open_stream(stream_config).await?;
-        Self::spawn_probe(stream, byte_pool).await
-    }
-
-    async fn open_stream(stream_config: T::Config) -> Result<Stream<T>, DecodeError> {
-        debug!("Audio::new — creating Stream...");
-        let stream = Stream::<T>::new(stream_config)
-            .await
-            .map_err(|e| DecodeError::Io(IoError::other(e.to_string())))?;
-        debug!("Audio::new — Stream created");
-        Ok(stream)
-    }
-
-    async fn spawn_probe(
-        stream: Stream<T>,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Result<Stream<T>, DecodeError> {
-        debug!("Audio::new — spawning probe task...");
-        let result = spawn_blocking(move || Self::probe_stream_blocking(stream, &byte_pool))
-            .await
-            .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
-        debug!("Audio::new — probe task done");
-        Ok(result)
-    }
-
-    fn probe_stream_blocking(
-        mut stream: Stream<T>,
-        byte_pool: &kithara_bufpool::BytePool,
-    ) -> Result<Stream<T>, DecodeError> {
-        let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
-        let _ = stream.read(&mut probe_buf);
-        stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
-        Ok(stream)
-    }
-
-    async fn create_initial_decoder(
-        shared_stream: SharedStream<T>,
-        initial_media_info: Option<MediaInfo>,
-        hint: Option<String>,
-        pcm_pool: PcmPool,
-        byte_pool: kithara_bufpool::BytePool,
-        decoder_backend: kithara_decode::DecoderBackend,
-        stream_ctx: Arc<dyn StreamContext>,
-    ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
-        debug!("Audio::new — spawning decoder creation...");
-        let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
-        let hooks = shared_stream.take_reader_hooks();
-        let segment_layout = shared_stream.as_segment_layout();
-        let decoder_config = kithara_decode::DecoderConfig {
-            backend: decoder_backend,
-            hint: hint.clone(),
-            byte_len_handle: Some(Arc::clone(&byte_len_handle)),
-            pcm_pool: Some(pcm_pool),
-            byte_pool: Some(byte_pool),
-            stream_ctx: Some(stream_ctx),
-            segment_layout,
-            hooks,
-            ..Default::default()
-        };
-        let hint_for_decoder = hint;
-        let initial_media_info_for_decoder = initial_media_info;
-        let decoder = spawn_blocking(move || {
-            if let Some(ref info) = initial_media_info_for_decoder {
-                DecoderFactory::create_from_media_info(shared_stream, info, &decoder_config)
-            } else {
-                DecoderFactory::create_with_probe(
-                    shared_stream,
-                    hint_for_decoder.as_deref(),
-                    decoder_config,
-                )
-            }
-        })
-        .await
-        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))??;
-        debug!("Audio::new — decoder created");
-        Ok(decoder)
-    }
-
-    fn create_channels(
-        pcm_buffer_chunks: usize,
-        wake: Arc<ThreadWake>,
-    ) -> (
-        crate::runtime::Outlet<Fetch<PcmChunk>>,
-        crate::runtime::Inlet<Fetch<PcmChunk>>,
-    ) {
-        crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
-    }
-
-    fn create_emit(bus: &EventBus) -> Box<dyn Fn(AudioEvent) + Send> {
-        let emit_bus = bus.clone();
-        Box::new(move |event: AudioEvent| {
-            emit_bus.publish(event);
-        })
-    }
-
-    fn log_pipeline_ready(
-        initial_spec: PcmSpec,
-        output_spec: PcmSpec,
-        host_sample_rate: &Arc<AtomicU32>,
-    ) {
-        info!(
-            ?initial_spec,
-            ?output_spec,
-            host_sr = host_sample_rate.load(Ordering::Relaxed),
-            "Audio pipeline created"
-        );
-    }
-
-    fn create_decoder_factory(
-        decoder_backend: kithara_decode::DecoderBackend,
-        stream_ctx: &Arc<dyn StreamContext>,
-        epoch: &Arc<AtomicU64>,
-        byte_len_handle: &Arc<AtomicU64>,
-        pool: &PcmPool,
-        byte_pool: &kithara_bufpool::BytePool,
-    ) -> crate::pipeline::source::DecoderFactory<T> {
-        let factory_stream_ctx = Arc::clone(stream_ctx);
-        let factory_epoch = Arc::clone(epoch);
-        let factory_byte_len = Arc::clone(byte_len_handle);
-        let factory_pool = pool.clone();
-        let factory_byte_pool = byte_pool.clone();
-        Box::new(move |stream, info, base_offset| {
-            // Compute byte_len from current stream length minus base_offset.
-            // Must be recomputed on every recreation — variant switches change
-            // the effective total, so a stale value from the previous variant
-            // would cause Symphonia to compute corrupted seek deltas.
-            let byte_len = stream
-                .len()
-                .map_or(0, |len| len.saturating_sub(base_offset));
-            factory_byte_len.store(byte_len, Ordering::Release);
-            let current_epoch = factory_epoch.load(Ordering::Acquire);
-            let hooks = stream.take_reader_hooks();
-            let segment_layout = stream.as_segment_layout();
-            let config = kithara_decode::DecoderConfig {
-                backend: decoder_backend,
-                byte_len_handle: Some(Arc::clone(&factory_byte_len)),
-                pcm_pool: Some(factory_pool.clone()),
-                byte_pool: Some(factory_byte_pool.clone()),
-                stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
-                segment_layout,
-                epoch: current_epoch,
-                hooks,
-                ..Default::default()
-            };
-            let make_source = || OffsetReader::new(stream.clone(), base_offset);
-            match DecoderFactory::create_for_recreate(make_source, info, &config) {
-                Ok(d) => {
-                    d.update_byte_len(byte_len);
-                    Some(d)
-                }
-                Err(e) => {
-                    warn!(?e, "failed to recreate decoder");
-                    None
-                }
-            }
-        })
-    }
-
     /// Create audio pipeline from `AudioConfig`.
     ///
     /// This is the target API for Stream sources.
@@ -1062,12 +894,122 @@ where
         })
     }
 
-    /// Subscribe to unified events via the `EventBus`.
-    ///
-    /// Returns a receiver for all events published to the bus.
-    #[must_use]
-    pub fn events(&self) -> kithara_events::EventReceiver {
-        self.bus.subscribe()
+    fn create_channels(
+        pcm_buffer_chunks: usize,
+        wake: Arc<ThreadWake>,
+    ) -> (
+        crate::runtime::Outlet<Fetch<PcmChunk>>,
+        crate::runtime::Inlet<Fetch<PcmChunk>>,
+    ) {
+        crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
+    }
+
+    fn create_decoder_factory(
+        decoder_backend: kithara_decode::DecoderBackend,
+        stream_ctx: &Arc<dyn StreamContext>,
+        epoch: &Arc<AtomicU64>,
+        byte_len_handle: &Arc<AtomicU64>,
+        pool: &PcmPool,
+        byte_pool: &kithara_bufpool::BytePool,
+    ) -> crate::pipeline::source::DecoderFactory<T> {
+        let factory_stream_ctx = Arc::clone(stream_ctx);
+        let factory_epoch = Arc::clone(epoch);
+        let factory_byte_len = Arc::clone(byte_len_handle);
+        let factory_pool = pool.clone();
+        let factory_byte_pool = byte_pool.clone();
+        Box::new(move |stream, info, base_offset| {
+            // Compute byte_len from current stream length minus base_offset.
+            // Must be recomputed on every recreation — variant switches change
+            // the effective total, so a stale value from the previous variant
+            // would cause Symphonia to compute corrupted seek deltas.
+            let byte_len = stream
+                .len()
+                .map_or(0, |len| len.saturating_sub(base_offset));
+            factory_byte_len.store(byte_len, Ordering::Release);
+            let current_epoch = factory_epoch.load(Ordering::Acquire);
+            let hooks = stream.take_reader_hooks();
+            let segment_layout = stream.as_segment_layout();
+            let config = kithara_decode::DecoderConfig {
+                backend: decoder_backend,
+                byte_len_handle: Some(Arc::clone(&factory_byte_len)),
+                pcm_pool: Some(factory_pool.clone()),
+                byte_pool: Some(factory_byte_pool.clone()),
+                stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
+                segment_layout,
+                epoch: current_epoch,
+                hooks,
+                ..Default::default()
+            };
+            let make_source = || OffsetReader::new(stream.clone(), base_offset);
+            match DecoderFactory::create_for_recreate(make_source, info, &config) {
+                Ok(d) => {
+                    d.update_byte_len(byte_len);
+                    Some(d)
+                }
+                Err(e) => {
+                    warn!(?e, "failed to recreate decoder");
+                    None
+                }
+            }
+        })
+    }
+
+    fn create_emit(bus: &EventBus) -> Box<dyn Fn(AudioEvent) + Send> {
+        let emit_bus = bus.clone();
+        Box::new(move |event: AudioEvent| {
+            emit_bus.publish(event);
+        })
+    }
+
+    async fn create_initial_decoder(
+        shared_stream: SharedStream<T>,
+        initial_media_info: Option<MediaInfo>,
+        hint: Option<String>,
+        pcm_pool: PcmPool,
+        byte_pool: kithara_bufpool::BytePool,
+        decoder_backend: kithara_decode::DecoderBackend,
+        stream_ctx: Arc<dyn StreamContext>,
+    ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
+        debug!("Audio::new — spawning decoder creation...");
+        let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
+        let hooks = shared_stream.take_reader_hooks();
+        let segment_layout = shared_stream.as_segment_layout();
+        let decoder_config = kithara_decode::DecoderConfig {
+            backend: decoder_backend,
+            hint: hint.clone(),
+            byte_len_handle: Some(Arc::clone(&byte_len_handle)),
+            pcm_pool: Some(pcm_pool),
+            byte_pool: Some(byte_pool),
+            stream_ctx: Some(stream_ctx),
+            segment_layout,
+            hooks,
+            ..Default::default()
+        };
+        let hint_for_decoder = hint;
+        let initial_media_info_for_decoder = initial_media_info;
+        let decoder = spawn_blocking(move || {
+            if let Some(ref info) = initial_media_info_for_decoder {
+                DecoderFactory::create_from_media_info(shared_stream, info, &decoder_config)
+            } else {
+                DecoderFactory::create_with_probe(
+                    shared_stream,
+                    hint_for_decoder.as_deref(),
+                    decoder_config,
+                )
+            }
+        })
+        .await
+        .map_err(|e| DecodeError::Io(IoError::other(format!("decoder task panicked: {e}"))))??;
+        debug!("Audio::new — decoder created");
+        Ok(decoder)
+    }
+
+    async fn create_stream_with_probe(
+        stream_config: T::Config,
+        byte_pool: kithara_bufpool::BytePool,
+    ) -> Result<Stream<T>, DecodeError> {
+        let stream = Self::open_stream(stream_config).await?;
+        Self::spawn_probe(stream, byte_pool).await
     }
 
     /// Get a reference to the underlying `EventBus`.
@@ -1076,6 +1018,64 @@ where
     #[must_use]
     pub fn event_bus(&self) -> &EventBus {
         &self.bus
+    }
+
+    /// Subscribe to unified events via the `EventBus`.
+    ///
+    /// Returns a receiver for all events published to the bus.
+    #[must_use]
+    pub fn events(&self) -> kithara_events::EventReceiver {
+        self.bus.subscribe()
+    }
+
+    fn log_pipeline_ready(
+        initial_spec: PcmSpec,
+        output_spec: PcmSpec,
+        host_sample_rate: &Arc<AtomicU32>,
+    ) {
+        info!(
+            ?initial_spec,
+            ?output_spec,
+            host_sr = host_sample_rate.load(Ordering::Relaxed),
+            "Audio pipeline created"
+        );
+    }
+
+    async fn open_stream(stream_config: T::Config) -> Result<Stream<T>, DecodeError> {
+        debug!("Audio::new — creating Stream...");
+        let stream = Stream::<T>::new(stream_config)
+            .await
+            .map_err(|e| DecodeError::Io(IoError::other(e.to_string())))?;
+        debug!("Audio::new — Stream created");
+        Ok(stream)
+    }
+
+    fn probe_stream_blocking(
+        mut stream: Stream<T>,
+        byte_pool: &kithara_bufpool::BytePool,
+    ) -> Result<Stream<T>, DecodeError> {
+        let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
+        let _ = stream.read(&mut probe_buf);
+        stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
+        Ok(stream)
+    }
+
+    fn resolve_event_bus(stream_config: &T::Config, config_bus: Option<EventBus>) -> EventBus {
+        T::event_bus(stream_config)
+            .or(config_bus)
+            .unwrap_or_default()
+    }
+
+    async fn spawn_probe(
+        stream: Stream<T>,
+        byte_pool: kithara_bufpool::BytePool,
+    ) -> Result<Stream<T>, DecodeError> {
+        debug!("Audio::new — spawning probe task...");
+        let result = spawn_blocking(move || Self::probe_stream_blocking(stream, &byte_pool))
+            .await
+            .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
+        debug!("Audio::new — probe task done");
+        Ok(result)
     }
 }
 
@@ -1136,6 +1136,72 @@ impl<S> Drop for Audio<S> {
 
 // PcmReader implementation for Audio
 impl<S: Send> PcmReader for Audio<S> {
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.abr_handle.clone()
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        Self::duration(self)
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        Self::metadata(self)
+    }
+
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        // Reuse preloaded chunk if any, else pull from the channel.
+        let chunk = if let Some(c) = self.current_chunk.take() {
+            c
+        } else if let Some(c) = self.recv_valid_chunk() {
+            c
+        } else {
+            let position = self.position();
+            return match self.consumer_phase {
+                ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
+                ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
+                    "pcm channel closed / producer failed",
+                ))),
+                ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
+                    reason: PendingReason::SeekInProgress,
+                    position,
+                }),
+                _ => Ok(ChunkOutcome::Pending {
+                    reason: PendingReason::Buffering,
+                    position,
+                }),
+            };
+        };
+        self.spec = chunk.spec();
+
+        // Transition to Playing on first chunk (same as fill_buffer)
+        if matches!(
+            self.consumer_phase,
+            ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
+        ) {
+            self.consumer_phase = ConsumerPhase::Playing;
+        }
+
+        self.timeline
+            .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
+        Ok(ChunkOutcome::Chunk(chunk))
+    }
+
+    fn position(&self) -> Duration {
+        Self::position(self)
+    }
+
+    fn preload(&mut self) -> Result<(), DecodeError> {
+        Self::preload(self)
+    }
+
+    fn preload_notify(&self) -> Option<Arc<Notify>> {
+        Some(self.preload_notify.clone())
+    }
+
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Self::read(self, buf)
     }
@@ -1195,35 +1261,10 @@ impl<S: Send> PcmReader for Audio<S> {
         Self::seek(self, position)
     }
 
-    fn spec(&self) -> PcmSpec {
-        Self::spec(self)
-    }
-
-    fn position(&self) -> Duration {
-        Self::position(self)
-    }
-
-    fn duration(&self) -> Option<Duration> {
-        Self::duration(self)
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        Self::metadata(self)
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
-    }
-
-    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.abr_handle.clone()
-    }
-
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         self.host_sample_rate
             .store(sample_rate.get(), Ordering::Relaxed);
     }
-
     fn set_playback_rate(&self, rate: f32) {
         self.playback_rate.store(rate, Ordering::Relaxed);
     }
@@ -1233,50 +1274,9 @@ impl<S: Send> PcmReader for Audio<S> {
             worker.set_service_class(track_id, class);
         }
     }
-    fn preload_notify(&self) -> Option<Arc<Notify>> {
-        Some(self.preload_notify.clone())
-    }
 
-    fn preload(&mut self) -> Result<(), DecodeError> {
-        Self::preload(self)
-    }
-
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        // Reuse preloaded chunk if any, else pull from the channel.
-        let chunk = if let Some(c) = self.current_chunk.take() {
-            c
-        } else if let Some(c) = self.recv_valid_chunk() {
-            c
-        } else {
-            let position = self.position();
-            return match self.consumer_phase {
-                ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
-                ConsumerPhase::Failed => Err(DecodeError::Io(IoError::other(
-                    "pcm channel closed / producer failed",
-                ))),
-                ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
-                    reason: PendingReason::SeekInProgress,
-                    position,
-                }),
-                _ => Ok(ChunkOutcome::Pending {
-                    reason: PendingReason::Buffering,
-                    position,
-                }),
-            };
-        };
-        self.spec = chunk.spec();
-
-        // Transition to Playing on first chunk (same as fill_buffer)
-        if matches!(
-            self.consumer_phase,
-            ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
-        ) {
-            self.consumer_phase = ConsumerPhase::Playing;
-        }
-
-        self.timeline
-            .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
-        Ok(ChunkOutcome::Chunk(chunk))
+    fn spec(&self) -> PcmSpec {
+        Self::spec(self)
     }
 }
 

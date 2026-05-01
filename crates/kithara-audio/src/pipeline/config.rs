@@ -28,24 +28,8 @@ use crate::{
 #[derive(Setters)]
 #[setters(prefix = "with_", strip_option)]
 pub struct AudioConfig<T: StreamType> {
-    /// Shared byte pool for temporary buffers (probe, etc.).
-    pub byte_pool: Option<BytePool>,
-    /// Optional format hint (file extension like "mp3", "wav")
-    #[setters(skip)]
-    pub hint: Option<String>,
-    /// Target sample rate of the audio host (for resampling).
-    pub host_sample_rate: Option<NonZeroU32>,
-    /// Media info hint for format detection
-    pub media_info: Option<kithara_stream::MediaInfo>,
-    /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
-    pub pcm_buffer_chunks: usize,
-    /// Shared atomic for dynamic playback rate (1.0 = normal speed).
-    ///
-    /// When set, propagated to the resampler for pitch-shifting playback.
-    /// When `None`, a default `Arc<AtomicF32>` with value `1.0` is created.
-    pub playback_rate: Option<Arc<AtomicF32>>,
-    /// Shared PCM pool for temporary buffers.
-    pub pcm_pool: Option<PcmPool>,
+    /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
+    pub stream: T::Config,
     /// Decoder backend selection. See [`DecoderBackend`]. Defaults to
     /// [`DecoderBackend::Symphonia`] — the software path is cross-platform
     /// and capability-complete; hardware backends are opt-in via
@@ -57,16 +41,25 @@ pub struct AudioConfig<T: StreamType> {
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
     pub preload_chunks: NonZeroUsize,
-    /// Resampling quality preset.
-    pub resampler_quality: ResamplerQuality,
-    /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
-    pub stream: T::Config,
     /// Unified event bus (optional — if not provided, one is created internally).
     #[setters(rename = "with_events")]
     pub bus: Option<EventBus>,
-    /// Additional effects to append after resampler in the processing chain.
+    /// Shared byte pool for temporary buffers (probe, etc.).
+    pub byte_pool: Option<BytePool>,
+    /// Optional format hint (file extension like "mp3", "wav")
     #[setters(skip)]
-    pub effects: Vec<Box<dyn AudioEffect>>,
+    pub hint: Option<String>,
+    /// Target sample rate of the audio host (for resampling).
+    pub host_sample_rate: Option<NonZeroU32>,
+    /// Media info hint for format detection
+    pub media_info: Option<kithara_stream::MediaInfo>,
+    /// Shared PCM pool for temporary buffers.
+    pub pcm_pool: Option<PcmPool>,
+    /// Shared atomic for dynamic playback rate (1.0 = normal speed).
+    ///
+    /// When set, propagated to the resampler for pitch-shifting playback.
+    /// When `None`, a default `Arc<AtomicF32>` with value `1.0` is created.
+    pub playback_rate: Option<Arc<AtomicF32>>,
     /// Optional shared audio worker handle.
     ///
     /// When provided, the track registers with this shared worker instead of
@@ -74,17 +67,24 @@ pub struct AudioConfig<T: StreamType> {
     /// worker is created automatically for backward compatibility.
     #[setters(skip)]
     pub worker: Option<handle::AudioWorkerHandle>,
+    /// Resampling quality preset.
+    pub resampler_quality: ResamplerQuality,
+    /// Additional effects to append after resampler in the processing chain.
+    #[setters(skip)]
+    pub effects: Vec<Box<dyn AudioEffect>>,
+    /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
+    pub pcm_buffer_chunks: usize,
 }
 
 impl<T: StreamType> AudioConfig<T> {
-    /// Default number of preload chunks.
-    const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
-
     /// Default PCM queue depth in decoded chunks.
     #[cfg(target_arch = "wasm32")]
     const DEFAULT_PCM_BUFFER_CHUNKS: usize = 32;
+
     #[cfg(not(target_arch = "wasm32"))]
     const DEFAULT_PCM_BUFFER_CHUNKS: usize = 10;
+    /// Default number of preload chunks.
+    const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
     /// Create config with stream config and default audio settings.
     pub fn new(stream: T::Config) -> Self {
@@ -106,15 +106,15 @@ impl<T: StreamType> AudioConfig<T> {
         }
     }
 
-    /// Set format hint.
-    pub fn with_hint<S: Into<String>>(mut self, hint: S) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
-
     /// Add an audio effect to the processing chain (runs after resampler).
     pub fn with_effect(mut self, effect: Box<dyn AudioEffect>) -> Self {
         self.effects.push(effect);
+        self
+    }
+
+    /// Set format hint.
+    pub fn with_hint<S: Into<String>>(mut self, hint: S) -> Self {
+        self.hint = Some(hint.into());
         self
     }
 
@@ -181,11 +181,11 @@ mod tests {
     struct PassthroughEffect;
 
     impl AudioEffect for PassthroughEffect {
-        fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
-            Some(chunk)
-        }
         fn flush(&mut self) -> Option<PcmChunk> {
             None
+        }
+        fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+            Some(chunk)
         }
         fn reset(&mut self) {}
     }

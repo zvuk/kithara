@@ -179,9 +179,9 @@ impl From<Infinite> for SignalLength {
 /// PCM-first signal renderer used by fixture generators and WAV adapters.
 pub struct SignalPcm<S: signal::SignalFn> {
     signal: S,
-    sample_rate: u32,
-    channels: u16,
     length: SignalLength,
+    channels: u16,
+    sample_rate: u32,
 }
 
 impl<S: signal::SignalFn> SignalPcm<S> {
