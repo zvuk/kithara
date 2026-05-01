@@ -1,27 +1,27 @@
 schema_version = 1
 
 [accumulator_loops]
-"crates/kithara-audio/src/effects/eq.rs:351:16" = 1
-"crates/kithara-audio/src/resampler.rs:339:8" = 1
+"crates/kithara-assets/src/index/pin.rs:402:8" = 1
+"crates/kithara-assets/src/index/pin.rs:412:8" = 1
+"crates/kithara-audio/src/effects/eq.rs:356:16" = 1
+"crates/kithara-audio/src/resampler.rs:575:8" = 1
 "crates/kithara-hls/src/stream_index.rs:488:8" = 1
-"crates/kithara-play/src/impls/player_processor.rs:425:20" = 1
+"crates/kithara-play/src/impls/player_processor.rs:399:20" = 1
 "crates/kithara-stream/src/dl/tests.rs:327:4" = 1
 "crates/kithara-test-utils/src/fmp4/bytes.rs:94:4" = 1
 
 [branch_chains]
-"crates/kithara-stream/src/media.rs:147:8" = 1
+"crates/kithara-stream/src/media.rs:111:8" = 1
 
 [guard_cascade]
-"crates/kithara-audio/src/pipeline/source.rs:1175:8" = 1
-"crates/kithara-decode/src/android/source.rs:111:4" = 1
-"crates/kithara-decode/src/apple/audiofile.rs:420:8" = 1
-"crates/kithara-hls/src/loading/segment_loader.rs:186:8" = 1
-"crates/kithara-hls/src/source/source_impl.rs:108:12" = 1
+"crates/kithara-audio/src/pipeline/source.rs:590:8" = 1
+"crates/kithara-hls/src/loading/segment_loader.rs:259:8" = 1
+"crates/kithara-hls/src/source/source_impl.rs:503:12" = 1
 "crates/kithara-play/src/impls/session_engine.rs:1328:4" = 1
-"crates/kithara-stream/src/media.rs:107:8" = 1
+"crates/kithara-stream/src/media.rs:143:8" = 1
 "crates/kithara-test-utils/src/hls_spec.rs:209:4" = 1
 "crates/kithara-test-utils/src/signal_spec.rs:142:4" = 1
 "crates/kithara-test-utils/src/signal_spec.rs:270:4" = 1
 
 [parallel_loops]
-"crates/kithara-stream/src/dl/registry.rs:143:8::self.peers" = 1
+"crates/kithara-stream/src/dl/registry.rs:181:8::self.peers" = 1
