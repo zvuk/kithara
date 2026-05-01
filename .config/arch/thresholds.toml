@@ -70,6 +70,21 @@ warn = 3
 # are not counted (use `single_impl_size` for those).
 warn = 6
 
+[fn_arg_count]
+# Functions with this many arguments (excluding `self`) trigger a warn.
+# Tighter than clippy's `too_many_arguments` default (7) — used as a map
+# of the codebase, not an enforced gate. The clippy lint stays at its
+# threshold (clippy.toml: too-many-arguments-threshold) and acts as the
+# hard ceiling.
+warn = 5
+
+[generic_param_count]
+# Items (fn/struct/enum/trait/type) with this many generic params
+# (type+lifetime+const combined) trigger a warn. Sister threshold
+# `warn_where` flags many where-clause predicates separately.
+warn_params = 3
+warn_where = 4
+
 [shared_state]
 warn = 3
 deny = 5

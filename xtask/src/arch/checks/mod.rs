@@ -18,6 +18,8 @@ pub(crate) mod duplicate_error_enums;
 pub(crate) mod file_density;
 pub(crate) mod file_size;
 pub(crate) mod flat_directory;
+pub(crate) mod fn_arg_count;
+pub(crate) mod generic_param_count;
 pub(crate) mod god_module;
 pub(crate) mod god_struct;
 pub(crate) mod god_trait;
@@ -51,6 +53,8 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(direction::Direction),
         Box::new(canonical_types::CanonicalTypes),
         Box::new(arc_clone_hotspots::ArcCloneHotspots),
+        Box::new(fn_arg_count::FnArgCount),
+        Box::new(generic_param_count::GenericParamCount),
         Box::new(god_module::GodModule),
         Box::new(god_struct::GodStruct),
         Box::new(god_trait::GodTrait),

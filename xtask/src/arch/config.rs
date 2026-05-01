@@ -87,6 +87,10 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) trait_impl_count: TraitImplCountThreshold,
     #[serde(default)]
+    pub(crate) fn_arg_count: FnArgCountThreshold,
+    #[serde(default)]
+    pub(crate) generic_param_count: GenericParamCountThreshold,
+    #[serde(default)]
     pub(crate) flat_directory: FlatDirectoryThreshold,
     #[serde(default)]
     pub(crate) max_nesting: MaxNestingThreshold,
@@ -259,6 +263,39 @@ pub(crate) struct PubStructOpenFieldsThreshold {
 impl Default for PubStructOpenFieldsThreshold {
     fn default() -> Self {
         Self { warn: 3 }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FnArgCountThreshold {
+    /// Functions with this many arguments (excluding `self`) trigger a warn.
+    /// Tighter than clippy's `too_many_arguments` default (7) — used as a
+    /// map of the codebase, not an enforced gate.
+    pub(crate) warn: usize,
+}
+
+impl Default for FnArgCountThreshold {
+    fn default() -> Self {
+        Self { warn: 5 }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GenericParamCountThreshold {
+    /// Items with this many generic params (type+lifetime+const) trigger a warn.
+    pub(crate) warn_params: usize,
+    /// Items with this many where-clause predicates trigger a warn.
+    pub(crate) warn_where: usize,
+}
+
+impl Default for GenericParamCountThreshold {
+    fn default() -> Self {
+        Self {
+            warn_params: 3,
+            warn_where: 4,
+        }
     }
 }
 
