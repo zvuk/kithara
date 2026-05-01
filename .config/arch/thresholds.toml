@@ -26,6 +26,50 @@ min_fns_to_evaluate = 20
 # cannot tell whether the receiver is `Arc<T>` or a value type.
 warn = 3
 
+[god_module]
+# `pub` + `pub(crate)` items declared in one module file. High count → file
+# is exposing too many independent abstractions; split into smaller modules
+# with single-purpose APIs. Counted item kinds: struct, enum, trait, fn,
+# type alias, const, static, macro_rules.
+warn = 8
+# Per-crate overrides: `crate-name = N`. Lets app/test/macro crates relax
+# the default without baselining each file.
+[god_module.overrides]
+"kithara-app" = 20
+"kithara-ffi" = 20
+"kithara-wasm" = 20
+"kithara-test-utils" = 20
+"kithara-test-macros" = 20
+"kithara-hang-detector-macros" = 20
+"kithara-wasm-macros" = 20
+"xtask" = 20
+
+[god_struct]
+# `fields + methods` per struct. Methods include both inherent (`impl X`)
+# and trait-impl (`impl Trait for X`) functions, aggregated across every
+# `impl` block in the file (so a type whose surface is split across many
+# traits still hits the threshold). Tuple structs and unit structs count
+# as zero fields.
+warn = 15
+
+[god_trait]
+# Number of method (`fn`) items in a single trait definition. Per AGENTS.md:
+# "prefer several smaller traits with clearer ownership" over one fat trait.
+warn = 7
+
+[pub_struct_open_fields]
+# `pub` structs with at least this many `pub` fields are flagged. Signals
+# missing invariants / direct mutation. Candidate for a builder, encapsulated
+# setters, or grouping into a typed value. Only strict `pub` is considered;
+# `pub(crate)` structs are not flagged here.
+warn = 3
+
+[trait_impl_count]
+# Number of `impl Trait for X` blocks targeting one local type, per file.
+# High count → god-type playing several roles. Inherent `impl X` blocks
+# are not counted (use `single_impl_size` for those).
+warn = 6
+
 [shared_state]
 warn = 3
 deny = 5

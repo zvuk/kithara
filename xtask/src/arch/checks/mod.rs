@@ -18,9 +18,13 @@ pub(crate) mod duplicate_error_enums;
 pub(crate) mod file_density;
 pub(crate) mod file_size;
 pub(crate) mod flat_directory;
+pub(crate) mod god_module;
+pub(crate) mod god_struct;
+pub(crate) mod god_trait;
 pub(crate) mod max_nesting;
 pub(crate) mod mixed_entities;
 pub(crate) mod module_layers;
+pub(crate) mod pub_struct_open_fields;
 pub(crate) mod readme_presence;
 pub(crate) mod redundant_accessors;
 pub(crate) mod redundant_reexport;
@@ -28,6 +32,7 @@ pub(crate) mod shared_state;
 pub(crate) mod single_impl_size;
 pub(crate) mod single_word_filenames;
 pub(crate) mod stray_rs_files;
+pub(crate) mod trait_impl_count;
 
 pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
@@ -46,6 +51,11 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(direction::Direction),
         Box::new(canonical_types::CanonicalTypes),
         Box::new(arc_clone_hotspots::ArcCloneHotspots),
+        Box::new(god_module::GodModule),
+        Box::new(god_struct::GodStruct),
+        Box::new(god_trait::GodTrait),
+        Box::new(pub_struct_open_fields::PubStructOpenFields),
+        Box::new(trait_impl_count::TraitImplCount),
         Box::new(duplicate_error_enums::DuplicateErrorEnums),
         Box::new(stray_rs_files::StrayRsFiles),
         Box::new(file_size::FileSize),

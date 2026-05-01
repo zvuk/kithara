@@ -77,6 +77,16 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) arc_clone_hotspots: ArcCloneHotspotsThreshold,
     #[serde(default)]
+    pub(crate) god_module: GodModuleThreshold,
+    #[serde(default)]
+    pub(crate) god_struct: GodStructThreshold,
+    #[serde(default)]
+    pub(crate) god_trait: GodTraitThreshold,
+    #[serde(default)]
+    pub(crate) pub_struct_open_fields: PubStructOpenFieldsThreshold,
+    #[serde(default)]
+    pub(crate) trait_impl_count: TraitImplCountThreshold,
+    #[serde(default)]
     pub(crate) flat_directory: FlatDirectoryThreshold,
     #[serde(default)]
     pub(crate) max_nesting: MaxNestingThreshold,
@@ -186,6 +196,84 @@ pub(crate) struct ArcCloneHotspotsThreshold {
 impl Default for ArcCloneHotspotsThreshold {
     fn default() -> Self {
         Self { warn: 3 }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GodModuleThreshold {
+    /// Default warn threshold = number of `pub`/`pub(crate)` items in one
+    /// module file that triggers a violation.
+    pub(crate) warn: usize,
+    /// Per-crate override map: crate-name → custom warn threshold. Lets
+    /// app/test/macro crates relax the default without baselining each file.
+    #[serde(default)]
+    pub(crate) overrides: BTreeMap<String, usize>,
+}
+
+impl Default for GodModuleThreshold {
+    fn default() -> Self {
+        Self {
+            warn: 8,
+            overrides: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GodStructThreshold {
+    /// `fields + methods` per struct. Methods include both inherent and
+    /// trait-impl methods aggregated from all `impl` blocks in the file.
+    pub(crate) warn: usize,
+}
+
+impl Default for GodStructThreshold {
+    fn default() -> Self {
+        Self { warn: 15 }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GodTraitThreshold {
+    /// Number of method (`fn`) items in a single trait definition.
+    pub(crate) warn: usize,
+}
+
+impl Default for GodTraitThreshold {
+    fn default() -> Self {
+        Self { warn: 7 }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PubStructOpenFieldsThreshold {
+    /// `pub` structs with at least this many `pub` fields are flagged. Signals
+    /// missing invariants / direct mutation. Candidate for a builder or
+    /// encapsulated setter API.
+    pub(crate) warn: usize,
+}
+
+impl Default for PubStructOpenFieldsThreshold {
+    fn default() -> Self {
+        Self { warn: 3 }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TraitImplCountThreshold {
+    /// Number of `impl Trait for X` blocks targeting one local type
+    /// (per file, since the AST view is per-file). High count → god-type
+    /// implementing too many roles.
+    pub(crate) warn: usize,
+}
+
+impl Default for TraitImplCountThreshold {
+    fn default() -> Self {
+        Self { warn: 6 }
     }
 }
 
