@@ -14,7 +14,7 @@ use std::{
 };
 
 use kithara_bufpool::PcmPool;
-use kithara_stream::StreamContext;
+use kithara_stream::{ReaderChunkSignal, ReaderSeekSignal, SharedHooks, StreamContext};
 
 use crate::{
     codec::{DecodedFrame, FrameCodec},
@@ -36,6 +36,11 @@ pub(crate) struct UniversalDecoder<D: Demuxer, C: FrameCodec> {
     epoch: u64,
     byte_len_handle: Option<Arc<AtomicU64>>,
     stream_ctx: Option<Arc<dyn StreamContext>>,
+    /// Reader-side observer hooks. `None` skips the lock entirely on the
+    /// hot path; `Some(_)` emits per-chunk / per-seek signals after the
+    /// inner outcome resolves. Folded in from the former `HookedDecoder`
+    /// decorator — every decoder is hookable now.
+    hooks: Option<SharedHooks>,
     /// Cumulative frame counter. Anchored to `landed_at` on seek (so the
     /// next chunk's `frame_offset / sample_rate ≈ timestamp`) and
     /// incremented by `decoded.frames` per emitted chunk. Tracking it
@@ -65,6 +70,7 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
         epoch: u64,
         byte_len_handle: Option<Arc<AtomicU64>>,
         stream_ctx: Option<Arc<dyn StreamContext>>,
+        hooks: Option<SharedHooks>,
     ) -> Self {
         let spec = codec.spec();
         let duration = demuxer.duration();
@@ -77,9 +83,39 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
             epoch,
             byte_len_handle,
             stream_ctx,
+            hooks,
             frame_offset: 0,
             pending_seek_target: None,
             resync_frame_offset_to_pts: false,
+        }
+    }
+
+    fn emit_chunk_signal(&self, outcome: &DecoderChunkOutcome) {
+        let Some(hooks) = self.hooks.as_ref() else {
+            return;
+        };
+        let signal = match outcome {
+            DecoderChunkOutcome::Chunk(_) => ReaderChunkSignal::Chunk,
+            DecoderChunkOutcome::Pending(reason) => ReaderChunkSignal::Pending(*reason),
+            DecoderChunkOutcome::Eof => ReaderChunkSignal::Eof,
+        };
+        if let Ok(mut h) = hooks.lock() {
+            h.on_chunk(signal);
+        }
+    }
+
+    fn emit_seek_signal(&self, outcome: &DecoderSeekOutcome) {
+        let Some(hooks) = self.hooks.as_ref() else {
+            return;
+        };
+        let signal = match outcome {
+            DecoderSeekOutcome::Landed { landed_byte, .. } => ReaderSeekSignal::Landed {
+                landed_byte: *landed_byte,
+            },
+            DecoderSeekOutcome::PastEof { .. } => ReaderSeekSignal::PastEof,
+        };
+        if let Ok(mut h) = hooks.lock() {
+            h.on_seek(signal);
         }
     }
 
@@ -130,18 +166,8 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
         self.pending_seek_target = None;
         false
     }
-}
 
-impl<D: Demuxer + 'static, C: FrameCodec> Decoder for UniversalDecoder<D, C> {
-    fn duration(&self) -> Option<Duration> {
-        self.duration
-    }
-
-    fn metadata(&self) -> TrackMetadata {
-        TrackMetadata::default()
-    }
-
-    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+    fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             match self.demuxer.next_frame()? {
                 DemuxOutcome::Frame(frame) => {
@@ -163,7 +189,7 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for UniversalDecoder<D, C> {
         }
     }
 
-    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+    fn seek_inner(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         match self.demuxer.seek(pos)? {
             DemuxSeekOutcome::Landed {
                 landed_at,
@@ -191,6 +217,28 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for UniversalDecoder<D, C> {
                 Ok(DecoderSeekOutcome::PastEof { duration })
             }
         }
+    }
+}
+
+impl<D: Demuxer + 'static, C: FrameCodec> Decoder for UniversalDecoder<D, C> {
+    fn duration(&self) -> Option<Duration> {
+        self.duration
+    }
+
+    fn metadata(&self) -> TrackMetadata {
+        TrackMetadata::default()
+    }
+
+    fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        let outcome = self.next_chunk_inner()?;
+        self.emit_chunk_signal(&outcome);
+        Ok(outcome)
+    }
+
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        let outcome = self.seek_inner(pos)?;
+        self.emit_seek_signal(&outcome);
+        Ok(outcome)
     }
 
     fn spec(&self) -> PcmSpec {
@@ -272,7 +320,8 @@ mod smoke_tests {
         let demuxer = build_mp3_demuxer();
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open(&track_info).expect("MP3 codec should open");
-        let mut decoder = UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None);
+        let mut decoder =
+            UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None, None);
 
         let mut got_chunk = false;
         for _ in 0..16 {
@@ -296,7 +345,8 @@ mod smoke_tests {
         let demuxer = build_mp3_demuxer();
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open(&track_info).expect("MP3 codec should open");
-        let mut decoder = UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None);
+        let mut decoder =
+            UniversalDecoder::new(demuxer, codec, pcm_pool().clone(), 0, None, None, None);
 
         for _ in 0..4 {
             let _ = decoder
@@ -318,5 +368,198 @@ mod smoke_tests {
                 panic!("seek(0) on a real MP3 must not be PastEof")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod hook_tests {
+    //! Hook-emission tests for `UniversalDecoder`. Validate that the folded-in
+    //! `Option<SharedHooks>` field forwards `next_chunk` / `seek` outcomes to
+    //! the registered observer. Migrated from the former `HookedDecoder`
+    //! decorator, which has been deleted in favour of native hook support.
+
+    use std::sync::{Arc, Mutex};
+
+    use kithara_bufpool::pcm_pool;
+    use kithara_stream::{
+        DecoderHooks, PendingReason, ReaderChunkSignal, ReaderSeekSignal, SharedHooks,
+    };
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        codec::DecodedFrame,
+        demuxer::{DemuxOutcome, DemuxSeekOutcome, TrackInfo},
+        traits::Decoder,
+    };
+
+    #[derive(Default)]
+    struct CallLog {
+        chunks: Vec<&'static str>,
+        seeks: Vec<&'static str>,
+    }
+
+    struct LoggingHooks {
+        log: Arc<Mutex<CallLog>>,
+    }
+
+    impl DecoderHooks for LoggingHooks {
+        fn on_chunk(&mut self, signal: ReaderChunkSignal) {
+            let tag = match signal {
+                ReaderChunkSignal::Chunk => "chunk",
+                ReaderChunkSignal::Pending(_) => "pending",
+                ReaderChunkSignal::Eof => "eof",
+                _ => "other",
+            };
+            self.log.lock().unwrap().chunks.push(tag);
+        }
+
+        fn on_seek(&mut self, signal: ReaderSeekSignal) {
+            let tag = match signal {
+                ReaderSeekSignal::Landed { .. } => "landed",
+                ReaderSeekSignal::PastEof => "past_eof",
+                _ => "other",
+            };
+            self.log.lock().unwrap().seeks.push(tag);
+        }
+    }
+
+    /// Stub demuxer + codec pair driven by canned outcomes. Exists only so
+    /// hook tests can construct a `UniversalDecoder` without needing a real
+    /// container/codec.
+    struct StubDemuxer {
+        next: Vec<DemuxOutcome>,
+        seek: Vec<DemuxSeekOutcome>,
+        track: TrackInfo,
+    }
+
+    impl Demuxer for StubDemuxer {
+        fn track_info(&self) -> &TrackInfo {
+            &self.track
+        }
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+        fn next_frame(&mut self) -> DecodeResult<DemuxOutcome> {
+            Ok(self.next.pop().unwrap_or(DemuxOutcome::Eof))
+        }
+        fn seek(&mut self, _pos: Duration) -> DecodeResult<DemuxSeekOutcome> {
+            Ok(self.seek.pop().unwrap_or(DemuxSeekOutcome::PastEof {
+                duration: Duration::ZERO,
+            }))
+        }
+    }
+
+    struct StubCodec {
+        spec: PcmSpec,
+    }
+
+    impl FrameCodec for StubCodec {
+        fn open(_track: &TrackInfo) -> DecodeResult<Self> {
+            unreachable!("stub codec is hand-built")
+        }
+        fn decode_frame(&mut self, _bytes: &[u8], _pts: Duration) -> DecodeResult<DecodedFrame> {
+            Ok(DecodedFrame {
+                samples: vec![0.0; self.spec.channels as usize],
+                frames: 1,
+            })
+        }
+        fn flush(&mut self) {}
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    fn empty_track() -> TrackInfo {
+        TrackInfo {
+            codec: kithara_stream::AudioCodec::Mp3,
+            sample_rate: 44_100,
+            channels: 2,
+            extra_data: Vec::new(),
+            duration: None,
+        }
+    }
+
+    fn build(
+        demuxer: StubDemuxer,
+        log: Arc<Mutex<CallLog>>,
+    ) -> UniversalDecoder<StubDemuxer, StubCodec> {
+        let codec = StubCodec {
+            spec: PcmSpec {
+                channels: 2,
+                sample_rate: 44_100,
+            },
+        };
+        let hooks: SharedHooks = Arc::new(Mutex::new(LoggingHooks { log }));
+        UniversalDecoder::new(
+            demuxer,
+            codec,
+            pcm_pool().clone(),
+            0,
+            None,
+            None,
+            Some(hooks),
+        )
+    }
+
+    #[kithara::test]
+    fn next_chunk_emits_chunk_signal() {
+        let log = Arc::new(Mutex::new(CallLog::default()));
+        let demuxer = StubDemuxer {
+            next: vec![DemuxOutcome::Frame(Frame {
+                data: vec![0u8; 4],
+                pts: Duration::ZERO,
+                duration: Duration::from_millis(20),
+            })],
+            seek: Vec::new(),
+            track: empty_track(),
+        };
+        let mut decoder = build(demuxer, Arc::clone(&log));
+        let _ = decoder.next_chunk().unwrap();
+        assert_eq!(log.lock().unwrap().chunks, vec!["chunk"]);
+    }
+
+    #[kithara::test]
+    fn next_chunk_emits_pending_signal() {
+        let log = Arc::new(Mutex::new(CallLog::default()));
+        let demuxer = StubDemuxer {
+            next: vec![DemuxOutcome::Pending(PendingReason::SeekPending)],
+            seek: Vec::new(),
+            track: empty_track(),
+        };
+        let mut decoder = build(demuxer, Arc::clone(&log));
+        let _ = decoder.next_chunk().unwrap();
+        assert_eq!(log.lock().unwrap().chunks, vec!["pending"]);
+    }
+
+    #[kithara::test]
+    fn seek_emits_landed_signal() {
+        let log = Arc::new(Mutex::new(CallLog::default()));
+        let demuxer = StubDemuxer {
+            next: Vec::new(),
+            seek: vec![DemuxSeekOutcome::Landed {
+                landed_at: Duration::from_secs(1),
+                landed_byte: Some(123),
+            }],
+            track: empty_track(),
+        };
+        let mut decoder = build(demuxer, Arc::clone(&log));
+        let _ = decoder.seek(Duration::from_secs(1)).unwrap();
+        assert_eq!(log.lock().unwrap().seeks, vec!["landed"]);
+    }
+
+    #[kithara::test]
+    fn seek_emits_past_eof_signal() {
+        let log = Arc::new(Mutex::new(CallLog::default()));
+        let demuxer = StubDemuxer {
+            next: Vec::new(),
+            seek: vec![DemuxSeekOutcome::PastEof {
+                duration: Duration::from_secs(10),
+            }],
+            track: empty_track(),
+        };
+        let mut decoder = build(demuxer, Arc::clone(&log));
+        let _ = decoder.seek(Duration::from_secs(15)).unwrap();
+        assert_eq!(log.lock().unwrap().seeks, vec!["past_eof"]);
     }
 }

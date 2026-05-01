@@ -20,7 +20,6 @@ use super::probe::{
 use crate::{
     Decoder,
     error::{DecodeError, DecodeResult},
-    hooks::HookedDecoder,
     traits::BoxedSource,
 };
 
@@ -88,10 +87,12 @@ pub struct DecoderConfig {
     ///
     /// Used when the container format is not specified, as a hint for auto-detection.
     pub hint: Option<String>,
-    /// Reader-side hooks injected into the resulting decoder via
-    /// [`HookedDecoder`]. The factory wraps the inner decoder in
-    /// `HookedDecoder` whenever this is `Some`. `None` keeps the
-    /// inner decoder unwrapped (mock sources, tests).
+    /// Reader-side observer hooks. Forwarded into [`UniversalDecoder`]
+    /// directly; emitting them is opt-in and zero-overhead when `None`.
+    /// `Some(_)` wires the chunk/seek signals into the supplied
+    /// [`SharedHooks`] sink (mock sources, tests, telemetry).
+    ///
+    /// [`UniversalDecoder`]: crate::universal::UniversalDecoder
     pub hooks: Option<SharedHooks>,
     /// Optional PCM buffer pool override.
     ///
@@ -110,16 +111,6 @@ pub struct DecoderConfig {
     pub gapless: bool,
     /// Epoch counter for decoder recreation tracking.
     pub epoch: u64,
-}
-
-pub(super) fn wrap_with_hooks(
-    inner: Box<dyn Decoder>,
-    hooks: Option<SharedHooks>,
-) -> Box<dyn Decoder> {
-    match hooks {
-        Some(hooks) => Box::new(HookedDecoder::new(inner, hooks)),
-        None => inner,
-    }
 }
 
 /// Factory for creating decoders with a single, strict backend selection.
@@ -253,16 +244,14 @@ impl DecoderFactory {
             "DecoderFactory::create called"
         );
 
-        let inner = match config.backend {
+        match config.backend {
             #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
             DecoderBackend::Apple => create_apple(source, codec, container, config),
             #[cfg(all(feature = "android", target_os = "android"))]
             DecoderBackend::Android => create_android(source, codec, container, config),
             #[cfg(feature = "symphonia")]
             DecoderBackend::Symphonia => create_symphonia(source, codec, container, config),
-        }?;
-
-        Ok(wrap_with_hooks(inner, config.hooks.clone()))
+        }
     }
 }
 
@@ -327,6 +316,7 @@ fn create_fmp4_segment_apple(
         config.epoch,
         config.byte_len_handle.clone(),
         config.stream_ctx.clone(),
+        config.hooks.clone(),
     );
     Ok(Box::new(decoder))
 }
@@ -383,6 +373,7 @@ fn create_fmp4_segment_android(
         config.epoch,
         config.byte_len_handle.clone(),
         config.stream_ctx.clone(),
+        config.hooks.clone(),
     );
     Ok(Box::new(decoder))
 }
@@ -447,6 +438,7 @@ fn create_file_symphonia_universal(
         config.epoch,
         config.byte_len_handle.clone(),
         config.stream_ctx.clone(),
+        config.hooks.clone(),
     );
     Ok(Box::new(decoder))
 }
@@ -497,6 +489,7 @@ fn create_fmp4_segment_symphonia(
                 config.epoch,
                 config.byte_len_handle.clone(),
                 config.stream_ctx.clone(),
+                config.hooks.clone(),
             );
             Ok(Box::new(decoder))
         }

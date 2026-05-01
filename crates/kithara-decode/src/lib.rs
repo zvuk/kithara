@@ -24,7 +24,6 @@ mod demuxer;
 mod error;
 mod factory;
 mod fmp4;
-mod hooks;
 mod pcm;
 #[cfg(feature = "symphonia")]
 mod symphonia;
@@ -44,8 +43,6 @@ mod apple;
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
-// Reader-side hook wrapper (the trait + signals live in `kithara-stream`).
-pub use hooks::HookedDecoder;
 // Public traits
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
