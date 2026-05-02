@@ -686,6 +686,8 @@ mod tests {
                 spec,
                 ..Default::default()
             },
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().attach(pcm),
         )
     }

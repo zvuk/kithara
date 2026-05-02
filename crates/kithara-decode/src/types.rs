@@ -122,6 +122,8 @@ pub struct PcmMeta {
 #[derive(Debug, Derivative)]
 #[derivative(Default)]
 pub struct PcmChunk {
+    // Derivative-driven Default — no pool parameter
+    // ast-grep-ignore: perf.no-global-pool-accessor
     #[derivative(Default(value = "PcmPool::default().get()"))]
     pub pcm: PcmBuf,
     pub meta: PcmMeta,
@@ -133,6 +135,8 @@ impl Clone for PcmChunk {
     /// Each clone gets its own [`PcmBuf`] from the global pool,
     /// so both original and clone recycle independently on drop.
     fn clone(&self) -> Self {
+        // Clone trait — no pool parameter
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let mut new_pcm = PcmPool::default().get();
         new_pcm.extend_from_slice(&self.pcm);
         Self {
@@ -177,6 +181,8 @@ mod tests {
                 spec,
                 ..Default::default()
             },
+            // test fixture: top-level singleton acceptable
+            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().attach(pcm),
         )
     }

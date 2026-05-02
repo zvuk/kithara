@@ -332,6 +332,8 @@ mod smoke_tests {
         let mut decoder = UniversalDecoder::new(
             demuxer,
             codec,
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().clone(),
             0,
             None,
@@ -364,6 +366,8 @@ mod smoke_tests {
         let mut decoder = UniversalDecoder::new(
             demuxer,
             codec,
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().clone(),
             0,
             None,
@@ -556,6 +560,8 @@ mod hook_tests {
         UniversalDecoder::new(
             demuxer,
             codec,
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().clone(),
             0,
             None,

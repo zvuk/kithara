@@ -1307,6 +1307,8 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
@@ -1365,6 +1367,8 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),

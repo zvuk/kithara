@@ -126,6 +126,8 @@ mod tests {
 
     #[kithara::test]
     fn pcm16_conversion_normalizes_and_trims() {
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = PcmPool::default().clone();
         let bytes = [
             0x00_u8, 0x80, // -1.0
@@ -143,6 +145,8 @@ mod tests {
 
     #[kithara::test]
     fn pcm_float_copy_is_pool_backed_and_trimmed() {
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = PcmPool::default().clone();
         let samples = [0.25_f32, -0.5, 0.75, -1.0];
         let bytes: Vec<u8> = samples.into_iter().flat_map(f32::to_le_bytes).collect();
@@ -156,6 +160,8 @@ mod tests {
 
     #[kithara::test]
     fn pcm16_rejects_odd_byte_length() {
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = PcmPool::default().clone();
         let bytes = [0u8; 3];
         let err = decode_pcm16_to_f32(&pool, &bytes, 0, 2).expect_err("should reject odd length");
@@ -167,6 +173,8 @@ mod tests {
 
     #[kithara::test]
     fn trim_greater_than_total_returns_empty_pool_buffer() {
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = PcmPool::default().clone();
         let bytes = vec![0u8; 8]; // 4 i16 samples, 2 frames for stereo
         let pcm = decode_pcm16_to_f32(&pool, &bytes, 10, 2).expect("trim-over-empty");
