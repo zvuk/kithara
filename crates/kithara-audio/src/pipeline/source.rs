@@ -572,6 +572,24 @@ impl<T: StreamType> StreamAudioSource<T> {
         true
     }
 
+    /// Resolve the post-seek skip remainder for the given epoch in one
+    /// pass. Returns `Some(remaining)` only when an active skip is still
+    /// owed; otherwise clears any stale entry and returns `None`. Lets
+    /// the caller short-circuit the per-chunk fast path with a single
+    /// branch instead of a four-guard cascade (`guard_cascade.rs:60-76`).
+    #[inline]
+    fn pending_skip_amount(&mut self, epoch: u64) -> Option<Duration> {
+        let resume = self.resume_state().copied()?;
+        let remaining = resume.skip?;
+        if resume.seek.epoch != epoch || remaining.is_zero() {
+            if let Some(state) = self.resume_state_mut() {
+                state.skip = None;
+            }
+            return None;
+        }
+        Some(remaining)
+    }
+
     /// Trim or drop a freshly-decoded chunk against an in-flight seek
     /// skip. Returns the same [`DecoderChunkOutcome`] shape as
     /// [`Decoder::next_chunk`] so the decode loop carries one
@@ -587,24 +605,9 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// `Eof` is structurally impossible here (we don't observe stream
     /// termination from a chunk we just decoded).
     fn apply_seek_skip(&mut self, epoch: u64, mut chunk: PcmChunk) -> DecoderChunkOutcome {
-        let Some(resume) = self.resume_state().copied() else {
+        let Some(remaining) = self.pending_skip_amount(epoch) else {
             return DecoderChunkOutcome::Chunk(chunk);
         };
-        let Some(remaining) = resume.skip else {
-            return DecoderChunkOutcome::Chunk(chunk);
-        };
-        if resume.seek.epoch != epoch {
-            if let Some(state) = self.resume_state_mut() {
-                state.skip = None;
-            }
-            return DecoderChunkOutcome::Chunk(chunk);
-        }
-        if remaining.is_zero() {
-            if let Some(state) = self.resume_state_mut() {
-                state.skip = None;
-            }
-            return DecoderChunkOutcome::Chunk(chunk);
-        }
 
         let spec = chunk.spec();
         let channels = usize::from(spec.channels.max(1));
