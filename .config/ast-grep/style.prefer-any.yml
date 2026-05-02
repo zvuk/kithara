@@ -1,0 +1,33 @@
+id: style.prefer-any
+message: |
+  Detected `.find(p).is_some()` / `.find(p).is_none()`.
+  Use `.any(p)` / `!iter.any(p)` instead.
+
+  Why it matters: `.any(p)` and `!iter.any(p)` express the intent
+  ("does at least one match?") directly. `find(...).is_some()`
+  materialises the matching item only to throw it away. For types
+  where `find` returns `Option<&T>` this is just verbosity; for
+  consuming iterators it can pull more state than needed before
+  short-circuit.
+
+      // ❌  if items.iter().find(|x| x.is_active()).is_some() { ... }
+      // ✅  if items.iter().any(|x| x.is_active()) { ... }
+
+  Suppress with `// ast-grep-ignore: style.prefer-any` when `find`
+  is followed by side-effects or context-dependent filtering (the
+  located element is actually used downstream).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: $X.find($P).is_some()
+    - pattern: $X.find($P).is_none()

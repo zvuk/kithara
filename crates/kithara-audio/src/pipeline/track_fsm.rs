@@ -4,9 +4,8 @@
 //! (`pending_format_change`, `pending_decode_started_epoch`, etc.) with a
 //! single `TrackState` enum that is the sole source of truth.
 
-use std::time::Duration;
-
 use kithara_decode::{DecodeError, Decoder};
+use kithara_platform::time::Duration;
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};
 
 use crate::pipeline::{fetch::Fetch, seek_location::SeekLocation};

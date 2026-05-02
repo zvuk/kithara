@@ -650,9 +650,8 @@ mod pool_budget_tests {
     //! Backend-specific equivalents (Apple/Android FFI cookie code paths)
     //! live next to those codecs.
 
-    use std::time::Duration;
-
     use kithara_bufpool::{PcmBuf, PcmPool};
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use crate::{codec::FrameCodec, demuxer::TrackInfo, error::DecodeResult, types::PcmSpec};

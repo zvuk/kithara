@@ -162,6 +162,8 @@ impl VariantSegments {
     /// Number of committed segments.
     #[must_use]
     pub fn len(&self) -> usize {
+        // self.iter() filters out unavailable segments — `.len()` would count invalidated entries
+        // ast-grep-ignore: perf.no-iter-count
         self.iter().count()
     }
 
@@ -534,6 +536,8 @@ impl StreamIndex {
     /// Number of committed segments in the layout variant's byte map.
     #[must_use]
     pub fn num_committed(&self) -> usize {
+        // rangemap::RangeMap exposes only .iter() — no `.len()` available
+        // ast-grep-ignore: perf.no-iter-count
         self.variant_byte_maps[self.layout_variant].iter().count()
     }
 

@@ -52,7 +52,7 @@ pub struct OfflineError;
 impl AudioBackend for OfflineBackend {
     type Config = OfflineConfig;
     type Enumerator = ();
-    type Instant = std::time::Instant;
+    type Instant = kithara_platform::time::Instant;
     type StartStreamError = OfflineError;
     type StreamError = OfflineError;
 
@@ -115,7 +115,7 @@ impl OfflineBackend {
                 frames,
                 num_in_channels: 0,
                 num_out_channels: channels,
-                process_timestamp: std::time::Instant::now(),
+                process_timestamp: kithara_platform::time::Instant::now(),
                 #[expect(
                     clippy::cast_precision_loss,
                     reason = "frame counter precision loss acceptable for test timing"

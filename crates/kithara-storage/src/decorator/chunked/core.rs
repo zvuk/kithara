@@ -120,6 +120,8 @@ pub struct AtomicChunked<R: ResourceExt> {
 
 impl<R: ResourceExt> std::fmt::Debug for AtomicChunked<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // MutexGuard::clone() is via the inner type — `.cloned()` would require an iterator of references
+        // ast-grep-ignore: perf.prefer-cloned
         let tmp = self.tmp_path.try_lock().map(|g| g.clone());
         f.debug_struct("AtomicChunked")
             .field("canonical_path", &self.canonical_path)

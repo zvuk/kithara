@@ -433,8 +433,7 @@ fn sample_duration_for(trun: &re_mp4::TrunBox, tfhd: &re_mp4::TfhdBox, idx: usiz
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
     use super::*;

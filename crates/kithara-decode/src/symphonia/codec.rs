@@ -13,9 +13,8 @@
 //! original `AudioCodecParameters` straight through from
 //! [`crate::demuxer::SymphoniaDemuxer::native_params`].
 
-use std::time::Duration;
-
 use kithara_bufpool::PcmBuf;
+use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
 use symphonia::core::{
     audio::Channels,

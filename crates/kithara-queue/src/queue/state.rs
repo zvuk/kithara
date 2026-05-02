@@ -188,9 +188,8 @@ impl Queue {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use std::time::Duration;
-
     use kithara_events::{Event, EventReceiver, QueueEvent};
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use tokio::time::{Instant as TokioInstant, timeout as tokio_timeout};
 

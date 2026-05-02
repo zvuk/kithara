@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-platform = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 re_mp4 = { workspace = true }
@@ -55,7 +56,6 @@ test-utils = ["unimock"]
 
 [dev-dependencies]
 kithara-decode = { path = ".", default-features = false, features = ["symphonia"] }
-kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-utils = { workspace = true }
 unimock = { workspace = true }

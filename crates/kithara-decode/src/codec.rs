@@ -1,8 +1,7 @@
 //! [`FrameCodec`] trait — codec-side half of the unified architecture.
 
-use std::time::Duration;
-
 use kithara_bufpool::PcmBuf;
+use kithara_platform::time::Duration;
 
 use crate::{demuxer::TrackInfo, error::DecodeResult, types::PcmSpec};
 

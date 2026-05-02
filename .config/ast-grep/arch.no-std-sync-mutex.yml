@@ -1,0 +1,36 @@
+id: arch.no-std-sync-mutex
+message: |
+  Direct use of `std::sync::Mutex` / `std::sync::RwLock` in workspace
+  code. Use `kithara_platform::{Mutex, RwLock}` instead.
+
+  Why it matters:
+  - wasm32 builds need different inner implementations (web mutex vs std).
+  - Poison handling is centralised: `lock_sync()` returns a guard
+    without the `.unwrap()` cascade and matches workspace policy
+    (`feedback_use_platform_mutex.md`).
+  - Instrumentation hooks (hang-detector) wrap kithara_platform but
+    not std — bypassing the abstraction is invisible to those tools.
+
+      // ❌  use std::sync::Mutex;
+      // ❌  let m = Arc::new(Mutex::new(state)); let g = m.lock().unwrap();
+      // ✅  use kithara_platform::Mutex;
+      // ✅  let m = Arc::new(Mutex::new(state)); let g = m.lock_sync();
+
+  Suppress only inside `kithara-platform` itself (already excluded
+  via `ignores:`).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+  - "crates/kithara-platform/**"
+rule:
+  any:
+    - pattern: std::sync::Mutex
+    - pattern: std::sync::RwLock

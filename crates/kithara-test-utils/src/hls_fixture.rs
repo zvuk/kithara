@@ -321,16 +321,22 @@ impl HlsTestServer {
             "/key.bin" => self.created.key_url(),
             other if other.starts_with("/playlist/v") && other.ends_with(".m3u8") => {
                 let variant = parse_variant(other, "/playlist/v", ".m3u8")
+                    // formatted message captures `other` via closure binding
+                    // ast-grep-ignore: style.prefer-expect
                     .unwrap_or_else(|| panic!("invalid HlsTestServer playlist path `{other}`"));
                 self.created.media_url(variant)
             }
             other if other.starts_with("/seg/v") && other.ends_with(".bin") => {
                 let (variant, segment) = parse_segment(other)
+                    // formatted message captures `other` via closure binding
+                    // ast-grep-ignore: style.prefer-expect
                     .unwrap_or_else(|| panic!("invalid HlsTestServer segment path `{other}`"));
                 self.created.segment_url(variant, segment)
             }
             other if other.starts_with("/init/v") && other.ends_with("_init.bin") => {
                 let variant = parse_variant(other, "/init/v", "_init.bin")
+                    // formatted message captures `other` via closure binding
+                    // ast-grep-ignore: style.prefer-expect
                     .unwrap_or_else(|| panic!("invalid HlsTestServer init path `{other}`"));
                 self.created.init_url(variant)
             }

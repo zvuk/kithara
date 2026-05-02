@@ -1,0 +1,39 @@
+id: arch.no-std-time
+message: |
+  Direct use of `std::time::Instant` / `std::time::Duration` in
+  workspace code. Use `kithara_platform::time::{Instant, Duration}`.
+
+  Why it matters: `std::time::Instant::now()` panics on wasm32 — the
+  platform has no monotonic clock through std. `kithara_platform::time::Instant`
+  routes through `web_time` on wasm and `std::time::Instant` on
+  native. Code that uses `std::time::*` directly silently breaks the
+  wasm build.
+
+      // ❌  use std::time::Instant; let t = Instant::now();
+      // ✅  use kithara_platform::time::Instant; let t = Instant::now();
+
+  `std::time::Duration` is wasm-safe by itself but workspace policy
+  prefers a single import path so it's covered by the same rule.
+
+  Suppress with `// ast-grep-ignore: arch.no-std-time` when interop
+  requires the std type (e.g. an external trait signature explicitly
+  takes `std::time::Duration`).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+  - "crates/kithara-platform/**"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-app/**"
+  - "crates/kithara-ffi/**"
+rule:
+  any:
+    - pattern: std::time::Instant
+    - pattern: std::time::Duration

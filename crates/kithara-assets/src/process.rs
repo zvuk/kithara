@@ -123,7 +123,7 @@ impl ReadinessGate {
                 if *guard {
                     return true;
                 }
-                let deadline = Instant::now() + std::time::Duration::from_millis(100);
+                let deadline = Instant::now() + kithara_platform::time::Duration::from_millis(100);
                 let (next, _) = self.cv.wait_sync_timeout(guard, deadline);
                 *next
             };
@@ -1001,7 +1001,7 @@ mod tests {
         });
 
         // Give the reader long enough to enter the gate's wait loop.
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(kithara_platform::time::Duration::from_millis(50));
         assert_eq!(
             call_count.load(Ordering::SeqCst),
             0,
@@ -1042,7 +1042,7 @@ mod tests {
 
         let reader = std::thread::spawn(move || processed_for_reader.wait_range(0..16));
 
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(kithara_platform::time::Duration::from_millis(50));
         cancel.cancel();
 
         let outcome = reader

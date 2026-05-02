@@ -602,7 +602,7 @@ impl PlayerImpl {
         shared_state.seek_epoch.store(seek_epoch, Ordering::SeqCst);
 
         let target_secs = seconds.max(0.0);
-        let target = std::time::Duration::from_secs_f64(target_secs);
+        let target = kithara_platform::time::Duration::from_secs_f64(target_secs);
 
         self.send_to_slot(PlayerCmd::Seek {
             seek_epoch,
@@ -612,7 +612,7 @@ impl PlayerImpl {
         Ok(match self.duration_seconds() {
             Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
                 target,
-                duration: std::time::Duration::from_secs_f64(dur),
+                duration: kithara_platform::time::Duration::from_secs_f64(dur),
             },
             _ => SeekOutcome::Landed {
                 target,

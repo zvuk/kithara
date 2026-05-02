@@ -1,0 +1,33 @@
+id: perf.no-collect-iter-roundtrip
+message: |
+  Detected `.collect::<Vec<_>>().into_iter()` / `.collect::<Vec<_>>().iter()`
+  — collecting into a temporary `Vec` only to immediately re-iterate.
+
+  Why it matters: each round-trip costs one heap allocation plus a
+  bytewise copy of N items. Iterators are lazy; chains compose
+  without intermediate buffers. Removing the round-trip saves the
+  allocation and lets the optimiser fuse adjacent passes.
+
+      // ❌  items.iter().map(f).collect::<Vec<_>>().into_iter().filter(p).collect()
+      // ✅  items.iter().map(f).filter(p).collect::<Vec<_>>()
+
+  Suppress with `// ast-grep-ignore: perf.no-collect-iter-roundtrip`
+  when the intermediate `Vec` is needed (e.g. converting to
+  `Arc<[T]>` via `.into()`, releasing a borrow before consuming).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: $X.collect::<Vec<_>>().into_iter()
+    - pattern: $X.collect::<Vec<$T>>().into_iter()
+    - pattern: $X.collect::<Vec<_>>().iter()
+    - pattern: $X.collect::<Vec<$T>>().iter()

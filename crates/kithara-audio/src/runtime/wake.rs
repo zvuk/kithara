@@ -1,10 +1,8 @@
 //! Wake primitive for the scheduler.
 
-use std::time::Duration;
-
 use kithara_platform::{
     sync::{Condvar, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 /// Level-triggered wake for the scheduler thread.

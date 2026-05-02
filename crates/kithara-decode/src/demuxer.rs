@@ -13,8 +13,7 @@
 //!
 //! [`FrameCodec`]: crate::codec::FrameCodec
 
-use std::time::Duration;
-
+use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, PendingReason};
 
 use crate::error::DecodeResult;

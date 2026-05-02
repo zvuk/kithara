@@ -463,8 +463,7 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::time::Duration;
-
+    use kithara_platform::time::Duration;
     use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
     use kithara_test_utils::kithara;
     use tempfile::TempDir;

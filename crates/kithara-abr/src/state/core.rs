@@ -78,12 +78,16 @@ impl AbrState {
         self.record_switch(now);
     }
 
-    pub(super) fn can_switch_now(&self, now: Instant, min_interval: std::time::Duration) -> bool {
+    pub(super) fn can_switch_now(
+        &self,
+        now: Instant,
+        min_interval: kithara_platform::time::Duration,
+    ) -> bool {
         let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
         if nanos == Self::NO_SWITCH {
             return true;
         }
-        let last = self.reference_instant + std::time::Duration::from_nanos(nanos);
+        let last = self.reference_instant + kithara_platform::time::Duration::from_nanos(nanos);
         now.duration_since(last) >= min_interval
     }
 

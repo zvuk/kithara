@@ -413,6 +413,8 @@ impl Source for HlsSource {
             self.coord.timeline().byte_position_handle(),
             self.coord.timeline().seek_epoch_handle(),
         );
+        // constructing into kithara_stream::SharedHooks (cross-crate public type fixes std::sync::Mutex)
+        // ast-grep-ignore: arch.no-std-sync-mutex
         Some(Arc::new(std::sync::Mutex::new(hooks)))
     }
 
