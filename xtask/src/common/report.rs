@@ -4,13 +4,97 @@ use std::collections::BTreeMap;
 
 use super::{
     baseline::RatchetDiff,
+    style::{bold, bold_cyan, bold_red, bold_yellow, cyan, dim, green, red},
     violation::{Report, Severity, Violation},
 };
 
-/// Render a report grouped by `check`. Each check appears once with a
-/// `(N deny, M warn)` header; violations follow as `<key> — <message>`
-/// lines. Mirrors the JSON/markdown renderers' shape but optimised for
-/// a terminal: no per-violation `[SEV] check:` prefix repetition.
+const RULE_BAR: &str = "─────────────────────────────────────────────────────────────────────";
+
+/// Map a severity word (`error|deny|warning|warn|info|hint|...`) to a
+/// short emoji + colourised tag pair used in block headers.
+fn severity_glyphs(severity: &str) -> (&'static str, fn(&str) -> String) {
+    match severity {
+        "error" | "deny" => ("🛑", bold_red as fn(&str) -> String),
+        "warning" | "warn" => ("⚠️ ", bold_yellow as fn(&str) -> String),
+        "info" => ("ℹ️ ", bold_cyan as fn(&str) -> String),
+        "hint" => ("💡", bold_cyan as fn(&str) -> String),
+        _ => ("•", bold as fn(&str) -> String),
+    }
+}
+
+/// Render a single check/rule block: header, optional rule description,
+/// list of locations. Used by both `xtask lint` and the ast-grep wrapper
+/// so they share one visual shape.
+///
+/// `description` — multi-line rationale; printed once, indented two
+/// spaces. `locations` yields `(location, fact)` pairs; `fact` is the
+/// per-instance message (numbers, threshold details), printed under the
+/// location at deeper indent. Pass `None` for `fact` when there is
+/// nothing instance-specific to add.
+pub(crate) fn print_check_block<I, L>(
+    name: &str,
+    severity: &str,
+    summary: &str,
+    description: Option<&str>,
+    locations: I,
+) where
+    I: IntoIterator<Item = (L, Option<String>)>,
+    L: AsRef<str>,
+{
+    let (icon, color) = severity_glyphs(severity);
+    let bar_len = RULE_BAR.chars().count();
+    // Width budget: visible text only — emoji is 2 columns, separator is 1.
+    let visible_left = icon.chars().count().max(1) + 1 + name.chars().count();
+    let pad = bar_len.saturating_sub(visible_left + summary.chars().count() + 2);
+    let dots = ".".repeat(pad.max(2));
+    println!(
+        "{icon} {name_styled} {dots} {sum}",
+        name_styled = bold(name),
+        dots = dim(&dots),
+        sum = color(summary),
+    );
+    println!("{}", dim(RULE_BAR));
+
+    if let Some(desc) = description {
+        let trimmed = desc.trim_matches('\n');
+        for line in trimmed.lines() {
+            let body = line.trim_end();
+            if body.trim().is_empty() {
+                println!();
+            } else {
+                println!("  {}", dim(body.trim_start()));
+            }
+        }
+        println!();
+    }
+
+    for (loc, fact) in locations {
+        let raw = loc.as_ref();
+        let (is_deny, rest) = raw
+            .strip_prefix("DENY  ")
+            .map_or((false, raw), |stripped| (true, stripped));
+        let marker = if is_deny { red("▸") } else { cyan("▸") };
+        let location_styled = if is_deny {
+            format!("{} {}", bold_red("DENY"), rest)
+        } else {
+            rest.to_string()
+        };
+        println!("  {marker} {location_styled}");
+        if let Some(f) = fact {
+            for line in f.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    println!("      {}", dim(trimmed));
+                }
+            }
+        }
+    }
+}
+
+/// Render a report grouped by `check`. Each check appears as a block
+/// with header, optional rule description (when an explanation is
+/// attached to any of its violations), then per-location lines with the
+/// instance fact.
 pub(crate) fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
     if report.violations.is_empty() && diff.improvements.is_empty() {
         return;
@@ -21,15 +105,19 @@ pub(crate) fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
         by_check.entry(v.check).or_default().push(v);
     }
 
-    for (check, vs) in &by_check {
+    for (idx, (check, vs)) in by_check.iter().enumerate() {
+        if idx > 0 {
+            println!();
+        }
+
         let deny = vs.iter().filter(|v| v.severity == Severity::Deny).count();
         let warn = vs.iter().filter(|v| v.severity == Severity::Warn).count();
-        let counts = match (deny, warn) {
-            (0, w) => format!("{w} warn"),
-            (d, 0) => format!("{d} deny"),
-            (d, w) => format!("{d} deny, {w} warn"),
+        let header_severity = if deny > 0 { "deny" } else { "warn" };
+        let summary = match (deny, warn) {
+            (0, w) => format!("×{w} warn"),
+            (d, 0) => format!("×{d} deny"),
+            (d, w) => format!("{d} deny + {w} warn"),
         };
-        println!("{check} ({counts})");
 
         let mut sorted = vs.clone();
         sorted.sort_by(|a, b| {
@@ -38,24 +126,43 @@ pub(crate) fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
                 .reverse()
                 .then_with(|| a.key.cmp(&b.key))
         });
-        for v in sorted {
-            let sev_tag = match v.severity {
-                Severity::Deny => "DENY ",
-                Severity::Warn => "",
+
+        let description = sorted.iter().find_map(|v| v.explanation);
+
+        let locations = sorted.iter().map(|v| {
+            let loc = match v.severity {
+                Severity::Deny => format!("DENY  {}", v.key),
+                Severity::Warn => v.key.clone(),
             };
-            println!("  {sev_tag}{key} — {msg}", key = v.key, msg = v.message);
-        }
+            (loc, Some(v.message.clone()))
+        });
+
+        print_check_block(check, header_severity, &summary, description, locations);
     }
 
     if !diff.improvements.is_empty() {
-        println!("ratchet improvements:");
+        println!();
+        let n = diff.improvements.len();
+        let pad = RULE_BAR
+            .chars()
+            .count()
+            .saturating_sub(28 + format!("{n} entries").chars().count());
+        let dots = ".".repeat(pad.max(2));
+        println!(
+            "✨ {} {} {}",
+            bold("ratchet improvements"),
+            dim(&dots),
+            green(&format!("{n} entries")),
+        );
+        println!("{}", dim(RULE_BAR));
         for imp in &diff.improvements {
             println!(
-                "  {check}/{key}: {from} -> {to}",
+                "  {arrow} {check}/{key}: {from} → {to}",
+                arrow = green("▸"),
                 check = imp.check,
                 key = imp.key,
-                from = imp.from,
-                to = imp.to,
+                from = dim(&imp.from.to_string()),
+                to = green(&imp.to.to_string()),
             );
         }
     }

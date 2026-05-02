@@ -187,7 +187,24 @@ test-all: test test-doc
 audit *ARGS:
     #!/usr/bin/env bash
     set -uo pipefail
-    section() { echo; echo "── $1"; }
+
+    # ANSI styling — only when stdout is a TTY and NO_COLOR is unset.
+    if [[ -t 1 && -z "${NO_COLOR-}" ]]; then
+        BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
+        BLUE=$'\033[1;36m'; GREEN=$'\033[1;32m'; RED=$'\033[1;31m'; YEL=$'\033[1;33m'
+        export KITHARA_AUDIT_COLOR=1
+    else
+        BOLD=""; DIM=""; RESET=""; BLUE=""; GREEN=""; RED=""; YEL=""
+    fi
+    section() { printf '\n%s── %s%s\n' "$BLUE" "$1" "$RESET"; }
+    badge() {
+        case "$1" in
+            ok)   printf '%s✓ ok%s'   "$GREEN" "$RESET" ;;
+            FAIL) printf '%s✗ FAIL%s' "$RED"   "$RESET" ;;
+            skip) printf '%s∘ skip%s' "$DIM"   "$RESET" ;;
+            *)    printf '%s' "$1" ;;
+        esac
+    }
 
     # Strip the recipe-level `--autofix` flag before forwarding the
     # remainder to scope resolution.
@@ -263,17 +280,20 @@ audit *ARGS:
     fi
 
     echo
-    echo "── summary"
-    printf "  %-12s %s\n" \
-        "fmt"        "$fmt_status" \
-        "clippy"     "$clippy_status" \
-        "ast-grep"   "$astgrep_status" \
-        "lint"       "$lint_status" \
-        "typos"      "$typos_status" \
-        "similarity" "$similarity_status" \
-        "orphans"    "$orphans_status"
+    printf '%s── summary%s\n' "$BLUE" "$RESET"
+    for entry in "fmt:$fmt_status" "clippy:$clippy_status" "ast-grep:$astgrep_status" \
+                 "lint:$lint_status" "typos:$typos_status" "similarity:$similarity_status" \
+                 "orphans:$orphans_status"; do
+        name=${entry%%:*}; status=${entry##*:}
+        printf "  %s%-12s%s %s\n" "$BOLD" "$name" "$RESET" "$(badge "$status")"
+    done
     echo
-    [[ $fail -eq 0 ]] && echo "audit: OK" || { echo "audit: FAILED"; exit 1; }
+    if [[ $fail -eq 0 ]]; then
+        printf '%saudit: OK%s\n' "$GREEN" "$RESET"
+    else
+        printf '%saudit: FAILED%s\n' "$RED" "$RESET"
+        exit 1
+    fi
 
 # --- internal: xtask self-tests ---
 

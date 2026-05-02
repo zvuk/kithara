@@ -193,37 +193,23 @@ fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {
 
     let total: usize = rules.iter().map(|(_, g)| g.hits.len()).sum();
 
-    for (rule_id, group) in &rules {
-        println!(
-            "{rule_id} ×{count} {sev}",
-            count = group.hits.len(),
-            sev = group.severity,
-        );
-        for hit in &group.hits {
-            println!("  {}:{}:{}", hit.file, hit.line, hit.column);
+    for (i, (rule_id, group)) in rules.iter().enumerate() {
+        if i > 0 {
+            println!();
         }
+        let summary = format!("×{} {}", group.hits.len(), group.severity);
+        crate::common::report::print_check_block(
+            rule_id,
+            &group.severity,
+            &summary,
+            Some(group.message.trim()),
+            group.hits.iter().map(|h| {
+                let location = format!("{}:{}:{}", h.file, h.line, h.column);
+                (location, None)
+            }),
+        );
     }
 
-    println!();
-    println!(
-        "why & how ({} rule{}):",
-        rules.len(),
-        if rules.len() == 1 { "" } else { "s" }
-    );
-    for (rule_id, group) in &rules {
-        let trimmed = group.message.trim();
-        let first_line = trimmed.lines().next().unwrap_or("").trim();
-        let rest: Vec<&str> = trimmed.lines().skip(1).collect();
-        println!("  {rule_id} — {first_line}");
-        for line in rest {
-            let body = line.trim_end();
-            if body.trim().is_empty() {
-                println!();
-            } else {
-                println!("    {}", body.trim_start());
-            }
-        }
-    }
     println!();
     println!(
         "ast-grep: {total} hit{plural} in {rules_n} rule{rules_plural}",

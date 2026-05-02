@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::{arch, idioms, style};
+use crate::{arch, common::style::bold_cyan, idioms, style};
 
 #[derive(Debug, Args)]
 pub(crate) struct LintArgs {
@@ -82,15 +82,15 @@ fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -
         ..idioms::IdiomsArgs::default()
     };
 
-    println!("== arch ==");
+    println!("{}", bold_cyan("══ arch ══"));
     if arch::run(&arch_args).is_err() {
         failures.push("arch");
     }
-    println!("\n== style ==");
+    println!("\n{}", bold_cyan("══ style ══"));
     if style::run(&style_args).is_err() {
         failures.push("style");
     }
-    println!("\n== idioms ==");
+    println!("\n{}", bold_cyan("══ idioms ══"));
     if idioms::run(&idioms_args).is_err() {
         failures.push("idioms");
     }
