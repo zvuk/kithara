@@ -39,6 +39,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) box_concrete_type: BoxConcreteTypeConfig,
     #[serde(default)]
     pub(crate) arc_mutex_collection: ArcMutexCollectionConfig,
+    #[serde(default)]
+    pub(crate) await_under_guard: AwaitUnderGuardConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -259,6 +261,21 @@ pub(crate) struct ArcMutexCollectionConfig {
 }
 
 impl Default for ArcMutexCollectionConfig {
+    fn default() -> Self {
+        Self {
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AwaitUnderGuardConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for AwaitUnderGuardConfig {
     fn default() -> Self {
         Self {
             exempt_files: default_exempt_files(),
