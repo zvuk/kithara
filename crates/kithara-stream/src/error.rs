@@ -46,6 +46,13 @@ pub enum SourceError {
     #[error("timeout: {0}")]
     Timeout(String),
 
+    /// Cooperative `wait_range` budget exceeded — caller passed
+    /// `Some(timeout)` and the source did not become ready within it.
+    /// Hot-path classifier for the audio worker's retry loop; diagnostic
+    /// detail is intentionally absent so emission allocates nothing.
+    #[error("wait_range budget exceeded")]
+    WaitBudgetExceeded,
+
     #[error("io: {0}")]
     Io(#[from] io::Error),
 

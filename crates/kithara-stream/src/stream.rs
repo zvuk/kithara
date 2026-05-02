@@ -119,7 +119,7 @@ impl StdError for VariantChangeError {}
 
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
-    error::SourceError,
+    error::{SourceError, StreamError},
     source::{PendingReason, ReadOutcome, Source},
 };
 
@@ -303,21 +303,20 @@ impl<T: StreamType> Stream<T> {
             let wait_result = self.source.wait_range(range, Some(WAIT_RANGE_TIMEOUT));
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("budget exceeded") {
-                        if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
-                            return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                        }
-                        wait_spins += 1;
-                        if wait_spins >= MAX_WAIT_SPINS {
-                            return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
-                        }
-                        hang_tick!();
-                        yield_now();
-                        continue;
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
+                    if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
+                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
-                    return Err(StreamReadError::Source(IoError::other(msg)));
+                    wait_spins += 1;
+                    if wait_spins >= MAX_WAIT_SPINS {
+                        return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
+                    }
+                    hang_tick!();
+                    yield_now();
+                    continue;
+                }
+                Err(e) => {
+                    return Err(StreamReadError::Source(IoError::other(e.to_string())));
                 }
             };
             match wait_outcome {

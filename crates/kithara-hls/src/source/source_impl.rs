@@ -435,15 +435,7 @@ impl Source for HlsSource {
             if let Some(budget) = timeout
                 && started_at.elapsed() > budget
             {
-                return Err(StreamError::Source(
-                    HlsError::Timeout(format!(
-                        "wait_range budget exceeded: range={}..{} elapsed={:?} timeout={budget:?}",
-                        range.start,
-                        range.end,
-                        started_at.elapsed(),
-                    ))
-                    .into(),
-                ));
+                return Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()));
             }
 
             // Phase 1: check state under segments lock.

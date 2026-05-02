@@ -35,6 +35,11 @@ pub enum HlsError {
 
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    /// Cooperative `wait_range` budget exceeded — surfaces as
+    /// [`SourceError::WaitBudgetExceeded`] for hot-path classification.
+    #[error("wait_range budget exceeded")]
+    WaitBudgetExceeded,
 }
 
 impl From<HlsError> for SourceError {
@@ -50,6 +55,7 @@ impl From<HlsError> for SourceError {
             HlsError::InvalidUrl(s) => Self::InvalidUrl(s),
             HlsError::Cancelled => Self::Cancelled,
             HlsError::Timeout(s) => Self::Timeout(s),
+            HlsError::WaitBudgetExceeded => Self::WaitBudgetExceeded,
         }
     }
 }
