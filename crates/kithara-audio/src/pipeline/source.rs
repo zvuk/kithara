@@ -605,6 +605,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     ///
     /// `Eof` is structurally impossible here (we don't observe stream
     /// termination from a chunk we just decoded).
+    #[inline]
     fn apply_seek_skip(&mut self, epoch: u64, mut chunk: PcmChunk) -> DecoderChunkOutcome {
         let Some(remaining) = self.pending_skip_amount(epoch) else {
             return DecoderChunkOutcome::Chunk(chunk);
