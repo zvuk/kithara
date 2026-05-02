@@ -253,6 +253,30 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Resolve a seek-preemption target in one Option-chain so the per-tick
+    /// hot path of `step_track` short-circuits with a single branch instead
+    /// of four sequential predicates. Returns `Some(target)` only when a
+    /// new timeline seek epoch must preempt the current state; otherwise
+    /// `None` and the caller falls through to the phase dispatcher.
+    #[inline]
+    fn preempt_seek_target(&self) -> Option<Duration> {
+        let timeline_epoch = self.timeline.seek_epoch();
+        if timeline_epoch <= self.epoch.load(Ordering::Acquire) {
+            return None;
+        }
+        let target = self.timeline.seek_target()?;
+        if self.state.is_terminal() {
+            return None;
+        }
+        if self
+            .active_seek_epoch()
+            .is_some_and(|epoch| epoch >= timeline_epoch)
+        {
+            return None;
+        }
+        Some(target)
+    }
+
     fn active_seek_epoch(&self) -> Option<u64> {
         match &self.state {
             TrackState::WaitingForSource {
@@ -2018,22 +2042,16 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
     fn step_track(&mut self) -> TrackStep<PcmChunk> {
         // 1. Seek preemption: detect new seek epoch from Timeline.
-        //    Skip if the FSM is already handling this epoch (SeekRequested).
-        let timeline_epoch = self.timeline.seek_epoch();
-        let current_epoch = self.epoch.load(Ordering::Acquire);
-        let already_handling = self
-            .active_seek_epoch()
-            .is_some_and(|epoch| epoch >= timeline_epoch);
-        if timeline_epoch > current_epoch
-            && self.timeline.seek_target().is_some()
-            && !self.state.is_terminal()
-            && !already_handling
-        {
+        //    The four-condition guard collapses into a typed Option so
+        //    the typical case (no preemption) skips one branch instead
+        //    of evaluating four predicates per tick — this site runs
+        //    every scheduler pass on every track.
+        if let Some(target) = self.preempt_seek_target() {
             self.update_state(TrackState::SeekRequested(SeekRequest {
                 attempt: 0,
                 seek: SeekContext {
-                    epoch: timeline_epoch,
-                    target: self.timeline.seek_target().unwrap_or(Duration::ZERO),
+                    epoch: self.timeline.seek_epoch(),
+                    target,
                 },
             }));
             reset_effects(&mut self.effects);

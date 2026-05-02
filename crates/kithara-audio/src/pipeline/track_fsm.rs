@@ -237,6 +237,7 @@ impl TrackState {
     }
 
     /// Fieldless discriminant for external phase queries.
+    #[inline(always)]
     pub(crate) fn phase_tag(&self) -> TrackPhaseTag {
         match self {
             Self::Decoding => TrackPhaseTag::Decoding,
