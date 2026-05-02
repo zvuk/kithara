@@ -116,6 +116,8 @@ impl PlayerImpl {
         let resolved_pool = config
             .pcm_pool
             .clone()
+            // PlayerImpl::new fallback — caller injects pcm_pool via PlayerConfig
+            // ast-grep-ignore: perf.no-global-pool-accessor
             .unwrap_or_else(|| PcmPool::default().clone());
 
         let bus = config.bus.clone().unwrap_or_default();

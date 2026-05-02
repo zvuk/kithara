@@ -510,6 +510,8 @@ mod tests {
         let player_resource = PlayerResource::new(
             resource,
             Arc::clone(&src),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &kithara_bufpool::PcmPool::default(),
         );
         let arc_resource = Arc::new(Mutex::new(player_resource));

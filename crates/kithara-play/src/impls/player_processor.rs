@@ -548,6 +548,8 @@ mod tests {
         let (tx, rx) = HeapRb::<PlayerCmd>::new(32).split();
         let sample_rate = NonZeroU32::new(44100).expect("non-zero");
         let processor =
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
         (processor, tx)
     }
@@ -637,6 +639,8 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &PcmPool::default(),
         )));
 
@@ -644,6 +648,8 @@ mod tests {
         let (tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
         let sample_rate = NonZeroU32::new(host_rate).expect("non-zero");
         let mut processor =
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
 
         let mut tx = tx;
@@ -819,6 +825,8 @@ mod tests {
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &PcmPool::default(),
         )))
     }
@@ -908,6 +916,8 @@ mod tests {
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &PcmPool::default(),
         )))
     }
@@ -1021,6 +1031,8 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &PcmPool::default(),
         )));
 
@@ -1096,6 +1108,8 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &PcmPool::default(),
         )));
 
@@ -1211,6 +1225,8 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &PcmPool::default(),
         )));
 
@@ -1270,6 +1286,8 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &PcmPool::default(),
         )));
 

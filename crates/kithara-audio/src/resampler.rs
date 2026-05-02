@@ -271,6 +271,8 @@ impl ResamplerProcessor {
             input_buffer: smallvec_new_vecs(channels),
             output_spec,
             playback_rate: params.playback_rate,
+            // ResamplerProcessor::new fallback — caller injects pool via ResamplerParams
+            // ast-grep-ignore: perf.no-global-pool-accessor
             pool: params.pool.unwrap_or_else(|| PcmPool::default().clone()),
             quality: params.quality,
             resampler: None,

@@ -252,6 +252,8 @@ mod tests {
     fn make_player_resource() -> PlayerResource {
         let reader = TestPcmReader::new(mock_spec(), 1.0);
         let resource = Resource::from_reader(reader);
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         PlayerResource::new(resource, Arc::from("test.mp3"), &PcmPool::default())
     }
 
@@ -382,6 +384,8 @@ mod tests {
     async fn resource_zero_read_without_eof_is_not_error() {
         let reader = PendingReader::new();
         let resource = Resource::from_reader(reader);
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let mut pr = PlayerResource::new(resource, Arc::from("pending"), &PcmPool::default());
 
         let mut left = vec![0.0f32; 128];
@@ -400,6 +404,8 @@ mod tests {
     async fn resource_read_zeroes_output_when_no_data_available() {
         let reader = PendingReader::new();
         let resource = Resource::from_reader(reader);
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let mut pr = PlayerResource::new(resource, Arc::from("pending"), &PcmPool::default());
 
         // Fill output buffers with a sentinel value that simulates stale
@@ -427,6 +433,8 @@ mod tests {
     async fn resource_eof_returns_error() {
         let reader = TestPcmReader::new(mock_spec(), 0.01);
         let resource = Resource::from_reader(reader);
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &PcmPool::default());
 
         // Read until natural EOF surfaces as `PlayError::Eof`.

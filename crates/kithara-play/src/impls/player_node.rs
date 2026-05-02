@@ -65,6 +65,8 @@ impl PlayerNode {
         Self {
             active: true,
             cmd_rx: Arc::new(Mutex::new(Some(rx))),
+            // PlayerNode test-only constructor
+            // ast-grep-ignore: perf.no-global-pool-accessor
             pcm_pool: PcmPool::default().clone(),
             shared_state: Arc::new(SharedPlayerState::new()),
         }
@@ -159,6 +161,8 @@ mod tests {
     fn player_node_with_channel(#[case] cmd: PlayerCmd) {
         let (mut tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
         let shared_state = Arc::new(SharedPlayerState::new());
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let node = PlayerNode::with_channel(rx, shared_state, PcmPool::default().clone());
         assert!(node.active);
 

@@ -777,6 +777,8 @@ where
         } = config;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
+        // from_parts fallback safety net — caller injects byte_pool via AudioConfig
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
@@ -790,6 +792,8 @@ where
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
         let stream_ctx = shared_stream.build_stream_context();
 
+        // from_parts fallback safety net — caller injects pcm_pool via AudioConfig
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),

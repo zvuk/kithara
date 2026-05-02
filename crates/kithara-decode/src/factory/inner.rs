@@ -312,6 +312,8 @@ fn create_fmp4_segment_apple(
     let pool = config
         .pcm_pool
         .clone()
+        // fallback safety net — caller injects pcm_pool via DecoderConfig
+        // ast-grep-ignore: perf.no-global-pool-accessor
         .unwrap_or_else(|| PcmPool::default().clone());
     let decoder = UniversalDecoder::new(
         demuxer,
@@ -369,6 +371,8 @@ fn create_fmp4_segment_android(
     let pool = config
         .pcm_pool
         .clone()
+        // fallback safety net — caller injects pcm_pool via DecoderConfig
+        // ast-grep-ignore: perf.no-global-pool-accessor
         .unwrap_or_else(|| PcmPool::default().clone());
     let decoder = UniversalDecoder::new(
         demuxer,
@@ -434,6 +438,8 @@ fn create_file_symphonia_universal(
     let pool = config
         .pcm_pool
         .clone()
+        // fallback safety net — caller injects pcm_pool via DecoderConfig
+        // ast-grep-ignore: perf.no-global-pool-accessor
         .unwrap_or_else(|| PcmPool::default().clone());
     let decoder = UniversalDecoder::new(
         demuxer,
@@ -485,6 +491,8 @@ fn create_fmp4_segment_symphonia(
             let pool = config
                 .pcm_pool
                 .clone()
+                // fallback safety net — caller injects pcm_pool via DecoderConfig
+                // ast-grep-ignore: perf.no-global-pool-accessor
                 .unwrap_or_else(|| PcmPool::default().clone());
             let decoder = UniversalDecoder::new(
                 demuxer,

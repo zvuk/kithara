@@ -119,6 +119,8 @@ impl EngineImpl {
         let resolved_pool = config
             .pcm_pool
             .clone()
+            // EngineImpl::new fallback — caller injects pcm_pool via EngineConfig
+            // ast-grep-ignore: perf.no-global-pool-accessor
             .unwrap_or_else(|| PcmPool::default().clone());
         let session = session_client();
 
