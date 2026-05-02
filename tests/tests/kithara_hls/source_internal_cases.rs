@@ -1780,10 +1780,10 @@ async fn test_wait_range_without_size_map_does_not_enqueue_request() {
         "no request should be enqueued without size map"
     );
     match result {
-        Err(StreamError::Source(kithara_stream::SourceError::Timeout(msg))) => {
-            assert!(msg.contains("budget exceeded"), "unexpected: {msg}");
+        Err(StreamError::Source(kithara_stream::SourceError::WaitBudgetExceeded)) => {
+            // Expected: budget exceeded surfaces as the typed variant.
         }
-        other => panic!("expected Timeout, got: {other:?}"),
+        other => panic!("expected WaitBudgetExceeded, got: {other:?}"),
     }
 }
 
@@ -2134,14 +2134,14 @@ async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
         cancel.cancel();
         let _ = timeout(Duration::from_secs(1), bg).await;
 
-        // Budget check returns Err(Timeout) because range is never ready.
+        // Budget check returns Err(WaitBudgetExceeded) because range is never ready.
         match result {
-            Err(StreamError::Source(kithara_stream::SourceError::Timeout(_))) => {
+            Err(StreamError::Source(kithara_stream::SourceError::WaitBudgetExceeded)) => {
                 // Expected: budget exceeded.
             }
             other => {
                 panic!(
-                    "wait_range should return Err(Timeout) when range is never ready: {other:?}"
+                    "wait_range should return Err(WaitBudgetExceeded) when range is never ready: {other:?}"
                 );
             }
         }
