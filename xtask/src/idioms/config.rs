@@ -32,6 +32,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) parallel_loops: ParallelLoopsConfig,
     #[serde(default)]
+    pub(crate) function_branch_density: FunctionBranchDensityConfig,
+    #[serde(default)]
     pub(crate) manual_question_mark: ManualQuestionMarkConfig,
     #[serde(default)]
     pub(crate) loop_allocation: LoopAllocationConfig,
@@ -136,6 +138,43 @@ fn default_terminator_macros() -> Vec<String> {
     .iter()
     .map(|s| (*s).to_string())
     .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FunctionBranchDensityConfig {
+    /// Warn when the deepest reachable execution path from a public
+    /// entry point accumulates more than this many branches. Always a
+    /// warning — never escalated. Existing code that breaches the
+    /// threshold is technical debt, not an accepted floor; the
+    /// detector keeps firing on every audit run so the noise stays
+    /// visible until the code is restructured.
+    #[serde(default = "default_density_warn_path")]
+    pub(crate) warn_path: usize,
+    /// Warn when total branches across the whole reachable call graph
+    /// from a public entry point exceed this. Catches APIs whose
+    /// fan-out is broad rather than deep.
+    #[serde(default = "default_density_warn_total")]
+    pub(crate) warn_total: usize,
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for FunctionBranchDensityConfig {
+    fn default() -> Self {
+        Self {
+            warn_path: default_density_warn_path(),
+            warn_total: default_density_warn_total(),
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+fn default_density_warn_path() -> usize {
+    15
+}
+fn default_density_warn_total() -> usize {
+    50
 }
 
 #[derive(Debug, Deserialize)]

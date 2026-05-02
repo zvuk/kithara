@@ -18,6 +18,7 @@ pub(crate) mod arc_mutex_collection;
 pub(crate) mod await_under_guard;
 pub(crate) mod box_concrete_type;
 pub(crate) mod branch_chains;
+pub(crate) mod function_branch_density;
 pub(crate) mod guard_cascade;
 pub(crate) mod loop_allocation;
 pub(crate) mod manual_question_mark;
@@ -49,5 +50,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(box_concrete_type::BoxConcreteType),
         Box::new(arc_mutex_collection::ArcMutexCollection),
         Box::new(await_under_guard::AwaitUnderGuard),
+        Box::new(function_branch_density::FunctionBranchDensity),
     ]
 }
