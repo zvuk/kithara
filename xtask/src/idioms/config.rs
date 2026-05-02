@@ -83,10 +83,10 @@ fn default_homogeneous_arms() -> usize {
     3
 }
 fn default_heterogeneous_arms() -> usize {
-    5
+    4
 }
 fn default_general_arms() -> usize {
-    6
+    5
 }
 fn default_exempt_files() -> Vec<String> {
     ["**/tests/**", "**/benches/**"]
@@ -121,7 +121,7 @@ impl Default for GuardCascadeConfig {
 }
 
 fn default_cascade_warn_streak() -> usize {
-    4
+    3
 }
 
 fn default_terminator_macros() -> Vec<String> {
