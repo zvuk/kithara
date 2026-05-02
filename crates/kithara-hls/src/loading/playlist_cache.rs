@@ -51,6 +51,8 @@ pub struct PlaylistCache {
     media: Arc<DashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>,
     backend: AssetStore<DecryptContext>,
     downloader: PeerHandle,
+    /// Byte buffer pool for reading cached playlist bodies.
+    byte_pool: kithara_bufpool::BytePool,
 }
 
 #[derive(Default, Clone)]
@@ -62,10 +64,15 @@ struct PlaylistConfig {
 
 impl PlaylistCache {
     #[must_use]
-    pub fn new(backend: AssetStore<DecryptContext>, downloader: PeerHandle) -> Self {
+    pub fn new(
+        backend: AssetStore<DecryptContext>,
+        downloader: PeerHandle,
+        byte_pool: kithara_bufpool::BytePool,
+    ) -> Self {
         Self {
             backend,
             downloader,
+            byte_pool,
             config: Arc::new(RwLock::new(PlaylistConfig::default())),
             master: Arc::new(OnceCell::new()),
             media: Arc::new(DashMap::new()),
@@ -82,6 +89,7 @@ impl PlaylistCache {
         let bytes = fetch_atomic_body(
             &self.downloader,
             &self.backend,
+            &self.byte_pool,
             headers,
             url,
             basename,

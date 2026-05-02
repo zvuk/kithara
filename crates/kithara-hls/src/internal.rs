@@ -52,7 +52,13 @@ fn make_test_loader(
         kithara_stream::Timeline::new(),
         AbrMode::default(),
     )));
-    let cache = PlaylistCache::new(backend.clone(), handle.clone());
+    let cache = PlaylistCache::new(
+        backend.clone(),
+        handle.clone(),
+        // test-utils fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
+        kithara_bufpool::BytePool::default(),
+    );
     let loader = Arc::new(SegmentLoader::new(handle, backend.clone(), None, cache));
     (backend, loader)
 }

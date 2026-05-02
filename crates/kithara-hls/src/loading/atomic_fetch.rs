@@ -33,13 +33,14 @@ use crate::{HlsError, HlsResult};
 pub(crate) async fn fetch_atomic_body(
     downloader: &PeerHandle,
     backend: &AssetStore<DecryptContext>,
+    byte_pool: &BytePool,
     headers: Option<Headers>,
     url: &Url,
     rel_path: &str,
     resource_kind: &str,
 ) -> HlsResult<Bytes> {
     let key = ResourceKey::from_url(url);
-    if let Some(bytes) = try_read_cached(backend, &key, url, rel_path, resource_kind)? {
+    if let Some(bytes) = try_read_cached(backend, byte_pool, &key, url, rel_path, resource_kind)? {
         return Ok(bytes);
     }
 
@@ -63,6 +64,7 @@ pub(crate) async fn fetch_atomic_body(
 /// on a cache hit, `Ok(None)` on miss.
 fn try_read_cached(
     backend: &AssetStore<DecryptContext>,
+    byte_pool: &BytePool,
     key: &ResourceKey,
     url: &Url,
     rel_path: &str,
@@ -71,7 +73,7 @@ fn try_read_cached(
     let Ok(res) = backend.open_resource(key) else {
         return Ok(None);
     };
-    let mut buf = BytePool::default().get();
+    let mut buf = byte_pool.get();
     let n = res.read_into(&mut buf)?;
     if n == 0 {
         return Ok(None);

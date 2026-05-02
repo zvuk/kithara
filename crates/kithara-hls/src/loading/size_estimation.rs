@@ -29,9 +29,10 @@ pub(crate) async fn estimate_size_maps(
     loader: &SegmentLoader,
     media_playlists: &[(url::Url, MediaPlaylist)],
     headers: Option<&kithara_net::Headers>,
+    byte_pool: &kithara_bufpool::BytePool,
 ) {
     let num_variants = playlist_state.num_variants();
-    let mut buf = kithara_bufpool::BytePool::default().get();
+    let mut buf = byte_pool.get();
 
     for variant in 0..num_variants {
         estimate_variant_size_map(

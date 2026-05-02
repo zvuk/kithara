@@ -346,6 +346,8 @@ where
             .process_fn
             .expect("process_fn is required for AssetStoreBuilder");
 
+        // AssetStoreBuilder fallback safety net — caller must inject pool via with_pool
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
 
         // FlushHub coordinates flushes for all three on-disk indexes.
@@ -433,6 +435,8 @@ where
         let process_fn = self
             .process_fn
             .expect("process_fn is required for AssetStoreBuilder");
+        // AssetStoreBuilder fallback safety net — caller must inject pool via with_pool
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
 
         let asset_root_clone = asset_root.clone();

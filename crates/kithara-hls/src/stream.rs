@@ -81,13 +81,24 @@ impl StreamType for Hls {
         let invalidation_target = Arc::new(StdMutex::new(None));
         let backend = build_asset_store(&config, &asset_root, cancel.clone(), &invalidation_target);
 
+        // Resolve the byte pool once at the top of the HLS pipeline.
+        // Caller-supplied pool flows through to PlaylistCache, KeyManager,
+        // size_estimation and (transitively) atomic_fetch helpers.
+        let byte_pool = config
+            .pool
+            .clone()
+            // Hls::create fallback safety net — caller must inject pool via HlsConfig::pool
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            .unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
+
         let timeline = Timeline::new();
         let hls_peer = Arc::new(HlsPeer::new(timeline.clone(), config.initial_abr_mode));
         let peer_handle = downloader
             .register(Arc::clone(&hls_peer) as Arc<dyn Peer>)
             .with_bus(bus.clone());
 
-        let playlist_cache = PlaylistCache::new(backend.clone(), peer_handle.clone());
+        let playlist_cache =
+            PlaylistCache::new(backend.clone(), peer_handle.clone(), byte_pool.clone());
         playlist_cache.set_master_url(config.url.clone());
         playlist_cache.set_base_url(config.base_url.clone());
         playlist_cache.set_headers(config.headers.clone());
@@ -97,6 +108,7 @@ impl StreamType for Hls {
             backend.clone(),
             config.headers.clone(),
             config.keys.clone(),
+            byte_pool.clone(),
         ));
 
         let mut loader = SegmentLoader::new(
@@ -142,6 +154,7 @@ impl StreamType for Hls {
             &loader,
             &media_playlists,
             config.headers.as_ref(),
+            &byte_pool,
         )
         .await;
 

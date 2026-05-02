@@ -350,6 +350,8 @@ mod tests {
         let idx = PinsIndex::with_persist_at(
             path.clone(),
             CancellationToken::new(),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &BytePool::default(),
         );
         assert!(idx.snapshot().is_empty());
@@ -366,6 +368,8 @@ mod tests {
         let idx = PinsIndex::with_persist_at(
             path.clone(),
             CancellationToken::new(),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &BytePool::default(),
         );
 
@@ -403,6 +407,8 @@ mod tests {
         let idx = PinsIndex::with_persist_at(
             path.clone(),
             CancellationToken::new(),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
             &BytePool::default(),
         );
 
@@ -438,6 +444,8 @@ mod tests {
         // not unpin the asset while others are still alive.
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), &BytePool::default());
 
         idx.add("playlist").unwrap(); // resource 1
@@ -461,6 +469,8 @@ mod tests {
             let idx = PinsIndex::with_persist_at(
                 path.clone(),
                 CancellationToken::new(),
+                // test fixture
+                // ast-grep-ignore: perf.no-global-pool-accessor
                 &BytePool::default(),
             );
             idx.add("persistent_asset").unwrap();
@@ -470,6 +480,8 @@ mod tests {
             let idx = PinsIndex::with_persist_at(
                 path.clone(),
                 CancellationToken::new(),
+                // test fixture
+                // ast-grep-ignore: perf.no-global-pool-accessor
                 &BytePool::default(),
             );
             assert!(idx.contains("persistent_asset"));
@@ -483,6 +495,8 @@ mod tests {
         let path = temp_dir.path().join("invalid.bin");
         fs::write(&path, b"not valid rkyv data").unwrap();
 
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), &BytePool::default());
         assert!(idx.snapshot().is_empty());
     }
@@ -499,6 +513,8 @@ mod tests {
     fn clone_shares_state() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
         let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), &BytePool::default());
         let idx2 = idx.clone();
 

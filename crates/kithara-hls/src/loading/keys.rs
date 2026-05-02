@@ -46,6 +46,8 @@ pub struct KeyManager {
     base_headers: Option<Headers>,
     key_registry: Option<KeyProcessorRegistry>,
     downloader: PeerHandle,
+    /// Byte buffer pool for reading cached key bodies.
+    byte_pool: kithara_bufpool::BytePool,
 }
 
 impl KeyManager {
@@ -61,12 +63,14 @@ impl KeyManager {
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,
         key_registry: Option<KeyProcessorRegistry>,
+        byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
         Self {
             downloader,
             backend,
             base_headers,
             key_registry,
+            byte_pool,
             decrypted_keys: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -90,8 +94,15 @@ impl KeyManager {
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,
+        byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
-        Self::new(downloader, backend, base_headers, options.key_registry)
+        Self::new(
+            downloader,
+            backend,
+            base_headers,
+            options.key_registry,
+            byte_pool,
+        )
     }
 
     /// Synchronous key lookup — no I/O.
@@ -119,7 +130,7 @@ impl KeyManager {
             .backend
             .open_resource(&cache_key)
             .map_err(|e| HlsError::KeyProcessing(format!("key not in cache: {url} — {e}")))?;
-        let mut buf = kithara_bufpool::BytePool::default().get();
+        let mut buf = self.byte_pool.get();
         let n = res.read_into(&mut buf).map_err(|e| {
             HlsError::KeyProcessing(format!("failed to read cached key: {url} — {e}"))
         })?;
@@ -165,6 +176,7 @@ impl KeyManager {
             return fetch_atomic_body(
                 &self.downloader,
                 &self.backend,
+                &self.byte_pool,
                 headers,
                 url,
                 rel_path.as_str(),

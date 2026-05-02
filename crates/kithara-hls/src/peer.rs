@@ -1120,7 +1120,13 @@ mod tests {
         let timeline = Timeline::new();
         let peer = Arc::new(HlsPeer::new(timeline.clone(), AbrMode::default()));
         let handle = downloader.register(peer);
-        let cache = PlaylistCache::new(backend.clone(), handle.clone());
+        let cache = PlaylistCache::new(
+            backend.clone(),
+            handle.clone(),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            kithara_bufpool::BytePool::default(),
+        );
         let loader = Arc::new(crate::loading::SegmentLoader::new(
             handle.clone(),
             backend.clone(),

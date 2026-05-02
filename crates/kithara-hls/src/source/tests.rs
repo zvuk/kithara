@@ -60,7 +60,11 @@ fn make_test_loader_pair(
     backend: kithara_assets::AssetStore<DecryptContext>,
 ) -> LoaderPair {
     let handle = test_peer_handle(&cancel);
-    let cache = crate::loading::PlaylistCache::new(backend.clone(), handle.clone());
+    let cache = crate::loading::PlaylistCache::new(
+        backend.clone(),
+        handle.clone(),
+        kithara_bufpool::BytePool::default(),
+    );
     let loader = Arc::new(crate::loading::SegmentLoader::new(
         handle,
         backend.clone(),
