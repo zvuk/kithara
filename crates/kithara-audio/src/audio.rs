@@ -613,6 +613,8 @@ impl<S> Audio<S> {
     #[kithara_hang_detector::hang_watchdog]
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         // 1. Atomic write to Timeline — FLUSH_START
+        // `initiate_seek` also publishes the seek-preempt latch the
+        // audio worker reads on every `step_track`.
         let epoch = self.timeline.initiate_seek(position);
         self.timeline.mark_pending_seek_epoch(epoch);
         // 2. Update local consumer state

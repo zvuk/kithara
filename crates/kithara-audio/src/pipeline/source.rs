@@ -258,8 +258,18 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// of four sequential predicates. Returns `Some(target)` only when a
     /// new timeline seek epoch must preempt the current state; otherwise
     /// `None` and the caller falls through to the phase dispatcher.
+    ///
+    /// Fast-path: `Timeline::take_seek_preempt` returns `true` exactly
+    /// once per `initiate_seek` call. The typical no-seek tick reads a
+    /// single Acquire bool and falls through, instead of dereferencing
+    /// two `Arc<AtomicU64>`s. A spurious consume (e.g. seek already
+    /// processed by an earlier tick) is harmless because the slow path
+    /// below re-validates against `Timeline`.
     #[inline]
     fn preempt_seek_target(&self) -> Option<Duration> {
+        if !self.timeline.take_seek_preempt() {
+            return None;
+        }
         let timeline_epoch = self.timeline.seek_epoch();
         if timeline_epoch <= self.epoch.load(Ordering::Acquire) {
             return None;

@@ -3,7 +3,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -87,6 +87,13 @@ pub struct Timeline {
     seek_epoch: Arc<AtomicU64>,
 
     seek_target_ns: Arc<AtomicU64>,
+    /// Hot-path latch the audio worker reads on every `step_track` to
+    /// skip the multi-condition seek-preempt guard. Set by
+    /// `initiate_seek` once per seek (Release after `seek_epoch`/
+    /// `seek_target_ns` updates), consumed by the worker's
+    /// `swap(false, Acquire)`. A single bool load replaces two
+    /// `Arc<AtomicU64>` Acquire loads on the typical no-seek tick.
+    seek_preempt_latch: Arc<AtomicBool>,
     /// Byte offset at the start of the most recent `Stream::read()` call.
     /// Used by `StreamContext::segment_index()` to resolve which segment
     /// the last-read data belongs to — `byte_position` has already advanced
@@ -114,6 +121,7 @@ impl Timeline {
             segment_position: Arc::new(AtomicU64::new(0)),
             seek_epoch: Arc::new(AtomicU64::new(0)),
             seek_target_ns: Arc::new(AtomicU64::new(Self::NO_SEEK_TARGET)),
+            seek_preempt_latch: Arc::new(AtomicBool::new(false)),
             flags: Arc::new(AtomicU8::new(TimelineFlags::empty().bits())),
         }
     }
@@ -277,7 +285,25 @@ impl Timeline {
         // FLUSHING must be observed AFTER the seek target is published so
         // readers that see FLUSHING=true also see the updated target.
         self.insert_flags_with(TimelineFlags::FLUSHING, Ordering::Release);
+        // Hot-path latch: the audio worker swaps this to false on each
+        // tick, falling through cheaply when no seek is pending.
+        // Released here AFTER the target/flag stores so that the worker's
+        // Acquire-swap synchronises with all of them.
+        self.seek_preempt_latch.store(true, Ordering::Release);
         epoch
+    }
+
+    /// Consume the seek-preempt latch with an Acquire swap.
+    ///
+    /// Returns `true` exactly once per `initiate_seek` call: the worker
+    /// uses this to short-circuit `step_track`'s preempt guard without
+    /// dereferencing two `Arc<AtomicU64>`s. The Acquire ordering
+    /// synchronises with the Release in `initiate_seek` so observing
+    /// `true` here means the new `seek_epoch` and `seek_target_ns`
+    /// stores are also visible.
+    #[must_use]
+    pub fn take_seek_preempt(&self) -> bool {
+        self.seek_preempt_latch.swap(false, Ordering::Acquire)
     }
 
     #[inline]
