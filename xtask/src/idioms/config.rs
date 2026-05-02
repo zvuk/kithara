@@ -43,6 +43,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) arc_mutex_collection: ArcMutexCollectionConfig,
     #[serde(default)]
     pub(crate) await_under_guard: AwaitUnderGuardConfig,
+    #[serde(default)]
+    pub(crate) retry_fallback: RetryFallbackConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -315,6 +317,21 @@ pub(crate) struct AwaitUnderGuardConfig {
 }
 
 impl Default for AwaitUnderGuardConfig {
+    fn default() -> Self {
+        Self {
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RetryFallbackConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for RetryFallbackConfig {
     fn default() -> Self {
         Self {
             exempt_files: default_exempt_files(),

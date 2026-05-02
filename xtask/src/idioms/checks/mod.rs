@@ -24,6 +24,7 @@ pub(crate) mod loop_allocation;
 pub(crate) mod manual_question_mark;
 pub(crate) mod multi_accumulator_loop;
 pub(crate) mod parallel_loops;
+pub(crate) mod retry_fallback;
 
 #[expect(dead_code, reason = "fields consumed by upcoming idiom checks")]
 pub(crate) struct Context<'a> {
@@ -51,5 +52,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(arc_mutex_collection::ArcMutexCollection),
         Box::new(await_under_guard::AwaitUnderGuard),
         Box::new(function_branch_density::FunctionBranchDensity),
+        Box::new(retry_fallback::RetryFallback),
     ]
 }
