@@ -10571,6 +10571,7 @@ dependencies = [
  "proc-macro2",
  "regex",
  "serde",
+ "serde_json",
  "syn 2.0.117",
  "tempfile",
  "toml 0.8.23",

@@ -1,11 +1,65 @@
-//! Render `Report` as markdown or JSON.
+//! Render `Report` as markdown, JSON, or grouped terminal output.
 
 use std::collections::BTreeMap;
 
 use super::{
     baseline::RatchetDiff,
-    violation::{Report, Severity},
+    violation::{Report, Severity, Violation},
 };
+
+/// Render a report grouped by `check`. Each check appears once with a
+/// `(N deny, M warn)` header; violations follow as `<key> — <message>`
+/// lines. Mirrors the JSON/markdown renderers' shape but optimised for
+/// a terminal: no per-violation `[SEV] check:` prefix repetition.
+pub(crate) fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
+    if report.violations.is_empty() && diff.improvements.is_empty() {
+        return;
+    }
+
+    let mut by_check: BTreeMap<&'static str, Vec<&Violation>> = BTreeMap::new();
+    for v in &report.violations {
+        by_check.entry(v.check).or_default().push(v);
+    }
+
+    for (check, vs) in &by_check {
+        let deny = vs.iter().filter(|v| v.severity == Severity::Deny).count();
+        let warn = vs.iter().filter(|v| v.severity == Severity::Warn).count();
+        let counts = match (deny, warn) {
+            (0, w) => format!("{w} warn"),
+            (d, 0) => format!("{d} deny"),
+            (d, w) => format!("{d} deny, {w} warn"),
+        };
+        println!("{check} ({counts})");
+
+        let mut sorted = vs.clone();
+        sorted.sort_by(|a, b| {
+            a.severity
+                .cmp(&b.severity)
+                .reverse()
+                .then_with(|| a.key.cmp(&b.key))
+        });
+        for v in sorted {
+            let sev_tag = match v.severity {
+                Severity::Deny => "DENY ",
+                Severity::Warn => "",
+            };
+            println!("  {sev_tag}{key} — {msg}", key = v.key, msg = v.message);
+        }
+    }
+
+    if !diff.improvements.is_empty() {
+        println!("ratchet improvements:");
+        for imp in &diff.improvements {
+            println!(
+                "  {check}/{key}: {from} -> {to}",
+                check = imp.check,
+                key = imp.key,
+                from = imp.from,
+                to = imp.to,
+            );
+        }
+    }
+}
 
 pub(crate) fn render_markdown(
     report: &Report,

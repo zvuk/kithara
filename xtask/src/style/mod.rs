@@ -167,37 +167,7 @@ fn print_report(report: &Report, ran: &[&'static str], diff: &RatchetDiff<'_>) {
         return;
     }
 
-    let mut sorted = report.violations.clone();
-    sorted.sort_by(|a, b| {
-        a.severity
-            .cmp(&b.severity)
-            .reverse()
-            .then_with(|| a.check.cmp(b.check))
-            .then_with(|| a.key.cmp(&b.key))
-    });
-    for v in &sorted {
-        println!(
-            "[{sev}] {check}: {key} — {msg}",
-            sev = v.severity,
-            check = v.check,
-            key = v.key,
-            msg = v.message,
-        );
-    }
-
-    if !diff.improvements.is_empty() {
-        println!("ratchet improvements:");
-        for imp in &diff.improvements {
-            println!(
-                "  {check}/{key}: {from} -> {to}",
-                check = imp.check,
-                key = imp.key,
-                from = imp.from,
-                to = imp.to,
-            );
-        }
-    }
-
+    report::print_grouped(report, diff);
     println!(
         "summary: {deny} deny, {warn} warn, {regr} regression(s), {new} new across {n} check(s).",
         deny = report.deny_count(),

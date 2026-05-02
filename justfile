@@ -211,29 +211,67 @@ audit *ARGS:
         section "autofix: fmt cleanup";      cargo +nightly fmt --all
     fi
 
+    # Build xtask once up front so per-section invocations don't re-emit
+    # cargo's `Finished/Running target/...` noise on every step.
+    cargo build --quiet -p xtask
+    XTASK=target/debug/xtask
+
     # Validate scope tokens up front so a typo doesn't silently fall back to
     # a workspace-wide audit. `cargo xtask scope` exits non-zero on bad scope.
-    if ! XTASK_FLAGS=$(cargo xtask scope --for=xtask "${scope_args[@]}"); then exit 2; fi
-    CLIPPY_FLAGS=$(cargo xtask scope --for=clippy "${scope_args[@]}")
-    FMT_FLAGS=$(cargo xtask scope --for=fmt "${scope_args[@]}")
-    AST_GREP_PATHS=$(cargo xtask scope --for=ast-grep "${scope_args[@]}")
-    TYPOS_PATHS=$(cargo xtask scope --for=typos "${scope_args[@]}")
-    SIMILARITY_PATHS=$(cargo xtask scope --for=similarity "${scope_args[@]}")
-    ORPHANS_FLAGS=$(cargo xtask scope --for=orphans "${scope_args[@]}")
+    if ! XTASK_FLAGS=$($XTASK scope --for=xtask "${scope_args[@]}"); then exit 2; fi
+    CLIPPY_FLAGS=$($XTASK scope --for=clippy "${scope_args[@]}")
+    FMT_FLAGS=$($XTASK scope --for=fmt "${scope_args[@]}")
+    AST_GREP_PATHS=$($XTASK scope --for=ast-grep "${scope_args[@]}")
+    TYPOS_PATHS=$($XTASK scope --for=typos "${scope_args[@]}")
+    SIMILARITY_PATHS=$($XTASK scope --for=similarity "${scope_args[@]}")
+    ORPHANS_FLAGS=$($XTASK scope --for=orphans "${scope_args[@]}")
 
+    record() {
+        local name=$1 status=$2
+        results+=("$name=$status")
+    }
+
+    fmt_status="ok"; clippy_status="ok"; astgrep_status="ok"; lint_status="ok"
+    typos_status="ok"; similarity_status="ok"; orphans_status="ok"
     fail=0
-    section "fmt-check";    cargo +nightly fmt $FMT_FLAGS --check || fail=1
-    section "clippy";       cargo clippy $CLIPPY_FLAGS -- -D warnings || fail=1
-    section "ast-grep";     cargo xtask ast-grep $AST_GREP_PATHS || fail=1
-    section "xtask lint";   cargo xtask lint $XTASK_FLAGS || fail=1
-    section "typos";        cargo xtask typos $TYPOS_PATHS || fail=1
-    section "similarity";   cargo xtask similarity --profile audit $SIMILARITY_PATHS || fail=1
+    results=()
+
+    section "fmt-check"
+    if ! cargo +nightly fmt $FMT_FLAGS --check; then fail=1; fmt_status="FAIL"; fi
+
+    section "clippy"
+    if ! cargo clippy --quiet $CLIPPY_FLAGS -- -D warnings; then fail=1; clippy_status="FAIL"; fi
+
+    section "ast-grep"
+    if ! $XTASK ast-grep $AST_GREP_PATHS; then fail=1; astgrep_status="FAIL"; fi
+
+    section "xtask lint"
+    if ! $XTASK lint $XTASK_FLAGS; then fail=1; lint_status="FAIL"; fi
+
+    section "typos"
+    if ! $XTASK typos $TYPOS_PATHS; then fail=1; typos_status="FAIL"; fi
+
+    section "similarity"
+    if ! $XTASK similarity --profile audit $SIMILARITY_PATHS; then fail=1; similarity_status="FAIL"; fi
+
     if [[ "$ORPHANS_FLAGS" == "__skip__" ]]; then
         section "orphans"; echo "orphans: skipped (non-crate scope)"
+        orphans_status="skip"
     else
-        section "orphans"; cargo xtask orphans --deny --audit-mode $ORPHANS_FLAGS || fail=1
+        section "orphans"
+        if ! $XTASK orphans --deny --audit-mode $ORPHANS_FLAGS; then fail=1; orphans_status="FAIL"; fi
     fi
 
+    echo
+    echo "── summary"
+    printf "  %-12s %s\n" \
+        "fmt"        "$fmt_status" \
+        "clippy"     "$clippy_status" \
+        "ast-grep"   "$astgrep_status" \
+        "lint"       "$lint_status" \
+        "typos"      "$typos_status" \
+        "similarity" "$similarity_status" \
+        "orphans"    "$orphans_status"
     echo
     [[ $fail -eq 0 ]] && echo "audit: OK" || { echo "audit: FAILED"; exit 1; }
 

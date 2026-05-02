@@ -331,16 +331,15 @@ mod tests {
     }
 
     #[test]
-    fn three_guards_below_threshold_clean() {
-        // Sanity: default `warn_streak` is 4. Three guards is not yet a cascade.
+    fn two_guards_below_threshold_clean() {
+        // Sanity: default `warn_streak` is 3. Two guards is not yet a cascade.
         let n = count_violations(
             r#"{
                 if a { return 1; }
                 if b { return 2; }
-                if c { return 3; }
                 done
             }"#,
         );
-        assert_eq!(n, 0, "3 guards under threshold must NOT flag");
+        assert_eq!(n, 0, "2 guards under threshold must NOT flag");
     }
 }
