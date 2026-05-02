@@ -16,6 +16,7 @@ use crate::common::{scope::Scope, violation::Violation};
 pub(crate) mod accumulator_loops;
 pub(crate) mod branch_chains;
 pub(crate) mod guard_cascade;
+pub(crate) mod manual_question_mark;
 pub(crate) mod multi_accumulator_loop;
 pub(crate) mod parallel_loops;
 
@@ -39,5 +40,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(accumulator_loops::AccumulatorLoops),
         Box::new(multi_accumulator_loop::MultiAccumulatorLoop),
         Box::new(parallel_loops::ParallelLoops),
+        Box::new(manual_question_mark::ManualQuestionMark),
     ]
 }

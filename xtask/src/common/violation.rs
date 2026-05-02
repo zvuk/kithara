@@ -23,6 +23,10 @@ pub(crate) struct Violation {
     pub(crate) severity: Severity,
     pub(crate) key: String,
     pub(crate) message: String,
+    /// Optional long-form explanation (Summary / Why / Bad / Good /
+    /// Suppress block) shown in `--verbose` output and markdown reports.
+    /// `None` keeps the compact one-line render.
+    pub(crate) explanation: Option<&'static str>,
 }
 
 impl Violation {
@@ -36,6 +40,7 @@ impl Violation {
             severity: Severity::Deny,
             key: key.into(),
             message: message.into(),
+            explanation: None,
         }
     }
 
@@ -49,7 +54,17 @@ impl Violation {
             severity: Severity::Warn,
             key: key.into(),
             message: message.into(),
+            explanation: None,
         }
+    }
+
+    /// Attach the long-form Summary / Why / Bad / Good / Suppress block
+    /// to this violation. Shown in `--verbose` and markdown report
+    /// renderers; the compact one-line form keeps using `message`.
+    #[must_use]
+    pub(crate) fn with_explanation(mut self, explanation: &'static str) -> Self {
+        self.explanation = Some(explanation);
+        self
     }
 }
 
