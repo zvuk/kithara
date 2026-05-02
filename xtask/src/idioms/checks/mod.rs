@@ -14,6 +14,7 @@ use super::config::IdiomsConfig;
 use crate::common::{scope::Scope, violation::Violation};
 
 pub(crate) mod accumulator_loops;
+pub(crate) mod arc_mutex_collection;
 pub(crate) mod box_concrete_type;
 pub(crate) mod branch_chains;
 pub(crate) mod guard_cascade;
@@ -45,5 +46,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(manual_question_mark::ManualQuestionMark),
         Box::new(loop_allocation::LoopAllocation),
         Box::new(box_concrete_type::BoxConcreteType),
+        Box::new(arc_mutex_collection::ArcMutexCollection),
     ]
 }

@@ -10,6 +10,26 @@ schema_version = 1
 "crates/kithara-stream/src/dl/tests.rs:325:4" = 1
 "crates/kithara-test-utils/src/fmp4/bytes.rs:94:4" = 1
 
+[arc_mutex_collection]
+"crates/kithara-app/src/gui/app.rs:177:21" = 1
+"crates/kithara-app/src/gui/app.rs:26:36" = 1
+"crates/kithara-assets/src/cache.rs:121:12" = 1
+"crates/kithara-assets/src/cache.rs:23:12" = 1
+"crates/kithara-assets/src/evict.rs:48:10" = 1
+"crates/kithara-assets/src/lease.rs:87:10" = 1
+"crates/kithara-decode/src/fmp4/tests.rs:142:4" = 1
+"crates/kithara-decode/src/fmp4/tests.rs:147:15" = 1
+"crates/kithara-decode/src/fmp4/tests.rs:30:11" = 1
+"crates/kithara-ffi/src/event_bridge.rs:144:16" = 1
+"crates/kithara-ffi/src/event_bridge.rs:159:15" = 1
+"crates/kithara-ffi/src/event_bridge.rs:40:16" = 1
+"crates/kithara-ffi/src/event_bridge.rs:57:16" = 1
+"crates/kithara-ffi/src/player.rs:41:11" = 1
+"crates/kithara-hls/src/loading/keys.rs:43:20" = 1
+"crates/kithara-queue/src/queue/state.rs:59:24" = 1
+"crates/kithara-stream/src/dl/tests.rs:613:20" = 1
+"crates/kithara-test-utils/src/probe_capture.rs:77:17" = 1
+
 [box_concrete_type]
 "crates/kithara-decode/src/fmp4/tests.rs:149:30" = 1
 

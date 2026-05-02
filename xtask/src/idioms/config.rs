@@ -37,6 +37,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) loop_allocation: LoopAllocationConfig,
     #[serde(default)]
     pub(crate) box_concrete_type: BoxConcreteTypeConfig,
+    #[serde(default)]
+    pub(crate) arc_mutex_collection: ArcMutexCollectionConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,6 +244,21 @@ pub(crate) struct BoxConcreteTypeConfig {
 }
 
 impl Default for BoxConcreteTypeConfig {
+    fn default() -> Self {
+        Self {
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArcMutexCollectionConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for ArcMutexCollectionConfig {
     fn default() -> Self {
         Self {
             exempt_files: default_exempt_files(),
