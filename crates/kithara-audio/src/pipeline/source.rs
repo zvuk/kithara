@@ -710,12 +710,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         if sample_rate == 0 {
             return;
         }
-        let (frame_offset, end_position) = match *outcome {
+        let (frame_offset, end_position, applied_landed_byte) = match *outcome {
             DecoderSeekOutcome::Landed {
                 landed_frame,
                 landed_at,
-                landed_byte: _,
-            } => (landed_frame, landed_at),
+                landed_byte,
+            } => (landed_frame, landed_at, landed_byte),
             DecoderSeekOutcome::PastEof { duration } => {
                 // The decoder reports the final wall-clock position
                 // directly via `duration`; we still need a frame
@@ -726,7 +726,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 // does not carry a frame index.
                 #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let end_frame = (duration.as_secs_f64() * f64::from(sample_rate)) as u64;
-                (end_frame, duration)
+                (end_frame, duration, None)
             }
         };
         let end_position_ns = u64::try_from(end_position.as_nanos()).unwrap_or(u64::MAX);
@@ -736,9 +736,12 @@ impl<T: StreamType> StreamAudioSource<T> {
             end_position_ns,
             frames: 0,
             source_bytes: 0,
-            source_byte_offset: None,
+            source_byte_offset: applied_landed_byte,
         };
         self.timeline.commit_seek_landed(&pos);
+        if let Some(byte) = applied_landed_byte {
+            self.timeline.set_byte_position(byte);
+        }
     }
 
     fn decode_panic_message(payload: Box<dyn Any + Send>) -> String {

@@ -300,13 +300,18 @@ async fn run_one_attempt(
         };
     }
 
-    // During the post-seek render window, also watch for the track
+    // During the post-seek render window, watch for either the track
     // entering `TrackStatus::Failed` — `commit_seek_landing` updates
     // `timeline.byte_position` to the target before the audio FSM
     // emits TrackError, so a "landed" position may coincide with a
     // typed failure that the user-side wants to see as Errored, not
-    // Hung.
+    // Hung — or the position advancing past `MIN_POST_SEEK_ADVANCE_S`
+    // (success exit). `POST_SEEK_RENDER_WALL` is the upper bound: a
+    // failed render that never advances will exhaust it before we
+    // declare `Hung`. The poll exits early on success, keeping the
+    // upper bound intact for failure diagnostics.
     let post_seek_started = std::time::Instant::now();
+    let mut pos_after = queue.position_seconds().unwrap_or(0.0);
     while post_seek_started.elapsed() < Consts::POST_SEEK_RENDER_WALL {
         if let Some(entry) = queue.track(track_id)
             && let TrackStatus::Failed(err) = &entry.status
@@ -318,21 +323,22 @@ async fn run_one_attempt(
                 error: format!("track entered Failed (post-seek): {err}"),
             };
         }
+        if let Some(p) = queue.position_seconds() {
+            pos_after = p;
+            if (p - target) >= Consts::MIN_POST_SEEK_ADVANCE_S {
+                tick_handle.abort();
+                return IterOutcome::Ok;
+            }
+        }
         sleep(Duration::from_millis(30)).await;
     }
-    let pos_after = queue.position_seconds().unwrap_or(0.0);
     tick_handle.abort();
-    let advance = pos_after - target;
-    if advance < Consts::MIN_POST_SEEK_ADVANCE_S {
-        IterOutcome::Hung {
-            iter,
-            target,
-            pos_before,
-            pos_after,
-            budget_ms: Consts::SEEK_BUDGET.as_millis(),
-        }
-    } else {
-        IterOutcome::Ok
+    IterOutcome::Hung {
+        iter,
+        target,
+        pos_before,
+        pos_after,
+        budget_ms: Consts::SEEK_BUDGET.as_millis(),
     }
 }
 
