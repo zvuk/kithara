@@ -59,47 +59,40 @@ impl ServerState {
     }
 }
 
+fn typed_response(content_type: &'static str, body: &'static str) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+    (StatusCode::OK, headers, body.to_string()).into_response()
+}
+
 async fn master_html_handler(State(state): State<ServerState>) -> Response {
     state.master_hits.fetch_add(1, Ordering::Relaxed);
-    let html = "<html><body>503 Service Unavailable</body></html>";
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        "text/html; charset=utf-8".parse().unwrap(),
-    );
-    (StatusCode::OK, headers, html.to_string()).into_response()
+    typed_response(
+        "text/html; charset=utf-8",
+        "<html><body>503 Service Unavailable</body></html>",
+    )
 }
 
 async fn valid_master_handler(State(state): State<ServerState>) -> Response {
     state.master_hits.fetch_add(1, Ordering::Relaxed);
-    let body = "#EXTM3U\n\
-                #EXT-X-VERSION:3\n\
-                #EXT-X-STREAM-INF:BANDWIDTH=128000\n\
-                v0.m3u8\n";
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        "application/vnd.apple.mpegurl".parse().unwrap(),
-    );
-    (StatusCode::OK, headers, body.to_string()).into_response()
+    typed_response(
+        "application/vnd.apple.mpegurl",
+        "#EXTM3U\n\
+         #EXT-X-VERSION:3\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=128000\n\
+         v0.m3u8\n",
+    )
 }
 
 async fn media_html_handler(State(state): State<ServerState>) -> Response {
     state.media_hits.fetch_add(1, Ordering::Relaxed);
-    let html = "<html><body>503 Backend Error</body></html>";
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        "text/html; charset=utf-8".parse().unwrap(),
-    );
-    (StatusCode::OK, headers, html.to_string()).into_response()
+    typed_response(
+        "text/html; charset=utf-8",
+        "<html><body>503 Backend Error</body></html>",
+    )
 }
 
-async fn start_server(state: ServerState) -> SocketAddr {
-    let app = Router::new()
-        .route("/master.m3u8", get(master_html_handler))
-        .fallback(get(master_html_handler))
-        .with_state(state);
+async fn spawn_ephemeral(app: Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     task::spawn(async move {
@@ -108,17 +101,24 @@ async fn start_server(state: ServerState) -> SocketAddr {
     addr
 }
 
-async fn start_partial_server(state: ServerState) -> SocketAddr {
-    let app = Router::new()
-        .route("/master.m3u8", get(valid_master_handler))
-        .route("/v0.m3u8", get(media_html_handler))
-        .with_state(state);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    task::spawn(async move {
-        axum::serve(listener, app).await.ok();
-    });
-    addr
+#[derive(Copy, Clone)]
+enum ServerMode {
+    AllHtml,
+    PartialHtml,
+}
+
+async fn start_server(mode: ServerMode, state: ServerState) -> SocketAddr {
+    let app = match mode {
+        ServerMode::AllHtml => Router::new()
+            .route("/master.m3u8", get(master_html_handler))
+            .fallback(get(master_html_handler))
+            .with_state(state),
+        ServerMode::PartialHtml => Router::new()
+            .route("/master.m3u8", get(valid_master_handler))
+            .route("/v0.m3u8", get(media_html_handler))
+            .with_state(state),
+    };
+    spawn_ephemeral(app).await
 }
 
 /// Walk `root` recursively and collect every file that is not inside the
@@ -146,14 +146,34 @@ fn collect_cache_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     out
 }
 
-/// After `Stream::new` fails with a `text/html` master playlist, no orphan
-/// cache files may remain under the cache directory. Current behaviour
-/// parks a pre-allocated `DEFAULT_INITIAL_SIZE` (64 KB) mmap file keyed by
-/// the HTML response URL — confirmed by this test.
+/// After `Stream::new` fails with `text/html` at some layer, no orphan
+/// pre-allocated cache file may remain for the failing URL. Current behaviour
+/// keys the mmap file by URL — confirmed by both cases:
+///
+/// * `AllHtml` — master playlist itself is HTML; the whole cache must be empty.
+/// * `PartialHtml` — master is valid, media playlist for variant 0 returns HTML;
+///   the master may remain cached (it succeeded) but no `v0*` orphan may exist
+///   (exercises the `acquire_resource` → `InvalidContent` path at
+///   `atomic_fetch.rs:67`).
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
-async fn html_master_playlist_leaves_no_orphan_cache_files(temp_dir: TestTempDir) {
+#[case::master_all_html(
+    ServerMode::AllHtml,
+    None,
+    "HTML master playlist must fail Stream::new"
+)]
+#[case::media_after_valid_master(
+    ServerMode::PartialHtml,
+    Some("v0"),
+    "HTML on the media playlist must fail Stream::new"
+)]
+async fn html_playlist_failure_leaves_no_orphan_cache_files(
+    temp_dir: TestTempDir,
+    #[case] mode: ServerMode,
+    #[case] orphan_prefix: Option<&str>,
+    #[case] fail_msg: &str,
+) {
     let state = ServerState::new();
-    let addr = start_server(state.clone()).await;
+    let addr = start_server(mode, state.clone()).await;
     let url = Url::parse(&format!("http://{addr}/master.m3u8")).unwrap();
 
     let cancel = CancellationToken::new();
@@ -162,19 +182,29 @@ async fn html_master_playlist_leaves_no_orphan_cache_files(temp_dir: TestTempDir
         .with_cancel(cancel.clone());
 
     let result = Stream::<Hls>::new(config).await;
-    assert!(
-        result.is_err(),
-        "HTML master playlist must fail Stream::new",
-    );
+    assert!(result.is_err(), "{fail_msg}");
 
     // Give LeaseResource::Drop + cache cleanup a chance to run. In practice
     // Drop is synchronous, so this is conservatively generous.
     sleep(Duration::from_millis(200)).await;
 
     let leftover = collect_cache_files(temp_dir.path());
+    let suspicious: Vec<_> = match orphan_prefix {
+        None => leftover.iter().collect(),
+        Some(prefix) => leftover
+            .iter()
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|n| n.starts_with(prefix))
+            })
+            .collect(),
+    };
+
     assert!(
-        leftover.is_empty(),
-        "failed atomic fetch must not leak cache files, found: {leftover:?}",
+        suspicious.is_empty(),
+        "failed atomic fetch leaked cache file(s): {suspicious:?}\n\
+         full cache contents: {leftover:?}",
     );
 }
 
@@ -185,7 +215,7 @@ async fn html_master_playlist_leaves_no_orphan_cache_files(temp_dir: TestTempDir
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     let state = ServerState::new();
-    let addr = start_server(state.clone()).await;
+    let addr = start_server(ServerMode::AllHtml, state.clone()).await;
     let url = Url::parse(&format!("http://{addr}/master.m3u8")).unwrap();
 
     let cancel = CancellationToken::new();
@@ -215,50 +245,5 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     assert!(
         end_hits <= 10,
         "excessive master_hits={end_hits} from a single Stream::new attempt",
-    );
-}
-
-/// Master playlist succeeds but the media playlist for variant 0 returns
-/// `text/html`. `Stream::new` must fail without leaving the pre-allocated
-/// 64 KB mmap for the media playlist URL parked in the cache.
-///
-/// Exercises the exact `atomic_fetch.rs:67` path the user flagged: a second
-/// `acquire_resource` after the first succeeded, followed by an
-/// `InvalidContent` failure on the network fetch.
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
-async fn html_media_playlist_after_successful_master_leaves_no_orphan_files(temp_dir: TestTempDir) {
-    let state = ServerState::new();
-    let addr = start_partial_server(state.clone()).await;
-    let url = Url::parse(&format!("http://{addr}/master.m3u8")).unwrap();
-
-    let cancel = CancellationToken::new();
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel.clone());
-
-    let result = Stream::<Hls>::new(config).await;
-    assert!(
-        result.is_err(),
-        "HTML on the media playlist must fail Stream::new",
-    );
-
-    // Wait long enough for any pending Drop + cache cleanup to land.
-    sleep(Duration::from_millis(200)).await;
-
-    // Master playlist is allowed to remain cached (it succeeded) but the
-    // failing media playlist must NOT leave an orphan pre-allocated mmap.
-    let leftover = collect_cache_files(temp_dir.path());
-    let suspicious: Vec<_> = leftover
-        .iter()
-        .filter(|p| {
-            let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            n.starts_with("v0") // media playlist basename
-        })
-        .collect();
-
-    assert!(
-        suspicious.is_empty(),
-        "failed media-playlist fetch leaked cache file(s): {suspicious:?}\n\
-         full cache contents: {leftover:?}",
     );
 }

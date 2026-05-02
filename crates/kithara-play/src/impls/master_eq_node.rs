@@ -60,6 +60,14 @@ impl MasterEqNode {
 impl AudioNode for MasterEqNode {
     type Configuration = EmptyConfig;
 
+    fn construct_processor(
+        &self,
+        _config: &Self::Configuration,
+        cx: ConstructProcessorContext,
+    ) -> impl AudioNodeProcessor {
+        MasterEqProcessor::new(self.clone(), cx.stream_info.sample_rate)
+    }
+
     fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
         AudioNodeInfo::new()
             .debug_name("master_eq")
@@ -67,14 +75,6 @@ impl AudioNode for MasterEqNode {
                 num_inputs: ChannelCount::STEREO,
                 num_outputs: ChannelCount::STEREO,
             })
-    }
-
-    fn construct_processor(
-        &self,
-        _config: &Self::Configuration,
-        cx: ConstructProcessorContext,
-    ) -> impl AudioNodeProcessor {
-        MasterEqProcessor::new(self.clone(), cx.stream_info.sample_rate)
     }
 }
 
@@ -116,16 +116,23 @@ fn bands_from_params(params: &MasterEqNode) -> Vec<EqBandConfig> {
     params
         .bands
         .iter()
-        .map(|b| EqBandConfig {
-            frequency: b.frequency,
-            q_factor: b.q_factor,
-            gain_db: b.gain_db,
-            kind: b.kind.into(),
+        .map(|b| {
+            EqBandConfig::default()
+                .with_frequency(b.frequency)
+                .with_q_factor(b.q_factor)
+                .with_gain_db(b.gain_db)
+                .with_kind(b.kind.into())
         })
         .collect()
 }
 
 impl AudioNodeProcessor for MasterEqProcessor {
+    fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
+        self.sample_rate = stream_info.sample_rate;
+        self.eq_l.update_sample_rate(self.sample_rate.get());
+        self.eq_r.update_sample_rate(self.sample_rate.get());
+    }
+
     fn process(
         &mut self,
         info: &ProcInfo,
@@ -169,11 +176,5 @@ impl AudioNodeProcessor for MasterEqProcessor {
         }
 
         ProcessStatus::OutputsModified
-    }
-
-    fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
-        self.sample_rate = stream_info.sample_rate;
-        self.eq_l.update_sample_rate(self.sample_rate.get());
-        self.eq_r.update_sample_rate(self.sample_rate.get());
     }
 }

@@ -1,6 +1,7 @@
 use std::{cmp::min, collections::HashMap, time::Duration};
 
 use derivative::Derivative;
+use derive_setters::Setters;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Headers {
@@ -15,21 +16,21 @@ impl Headers {
         }
     }
 
-    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
-        self.inner.insert(key.into(), value.into());
-    }
-
     pub fn get(&self, key: &str) -> Option<&str> {
         self.inner.get(key).map(String::as_str)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
+        self.inner.insert(key.into(), value.into());
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 }
 
@@ -73,6 +74,7 @@ impl RangeSpec {
 
 #[derive(Clone, Debug, Derivative)]
 #[derivative(Default)]
+#[non_exhaustive]
 pub struct RetryPolicy {
     #[derivative(Default(value = "Duration::from_millis(100)"))]
     pub base_delay: Duration,
@@ -104,21 +106,48 @@ impl RetryPolicy {
     }
 }
 
-#[derive(Clone, Debug, Derivative)]
+#[derive(Clone, Debug, Derivative, Setters)]
 #[derivative(Default)]
+#[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct NetOptions {
+    /// Maximum allowed inactivity between consecutive read operations.
+    /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
+    /// "The timeout applies to each read operation, and resets after a
+    /// successful read") and also drives the Downloader-layer
+    /// `BodyStream` chunk-inactivity guard for the same semantics one
+    /// layer down.
+    ///
+    /// Protects against zombie connections that send headers but then
+    /// stop streaming bytes. Does **not** cap the total request
+    /// lifetime; a legitimately slow stream that keeps delivering
+    /// chunks (even one byte every few seconds) is not aborted.
+    /// Default 30s is sized to absorb realistic mobile-network stalls
+    /// (TCP retransmits, captive-portal warm-up, server-side TTFB
+    /// spikes) without aborting valid slow streams — the player's
+    /// contract is "wait for the segment, regardless of connection
+    /// speed", and a 10s cap raced real fixtures.
+    #[derivative(Default(value = "Duration::from_secs(30)"))]
+    pub inactivity_timeout: Duration,
+    /// Hard cap on total request lifetime. Maps to
+    /// [`reqwest::RequestBuilder::timeout`]. `None` lets streaming
+    /// downloads run indefinitely as long as `inactivity_timeout` is
+    /// satisfied — required for the player to honour "wait for the
+    /// segment, regardless of connection speed". Default `Some(2 min)`
+    /// keeps a safety net against pathological cases (server stuck in
+    /// mid-body without ever closing) while not racing realistic
+    /// slow-network seeks.
+    #[derivative(Default(value = "Some(Duration::from_secs(120))"))]
+    pub total_timeout: Option<Duration>,
+    pub retry_policy: RetryPolicy,
+    /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
+    /// **Security risk** — use only for local development and test servers.
+    pub insecure: bool,
     /// Max idle connections per host. Enables HTTP keep-alive connection
     /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
     /// Set to 0 to disable pooling.
     #[derivative(Default(value = "8"))]
     pub pool_max_idle_per_host: usize,
-    /// Hard timeout per request. Connection is aborted after this duration.
-    #[derivative(Default(value = "Duration::from_secs(10)"))]
-    pub request_timeout: Duration,
-    pub retry_policy: RetryPolicy,
-    /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
-    /// **Security risk** — use only for local development and test servers.
-    pub insecure: bool,
 }
 
 #[cfg(test)]

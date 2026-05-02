@@ -17,10 +17,10 @@ use kithara_platform::{
 /// Response from a fetch — headers available immediately, body as
 /// async stream.
 pub struct FetchResponse {
-    /// HTTP response headers.
-    pub headers: Headers,
     /// Body as an async byte stream.
     pub body: BodyStream,
+    /// HTTP response headers.
+    pub headers: Headers,
 }
 
 impl std::fmt::Debug for FetchResponse {
@@ -47,30 +47,6 @@ impl std::fmt::Debug for BodyStream {
 }
 
 impl BodyStream {
-    /// Empty body (for HEAD responses).
-    pub(super) fn empty() -> Self {
-        Self {
-            inner: Box::pin(stream::empty()),
-        }
-    }
-
-    /// Wrap a raw stream (for testing or non-HTTP sources).
-    #[must_use]
-    pub fn from_raw(inner: Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>) -> Self {
-        Self { inner }
-    }
-
-    /// Wrap an HTTP [`ByteStream`] with per-chunk cancel + timeout.
-    pub(super) fn from_http(
-        byte_stream: ByteStream,
-        cancel: CancelGroup,
-        chunk_timeout: Duration,
-    ) -> Self {
-        Self {
-            inner: wrap_with_cancel(byte_stream, cancel, chunk_timeout),
-        }
-    }
-
     /// Collect entire body into bytes.
     ///
     /// Use for small control-plane responses (playlists, DRM keys).
@@ -84,6 +60,30 @@ impl BodyStream {
             buf.extend_from_slice(&chunk?);
         }
         Ok(Bytes::from(buf))
+    }
+
+    /// Empty body (for HEAD responses).
+    pub(super) fn empty() -> Self {
+        Self {
+            inner: Box::pin(stream::empty()),
+        }
+    }
+
+    /// Wrap an HTTP [`ByteStream`] with per-chunk cancel + timeout.
+    pub(super) fn from_http(
+        byte_stream: ByteStream,
+        cancel: CancelGroup,
+        chunk_timeout: Duration,
+    ) -> Self {
+        Self {
+            inner: wrap_with_cancel(byte_stream, cancel, chunk_timeout),
+        }
+    }
+
+    /// Wrap a raw stream (for testing or non-HTTP sources).
+    #[must_use]
+    pub fn from_raw(inner: Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>) -> Self {
+        Self { inner }
     }
 
     /// Stream chunks through a writer, return total bytes written.
@@ -132,8 +132,8 @@ fn wrap_with_cancel(
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>> {
     Box::pin(stream::unfold(
         WrapState {
-            stream: byte_stream,
             cancel,
+            stream: byte_stream,
             timeout: chunk_timeout,
             done: false,
         },

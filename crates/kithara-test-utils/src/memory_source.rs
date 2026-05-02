@@ -1,12 +1,12 @@
 //! In-memory Source implementation for testing.
 
-use std::{io, io::Error as IoError, ops::Range};
+use std::{io::Error as IoError, num::NonZeroUsize, ops::Range};
 
 use futures::executor::block_on;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+    ReadOutcome, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType, Timeline,
 };
 
 /// Error type for memory-backed sources.
@@ -29,8 +29,8 @@ impl MemorySource {
     #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
         Self {
-            timeline: Timeline::new(),
             data,
+            timeline: Timeline::new(),
             report_len: true,
         }
     }
@@ -39,42 +39,20 @@ impl MemorySource {
     #[must_use]
     pub fn without_len(data: Vec<u8>) -> Self {
         Self {
-            timeline: Timeline::new(),
             data,
+            timeline: Timeline::new(),
             report_len: false,
         }
     }
 }
 
 impl Source for MemorySource {
-    type Error = MemorySourceError;
-
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-
-    fn wait_range(
-        &mut self,
-        range: Range<u64>,
-        timeout: Duration,
-    ) -> StreamResult<WaitOutcome, Self::Error> {
-        let _ = timeout;
-        if range.start >= self.data.len() as u64 {
-            Ok(WaitOutcome::Eof)
+    fn len(&self) -> Option<u64> {
+        if self.report_len {
+            Some(self.data.len() as u64)
         } else {
-            Ok(WaitOutcome::Ready)
+            None
         }
-    }
-
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
-        let offset = offset as usize;
-        if offset >= self.data.len() {
-            return Ok(ReadOutcome::Data(0));
-        }
-        let available = self.data.len() - offset;
-        let n = buf.len().min(available);
-        buf[..n].copy_from_slice(&self.data[offset..offset + n]);
-        Ok(ReadOutcome::Data(n))
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
@@ -85,11 +63,34 @@ impl Source for MemorySource {
         }
     }
 
-    fn len(&self) -> Option<u64> {
-        if self.report_len {
-            Some(self.data.len() as u64)
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+        let offset = offset as usize;
+        if offset >= self.data.len() {
+            return Ok(ReadOutcome::Eof);
+        }
+        let available = self.data.len() - offset;
+        let n = buf.len().min(available);
+        let Some(count) = NonZeroUsize::new(n) else {
+            return Ok(ReadOutcome::Eof);
+        };
+        buf[..n].copy_from_slice(&self.data[offset..offset + n]);
+        Ok(ReadOutcome::Bytes(count))
+    }
+
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        let _ = timeout;
+        if range.start >= self.data.len() as u64 {
+            Ok(WaitOutcome::Eof)
         } else {
-            None
+            Ok(WaitOutcome::Ready)
         }
     }
 }
@@ -104,12 +105,13 @@ pub struct MemStream;
 
 impl StreamType for MemStream {
     type Config = MemStreamConfig;
-    type Source = MemorySource;
-    type Error = io::Error;
     type Events = ();
+    type Source = MemorySource;
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| IoError::other("no source"))
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        config
+            .source
+            .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
 }
 
@@ -123,12 +125,13 @@ pub struct UnknownLenStream;
 
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
-    type Source = MemorySource;
-    type Error = io::Error;
     type Events = ();
+    type Source = MemorySource;
 
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| IoError::other("no source"))
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        config
+            .source
+            .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
 }
 

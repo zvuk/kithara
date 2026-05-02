@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
-pub use kithara_abr::{AbrMode, AbrOptions};
+pub use kithara_abr::AbrMode;
 use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
@@ -50,8 +50,15 @@ fn make_test_loader(
     let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
     let handle = downloader.register(Arc::new(crate::peer::HlsPeer::new(
         kithara_stream::Timeline::new(),
+        AbrMode::default(),
     )));
-    let cache = PlaylistCache::new(backend.clone(), handle.clone());
+    let cache = PlaylistCache::new(
+        backend.clone(),
+        handle.clone(),
+        // test-utils fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
+        kithara_bufpool::BytePool::default(),
+    );
     let loader = Arc::new(SegmentLoader::new(handle, backend.clone(), None, cache));
     (backend, loader)
 }
@@ -72,15 +79,19 @@ pub fn make_test_source_with_backend(
     coord: Arc<HlsCoord>,
     backend: AssetStore<DecryptContext>,
 ) -> HlsSource {
+    let segmented_view =
+        crate::source::HlsSegmentView::new(Arc::clone(&playlist_state), Arc::clone(&segments));
     HlsSource {
         coord,
         backend,
         segments,
         playlist_state,
+        segmented_view,
         bus: EventBus::new(DEFAULT_EVENT_BUS_CAPACITY),
         variant_fence: None,
         _hls_peer: None,
         _peer_handle: None,
+        reader_segment: Arc::new(AtomicUsize::new(0)),
     }
 }
 
@@ -140,12 +151,30 @@ pub fn build_source(
         .clone()
         .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
     let timeline = kithara_stream::Timeline::new();
-    let handle = downloader.register(Arc::new(crate::peer::HlsPeer::new(timeline.clone())));
+    let hls_peer = Arc::new(crate::peer::HlsPeer::new(
+        timeline.clone(),
+        config.initial_abr_mode,
+    ));
+    // Seed the variant list so the scheduler's initial_variant pickup
+    // matches the caller's `initial_abr_mode`.
+    let abr_variants: Vec<kithara_events::AbrVariant> = variants
+        .iter()
+        .map(|v| kithara_events::AbrVariant {
+            variant_index: v.id.0,
+            bandwidth_bps: v.bandwidth.unwrap_or(0),
+            duration: kithara_events::VariantDuration::Unknown,
+        })
+        .collect();
+    hls_peer.set_abr_variants(abr_variants);
+    let handle = downloader.register(Arc::clone(&hls_peer) as Arc<dyn kithara_stream::dl::Peer>);
     let (_downloader, source) = build_pair(
         backend,
         handle,
         variants,
         config,
+        Arc::clone(hls_peer.abr()),
+        hls_peer.reader_segment_cursor(),
+        hls_peer.committed_segment_cursor(),
         playlist_state,
         bus,
         timeline,
@@ -176,6 +205,17 @@ pub fn source_range_ready_from_segments(
 }
 
 #[must_use]
-pub fn source_variant_index_handle(source: &HlsSource) -> Arc<AtomicUsize> {
-    Arc::clone(&source.coord.abr_variant_index)
+pub fn source_variant_index(source: &HlsSource) -> usize {
+    source.coord.variant_index()
+}
+
+/// Force the ABR variant index without running through a real ABR tick.
+///
+/// Test-only escape hatch for integration tests that want to reproduce a
+/// midstream variant switch without simulating a full bandwidth/buffer
+/// scenario. Backed by `AbrState::set_variant_for_test` (gated under the
+/// `internal` feature in kithara-abr); production callers cannot reach
+/// `current_variant` from outside this crate without it.
+pub fn set_source_variant_for_test(source: &HlsSource, idx: usize) {
+    source.coord.abr_state.set_variant_for_test(idx);
 }

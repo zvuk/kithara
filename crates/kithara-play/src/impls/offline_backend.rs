@@ -23,9 +23,10 @@ pub struct OfflineBackend {
 
 /// Configuration for the offline backend.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct OfflineConfig {
-    pub sample_rate: u32,
     pub block_frames: u32,
+    pub sample_rate: u32,
 }
 
 impl Default for OfflineConfig {
@@ -51,11 +52,23 @@ pub struct OfflineError;
 impl AudioBackend for OfflineBackend {
     type Config = OfflineConfig;
     type Enumerator = ();
-    type Instant = std::time::Instant;
+    type Instant = kithara_platform::time::Instant;
     type StartStreamError = OfflineError;
     type StreamError = OfflineError;
 
+    fn delay_from_last_process(&self, _process_timestamp: Self::Instant) -> Option<Duration> {
+        None
+    }
+
     fn enumerator() -> Self::Enumerator {}
+
+    fn poll_status(&mut self) -> Result<(), Self::StreamError> {
+        Ok(())
+    }
+
+    fn set_processor(&mut self, processor: FirewheelProcessor<Self>) {
+        self.processor = Some(processor);
+    }
 
     fn start_stream(config: Self::Config) -> Result<(Self, StreamInfo), Self::StartStreamError> {
         let sr = NonZeroU32::new(config.sample_rate).expect("non-zero sample rate");
@@ -81,18 +94,6 @@ impl AudioBackend for OfflineBackend {
         };
         Ok((backend, stream_info))
     }
-
-    fn set_processor(&mut self, processor: FirewheelProcessor<Self>) {
-        self.processor = Some(processor);
-    }
-
-    fn poll_status(&mut self) -> Result<(), Self::StreamError> {
-        Ok(())
-    }
-
-    fn delay_from_last_process(&self, _process_timestamp: Self::Instant) -> Option<Duration> {
-        None
-    }
 }
 
 impl OfflineBackend {
@@ -111,10 +112,10 @@ impl OfflineBackend {
 
         if let Some(ref mut processor) = self.processor {
             let info = BackendProcessInfo {
+                frames,
                 num_in_channels: 0,
                 num_out_channels: channels,
-                frames,
-                process_timestamp: std::time::Instant::now(),
+                process_timestamp: kithara_platform::time::Instant::now(),
                 #[expect(
                     clippy::cast_precision_loss,
                     reason = "frame counter precision loss acceptable for test timing"

@@ -4,55 +4,48 @@ use crate::pool::{PooledOwned, SharedPool};
 
 /// Standard byte buffer pool type for the entire workspace.
 ///
-/// Use this type everywhere instead of creating custom `SharedPool` aliases.
+/// `BytePool::default()` returns a clone of a process-wide `OnceLock`-backed
+/// instance — cheap (one `Arc::clone`) and produces a singleton across the
+/// program. Top-level entry points (main, FFI) build one pool here and pass
+/// it down through their config structs; library code should never call
+/// `BytePool::default()` itself — read the pool from injected config.
 pub type BytePool = SharedPool<32, Vec<u8>>;
 
 /// Standard PCM (f32) buffer pool type for the entire workspace.
 ///
 /// Uses 8 shards (128 buffers / 8 = 16 per shard) for good single-thread
-/// reuse without excessive cross-shard stealing.
+/// reuse without excessive cross-shard stealing. Same `Default` policy as
+/// `BytePool`.
 pub type PcmPool = SharedPool<8, Vec<f32>>;
 
-/// Pooled PCM buffer that auto-recycles to the global pool on drop.
+/// Pooled PCM buffer that auto-recycles to the source pool on drop.
 ///
 /// Use this instead of `Vec<f32>` in audio pipelines to enable
 /// zero-allocation buffer reuse.
 pub type PcmBuf = PooledOwned<8, Vec<f32>>;
 
-/// Get global byte buffer pool for the entire workspace.
-///
-/// Lazily initialized on first call. Use this instead of creating
-/// separate `BytePool` instances.
-///
-/// Configured with a 256 MB byte budget (expected baseline ~16 MB).
-/// Same limits for all platforms (WASM and native).
-pub fn byte_pool() -> &'static BytePool {
-    static GLOBAL_BYTE_POOL: OnceLock<BytePool> = OnceLock::new();
-
-    /// Byte pool budget: 256 MB hard ceiling.
-    const BYTE_POOL_BUDGET: usize = 256 * 1024 * 1024;
-
-    GLOBAL_BYTE_POOL.get_or_init(|| {
-        BytePool::with_byte_budget(
-            usize::MAX, // no buffer count limit — budget is the cap
-            0,          // trim=0 means "never shrink" — always reuse
-            BYTE_POOL_BUDGET,
-        )
-    })
+/// Default-constructed `BytePool` returns a process-wide singleton with a
+/// 256 MB byte budget and no buffer-count limit (the budget is the cap).
+/// Trim is disabled — buffers always grow up to their high-water mark.
+impl Default for BytePool {
+    fn default() -> Self {
+        static GLOBAL: OnceLock<BytePool> = OnceLock::new();
+        const BUDGET: usize = 256 * 1024 * 1024;
+        GLOBAL
+            .get_or_init(|| Self::with_byte_budget(usize::MAX, 0, BUDGET))
+            .clone()
+    }
 }
 
-/// Get global PCM buffer pool for the entire workspace.
-///
-/// Lazily initialized on first call. Use this instead of creating
-/// separate `PcmPool` instances.
-pub fn pcm_pool() -> &'static PcmPool {
-    static GLOBAL_PCM_POOL: OnceLock<PcmPool> = OnceLock::new();
-
-    /// PCM pool max buffer count.
-    const PCM_POOL_MAX_BUFFERS: usize = 128;
-
-    /// PCM pool trim capacity.
-    const PCM_POOL_TRIM_CAPACITY: usize = 200_000;
-
-    GLOBAL_PCM_POOL.get_or_init(|| PcmPool::new(PCM_POOL_MAX_BUFFERS, PCM_POOL_TRIM_CAPACITY))
+/// Default-constructed `PcmPool` returns a process-wide singleton with at
+/// most 128 buffers and a 200 000-element trim cap.
+impl Default for PcmPool {
+    fn default() -> Self {
+        static GLOBAL: OnceLock<PcmPool> = OnceLock::new();
+        const MAX_BUFFERS: usize = 128;
+        const TRIM_CAPACITY: usize = 200_000;
+        GLOBAL
+            .get_or_init(|| Self::new(MAX_BUFFERS, TRIM_CAPACITY))
+            .clone()
+    }
 }

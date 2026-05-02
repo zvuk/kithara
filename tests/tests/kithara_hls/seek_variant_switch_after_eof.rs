@@ -14,15 +14,12 @@
 //! `wait_range` clears `on_demand_pending` when `had_midstream_switch` is true,
 //! allowing the reader to re-push its request.
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    sync::atomic::Ordering,
-};
+use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
-    internal::source_variant_index_handle,
+    hls::{AbrMode, Hls, HlsConfig},
+    internal::set_source_variant_for_test,
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -59,15 +56,9 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
-
-    // Get handle to ABR variant index atomic so we can force a switch.
-    let variant_index = source_variant_index_handle(stream.source());
 
     spawn_blocking(move || {
         // Step 1: Read all data to EOF (caches all variant 0 segments).
@@ -81,7 +72,7 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
         info!("All variant 0 data read to EOF");
 
         // Step 2: Force ABR switch to variant 1.
-        variant_index.store(1, Ordering::Release);
+        set_source_variant_for_test(stream.source(), 1);
         info!("ABR variant switched 0 → 1");
 
         // Step 3: Seek to middle of stream (segment 1 territory).

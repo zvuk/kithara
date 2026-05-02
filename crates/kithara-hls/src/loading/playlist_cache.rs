@@ -40,8 +40,6 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 /// the same master/media `OnceCell` buckets and configured headers/URLs.
 #[derive(Clone)]
 pub struct PlaylistCache {
-    backend: AssetStore<DecryptContext>,
-    downloader: PeerHandle,
     /// Cache-wide config (headers, master URL, base URL override). Held
     /// behind `Arc<RwLock<...>>` so clones see the same builder
     /// mutations.
@@ -51,37 +49,69 @@ pub struct PlaylistCache {
     /// fine-grained locks keep parallel variants out of each other's
     /// critical sections.
     media: Arc<DashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>,
+    backend: AssetStore<DecryptContext>,
+    downloader: PeerHandle,
+    /// Byte buffer pool for reading cached playlist bodies.
+    byte_pool: kithara_bufpool::BytePool,
 }
 
 #[derive(Default, Clone)]
 struct PlaylistConfig {
+    base_url: Option<Url>,
     headers: Option<Headers>,
     master_url: Option<Url>,
-    base_url: Option<Url>,
 }
 
 impl PlaylistCache {
     #[must_use]
-    pub fn new(backend: AssetStore<DecryptContext>, downloader: PeerHandle) -> Self {
+    pub fn new(
+        backend: AssetStore<DecryptContext>,
+        downloader: PeerHandle,
+        byte_pool: kithara_bufpool::BytePool,
+    ) -> Self {
         Self {
             backend,
             downloader,
+            byte_pool,
             config: Arc::new(RwLock::new(PlaylistConfig::default())),
             master: Arc::new(OnceCell::new()),
             media: Arc::new(DashMap::new()),
         }
     }
 
-    pub fn set_master_url(&self, url: Url) {
-        self.config.lock_sync_write().master_url = Some(url);
+    async fn fetch_and_parse<T, F>(&self, url: &Url, label: &str, parse: F) -> HlsResult<T>
+    where
+        F: Fn(&[u8]) -> HlsResult<T>,
+    {
+        let basename = uri_basename_no_query(url.as_str())
+            .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
+        let headers = self.headers();
+        let bytes = fetch_atomic_body(
+            &self.downloader,
+            &self.backend,
+            &self.byte_pool,
+            headers,
+            url,
+            basename,
+            "playlist",
+        )
+        .await?;
+        parse(&bytes)
     }
 
-    pub fn set_base_url(&self, url: Option<Url>) {
-        self.config.lock_sync_write().base_url = url;
-    }
-
-    pub fn set_headers(&self, headers: Option<Headers>) {
-        self.config.lock_sync_write().headers = headers;
+    /// Synchronous access to an already-loaded media playlist.
+    ///
+    /// Returns `None` if the master or media playlist hasn't been loaded
+    /// yet. After `Hls::create()` all playlists are pre-populated so
+    /// this always succeeds during playback.
+    #[must_use]
+    pub fn get_media_playlist_sync(&self, variant: usize) -> Option<(Url, MediaPlaylist)> {
+        let master_url = self.config.lock_sync_read().master_url.clone()?;
+        let master = self.master.get()?;
+        let variant_stream = master.variants.get(variant)?;
+        let media_url = self.resolve_url(&master_url, &variant_stream.uri).ok()?;
+        let playlist = self.media.get(&VariantId(variant))?.get()?.clone();
+        Some((media_url, playlist))
     }
 
     #[must_use]
@@ -89,12 +119,26 @@ impl PlaylistCache {
         self.config.lock_sync_read().headers.clone()
     }
 
-    fn master_url_clone(&self) -> HlsResult<Url> {
-        self.config
-            .lock_sync_read()
-            .master_url
-            .clone()
-            .ok_or_else(|| HlsError::InvalidUrl("master_url not set on PlaylistCache".to_string()))
+    /// Load the media playlist for `variant`, returning both its
+    /// resolved URL and the parsed struct. Used by segment-loader paths
+    /// that need both pieces.
+    ///
+    /// # Errors
+    /// Returns an error when the master playlist, URL resolution, or
+    /// media playlist fetch fails.
+    pub async fn load_media_playlist(&self, variant: usize) -> HlsResult<(Url, MediaPlaylist)> {
+        let master_url = self.master_url_clone()?;
+        let master = self.master_playlist(&master_url).await?;
+
+        let variant_stream = master
+            .variants
+            .get(variant)
+            .ok_or_else(|| HlsError::VariantNotFound(format!("variant {variant}")))?;
+
+        let media_url = self.resolve_url(&master_url, &variant_stream.uri)?;
+        let playlist = self.media_playlist(&media_url, VariantId(variant)).await?;
+
+        Ok((media_url, playlist))
     }
 
     /// Load and parse the master playlist. First call fetches from the
@@ -111,6 +155,14 @@ impl PlaylistCache {
             })
             .await?;
         Ok(master.clone())
+    }
+
+    fn master_url_clone(&self) -> HlsResult<Url> {
+        self.config
+            .lock_sync_read()
+            .master_url
+            .clone()
+            .ok_or_else(|| HlsError::InvalidUrl("master_url not set on PlaylistCache".to_string()))
     }
 
     /// Load and parse the media playlist for `variant_id`. Deduplicated
@@ -156,59 +208,15 @@ impl PlaylistCache {
         Ok(resolved)
     }
 
-    /// Load the media playlist for `variant`, returning both its
-    /// resolved URL and the parsed struct. Used by segment-loader paths
-    /// that need both pieces.
-    ///
-    /// # Errors
-    /// Returns an error when the master playlist, URL resolution, or
-    /// media playlist fetch fails.
-    pub async fn load_media_playlist(&self, variant: usize) -> HlsResult<(Url, MediaPlaylist)> {
-        let master_url = self.master_url_clone()?;
-        let master = self.master_playlist(&master_url).await?;
-
-        let variant_stream = master
-            .variants
-            .get(variant)
-            .ok_or_else(|| HlsError::VariantNotFound(format!("variant {variant}")))?;
-
-        let media_url = self.resolve_url(&master_url, &variant_stream.uri)?;
-        let playlist = self.media_playlist(&media_url, VariantId(variant)).await?;
-
-        Ok((media_url, playlist))
+    pub fn set_base_url(&self, url: Option<Url>) {
+        self.config.lock_sync_write().base_url = url;
     }
 
-    /// Synchronous access to an already-loaded media playlist.
-    ///
-    /// Returns `None` if the master or media playlist hasn't been loaded
-    /// yet. After `Hls::create()` all playlists are pre-populated so
-    /// this always succeeds during playback.
-    #[must_use]
-    pub fn get_media_playlist_sync(&self, variant: usize) -> Option<(Url, MediaPlaylist)> {
-        let master_url = self.config.lock_sync_read().master_url.clone()?;
-        let master = self.master.get()?;
-        let variant_stream = master.variants.get(variant)?;
-        let media_url = self.resolve_url(&master_url, &variant_stream.uri).ok()?;
-        let playlist = self.media.get(&VariantId(variant))?.get()?.clone();
-        Some((media_url, playlist))
+    pub fn set_headers(&self, headers: Option<Headers>) {
+        self.config.lock_sync_write().headers = headers;
     }
 
-    async fn fetch_and_parse<T, F>(&self, url: &Url, label: &str, parse: F) -> HlsResult<T>
-    where
-        F: Fn(&[u8]) -> HlsResult<T>,
-    {
-        let basename = uri_basename_no_query(url.as_str())
-            .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
-        let headers = self.headers();
-        let bytes = fetch_atomic_body(
-            &self.downloader,
-            &self.backend,
-            headers,
-            url,
-            basename,
-            "playlist",
-        )
-        .await?;
-        parse(&bytes)
+    pub fn set_master_url(&self, url: Url) {
+        self.config.lock_sync_write().master_url = Some(url);
     }
 }

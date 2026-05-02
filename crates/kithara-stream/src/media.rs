@@ -85,9 +85,9 @@ impl MediaInfo {
     #[must_use]
     pub fn new(codec: Option<AudioCodec>, container: Option<ContainerFormat>) -> Self {
         Self {
-            channels: None,
             codec,
             container,
+            channels: None,
             sample_rate: None,
             variant_index: None,
         }
@@ -95,42 +95,6 @@ impl MediaInfo {
 }
 
 impl AudioCodec {
-    /// Parse codec from HTTP Content-Type header value.
-    ///
-    /// Examples:
-    /// - `audio/mpeg` -> `Mp3`
-    /// - `audio/aac` -> `AacLc`
-    /// - `audio/flac` -> `Flac`
-    #[must_use]
-    pub fn from_mime(mime: &str) -> Option<Self> {
-        let m = mime.to_lowercase();
-        if m.contains("mp3") || m == "audio/mpeg" {
-            return Some(Self::Mp3);
-        }
-        if m.contains("aac") {
-            return Some(Self::AacLc);
-        }
-        if m.contains("flac") {
-            return Some(Self::Flac);
-        }
-        if m.contains("vorbis") {
-            return Some(Self::Vorbis);
-        }
-        if m.contains("opus") {
-            return Some(Self::Opus);
-        }
-        if m == "audio/ogg" {
-            return Some(Self::Vorbis);
-        }
-        if m == "audio/wav" || m == "audio/wave" || m == "audio/x-wav" {
-            return Some(Self::Pcm);
-        }
-        if m == "audio/mp4" || m == "audio/x-m4a" {
-            return Some(Self::AacLc);
-        }
-        None
-    }
-
     /// Parse from HLS CODECS attribute value.
     ///
     /// Examples:
@@ -165,6 +129,42 @@ impl AudioCodec {
         } else {
             None
         }
+    }
+
+    /// Parse codec from HTTP Content-Type header value.
+    ///
+    /// Examples:
+    /// - `audio/mpeg` -> `Mp3`
+    /// - `audio/aac` -> `AacLc`
+    /// - `audio/flac` -> `Flac`
+    #[must_use]
+    pub fn from_mime(mime: &str) -> Option<Self> {
+        let m = mime.to_lowercase();
+        if m.contains("mp3") || m == "audio/mpeg" {
+            return Some(Self::Mp3);
+        }
+        if m.contains("aac") {
+            return Some(Self::AacLc);
+        }
+        if m.contains("flac") {
+            return Some(Self::Flac);
+        }
+        if m.contains("vorbis") {
+            return Some(Self::Vorbis);
+        }
+        if m.contains("opus") {
+            return Some(Self::Opus);
+        }
+        if m == "audio/ogg" {
+            return Some(Self::Vorbis);
+        }
+        if m == "audio/wav" || m == "audio/wave" || m == "audio/x-wav" {
+            return Some(Self::Pcm);
+        }
+        if m == "audio/mp4" || m == "audio/x-m4a" {
+            return Some(Self::AacLc);
+        }
+        None
     }
 }
 

@@ -19,31 +19,33 @@
 //! let decoder = DecoderFactory::create_from_media_info(source, &media_info, config)?;
 //! ```
 
+mod codec;
+mod demuxer;
 mod error;
 mod factory;
+mod fmp4;
+mod pcm;
+#[cfg(feature = "symphonia")]
 mod symphonia;
 mod traits;
 mod types;
-
-#[cfg(feature = "internal")]
-pub mod internal;
+mod universal;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 
-// Platform-specific backends
-#[cfg(any(test, all(feature = "android", target_os = "android")))]
+// Platform-specific backends. Gated once here; no internal cfg attrs.
+#[cfg(all(feature = "android", target_os = "android"))]
 mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
 
-mod hardware;
-
-// Error types
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
-pub use factory::{DecoderConfig, DecoderFactory};
+pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
 // Public traits
-pub use traits::InnerDecoder;
+pub use traits::{
+    Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
+};
 // Core types
 pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};

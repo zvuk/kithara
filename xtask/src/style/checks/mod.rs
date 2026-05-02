@@ -1,0 +1,52 @@
+//! Registry of code-style checks.
+//!
+//! Style checks operate on intra-file organisation (constant locality, field
+//! and item ordering, init-expression form). They are independent from `arch`
+//! topology checks: a single file can satisfy `arch` perfectly and still trip
+//! `style` rules, and vice versa.
+
+use std::path::Path;
+
+use anyhow::Result;
+use cargo_metadata::Metadata;
+
+use super::config::StyleConfig;
+use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
+
+pub(crate) mod const_locality;
+pub(crate) mod struct_field_order;
+pub(crate) mod struct_init_order;
+pub(crate) mod trait_item_order;
+
+#[expect(dead_code, reason = "metadata field reserved for future style checks")]
+pub(crate) struct Context<'a> {
+    pub(crate) workspace_root: &'a Path,
+    pub(crate) metadata: &'a Metadata,
+    pub(crate) config: &'a StyleConfig,
+    pub(crate) scope: &'a Scope,
+}
+
+pub(crate) trait Check {
+    fn id(&self) -> &'static str;
+    fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
+
+    /// Apply the check's autofix in place. Default: no autofix; the
+    /// violation stays in the report and the user resolves it manually.
+    /// Implementations must uphold the four invariants from
+    /// `xtask/src/common/fix/README.md` (I1-I4).
+    fn fix(&self, _ctx: &Context<'_>) -> Result<FixOutcome> {
+        Ok(FixOutcome {
+            writes: 0,
+            skipped: vec![format!("check '{}' has no autofix", self.id())],
+        })
+    }
+}
+
+pub(crate) fn registry() -> Vec<Box<dyn Check>> {
+    vec![
+        Box::new(const_locality::ConstLocality),
+        Box::new(struct_field_order::StructFieldOrder),
+        Box::new(trait_item_order::TraitItemOrder),
+        Box::new(struct_init_order::StructInitOrder),
+    ]
+}

@@ -33,6 +33,19 @@ use crate::{disk_store::DiskAssetStore, store::DiskStore};
 /// [`crate::AssetStoreBuilder::build`] (production path) and `None`
 /// when a bare [`DiskStore`] chain is converted via `From`/`Into`
 /// (test-only path). A `None` `base` makes `checkpoint()` a no-op.
+/// Forward a method call to the active store variant. Keeps the
+/// `#[cfg(not(target_arch = "wasm32"))]` gate on `Disk` in one place so
+/// the enum arms don't repeat it across a dozen trivial wrappers.
+macro_rules! delegate_to_store {
+    ($self:expr, $method:ident $(, $arg:expr)*) => {
+        match $self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { store, .. } => store.$method($($arg),*),
+            Self::Mem { store, .. } => store.$method($($arg),*),
+        }
+    };
+}
+
 #[derive(Clone, Debug)]
 pub enum AssetStore<Ctx = ()>
 where
@@ -56,20 +69,6 @@ impl<Ctx> AssetStore<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    /// Open a resource by key (no processing context).
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened.
-    pub fn open_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource<Ctx>> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.open_resource(key),
-            Self::Mem { store, .. } => store.open_resource(key),
-        }
-    }
-
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
@@ -77,29 +76,7 @@ where
     /// Returns `AssetsError` if the resource key is invalid or the underlying
     /// storage cannot be opened.
     pub fn acquire_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource<Ctx>> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.acquire_resource(key),
-            Self::Mem { store, .. } => store.acquire_resource(key),
-        }
-    }
-
-    /// Open a resource with processing context.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the resource key is invalid or the underlying
-    /// storage cannot be opened.
-    pub fn open_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Ctx>,
-    ) -> AssetsResult<AssetResource<Ctx>> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.open_resource_with_ctx(key, ctx),
-            Self::Mem { store, .. } => store.open_resource_with_ctx(key, ctx),
-        }
+        delegate_to_store!(self, acquire_resource, key)
     }
 
     /// Acquire a resource with processing context for an explicit write path.
@@ -113,106 +90,13 @@ where
         key: &ResourceKey,
         ctx: Option<Ctx>,
     ) -> AssetsResult<AssetResource<Ctx>> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.acquire_resource_with_ctx(key, ctx),
-            Self::Mem { store, .. } => store.acquire_resource_with_ctx(key, ctx),
-        }
-    }
-
-    /// Inspect the current resource state without creating or mutating it.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the key is invalid or the backend cannot inspect it.
-    pub fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.resource_state(key),
-            Self::Mem { store, .. } => store.resource_state(key),
-        }
+        delegate_to_store!(self, acquire_resource_with_ctx, key, ctx)
     }
 
     /// Return the asset root identifier.
     #[must_use]
     pub fn asset_root(&self) -> &str {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.asset_root(),
-            Self::Mem { store, .. } => store.asset_root(),
-        }
-    }
-
-    /// Whether this backend is ephemeral (in-memory).
-    #[must_use]
-    pub fn is_ephemeral(&self) -> bool {
-        matches!(self, Self::Mem { .. })
-    }
-
-    /// Compatibility helper for callers that only care about committed resources.
-    #[must_use]
-    pub fn has_resource(&self, key: &ResourceKey) -> bool {
-        matches!(
-            self.resource_state(key),
-            Ok(AssetResourceState::Committed { .. })
-        )
-    }
-
-    /// Remove a single resource from the store. Also evicts the key
-    /// from the aggregate byte availability index.
-    pub fn remove_resource(&self, key: &ResourceKey) {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => {
-                let _ = store.remove_resource(key);
-            }
-            Self::Mem { store, .. } => {
-                let _ = store.remove_resource(key);
-            }
-        }
-        self.availability().remove(self.asset_root(), key);
-    }
-
-    /// Return the root directory for the asset store.
-    #[must_use]
-    pub fn root_dir(&self) -> &Path {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.root_dir(),
-            Self::Mem { store, .. } => store.root_dir(),
-        }
-    }
-
-    /// Delete the entire asset directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the directory cannot be removed.
-    pub fn delete_asset(&self) -> AssetsResult<()> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { store, .. } => store.delete_asset(),
-            Self::Mem { store, .. } => store.delete_asset(),
-        }
-    }
-
-    /// Persist the in-memory byte-availability aggregate snapshot to
-    /// disk. For `AssetStore::Mem` this is a no-op.
-    ///
-    /// Checkpointing is always explicit — there is no `Drop` hook and
-    /// no background flush timer (attempt #1 landmine L3). Callers
-    /// decide when a consistent aggregate must survive a restart.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the persistent index resource cannot
-    /// be opened or the atomic write fails.
-    pub fn checkpoint(&self) -> AssetsResult<()> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk { base, .. } => base.as_ref().map_or(Ok(()), |base| base.checkpoint()),
-            Self::Mem { .. } => Ok(()),
-        }
+        delegate_to_store!(self, asset_root)
     }
 
     /// Return the crate-private aggregate availability handle.
@@ -250,6 +134,25 @@ where
         ranges
     }
 
+    /// Persist the in-memory byte-availability aggregate snapshot to
+    /// disk. For `AssetStore::Mem` this is a no-op.
+    ///
+    /// Checkpointing is always explicit — there is no `Drop` hook and
+    /// no background flush timer (attempt #1 landmine L3). Callers
+    /// decide when a consistent aggregate must survive a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the persistent index resource cannot
+    /// be opened or the atomic write fails.
+    pub fn checkpoint(&self) -> AssetsResult<()> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { base, .. } => base.as_ref().map_or(Ok(()), |base| base.checkpoint()),
+            Self::Mem { .. } => Ok(()),
+        }
+    }
+
     /// Return `true` when every byte in `range` is already present for
     /// the resource, or when the range is empty.
     ///
@@ -276,6 +179,15 @@ where
         false
     }
 
+    /// Delete the entire asset directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the directory cannot be removed.
+    pub fn delete_asset(&self) -> AssetsResult<()> {
+        delegate_to_store!(self, delete_asset)
+    }
+
     /// Return the committed final length of the resource, if known.
     #[must_use]
     pub fn final_len(&self, key: &ResourceKey) -> Option<u64> {
@@ -289,6 +201,77 @@ where
             return Some(len);
         }
         None
+    }
+
+    /// Compatibility helper for callers that only care about committed resources.
+    #[must_use]
+    pub fn has_resource(&self, key: &ResourceKey) -> bool {
+        matches!(
+            self.resource_state(key),
+            Ok(AssetResourceState::Committed { .. })
+        )
+    }
+
+    /// Whether this backend is ephemeral (in-memory).
+    #[must_use]
+    pub fn is_ephemeral(&self) -> bool {
+        matches!(self, Self::Mem { .. })
+    }
+
+    /// Open a resource by key (no processing context).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened.
+    pub fn open_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource<Ctx>> {
+        delegate_to_store!(self, open_resource, key)
+    }
+
+    /// Open a resource with processing context.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened.
+    pub fn open_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Ctx>,
+    ) -> AssetsResult<AssetResource<Ctx>> {
+        delegate_to_store!(self, open_resource_with_ctx, key, ctx)
+    }
+
+    /// Remove a single resource from the store. The concrete store
+    /// dispatches through the canonical [`crate::deleter::AssetDeleter`]
+    /// channel, which atomically clears the matching
+    /// [`AvailabilityIndex`](crate::index) entry — so this method
+    /// must not invalidate the index again.
+    pub fn remove_resource(&self, key: &ResourceKey) {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk { store, .. } => {
+                let _ = store.remove_resource(key);
+            }
+            Self::Mem { store, .. } => {
+                let _ = store.remove_resource(key);
+            }
+        }
+    }
+
+    /// Inspect the current resource state without creating or mutating it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the key is invalid or the backend cannot inspect it.
+    pub fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
+        delegate_to_store!(self, resource_state, key)
+    }
+
+    /// Return the root directory for the asset store.
+    #[must_use]
+    pub fn root_dir(&self) -> &Path {
+        delegate_to_store!(self, root_dir)
     }
 }
 

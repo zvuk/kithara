@@ -7,18 +7,18 @@
 use std::io::Cursor;
 
 use hotpath::HotpathGuardBuilder;
-use kithara::decode::{DecoderConfig, DecoderFactory, InnerDecoder};
+use kithara::decode::{Decoder, DecoderConfig, DecoderFactory};
 use kithara_platform::time::Instant;
 use kithara_test_utils::create_test_wav;
 
-fn create_wav_decoder(frames: usize) -> Box<dyn InnerDecoder> {
+fn create_wav_decoder(frames: usize) -> Box<dyn Decoder> {
     let wav_data = create_test_wav(frames, 44100, 2);
     let cursor = Cursor::new(wav_data);
     DecoderFactory::create_with_probe(cursor, Some("wav"), DecoderConfig::default()).unwrap()
 }
 
 #[hotpath::measure]
-fn decoder_next_chunk_measured(decoder: &mut Box<dyn InnerDecoder>) -> Option<()> {
+fn decoder_next_chunk_measured(decoder: &mut Box<dyn Decoder>) -> Option<()> {
     decoder.next_chunk().ok().flatten().map(|_| ())
 }
 
@@ -30,7 +30,7 @@ fn decoder_probe_single(wav_data: &[u8]) {
 }
 
 #[hotpath::measure]
-fn decoder_chunk_process(decoder: &mut Box<dyn InnerDecoder>) -> Option<usize> {
+fn decoder_chunk_process(decoder: &mut Box<dyn Decoder>) -> Option<usize> {
     decoder.next_chunk().ok().flatten().map(|chunk| {
         // F32 conversion happens inside next_chunk
         chunk.pcm.len()
@@ -50,7 +50,6 @@ enum PerfScenario {
 #[case("decoder_probe", PerfScenario::ProbeLatency)]
 #[case("decoder_f32_conversion", PerfScenario::F32Conversion)]
 #[case("decoder_throughput", PerfScenario::Throughput)]
-#[ignore]
 fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {

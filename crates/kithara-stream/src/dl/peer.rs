@@ -6,7 +6,8 @@ use std::{
 };
 
 use futures::future::join_all;
-use kithara_events::EventBus;
+use kithara_abr::{Abr, AbrHandle, AbrPeerId};
+use kithara_events::{EventBus, RequestPriority};
 use kithara_net::NetError;
 use kithara_platform::{
     CancelGroup, RwLock,
@@ -14,11 +15,7 @@ use kithara_platform::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::{
-    cmd::{FetchCmd, Priority},
-    downloader::DownloaderInner,
-    response::FetchResponse,
-};
+use super::{cmd::FetchCmd, downloader::DownloaderInner, response::FetchResponse};
 
 /// Protocol-agnostic contract for download orchestration.
 ///
@@ -31,12 +28,7 @@ use super::{
 /// Complex peers (HLS) override `poll_next` to let the Downloader
 /// drive media segment downloads via per-command `writer`/`on_complete`
 /// closures in [`FetchCmd`].
-pub trait Peer: Send + Sync + 'static {
-    /// Peer-level priority. `High` = active playback track.
-    fn priority(&self) -> Priority {
-        Priority::Low
-    }
-
+pub trait Peer: Abr {
     /// Yield the next batch of commands for the Downloader to execute.
     ///
     /// Returns `Ready(Some(batch))` with one or more self-contained
@@ -48,6 +40,11 @@ pub trait Peer: Send + Sync + 'static {
     fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         Poll::Ready(None)
     }
+
+    /// Peer-level priority. `High` = active playback track.
+    fn priority(&self) -> RequestPriority {
+        RequestPriority::Low
+    }
 }
 
 /// How the Downloader delivers the response for a command.
@@ -58,32 +55,59 @@ pub(super) enum ResponseTarget {
     Streaming,
 }
 
+/// Pair of an [`InternalCmd`] and the **peer-level** cancel token used
+/// to discriminate `CancelReason` later in `deliver`.
+///
+/// The peer-level token lives in [`PeerInner::cancel`] (and the
+/// Registry's `PeerEntry::peer_cancel`). Carrying a clone alongside
+/// the cmd through the slot queue lets the spawned fetch task report
+/// `CancelReason::PeerCancel` without holding a reference back into
+/// the Registry.
+pub(super) struct SlotEntry {
+    pub(super) peer_cancel: CancellationToken,
+    pub(super) cmd: InternalCmd,
+}
+
 /// Per-peer command sent through the channel to the downloader loop.
 pub(super) struct InternalCmd {
-    pub(super) cmd: FetchCmd,
+    /// ABR peer identifier for bandwidth accounting after fetch completes.
+    pub(super) peer_id: AbrPeerId,
     pub(super) cancel: CancelGroup,
-    pub(super) priority: Priority,
-    pub(super) response: ResponseTarget,
+    pub(super) cmd: FetchCmd,
+    /// Wall-clock instant the cmd was placed into a priority slot.
+    /// Used to compute `RequestStarted::wait_in_queue` later in the
+    /// pipeline.
+    pub(super) enqueued_at: kithara_platform::time::Instant,
+    /// Bus of the peer that issued this command. Downloader publishes
+    /// per-fetch `DownloaderEvent`s here.
+    pub(super) bus: Option<EventBus>,
     /// Arena index of the owning peer. `None` when sent from `PeerHandle`
     /// (filled in by Registry on receipt).
     pub(super) peer: Option<thunderdome::Index>,
-    /// Bus of the peer that issued this command. Downloader publishes
-    /// per-fetch `DownloaderEvent`s here (currently `LoadSlow`).
-    pub(super) bus: Option<EventBus>,
+    /// Stable id allocated by the Downloader on enqueue. Carried in
+    /// every `DownloaderEvent` for this fetch's lifecycle so subscribers
+    /// can correlate Enqueued → Started → Completed/Failed/Cancelled.
+    pub(super) request_id: kithara_events::RequestId,
+    pub(super) priority: RequestPriority,
+    pub(super) response: ResponseTarget,
 }
 
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
 struct PeerInner {
+    /// ABR side of the double registration. Keeps the peer registered
+    /// with the shared `AbrController` until the last `PeerHandle` drops
+    /// (the handle's `Drop` calls `controller.unregister`).
+    abr: AbrHandle,
     /// Keeps `DownloaderInner` (`HttpClient`, cancel, runtime) alive
     /// for this peer's lifetime.
     _pool: Arc<DownloaderInner>,
-    cancel: CancellationToken,
-    cmd_tx: mpsc::Sender<InternalCmd>,
     /// Shared with the Registry's `PeerEntry`. Writing through
     /// [`PeerHandle::with_bus`] immediately makes the new bus visible
     /// to both the handle's own imperative path and the Registry's
     /// proactive `poll_next` path.
     bus: Arc<RwLock<Option<EventBus>>>,
+    cancel: CancellationToken,
+    cmd_tx: mpsc::Sender<InternalCmd>,
 }
 
 impl Drop for PeerInner {
@@ -115,68 +139,23 @@ impl PeerHandle {
         cancel: CancellationToken,
         cmd_tx: mpsc::Sender<InternalCmd>,
         bus: Arc<RwLock<Option<EventBus>>>,
+        abr: AbrHandle,
     ) -> Self {
         Self {
             inner: Arc::new(PeerInner {
-                _pool: pool,
                 cancel,
                 cmd_tx,
                 bus,
+                abr,
+                _pool: pool,
             }),
         }
     }
 
-    /// Peer-level cancellation token.
-    ///
-    /// Cancelling this token aborts all in-flight fetches for this
-    /// peer. The cancel also fires automatically when the last clone
-    /// of this handle is dropped.
+    /// ABR-side handle attached at registration.
     #[must_use]
-    pub fn cancel(&self) -> CancellationToken {
-        self.inner.cancel.clone()
-    }
-
-    /// Attach an event bus so the Downloader can publish per-peer
-    /// [`DownloaderEvent`](kithara_events::DownloaderEvent)s (currently
-    /// `LoadSlow`) to it. Returns `self` so the call chains naturally
-    /// after [`Downloader::register`](super::Downloader::register).
-    #[must_use]
-    pub fn with_bus(self, bus: EventBus) -> Self {
-        *self.inner.bus.lock_sync_write() = Some(bus);
-        self
-    }
-
-    /// Currently attached bus, if any.
-    #[must_use]
-    pub fn bus(&self) -> Option<EventBus> {
-        self.inner.bus.lock_sync_read().clone()
-    }
-
-    /// Submit a single fetch command and await the response.
-    ///
-    /// Always runs at `High` priority — imperative requests are
-    /// latency-sensitive.
-    ///
-    /// # Errors
-    /// Returns [`NetError::Cancelled`] when the peer cancel fires,
-    /// the downloader shuts down, or the HTTP request itself fails.
-    pub async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
-        let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
-        let (resp_tx, resp_rx) = oneshot::channel();
-        let internal = InternalCmd {
-            cmd,
-            cancel,
-            priority: Priority::High,
-            response: ResponseTarget::Channel(resp_tx),
-            peer: None,
-            bus: self.bus(),
-        };
-        self.inner
-            .cmd_tx
-            .send(internal)
-            .await
-            .map_err(|_| NetError::Cancelled)?;
-        resp_rx.await.map_err(|_| NetError::Cancelled)?
+    pub fn abr(&self) -> &AbrHandle {
+        &self.inner.abr
     }
 
     /// Submit a batch of fetch commands and await all responses.
@@ -191,18 +170,10 @@ impl PeerHandle {
         let mut receivers: Vec<Option<oneshot::Receiver<Result<FetchResponse, NetError>>>> =
             Vec::with_capacity(cmds.len());
         let bus = self.bus();
+        let peer_id = self.inner.abr.peer_id();
 
         for cmd in cmds {
-            let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
-            let (resp_tx, resp_rx) = oneshot::channel();
-            let internal = InternalCmd {
-                cmd,
-                cancel,
-                priority: Priority::High,
-                response: ResponseTarget::Channel(resp_tx),
-                peer: None,
-                bus: bus.clone(),
-            };
+            let (internal, resp_rx) = self.make_imperative(cmd, bus.clone(), peer_id);
             if self.inner.cmd_tx.send(internal).await.is_err() {
                 receivers.push(None);
                 continue;
@@ -218,5 +189,90 @@ impl PeerHandle {
             }
         }))
         .await
+    }
+
+    /// Currently attached bus, if any.
+    #[must_use]
+    pub fn bus(&self) -> Option<EventBus> {
+        self.inner.bus.lock_sync_read().clone()
+    }
+
+    /// Peer-level cancellation token.
+    ///
+    /// Cancelling this token aborts all in-flight fetches for this
+    /// peer. The cancel also fires automatically when the last clone
+    /// of this handle is dropped.
+    #[must_use]
+    pub fn cancel(&self) -> CancellationToken {
+        self.inner.cancel.clone()
+    }
+
+    /// Submit a single fetch command and await the response.
+    ///
+    /// Always runs at `High` priority — imperative requests are
+    /// latency-sensitive.
+    ///
+    /// # Errors
+    /// Returns [`NetError::Cancelled`] when the peer cancel fires,
+    /// the downloader shuts down, or the HTTP request itself fails.
+    pub async fn execute(&self, cmd: FetchCmd) -> Result<FetchResponse, NetError> {
+        let (internal, resp_rx) = self.make_imperative(cmd, self.bus(), self.inner.abr.peer_id());
+        self.inner
+            .cmd_tx
+            .send(internal)
+            .await
+            .map_err(|_| NetError::Cancelled)?;
+        resp_rx.await.map_err(|_| NetError::Cancelled)?
+    }
+
+    /// Build a High-priority imperative `InternalCmd` paired with its
+    /// response receiver. Shared by [`Self::execute`] and [`Self::batch`].
+    fn make_imperative(
+        &self,
+        cmd: FetchCmd,
+        bus: Option<EventBus>,
+        peer_id: AbrPeerId,
+    ) -> (
+        InternalCmd,
+        oneshot::Receiver<Result<FetchResponse, NetError>>,
+    ) {
+        let cancel = CancelGroup::new(vec![self.inner.cancel.child_token()]);
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let request_id = self.inner._pool.next_request_id();
+        let enqueued_at = kithara_platform::time::Instant::now();
+        let internal = InternalCmd {
+            cmd,
+            cancel,
+            bus,
+            peer_id,
+            request_id,
+            enqueued_at,
+            priority: RequestPriority::High,
+            response: ResponseTarget::Channel(resp_tx),
+            peer: None,
+        };
+        (internal, resp_rx)
+    }
+
+    /// ABR peer identifier for this handle.
+    #[must_use]
+    pub fn peer_id(&self) -> AbrPeerId {
+        self.inner.abr.peer_id()
+    }
+
+    /// Attach an event bus so the Downloader can publish per-peer
+    /// [`DownloaderEvent`](kithara_events::DownloaderEvent)s and the ABR
+    /// controller can publish [`AbrEvent`](kithara_events::AbrEvent)s to
+    /// it. Returns `self` so the call chains naturally after
+    /// [`Downloader::register`](super::Downloader::register).
+    #[must_use]
+    pub fn with_bus(self, bus: EventBus) -> Self {
+        *self.inner.bus.lock_sync_write() = Some(bus.clone());
+        // AbrHandle::with_bus consumes the handle, but AbrHandle is
+        // Clone-able and backed by Arc — we clone to keep the peer-bound
+        // handle in place while the trait call chains through to the
+        // peer's shared bus cell.
+        let _ = self.inner.abr.clone().with_bus(bus);
+        self
     }
 }

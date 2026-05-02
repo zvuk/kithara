@@ -22,12 +22,6 @@ pub trait Frontend: Sized {
     /// Returns an error if frontend initialization fails.
     fn new(config: &AppConfig) -> Result<Self, FrontendError>;
 
-    /// Initialize the frontend (set up terminal / window).
-    ///
-    /// # Errors
-    /// Returns an error if the frontend cannot start.
-    fn start(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError>;
-
     /// Run the main event loop. Blocks until exit.
     ///
     /// # Errors
@@ -39,4 +33,10 @@ pub trait Frontend: Sized {
     /// # Errors
     /// Returns an error if cleanup fails.
     fn shutdown(&mut self) -> Result<(), FrontendError>;
+
+    /// Initialize the frontend (set up terminal / window).
+    ///
+    /// # Errors
+    /// Returns an error if the frontend cannot start.
+    fn start(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError>;
 }

@@ -26,6 +26,8 @@ members = [
     "crates/kithara-app",
     "crates/kithara-wasm-macros",
     "crates/kithara-ffi",
+    "crates/kithara-probes",
+    "crates/kithara-probe-macros",
     "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
@@ -55,6 +57,8 @@ default-members = [
     "crates/kithara-queue",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
+    "crates/kithara-probes",
+    "crates/kithara-probe-macros",
     "tests",
     "examples",
 ]
@@ -70,6 +74,17 @@ broken_intra_doc_links = "deny"
 undocumented_unsafe_blocks = "deny"
 unwrap_used = "deny"
 allow_attributes = "deny"
+# D-3 promote: each lint at deny because workspace currently has 0
+# violations. Adding new violations becomes a hard error rather than
+# silent noise — keeps the rust-way idioms enforced going forward.
+needless_range_loop = "deny"
+needless_borrow = "deny"
+ptr_arg = "deny"
+map_identity = "deny"
+needless_lifetimes = "deny"
+search_is_some = "deny"
+manual_map = "deny"
+question_mark = "deny"
 doc_markdown = "warn"
 default_trait_access = "warn"
 ignored_unit_patterns = "warn"
@@ -80,7 +95,7 @@ impl_trait_in_params = "warn"
 explicit_iter_loop = "warn"
 explicit_into_iter_loop = "warn"
 redundant_closure_for_method_calls = "warn"
-cloned_instead_of_copied = "warn"
+cloned_instead_of_copied = "deny"
 flat_map_option = "warn"
 manual_let_else = "warn"
 inconsistent_struct_constructor = "warn"
@@ -108,6 +123,9 @@ cast_precision_loss = "warn"
 derive_partial_eq_without_eq = "warn"
 significant_drop_tightening = "warn"
 cognitive_complexity = "warn"
+too_many_lines = "warn"
+too_many_arguments = "warn"
+type_complexity = "warn"
 approx_constant = "warn"
 
 [workspace.metadata.kithara]
@@ -156,6 +174,8 @@ kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 kithara-test-macros = { path = "crates/kithara-test-macros" }
 kithara-test-utils = { path = "crates/kithara-test-utils" }
+kithara-probes = { path = "crates/kithara-probes", version = "0.1.0" }
+kithara-probe-macros = { path = "crates/kithara-probe-macros", version = "0.1.0" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
 kithara-ffi = { path = "crates/kithara-ffi" }
@@ -197,13 +217,22 @@ fallible-iterator = "0.3"
 # decoding / mp4 parsing
 re_mp4 = "0.4.0"
 symphonia = { version = "0.6.0-alpha.1", features = ["all", "opt-simd"] }
+# Pulled in stand-alone for the Apple hardware backend so it can run a
+# streaming fMP4 container parser without requiring the full Symphonia
+# decoder suite.
+symphonia-format-isomp4 = "0.6.0-alpha.1"
+symphonia-core = "0.6.0-alpha.1"
 ffmpeg-next = "8.1.0"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
-rodio = { version = "0.22.2", default-features = false }
 ratatui = "0.30.0"
 rubato = "2.0"
 audioadapter-buffers = "3.0"
 smallvec = "1"
+# Numeric conversions: lets call sites express bounded f→i / u→f via
+# `.to_u64()` / `.to_f64()` (returning Option) instead of raw `as` casts.
+# Using a typed conversion API is the alternative to `#[expect(clippy::cast_*)]`
+# suppressions when an `as` cast is genuinely required.
+num-traits = { version = "0.2", default-features = false }
 
 # audio engine
 cpal = { version = "0.17", default-features = false }
@@ -221,6 +250,11 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 tracing-wasm = "0.2"
 tracing-android = "0.2.0"
 tracing-log = "0.2"
+# USDT probes for production observability (dtrace/bpftrace) and
+# defense-in-depth in tests against EventBus broadcast overflow.
+# Linux x86_64 + macOS aarch64 supported via the `asm` backend on
+# stable Rust; Windows is a no-op stub.
+usdt = { version = "0.5", default-features = false, features = ["asm"] }
 web-time = "1.1"
 gloo-timers = { version = "0.4", features = ["futures"] }
 console_error_panic_hook = "0.1"
@@ -236,7 +270,8 @@ web-sys = { version = "0.3", features = ["Blob", "BroadcastChannel", "console", 
 base64 = "0.22.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rkyv = "0.8.15"
+toml = { version = "0.8", features = ["preserve_order"] }
+rkyv = "0.8.16"
 bytecheck = "0.8.2"
 
 # hex encoding
@@ -261,7 +296,7 @@ tempfile = "3.27.0"
 uniffi = { version = "0.31.1" }
 jni = "0.22"
 ndk-context = "0.1.1"
-rustls-platform-verifier = "0.6.2"
+rustls-platform-verifier = "0.7.0"
 
 # async traits
 async-trait = "0.1.89"
@@ -287,6 +322,7 @@ lru = "0.17"
 # fuzzing
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
+proptest = "1"
 
 # memory profiling
 dhat = "0.3"

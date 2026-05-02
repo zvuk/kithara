@@ -8,7 +8,7 @@
 use std::{fmt, fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
-use kithara_platform::Mutex;
+use kithara_platform::{Condvar, Mutex, time::Instant};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
 use crate::{AssetResourceState, AssetsResult, ResourceKey, base::Assets};
@@ -46,12 +46,95 @@ pub type ProcessChunkFn<Ctx> =
 ///
 /// Processing only happens when `ctx` is `Some`. When `ctx` is `None`
 /// (playlists, keys), commit just delegates to inner — no processing.
+///
+/// ## Readability sync
+///
+/// `inner.wait_range` reports `Ready` as soon as bytes hit disk via
+/// `write_at`, but for an active processor those bytes are still
+/// **encrypted** until [`Self::commit`] runs `process_and_write`. A
+/// reader that observed `wait_range = Ready` and immediately called
+/// `read_at` would race the processor and hit
+/// [`StorageError::NotReadable`] (the symptom that surfaced as the
+/// `local_queue_playlist_behavior_*` post-seek hang under DRM).
+///
+/// `ProcessedResource` therefore owns a [`ReadinessGate`] that pairs
+/// the `processed` flag with a [`Condvar`]: `commit()` flips the flag
+/// and notifies, and `wait_range`/`read_at` block on the gate so
+/// callers cannot see "ready bytes" until processing has finished.
 pub struct ProcessedResource<R, Ctx> {
-    inner: R,
+    readiness: Arc<ReadinessGate>,
+    pool: BytePool,
     ctx: Option<Ctx>,
     process: ProcessChunkFn<Ctx>,
-    pool: BytePool,
-    processed: Arc<Mutex<bool>>,
+    inner: R,
+}
+
+/// Pairs a `processed` flag with a [`Condvar`] so readers can block
+/// until [`ProcessedResource::commit`] drains the processor.
+///
+/// Splitting this out keeps the locking discipline explicit: the
+/// guard is only ever held inside [`ReadinessGate::wait_until_ready`]
+/// or the brief flip in [`ReadinessGate::mark_ready`].
+struct ReadinessGate {
+    cv: Condvar,
+    processed: Mutex<bool>,
+}
+
+impl ReadinessGate {
+    fn new(initial: bool) -> Self {
+        Self {
+            processed: Mutex::new(initial),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        *self.processed.lock_sync()
+    }
+
+    /// Reset to "not ready" — used by [`ProcessedResource::reactivate`]
+    /// when the inner resource is reopened for fresh writes.
+    fn mark_pending(&self) {
+        *self.processed.lock_sync() = false;
+    }
+
+    /// Mark the gate ready and wake every waiter.
+    fn mark_ready(&self) {
+        *self.processed.lock_sync() = true;
+        self.cv.notify_all();
+    }
+
+    /// Block the caller until `processed` becomes `true` or
+    /// `should_abort` reports that the underlying resource has
+    /// failed/cancelled. Returns `true` if the gate was reached,
+    /// `false` if the wait was aborted.
+    fn wait_until_ready(&self, should_abort: &dyn Fn() -> bool) -> bool {
+        loop {
+            // Bounded wake-up so a missed notify (or a status change
+            // that does not flow through `mark_ready`) cannot strand
+            // a reader. 100 ms keeps perceived latency under the
+            // 250 ms playback engine tick budget. The result is read
+            // out of the guard, which is dropped at the end of the
+            // block so `should_abort()` (which may take the inner
+            // resource's locks) cannot deadlock against a producer
+            // that wants the gate's own mutex.
+            let ready = {
+                let guard = self.processed.lock_sync();
+                if *guard {
+                    return true;
+                }
+                let deadline = Instant::now() + kithara_platform::time::Duration::from_millis(100);
+                let (next, _) = self.cv.wait_sync_timeout(guard, deadline);
+                *next
+            };
+            if ready {
+                return true;
+            }
+            if should_abort() {
+                return false;
+            }
+        }
+    }
 }
 
 impl<R, Ctx> Clone for ProcessedResource<R, Ctx>
@@ -65,7 +148,7 @@ where
             ctx: self.ctx.clone(),
             process: Arc::clone(&self.process),
             pool: self.pool.clone(),
-            processed: Arc::clone(&self.processed),
+            readiness: Arc::clone(&self.readiness),
         }
     }
 }
@@ -79,7 +162,7 @@ where
         f.debug_struct("ProcessedResource")
             .field("inner", &self.inner)
             .field("ctx", &self.ctx)
-            .field("is_processed", &*self.processed.lock_sync())
+            .field("is_processed", &self.readiness.is_ready())
             .finish_non_exhaustive()
     }
 }
@@ -96,7 +179,7 @@ where
             ctx,
             process,
             pool,
-            processed: Arc::new(Mutex::new(processed)),
+            readiness: Arc::new(ReadinessGate::new(processed)),
         }
     }
 }
@@ -106,8 +189,23 @@ where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,
     Ctx: Clone + Send + Sync + Debug,
 {
+    /// Whether further waiting is pointless because the inner
+    /// resource will never produce processed bytes.
+    ///
+    /// Both `Failed` and `Cancelled` are terminal here: failure
+    /// means a data error, cancellation means the routine shutdown
+    /// signal (e.g. track switch, app exit) reached the resource.
+    /// Either way the gate will never flip Ready, so a waiter must
+    /// abort instead of polling indefinitely.
+    fn inner_terminal(&self) -> bool {
+        matches!(
+            self.inner.status(),
+            ResourceStatus::Failed(_) | ResourceStatus::Cancelled
+        )
+    }
+
     fn is_readable(&self) -> bool {
-        self.ctx.is_none() || *self.processed.lock_sync()
+        self.ctx.is_none() || self.readiness.is_ready()
     }
 
     /// Process content chunk-by-chunk and write back to disk.
@@ -163,64 +261,88 @@ where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,
     Ctx: Clone + Send + Sync + Debug + 'static,
 {
-    delegate::delegate! {
-        to self.inner {
-            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-            fn fail(&self, reason: String);
-            fn path(&self) -> Option<&Path>;
-            fn len(&self) -> Option<u64>;
-            fn status(&self) -> ResourceStatus;
-            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
-        }
-    }
+    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        // Process on commit (once) if ctx is present.
+        // Use the actual processed length (may differ due to padding removal).
+        let needs_processing = self.ctx.is_some() && !self.readiness.is_ready();
+        let actual_len = if needs_processing {
+            if let Some(len) = final_len
+                && len > 0
+            {
+                Some(self.process_and_write(len)?)
+            } else {
+                final_len
+            }
+        } else {
+            final_len
+        };
 
-    fn reactivate(&self) -> StorageResult<()> {
-        // Reactivation reopens the inner resource for fresh writes (LRU slot
-        // reuse). The processor must rerun on the next commit, so clear the
-        // `processed` flag when a processing context is attached.
-        self.inner.reactivate()?;
-        if self.ctx.is_some() {
-            *self.processed.lock_sync() = false;
+        let inner_result = self.inner.commit(actual_len);
+        // Mark readiness only after the inner commit succeeds — a
+        // failed inner commit must not unblock waiters that would
+        // then race against a half-written file.
+        if inner_result.is_ok() && needs_processing {
+            self.readiness.mark_ready();
         }
-        Ok(())
-    }
-
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        if !self.is_readable() {
-            return Err(StorageError::Failed(
-                "processed resource is not readable before commit".to_string(),
-            ));
-        }
-        self.inner.read_at(offset, buf)
+        inner_result
     }
 
     fn contains_range(&self, range: Range<u64>) -> bool {
         self.is_readable() && self.inner.contains_range(range)
     }
 
-    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        // Process on commit (once) if ctx is present.
-        // Use the actual processed length (may differ due to padding removal).
-        let actual_len = {
-            let mut processed = self.processed.lock_sync();
-            if !*processed && self.ctx.is_some() {
-                if let Some(len) = final_len
-                    && len > 0
-                {
-                    let processed_len = self.process_and_write(len)?;
-                    *processed = true;
-                    Some(processed_len)
-                } else {
-                    *processed = true;
-                    final_len
-                }
-            } else {
-                final_len
-            }
-        };
+    fn reactivate(&self) -> StorageResult<()> {
+        // Reactivation reopens the inner resource for fresh writes (LRU
+        // slot reuse). Flip the gate to Pending **before** touching
+        // `inner.reactivate` so `is_readable()` cannot lie during the
+        // window where the inner has been reopened but the next commit
+        // has not yet rerun the processor — otherwise a concurrent
+        // reader sees `processed = true` while the inner is mid-truncate
+        // and reads half-overwritten bytes. The flag is restored to
+        // Ready by the next successful commit.
+        if self.ctx.is_some() {
+            self.readiness.mark_pending();
+        }
+        self.inner.reactivate()
+    }
 
-        self.inner.commit(actual_len)
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        if !self.is_readable() {
+            return Err(StorageError::NotReadable);
+        }
+        self.inner.read_at(offset, buf)
+    }
+
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        let outcome = self.inner.wait_range(range)?;
+        // No active processor → bytes-on-disk readiness *is* readiness.
+        // Forward the inner outcome unchanged. Same for `Eof` /
+        // `Interrupted`: those terminal/control variants do not depend
+        // on processing.
+        if self.ctx.is_none() || outcome != WaitOutcome::Ready {
+            return Ok(outcome);
+        }
+        // Active processor: inner reports Ready as soon as bytes hit
+        // disk via write_at, but those bytes are still encrypted
+        // until commit() runs process_and_write. Block on the
+        // readiness gate so the caller cannot race past processing
+        // into a NotReadable read.
+        let aborted = !self.readiness.wait_until_ready(&|| self.inner_terminal());
+        if aborted {
+            return Ok(WaitOutcome::Interrupted);
+        }
+        Ok(WaitOutcome::Ready)
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+            fn fail(&self, reason: String);
+            fn path(&self) -> Option<&Path>;
+            fn len(&self) -> Option<u64>;
+            fn status(&self) -> ResourceStatus;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+        }
     }
 }
 
@@ -237,8 +359,8 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     inner: Arc<A>,
-    process: ProcessChunkFn<Ctx>,
     pool: BytePool,
+    process: ProcessChunkFn<Ctx>,
 }
 
 impl<A, Ctx> ProcessingAssets<A, Ctx>
@@ -250,8 +372,8 @@ where
     pub fn new(inner: Arc<A>, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
         Self {
             inner,
-            process,
             pool,
+            process,
         }
     }
 
@@ -267,9 +389,25 @@ where
     A::Context: Default,
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    type Res = ProcessedResource<A::Res, Ctx>;
     type Context = Ctx;
     type IndexRes = A::IndexRes;
+    type Res = ProcessedResource<A::Res, Ctx>;
+
+    fn acquire_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        Ok(self.wrap(self.inner.acquire_resource(key)?, ctx))
+    }
+
+    fn open_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::Res> {
+        Ok(self.wrap(self.inner.open_resource(key)?, ctx))
+    }
 
     delegate::delegate! {
         to self.inner {
@@ -283,31 +421,16 @@ where
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
     }
+}
 
-    fn open_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        let inner = self.inner.open_resource(key)?;
-
-        let processed =
-            ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone());
-
-        Ok(processed)
-    }
-
-    fn acquire_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::Res> {
-        let inner = self.inner.acquire_resource(key)?;
-
-        let processed =
-            ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone());
-
-        Ok(processed)
+impl<A, Ctx> ProcessingAssets<A, Ctx>
+where
+    A: Assets,
+    A::Context: Default,
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
+{
+    fn wrap(&self, inner: A::Res, ctx: Option<Ctx>) -> ProcessedResource<A::Res, Ctx> {
+        ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone())
     }
 }
 
@@ -319,7 +442,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
+    use kithara_storage::{MmapOptions, MmapResource, Resource};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
@@ -338,15 +461,7 @@ mod tests {
         let path = dir.path().join("test.bin");
         let cancel = CancellationToken::new();
 
-        let res = Resource::open(
-            cancel,
-            MmapOptions {
-                path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .unwrap();
+        let res = Resource::open(cancel, MmapOptions::new(path)).unwrap();
         res.write_at(0, content).unwrap();
         // Don't commit here - let the test control when commit happens
         (res, dir)
@@ -573,7 +688,7 @@ mod tests {
         }
     }
 
-    /// RED test (integration: live_ephemeral_small_cache_playback_drm)
+    /// RED test (integration: `live_ephemeral_small_cache_playback_drm`)
     ///
     /// Scenario: an ephemeral DRM stream evicts and then re-acquires the
     /// same `(ResourceKey, Some(ctx))` slot while the entry is still in
@@ -594,8 +709,8 @@ mod tests {
     fn red_test_drm_small_cache_reactivate_preserves_processed_flag() {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
-        let encrypted_first: Vec<u8> = b"first payload".iter().map(|b| b ^ 0x42).collect();
-        let encrypted_second: Vec<u8> = b"second paylod".iter().map(|b| b ^ 0x42).collect();
+        let encrypted_first: Vec<u8> = b"first  payload".iter().map(|b| b ^ 0x42).collect();
+        let encrypted_second: Vec<u8> = b"second payload".iter().map(|b| b ^ 0x42).collect();
         assert_eq!(
             encrypted_first.len(),
             encrypted_second.len(),
@@ -656,14 +771,14 @@ mod tests {
             .expect("read_at after second commit");
         assert_eq!(
             &out[..],
-            b"second paylod",
+            b"second payload",
             "reader must see plaintext after the reactivated resource is \
              re-committed; if bytes are still ciphertext the DRM \
              processor was skipped"
         );
     }
 
-    /// RED test (integration: live_ephemeral_small_cache_playback_drm)
+    /// RED test (integration: `live_ephemeral_small_cache_playback_drm`)
     ///
     /// Root cause hypothesis for the DRM-only flake:
     ///
@@ -689,7 +804,7 @@ mod tests {
     ///
     /// Sibling case (`_hls`) is unaffected because without DRM context
     /// `ProcessedResource::is_readable()` short-circuits on
-    /// `ctx.is_none()`, and reactivate() never poisons reads.
+    /// `ctx.is_none()`, and `reactivate()` never poisons reads.
     ///
     /// Contract under test: after
     /// `acquire_resource_with_ctx(K, Some(ctx))` observes an existing
@@ -849,5 +964,100 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Concurrent contract pinning the post-commit readiness gate.
+    ///
+    /// Reader spawns first, parks in `wait_range` while bytes-on-disk
+    /// are already `Ready` but processing has not yet run. The writer
+    /// thread fires `commit()` after a short delay; `wait_range` must
+    /// wake only after `process_and_write` has finished and `read_at`
+    /// must return the *processed* bytes (not the raw on-disk bytes).
+    ///
+    /// Before the gate fix this race collapsed to `wait_range = Ready`
+    /// + `read_at = NotReadable`, the production hang surfaced by
+    /// `local_queue_playlist_behavior_symphonia`.
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(5)))]
+    fn wait_range_blocks_until_commit_processes() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x55, Arc::clone(&call_count));
+        let raw: Vec<u8> = (0..32u8).collect();
+
+        let (resource, _dir) = mock_resource(&raw);
+        let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+        let processed_for_writer = processed.clone();
+        let raw_len = raw.len() as u64;
+
+        let reader = std::thread::spawn(move || {
+            let outcome = processed.wait_range(0..raw_len).unwrap();
+            assert_eq!(outcome, WaitOutcome::Ready);
+            assert!(
+                processed.is_readable(),
+                "wait_range must not return Ready before processing has run"
+            );
+            let mut buf = vec![0u8; raw.len()];
+            processed.read_at(0, &mut buf).unwrap();
+            buf
+        });
+
+        // Give the reader long enough to enter the gate's wait loop.
+        std::thread::sleep(kithara_platform::time::Duration::from_millis(50));
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            0,
+            "process must not have run before commit"
+        );
+        processed_for_writer.commit(Some(raw_len)).unwrap();
+
+        let read = reader.join().unwrap();
+        let expected: Vec<u8> = (0..32u8).map(|b| b ^ 0x55).collect();
+        assert_eq!(
+            read, expected,
+            "reader must observe the processed (XOR'd) bytes, not raw"
+        );
+    }
+
+    /// Cancellation contract: a reader parked in the readiness gate
+    /// must wake when the underlying resource's cancel token fires —
+    /// not poll on the watchdog tick until something else nudges it.
+    /// Surfacing the cancel through `ResourceStatus::Cancelled` is
+    /// what closes that observation gap.
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(5)))]
+    fn wait_range_aborts_on_cancellation() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
+
+        // Build a resource with an explicit cancel token we can fire
+        // from the test thread; the standard `mock_resource` helper
+        // immediately drops its token, which would race the assert.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cancel.bin");
+        let cancel = CancellationToken::new();
+        let resource: MmapResource =
+            Resource::open(cancel.clone(), MmapOptions::new(path)).unwrap();
+        resource.write_at(0, &[1u8; 16]).unwrap();
+
+        let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
+        let processed_for_reader = processed.clone();
+
+        let reader = std::thread::spawn(move || processed_for_reader.wait_range(0..16));
+
+        std::thread::sleep(kithara_platform::time::Duration::from_millis(50));
+        cancel.cancel();
+
+        let outcome = reader
+            .join()
+            .expect("reader thread panicked")
+            .expect("wait_range must not surface a hard error on cancel");
+        assert_eq!(
+            outcome,
+            WaitOutcome::Interrupted,
+            "cancellation must wake the gate as Interrupted, not block on the 100ms tick"
+        );
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            0,
+            "processor must not have run after cancellation"
+        );
     }
 }

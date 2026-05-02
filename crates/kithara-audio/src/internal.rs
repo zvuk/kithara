@@ -17,6 +17,12 @@ pub mod audio {
             self.current_chunk.is_some()
         }
 
+        #[cfg(any(test, feature = "test-utils"))]
+        #[must_use]
+        pub(crate) fn test_pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
+            self.pcm_rx()
+        }
+
         #[must_use]
         pub fn test_preload_notify(&self) -> Arc<Notify> {
             Arc::clone(&self.preload_notify)
@@ -25,12 +31,6 @@ pub mod audio {
         #[must_use]
         pub fn test_seek_epoch(&self) -> u64 {
             self.validator.epoch
-        }
-
-        #[cfg(any(test, feature = "test-utils"))]
-        #[must_use]
-        pub(crate) fn test_pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
-            self.pcm_rx()
         }
     }
 
@@ -69,7 +69,7 @@ pub mod source {
     };
 
     use delegate::delegate;
-    use kithara_decode::{InnerDecoder, PcmChunk};
+    use kithara_decode::{Decoder, PcmChunk};
     use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
 
     pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
@@ -77,8 +77,8 @@ pub mod source {
         pipeline::{
             fetch::Fetch,
             track_fsm::{
-                RecreateCause, RecreateNext, RecreateState, ResumeState, SeekContext, SeekRequest,
-                TrackState, WaitContext,
+                RecreateCause, RecreateNext, RecreateState, SeekContext, SeekRequest, TrackState,
+                WaitContext,
             },
         },
         traits::AudioEffect,
@@ -134,7 +134,7 @@ pub mod source {
     }
 
     pub type DecoderFactory<T> =
-        Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn InnerDecoder>> + Send>;
+        Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn Decoder>> + Send>;
 
     pub struct StreamAudioSource<T: StreamType>(crate::pipeline::source::StreamAudioSource<T>);
 
@@ -155,7 +155,7 @@ pub mod source {
 
     pub fn new_stream_audio_source<T: StreamType>(
         shared_stream: SharedStream<T>,
-        decoder: Box<dyn InnerDecoder>,
+        decoder: Box<dyn Decoder>,
         decoder_factory: DecoderFactory<T>,
         initial_media_info: Option<MediaInfo>,
         epoch: Arc<AtomicU64>,
@@ -257,60 +257,48 @@ pub mod source {
         source.0.session.media_info = media_info;
     }
 
-    pub fn set_awaiting_resume_state<T: StreamType>(
-        source: &mut StreamAudioSource<T>,
-        epoch: u64,
-        target: Duration,
-        recover_attempts: u8,
-        skip: Option<Duration>,
-    ) {
-        source.0.state = TrackState::AwaitingResume(ResumeState {
-            recover_attempts,
-            seek: SeekContext { epoch, target },
-            skip,
-            anchor_offset: None,
-        });
-    }
-
-    pub fn set_recreating_decoder<T: StreamType>(
-        source: &mut StreamAudioSource<T>,
+    fn build_recreate_state(
         epoch: u64,
         target: Duration,
         media_info: MediaInfo,
         offset: u64,
-    ) {
-        source.0.state = TrackState::RecreatingDecoder(RecreateState {
+    ) -> RecreateState {
+        RecreateState {
+            media_info,
+            offset,
             attempt: 0,
             cause: RecreateCause::VariantSwitch,
-            media_info,
             next: RecreateNext::Seek(SeekRequest {
                 attempt: 0,
-                seek: SeekContext { epoch, target },
+                seek: SeekContext { target, epoch },
             }),
-            offset,
-        });
+        }
     }
 
-    pub fn set_waiting_recreation<T: StreamType>(
+    /// Where a recreate state should land when placed on the FSM:
+    /// either directly (active decoder recreation) or wrapped in a
+    /// `WaitingForSource` context with a matching wait reason.
+    #[derive(Debug, Clone, Copy)]
+    pub enum RecreateKind {
+        Decoder,
+        WaitingFor(WaitingReason),
+    }
+
+    pub fn set_recreate<T: StreamType>(
         source: &mut StreamAudioSource<T>,
         epoch: u64,
         target: Duration,
         media_info: MediaInfo,
         offset: u64,
-        reason: WaitingReason,
+        kind: RecreateKind,
     ) {
-        source.0.state = TrackState::WaitingForSource {
-            context: WaitContext::Recreation(RecreateState {
-                attempt: 0,
-                cause: RecreateCause::VariantSwitch,
-                media_info,
-                next: RecreateNext::Seek(SeekRequest {
-                    attempt: 0,
-                    seek: SeekContext { epoch, target },
-                }),
-                offset,
-            }),
-            reason,
+        let state = build_recreate_state(epoch, target, media_info, offset);
+        source.0.state = match kind {
+            RecreateKind::Decoder => TrackState::RecreatingDecoder(state),
+            RecreateKind::WaitingFor(reason) => TrackState::WaitingForSource {
+                reason,
+                context: WaitContext::Recreation(state),
+            },
         };
     }
 }

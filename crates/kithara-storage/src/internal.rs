@@ -1,14 +1,13 @@
 #![forbid(unsafe_code)]
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use crate::atomic::AtomicMmap;
+pub use crate::backend::{MmapDriver, MmapOptions, MmapResource};
 #[cfg(not(target_arch = "wasm32"))]
-pub use crate::mmap::{MmapDriver, MmapOptions, MmapResource};
+pub use crate::decorator::AtomicMmap;
 pub use crate::{
-    atomic::Atomic,
-    driver::{Driver, DriverIo, Resource},
+    backend::{Driver, DriverIo, MemDriver, MemOptions, MemResource, Resource},
+    decorator::Atomic,
     error::{StorageError, StorageResult},
-    memory::{MemDriver, MemOptions, MemResource},
     resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome},
     unified::StorageResource,
 };

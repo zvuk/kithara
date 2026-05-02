@@ -1,0 +1,26 @@
+id: arch.tests-use-pub-only
+message: |
+  Integration test file imports an internal module (`internal`, `impls`,
+  `inner`, `private`) of a kithara crate. Tests that reach past the public
+  API freeze the implementation: every refactor of the internal module
+  needs the test rewritten, and the test stops protecting the *contract*
+  and starts protecting *layout*.
+
+  Per AGENTS.md: tests "should capture the contract, not an incidental
+  implementation detail." Pull the symbol you need into the public API
+  (or expose a typed test-helper module the lib crate owns), and let the
+  test consume that.
+
+      // ❌  use kithara_play::internal::session::Foo;
+      // ✅  use kithara_play::Foo;
+severity: warning
+language: Rust
+files:
+  - tests/**/*.rs
+  - crates/*/tests/**/*.rs
+rule:
+  any:
+    - pattern: use $C::internal::$$$;
+    - pattern: use $C::impls::$$$;
+    - pattern: use $C::inner::$$$;
+    - pattern: use $C::private::$$$;

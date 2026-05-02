@@ -17,9 +17,9 @@ pub trait Equalizer: MaybeSend + MaybeSync + 'static {
     /// Get the current gain in dB for the given band index.
     fn gain(&self, band: usize) -> Option<f32>;
 
-    /// Set the gain in dB for the given band index (clamped to -24..+6 dB).
-    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;
-
     /// Reset all bands to 0 dB.
     fn reset(&self) -> Result<(), PlayError>;
+
+    /// Set the gain in dB for the given band index (clamped to -24..+6 dB).
+    fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;
 }

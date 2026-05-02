@@ -1,0 +1,31 @@
+id: rust.no-crate-lint-allow
+message: |
+  Crate-level `[lints.clippy] foo = "allow"` (or `[lints.rust] foo = "allow"`)
+  is the same suppression as `#[expect(foo)]` / `#[allow(foo)]` — just relocated
+  from the offending line to Cargo.toml. The lint is still silenced; the code
+  smell is still there. This is a workaround, not a fix.
+
+  The fix is the underlying code:
+    • Numeric casts (clippy::cast_possible_truncation / cast_sign_loss /
+      cast_precision_loss): use `u32::try_from(x).unwrap_or(default)` /
+      `f64::from(u32_value)` / a typed conversion helper that captures the
+      bounds contract. Do NOT relocate the cast into a wrapper function and
+      leave it raw — that's the same workaround.
+    • dead_code: delete the item.
+    • unused_*: delete or expose.
+    • clippy::cognitive_complexity / too_many_arguments / too_many_lines:
+      split the function / introduce a parameter struct.
+    • clippy::needless_pass_by_value: take `&T`.
+
+  Workspace-wide lint policy belongs in the root `/Cargo.toml`. Per-crate
+  carve-outs of this kind are not legitimate — if a lint truly does not fit
+  the crate's nature, raise it at the workspace level (root Cargo.toml) and
+  document the rationale in `feedback_no_lint_suppression.md`.
+severity: error
+language: Yaml
+files:
+  - crates/**/Cargo.toml
+rule:
+  all:
+    - kind: string_scalar
+    - regex: '=\s*"allow"\s*$'

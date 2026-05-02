@@ -9,7 +9,13 @@ use crate::{metadata::Metadata, time::MediaTime};
 pub trait Asset: MaybeSend + MaybeSync + 'static {
     fn duration(&self) -> MediaTime;
 
+    fn has_protected_content(&self) -> bool {
+        false
+    }
+
     fn is_playable(&self) -> bool;
+
+    fn metadata(&self) -> Metadata;
 
     fn preferred_rate(&self) -> f32 {
         1.0
@@ -19,11 +25,5 @@ pub trait Asset: MaybeSend + MaybeSync + 'static {
         1.0
     }
 
-    fn metadata(&self) -> Metadata;
-
     fn url(&self) -> Option<url::Url>;
-
-    fn has_protected_content(&self) -> bool {
-        false
-    }
 }

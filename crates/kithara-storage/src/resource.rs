@@ -52,6 +52,18 @@ pub enum ResourceStatus {
     Committed { final_len: Option<u64> },
     /// Resource encountered an error.
     Failed(String),
+    /// Resource's cancellation token has fired and the data
+    /// lifecycle has not progressed past `Active` (no committed
+    /// bytes, no recorded failure).
+    ///
+    /// `Committed { .. }` and `Failed(_)` retain priority because
+    /// their data outcomes already classify the resource — observers
+    /// that want to read the bytes a `Committed` resource produced
+    /// before being cancelled need not be denied. Treat `Cancelled`
+    /// as the routine shutdown signal that supersedes `Active`
+    /// **only** when there is no other lifecycle classification to
+    /// surface.
+    Cancelled,
 }
 
 /// Unified sync resource trait.
@@ -66,34 +78,6 @@ pub enum ResourceStatus {
     unimock::unimock(api = ResourceMock)
 )]
 pub trait ResourceExt: Send + Sync + 'static {
-    /// Read data at the given offset into `buf`.
-    ///
-    /// Returns the number of bytes read.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the resource is cancelled, failed, committed (and
-    /// the backend does not support post-commit writes), or the write fails.
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-
-    /// Wait until the given byte range is available.
-    ///
-    /// Blocks the calling thread using `Condvar` until data is written
-    /// or the resource reaches EOF / error / cancellation.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the range is invalid, the resource is cancelled,
-    /// or the resource has failed.
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
-
     /// Mark the resource as fully written.
     ///
     /// If `final_len` is provided, the backing storage may be truncated to that size.
@@ -104,24 +88,37 @@ pub trait ResourceExt: Send + Sync + 'static {
     /// cannot finalize (e.g. file truncation or reopen fails).
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
 
+    /// Check if the given byte range is fully covered by available data (non-blocking).
+    ///
+    /// Returns `false` by default. Override for implementations that track
+    /// available byte ranges.
+    fn contains_range(&self, _range: Range<u64>) -> bool {
+        false
+    }
+
     /// Mark the resource as failed.
     fn fail(&self, reason: String);
-
-    /// Get the file path, if backed by a file.
-    ///
-    /// Returns `None` for in-memory resources that have no filesystem path.
-    fn path(&self) -> Option<&Path>;
-
-    /// Get the committed length, if known.
-    fn len(&self) -> Option<u64>;
 
     /// Returns `true` if the resource has been committed with zero length.
     fn is_empty(&self) -> bool {
         self.len() == Some(0)
     }
 
-    /// Get resource status.
-    fn status(&self) -> ResourceStatus;
+    /// Get the committed length, if known.
+    fn len(&self) -> Option<u64>;
+
+    /// Find the first gap in available data starting from `from`, up to `limit`.
+    ///
+    /// Returns `None` by default (conservative: assumes no data available).
+    /// Override for implementations that track available byte ranges.
+    fn next_gap(&self, _from: u64, _limit: u64) -> Option<Range<u64>> {
+        None
+    }
+
+    /// Get the file path, if backed by a file.
+    ///
+    /// Returns `None` for in-memory resources that have no filesystem path.
+    fn path(&self) -> Option<&Path>;
 
     /// Reactivate a committed resource for continued writing.
     ///
@@ -140,21 +137,14 @@ pub trait ResourceExt: Send + Sync + 'static {
     /// cannot reopen for writing.
     fn reactivate(&self) -> StorageResult<()>;
 
-    /// Check if the given byte range is fully covered by available data (non-blocking).
+    /// Read data at the given offset into `buf`.
     ///
-    /// Returns `false` by default. Override for implementations that track
-    /// available byte ranges.
-    fn contains_range(&self, _range: Range<u64>) -> bool {
-        false
-    }
-
-    /// Find the first gap in available data starting from `from`, up to `limit`.
+    /// Returns the number of bytes read.
     ///
-    /// Returns `None` by default (conservative: assumes no data available).
-    /// Override for implementations that track available byte ranges.
-    fn next_gap(&self, _from: u64, _limit: u64) -> Option<Range<u64>> {
-        None
-    }
+    /// # Errors
+    ///
+    /// Returns error if the resource is cancelled, failed, or the read fails.
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
 
     /// Read the entire resource contents into a caller-provided buffer.
     ///
@@ -182,6 +172,20 @@ pub trait ResourceExt: Send + Sync + 'static {
         Ok(n)
     }
 
+    /// Get resource status.
+    fn status(&self) -> ResourceStatus;
+
+    /// Wait until the given byte range is available.
+    ///
+    /// Blocks the calling thread using `Condvar` until data is written
+    /// or the resource reaches EOF / error / cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the range is invalid, the resource is cancelled,
+    /// or the resource has failed.
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+
     /// Write entire contents and commit atomically.
     ///
     /// # Errors
@@ -191,6 +195,14 @@ pub trait ResourceExt: Send + Sync + 'static {
         self.write_at(0, data)?;
         self.commit(Some(data.len() as u64))
     }
+
+    /// Write data at the given offset.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the resource is cancelled, failed, committed (and
+    /// the backend does not support post-commit writes), or the write fails.
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
 }
 
 /// Check if the `available` range set fully covers `range`.

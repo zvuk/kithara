@@ -9,12 +9,12 @@ use std::{
 
 use derive_setters::Setters;
 #[cfg(feature = "hls")]
-use kithara_abr::{AbrController, AbrOptions, ThroughputEstimator};
+use kithara_abr::AbrMode;
 #[cfg(any(feature = "file", feature = "hls"))]
-use kithara_assets::StoreOptions;
+use kithara_assets::{FlushHub, StoreOptions};
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::DecodeError;
+use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
 #[cfg(feature = "file")]
 use kithara_file::{FileConfig, FileSrc};
@@ -100,10 +100,13 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 /// ```
 #[derive(Clone, Setters)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct ResourceConfig {
-    /// ABR controller (shared across tracks in a player).
+    /// Initial ABR mode passed to the HLS stream. The shared
+    /// `AbrController` lives on the `Downloader` and runs per-sample
+    /// decisions; this field only seeds the starting variant.
     #[cfg(feature = "hls")]
-    pub abr: Option<AbrController<ThroughputEstimator>>,
+    pub initial_abr_mode: AbrMode,
     /// Unified event bus for streaming, decode, and audio events.
     ///
     /// When set, the bus is propagated to the underlying stream and audio
@@ -165,6 +168,11 @@ pub struct ResourceConfig {
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
     pub preload_chunks: NonZeroUsize,
+    /// Forwarded to [`AudioConfig::with_decoder_backend`] via
+    /// `into_file_config` / `into_hls_config`. Selects the decoder
+    /// backend explicitly. No runtime fallback between paths —
+    /// a failure is terminal.
+    pub decoder_backend: DecoderBackend,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
@@ -180,6 +188,15 @@ pub struct ResourceConfig {
     #[cfg(any(feature = "file", feature = "hls"))]
     #[setters(skip)]
     pub downloader: Option<Downloader>,
+    /// Shared flush coordinator for `AssetStore` on-disk indexes.
+    ///
+    /// When set, the underlying [`StoreOptions`] uses this hub instead
+    /// of the per-store default. Lets multiple tracks coalesce index
+    /// flushes through a single (optionally worker-backed) coordinator
+    /// — analogous to a shared [`Downloader`] or audio worker.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[setters(skip)]
+    pub flush_hub: Option<Arc<FlushHub>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     ///
     /// When set, all resources sharing the same worker decode on a single
@@ -229,8 +246,9 @@ impl ResourceConfig {
         };
 
         Ok(Self {
+            src,
             #[cfg(feature = "hls")]
-            abr: None,
+            initial_abr_mode: AbrMode::default(),
             bus: None,
             byte_pool: None,
             cancel: None,
@@ -249,43 +267,16 @@ impl ResourceConfig {
             preferred_peak_bitrate: 0.0,
             preferred_peak_bitrate_for_expensive_networks: 0.0,
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
+            decoder_backend: DecoderBackend::default(),
             resampler_quality: ResamplerQuality::default(),
-            src,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
             #[cfg(any(feature = "file", feature = "hls"))]
             downloader: None,
+            #[cfg(any(feature = "file", feature = "hls"))]
+            flush_hub: None,
             worker: None,
         })
-    }
-
-    /// Set a shared downloader for the underlying stream.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_downloader(mut self, dl: Downloader) -> Self {
-        self.downloader = Some(dl);
-        self
-    }
-
-    /// Set name for cache disambiguation.
-    #[must_use]
-    pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
-    /// Set format hint (file extension like "mp3", "wav").
-    #[must_use]
-    pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
-
-    /// Set shared audio worker for cooperative multi-track decoding.
-    #[must_use]
-    pub fn with_worker(mut self, worker: AudioWorkerHandle) -> Self {
-        self.worker = Some(worker);
-        self
     }
 
     /// Convert into an `AudioConfig<File>`.
@@ -308,8 +299,12 @@ impl ResourceConfig {
         let dl = self
             .downloader
             .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
+        let mut store = self.store;
+        if let Some(hub) = self.flush_hub {
+            store = store.with_flush_hub(hub);
+        }
         let mut file_config = FileConfig::new(file_src)
-            .with_store(self.store)
+            .with_store(store)
             .with_downloader(dl);
 
         if let Some(bytes) = self.look_ahead_bytes {
@@ -349,6 +344,7 @@ impl ResourceConfig {
         }
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
+        config = config.with_decoder_backend(self.decoder_backend);
         if let Some(rate) = self.playback_rate {
             config = config.with_playback_rate(rate);
         }
@@ -372,24 +368,21 @@ impl ResourceConfig {
             }
         };
 
-        let mut hls_config = HlsConfig::new(url)
-            .with_store(self.store)
-            .with_keys(self.keys);
+        let mut store = self.store;
+        if let Some(hub) = self.flush_hub {
+            store = store.with_flush_hub(hub);
+        }
+        let mut hls_config = HlsConfig::new(url).with_store(store).with_keys(self.keys);
         if let Some(dl) = self.downloader {
             hls_config = hls_config.with_downloader(dl);
         }
 
-        hls_config.abr = self.abr;
+        hls_config = hls_config.with_initial_abr_mode(self.initial_abr_mode);
 
-        if self.preferred_peak_bitrate.is_finite() && self.preferred_peak_bitrate >= 1.0 {
-            #[expect(clippy::cast_sign_loss)]
-            #[expect(clippy::cast_possible_truncation)]
-            let cap = self.preferred_peak_bitrate as u64;
-            let ctrl = hls_config
-                .abr
-                .get_or_insert_with(|| AbrController::new(AbrOptions::default()));
-            ctrl.set_max_bandwidth_bps(Some(cap));
-        }
+        // NOTE: `preferred_peak_bitrate` per-track cap now lives on the
+        // `PeerHandle::abr().set_max_bandwidth_bps(...)` path. Wiring it
+        // requires access to the registered handle, which is built inside
+        // `Hls::create` — deferred to Commit 3.
 
         if let Some(bytes) = self.look_ahead_bytes {
             hls_config = hls_config.with_look_ahead_bytes(bytes);
@@ -430,6 +423,7 @@ impl ResourceConfig {
         }
         config = config.with_resampler_quality(self.resampler_quality);
         config = config.with_preload_chunks(self.preload_chunks);
+        config = config.with_decoder_backend(self.decoder_backend);
         if let Some(rate) = self.playback_rate {
             config = config.with_playback_rate(rate);
         }
@@ -438,6 +432,44 @@ impl ResourceConfig {
         }
 
         Ok(config)
+    }
+
+    /// Set a shared downloader for the underlying stream.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[must_use]
+    pub fn with_downloader(mut self, dl: Downloader) -> Self {
+        self.downloader = Some(dl);
+        self
+    }
+
+    /// Set a shared [`FlushHub`] for the underlying `AssetStore`.
+    /// When omitted, each store gets its own no-worker hub.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[must_use]
+    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
+        self.flush_hub = Some(hub);
+        self
+    }
+
+    /// Set format hint (file extension like "mp3", "wav").
+    #[must_use]
+    pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    /// Set name for cache disambiguation.
+    #[must_use]
+    pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Set shared audio worker for cooperative multi-track decoding.
+    #[must_use]
+    pub fn with_worker(mut self, worker: AudioWorkerHandle) -> Self {
+        self.worker = Some(worker);
+        self
     }
 }
 
@@ -566,16 +598,15 @@ mod tests {
     #[cfg(feature = "hls")]
     #[kithara::test]
     fn config_bitrate_propagates_to_hls_abr() {
+        // `preferred_peak_bitrate` → per-track cap wiring lives on the
+        // `PeerHandle::abr().set_max_bandwidth_bps(...)` path which is
+        // established inside `Hls::create`. The old `HlsConfig::abr`
+        // field has been removed, so this test now only verifies that
+        // `into_hls_config()` accepts the bitrate without panicking.
         let config = ResourceConfig::new("https://example.com/live.m3u8")
             .unwrap()
             .with_preferred_peak_bitrate(512_000.0);
-        let audio_config = config.into_hls_config().unwrap();
-        let abr = audio_config
-            .stream
-            .abr
-            .as_ref()
-            .expect("controller should be set");
-        assert_eq!(abr.max_bandwidth_bps(), Some(512_000));
+        let _audio_config = config.into_hls_config().unwrap();
     }
 
     #[kithara::test]

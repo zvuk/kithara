@@ -27,6 +27,14 @@ pub enum StorageError {
     #[error("resource failed: {0}")]
     Failed(String),
 
+    /// A read targeted a resource whose processing pipeline has not yet
+    /// committed (e.g. AES-128 segment reactivated for re-fetch). The
+    /// underlying bytes either still hold ciphertext or are stale; the
+    /// caller should treat this as transient and retry once the writer
+    /// completes its commit.
+    #[error("processed resource is not readable before commit")]
+    NotReadable,
+
     #[error("operation cancelled")]
     Cancelled,
 }

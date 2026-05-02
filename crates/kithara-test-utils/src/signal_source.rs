@@ -2,14 +2,14 @@
 //!
 //! `SignalPcm<S>` is the PCM-first core that creates interleaved samples.
 
-use std::{io, io::Error as IoError, ops::Range};
+use std::{io::Error as IoError, num::NonZeroUsize, ops::Range};
 
 use futures::executor::block_on;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, ReadOutcome, Source, SourcePhase, Stream, StreamResult,
-    StreamType, Timeline,
+    AudioCodec, ContainerFormat, MediaInfo, ReadOutcome, Source, SourceError, SourcePhase, Stream,
+    StreamResult, StreamType, Timeline,
 };
 
 use crate::{
@@ -39,16 +39,16 @@ impl<S: signal::SignalFn> SignalSource<S> {
         }
     }
 
+    fn is_past_eof(&self, offset: u64) -> bool {
+        self.total_byte_len().is_some_and(|total| offset >= total)
+    }
+
     fn total_byte_len(&self) -> Option<u64> {
         let header_len = self.header.size();
 
         self.pcm
             .total_pcm_byte_len()
             .map(|data_len| (data_len + header_len) as u64)
-    }
-
-    fn is_past_eof(&self, offset: u64) -> bool {
-        self.total_byte_len().is_some_and(|total| offset >= total)
     }
 }
 
@@ -57,28 +57,32 @@ impl<S: signal::SignalFn> SignalSource<S> {
 #[error("signal source error")]
 pub struct SignalSourceError;
 
-impl<S: signal::SignalFn> Source for SignalSource<S> {
-    type Error = SignalSourceError;
-
-    fn timeline(&self) -> Timeline {
-        self.timeline.clone()
+impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
+    fn len(&self) -> Option<u64> {
+        self.total_byte_len()
     }
 
-    fn wait_range(
-        &mut self,
-        range: Range<u64>,
-        _timeout: Duration,
-    ) -> StreamResult<WaitOutcome, Self::Error> {
+    fn media_info(&self) -> Option<MediaInfo> {
+        Some(
+            MediaInfo::default()
+                .with_channels(self.pcm.channels())
+                .with_codec(AudioCodec::Pcm)
+                .with_container(ContainerFormat::Wav)
+                .with_sample_rate(self.pcm.sample_rate()),
+        )
+    }
+
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if self.is_past_eof(range.start) {
-            Ok(WaitOutcome::Eof)
+            SourcePhase::Eof
         } else {
-            Ok(WaitOutcome::Ready)
+            SourcePhase::Ready
         }
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if buf.is_empty() || self.is_past_eof(offset) {
-            return Ok(ReadOutcome::Data(0));
+            return Ok(ReadOutcome::Eof);
         }
 
         let mut written = 0usize;
@@ -103,45 +107,43 @@ impl<S: signal::SignalFn> Source for SignalSource<S> {
                 .render_pcm(pcm_offset as usize, pcm_max, &mut buf[written..]);
         }
 
-        Ok(ReadOutcome::Data(written))
+        let Some(count) = NonZeroUsize::new(written) else {
+            return Ok(ReadOutcome::Eof);
+        };
+        Ok(ReadOutcome::Bytes(count))
     }
 
-    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        _timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
         if self.is_past_eof(range.start) {
-            SourcePhase::Eof
+            Ok(WaitOutcome::Eof)
         } else {
-            SourcePhase::Ready
+            Ok(WaitOutcome::Ready)
         }
-    }
-
-    fn len(&self) -> Option<u64> {
-        self.total_byte_len()
-    }
-
-    fn media_info(&self) -> Option<MediaInfo> {
-        Some(
-            MediaInfo::default()
-                .with_channels(self.pcm.channels())
-                .with_codec(AudioCodec::Pcm)
-                .with_container(ContainerFormat::Wav)
-                .with_sample_rate(self.pcm.sample_rate()),
-        )
     }
 }
 
 /// `StreamType` marker for [`SignalSource`].
 pub struct SignalStream<S: signal::SignalFn>(std::marker::PhantomData<S>);
 
-impl<S: signal::SignalFn> StreamType for SignalStream<S> {
+impl<S: signal::SignalFn + Sync> StreamType for SignalStream<S> {
     type Config = SignalStreamConfig<S>;
-    type Source = SignalSource<S>;
-    type Error = io::Error;
-
-    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config.source.ok_or_else(|| IoError::other("no source"))
-    }
-
     type Events = ();
+
+    type Source = SignalSource<S>;
+
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        config
+            .source
+            .ok_or_else(|| SourceError::other(IoError::other("no source")))
+    }
 }
 
 /// Configuration for [`SignalStream`].
@@ -158,7 +160,9 @@ impl<S: signal::SignalFn> Default for SignalStreamConfig<S> {
 
 /// Create a `Stream` from a WAV-backed [`SignalSource`].
 #[must_use]
-pub fn signal_stream<S: signal::SignalFn>(source: SignalSource<S>) -> Stream<SignalStream<S>> {
+pub fn signal_stream<S: signal::SignalFn + Sync>(
+    source: SignalSource<S>,
+) -> Stream<SignalStream<S>> {
     let config = SignalStreamConfig {
         source: Some(source),
     };
@@ -187,7 +191,7 @@ mod tests {
         let mut src = SignalSource::new(pcm);
         let total = src.len().unwrap();
         let mut buf = [0u8; 16];
-        assert_eq!(src.read_at(total, &mut buf).unwrap(), ReadOutcome::Data(0));
+        assert_eq!(src.read_at(total, &mut buf).unwrap(), ReadOutcome::Eof);
     }
 
     #[kithara::test]
@@ -207,7 +211,7 @@ mod tests {
         let mut src = SignalSource::new(pcm);
         let mut buf = [0xFFu8; 8];
         let result = src.read_at(40, &mut buf).unwrap();
-        assert_eq!(result, ReadOutcome::Data(8));
+        assert_eq!(result, ReadOutcome::Bytes(NonZeroUsize::new(8).unwrap()));
         assert_eq!(&buf[0..4], &0xFFFF_FFFFu32.to_le_bytes());
         assert_eq!(&buf[4..8], &[0, 0, 0, 0]);
     }

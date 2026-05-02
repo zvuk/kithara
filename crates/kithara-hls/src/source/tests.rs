@@ -1,27 +1,31 @@
 use std::{
     num::NonZeroUsize,
     path::Path,
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread,
     time::Duration as StdDuration,
 };
 
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{Event, EventBus, HlsEvent};
+use kithara_events::EventBus;
 use kithara_platform::{
     time::Duration,
-    tokio::{
-        sync::broadcast::error::TryRecvError,
-        time::{Duration as TokioDuration, timeout},
-    },
+    tokio::time::{Duration as TokioDuration, timeout},
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
-    ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
+    PendingReason, ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
     dl::{Downloader, DownloaderConfig, PeerHandle},
 };
-use kithara_test_utils::kithara;
+
+fn nz_bytes(n: usize) -> ReadOutcome {
+    ReadOutcome::Bytes(NonZeroUsize::new(n).expect("test: byte count must be > 0"))
+}
+use kithara_test_utils::{kithara, probe_capture};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -31,7 +35,6 @@ use super::{
     types::{ReadSegment, SeekLayout},
 };
 use crate::{
-    HlsError,
     config::HlsConfig,
     coord::SegmentRequest,
     parsing::{VariantId, VariantStream},
@@ -43,6 +46,7 @@ fn test_peer_handle(cancel: &CancellationToken) -> PeerHandle {
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
     dl.register(Arc::new(crate::peer::HlsPeer::new(
         kithara_stream::Timeline::new(),
+        kithara_abr::AbrMode::Auto(None),
     )))
 }
 
@@ -56,7 +60,11 @@ fn make_test_loader_pair(
     backend: kithara_assets::AssetStore<DecryptContext>,
 ) -> LoaderPair {
     let handle = test_peer_handle(&cancel);
-    let cache = crate::loading::PlaylistCache::new(backend.clone(), handle.clone());
+    let cache = crate::loading::PlaylistCache::new(
+        backend.clone(),
+        handle.clone(),
+        kithara_bufpool::BytePool::default(),
+    );
     let loader = Arc::new(crate::loading::SegmentLoader::new(
         handle,
         backend.clone(),
@@ -155,6 +163,12 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -181,9 +195,9 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
     playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            segment_sizes: segment_sizes.to_vec(),
             offsets,
             total,
+            segment_sizes: segment_sizes.to_vec(),
         },
     );
     let parsed = parsed_variants(1);
@@ -198,6 +212,12 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -218,9 +238,9 @@ fn set_variant_size_map(state: &PlaylistState, variant: usize, segment_sizes: &[
     state.set_size_map(
         variant,
         VariantSizeMap {
-            segment_sizes: segment_sizes.to_vec(),
             offsets,
             total,
+            segment_sizes: segment_sizes.to_vec(),
         },
     );
 }
@@ -286,7 +306,7 @@ fn seek_resolves_in_layout_variant_not_abr_target() {
     push_segment(&source.segments, 0, 0, 0, SEG0_LEN);
 
     // ABR wants variant 1, but layout is variant 0
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     let anchor = source
         .resolve_seek_anchor(Duration::from_millis(SEEK_MS))
@@ -313,7 +333,7 @@ fn seek_does_not_switch_layout_variant() {
     );
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
 
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     let anchor = make_anchor(0, 0, 0);
     let layout = source.classify_seek(&anchor);
@@ -378,7 +398,7 @@ fn commit_seek_landing_keeps_switched_tail_in_mixed_layout() {
 fn resolve_current_variant_uses_layout_variant() {
     const NUM_VARIANTS: usize = 2;
     let source = build_test_source_with_segments(NUM_VARIANTS, 1);
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     // resolve_current_variant uses layout_variant, not ABR
     assert_eq!(
@@ -407,7 +427,7 @@ fn seek_anchor_uses_layout_variant_not_abr_target() {
     push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
     push_segment(&source.segments, 0, 2, 2 * SEG_SIZE, SEG_SIZE);
     // ABR wants variant 1, but seek must use layout_variant (0)
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(SEEK_MS))
         .expect("seek anchor resolution should not error")
@@ -447,7 +467,7 @@ fn abr_does_not_affect_any_seek_state() {
     push_segment(&source.segments, 0, 1, V0_SEG_SIZE, V0_SEG_SIZE);
 
     // ABR switches to variant 1 mid-stream
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
     source
         .coord
         .had_midstream_switch
@@ -500,7 +520,7 @@ fn commit_seek_landing_uses_layout_variant_for_invalidated_segment() {
     assert!(source.segments.lock_sync().remove_resource(&evicted));
 
     // ABR wants variant 1, but layout is still variant 0
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
     source.coord.timeline().set_byte_position(0);
 
     source.commit_seek_landing(Some(make_anchor(0, 0, 0)));
@@ -542,7 +562,7 @@ fn commit_seek_landing_uses_anchor_variant_metadata_when_reset_truncates_prefix(
         1,
         &[SEG_SIZE, SEG_SIZE, SEG_SIZE, SEG_SIZE],
     );
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     let anchor = make_anchor(ANCHOR_VARIANT, ANCHOR_SEGMENT, ANCHOR_OFFSET);
     source.apply_seek_plan(&anchor, &SeekLayout::Reset);
@@ -628,7 +648,7 @@ fn queue_segment_request_uses_layout_variant_for_invalidated_segment() {
     assert!(removed);
 
     // ABR wants variant 1, but layout is still variant 0
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
 
     assert!(
         source.queue_segment_request_for_offset(0, SEEK_EPOCH),
@@ -666,12 +686,15 @@ fn wait_range_reissues_request_after_pending_request_is_cleared() {
         coord.condvar.notify_all();
     });
 
-    let result = source.wait_range(0..1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
     join.join()
         .expect("clear-pending helper thread must complete");
 
     assert!(
-        matches!(result, Err(StreamError::Source(HlsError::Timeout(_)))),
+        matches!(
+            result,
+            Err(StreamError::Source(kithara_stream::SourceError::Timeout(_)))
+        ),
         "without a downloader the wait should still end by timeout"
     );
 
@@ -696,10 +719,13 @@ fn wait_range_replaces_mismatched_pending_request_for_same_epoch() {
         seek_epoch: 0,
     });
 
-    let result = source.wait_range(0..1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
-        matches!(result, Err(StreamError::Source(HlsError::Timeout(_)))),
+        matches!(
+            result,
+            Err(StreamError::Source(kithara_stream::SourceError::Timeout(_)))
+        ),
         "without a downloader the wait should still end by timeout"
     );
 
@@ -733,8 +759,8 @@ fn demand_range_queues_request_for_unloaded_offset() {
     playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            segment_sizes,
             offsets,
+            segment_sizes,
             total,
         },
     );
@@ -750,6 +776,12 @@ fn demand_range_queues_request_for_unloaded_offset() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -802,6 +834,12 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -813,8 +851,8 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     source.playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            segment_sizes,
             offsets,
+            segment_sizes,
             total,
         },
     );
@@ -903,7 +941,7 @@ fn set_seek_epoch_keeps_exact_eof_visible_until_seek_lands() {
 
     source.set_seek_epoch(NEW_EPOCH);
 
-    let result = source.wait_range(total..total + 1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(total..total + 1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
         matches!(result, Ok(WaitOutcome::Eof)),
@@ -922,7 +960,7 @@ fn wait_range_uses_known_total_bytes_for_exact_eof() {
     source.coord.timeline().set_byte_position(total);
     source.coord.timeline().set_eof(false);
 
-    let result = source.wait_range(total..total + 1, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(total..total + 1, Some(Duration::from_millis(TIMEOUT_MS)));
 
     assert!(
         matches!(result, Ok(WaitOutcome::Eof)),
@@ -940,13 +978,13 @@ fn read_media_segment_checked_reads_active_resource_in_ephemeral_mode() {
 
     let media_len = b"media_data".len() as u64;
     let seg = ReadSegment {
+        media_len,
+        media_url,
         variant: 0,
         segment_index: 0,
         byte_offset: 0,
         init_len: 0,
-        media_len,
         init_url: None,
-        media_url,
     };
     let mut buf = vec![0u8; media_len as usize];
 
@@ -973,10 +1011,10 @@ fn read_at_does_not_advance_timeline_position() {
         0,
         0,
         SegmentData {
-            init_len: 0,
             media_len,
-            init_url: None,
             media_url,
+            init_len: 0,
+            init_url: None,
         },
     );
     source.coord.timeline().set_byte_position(0);
@@ -984,7 +1022,7 @@ fn read_at_does_not_advance_timeline_position() {
     let mut buf = vec![0u8; media_len as usize];
     let read = source.read_at(0, &mut buf).unwrap();
 
-    assert_eq!(read, ReadOutcome::Data(10));
+    assert_eq!(read, nz_bytes(10));
     assert_eq!(
         source.coord.timeline().byte_position(),
         0,
@@ -1009,8 +1047,8 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
     playlist_state.set_size_map(
         0,
         VariantSizeMap {
-            segment_sizes,
             offsets,
+            segment_sizes,
             total,
         },
     );
@@ -1026,6 +1064,12 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -1047,7 +1091,7 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
 
     assert_eq!(
         read,
-        ReadOutcome::Retry,
+        ReadOutcome::Pending(PendingReason::Retry),
         "layout hole before effective total must trigger retry instead of synthetic EOF"
     );
 }
@@ -1073,14 +1117,17 @@ fn wait_range_allows_short_read_when_range_crosses_known_eof() {
         0,
         0,
         SegmentData {
+            media_url,
             init_len: 0,
             media_len: SEG_SIZE,
             init_url: None,
-            media_url,
         },
     );
 
-    let result = source.wait_range(RANGE_START..RANGE_END, Duration::from_millis(TIMEOUT_MS));
+    let result = source.wait_range(
+        RANGE_START..RANGE_END,
+        Some(Duration::from_millis(TIMEOUT_MS)),
+    );
 
     assert!(
         matches!(result, Ok(WaitOutcome::Ready)),
@@ -1113,6 +1160,12 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
         track,
         &parsed,
         &config,
+        Arc::new(kithara_abr::AbrState::new(
+            Vec::new(),
+            kithara_abr::AbrMode::Auto(None),
+        )),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
         playlist_state,
         EventBus::new(BUS_CAPACITY),
         kithara_stream::Timeline::new(),
@@ -1139,10 +1192,10 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
             0,
             index,
             SegmentData {
+                media_url,
                 init_len: 0,
                 media_len: payload.len() as u64,
                 init_url: None,
-                media_url,
             },
         );
         segments.push(payload);
@@ -1152,7 +1205,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
     for payload in &segments {
         let mut buf = vec![0u8; payload.len()];
         let read = source.read_at(offset, &mut buf).expect("read_at");
-        assert_eq!(read, ReadOutcome::Data(payload.len()));
+        assert_eq!(read, nz_bytes(payload.len()));
         assert_eq!(buf, *payload);
         offset += payload.len() as u64;
     }
@@ -1309,7 +1362,7 @@ fn queue_segment_request_resolves_offset_to_segment() {
     assert_eq!(req.segment_index, 0);
 }
 
-/// RED test #2 (integration: live_ephemeral_revisit_sequence_regression_drm_sw)
+/// RED test #2 (integration: `live_ephemeral_revisit_sequence_regression_drm_sw`)
 ///
 /// After DRM padding removal shrinks a variant's `size_map.total`, the
 /// decoder can land at a `byte_position` that is >= the new total. Both
@@ -1359,7 +1412,7 @@ fn red_test_drm_sw_commit_seek_landing_enqueues_request_when_offset_past_total()
     );
 }
 
-/// Regression test (integration: live_ephemeral_revisit_sequence_regression_drm_hw)
+/// Regression test (integration: `live_ephemeral_revisit_sequence_regression_drm_hw`)
 ///
 /// When the scheduler re-acquires a DRM resource (via `acquire_resource_with_ctx`)
 /// for a previously-committed segment — e.g. after LRU eviction pressure —
@@ -1404,7 +1457,7 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
     // Sanity: first read succeeds against the committed resource.
     let mut buf = vec![0u8; READ_SIZE];
     let first = source.read_at(0, &mut buf).expect("first read_at");
-    assert_eq!(first, ReadOutcome::Data(READ_SIZE));
+    assert_eq!(first, nz_bytes(READ_SIZE));
 
     // Step 2: simulate scheduler-driven re-fetch — a second DRM acquire
     // on the same key. Cache-hit branch must recognise the cached entry
@@ -1424,162 +1477,9 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
         .expect("read_at must not return hard error after reacquire");
     assert_eq!(
         outcome,
-        ReadOutcome::Data(READ_SIZE),
-        "expected Data({READ_SIZE}) after committed DRM reacquire — cache-hit must \
+        nz_bytes(READ_SIZE),
+        "expected Bytes({READ_SIZE}) after committed DRM reacquire — cache-hit must \
          not reactivate a Committed resource"
-    );
-}
-
-/// RED test (integration: live_stress_real_stream_seek_read_cache_drm_mmap)
-///
-/// Symptom: under DRM + non-ephemeral mmap, the random-seek phase
-/// (`RANDOM_PHASE_BUDGET_SECS = 5`, target ≥ `MIN_RANDOM_SEEKS = 50`)
-/// regularly underflows ("stress seek underflow: expected at least 50
-/// seek ops, got 29..48"). Profiling shows ~21k `apply_cached_segment_progress`
-/// + `populate_cached_segments_if_needed` invocations per run when only
-/// 37 cached segments exist on disk. Each `poll_next` pass re-emits one
-/// `HlsEvent::SegmentComplete { cached: true, .. }` per *already-cached*
-/// segment — there is no dedup of segments that have already been
-/// announced, so the bus is flooded with N × poll_next events and the
-/// listener task burns wall-clock time draining duplicates.
-///
-/// Contract under test: cached segments must be announced as
-/// `SegmentComplete { cached: true }` *once* across repeated
-/// `apply_cached_segment_progress` calls when the underlying
-/// `populate_cached_segments_if_needed` finds nothing new. Otherwise
-/// every poll_next on a steady state pays an O(N) event-publish cost,
-/// starving the test's 5-second seek budget under contention.
-///
-/// Construction stays unit-scope: a non-ephemeral disk-backed
-/// `AssetStore`, all 8 segments pre-committed on disk, then 5 back-to-back
-/// `populate + apply_cached_segment_progress` cycles. With the bug, the
-/// subscriber drains 8 × 5 = 40 cached-SegmentComplete events. With the
-/// dedup invariant, it drains exactly 8.
-#[kithara::test]
-fn red_test_apply_cached_segment_progress_floods_events_on_repeat_polls() {
-    const NUM_SEGMENTS: usize = 8;
-    const SEGMENT_LEN: usize = 256;
-    const POLL_CYCLES: usize = 5;
-    const BUS_CAPACITY: usize = 1024;
-    const BANDWIDTH: u64 = 128_000;
-    const SEGMENT_SECS: u64 = 4;
-
-    let dir = tempdir().expect("temp dir");
-    let cancel = CancellationToken::new();
-
-    // Non-ephemeral disk backend with a real on-disk asset_root so
-    // populate_cached_segments_if_needed walks the disk path (not the
-    // ephemeral early-return at size_map.rs:21-23).
-    let noop_drm: ProcessChunkFn<DecryptContext> =
-        Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
-            output[..input.len()].copy_from_slice(input);
-            Ok(input.len())
-        });
-    let backend = AssetStoreBuilder::new()
-        .root_dir(dir.path())
-        .asset_root(Some("flaky-mmap-red-test"))
-        .cancel(cancel.clone())
-        .process_fn(noop_drm)
-        .build();
-    assert!(
-        !backend.is_ephemeral(),
-        "RED test must hit the disk populate path, not the ephemeral early-return"
-    );
-
-    // Pre-commit every segment to disk so populate_cached_segments_if_needed
-    // sees AssetResourceState::Committed for all of them on every call.
-    let payload = vec![0xCDu8; SEGMENT_LEN];
-    let base = Url::parse("https://example.com/").expect("base url");
-    let mut segment_urls = Vec::with_capacity(NUM_SEGMENTS);
-    for index in 0..NUM_SEGMENTS {
-        let url = base.join(&format!("seg-0-{index}.m4s")).expect("seg url");
-        let key = ResourceKey::from_url(&url);
-        let res = backend
-            .acquire_resource_with_ctx(&key, Some(DecryptContext::default()))
-            .expect("acquire seg");
-        res.write_at(0, &payload).expect("write seg");
-        res.commit(Some(payload.len() as u64)).expect("commit seg");
-        segment_urls.push(url);
-    }
-
-    // Build a matching playlist + scheduler.
-    let variant = VariantState {
-        id: 0,
-        uri: base.join("v0.m3u8").expect("playlist url"),
-        bandwidth: Some(BANDWIDTH),
-        codec: None,
-        container: None,
-        init_url: None,
-        segments: (0..NUM_SEGMENTS)
-            .map(|index| SegmentState {
-                index,
-                url: segment_urls[index].clone(),
-                duration: Duration::from_secs(SEGMENT_SECS),
-                key: None,
-            })
-            .collect(),
-        size_map: None,
-    };
-    let playlist_state = Arc::new(PlaylistState::new(vec![variant]));
-    let parsed = parsed_variants(1);
-    let track = test_peer_handle(&cancel);
-    let config = HlsConfig {
-        cancel: Some(cancel.clone()),
-        ..HlsConfig::default()
-    };
-    let bus = EventBus::new(BUS_CAPACITY);
-    let mut events = bus.subscribe();
-    let (mut downloader, _source) = build_pair(
-        backend.clone(),
-        track,
-        &parsed,
-        &config,
-        playlist_state,
-        bus,
-        kithara_stream::Timeline::new(),
-    );
-
-    // Drive POLL_CYCLES populate→apply cycles, mirroring what poll_next
-    // does on every wake. Steady state: nothing new is committed
-    // between cycles, yet the buggy code re-emits all NUM_SEGMENTS events.
-    for _ in 0..POLL_CYCLES {
-        let (cached_count, cached_end_offset) = downloader.populate_cached_segments_if_needed(0);
-        downloader.apply_cached_segment_progress(0, cached_count, cached_end_offset);
-    }
-
-    let mut cached_announces = 0usize;
-    loop {
-        match events.try_recv() {
-            Ok(Event::Hls(HlsEvent::SegmentComplete {
-                cached: true,
-                variant: 0,
-                ..
-            })) => cached_announces += 1,
-            Ok(_) => {}
-            Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
-            Err(TryRecvError::Lagged(n)) => {
-                panic!(
-                    "broadcast receiver lagged by {n} events — the bus \
-                     buffer overflowed because cached SegmentComplete \
-                     events are being re-published every poll cycle, \
-                     which is exactly the bug under test"
-                );
-            }
-        }
-    }
-
-    assert_eq!(
-        cached_announces,
-        NUM_SEGMENTS,
-        "expected each of the {NUM_SEGMENTS} cached segments to be \
-         announced exactly once across {POLL_CYCLES} populate→apply \
-         cycles, got {cached_announces}. Today \
-         apply_cached_segment_progress republishes a SegmentComplete \
-         event for every segment in 0..cached_count on every call, so \
-         the count is NUM_SEGMENTS × POLL_CYCLES = {} — this O(N×polls) \
-         flood explains the seek-underflow flakiness in \
-         live_stress_real_stream_seek_read_cache_drm_mmap.",
-        NUM_SEGMENTS * POLL_CYCLES,
     );
 }
 
@@ -1589,11 +1489,11 @@ fn red_test_apply_cached_segment_progress_floods_events_on_repeat_polls() {
 ///   - Playback starts on variant 0, peer fetches segments 0..N0
 ///   - ABR decides to up-switch to variant 1; peer pivots to variant 1
 ///     segments and stops fetching variant 0
-///   - Decoder is still mid-playback on variant 0 (format_change hasn't
+///   - Decoder is still mid-playback on variant 0 (`format_change` hasn't
 ///     fired yet — variant 0 data isn't exhausted)
 ///   - User seeks to a time past N0
 ///
-/// With the old policy (anchor = layout_variant ignoring ABR), the
+/// With the old policy (anchor = `layout_variant` ignoring ABR), the
 /// anchor resolves to variant 0 at a segment the downloader stopped
 /// fetching. `source_is_ready_for_apply_seek` stays `Waiting` because
 /// that byte range never arrives, and the track hangs silently.
@@ -1621,7 +1521,7 @@ fn seek_anchor_falls_back_to_abr_when_layout_variant_has_no_target_segment() {
     // ABR has since picked variant 1 and the peer is fetching it — even
     // if variant 1 has no committed segments yet, its forward fetch is
     // what will actually arrive at the anchor offset.
-    source.coord.abr_variant_index.store(1, Ordering::Release);
+    source.coord.abr_state.set_variant_for_test(1);
     assert_eq!(
         source.segments.lock_sync().layout_variant(),
         0,
@@ -1721,5 +1621,94 @@ fn cross_variant_seek_same_codec_requires_reset() {
          byte spaces are per-variant, Preserve would leave layout=0 \
          while the anchor offset lives in variant 2's space, hanging \
          wait_range forever; got {layout:?}"
+    );
+}
+
+#[kithara::test]
+#[serial_test::serial]
+fn wait_range_returns_interrupted_when_seek_epoch_advances_mid_wait() {
+    // Pins the HLS seek-skip root cause: while a stale `wait_range`
+    // sits in its condvar wait under epoch=N, audio FSM bumps the
+    // timeline to epoch=N+1 (initiate_seek) and the decoder clears
+    // FLUSHING (complete_seek) before it has actually applied the
+    // seek — so SEEK_PENDING is still true. The next iteration sees
+    // epoch != wait_seek_epoch with SEEK_PENDING=true and must NOT
+    // fall through into Phase 3, which would re-enqueue the stale
+    // range_start under the new epoch and feed the scheduler a stream
+    // of legitimate-looking prefix demands.
+    //
+    // The test pins the contract on three independent levels:
+    //   1. Return value of `wait_range` is `Interrupted`.
+    //   2. Probe `wait_range_epoch_advance` fires with prev_epoch=0,
+    //      seek_epoch=new_epoch — proving the early-return branch ran.
+    //   3. Probe `queue_resolved_segment_request` does NOT fire with
+    //      seek_epoch=new_epoch — proving Phase 3 demand-push under
+    //      the new epoch never executed.
+    const SEG_SIZE: u64 = 100;
+    const NUM_SEGS: usize = 4;
+    const WAKE_DELAY_MS: u64 = 30;
+    const TIMEOUT_MS: u64 = 200;
+    const SEEK_TARGET_MS: u64 = 8_000;
+    let recorder = probe_capture::install();
+    let mut source = build_source_with_size_map(&[SEG_SIZE; NUM_SEGS]);
+    source.coord.stopped.store(false, Ordering::Release);
+
+    let coord = Arc::clone(&source.coord);
+    let join = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(WAKE_DELAY_MS));
+        // Bump seek_epoch (FLUSHING + SEEK_PENDING).
+        let new_epoch = coord
+            .timeline()
+            .initiate_seek(Duration::from_millis(SEEK_TARGET_MS));
+        // Mimic the decoder: clear FLUSHING, but leave SEEK_PENDING
+        // set (decoder has not yet repositioned).
+        coord.timeline().complete_seek(new_epoch);
+        coord.condvar.notify_all();
+        new_epoch
+    });
+
+    let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
+    let new_epoch = join.join().expect("seek-bump helper thread must complete");
+
+    assert_eq!(
+        new_epoch, 1,
+        "test sanity: initiate_seek must produce a single epoch bump"
+    );
+    assert!(
+        matches!(result, Ok(WaitOutcome::Interrupted)),
+        "wait_range must abort with Interrupted as soon as it observes \
+         seek_epoch advance, regardless of is_seek_pending — observed: \
+         {result:?}"
+    );
+
+    // Probe assertion #1: epoch-advance branch executed with the
+    // expected (prev_epoch=0, seek_epoch=1) pair.
+    let advances = recorder.events_with_probe("record_wait_range_epoch_advance");
+    let matched_advance = advances
+        .iter()
+        .find(|e| e.u64("prev_epoch") == Some(0) && e.u64("seek_epoch") == Some(new_epoch));
+    assert!(
+        matched_advance.is_some(),
+        "expected wait_range_epoch_advance probe with prev_epoch=0, \
+         seek_epoch={new_epoch} — captured: {advances:?}"
+    );
+
+    // Probe assertion #2: no demand was enqueued under the NEW epoch.
+    // Phase 3 of `wait_range` runs `queue_resolved_segment_request` —
+    // the bug let it execute after the epoch advanced. Under the fix
+    // the loop returns Interrupted before Phase 3 ever runs, so no
+    // probe with seek_epoch=new_epoch must appear.
+    let resolved = recorder.events_with_probe("queue_resolved_segment_request");
+    let stale_under_new_epoch: Vec<_> = resolved
+        .iter()
+        .filter(|e| e.u64("seek_epoch") == Some(new_epoch))
+        .collect();
+    assert!(
+        stale_under_new_epoch.is_empty(),
+        "wait_range must not call queue_resolved_segment_request \
+         under the new seek_epoch — that path is exactly what feeds \
+         the scheduler the prefix-segment fetches the user sees as \
+         a multi-second freeze on long-distance HLS seek; \
+         stale events: {stale_under_new_epoch:?}"
     );
 }

@@ -7,11 +7,13 @@ use std::{
     time::Duration,
 };
 
-use kithara_bufpool::pcm_pool;
+use kithara_bufpool::PcmPool;
 use unimock::{MockFn, Unimock, matching};
 
-pub use crate::traits::InnerDecoderMock;
-use crate::{DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
+pub use crate::traits::DecoderMock;
+use crate::{
+    DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, PcmChunk, PcmMeta, PcmSpec,
+};
 
 /// Minimal mutex wrapper with infallible `lock()` for tests.
 pub struct MockLog<T> {
@@ -38,12 +40,12 @@ impl<T> MockLog<T> {
 
 /// Shared logs for seek and byte-length updates.
 #[derive(Clone)]
-pub struct InnerDecoderLogs {
+pub struct DecoderLogs {
     byte_len_log: Arc<MockLog<Vec<u64>>>,
     seek_log: Arc<MockLog<Vec<Duration>>>,
 }
 
-impl InnerDecoderLogs {
+impl DecoderLogs {
     #[must_use]
     pub fn byte_len_log(&self) -> Arc<MockLog<Vec<u64>>> {
         Arc::clone(&self.byte_len_log)
@@ -59,14 +61,16 @@ impl InnerDecoderLogs {
 ///
 /// `next_chunk()` yields from `chunks` then returns EOF.
 /// `seek()` logs positions and consumes preconfigured results in order.
+/// When the queue is exhausted, seek returns
+/// [`DecoderSeekOutcome::Landed`] at the requested position by default.
 #[must_use]
-pub fn scripted_inner_decoder(
+pub fn scripted_decoder(
     spec: PcmSpec,
     chunks: Vec<PcmChunk>,
-    seek_results: Vec<DecodeResult<()>>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
-) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
-    build_scripted_inner_decoder(spec, chunks, seek_results, duration, true)
+) -> (Box<dyn Decoder>, DecoderLogs) {
+    build_scripted_decoder(spec, chunks, seek_results, duration, true)
 }
 
 /// Create a scripted decoder mock with verification disabled in `Drop`.
@@ -74,58 +78,140 @@ pub fn scripted_inner_decoder(
 /// Use this only for data-plane tests where not all mocked methods are expected
 /// to be called in every scenario.
 #[must_use]
-pub fn scripted_inner_decoder_loose(
+pub fn scripted_decoder_loose(
     spec: PcmSpec,
     chunks: Vec<PcmChunk>,
-    seek_results: Vec<DecodeResult<()>>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
-) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
-    build_scripted_inner_decoder(spec, chunks, seek_results, duration, false)
+) -> (Box<dyn Decoder>, DecoderLogs) {
+    build_scripted_decoder(spec, chunks, seek_results, duration, false)
 }
 
-fn build_scripted_inner_decoder(
+fn build_scripted_decoder(
     spec: PcmSpec,
     chunks: Vec<PcmChunk>,
-    seek_results: Vec<DecodeResult<()>>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
     verify_in_drop: bool,
-) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
+) -> (Box<dyn Decoder>, DecoderLogs) {
     let chunk_queue = Arc::new(MockLog::new(VecDeque::from(chunks)));
+    let next_chunk_queue = Arc::clone(&chunk_queue);
+
+    build_decoder_mock(
+        spec,
+        move |_| {
+            Ok(next_chunk_queue
+                .lock()
+                .pop_front()
+                .map_or(DecoderChunkOutcome::Eof, DecoderChunkOutcome::Chunk))
+        },
+        seek_results,
+        duration,
+        verify_in_drop,
+    )
+}
+
+/// Create an infinite decoder mock backed by unimock.
+///
+/// Produces fixed-size chunks until `stop` becomes true.
+#[must_use]
+pub fn infinite_decoder(spec: PcmSpec, stop: Arc<AtomicBool>) -> (Box<dyn Decoder>, DecoderLogs) {
+    build_infinite_decoder(spec, stop, true)
+}
+
+/// Create an infinite decoder mock with verification disabled in `Drop`.
+///
+/// Use this only for data-plane tests where not all mocked methods are expected
+/// to be called in every scenario.
+#[must_use]
+pub fn infinite_decoder_loose(
+    spec: PcmSpec,
+    stop: Arc<AtomicBool>,
+) -> (Box<dyn Decoder>, DecoderLogs) {
+    build_infinite_decoder(spec, stop, false)
+}
+
+fn build_infinite_decoder(
+    spec: PcmSpec,
+    stop: Arc<AtomicBool>,
+    verify_in_drop: bool,
+) -> (Box<dyn Decoder>, DecoderLogs) {
+    /// Default PCM sample value for mock audio.
+    const SAMPLE_VALUE: f32 = 0.5;
+
+    /// Default chunk size for infinite mock decoder.
+    const MOCK_CHUNK_SIZE: usize = 1024;
+
+    /// Default mock track duration in seconds.
+    const MOCK_DURATION_SECS: u64 = 220;
+
+    build_decoder_mock(
+        spec,
+        move |_| {
+            if stop.load(Ordering::Acquire) {
+                return Ok(DecoderChunkOutcome::Eof);
+            }
+            Ok(DecoderChunkOutcome::Chunk(PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
+            )))
+        },
+        Vec::new(),
+        Some(Duration::from_secs(MOCK_DURATION_SECS)),
+        verify_in_drop,
+    )
+}
+
+fn build_decoder_mock<F>(
+    spec: PcmSpec,
+    next_chunk: F,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
+    duration: Option<Duration>,
+    verify_in_drop: bool,
+) -> (Box<dyn Decoder>, DecoderLogs)
+where
+    F: Fn(&mut Unimock) -> DecodeResult<DecoderChunkOutcome> + Send + Sync + 'static,
+{
     let seek_queue = Arc::new(MockLog::new(VecDeque::from(seek_results)));
     let seek_log = Arc::new(MockLog::new(Vec::new()));
     let byte_len_log = Arc::new(MockLog::new(Vec::new()));
 
-    let next_chunk_queue = Arc::clone(&chunk_queue);
-    let seek_results_queue = Arc::clone(&seek_queue);
     let seek_log_for_seek = Arc::clone(&seek_log);
     let byte_len_log_for_update = Arc::clone(&byte_len_log);
 
     let mock = Unimock::new((
-        InnerDecoderMock::next_chunk
+        DecoderMock::next_chunk
             .each_call(matching!())
-            .answers_arc(Arc::new(move |_| Ok(next_chunk_queue.lock().pop_front())))
+            .answers_arc(Arc::new(next_chunk))
             .at_least_times(0),
-        InnerDecoderMock::spec
+        DecoderMock::spec
             .each_call(matching!())
             .returns(spec)
             .at_least_times(0),
-        InnerDecoderMock::seek
+        DecoderMock::seek
             .each_call(matching!(_))
             .answers_arc(Arc::new(move |_, pos| {
                 seek_log_for_seek.lock().push(pos);
-                if let Some(result) = seek_results_queue.lock().pop_front() {
+                if let Some(result) = seek_queue.lock().pop_front() {
                     return result;
                 }
-                Ok(())
+                Ok(DecoderSeekOutcome::Landed {
+                    landed_at: pos,
+                    landed_frame: 0,
+                    landed_byte: None,
+                })
             }))
             .at_least_times(0),
-        InnerDecoderMock::update_byte_len
+        DecoderMock::update_byte_len
             .each_call(matching!(_))
             .answers_arc(Arc::new(move |_, len| {
                 byte_len_log_for_update.lock().push(len);
             }))
             .at_least_times(0),
-        InnerDecoderMock::duration
+        DecoderMock::duration
             .each_call(matching!())
             .returns(duration)
             .at_least_times(0),
@@ -138,103 +224,7 @@ fn build_scripted_inner_decoder(
 
     (
         Box::new(mock),
-        InnerDecoderLogs {
-            byte_len_log,
-            seek_log,
-        },
-    )
-}
-
-/// Create an infinite decoder mock backed by unimock.
-///
-/// Produces fixed-size chunks until `stop` becomes true.
-#[must_use]
-pub fn infinite_inner_decoder(
-    spec: PcmSpec,
-    stop: Arc<AtomicBool>,
-) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
-    build_infinite_inner_decoder(spec, stop, true)
-}
-
-/// Create an infinite decoder mock with verification disabled in `Drop`.
-///
-/// Use this only for data-plane tests where not all mocked methods are expected
-/// to be called in every scenario.
-#[must_use]
-pub fn infinite_inner_decoder_loose(
-    spec: PcmSpec,
-    stop: Arc<AtomicBool>,
-) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
-    build_infinite_inner_decoder(spec, stop, false)
-}
-
-fn build_infinite_inner_decoder(
-    spec: PcmSpec,
-    stop: Arc<AtomicBool>,
-    verify_in_drop: bool,
-) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
-    /// Default PCM sample value for mock audio.
-    const SAMPLE_VALUE: f32 = 0.5;
-
-    /// Default chunk size for infinite mock decoder.
-    const MOCK_CHUNK_SIZE: usize = 1024;
-
-    /// Default mock track duration in seconds.
-    const MOCK_DURATION_SECS: u64 = 220;
-
-    let seek_log = Arc::new(MockLog::new(Vec::new()));
-    let byte_len_log = Arc::new(MockLog::new(Vec::new()));
-
-    let seek_log_for_seek = Arc::clone(&seek_log);
-    let byte_len_log_for_update = Arc::clone(&byte_len_log);
-
-    let mock = Unimock::new((
-        InnerDecoderMock::next_chunk
-            .each_call(matching!())
-            .answers_arc(Arc::new(move |_| {
-                if stop.load(Ordering::Acquire) {
-                    return Ok(None);
-                }
-                Ok(Some(PcmChunk::new(
-                    PcmMeta {
-                        spec,
-                        ..Default::default()
-                    },
-                    pcm_pool().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
-                )))
-            }))
-            .at_least_times(0),
-        InnerDecoderMock::spec
-            .each_call(matching!())
-            .returns(spec)
-            .at_least_times(0),
-        InnerDecoderMock::seek
-            .each_call(matching!(_))
-            .answers_arc(Arc::new(move |_, pos| {
-                seek_log_for_seek.lock().push(pos);
-                Ok(())
-            }))
-            .at_least_times(0),
-        InnerDecoderMock::update_byte_len
-            .each_call(matching!(_))
-            .answers_arc(Arc::new(move |_, len| {
-                byte_len_log_for_update.lock().push(len);
-            }))
-            .at_least_times(0),
-        InnerDecoderMock::duration
-            .each_call(matching!())
-            .returns(Some(Duration::from_secs(MOCK_DURATION_SECS)))
-            .at_least_times(0),
-    ));
-    let mock = if verify_in_drop {
-        mock
-    } else {
-        mock.no_verify_in_drop()
-    };
-
-    (
-        Box::new(mock),
-        InnerDecoderLogs {
+        DecoderLogs {
             byte_len_log,
             seek_log,
         },

@@ -45,7 +45,7 @@ pub mod offline {
     use kithara_platform::Mutex;
     use ringbuf::{
         HeapRb,
-        traits::{Producer, Split},
+        traits::{Consumer, Producer, Split},
     };
 
     use crate::impls::{
@@ -58,17 +58,17 @@ pub mod offline {
     };
 
     pub struct OfflinePlayer {
+        shared_state: Arc<SharedPlayerState>,
         ctx: FirewheelCtx<OfflineBackend>,
         cmd_tx: ringbuf::HeapProd<PlayerCmd>,
-        shared_state: Arc<SharedPlayerState>,
     }
 
     impl OfflinePlayer {
-        /// Offline audio block size in frames.
-        const OFFLINE_BLOCK_FRAMES: u32 = 512;
-
         /// Capacity of the player command ring buffer.
         const CMD_RINGBUF_CAPACITY: usize = 64;
+
+        /// Offline audio block size in frames.
+        const OFFLINE_BLOCK_FRAMES: u32 = 512;
 
         /// Create an offline player with stereo output at the given sample rate.
         ///
@@ -96,7 +96,9 @@ pub mod offline {
             let player_node = PlayerNode::with_channel(
                 cmd_rx,
                 Arc::clone(&shared_state),
-                kithara_bufpool::pcm_pool().clone(),
+                // OfflinePlayer test-utils fixture
+                // ast-grep-ignore: perf.no-global-pool-accessor
+                kithara_bufpool::PcmPool::default().clone(),
             );
             let node_id = ctx.add_node(player_node, None);
             let graph_out = ctx.graph_out_node_id();
@@ -105,23 +107,10 @@ pub mod offline {
             ctx.update().expect("initial graph update");
 
             Self {
+                shared_state,
                 ctx,
                 cmd_tx,
-                shared_state,
             }
-        }
-
-        /// Render `frames` of audio. Returns interleaved stereo output.
-        ///
-        /// # Panics
-        ///
-        /// Panics if the graph update or backend access fails.
-        pub fn render(&mut self, frames: usize) -> Vec<f32> {
-            self.ctx.update().expect("graph update");
-            self.ctx
-                .active_backend_mut()
-                .expect("backend active")
-                .render(frames)
         }
 
         /// Load a resource as a track and trigger `FadeIn` crossfade.
@@ -131,7 +120,13 @@ pub mod offline {
         /// Panics if the command channel is full.
         pub fn load_and_fadein(&mut self, resource: crate::Resource, src: &str) {
             let src: Arc<str> = Arc::from(src);
-            let pr = PlayerResource::new(resource, Arc::clone(&src), kithara_bufpool::pcm_pool());
+            let pr = PlayerResource::new(
+                resource,
+                Arc::clone(&src),
+                // OfflinePlayer test-utils fixture
+                // ast-grep-ignore: perf.no-global-pool-accessor
+                &kithara_bufpool::PcmPool::default(),
+            );
             self.cmd_tx
                 .try_push(PlayerCmd::LoadTrack {
                     resource: Arc::new(Mutex::new(pr)),
@@ -156,6 +151,19 @@ pub mod offline {
             self.shared_state.process_count.load(Ordering::Relaxed)
         }
 
+        /// Render `frames` of audio. Returns interleaved stereo output.
+        ///
+        /// # Panics
+        ///
+        /// Panics if the graph update or backend access fails.
+        pub fn render(&mut self, frames: usize) -> Vec<f32> {
+            self.ctx.update().expect("graph update");
+            self.ctx
+                .active_backend_mut()
+                .expect("backend active")
+                .render(frames)
+        }
+
         /// Send a seek command to the processor.
         ///
         /// # Panics
@@ -172,6 +180,59 @@ pub mod offline {
                 })
                 .expect("send Seek");
         }
+
+        /// Drain pending processor notifications.
+        ///
+        /// Tests use this to discriminate between a track that ended/failed
+        /// cleanly (notification arrives within the observation window) and
+        /// a pipeline stuck in a recreate-loop (no terminal notification —
+        /// position stays pinned at the seek target).
+        ///
+        /// Returns notification kind tags rather than the full enum so the
+        /// internal `PlayerNotification` type stays `pub(crate)`.
+        pub fn take_notification_kinds(&self) -> Vec<NotificationKind> {
+            let mut rx = self.shared_state.notification_rx.lock_sync();
+            let mut out = Vec::new();
+            while let Some(n) = rx.try_pop() {
+                use crate::impls::player_notification::PlayerNotification as N;
+                out.push(match n {
+                    N::TrackError(_, _) => NotificationKind::TrackError,
+                    N::TrackLoaded(_) => NotificationKind::TrackLoaded,
+                    N::TrackUnloaded(_) => NotificationKind::TrackUnloaded,
+                    N::TrackAboutToEnd(_) => NotificationKind::TrackAboutToEnd,
+                    N::TrackPlaybackStarted(_) => NotificationKind::TrackPlaybackStarted,
+                    N::TrackPlaybackStopped(_) => NotificationKind::TrackPlaybackStopped,
+                    N::TrackPlaybackPaused(_) => NotificationKind::TrackPlaybackPaused,
+                    N::TrackRequested(_) => NotificationKind::TrackRequested,
+                    N::TrackChanged { .. } => NotificationKind::TrackChanged,
+                    N::TrackFadingIn(_) => NotificationKind::TrackFadingIn,
+                    N::TrackFadingOut(_) => NotificationKind::TrackFadingOut,
+                });
+            }
+            out
+        }
+    }
+
+    /// Tag for [`PlayerNotification`] variants.
+    ///
+    /// Mirrors the variants of the internal `PlayerNotification` enum so
+    /// tests can match on terminal-state classes (`TrackError`,
+    /// `TrackPlaybackStopped`) without importing the `pub(crate)` type.
+    ///
+    /// [`PlayerNotification`]: crate::impls::player_notification::PlayerNotification
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum NotificationKind {
+        TrackError,
+        TrackLoaded,
+        TrackUnloaded,
+        TrackAboutToEnd,
+        TrackPlaybackStarted,
+        TrackPlaybackStopped,
+        TrackPlaybackPaused,
+        TrackRequested,
+        TrackChanged,
+        TrackFadingIn,
+        TrackFadingOut,
     }
 
     /// Create a [`Resource`](crate::Resource) from any [`PcmReader`].

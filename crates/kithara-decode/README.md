@@ -13,24 +13,31 @@
 
 # kithara-decode
 
-Audio decoding library with runtime backend selection. `DecoderFactory` creates synchronous `InnerDecoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk` samples (pool-backed `Vec<f32>`). No threading, no channels -- just decoding.
+Audio decoding library with explicit, typed backend selection. `DecoderFactory` creates synchronous `Decoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk` samples (pool-backed `Vec<f32>`). No threading, no channels — just decoding.
+
+Two traits drive the crate:
+
+- `Decoder` (public) — runtime instance contract: `next_chunk`, `seek`, `spec`, `duration`, `update_byte_len`, `metadata`. Used through `Box<dyn Decoder>` by `kithara-audio` and tests.
+- `Backend: Decoder` (`pub(crate)`) — static-dispatch factory: `supports(codec, container) -> bool` plus `try_create(...) -> Self`. Every real backend is also a `Decoder`, so `dispatch::<B>` boxes the result straight into `Box<dyn Decoder>` without juggling associated types.
 
 ## Usage
 
 ```rust
 use std::io::Cursor;
-use kithara_decode::{DecoderConfig, DecoderFactory};
+use kithara_decode::{DecoderBackend, DecoderConfig, DecoderFactory};
 
 let reader = Cursor::new(wav_bytes);
-let mut decoder = DecoderFactory::create_with_probe(
-    reader,
-    Some("wav"),
-    DecoderConfig::default(),
-)?;
+let mut config = DecoderConfig::default();
+config.backend = DecoderBackend::Symphonia;
+let mut decoder = DecoderFactory::create_with_probe(reader, Some("wav"), config)?;
 
 let spec = decoder.spec(); // sample_rate, channels
-while let Ok(Some(chunk)) = decoder.next_chunk() {
-    play(&chunk.pcm);
+loop {
+    match decoder.next_chunk()? {
+        kithara_decode::DecoderChunkOutcome::Chunk(chunk) => play(&chunk.pcm),
+        kithara_decode::DecoderChunkOutcome::Pending(_) => continue,
+        kithara_decode::DecoderChunkOutcome::Eof => break,
+    }
 }
 ```
 
@@ -51,9 +58,15 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 ## Decoder recreate strategy
 
 - `create_for_recreate` is used for seek-time decoder rebuild.
-- First attempt: create from `MediaInfo` hints (codec/container from stream metadata).
-- Fallback: native Symphonia probe on a fresh reader if metadata-driven creation fails.
-- If both fail, error is surfaced to caller; decoder layer does not silently switch to unrelated formats.
+- It is a thin wrapper over `create_from_media_info`: callers must
+  supply a `base_offset` that lines up with the container's init
+  region (for fMP4/MP4/WAV/MKV/CAF the `ftyp`/RIFF/EBML header; for
+  MPEG-ES / ADTS / FLAC / Ogg / MPEG-TS any valid packet start).
+- **No fallback**: when the metadata-driven path fails the error is
+  propagated verbatim. Probing mid-segment bytes at a mismatched
+  offset can silently match an unrelated codec (e.g. MP3 frame sync
+  in raw AAC-in-fMP4 bytes) and drive the rest of the pipeline off a
+  `session.media_info` the decoder never actually realised.
 
 ## Feature Flags
 
@@ -64,6 +77,30 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 <tr><td><code>perf</code></td><td>Performance instrumentation via <code>hotpath</code></td></tr>
 <tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
 </table>
+
+## Module layout
+
+- `src/traits.rs` — public `Decoder` runtime trait, plus typed outcomes (`DecoderChunkOutcome`, `DecoderSeekOutcome`, `InputReadOutcome`) and the `DecoderInput` source supertrait.
+- `src/backend/` — `pub(crate) trait Backend: Decoder` (capability + factory). One file per concern: `protocol.rs` (the trait), `tests.rs` (capability-only test backends).
+- `src/apple/` — `AppleDecoder` (in `decoder.rs`) implements `Decoder`; `backend.rs` carries `impl Backend for AppleDecoder` plus the codec/container helpers (`supports_codec`, `default_container_for_codec`, `can_seek_container`). FFI under `audiofile.rs` / `fmp4.rs` / `converter.rs` / `ffi.rs`.
+- `src/codec/apple.rs` — `AppleCodec` is a frame-level wrapper over the same `AudioConverter` FFI surface as `src/apple/`, exposed as a `FrameCodec` for `UniversalDecoder<D, AppleCodec>` paths. Carries the same FFI lint carve-outs (unsafe blocks, `cast_possible_truncation` on `UInt32` packet/byte sizes mirroring CoreAudio API contracts) and is whitelisted in `.config/ast-grep/rust.no-lint-suppression.yml` alongside `src/apple/**`.
+- `src/android/` — `AndroidDecoder` (`decoder.rs`) implements `Decoder`; `backend.rs` carries `impl Backend for AndroidDecoder`. Whole module gated once in `lib.rs`; no internal `#[cfg(target_os = "android")]`.
+- `src/symphonia/` — `SymphoniaDecoder` (`decoder.rs`) implements `Decoder`; `backend.rs` carries `impl Backend for SymphoniaDecoder` plus the `SymphoniaConfig` assembly. `probe.rs` and `adapter.rs` host the probe/direct paths and `ReadSeekAdapter`.
+- `src/pcm/` — host-agnostic PCM conversion helpers (`pcm16_to_f32`, `pcm_float_to_pool`) and timeline math (`pcm_meta_from_pts_us`, `seek_trim_for_buffer`) shared across backends.
+- `src/factory/` — public `DecoderConfig` + `DecoderFactory` + the `DecoderBackend` enum selector. `dispatch::<B: Backend>` is the single point that boxes the concrete decoder into `Box<dyn Decoder>`.
+- `src/hooks.rs` — `HookedDecoder` adapter that wraps any `Box<dyn Decoder>` and forwards `DecoderHooks` callbacks at the chunk/seek boundary.
+
+## Cross-decoder protocol test
+
+`tests/protocol.rs` (integration test) decodes the same MP3 with
+every available backend and asserts agreement on `spec()`, `duration()`,
+total frame count, post-seek timestamp, EOF semantics, and — when the
+`apple` feature is enabled on macOS/iOS — the full-decode PCM L2 norm
+within 2 %. Run with:
+
+```
+cargo test -p kithara-decode --test protocol --features apple
+```
 
 ## Integration
 

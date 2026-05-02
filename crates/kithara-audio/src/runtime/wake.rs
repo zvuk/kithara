@@ -1,16 +1,14 @@
 //! Wake primitive for the scheduler.
 
-use std::time::Duration;
-
 use kithara_platform::{
     sync::{Condvar, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 /// Level-triggered wake for the scheduler thread.
 pub(crate) struct SchedulerWake {
-    woken: Mutex<bool>,
     condvar: Condvar,
+    woken: Mutex<bool>,
 }
 
 impl SchedulerWake {
@@ -21,12 +19,6 @@ impl SchedulerWake {
             woken: Mutex::new(false),
             condvar: Condvar::new(),
         }
-    }
-
-    /// Signal the scheduler to wake up. Safe to call from any thread.
-    pub(crate) fn wake(&self) {
-        *self.woken.lock_sync() = true;
-        self.condvar.notify_one();
     }
 
     /// Block until woken or `timeout` elapses.
@@ -52,6 +44,12 @@ impl SchedulerWake {
                 return false;
             }
         }
+    }
+
+    /// Signal the scheduler to wake up. Safe to call from any thread.
+    pub(crate) fn wake(&self) {
+        *self.woken.lock_sync() = true;
+        self.condvar.notify_one();
     }
 }
 

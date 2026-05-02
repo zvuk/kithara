@@ -12,7 +12,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -54,10 +54,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
     let total_bytes = server.total_bytes();
@@ -168,10 +165,7 @@ async fn ephemeral_small_cache_reads_entire_stream() {
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
     let result = spawn_blocking(move || {

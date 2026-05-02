@@ -4,10 +4,10 @@ const DEFAULT_LOSSY_BIT_RATE: u64 = 128_000;
 
 /// PCM source for encoder requests.
 pub trait PcmSource: Send + Sync {
-    fn sample_rate(&self) -> u32;
     fn channels(&self) -> u16;
-    fn total_byte_len(&self) -> Option<usize>;
     fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize;
+    fn sample_rate(&self) -> u32;
+    fn total_byte_len(&self) -> Option<usize>;
 }
 
 /// Target container/codec for byte-oriented encoding.
@@ -50,20 +50,20 @@ impl BytesEncodeTarget {
     }
 
     #[must_use]
+    pub const fn default_bit_rate(self) -> Option<u64> {
+        match self {
+            Self::Mp3 | Self::Aac | Self::M4a => Some(DEFAULT_LOSSY_BIT_RATE),
+            Self::Flac => None,
+        }
+    }
+
+    #[must_use]
     pub const fn extension(self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
             Self::Flac => "flac",
             Self::Aac => "aac",
             Self::M4a => "m4a",
-        }
-    }
-
-    #[must_use]
-    pub const fn default_bit_rate(self) -> Option<u64> {
-        match self {
-            Self::Mp3 | Self::Aac | Self::M4a => Some(DEFAULT_LOSSY_BIT_RATE),
-            Self::Flac => None,
         }
     }
 
@@ -103,28 +103,28 @@ pub struct PackagedEncodeRequest<'a> {
 
 #[derive(Debug, Clone)]
 pub struct EncodedBytes {
-    pub bytes: Vec<u8>,
     pub content_type: &'static str,
     pub media_info: MediaInfo,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EncodedAccessUnit {
     pub bytes: Vec<u8>,
-    pub pts: u64,
-    pub dts: u64,
-    pub duration: u32,
     pub is_sync: bool,
+    pub duration: u32,
+    pub dts: u64,
+    pub pts: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct EncodedTrack {
     pub media_info: MediaInfo,
+    pub access_units: Vec<EncodedAccessUnit>,
+    pub codec_config: Vec<u8>,
     pub timescale: u32,
     pub bit_rate: u64,
-    pub codec_config: Vec<u8>,
     pub packets_per_segment: usize,
-    pub access_units: Vec<EncodedAccessUnit>,
 }
 
 #[cfg(test)]

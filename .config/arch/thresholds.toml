@@ -1,0 +1,272 @@
+# Numeric thresholds for size/density/nesting checks.
+# Each section has `warn` and `deny` levels; values below `warn` are clean.
+
+[file_size]
+warn = 400
+deny = 1000
+exclude_globs = [
+    "**/tests/**",
+    "**/benches/**",
+    "**/generated/**",
+    "**/*.pb.rs",
+]
+
+[file_density]
+warn_fns_per_type = 25.0
+deny_fns_per_type = 40.0
+min_fns_to_evaluate = 20
+
+[arc_clone_hotspots]
+# Functions with this many `Arc::clone(...)` / `Rc::clone(...)` calls are
+# flagged. Catches god-orchestrators that distribute ownership of shared
+# state through clones; complementary to `shared_state` which counts
+# *declarations* of `Arc<Mutex/RwLock>` per file. Detection counts only the
+# explicit `Arc::clone(&x)` / `Rc::clone(&x)` form (the `clippy::clone_on_ref_ptr`
+# blessed shape) — method-call `x.clone()` is not counted because the AST
+# cannot tell whether the receiver is `Arc<T>` or a value type.
+warn = 3
+
+[god_module]
+# `pub` + `pub(crate)` items declared in one module file. High count → file
+# is exposing too many independent abstractions; split into smaller modules
+# with single-purpose APIs. Counted item kinds: struct, enum, trait, fn,
+# type alias, const, static, macro_rules.
+warn = 8
+# Per-crate overrides: `crate-name = N`. Lets app/test/macro crates relax
+# the default without baselining each file.
+[god_module.overrides]
+"kithara-app" = 20
+"kithara-ffi" = 20
+"kithara-wasm" = 20
+"kithara-test-utils" = 20
+"kithara-test-macros" = 20
+"kithara-hang-detector-macros" = 20
+"kithara-wasm-macros" = 20
+"xtask" = 20
+
+[god_struct]
+# `fields + methods` per struct. Methods include both inherent (`impl X`)
+# and trait-impl (`impl Trait for X`) functions, aggregated across every
+# `impl` block in the file (so a type whose surface is split across many
+# traits still hits the threshold). Tuple structs and unit structs count
+# as zero fields.
+warn = 15
+
+[god_trait]
+# Number of method (`fn`) items in a single trait definition. Per AGENTS.md:
+# "prefer several smaller traits with clearer ownership" over one fat trait.
+warn = 7
+
+[pub_struct_open_fields]
+# `pub` structs with at least this many `pub` fields are flagged. Signals
+# missing invariants / direct mutation. Candidate for a builder, encapsulated
+# setters, or grouping into a typed value. Only strict `pub` is considered;
+# `pub(crate)` structs are not flagged here.
+warn = 3
+
+[trait_impl_count]
+# Number of `impl Trait for X` blocks targeting one local type, per file.
+# High count → god-type playing several roles. Inherent `impl X` blocks
+# are not counted (use `single_impl_size` for those).
+warn = 6
+
+[fn_arg_count]
+# Functions with this many arguments (excluding `self`) trigger a warn.
+# Tighter than clippy's `too_many_arguments` default (7) — used as a map
+# of the codebase, not an enforced gate. The clippy lint stays at its
+# threshold (clippy.toml: too-many-arguments-threshold) and acts as the
+# hard ceiling.
+warn = 5
+
+[generic_param_count]
+# Items (fn/struct/enum/trait/type) with this many generic params
+# (type+lifetime+const combined) trigger a warn. Sister threshold
+# `warn_where` flags many where-clause predicates separately.
+warn_params = 3
+warn_where = 4
+
+[no_lib_statics]
+# Hidden globals (`static`, `OnceLock`/`OnceCell`/`LazyLock`/`Lazy` typed
+# constants, `lazy_static!`) declared at item scope inside library crates.
+# App / FFI / wasm / xtask / test-support crates may legitimately own
+# singletons; lib crates accept them as injected dependencies (see
+# `feedback_pools_via_config_not_global` in user memory).
+exempt_crates = [
+    "kithara-app",
+    "kithara-ffi",
+    "kithara-wasm",
+    "xtask",
+    "kithara-test-utils",
+    "kithara-test-macros",
+    "kithara-hang-detector-macros",
+    "kithara-wasm-macros",
+    "kithara-probe-macros",
+]
+
+[shared_state]
+warn = 3
+deny = 5
+patterns = [
+    "Arc<Mutex<",
+    "Arc<RwLock<",
+    "Arc<parking_lot::Mutex<",
+    "Arc<parking_lot::RwLock<",
+    "Arc<tokio::sync::Mutex<",
+    "Arc<tokio::sync::RwLock<",
+]
+
+[flat_directory]
+# >=warn: recommend extracting subsystem into a submodule.
+# >=deny: hard fail.
+warn = 7
+deny = 12
+ignore_globs = ["**/tests/**", "**/benches/**"]
+
+[max_nesting]
+# Allowed depth of subdirectories under `crates/<crate>/src/`.
+# `src/foo/bar/baz.rs` is depth 2 (allowed); `src/a/b/c/d.rs` is depth 3 (deny).
+max_depth = 2
+exempt_crates = []
+
+[readme_presence]
+exempt = [
+    "kithara-workspace-hack",
+    "kithara-test-macros",
+    "kithara-hang-detector-macros",
+    "kithara-wasm-macros",
+]
+min_bytes = 200
+
+[mixed_entities]
+# A type is "sizable" when its `impl` surface meets EITHER bound:
+#   - has at least `min_fns_per_type` total `fn`s across all `impl X` and
+#     `impl Trait for X` blocks; or
+#   - has at least `min_impl_blocks` impl blocks (own + trait), which catches
+#     structural types whose surface is spread across many trait impls (e.g.
+#     `FilePeer` with separate `impl Peer`, `impl Abr`, ...).
+# A file mixing several sizable types signals that distinct entities should
+# live in separate files.
+min_fns_per_type = 5
+min_impl_blocks = 3
+warn = 2
+deny = 3
+
+[redundant_accessors]
+# AST data-flow analysis: catches multiple paths to the same datum within one
+# `impl` block. Three patterns, each toggleable and severity-configurable:
+#
+#   P1 — `pub` field exposed AND `pub fn x(&self) -> &T { &self.x }` (or
+#        `.clone()` flavour). Two paths to the same field.
+#   P2 — `pub fn a(&self) -> &Inner { &self.inner }` AND
+#        `pub fn b(&self) -> &TypeA { &self.inner.field }`.
+#        The shorthand path is a strict prefix-extension of the container path.
+#        Detection compares AST chains, not method names.
+#   P3 — handle exposing interior mutability AND a setter writing to the same
+#        field. External code can mutate via two paths.
+#   P4 — `pub fn x(&self) -> &T { &self.x }` (or `.clone()` flavour) AND a
+#        `delegate! { to self.x { … } }` block in the same impl. Both reach
+#        the same field from outside — one as a handle, one as forwarded
+#        methods. Detection scans `delegate!` macro tokens for
+#        `to self.<field>` patterns at the top level.
+#
+# Severities: "deny" (fail), "warn" (track via baseline), "off" (skip pattern).
+#
+# Nesting support (all dimensions are unbounded by recursion):
+#   - field chain depth: `self.a.b.c.d.e...` — unlimited via AST recursion
+#   - type generic depth: `Option<Arc<Mutex<RwLock<T>>>>` — unlimited
+#   - body wrappers: `Some(&self.x)`, `Ok(...)`, `Box::new(...)`, `Cow::Borrowed(...)`,
+#                    `Cell::new(...)`, etc. — unwrapped recursively
+#   - expose-method calls: `self.x.as_ref()`, `.lock()`, `.borrow()`, `.read()`,
+#                          `.deref()`, `.into_inner()`, ... — recursive on receiver
+#   - cast: `&self.x as &dyn T` — unwrapped recursively
+#   - block/return/paren: `{ &self.x }`, `return &self.x;`, `(&self.x)` — recursive
+#   - module nesting: structs and impls inside any depth of `mod foo { ... }`
+#                     are scoped per module via `collect_scopes`; cross-module
+#                     name collisions don't create false positives
+#   - cross-impl aggregation: `impl X` + `impl Trait for X` are joined per type
+detect_field_passthrough    = true
+detect_nested_shorthand     = true
+detect_mutation_handle      = true
+detect_delegate_passthrough = true
+p1_severity = "warn"
+p2_severity = "warn"
+p3_severity = "deny"
+p4_severity = "warn"
+public_only = true
+ignore_deref = true
+
+# Types whose presence in a return type signals interior mutability. Detection
+# recurses into generic arguments — `Arc<AtomicUsize>` / `Option<&Mutex<T>>`
+# match because `AtomicUsize` / `Mutex` appears anywhere in the type tree.
+mutable_handle_types = [
+    "AtomicBool",
+    "AtomicI8", "AtomicI16", "AtomicI32", "AtomicI64", "AtomicIsize",
+    "AtomicU8", "AtomicU16", "AtomicU32", "AtomicU64", "AtomicUsize",
+    "AtomicPtr",
+    "Cell", "RefCell", "OnceCell", "LazyLock",
+    "Mutex", "RwLock", "Notify", "Semaphore", "Condvar",
+]
+
+# Method names that mutate when applied to `self.<field>` — `self.x.store(v)`,
+# `self.x.set(v)`, etc. Used by P3 to find a setter that targets the same
+# field as a `*_handle()` getter, AND used to detect direct `self.x = ...`
+# assignment (always counted regardless of this list).
+writer_methods = [
+    # Atomic*
+    "store", "swap",
+    "fetch_add", "fetch_sub", "fetch_or", "fetch_and", "fetch_xor",
+    "fetch_max", "fetch_min", "fetch_update", "fetch_nand",
+    "compare_exchange", "compare_exchange_weak",
+    # Cell / RefCell / OnceCell
+    "set", "replace", "replace_with", "take",
+    # Mutex / RwLock writers (manual `*guard = X` is also caught via plain assignment)
+    "write", "send", "send_replace", "send_modify",
+    # Notify
+    "notify_one", "notify_all", "notify_waiters",
+]
+
+# Single-arg constructor calls treated as transparent over their argument:
+# `Some(&self.x)` is treated identically to `&self.x` for accessor-pattern
+# detection. Patterns are matched as plain identifier (`Some`) or path suffix
+# (`Box::new` matches `std::boxed::Box::new`, `Box::new`, etc.).
+wrapper_ctors = [
+    "Some", "Ok", "Err",
+    "Box::new", "Arc::new", "Rc::new",
+    "Pin::new", "Pin::new_unchecked",
+    "Cow::Borrowed", "Cow::Owned",
+    "Cell::new", "RefCell::new", "Mutex::new", "RwLock::new", "OnceCell::new",
+]
+
+# 0-arg methods that expose internal data — `self.x.as_ref()` is treated as
+# `&self.x` for accessor detection. `*_mut` variants are emitted with the
+# `RefMut` access kind so P3 (mutation handle) can flag them.
+expose_methods = [
+    "as_ref", "as_mut", "as_str", "as_slice", "as_path", "as_bytes", "as_deref",
+    "deref", "deref_mut",
+    "borrow", "borrow_mut",
+    "read", "write", "lock",
+    "get", "get_mut",
+    "into_inner",
+]
+
+[single_impl_size]
+# LOC of a single `impl X` or `impl Trait for X` block. Catches god-impl
+# blocks that `file_density` misses when a file has many types but one of
+# them has an outsized impl. Example: `impl Source for FileSource` spanning
+# hundreds of lines should be split by responsibility (read/seek/state into
+# separate impls or extension traits).
+warn_lines = 200
+deny_lines = 400
+
+[single_word_filenames]
+# Filenames under `crates/*/src/` should be a single word — `peer.rs`,
+# `source.rs`, `stream.rs` — not `stream_type.rs` or `playlist_cache.rs`.
+# Rationale: short names compose well with the module path. The crate already
+# names the namespace; the file should name the entity, not the entity-and-its-role.
+#
+# `max_words` counts `_`-separated tokens in the filename stem (leading/trailing
+# `_` does not count, so `_internal.rs` is one word).
+max_words = 1
+exempt_filenames = ["mod.rs", "lib.rs", "main.rs", "build.rs"]
+exempt_globs = []
+severity = "warn"

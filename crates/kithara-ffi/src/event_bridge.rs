@@ -35,6 +35,105 @@ impl EventBridge {
     /// Threshold for suppressing redundant time/duration updates (seconds).
     const TIME_UPDATE_THRESHOLD: f64 = 0.01;
 
+    fn dispatch(
+        observer: &Arc<dyn PlayerObserver>,
+        items: &Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+        event: &Event,
+    ) {
+        match event {
+            Event::Player(pe) => {
+                let Some(ffi_event) = Self::player_event_to_ffi(pe) else {
+                    return;
+                };
+                observer.on_event(ffi_event);
+            }
+            Event::Queue(qe) => Self::dispatch_queue_event(observer, items, qe),
+            _ => {}
+        }
+    }
+
+    fn dispatch_queue_event(
+        observer: &Arc<dyn PlayerObserver>,
+        items: &Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+        event: &QueueEvent,
+    ) {
+        match event {
+            QueueEvent::CurrentTrackChanged { id } => {
+                let item_id = id.and_then(|tid| items.lock_sync().get(&tid).map(|i| i.id()));
+                observer.on_event(FfiPlayerEvent::CurrentItemChanged { item_id });
+            }
+            QueueEvent::TrackStatusChanged { id, status } => {
+                let item = items.lock_sync().get(id).cloned();
+                if let Some(item) = item {
+                    let item_id = item.id();
+                    if let Some(item_obs) = item.observer() {
+                        Self::route_track_status_to_item(&item_obs, status);
+                    }
+                    observer.on_event(FfiPlayerEvent::TrackStatusChanged {
+                        item_id,
+                        status: FfiTrackStatus::from(status.clone()),
+                    });
+                }
+            }
+            QueueEvent::QueueEnded => {
+                observer.on_event(FfiPlayerEvent::QueueEnded);
+            }
+            QueueEvent::CrossfadeStarted { duration_seconds } => {
+                observer.on_event(FfiPlayerEvent::CrossfadeStarted {
+                    duration_seconds: *duration_seconds,
+                });
+            }
+            QueueEvent::CrossfadeDurationChanged { seconds } => {
+                observer.on_event(FfiPlayerEvent::CrossfadeDurationChanged { seconds: *seconds });
+            }
+            _ => {}
+        }
+    }
+
+    fn player_event_to_ffi(event: &PlayerEvent) -> Option<FfiPlayerEvent> {
+        Some(match event {
+            PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
+            PlayerEvent::StatusChanged { status } => FfiPlayerEvent::StatusChanged {
+                status: (*status).into(),
+            },
+            PlayerEvent::TimeControlStatusChanged { status, .. } => {
+                FfiPlayerEvent::TimeControlStatusChanged {
+                    status: (*status).into(),
+                }
+            }
+            PlayerEvent::VolumeChanged { volume } => {
+                FfiPlayerEvent::VolumeChanged { volume: *volume }
+            }
+            PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
+            PlayerEvent::ItemDidPlayToEnd => FfiPlayerEvent::ItemDidPlayToEnd,
+            // `PlayerEvent::CurrentItemChanged` is shadowed by
+            // `QueueEvent::CurrentTrackChanged` (carries the item id).
+            _ => return None,
+        })
+    }
+
+    /// Translate a queue-level `TrackStatus` into per-item callbacks so
+    /// Swift `KitharaPlayerItem.eventPublisher` sees `StatusChanged` +
+    /// `Error` without having to subscribe to the player-level stream.
+    fn route_track_status_to_item(observer: &Arc<dyn ItemObserver>, status: &TrackStatus) {
+        match status {
+            TrackStatus::Loaded => {
+                observer.on_event(FfiItemEvent::StatusChanged {
+                    status: FfiItemStatus::ReadyToPlay,
+                });
+            }
+            TrackStatus::Failed(reason) => {
+                observer.on_event(FfiItemEvent::StatusChanged {
+                    status: FfiItemStatus::Failed,
+                });
+                observer.on_event(FfiItemEvent::Error {
+                    error: reason.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+
     /// Spawn background tasks that translate queue/player events into
     /// observer callbacks. Returns a bridge handle; dropping it cancels
     /// the tasks.
@@ -96,9 +195,9 @@ impl EventBridge {
                 // `CurrentItemChanged` into QueueEvents for consistent
                 // handling below.
                 let _ = queue.tick();
-                queue.player().process_notifications();
+                queue.process_notifications();
                 let time = queue.position_seconds();
-                let duration = queue.player().duration_seconds();
+                let duration = queue.duration_seconds();
 
                 match time {
                     Some(t)
@@ -128,105 +227,6 @@ impl EventBridge {
                     _ => {}
                 }
             }
-        })
-    }
-
-    fn dispatch(
-        observer: &Arc<dyn PlayerObserver>,
-        items: &Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
-        event: &Event,
-    ) {
-        match event {
-            Event::Player(pe) => {
-                let Some(ffi_event) = Self::player_event_to_ffi(pe) else {
-                    return;
-                };
-                observer.on_event(ffi_event);
-            }
-            Event::Queue(qe) => Self::dispatch_queue_event(observer, items, qe),
-            _ => {}
-        }
-    }
-
-    fn dispatch_queue_event(
-        observer: &Arc<dyn PlayerObserver>,
-        items: &Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
-        event: &QueueEvent,
-    ) {
-        match event {
-            QueueEvent::CurrentTrackChanged { id } => {
-                let item_id = id.and_then(|tid| items.lock_sync().get(&tid).map(|i| i.id()));
-                observer.on_event(FfiPlayerEvent::CurrentItemChanged { item_id });
-            }
-            QueueEvent::TrackStatusChanged { id, status } => {
-                let item = items.lock_sync().get(id).cloned();
-                if let Some(item) = item {
-                    let item_id = item.id();
-                    if let Some(item_obs) = item.observer() {
-                        Self::route_track_status_to_item(&item_obs, status);
-                    }
-                    observer.on_event(FfiPlayerEvent::TrackStatusChanged {
-                        item_id,
-                        status: FfiTrackStatus::from(status.clone()),
-                    });
-                }
-            }
-            QueueEvent::QueueEnded => {
-                observer.on_event(FfiPlayerEvent::QueueEnded);
-            }
-            QueueEvent::CrossfadeStarted { duration_seconds } => {
-                observer.on_event(FfiPlayerEvent::CrossfadeStarted {
-                    duration_seconds: *duration_seconds,
-                });
-            }
-            QueueEvent::CrossfadeDurationChanged { seconds } => {
-                observer.on_event(FfiPlayerEvent::CrossfadeDurationChanged { seconds: *seconds });
-            }
-            _ => {}
-        }
-    }
-
-    /// Translate a queue-level `TrackStatus` into per-item callbacks so
-    /// Swift `KitharaPlayerItem.eventPublisher` sees `StatusChanged` +
-    /// `Error` without having to subscribe to the player-level stream.
-    fn route_track_status_to_item(observer: &Arc<dyn ItemObserver>, status: &TrackStatus) {
-        match status {
-            TrackStatus::Loaded => {
-                observer.on_event(FfiItemEvent::StatusChanged {
-                    status: FfiItemStatus::ReadyToPlay,
-                });
-            }
-            TrackStatus::Failed(reason) => {
-                observer.on_event(FfiItemEvent::StatusChanged {
-                    status: FfiItemStatus::Failed,
-                });
-                observer.on_event(FfiItemEvent::Error {
-                    error: reason.clone(),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    fn player_event_to_ffi(event: &PlayerEvent) -> Option<FfiPlayerEvent> {
-        Some(match event {
-            PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
-            PlayerEvent::StatusChanged { status } => FfiPlayerEvent::StatusChanged {
-                status: (*status).into(),
-            },
-            PlayerEvent::TimeControlStatusChanged { status, .. } => {
-                FfiPlayerEvent::TimeControlStatusChanged {
-                    status: (*status).into(),
-                }
-            }
-            PlayerEvent::VolumeChanged { volume } => {
-                FfiPlayerEvent::VolumeChanged { volume: *volume }
-            }
-            PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
-            PlayerEvent::ItemDidPlayToEnd => FfiPlayerEvent::ItemDidPlayToEnd,
-            // `PlayerEvent::CurrentItemChanged` is shadowed by
-            // `QueueEvent::CurrentTrackChanged` (carries the item id).
-            _ => return None,
         })
     }
 }

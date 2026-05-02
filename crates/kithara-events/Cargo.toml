@@ -14,24 +14,25 @@ workspace = true
 dashmap = { workspace = true }
 delegate = { workspace = true }
 derivative = { workspace = true }
+kithara-net = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 portable-atomic = { workspace = true }
 smallvec = { workspace = true }
-
-kithara-abr = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
-default = ["file", "hls", "audio", "player", "app", "queue", "downloader"]
+default = ["abr", "file", "hls", "audio", "player", "app", "queue", "downloader"]
+abr = []
 app = []
 file = []
-hls = ["dep:kithara-abr"]
+hls = ["abr"]
 audio = []
 player = []
 queue = []
-downloader = []
+downloader = ["dep:kithara-net", "dep:url"]
 internal = []
 
 [dev-dependencies]

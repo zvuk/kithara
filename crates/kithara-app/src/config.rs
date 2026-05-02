@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use derivative::Derivative;
 use derive_setters::Setters;
-use kithara::stream::dl::Downloader;
+use kithara::{assets::FlushHub, stream::dl::Downloader};
 use kithara_drm::KeyProcessorRegistry;
 
 use crate::{drm, theme::Palette};
@@ -14,31 +16,39 @@ use crate::{drm, theme::Palette};
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Debug)]
 #[setters(prefix = "with_")]
+#[non_exhaustive]
 pub struct AppConfig {
-    /// Audio file URLs or paths to play.
+    /// Shared `AssetStore` flush coordinator for every track. Built
+    /// once in `main` so all tracks coalesce their on-disk index
+    /// flushes through a single hub — analogous to [`Self::downloader`]
+    /// and the audio worker.
     #[setters(skip)]
-    pub tracks: Vec<String>,
+    #[derivative(Debug = "ignore")]
+    pub flush_hub: Arc<FlushHub>,
+    /// Shared HTTP downloader for every track. Built once in `main` so
+    /// the whole app reuses one HTTP pool and runtime context.
+    #[setters(skip)]
+    #[derivative(Debug = "ignore")]
+    pub downloader: Downloader,
     /// DRM key processing registry. Populated via
     /// [`drm::make_key_registry`](crate::drm::make_key_registry) or
     /// built directly by the embedding app. Carries the
     /// domain-scoped rules — processor + headers (incl. auth) +
     /// query params — that HLS applies to key fetches.
     pub key_registry: KeyProcessorRegistry,
+    /// Color palette for the UI.
+    pub palette: Palette,
+    /// Log filter directives.
+    pub log_directives: Vec<String>,
+    /// Audio file URLs or paths to play.
+    #[setters(skip)]
+    pub tracks: Vec<String>,
+    /// Accept invalid TLS certificates (self-signed, expired). Test servers only.
+    pub danger_accept_invalid_certs: bool,
     /// Crossfade duration in seconds.
     pub crossfade_seconds: f32,
     /// Number of EQ bands for the UI.
     pub eq_band_count: usize,
-    /// Log filter directives.
-    pub log_directives: Vec<String>,
-    /// Color palette for the UI.
-    pub palette: Palette,
-    /// Accept invalid TLS certificates (self-signed, expired). Test servers only.
-    pub danger_accept_invalid_certs: bool,
-    /// Shared HTTP downloader for every track. Built once in `main` so
-    /// the whole app reuses one HTTP pool and runtime context.
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
-    pub downloader: Downloader,
 }
 
 impl AppConfig {
@@ -60,11 +70,14 @@ impl AppConfig {
         "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
     ];
 
-    /// Create a default config around the given downloader. Tracks default
-    /// to [`Self::DEFAULT_TRACKS`]; override via [`Self::with_tracks`].
+    /// Create a default config around the given downloader and shared
+    /// flush hub. Tracks default to [`Self::DEFAULT_TRACKS`]; override
+    /// via [`Self::with_tracks`].
     #[must_use]
-    pub fn new(downloader: Downloader) -> Self {
+    pub fn new(downloader: Downloader, flush_hub: Arc<FlushHub>) -> Self {
         Self {
+            downloader,
+            flush_hub,
             tracks: Self::DEFAULT_TRACKS
                 .iter()
                 .map(ToString::to_string)
@@ -75,7 +88,6 @@ impl AppConfig {
             log_directives: Vec::new(),
             palette: Palette::default(),
             danger_accept_invalid_certs: true,
-            downloader,
         }
     }
 

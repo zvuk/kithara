@@ -217,7 +217,7 @@ impl SeleniumHarness {
             .env("TEST_SERVER_PORT", self.config.test_server_port.to_string());
 
         self.test_server = Some(ChildGuard::spawn("test_server", cmd)?);
-        wait_http_ready(&health_url, self.config.startup_timeout).await
+        wait_url_ready(&health_url, self.config.startup_timeout, "").await
     }
 
     async fn ensure_trunk_server(&mut self) -> Result<(), String> {
@@ -225,10 +225,10 @@ impl SeleniumHarness {
 
         if self.config.page_url_override.is_some() {
             println!("[selenium] using external wasm page: {page_url}");
-            return wait_page_ready(&page_url, self.config.startup_timeout).await;
+            return wait_url_ready(&page_url, self.config.startup_timeout, "wasm page").await;
         }
 
-        if page_ready_once(&page_url).await {
+        if http_ok(&page_url).await {
             println!("[selenium] trunk page already running: {page_url}");
             return Ok(());
         }
@@ -254,7 +254,7 @@ impl SeleniumHarness {
             ]);
 
         self.trunk_server = Some(ChildGuard::spawn("trunk", cmd)?);
-        wait_page_ready(&page_url, self.config.startup_timeout).await
+        wait_url_ready(&page_url, self.config.startup_timeout, "wasm page").await
     }
 
     async fn ensure_webdriver_server(&mut self) -> Result<(), String> {
@@ -1421,7 +1421,7 @@ async fn http_ok(url: &str) -> bool {
     }
 }
 
-async fn wait_http_ready(url: &str, timeout: Duration) -> Result<(), String> {
+async fn wait_url_ready(url: &str, timeout: Duration, kind: &str) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
@@ -1431,33 +1431,11 @@ async fn wait_http_ready(url: &str, timeout: Duration) -> Result<(), String> {
         sleep(Consts::CHECK_INTERVAL).await;
     }
 
-    Err(format!("timeout waiting for {url}"))
-}
-
-async fn page_ready_once(url: &str) -> bool {
-    let client = Client::builder().timeout(Duration::from_secs(2)).build();
-
-    let Ok(client) = client else {
-        return false;
-    };
-
-    match client.get(url).send().await {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
+    if kind.is_empty() {
+        Err(format!("timeout waiting for {url}"))
+    } else {
+        Err(format!("timeout waiting for {kind} {url}"))
     }
-}
-
-async fn wait_page_ready(url: &str, timeout: Duration) -> Result<(), String> {
-    let deadline = Instant::now() + timeout;
-
-    while Instant::now() < deadline {
-        if page_ready_once(url).await {
-            return Ok(());
-        }
-        sleep(Consts::CHECK_INTERVAL).await;
-    }
-
-    Err(format!("timeout waiting for wasm page {url}"))
 }
 
 /// Create a [`WasmPlayerSelenium`] session with its owning harness.

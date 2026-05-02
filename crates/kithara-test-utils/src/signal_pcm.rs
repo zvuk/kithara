@@ -81,16 +81,16 @@ pub enum SignalLength {
 }
 
 impl SignalLength {
-    /// Create from an exact frame count.
-    #[must_use]
-    pub const fn from_frames(total_frames: usize) -> Self {
-        Self::Finite { total_frames }
-    }
-
     /// Create from a time duration and sample rate.
     #[must_use]
     pub fn from_duration(duration: Duration, sample_rate: u32) -> Self {
         Self::from_frames((duration.as_secs_f64() * sample_rate as f64) as usize)
+    }
+
+    /// Create from an exact frame count.
+    #[must_use]
+    pub const fn from_frames(total_frames: usize) -> Self {
+        Self::Finite { total_frames }
     }
 
     /// Create from an HLS-style segment layout (count, byte size per segment, channels).
@@ -179,9 +179,9 @@ impl From<Infinite> for SignalLength {
 /// PCM-first signal renderer used by fixture generators and WAV adapters.
 pub struct SignalPcm<S: signal::SignalFn> {
     signal: S,
-    sample_rate: u32,
-    channels: u16,
     length: SignalLength,
+    channels: u16,
+    sample_rate: u32,
 }
 
 impl<S: signal::SignalFn> SignalPcm<S> {
@@ -201,10 +201,8 @@ impl<S: signal::SignalFn> SignalPcm<S> {
         }
     }
 
-    /// Sample rate in Hz.
-    #[must_use]
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
+    const fn bytes_per_frame(&self) -> usize {
+        self.channels as usize * size_of::<u16>()
     }
 
     /// Number of audio channels.
@@ -213,38 +211,33 @@ impl<S: signal::SignalFn> SignalPcm<S> {
         self.channels
     }
 
-    /// Normalized signal length.
-    #[must_use]
-    pub const fn length(&self) -> SignalLength {
-        self.length
-    }
-
-    const fn bytes_per_frame(&self) -> usize {
-        self.channels as usize * size_of::<u16>()
-    }
-
-    /// Total number of audio frames, or `None` for infinite signals.
-    #[must_use]
-    pub const fn total_frames(&self) -> Option<usize> {
-        self.length.total_frames()
-    }
-
-    /// Total PCM byte length, or `None` for infinite signals.
-    #[must_use]
-    pub const fn total_byte_len(&self) -> Option<usize> {
-        self.length.total_pcm_byte_len(self.channels)
-    }
-
-    /// Total PCM byte length, or `None` for infinite signals.
-    #[must_use]
-    pub const fn total_pcm_byte_len(&self) -> Option<usize> {
-        self.total_byte_len()
+    /// Render all PCM data into a `Vec<u8>`.
+    pub fn into_vec(self) -> Vec<u8> {
+        let total_bytes = self
+            .total_byte_len()
+            .expect("rendering a full Vec requires a finite signal length");
+        let mut bytes = vec![0u8; total_bytes];
+        self.read_pcm_at(0, &mut bytes);
+        bytes
     }
 
     /// Check whether `offset` is past EOF for finite signals.
     #[must_use]
     pub fn is_past_eof(&self, offset: usize) -> bool {
         self.total_byte_len().is_some_and(|total| offset >= total)
+    }
+
+    /// Normalized signal length.
+    #[must_use]
+    pub const fn length(&self) -> SignalLength {
+        self.length
+    }
+
+    /// Fill `buf` with PCM bytes starting at a PCM-relative byte offset.
+    ///
+    /// Returns the number of bytes written.
+    pub fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize {
+        self.render_pcm(offset, self.total_byte_len().unwrap_or(usize::MAX), buf)
     }
 
     /// Fill `buf` with PCM bytes starting at a PCM-relative byte offset.
@@ -278,40 +271,47 @@ impl<S: signal::SignalFn> SignalPcm<S> {
         written
     }
 
-    /// Render all PCM data into a `Vec<u8>`.
-    pub fn into_vec(self) -> Vec<u8> {
-        let total_bytes = self
-            .total_byte_len()
-            .expect("rendering a full Vec requires a finite signal length");
-        let mut bytes = vec![0u8; total_bytes];
-        self.read_pcm_at(0, &mut bytes);
-        bytes
+    /// Sample rate in Hz.
+    #[must_use]
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
     }
 
-    /// Fill `buf` with PCM bytes starting at a PCM-relative byte offset.
-    ///
-    /// Returns the number of bytes written.
-    pub fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize {
-        self.render_pcm(offset, self.total_byte_len().unwrap_or(usize::MAX), buf)
+    /// Total PCM byte length, or `None` for infinite signals.
+    #[must_use]
+    pub const fn total_byte_len(&self) -> Option<usize> {
+        self.length.total_pcm_byte_len(self.channels)
+    }
+
+    /// Total number of audio frames, or `None` for infinite signals.
+    #[must_use]
+    pub const fn total_frames(&self) -> Option<usize> {
+        self.length.total_frames()
+    }
+
+    /// Total PCM byte length, or `None` for infinite signals.
+    #[must_use]
+    pub const fn total_pcm_byte_len(&self) -> Option<usize> {
+        self.total_byte_len()
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl<S: signal::SignalFn + Sync> kithara_encode::PcmSource for SignalPcm<S> {
-    fn sample_rate(&self) -> u32 {
-        Self::sample_rate(self)
-    }
-
     fn channels(&self) -> u16 {
         Self::channels(self)
     }
 
-    fn total_byte_len(&self) -> Option<usize> {
-        Self::total_byte_len(self)
-    }
-
     fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize {
         Self::read_pcm_at(self, offset, buf)
+    }
+
+    fn sample_rate(&self) -> u32 {
+        Self::sample_rate(self)
+    }
+
+    fn total_byte_len(&self) -> Option<usize> {
+        Self::total_byte_len(self)
     }
 }
 

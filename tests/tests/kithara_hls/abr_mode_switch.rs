@@ -11,7 +11,7 @@
 //!   segments served from disk, quality transitions visible from cache.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -20,12 +20,9 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
-    events::{Event, EventBus, HlsEvent},
-    hls::{
-        AbrMode, AbrOptions, Hls, HlsConfig,
-        config::{AbrController, ThroughputEstimator},
-    },
+    audio::{Audio, AudioConfig, ReadOutcome},
+    events::{AbrEvent, DownloaderEvent, Event, EventBus, HlsEvent, RequestId},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -65,7 +62,11 @@ fn segment_duration_secs() -> f64 {
     D.segment_size as f64 / (f64::from(D.sample_rate) * f64::from(D.channels) * 2.0)
 }
 
-/// Record of a `SegmentComplete` event.
+/// Record of a segment-level event.
+///
+/// Synthesised across `DownloaderEvent` (network fetches) and `HlsEvent`
+/// (reader-side reads): `cached = true` means the reader read the
+/// segment without a corresponding `RequestCompleted` (cache hit).
 #[derive(Clone, Debug)]
 struct SegmentRecord {
     variant: usize,
@@ -73,39 +74,71 @@ struct SegmentRecord {
     cached: bool,
 }
 
-/// Collect `SegmentComplete` and `VariantApplied` events from a bus.
+fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
+    // /stream/{spec}/seg/v{variant}_{segment}.m4s
+    let segs_marker = "/seg/v";
+    let after = url.split(segs_marker).nth(1)?;
+    let stem = after.split(".m4s").next()?;
+    let mut parts = stem.split('_');
+    let variant = parts.next()?.parse().ok()?;
+    let segment = parts.next()?.parse().ok()?;
+    Some((variant, segment))
+}
+
+/// Collect download/reader segment events from a bus.
 struct EventCollector {
-    segments: Arc<Mutex<Vec<SegmentRecord>>>,
+    /// Network fetches that completed (URL→variant/seg parsed at enqueue).
+    network_fetches: Arc<Mutex<HashSet<(usize, usize)>>>,
+    /// Reader-side reads (segment boundaries crossed in `read_at`).
+    reader_segments: Arc<Mutex<Vec<(usize, usize)>>>,
     switch_count: Arc<AtomicUsize>,
 }
 
 impl EventCollector {
     fn new(bus: &EventBus) -> Self {
-        let segments: Arc<Mutex<Vec<SegmentRecord>>> = Arc::new(Mutex::new(Vec::new()));
+        let network_fetches: Arc<Mutex<HashSet<(usize, usize)>>> =
+            Arc::new(Mutex::new(HashSet::new()));
+        let reader_segments: Arc<Mutex<Vec<(usize, usize)>>> = Arc::new(Mutex::new(Vec::new()));
         let switch_count = Arc::new(AtomicUsize::new(0));
 
-        let seg_bg = Arc::clone(&segments);
+        let net_bg = Arc::clone(&network_fetches);
+        let read_bg = Arc::clone(&reader_segments);
         let sw_bg = Arc::clone(&switch_count);
         let mut rx = bus.subscribe();
         spawn(async move {
-            while let Ok(ev) = rx.recv().await {
+            let mut request_map: HashMap<RequestId, (usize, usize)> = HashMap::new();
+            loop {
+                let ev = match rx.recv().await {
+                    Ok(ev) => ev,
+                    // `Lagged` only signals a dropped backlog window — the
+                    // channel is still live. Continue draining so we don't
+                    // miss the (rare, low-volume) `AbrEvent::VariantApplied`
+                    // that this collector keys off of.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 match &ev {
-                    Event::Hls(HlsEvent::SegmentComplete {
+                    Event::Downloader(DownloaderEvent::RequestEnqueued {
+                        request_id, url, ..
+                    }) => {
+                        if let Some(seg) = parse_segment_url(url.as_str()) {
+                            request_map.insert(*request_id, seg);
+                        }
+                    }
+                    Event::Downloader(DownloaderEvent::RequestCompleted { request_id, .. }) => {
+                        if let Some(seg) = request_map.remove(request_id) {
+                            net_bg.lock_sync().insert(seg);
+                        }
+                    }
+                    Event::Hls(HlsEvent::SegmentReadStart {
                         variant,
                         segment_index,
-                        cached,
                         ..
                     }) => {
-                        seg_bg.lock_sync().push(SegmentRecord {
-                            variant: *variant,
-                            segment_index: *segment_index,
-                            cached: *cached,
-                        });
+                        read_bg.lock_sync().push((*variant, *segment_index));
                     }
-                    Event::Hls(HlsEvent::VariantApplied {
-                        to_variant, reason, ..
-                    }) => {
-                        info!(to = to_variant, ?reason, "VariantApplied");
+                    Event::Abr(AbrEvent::VariantApplied { to, reason, .. }) => {
+                        info!(to = to, ?reason, "VariantApplied");
                         sw_bg.fetch_add(1, Ordering::Release);
                     }
                     _ => {}
@@ -114,13 +147,44 @@ impl EventCollector {
         });
 
         Self {
-            segments,
+            network_fetches,
+            reader_segments,
             switch_count,
         }
     }
 
+    /// Synthesised view: for every (variant, seg) the reader saw, decide
+    /// whether it came from the network (`RequestCompleted` seen) or from
+    /// the cache (no Completed event for that pair). Returns one record
+    /// per `SegmentReadStart`, dedup'd by (variant, seg) — first sighting
+    /// wins.
     fn segments(&self) -> Vec<SegmentRecord> {
-        self.segments.lock_sync().clone()
+        let net = self.network_fetches.lock_sync().clone();
+        let reads = self.reader_segments.lock_sync().clone();
+        let mut seen: HashSet<(usize, usize)> = HashSet::new();
+        let mut out = Vec::new();
+        for (v, s) in reads {
+            if !seen.insert((v, s)) {
+                continue;
+            }
+            out.push(SegmentRecord {
+                variant: v,
+                segment_index: s,
+                cached: !net.contains(&(v, s)),
+            });
+        }
+        // Network fetches that the reader never reached — also include
+        // them so per-variant-fetch counts stay correct.
+        for (v, s) in net {
+            if seen.insert((v, s)) {
+                out.push(SegmentRecord {
+                    variant: v,
+                    segment_index: s,
+                    cached: false,
+                });
+            }
+        }
+        out
     }
 
     fn switch_count(&self) -> usize {
@@ -133,11 +197,12 @@ fn read_until_eof(audio: &mut Audio<Stream<Hls>>, timeout: Duration) -> u64 {
     let mut total = 0u64;
     let start = Instant::now();
     while start.elapsed() < timeout {
-        let n = audio.read(&mut buf);
-        if n == 0 && audio.is_eof() {
-            break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error: {e}"),
         }
-        total += n as u64;
     }
     total
 }
@@ -183,23 +248,14 @@ async fn vod_manual_switch_affects_future_segments() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
-    let bus = EventBus::new(64);
+    let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
-    let abr = AbrController::<ThroughputEstimator>::new(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        min_switch_interval: Duration::ZERO,
-        down_switch_buffer_secs: 0.0,
-        min_buffer_for_up_switch_secs: 0.0,
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
-
-    let mut hls_config = HlsConfig::new(url)
+    let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_events(bus.clone());
-    hls_config.abr = Some(abr);
+        .with_events(bus.clone())
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config)
@@ -303,24 +359,16 @@ async fn multi_track_shared_abr_with_cache() {
     let temp_dir = TestTempDir::new();
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
 
-    // Shared ABR controller across both tracks.
-    let abr = AbrController::<ThroughputEstimator>::new(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        min_switch_interval: Duration::ZERO,
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
-
     // Step 1: Track 1, Auto mode → downloads V0
     info!("=== Step 1: Track 1 Auto ===");
-    let bus1 = EventBus::new(64);
+    let bus1 = EventBus::new(8192);
     let collector1 = EventCollector::new(&bus1);
 
-    let mut hls1 = HlsConfig::new(url1.clone())
+    let hls1 = HlsConfig::new(url1.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(CancellationToken::new())
-        .with_events(bus1.clone());
-    hls1.abr = Some(abr.clone());
+        .with_events(bus1.clone())
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let config1 = AudioConfig::<Hls>::new(hls1)
         .with_events(bus1)
@@ -348,16 +396,15 @@ async fn multi_track_shared_abr_with_cache() {
 
     // Step 2: Switch to Manual(1) and load Track 2
     info!("=== Step 2: Manual(1) → Track 2 ===");
-    abr.set_mode(AbrMode::Manual(1));
 
-    let bus2 = EventBus::new(64);
+    let bus2 = EventBus::new(8192);
     let collector2 = EventCollector::new(&bus2);
 
-    let mut hls2 = HlsConfig::new(url2)
+    let hls2 = HlsConfig::new(url2)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(CancellationToken::new())
-        .with_events(bus2.clone());
-    hls2.abr = Some(abr.clone());
+        .with_events(bus2.clone())
+        .with_initial_abr_mode(AbrMode::Manual(1));
 
     let config2 = AudioConfig::<Hls>::new(hls2)
         .with_events(bus2)
@@ -385,16 +432,15 @@ async fn multi_track_shared_abr_with_cache() {
     );
 
     // Step 3: Replay Track 1 with Manual(0) → uses cache from step 1
-    abr.set_mode(AbrMode::Manual(0));
 
-    let bus3 = EventBus::new(64);
+    let bus3 = EventBus::new(8192);
     let collector3 = EventCollector::new(&bus3);
 
-    let mut hls3 = HlsConfig::new(url1)
+    let hls3 = HlsConfig::new(url1)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(CancellationToken::new())
-        .with_events(bus3.clone());
-    hls3.abr = Some(abr.clone());
+        .with_events(bus3.clone())
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let config3 = AudioConfig::<Hls>::new(hls3)
         .with_events(bus3)
@@ -477,25 +523,14 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
-    let bus = EventBus::new(64);
+    let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
-    let abr = AbrController::<ThroughputEstimator>::new(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        min_switch_interval: Duration::ZERO,
-        down_switch_buffer_secs: 0.0,
-        // Prevent up-switch back to V0 -- this test validates the V0->V1
-        // down-switch path; ABR oscillation is a separate concern.
-        min_buffer_for_up_switch_secs: 999.0,
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    });
-
-    let mut hls_config = HlsConfig::new(url)
+    let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_events(bus.clone());
-    hls_config.abr = Some(abr);
+        .with_events(bus.clone())
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config)

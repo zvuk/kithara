@@ -9,6 +9,7 @@ use std::{
 
 use clap::Parser;
 use kithara::{
+    assets::{FlushHub, FlushPolicy},
     audio::generate_log_spaced_bands,
     net::NetOptions,
     play::{PlayerConfig, PlayerImpl},
@@ -22,6 +23,7 @@ use kithara_app::gui::GuiFrontend;
 use kithara_app::tui::{TuiFrontend, init_tracing as init_tui_tracing};
 use kithara_app::{config::AppConfig, frontend::Frontend};
 use kithara_queue::{Queue, QueueConfig};
+use tokio_util::sync::CancellationToken;
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -31,13 +33,13 @@ struct Args {
     #[arg(long, short, default_value = "auto")]
     mode: Mode,
 
+    /// Audio files or URLs to play.
+    tracks: Vec<String>,
+
     /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
     /// Enabled by default during testing phase.
     #[arg(long, default_value_t = true)]
     insecure: bool,
-
-    /// Audio files or URLs to play.
-    tracks: Vec<String>,
 }
 
 /// Application UI mode.
@@ -83,12 +85,16 @@ fn main() -> AppResult {
     // ambient-runtime aware, so every track created through
     // `sources::build_source` reuses it. TLS posture goes through
     // `NetOptions` on the Downloader; `ResourceConfig` has no `net`.
-    let net = NetOptions {
-        insecure: args.insecure,
-        ..NetOptions::default()
-    };
+    let mut net = NetOptions::default();
+    net.insecure = args.insecure;
     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
-    let config = AppConfig::new(downloader)
+    // One FlushHub for the whole app — every track's `AssetStore`
+    // shares this hub. Worker is opt-in: see
+    // `FlushHub::with_worker(...)` if a future build wants debounced
+    // background flushes; the no-worker default keeps the existing
+    // sync-flush-per-mutation behaviour.
+    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
+    let config = AppConfig::new(downloader, flush_hub)
         .with_tracks(args.tracks)
         .with_danger_accept_invalid_certs(args.insecure);
 
@@ -111,9 +117,7 @@ fn main() -> AppResult {
         .with_crossfade_duration(config.crossfade_seconds)
         .with_eq_layout(generate_log_spaced_bands(config.eq_band_count));
     let player = Arc::new(PlayerImpl::new(player_config));
-    let queue_config = QueueConfig::default()
-        .with_player(player)
-        .with_autoplay(true);
+    let queue_config = QueueConfig::default().with_player(player);
 
     // Queue is constructed here, but `queue.set_tracks` is deferred to each
     // frontend's runtime context — `Loader::spawn_load` requires a running

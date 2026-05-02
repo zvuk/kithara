@@ -25,23 +25,23 @@ macro_rules! clog {
 }
 
 struct Player {
-    volume: AtomicU32,
     crossfade_secs: AtomicU32,
-    eq_gains: [AtomicU32; Player::EQ_BANDS],
     ducking: AtomicU32,
+    start_count: AtomicU32,
+    volume: AtomicU32,
     cmd_tx: LazyLock<Mutex<Option<mpsc::Sender<WorkerCmd>>>>,
     start_lock: LazyLock<Mutex<()>>,
-    start_count: AtomicU32,
+    eq_gains: [AtomicU32; Player::EQ_BANDS],
 }
 
 static PLAYER: Player = Player {
-    volume: AtomicU32::new(0),
     crossfade_secs: AtomicU32::new(0),
-    eq_gains: [const { AtomicU32::new(0) }; Player::EQ_BANDS],
     ducking: AtomicU32::new(0),
+    start_count: AtomicU32::new(0),
+    volume: AtomicU32::new(0),
     cmd_tx: LazyLock::new(|| Mutex::new(None)),
     start_lock: LazyLock::new(|| Mutex::new(())),
-    start_count: AtomicU32::new(0),
+    eq_gains: [const { AtomicU32::new(0) }; Player::EQ_BANDS],
 };
 
 fn player() -> &'static Player {
@@ -50,29 +50,11 @@ fn player() -> &'static Player {
 
 impl Player {
     const CROSSFADE_SECONDS: f32 = 5.0;
-    const EQ_BANDS: usize = 10;
-
     /// Default initial volume.
     const DEFAULT_VOLUME: f32 = 0.5;
-
+    const EQ_BANDS: usize = 10;
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
-
-    fn load_f32(a: &AtomicU32) -> f32 {
-        f32::from_bits(a.load(Ordering::Relaxed))
-    }
-
-    fn store_f32(a: &AtomicU32, val: f32) {
-        a.store(val.to_bits(), Ordering::Relaxed);
-    }
-
-    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
-        self.cmd_tx.lock_sync()
-    }
-
-    fn find_player_idx(&self) -> Option<usize> {
-        None
-    }
 
     fn clear_cmd_tx(&self) {
         *self.lock_cmd_tx() = None;
@@ -94,18 +76,30 @@ impl Player {
 
         wasm_support::ensure_main_session();
         wasm_support::init_worker_session();
-        crate::js_channel::init_event_reader();
+        crate::js::init_event_reader();
         self.reset_cached_state();
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
         let worker = kithara_platform::spawn(move || {
-            crate::worker_entry::worker_main(cmd_rx);
+            crate::worker::worker_main(cmd_rx);
         });
         std::mem::forget(worker);
 
         Ok(())
+    }
+
+    fn find_player_idx(&self) -> Option<usize> {
+        None
+    }
+
+    fn load_f32(a: &AtomicU32) -> f32 {
+        f32::from_bits(a.load(Ordering::Relaxed))
+    }
+
+    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
+        self.cmd_tx.lock_sync()
     }
 
     fn reset_cached_state(&self) {
@@ -116,10 +110,94 @@ impl Player {
         }
         self.ducking.store(0, Ordering::Relaxed);
     }
+
+    fn store_f32(a: &AtomicU32, val: f32) {
+        a.store(val.to_bits(), Ordering::Relaxed);
+    }
 }
 
 #[wasm_export]
 impl Player {
+    #[export]
+    fn eq_band_count(&self) -> u32 {
+        Self::EQ_BANDS as u32
+    }
+
+    #[export]
+    fn eq_gain(&self, band: u32) -> f32 {
+        self.eq_gains
+            .get(band as usize)
+            .map(Self::load_f32)
+            .unwrap_or(0.0)
+    }
+
+    #[export]
+    fn get_crossfade_seconds(&self) -> f32 {
+        Self::load_f32(&self.crossfade_secs)
+    }
+
+    #[export]
+    fn get_duration_ms(&self) -> f64 {
+        wasm_support::bridge_duration_secs() * Self::MS_PER_SECOND
+    }
+
+    #[export]
+    fn get_position_ms(&self) -> f64 {
+        wasm_support::bridge_position_secs() * Self::MS_PER_SECOND
+    }
+
+    #[export]
+    fn get_session_ducking(&self) -> u32 {
+        self.ducking.load(Ordering::Relaxed)
+    }
+
+    #[export]
+    fn get_volume(&self) -> f32 {
+        Self::load_f32(&self.volume)
+    }
+
+    #[export]
+    fn is_playing(&self) -> bool {
+        wasm_support::bridge_is_playing()
+    }
+
+    #[export]
+    fn pause(&self) {
+        let _ = self.send_cmd(WorkerCmd::Pause);
+    }
+
+    #[export]
+    fn play(&self) {
+        let _ = self.send_cmd(WorkerCmd::Play);
+    }
+
+    #[export]
+    fn process_count(&self) -> f64 {
+        wasm_support::bridge_process_count() as f64
+    }
+
+    #[export]
+    fn reset_eq(&self) -> Result<(), JsValue> {
+        for g in &self.eq_gains {
+            Self::store_f32(g, 0.0);
+        }
+        self.send_cmd(WorkerCmd::ResetEq)
+    }
+
+    #[export]
+    fn seek(&self, position_ms: f64) -> Result<(), JsValue> {
+        self.send_cmd(WorkerCmd::Seek(position_ms))
+    }
+
+    #[export]
+    fn select_track(&self, url: String) -> Result<js_sys::Promise, JsValue> {
+        clog!("[PLAYER] select_track: sending to Worker url={url}");
+        let request_id = crate::js::next_request_id();
+        let cmd = WorkerCmd::SelectTrack { url, request_id };
+        self.send_cmd(cmd)?;
+        crate::js::reply_promise(request_id)
+    }
+
     fn send_cmd(&self, cmd: WorkerCmd) -> Result<(), JsValue> {
         self.ensure_worker_started()?;
 
@@ -146,46 +224,6 @@ impl Player {
     }
 
     #[export]
-    fn select_track(&self, url: String) -> Result<js_sys::Promise, JsValue> {
-        clog!("[PLAYER] select_track: sending to Worker url={url}");
-        let request_id = crate::js_channel::next_request_id();
-        let cmd = WorkerCmd::SelectTrack { url, request_id };
-        self.send_cmd(cmd)?;
-        crate::js_channel::reply_promise(request_id)
-    }
-
-    #[export]
-    fn warm_up_audio(&self) {
-        wasm_support::warm_up_audio();
-    }
-
-    #[export]
-    fn play(&self) {
-        let _ = self.send_cmd(WorkerCmd::Play);
-    }
-
-    #[export]
-    fn pause(&self) {
-        let _ = self.send_cmd(WorkerCmd::Pause);
-    }
-
-    #[export]
-    fn stop(&self) {
-        let _ = self.send_cmd(WorkerCmd::Stop);
-    }
-
-    #[export]
-    fn seek(&self, position_ms: f64) -> Result<(), JsValue> {
-        self.send_cmd(WorkerCmd::Seek(position_ms))
-    }
-
-    #[export]
-    fn set_volume(&self, volume: f32) {
-        Self::store_f32(&self.volume, volume);
-        let _ = self.send_cmd(WorkerCmd::SetVolume(volume));
-    }
-
-    #[export]
     fn set_crossfade_seconds(&self, seconds: f32) {
         Self::store_f32(&self.crossfade_secs, seconds);
         let _ = self.send_cmd(WorkerCmd::SetCrossfade(seconds));
@@ -200,65 +238,25 @@ impl Player {
     }
 
     #[export]
-    fn reset_eq(&self) -> Result<(), JsValue> {
-        for g in &self.eq_gains {
-            Self::store_f32(g, 0.0);
-        }
-        self.send_cmd(WorkerCmd::ResetEq)
-    }
-
-    #[export]
     fn set_session_ducking(&self, mode: u32) -> Result<(), JsValue> {
         self.ducking.store(mode, Ordering::Relaxed);
         self.send_cmd(WorkerCmd::SetDucking(mode))
     }
 
     #[export]
-    fn get_position_ms(&self) -> f64 {
-        wasm_support::bridge_position_secs() * Self::MS_PER_SECOND
+    fn set_volume(&self, volume: f32) {
+        Self::store_f32(&self.volume, volume);
+        let _ = self.send_cmd(WorkerCmd::SetVolume(volume));
     }
 
     #[export]
-    fn get_duration_ms(&self) -> f64 {
-        wasm_support::bridge_duration_secs() * Self::MS_PER_SECOND
+    fn stop(&self) {
+        let _ = self.send_cmd(WorkerCmd::Stop);
     }
 
     #[export]
-    fn is_playing(&self) -> bool {
-        wasm_support::bridge_is_playing()
-    }
-
-    #[export]
-    fn process_count(&self) -> f64 {
-        wasm_support::bridge_process_count() as f64
-    }
-
-    #[export]
-    fn get_volume(&self) -> f32 {
-        Self::load_f32(&self.volume)
-    }
-
-    #[export]
-    fn get_crossfade_seconds(&self) -> f32 {
-        Self::load_f32(&self.crossfade_secs)
-    }
-
-    #[export]
-    fn eq_band_count(&self) -> u32 {
-        Self::EQ_BANDS as u32
-    }
-
-    #[export]
-    fn eq_gain(&self, band: u32) -> f32 {
-        self.eq_gains
-            .get(band as usize)
-            .map(Self::load_f32)
-            .unwrap_or(0.0)
-    }
-
-    #[export]
-    fn get_session_ducking(&self) -> u32 {
-        self.ducking.load(Ordering::Relaxed)
+    fn take_events(&self) -> String {
+        crate::js::take_events()
     }
 
     #[export]
@@ -267,8 +265,8 @@ impl Player {
     }
 
     #[export]
-    fn take_events(&self) -> String {
-        crate::js_channel::take_events()
+    fn warm_up_audio(&self) {
+        wasm_support::warm_up_audio();
     }
 }
 

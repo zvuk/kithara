@@ -119,8 +119,8 @@ build:
   script:
     - just test --no-run
     - RUSTUP_TOOLCHAIN=1.89 cargo check --workspace
-    - just wasm-check
-    - just wasm-size-check || true
+    - just wasm
+    - just wasm size-check || true
   artifacts:
     paths:
       - target/wasm-slim-result.json
@@ -144,10 +144,15 @@ lint:
     - rustup toolchain install nightly --component rustfmt
   script:
     - just lint-full
-    - just quality-report-ci
+    - just quality report
+        --min-unimock-traits "${QUALITY_MIN_UNIMOCK_TRAITS:-0}"
+        --min-rstest-cases "${QUALITY_MIN_RSTEST_CASES:-0}"
+        --min-perf-test-files "${QUALITY_MIN_PERF_TEST_FILES:-0}"
+        --min-bench-targets "${QUALITY_MIN_BENCH_TARGETS:-0}"
+        --max-local-http-servers "${QUALITY_MAX_LOCAL_HTTP_SERVERS:-999}"
     - just deny
     - just machete
-    - just arch
+    - just lint arch
     - just hack || true
     - just semver || true
   artifacts:
@@ -172,8 +177,8 @@ test:
     - rustup component add llvm-tools-preview
   script:
     - just coverage
-    - just perf-test
-    - just bench-ci
+    - just perf
+    - just bench ci
   artifacts:
     reports:
       coverage_report:
@@ -202,7 +207,7 @@ release-apple:
     - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
     - test -f "$CARGO_HOME/bin/cargo-swift" || cargo install cargo-swift --locked
   script:
-    - just release-apple
+    - just apple release
     - cp /tmp/KitharaFFIInternal.xcframework.zip .
     # macOS desktop binary
     - cargo build -p kithara-app --release --features tui
@@ -224,7 +229,7 @@ release-android:
   before_script:
     - !reference [.touch-sources, before_script]
   script:
-    - just android-aar
+    - just android aar
   artifacts:
     paths:
       - android/lib/build/outputs/aar/lib-release.aar

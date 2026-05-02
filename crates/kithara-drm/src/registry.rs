@@ -23,6 +23,18 @@ pub enum DomainMatcher {
 }
 
 impl DomainMatcher {
+    fn matches(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
+        match self {
+            Self::Exact(domain) => host == *domain,
+            Self::Wildcard(suffix) => {
+                host.ends_with(suffix.as_str())
+                    && host.len() > suffix.len()
+                    && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+            }
+        }
+    }
+
     /// Parse a pattern string into a [`DomainMatcher`].
     ///
     /// `"*.example.com"` → [`DomainMatcher::Wildcard`],
@@ -34,18 +46,6 @@ impl DomainMatcher {
             || Self::Exact(lower.clone()),
             |suffix| Self::Wildcard(suffix.to_string()),
         )
-    }
-
-    fn matches(&self, host: &str) -> bool {
-        let host = host.to_ascii_lowercase();
-        match self {
-            Self::Exact(domain) => host == *domain,
-            Self::Wildcard(suffix) => {
-                host.ends_with(suffix.as_str())
-                    && host.len() > suffix.len()
-                    && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
-            }
-        }
     }
 }
 
@@ -59,15 +59,15 @@ impl DomainMatcher {
 #[setters(prefix = "with_", strip_option)]
 #[non_exhaustive]
 pub struct KeyProcessorRule {
-    #[setters(skip)]
-    matchers: Vec<DomainMatcher>,
-    #[setters(skip)]
-    #[derivative(Debug(format_with = "fmt_processor"))]
-    processor: KeyProcessor,
     /// Headers appended to key requests that match this rule.
     pub headers: Option<HashMap<String, String>>,
     /// Query parameters appended to key URLs that match this rule.
     pub query_params: Option<HashMap<String, String>>,
+    #[setters(skip)]
+    #[derivative(Debug(format_with = "fmt_processor"))]
+    processor: KeyProcessor,
+    #[setters(skip)]
+    matchers: Vec<DomainMatcher>,
 }
 
 fn fmt_processor(_: &KeyProcessor, f: &mut fmt::Formatter) -> fmt::Result {
@@ -85,11 +85,11 @@ impl KeyProcessorRule {
         I: IntoIterator<Item = P>,
     {
         Self {
+            processor,
             matchers: patterns
                 .into_iter()
                 .map(|p| DomainMatcher::parse(p.as_ref()))
                 .collect(),
-            processor,
             headers: None,
             query_params: None,
         }
@@ -150,7 +150,7 @@ mod tests {
     use super::*;
 
     fn noop_processor() -> KeyProcessor {
-        Arc::new(|key| Ok(key))
+        Arc::new(Ok)
     }
 
     fn reverse_processor() -> KeyProcessor {

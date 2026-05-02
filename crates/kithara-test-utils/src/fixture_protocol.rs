@@ -152,11 +152,11 @@ pub enum PackagedSignal {
 /// Per-variant override for packaged audio fixtures.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct PackagedAudioVariantOverride {
-    pub variant: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_rate: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<PcmPattern>,
+    pub variant: usize,
 }
 
 /// Preferred description for real audio fMP4 packaging in new audio HLS fixtures.
@@ -164,15 +164,22 @@ pub struct PackagedAudioVariantOverride {
 pub struct PackagedAudioRequest {
     #[serde(with = "serde_audio_codec")]
     pub codec: AudioCodec,
-    pub sample_rate: u32,
-    pub channels: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timescale: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_rate: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timescale: Option<u32>,
     pub source: PackagedAudioSource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variant_overrides: Vec<PackagedAudioVariantOverride>,
+    /// If true, the init segment carries an `sidx` index referencing every
+    /// media segment by (size, duration). Real-world fMP4 produced by
+    /// packagers (DASH, HLS-fMP4 from major CDNs) usually includes one;
+    /// the kithara mux defaults to `false` so existing test fixtures
+    /// remain bit-stable.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub include_sidx: bool,
+    pub channels: u16,
+    pub sample_rate: u32,
 }
 
 /// Declarative delay rule for segment serving.
@@ -181,12 +188,12 @@ pub struct PackagedAudioRequest {
 /// The first matching rule wins; if none matches, the delay is zero.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct DelayRule {
-    /// Match only this variant index. `None` = any variant.
-    pub variant: Option<usize>,
     /// Match only this exact segment index. `None` = any segment.
     pub segment_eq: Option<usize>,
     /// Match segments with index >= N. `None` = no lower bound.
     pub segment_gte: Option<usize>,
+    /// Match only this variant index. `None` = any variant.
+    pub variant: Option<usize>,
     /// Delay in milliseconds.
     pub delay_ms: u64,
 }
@@ -227,10 +234,10 @@ pub fn eval_delay(rules: &[DelayRule], variant: usize, segment: usize) -> u64 {
 /// Encryption parameters for HLS segments.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EncryptionRequest {
-    /// 16-byte AES key as hex string.
-    pub key_hex: String,
     /// Optional 16-byte IV as hex string. When `None`, derived from segment sequence.
     pub iv_hex: Option<String>,
+    /// 16-byte AES key as hex string.
+    pub key_hex: String,
 }
 
 /// Generate test-pattern segment data: `V{v}-SEG-{s}:TEST_SEGMENT_DATA` + `0xFF` padding.

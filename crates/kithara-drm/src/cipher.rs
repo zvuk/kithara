@@ -9,23 +9,23 @@ pub struct UniqueBinaryCipher {
 }
 
 impl UniqueBinaryCipher {
+    // Keystream extraction parameters.
+    const KEYSTREAM_SHIFT: u32 = 56; // extract top byte
+    const ROTATION_MASK: u8 = 7; // 3-bit rotation amount
     // Splitmix64 constants (Steele, Lea & Moler, 2014).
     const SPLITMIX_INCREMENT: u64 = 0x9e3779b97f4a7c15; // golden-ratio derived
     const SPLITMIX_MIX1: u64 = 0xbf58476d1ce4e5b9;
     const SPLITMIX_MIX2: u64 = 0x94d049bb133111eb;
     const SPLITMIX_SHIFT1: u32 = 30;
+
     const SPLITMIX_SHIFT2: u32 = 27;
     const SPLITMIX_SHIFT3: u32 = 31;
-
     // Xorshift64* constants (Marsaglia, 2003; Vigna star variant).
     const XORSHIFT_SHIFT_A: u32 = 12;
     const XORSHIFT_SHIFT_B: u32 = 25;
+
     const XORSHIFT_SHIFT_C: u32 = 27;
     const XORSHIFT_STAR_MUL: u64 = 0x2545f4914f6cdd1d;
-
-    // Keystream extraction parameters.
-    const KEYSTREAM_SHIFT: u32 = 56; // extract top byte
-    const ROTATION_MASK: u8 = 7; // 3-bit rotation amount
 
     /// Creates a new cipher instance from a given key string.
     #[must_use]
@@ -57,11 +57,6 @@ impl UniqueBinaryCipher {
         out.freeze()
     }
 
-    #[inline]
-    fn ror8(v: u8, r: u8) -> u8 {
-        v.rotate_right(u32::from(r) & u32::from(Self::ROTATION_MASK))
-    }
-
     fn derive_seed_from_key(key_bytes: &[u8]) -> u64 {
         const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
         const FNV_PRIME: u64 = 0x100000001b3;
@@ -76,6 +71,11 @@ impl UniqueBinaryCipher {
         z = (z ^ (z >> Self::SPLITMIX_SHIFT1)).wrapping_mul(Self::SPLITMIX_MIX1);
         z = (z ^ (z >> Self::SPLITMIX_SHIFT2)).wrapping_mul(Self::SPLITMIX_MIX2);
         z ^ (z >> Self::SPLITMIX_SHIFT3)
+    }
+
+    #[inline]
+    fn ror8(v: u8, r: u8) -> u8 {
+        v.rotate_right(u32::from(r) & u32::from(Self::ROTATION_MASK))
     }
 
     #[inline]

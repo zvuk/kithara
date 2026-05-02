@@ -34,8 +34,13 @@ impl CodecDescriptor {
     }
 }
 
-fn aac_lc_sample_entry(sample_rate: u32, channels: u16, bit_rate: u64) -> Vec<u8> {
-    mp4_box(*b"mp4a", |buf| {
+fn audio_sample_entry(
+    fourcc: [u8; 4],
+    sample_rate: u32,
+    channels: u16,
+    extra: impl FnOnce(&mut Mp4Bytes),
+) -> Vec<u8> {
+    mp4_box(fourcc, |buf| {
         buf.push_zeroes(6);
         buf.push_u16(1);
         buf.push_zeroes(8);
@@ -44,6 +49,12 @@ fn aac_lc_sample_entry(sample_rate: u32, channels: u16, bit_rate: u64) -> Vec<u8
         buf.push_u16(0);
         buf.push_u16(0);
         buf.push_u32(sample_rate << 16);
+        extra(buf);
+    })
+}
+
+fn aac_lc_sample_entry(sample_rate: u32, channels: u16, bit_rate: u64) -> Vec<u8> {
+    audio_sample_entry(*b"mp4a", sample_rate, channels, |buf| {
         buf.push_bytes(&aac_esds(sample_rate, channels, bit_rate));
     })
 }
@@ -102,15 +113,7 @@ fn aac_audio_specific_config(sample_rate: u32, channels: u16) -> [u8; 2] {
 }
 
 fn flac_sample_entry(sample_rate: u32, channels: u16, codec_config: &[u8]) -> Vec<u8> {
-    mp4_box(*b"fLaC", |buf| {
-        buf.push_zeroes(6);
-        buf.push_u16(1);
-        buf.push_zeroes(8);
-        buf.push_u16(channels);
-        buf.push_u16(16);
-        buf.push_u16(0);
-        buf.push_u16(0);
-        buf.push_u32(sample_rate << 16);
+    audio_sample_entry(*b"fLaC", sample_rate, channels, |buf| {
         buf.push_bytes(&flac_dfla(codec_config));
     })
 }

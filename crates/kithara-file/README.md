@@ -53,7 +53,7 @@ flowchart LR
     end
 
     subgraph "Decode (worker thread)"
-        Decoder["Symphonia<br/><i>InnerDecoder</i>"]
+        Decoder["Symphonia<br/><i>Decoder</i>"]
         PCM["PcmChunk<br/><i>f32 interleaved</i>"]
     end
 

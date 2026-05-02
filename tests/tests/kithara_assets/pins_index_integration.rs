@@ -10,7 +10,7 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig},
-    bufpool::byte_pool,
+    bufpool::BytePool,
     internal::{DiskAssetStore, PinsIndex},
 };
 use kithara_test_utils::temp_dir;
@@ -34,7 +34,12 @@ fn asset_store_no_limits(temp_dir: kithara_test_utils::TestTempDir) -> AssetStor
 
 #[kithara::fixture]
 fn disk_asset_store(temp_dir: kithara_test_utils::TestTempDir) -> DiskAssetStore {
-    DiskAssetStore::new(temp_dir.path(), "test-asset", CancellationToken::new())
+    DiskAssetStore::new(
+        temp_dir.path(),
+        "test-asset",
+        CancellationToken::new(),
+        &BytePool::default(),
+    )
 }
 
 #[kithara::test(
@@ -42,51 +47,35 @@ fn disk_asset_store(temp_dir: kithara_test_utils::TestTempDir) -> DiskAssetStore
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-fn pins_index_missing_returns_default(
+#[case::missing_file(None)]
+#[case::corrupted_file(Some(&b"{ this is not valid json"[..]))]
+fn pins_index_bad_state_returns_default(
     temp_dir: kithara_test_utils::TestTempDir,
     disk_asset_store: DiskAssetStore,
+    #[case] prewrite_contents: Option<&[u8]>,
 ) {
     let dir = temp_dir.path();
     let base = disk_asset_store;
-
     let path = pins_path(dir);
-    assert!(!path.exists(), "pins.bin must not exist initially");
 
-    let idx = PinsIndex::open(&base, byte_pool().clone()).unwrap();
+    match prewrite_contents {
+        None => {
+            assert!(!path.exists(), "pins.bin must not exist initially");
+        }
+        Some(bytes) => {
+            // Write a corrupted blob directly on disk to simulate index damage.
+            fs::create_dir_all(dir.join("_index")).unwrap();
+            fs::write(&path, bytes).unwrap();
+            assert!(path.exists(), "pins.bin must exist for this test");
+        }
+    }
+
+    let idx = PinsIndex::open(&base, &BytePool::default()).unwrap();
     let pins = idx.load().unwrap();
 
     assert!(
         pins.is_empty(),
-        "missing pins index must be treated as empty (best-effort default)"
-    );
-}
-
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
-fn pins_index_invalid_json_returns_default(
-    temp_dir: kithara_test_utils::TestTempDir,
-    disk_asset_store: DiskAssetStore,
-) {
-    let dir = temp_dir.path();
-    let base = disk_asset_store;
-
-    // Write a corrupted JSON file directly on disk to simulate index damage.
-    let index_dir = dir.join("_index");
-    fs::create_dir_all(&index_dir).unwrap();
-
-    let path = pins_path(dir);
-    fs::write(&path, b"{ this is not valid json").unwrap();
-    assert!(path.exists(), "pins.bin must exist for this test");
-
-    let idx = PinsIndex::open(&base, byte_pool().clone()).unwrap();
-    let pins = idx.load().unwrap();
-
-    assert!(
-        pins.is_empty(),
-        "invalid JSON pins index must be treated as empty (best-effort default)"
+        "bad pins index must be treated as empty (best-effort default)"
     );
 }
 
@@ -102,7 +91,7 @@ fn pins_index_roundtrip_store_then_load(
     let _dir = temp_dir.path();
     let base = disk_asset_store;
 
-    let idx = PinsIndex::open(&base, byte_pool().clone()).unwrap();
+    let idx = PinsIndex::open(&base, &BytePool::default()).unwrap();
 
     let mut pins = HashSet::new();
     pins.insert("asset-a".to_string());
@@ -111,7 +100,7 @@ fn pins_index_roundtrip_store_then_load(
     idx.store(&pins).unwrap();
 
     // A second instance reading the same underlying resource should see the persisted set.
-    let idx2 = PinsIndex::open(&base, byte_pool().clone()).unwrap();
+    let idx2 = PinsIndex::open(&base, &BytePool::default()).unwrap();
     let loaded = idx2.load().unwrap();
 
     assert_eq!(loaded, pins, "pins index must roundtrip via store/load");
@@ -132,7 +121,7 @@ fn pins_index_store_load_with_different_sets(
 ) {
     let base = disk_asset_store;
 
-    let idx = PinsIndex::open(&base, byte_pool().clone()).unwrap();
+    let idx = PinsIndex::open(&base, &BytePool::default()).unwrap();
 
     let pins: HashSet<String> = asset_names.iter().map(ToString::to_string).collect();
     idx.store(&pins).unwrap();
@@ -158,14 +147,14 @@ fn pins_index_concurrent_updates_handled_correctly(
     let base = disk_asset_store;
 
     // Create first index and store some pins
-    let idx1 = PinsIndex::open(&base, byte_pool().clone()).unwrap();
+    let idx1 = PinsIndex::open(&base, &BytePool::default()).unwrap();
     let pins1: HashSet<String> = (0..asset_count)
         .map(|i| format!("asset-{}", i + 1))
         .collect();
     idx1.store(&pins1).unwrap();
 
     // Create second index and load (should see first pins)
-    let idx2 = PinsIndex::open(&base, byte_pool().clone()).unwrap();
+    let idx2 = PinsIndex::open(&base, &BytePool::default()).unwrap();
     let loaded1 = idx2.load().unwrap();
     assert_eq!(loaded1, pins1);
 
@@ -176,7 +165,7 @@ fn pins_index_concurrent_updates_handled_correctly(
     idx2.store(&pins2).unwrap();
 
     // A fresh open should see updated pins
-    let idx3 = PinsIndex::open(&base, byte_pool().clone()).unwrap();
+    let idx3 = PinsIndex::open(&base, &BytePool::default()).unwrap();
     let loaded2 = idx3.load().unwrap();
     assert_eq!(loaded2, pins2);
 }
@@ -192,7 +181,7 @@ fn pins_index_empty_set_stores_and_loads_correctly(
 ) {
     let base = disk_asset_store;
 
-    let idx = PinsIndex::open(&base, byte_pool().clone()).unwrap();
+    let idx = PinsIndex::open(&base, &BytePool::default()).unwrap();
 
     // Store empty set
     let empty_pins = HashSet::new();
@@ -219,8 +208,8 @@ fn pins_index_persists_across_store_instances(temp_dir: kithara_test_utils::Test
     let cancel = CancellationToken::new();
 
     // Create first store and write pins
-    let base1 = DiskAssetStore::new(dir, "test-asset", cancel.clone());
-    let idx1 = PinsIndex::open(&base1, byte_pool().clone()).unwrap();
+    let base1 = DiskAssetStore::new(dir, "test-asset", cancel.clone(), &BytePool::default());
+    let idx1 = PinsIndex::open(&base1, &BytePool::default()).unwrap();
 
     let mut pins = HashSet::new();
     pins.insert("persisted-asset".to_string());
@@ -229,8 +218,8 @@ fn pins_index_persists_across_store_instances(temp_dir: kithara_test_utils::Test
     idx1.store(&pins).unwrap();
 
     // Create completely new store instance (simulating restart)
-    let base2 = DiskAssetStore::new(dir, "test-asset", cancel);
-    let idx2 = PinsIndex::open(&base2, byte_pool().clone()).unwrap();
+    let base2 = DiskAssetStore::new(dir, "test-asset", cancel, &BytePool::default());
+    let idx2 = PinsIndex::open(&base2, &BytePool::default()).unwrap();
 
     let loaded = idx2.load().unwrap();
     assert_eq!(loaded, pins, "pins should persist across store instances");

@@ -27,20 +27,14 @@ pub enum NetError {
 }
 
 impl NetError {
+    /// HTTP 408 Request Timeout.
+    const HTTP_REQUEST_TIMEOUT: u16 = 408;
+
     /// Minimum HTTP status code for server errors (5xx).
     const HTTP_SERVER_ERROR_MIN: u16 = 500;
 
     /// HTTP 429 Too Many Requests.
     const HTTP_TOO_MANY_REQUESTS: u16 = 429;
-
-    /// HTTP 408 Request Timeout.
-    const HTTP_REQUEST_TIMEOUT: u16 = 408;
-
-    /// Creates a timeout error
-    #[must_use]
-    pub fn timeout() -> Self {
-        Self::Timeout
-    }
 
     /// Checks if this error is considered retryable
     #[must_use]
@@ -73,6 +67,12 @@ impl NetError {
             | Self::Cancelled
             | Self::InvalidContentType(_) => false,
         }
+    }
+
+    /// Creates a timeout error
+    #[must_use]
+    pub fn timeout() -> Self {
+        Self::Timeout
     }
 }
 
@@ -156,8 +156,8 @@ mod tests {
     async fn test_retry_exhausted_display() {
         let source = Box::new(NetError::Timeout);
         let error = NetError::RetryExhausted {
-            max_retries: 3,
             source,
+            max_retries: 3,
         };
 
         let display = error.to_string();

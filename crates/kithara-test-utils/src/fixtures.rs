@@ -5,11 +5,9 @@ use std::{
     time::Duration,
 };
 
-use kithara_abr::{AbrMode, AbrOptions};
+use kithara_abr::{AbrMode, AbrSettings};
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
-#[cfg(target_arch = "wasm32")]
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 #[cfg(target_arch = "wasm32")]
 use tracing_wasm::{WASMLayer, WASMLayerConfigBuilder};
 
@@ -91,40 +89,42 @@ pub fn cancel_token_cancelled() -> CancellationToken {
     token
 }
 
+/// ABR settings tuned for tests that want variant switches to fire on
+/// every sample without hysteresis or interval gates.
 #[must_use]
 #[kithara::fixture]
-pub fn abr_switch_trigger() -> AbrOptions {
-    AbrOptions {
-        down_hysteresis_ratio: 1.0,
-        down_switch_buffer_secs: 0.0,
-        max_bandwidth_bps: None,
-        min_buffer_for_up_switch_secs: 0.0,
-        min_switch_interval: Duration::ZERO,
-        min_throughput_record_ms: 0,
-        mode: AbrMode::Auto(None),
-        sample_window: Duration::from_millis(100),
-        throughput_safety_factor: 1.0,
-        up_hysteresis_ratio: 1.0,
-        variants: Vec::new(),
-    }
+pub fn abr_switch_trigger() -> AbrSettings {
+    AbrSettings::default()
+        .with_warmup_min_bytes(0)
+        .with_min_buffer_for_up_switch(Duration::ZERO)
+        .with_urgent_downswitch_buffer(Duration::ZERO)
+        .with_min_switch_interval(Duration::ZERO)
+        .with_throughput_safety_factor(1.0)
+        .with_up_hysteresis_ratio(1.0)
+        .with_down_hysteresis_ratio(1.0)
+        .with_min_throughput_record_ms(0)
 }
 
+/// ABR settings for fast-reacting tests (sub-second switch interval).
 #[must_use]
 #[kithara::fixture]
-pub fn abr_fast() -> AbrOptions {
-    AbrOptions {
-        down_hysteresis_ratio: 0.9,
-        down_switch_buffer_secs: 0.0,
-        max_bandwidth_bps: None,
-        min_buffer_for_up_switch_secs: 0.0,
-        min_switch_interval: Duration::from_secs(1),
-        min_throughput_record_ms: 0,
-        mode: AbrMode::Auto(None),
-        sample_window: Duration::from_millis(200),
-        throughput_safety_factor: 1.0,
-        up_hysteresis_ratio: 2.0,
-        variants: Vec::new(),
-    }
+pub fn abr_fast() -> AbrSettings {
+    AbrSettings::default()
+        .with_warmup_min_bytes(0)
+        .with_min_buffer_for_up_switch(Duration::ZERO)
+        .with_urgent_downswitch_buffer(Duration::ZERO)
+        .with_min_switch_interval(Duration::from_secs(1))
+        .with_throughput_safety_factor(1.0)
+        .with_up_hysteresis_ratio(2.0)
+        .with_down_hysteresis_ratio(0.9)
+        .with_min_throughput_record_ms(0)
+}
+
+/// Default initial ABR mode for test fixtures — Auto starting at variant 0.
+#[must_use]
+#[kithara::fixture]
+pub fn abr_initial_mode() -> AbrMode {
+    AbrMode::Auto(None)
 }
 
 pub fn setup_tracing() {
@@ -139,9 +139,26 @@ pub fn setup_tracing_with_filter(directives: &str) {
 pub fn init_tracing(filter: EnvFilter) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(filter)
+        use tracing_subscriber::Layer as _;
+
+        // Compose fmt + probe layers BEFORE calling try_init: a
+        // separate `set_global_default` for the probe layer would
+        // race the fmt layer's init (`try_init` succeeds for whoever
+        // wins, the loser gets a `SetGlobalDefault` error and probe
+        // capture is silently dropped). Stacking them in one
+        // subscriber guarantees both layers are active.
+        //
+        // The `EnvFilter` is attached to the fmt layer only — probe
+        // events (target ends with `_probe`, e.g. `"kithara_hls_probe"`) are emitted at
+        // TRACE level, which the default fmt filter ("warn") would
+        // otherwise drop before they reach our probe layer.
+        let fmt_layer = tracing_subscriber::fmt::layer()
             .with_test_writer()
+            .with_filter(filter);
+        let probe_layer = crate::probe_capture::probe_layer();
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(probe_layer)
             .try_init();
     }
 

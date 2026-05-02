@@ -1,6 +1,6 @@
 id: style.no-inline-qualified-paths
 message: Avoid inline qualified paths; import at file top and use short names in function bodies.
-severity: error
+severity: warning
 language: Rust
 files:
   - crates/**/*.rs

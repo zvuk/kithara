@@ -49,7 +49,7 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn disk_checkpoint_persists_partial_writes_across_rebuild() {
+fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
     let dir = tempdir().unwrap();
     let key = ResourceKey::new("segments/partial.bin");
 
@@ -59,7 +59,14 @@ fn disk_checkpoint_persists_partial_writes_across_rebuild() {
             .asset_root(Some("p4-partial"))
             .build();
         let res = store.acquire_resource(&key).unwrap();
-        // Write two disjoint ranges, do NOT commit.
+        // Write two disjoint ranges, do NOT commit. Dropping a writer
+        // with `status = Active` invokes `LeaseResource::drop`'s
+        // `RemoveFn`, which calls `inner.remove_resource(key)` →
+        // `DiskAssetStore::remove_resource` → `fs::remove_file` plus
+        // `availability.remove`. The concrete store is the canonical
+        // owner of `AvailabilityIndex` and synchronises both halves of
+        // a deletion so the index never claims bytes the file system
+        // does not have.
         res.write_at(0, b"aaa").unwrap();
         res.write_at(10, b"bbb").unwrap();
         drop(res);
@@ -71,13 +78,19 @@ fn disk_checkpoint_persists_partial_writes_across_rebuild() {
         .asset_root(Some("p4-partial"))
         .build();
 
+    // `AvailabilityIndex` must reflect that the abandoned writer's
+    // partial ranges no longer exist on disk. Otherwise any reader
+    // that consults the index (e.g. `wait_range`) would race a
+    // `read_at` that hits NotFound — the production hang scenario
+    // pinned by `red_test_lease_resource_drop_strands_availability_index`.
     let ranges = store.available_ranges(&key);
     let pairs: Vec<_> = ranges.iter().map(|r| (r.start, r.end)).collect();
-    assert_eq!(pairs, vec![(0, 3), (10, 13)]);
-    assert!(store.contains_range(&key, 0..3));
-    assert!(store.contains_range(&key, 10..13));
-    assert!(!store.contains_range(&key, 3..10));
-    // Uncommitted → final_len unknown.
+    assert!(
+        pairs.is_empty(),
+        "writer abandoned without commit must leave availability empty, got {pairs:?}"
+    );
+    assert!(!store.contains_range(&key, 0..3));
+    assert!(!store.contains_range(&key, 10..13));
     assert_eq!(store.final_len(&key), None);
 }
 

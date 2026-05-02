@@ -28,17 +28,6 @@ impl CancelGroup {
         }
     }
 
-    /// Returns `true` if both groups share the same underlying source array.
-    #[must_use]
-    pub fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.sources, &other.sources)
-    }
-
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.sources.iter().any(CancellationToken::is_cancelled)
-    }
-
     pub async fn cancelled(&self) {
         if self.is_cancelled() {
             return;
@@ -53,6 +42,17 @@ impl CancelGroup {
             return;
         }
         select_all(futs).await;
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.sources.iter().any(CancellationToken::is_cancelled)
+    }
+
+    /// Returns `true` if both groups share the same underlying source array.
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.sources, &other.sources)
     }
 
     fn tokens(&self) -> &[CancellationToken] {
@@ -138,8 +138,8 @@ mod tests {
 
     struct Setup {
         group: CancelGroup,
-        sources: Vec<CancellationToken>,
         parents: Vec<CancellationToken>,
+        sources: Vec<CancellationToken>,
     }
 
     fn build(spec: &[Src]) -> Setup {
@@ -166,8 +166,8 @@ mod tests {
         let group = CancelGroup::new(sources.clone());
         Setup {
             group,
-            sources,
             parents,
+            sources,
         }
     }
 

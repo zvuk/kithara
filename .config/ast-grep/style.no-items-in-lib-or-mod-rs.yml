@@ -1,0 +1,35 @@
+id: style.no-items-in-lib-or-mod-rs
+message: |
+  lib.rs and mod.rs files must contain only module declarations
+  (`mod foo;` / `pub mod foo;`), re-exports (`pub use ...;`), inner
+  attributes, and doc-comments. Move all other items (structs, enums,
+  unions, traits, impls, free functions, type aliases, consts, statics,
+  macro definitions, inline modules with bodies, and `mod tests` blocks)
+  to a sibling file.
+severity: error
+language: Rust
+files:
+  - crates/**/src/lib.rs
+  - crates/**/src/**/mod.rs
+ignores:
+  - crates/kithara-wasm-macros/**
+  - crates/kithara-hang-detector-macros/**
+  - crates/kithara-test-macros/**
+  - crates/kithara-probe-macros/**
+rule:
+  any:
+    - kind: function_item
+    - kind: struct_item
+    - kind: enum_item
+    - kind: union_item
+    - kind: trait_item
+    - kind: impl_item
+    - kind: type_item
+    - kind: const_item
+    - kind: static_item
+    - kind: macro_definition
+    # `mod tests { ... }` (inline test module) — even though `mod_item`
+    # is the legal form for re-exports, an inline module *with* a body
+    # is logic, not a declaration. Detect via the explicit `mod foo {}`
+    # pattern; bare `mod foo;` declarations remain valid.
+    - pattern: mod $NAME { $$$ }

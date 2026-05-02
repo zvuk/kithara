@@ -40,7 +40,7 @@ pub use impls::{
     resource::Resource,
     source_type::SourceType,
 };
-pub use kithara_audio::{AudioWorkerHandle, ServiceClass};
+pub use kithara_audio::{AudioWorkerHandle, SeekOutcome, ServiceClass};
 #[cfg(any(feature = "file", feature = "hls"))]
 pub use kithara_net::Headers;
 pub use metadata::{Artwork, Metadata};

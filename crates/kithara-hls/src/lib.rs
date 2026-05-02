@@ -1,4 +1,8 @@
-#![forbid(unsafe_code)]
+// `deny` (not `forbid`) so the `probes` module can locally
+// `#[allow(unsafe_code)]` for the inline asm emitted by `usdt::provider!`
+// when the `usdt-probes` feature is enabled. Production code outside
+// that module remains unsafe-free.
+#![deny(unsafe_code)]
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns))]
 #![allow(
     unreachable_pub,
@@ -47,6 +51,6 @@ pub(crate) mod stream_index;
 pub use config::{HlsConfig, KeyOptions};
 pub use context::HlsStreamContext;
 pub use error::{HlsError, HlsResult};
-pub use kithara_abr::{AbrMode, AbrOptions};
+pub use kithara_abr::AbrMode;
 pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
 pub use stream::Hls;

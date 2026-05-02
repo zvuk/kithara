@@ -32,6 +32,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use kithara_abr::Abr;
 use kithara_platform::{
     Mutex,
     time::{Duration, sleep},
@@ -60,13 +61,15 @@ impl SelfReferencingPeer {
         *self.inner_handle.lock_sync() = Some(handle);
     }
 
-    /// Mirror of `HlsPeer::teardown`: release the stashed PeerHandle
+    /// Mirror of `HlsPeer::teardown`: release the stashed `PeerHandle`
     /// clone so `PeerInner.cancel` can fire when the external handle
     /// drops, letting the Registry unregister this peer.
     fn teardown(&self) {
         *self.inner_handle.lock_sync() = None;
     }
 }
+
+impl Abr for SelfReferencingPeer {}
 
 impl Peer for SelfReferencingPeer {
     fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {

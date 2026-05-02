@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    hint::black_box,
     io::{Read, Seek, SeekFrom},
     sync::{
         Arc,
@@ -19,14 +20,14 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use criterion::{BatchSize, Criterion, SamplingMode, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioEffect, ResamplerQuality},
-    bufpool::pcm_pool,
+    bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     net::NetOptions,
     stream::{
         Stream,
@@ -48,6 +49,7 @@ impl Consts {
     const HLS_READ_TARGET_BYTES: usize = 196_608;
     const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
 
+    #[allow(dead_code, reason = "exposed for future bench cases")]
     const fn hls_total_bytes() -> usize {
         Self::HLS_SEGMENT_COUNT * Self::HLS_SEGMENT_SIZE
     }
@@ -84,7 +86,7 @@ fn make_chunk(sample_rate: u32, channels: u16, frames: usize) -> PcmChunk {
             },
             ..Default::default()
         },
-        pcm_pool().attach(make_pcm(frames, usize::from(channels))),
+        PcmPool::default().attach(make_pcm(frames, usize::from(channels))),
     )
 }
 
@@ -294,11 +296,14 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                     let mut buf = [0.0_f32; 4_096];
                     let mut total = 0usize;
                     while total < Consts::AUDIO_READ_TARGET_SAMPLES {
-                        let n = audio.read(&mut buf);
-                        if n == 0 {
-                            break;
+                        match audio.read(&mut buf) {
+                            Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => {
+                                total += count.get();
+                            }
+                            Ok(kithara_audio::ReadOutcome::Pending { .. }) => continue,
+                            Ok(kithara_audio::ReadOutcome::Eof { .. }) => break,
+                            Err(e) => panic!("audio read failed: {e}"),
                         }
-                        total += n;
                     }
                     black_box(total);
                 });
@@ -329,21 +334,14 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
             |temp_dir| {
                 let url = master_url.clone();
                 rt.block_on(async move {
-                    let net = NetOptions {
-                        pool_max_idle_per_host: 8,
-                        ..NetOptions::default()
-                    };
+                    let net = NetOptions::default().with_pool_max_idle_per_host(8);
                     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
                     let store = StoreOptions::new(temp_dir.path())
                         .with_ephemeral(true)
                         .with_max_bytes(200_000);
-                    let abr = AbrOptions {
-                        mode: AbrMode::Auto(Some(1)),
-                        ..AbrOptions::default()
-                    };
                     let config = HlsConfig::new(url)
                         .with_store(store)
-                        .with_abr_options(abr)
+                        .with_initial_abr_mode(AbrMode::Auto(Some(1)))
                         .with_downloader(downloader)
                         .with_download_batch_size(3)
                         .with_look_ahead_bytes(96_000);

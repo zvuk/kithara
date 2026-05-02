@@ -49,8 +49,9 @@ fn stress_seeks_preserve_timeline_integrity() {
 
         for j in 0..CHUNKS_PER_BURST {
             let chunk = match decoder.next_chunk() {
-                Ok(Some(c)) => c,
-                Ok(None) => break, // EOF
+                Ok(kithara_decode::DecoderChunkOutcome::Chunk(c)) => c,
+                Ok(kithara_decode::DecoderChunkOutcome::Pending(_)) => continue,
+                Ok(kithara_decode::DecoderChunkOutcome::Eof) => break,
                 Err(e) => panic!("next_chunk failed at seek #{i}, burst #{j}: {e}"),
             };
 

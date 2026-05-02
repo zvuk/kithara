@@ -26,24 +26,24 @@ const NOTIFICATION_RINGBUF_CAPACITY: usize = 32;
 pub(crate) struct SharedPlayerState {
     /// Whether playback is active.
     pub(crate) playing: AtomicBool,
-    /// Current seek epoch used to invalidate stale seek requests.
-    pub(crate) seek_epoch: AtomicU64,
-    /// Last observed playback position snapshot in seconds.
-    ///
-    /// Source of truth is the per-track `Timeline` in the audio pipeline.
-    pub(crate) position: AtomicF64,
     /// Last observed total duration snapshot in seconds.
     ///
     /// Source of truth is the per-track `Timeline` in the audio pipeline.
     pub(crate) duration: AtomicF64,
+    /// Last observed playback position snapshot in seconds.
+    ///
+    /// Source of truth is the per-track `Timeline` in the audio pipeline.
+    pub(crate) position: AtomicF64,
     /// Current sample rate from the audio stream.
     pub(crate) sample_rate: AtomicU32,
     /// Diagnostic: how many times `process()` has been called on the audio thread.
     pub(crate) process_count: AtomicU64,
-    /// Sender for processor-to-main-thread notifications.
-    pub(crate) notification_tx: Mutex<HeapProd<PlayerNotification>>,
+    /// Current seek epoch used to invalidate stale seek requests.
+    pub(crate) seek_epoch: AtomicU64,
     /// Receiver for processor-to-main-thread notifications.
     pub(crate) notification_rx: Mutex<HeapCons<PlayerNotification>>,
+    /// Sender for processor-to-main-thread notifications.
+    pub(crate) notification_tx: Mutex<HeapProd<PlayerNotification>>,
 }
 
 impl SharedPlayerState {
@@ -65,16 +65,16 @@ impl SharedPlayerState {
         }
     }
 
-    /// Get the current sample rate, if set.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
-    pub(crate) fn sample_rate(&self) -> Option<NonZeroU32> {
-        NonZeroU32::new(self.sample_rate.load(Ordering::Relaxed))
-    }
-
     pub(crate) fn next_seek_epoch(&self) -> u64 {
         self.seek_epoch
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
+    }
+
+    /// Get the current sample rate, if set.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
+    pub(crate) fn sample_rate(&self) -> Option<NonZeroU32> {
+        NonZeroU32::new(self.sample_rate.load(Ordering::Relaxed))
     }
 }
 

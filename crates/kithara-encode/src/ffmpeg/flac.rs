@@ -28,17 +28,13 @@ use crate::{
 pub(crate) struct FlacFFmpegEncoder;
 
 impl FlacFFmpegEncoder {
+    pub(crate) const FLAC_BLOCK_TYPE_MASK: u8 = 0x7F;
     pub(crate) const FLAC_FRAME_SAMPLES: usize = 4608;
-    pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
+    pub(crate) const FLAC_LAST_BLOCK_FLAG: u8 = 0x80;
     pub(crate) const FLAC_METADATA_HEADER_LEN: usize = 4;
     pub(crate) const FLAC_MIN_METADATA_BLOCK_LEN: usize =
         Self::FLAC_METADATA_HEADER_LEN + Self::FLAC_STREAMINFO_LEN;
-    pub(crate) const FLAC_BLOCK_TYPE_MASK: u8 = 0x7F;
-    pub(crate) const FLAC_LAST_BLOCK_FLAG: u8 = 0x80;
-
-    pub(crate) const fn frame_samples() -> usize {
-        Self::FLAC_FRAME_SAMPLES
-    }
+    pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
         if request.timescale == 0 {
@@ -88,22 +84,26 @@ impl FlacFFmpegEncoder {
 
         Ok(EncodedTrack {
             media_info,
+            codec_config,
+            access_units,
             timescale: request.timescale,
             bit_rate: request.bit_rate,
-            codec_config,
             packets_per_segment: request.packets_per_segment,
-            access_units,
         })
+    }
+
+    pub(crate) const fn frame_samples() -> usize {
+        Self::FLAC_FRAME_SAMPLES
     }
 }
 
 struct PacketCollectingEncoder {
-    filter: ffmpeg::filter::Graph,
     encoder: AudioEncoder,
-    codec_config: Vec<u8>,
+    filter: ffmpeg::filter::Graph,
+    timestamp_origin: Option<i64>,
     encoder_time_base: Rational,
     target_time_base: Rational,
-    timestamp_origin: Option<i64>,
+    codec_config: Vec<u8>,
     units: Vec<EncodedAccessUnit>,
 }
 
@@ -156,6 +156,10 @@ impl PacketCollectingEncoder {
         })
     }
 
+    fn into_track_parts(self) -> (Vec<u8>, Vec<EncodedAccessUnit>) {
+        (self.codec_config, self.units)
+    }
+
     fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {
         let encoder_time_base = self.encoder_time_base;
         let target_time_base = self.target_time_base;
@@ -181,10 +185,6 @@ impl PacketCollectingEncoder {
             &mut self.timestamp_origin,
             &mut self.units,
         );
-    }
-
-    fn into_track_parts(self) -> (Vec<u8>, Vec<EncodedAccessUnit>) {
-        (self.codec_config, self.units)
     }
 }
 
@@ -319,8 +319,8 @@ mod tests {
 
     struct Consts;
     impl Consts {
-        const SAMPLE_RATE: u32 = 48_000;
         const CHANNELS: u16 = 2;
+        const SAMPLE_RATE: u32 = 48_000;
     }
 
     #[kithara::test]
@@ -344,8 +344,8 @@ mod tests {
             .with_container(ContainerFormat::Fmp4);
 
         let encoded = EncoderFactory::encode_packaged(PackagedEncodeRequest {
-            pcm: &pcm,
             media_info,
+            pcm: &pcm,
             timescale: Consts::SAMPLE_RATE,
             bit_rate: 512_000,
             packets_per_segment: 2,

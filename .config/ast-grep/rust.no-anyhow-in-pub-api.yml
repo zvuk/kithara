@@ -1,0 +1,33 @@
+id: rust.no-anyhow-in-pub-api
+message: |
+  `anyhow::Error` / `anyhow::Result` in a public function signature of a
+  library crate. `anyhow` erases the error type at the boundary; callers
+  cannot match on variants, recover programmatically, or grow distinct
+  handling per failure mode without falling back to string matching.
+
+  Per AGENTS.md: "Errors should be typed and include context about what
+  failed and on which resource." Define a typed `enum Error` (`thiserror`
+  or hand-rolled) for the public surface of the crate; reserve `anyhow`
+  for binaries (`main.rs`, `xtask`, examples).
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/main.rs"
+  - "crates/kithara-app/**"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-test-macros/**"
+  - "crates/kithara-hang-detector-macros/**"
+  - "crates/kithara-wasm-macros/**"
+  - "crates/kithara-probe-macros/**"
+rule:
+  all:
+    - kind: function_item
+    - regex: 'pub(?:\([^)]*\))?\s+(?:async\s+)?(?:unsafe\s+)?fn\s+\w+'
+    - regex: '->\s*(?:anyhow::Result|anyhow::Error|::anyhow::Result|::anyhow::Error|Result<[^>]*,\s*anyhow::Error)'

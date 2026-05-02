@@ -1,0 +1,39 @@
+id: perf.prefer-pcm-pool
+message: |
+  Allocating a `Vec<f32>` directly in a hot-path crate. Audio render
+  and decode loops must reuse PCM buffers via the `PcmPool` that was
+  passed in from the top of the app (config field or constructor
+  argument), not by calling the global `pcm_pool()` accessor:
+
+      let mut buf = self.pcm_pool.get_with(|b| {
+          b.clear();
+          b.resize(samples, 0.0);
+      });
+
+  `PcmPool::get` returns a `PcmBuf = PooledOwned<8, Vec<f32>>` that
+  recycles on drop, so steady-state playback never allocates PCM
+  scratch. Direct `vec![0.0f32; ...]` / `Vec::<f32>::with_capacity(...)`
+  is only acceptable for one-shot initialisation outside the realtime
+  path.
+severity: warning
+language: Rust
+files:
+  - crates/kithara-audio/src/**/*.rs
+  - crates/kithara-decode/src/**/*.rs
+  - crates/kithara-stream/src/**/*.rs
+  - crates/kithara-hls/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: "vec![0.0f32; $N]"
+    - pattern: "vec![0_f32; $N]"
+    - pattern: "vec![0.0_f32; $N]"
+    - pattern: "vec![0.0; $N]"
+    - pattern: "Vec::<f32>::with_capacity($N)"
+    - pattern: "Vec::<f32>::new()"

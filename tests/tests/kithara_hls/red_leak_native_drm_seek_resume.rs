@@ -30,10 +30,10 @@
 //! delaying process exit past leak-timeout.
 //!
 //! RED strategy
-//! Exercise the same Audio<Stream<Hls>>::new + preload + seek() cycle with
+//! Exercise the same Audio<Stream<Hls>>`::new` + preload + `seek()` cycle with
 //! DRM, then drop everything. Count kithara-owned named threads (exposed
 //! by `kithara_platform::thread::active_named_thread_count`) across N
-//! iterations against a SHARED Downloader + SHARED TestServer — the
+//! iterations against a SHARED Downloader + SHARED `TestServer` — the
 //! server-side artifact is amortised, and any growth per iteration is
 //! thread/task leakage tied to a single session.
 //!
@@ -46,8 +46,8 @@ use std::{error::Error as StdError, num::NonZeroUsize, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, AudioWorkerHandle, PcmReader},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmReader},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::{thread::active_named_thread_count, time::sleep};
@@ -66,11 +66,10 @@ impl Consts {
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
-        if PcmReader::next_chunk(audio).is_some() {
-            return;
-        }
-        if audio.is_eof() {
-            return;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
         }
         assert!(
             std::time::Instant::now() <= deadline,
@@ -95,17 +94,14 @@ async fn run_drm_seek_resume_cycle(
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_downloader(downloader.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::new(hls_config).with_worker(shared_worker.clone()),
     )
     .await
     .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     // Warmup chunks so the DRM pipeline is fully live before we seek.
     for w in 0..4 {
@@ -117,7 +113,7 @@ async fn run_drm_seek_resume_cycle(
         audio
             .seek(Duration::from_secs_f64(seek_secs))
             .expect("seek must succeed");
-        audio.preload();
+        let _ = audio.preload();
 
         for c in 0..3 {
             next_chunk_or_timeout(
@@ -132,7 +128,7 @@ async fn run_drm_seek_resume_cycle(
 }
 
 /// RED test: after N DRM+seek+resume cycles against a shared Downloader
-/// and shared AudioWorkerHandle, the count of kithara-named threads must
+/// and shared `AudioWorkerHandle`, the count of kithara-named threads must
 /// be bounded. Each iteration leaks at most a constant number of threads;
 /// iteration-over-iteration growth indicates a real thread/task leak tied
 /// to the DRM seek path.

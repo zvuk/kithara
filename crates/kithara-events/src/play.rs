@@ -63,16 +63,13 @@ impl SlotId {
 #[derive(Clone, Copy, Debug, Derivative, PartialEq)]
 #[derivative(Default)]
 pub struct MediaTime {
-    value: i64,
     #[derivative(Default(value = "1"))]
     timescale: i32,
+    value: i64,
 }
 
 impl MediaTime {
-    pub const ZERO: Self = Self {
-        value: 0,
-        timescale: 1,
-    };
+    const DURATION_TIMESCALE: i32 = 600;
     pub const INVALID: Self = Self {
         value: 0,
         timescale: 0,
@@ -82,35 +79,24 @@ impl MediaTime {
         timescale: 1,
     };
 
+    pub const ZERO: Self = Self {
+        value: 0,
+        timescale: 1,
+    };
+
     #[must_use]
     pub fn new(value: i64, timescale: i32) -> Self {
-        Self { value, timescale }
+        Self { timescale, value }
     }
 
     #[must_use]
-    #[expect(clippy::cast_possible_truncation)]
-    pub fn with_seconds(seconds: f64, timescale: i32) -> Self {
-        Self {
-            value: (seconds * f64::from(timescale)) as i64,
-            timescale,
-        }
-    }
-
-    const DURATION_TIMESCALE: i32 = 600;
-
-    #[must_use]
-    pub fn with_duration(duration: Duration) -> Self {
-        Self::with_seconds(duration.as_secs_f64(), Self::DURATION_TIMESCALE)
+    pub fn is_indefinite(&self) -> bool {
+        self.value == i64::MAX
     }
 
     #[must_use]
-    pub fn value(&self) -> i64 {
-        self.value
-    }
-
-    #[must_use]
-    pub fn timescale(&self) -> i32 {
-        self.timescale
+    pub fn is_valid(&self) -> bool {
+        self.timescale > 0
     }
 
     #[must_use]
@@ -123,13 +109,8 @@ impl MediaTime {
     }
 
     #[must_use]
-    pub fn is_valid(&self) -> bool {
-        self.timescale > 0
-    }
-
-    #[must_use]
-    pub fn is_indefinite(&self) -> bool {
-        self.value == i64::MAX
+    pub fn timescale(&self) -> i32 {
+        self.timescale
     }
 
     #[must_use]
@@ -138,6 +119,25 @@ impl MediaTime {
             return None;
         }
         Some(Duration::from_secs_f64(self.seconds()))
+    }
+
+    #[must_use]
+    pub fn value(&self) -> i64 {
+        self.value
+    }
+
+    #[must_use]
+    pub fn with_duration(duration: Duration) -> Self {
+        Self::with_seconds(duration.as_secs_f64(), Self::DURATION_TIMESCALE)
+    }
+
+    #[must_use]
+    #[expect(clippy::cast_possible_truncation)]
+    pub fn with_seconds(seconds: f64, timescale: i32) -> Self {
+        Self {
+            value: (seconds * f64::from(timescale)) as i64,
+            timescale,
+        }
     }
 }
 
@@ -197,24 +197,24 @@ impl ops::Sub for MediaTime {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct TimeRange {
-    pub start: Duration,
     pub duration: Duration,
+    pub start: Duration,
 }
 
 impl TimeRange {
     #[must_use]
     pub fn new(start: Duration, duration: Duration) -> Self {
-        Self { start, duration }
-    }
-
-    #[must_use]
-    pub fn end(&self) -> Duration {
-        self.start + self.duration
+        Self { duration, start }
     }
 
     #[must_use]
     pub fn contains(&self, time: Duration) -> bool {
         time >= self.start && time < self.end()
+    }
+
+    #[must_use]
+    pub fn end(&self) -> Duration {
+        self.start + self.duration
     }
 }
 
@@ -271,9 +271,9 @@ pub enum RouteChangeReason {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct BpmInfo {
-    pub bpm: f64,
-    pub confidence: f32,
     pub first_beat_offset: Duration,
+    pub confidence: f32,
+    pub bpm: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -300,6 +300,13 @@ pub enum PlayerEvent {
         success: bool,
     },
     ItemDidPlayToEnd,
+    /// Current track aborted by an unrecoverable failure (decoder fault,
+    /// pcm channel closed, seek-out-of-range with no recovery). Distinct
+    /// from `ItemDidPlayToEnd` which is for natural EOF. Carries a
+    /// human-readable error string for surfacing to UI / Queue status.
+    TrackErrored {
+        error: String,
+    },
 }
 
 #[derive(Clone, Debug)]

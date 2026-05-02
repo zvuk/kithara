@@ -9,7 +9,7 @@
 
 use bytes::Bytes;
 use kithara_assets::{AssetStore, ResourceKey};
-use kithara_bufpool::byte_pool;
+use kithara_bufpool::BytePool;
 use kithara_drm::DecryptContext;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
@@ -33,27 +33,15 @@ use crate::{HlsError, HlsResult};
 pub(crate) async fn fetch_atomic_body(
     downloader: &PeerHandle,
     backend: &AssetStore<DecryptContext>,
+    byte_pool: &BytePool,
     headers: Option<Headers>,
     url: &Url,
     rel_path: &str,
     resource_kind: &str,
 ) -> HlsResult<Bytes> {
     let key = ResourceKey::from_url(url);
-    if let Ok(res) = backend.open_resource(&key) {
-        let mut buf = byte_pool().get();
-        let n = res.read_into(&mut buf)?;
-        if n > 0 {
-            let _pinned = res.retain();
-            debug!(
-                url = %url,
-                asset_root = %backend.asset_root(),
-                rel_path = %rel_path,
-                bytes = n,
-                resource_kind,
-                "kithara-hls: cache hit (pinned)"
-            );
-            return Ok(Bytes::copy_from_slice(&buf));
-        }
+    if let Some(bytes) = try_read_cached(backend, byte_pool, &key, url, rel_path, resource_kind)? {
+        return Ok(bytes);
     }
 
     debug!(
@@ -67,11 +55,54 @@ pub(crate) async fn fetch_atomic_body(
     let res = backend.acquire_resource(&key)?.retain();
     let bytes = download_atomic_bytes(downloader, url.clone(), headers).await?;
 
-    // Best-effort cache write. Concurrent callers may race: all miss
-    // the cache, all fetch, first commits, later `write_all` calls
-    // fail because the resource is already committed. Harmless — the
-    // bytes are in memory from the network fetch.
-    if let Err(e) = res.write_all(&bytes) {
+    write_back_cache(&res, &bytes, backend, url, rel_path, resource_kind);
+
+    Ok(bytes)
+}
+
+/// Try to read the resource from the cache. Returns `Ok(Some(bytes))`
+/// on a cache hit, `Ok(None)` on miss.
+fn try_read_cached(
+    backend: &AssetStore<DecryptContext>,
+    byte_pool: &BytePool,
+    key: &ResourceKey,
+    url: &Url,
+    rel_path: &str,
+    resource_kind: &str,
+) -> HlsResult<Option<Bytes>> {
+    let Ok(res) = backend.open_resource(key) else {
+        return Ok(None);
+    };
+    let mut buf = byte_pool.get();
+    let n = res.read_into(&mut buf)?;
+    if n == 0 {
+        return Ok(None);
+    }
+    let _pinned = res.retain();
+    debug!(
+        url = %url,
+        asset_root = %backend.asset_root(),
+        rel_path = %rel_path,
+        bytes = n,
+        resource_kind,
+        "kithara-hls: cache hit (pinned)"
+    );
+    Ok(Some(Bytes::copy_from_slice(&buf)))
+}
+
+/// Best-effort cache write. Concurrent callers may race: all miss
+/// the cache, all fetch, first commits, later `write_all` calls
+/// fail because the resource is already committed. Harmless — the
+/// bytes are in memory from the network fetch.
+fn write_back_cache(
+    res: &kithara_assets::AssetResource<DecryptContext>,
+    bytes: &Bytes,
+    backend: &AssetStore<DecryptContext>,
+    url: &Url,
+    rel_path: &str,
+    resource_kind: &str,
+) {
+    if let Err(e) = res.write_all(bytes) {
         trace!(
             url = %url,
             error = %e,
@@ -88,8 +119,6 @@ pub(crate) async fn fetch_atomic_body(
             "kithara-hls: fetched from network and cached"
         );
     }
-
-    Ok(bytes)
 }
 
 /// Fetch a URL and collect the full body into a `Bytes` buffer.

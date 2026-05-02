@@ -19,11 +19,7 @@ fn create_test_storage(size: usize) -> (MmapResource, NamedTempFile) {
     file.flush().unwrap();
 
     let path = file.path().to_path_buf();
-    let opts = MmapOptions {
-        path,
-        initial_len: None,
-        mode: OpenMode::ReadWrite,
-    };
+    let opts = MmapOptions::new(path).with_mode(OpenMode::ReadWrite);
     let storage: MmapResource = Resource::open(CancellationToken::new(), opts).unwrap();
     (storage, file)
 }
@@ -63,7 +59,6 @@ enum PerfScenario {
 #[case("storage_random_read", PerfScenario::RandomReads)]
 #[case("storage_write", PerfScenario::Writes)]
 #[case("storage_wait_range", PerfScenario::WaitRange)]
-#[ignore]
 fn perf_storage_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {

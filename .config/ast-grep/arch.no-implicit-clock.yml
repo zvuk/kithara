@@ -1,0 +1,44 @@
+id: arch.no-implicit-clock
+message: |
+  Library code reads the wall clock directly via `Instant::now()` /
+  `SystemTime::now()`. Hidden access to time defeats determinism: tests
+  cannot pin a clock, simulation cannot replay a session, and the same
+  function call yields different results depending on when it ran.
+
+  Per AGENTS.md: "Tests must be deterministic". Inject a `Clock` (or
+  whatever the crate calls its time port) from the top of the app and
+  read time through it:
+
+      // ❌  let now = Instant::now();
+      // ✅  let now = self.clock.now();
+
+  Tests can then substitute a `MockClock` / `ManualClock` and step time
+  explicitly. App / FFI / wasm / xtask / test-support crates may keep
+  the direct calls because they own the `Clock` impl that lib crates
+  consume.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/main.rs"
+  - "crates/kithara-app/**"
+  - "crates/kithara-ffi/**"
+  - "crates/kithara-wasm/**"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-test-macros/**"
+  - "crates/kithara-hang-detector-macros/**"
+  - "crates/kithara-wasm-macros/**"
+  - "crates/kithara-probe-macros/**"
+rule:
+  any:
+    - pattern: Instant::now()
+    - pattern: std::time::Instant::now()
+    - pattern: SystemTime::now()
+    - pattern: std::time::SystemTime::now()
+    - pattern: tokio::time::Instant::now()

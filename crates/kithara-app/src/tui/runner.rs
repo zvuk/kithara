@@ -15,10 +15,10 @@ use crate::{
 struct Consts;
 impl Consts {
     const CONTROL_POLL_MS: u64 = 50;
+    const MAX_DIGIT_TRACKS: usize = 9;
+    const PERCENT_SCALE: f32 = 100.0;
     const SEEK_STEP_SECONDS_F64: f64 = 5.0;
     const VOLUME_STEP: f32 = 0.05;
-    const PERCENT_SCALE: f32 = 100.0;
-    const MAX_DIGIT_TRACKS: usize = 9;
 }
 
 type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -35,7 +35,7 @@ pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig
     queue.set_tracks(crate::sources::build_sources(config));
 
     let event_rx = queue.subscribe();
-    let bus = queue.player().bus().clone();
+    let bus = queue.bus().clone();
 
     let queue_for_loop = Arc::clone(&queue);
     let mut ui_handle =
@@ -295,7 +295,7 @@ fn apply_seek(queue: &Queue, delta_seconds: f64, dashboard: &mut Dashboard) -> S
     let current = queue.position_seconds().unwrap_or(0.0).max(0.0);
     let target = (current + delta_seconds).max(0.0);
     match queue.seek(target) {
-        Ok(()) => {
+        Ok(_outcome) => {
             dashboard.set_note(format!("seek {}", format_seconds(target)));
             dashboard.set_position(Duration::from_secs_f64(target));
             format!("seek target={}", format_seconds(target))

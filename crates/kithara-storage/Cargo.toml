@@ -16,13 +16,13 @@ test-utils = ["unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 internal = []
 disable-hang-detector = [
-    "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
 ]
 
 [dependencies]
 delegate = { workspace = true }
 derivative = { workspace = true }
+derive_setters = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
@@ -30,7 +30,6 @@ kithara-bufpool = { workspace = true }
 
 # range tracking + sync primitives (wasm32-compatible)
 rangemap = { workspace = true }
-kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 crossbeam-queue = { workspace = true }
 

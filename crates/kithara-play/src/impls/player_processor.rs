@@ -71,27 +71,27 @@ pub(crate) enum PlayerCmd {
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
 pub(crate) struct PlayerNodeProcessor {
-    cmd_rx: HeapCons<PlayerCmd>,
-    crossfade: CrossfadeSettings,
-    sample_rate: NonZeroU32,
-    scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
     shared_state: Arc<SharedPlayerState>,
     tracks: ArenaRegistry<Arc<str>, PlayerTrack>,
+    crossfade: CrossfadeSettings,
+    cmd_rx: HeapCons<PlayerCmd>,
+    sample_rate: NonZeroU32,
     tracks_transitions: VecDeque<TrackTransition>,
+    scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
 }
 
 impl PlayerNodeProcessor {
+    /// Minimum position (seconds) before seeking is allowed on fade-in.
+    const FADE_IN_SEEK_THRESHOLD: f64 = 0.5;
+
     /// Maximum number of concurrent tracks per player node.
     const MAX_TRACKS: usize = 4;
-
-    /// Number of scratch buffers for stereo processing.
-    const SCRATCH_BUF_COUNT: usize = 4;
 
     /// Minimum stereo channel count for output processing.
     const MIN_STEREO: usize = 2;
 
-    /// Minimum position (seconds) before seeking is allowed on fade-in.
-    const FADE_IN_SEEK_THRESHOLD: f64 = 0.5;
+    /// Number of scratch buffers for stereo processing.
+    const SCRATCH_BUF_COUNT: usize = 4;
 
     /// Create a new processor with the given command receiver and shared state.
     pub(crate) fn new(
@@ -104,12 +104,68 @@ impl PlayerNodeProcessor {
 
         Self {
             cmd_rx,
-            crossfade: CrossfadeSettings::default(),
             sample_rate,
             scratch_bufs,
             shared_state,
+            crossfade: CrossfadeSettings::default(),
             tracks: ArenaRegistry::with_capacity(Self::MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
+        }
+    }
+
+    /// Update fade duration for all tracks.
+    fn apply_fade_duration(&mut self, duration: f32) {
+        self.crossfade.duration = duration;
+        for (_, track) in self.tracks.iter_mut() {
+            track.update_fade_duration(duration, self.sample_rate);
+        }
+    }
+
+    /// Apply seek to active tracks.
+    fn apply_seek(&mut self, seconds: f64, seek_epoch: u64) {
+        if seek_epoch != self.shared_state.seek_epoch.load(Ordering::SeqCst) {
+            return;
+        }
+
+        for (_, track) in self.tracks.iter_mut() {
+            match track.state() {
+                TrackState::FadingIn | TrackState::Playing => {
+                    track.seek(seconds);
+                    track.play();
+                }
+                TrackState::FadingOut => {
+                    track.stop();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Evict tracks that have reached a terminal state (`Finished` or
+    /// `Failed`).
+    ///
+    /// Uses a stack-allocated array instead of `Vec` since `Self::MAX_TRACKS` is 4,
+    /// avoiding heap allocation on every `process()` call.
+    fn cleanup_terminal_tracks(&mut self) {
+        let mut terminal_indices: [Option<Index>; Self::MAX_TRACKS] = [None; Self::MAX_TRACKS];
+        let mut count = 0;
+
+        for (idx, track) in self.tracks.iter() {
+            if track.state().is_terminal() && count < Self::MAX_TRACKS {
+                terminal_indices[count] = Some(idx);
+                count += 1;
+            }
+        }
+
+        for idx in terminal_indices[..count].iter().flatten() {
+            if let Some(track) = self.tracks.remove_by_index(*idx) {
+                let src = Arc::clone(track.src());
+                self.shared_state
+                    .notification_tx
+                    .lock_sync()
+                    .try_push(PlayerNotification::TrackUnloaded(src))
+                    .ok();
+            }
         }
     }
 
@@ -157,46 +213,44 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Load a new track into the arena.
-    fn load_track(&mut self, resource: Arc<Mutex<PlayerResource>>, src: Arc<str>) {
-        if self.tracks.remove(&src).is_some() {
-            self.shared_state
-                .notification_tx
-                .lock_sync()
-                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(&src)))
-                .ok();
-        }
+    /// Evict tracks to make room when at capacity.
+    ///
+    /// Tracks are evicted in priority order: `Finished` first, then `FadingOut`,
+    /// `Preloading`, `Paused`, `FadingIn`, and `Playing` last. If all tracks are in the
+    /// same state (e.g. all Playing), eviction order is non-deterministic
+    /// because `HashMap` iteration order is undefined.
+    fn evict_tracks_if_needed(&mut self) {
+        while self.tracks.len() >= Self::MAX_TRACKS {
+            let eviction_candidate = self
+                .tracks
+                .iter_keys()
+                .min_by_key(|(_, idx)| {
+                    self.tracks
+                        .get_by_index(**idx)
+                        .map_or(0, |t| eviction_priority(t.state()))
+                })
+                .map(|(key, idx)| {
+                    let state = self.tracks.get_by_index(*idx).map(PlayerTrack::state);
+                    (Arc::clone(key), state)
+                });
 
-        self.evict_tracks_if_needed();
-
-        if let Ok(res) = resource.try_lock() {
-            res.set_host_sample_rate(self.sample_rate);
-        }
-
-        let track = PlayerTrack::new(
-            resource,
-            Arc::clone(&src),
-            self.crossfade.duration,
-            self.sample_rate,
-            self.crossfade.fade_curve(),
-        );
-        self.tracks.insert(Arc::clone(&src), track);
-
-        self.shared_state
-            .notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackLoaded(src))
-            .ok();
-    }
-
-    /// Unload a track from the arena.
-    fn unload_track(&mut self, src: &Arc<str>) {
-        if self.tracks.remove(src).is_some() {
-            self.shared_state
-                .notification_tx
-                .lock_sync()
-                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(src)))
-                .ok();
+            if let Some((key, state)) = eviction_candidate {
+                if state == Some(TrackState::Playing) {
+                    warn!(
+                        src = &*key,
+                        "evicting a Playing track to make room for a new track"
+                    );
+                }
+                if self.tracks.remove(&key).is_some() {
+                    self.shared_state
+                        .notification_tx
+                        .lock_sync()
+                        .try_push(PlayerNotification::TrackUnloaded(key))
+                        .ok();
+                }
+            } else {
+                break;
+            }
         }
     }
 
@@ -265,115 +319,36 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Evict tracks to make room when at capacity.
-    ///
-    /// Tracks are evicted in priority order: `Finished` first, then `FadingOut`,
-    /// `Preloading`, `Paused`, `FadingIn`, and `Playing` last. If all tracks are in the
-    /// same state (e.g. all Playing), eviction order is non-deterministic
-    /// because `HashMap` iteration order is undefined.
-    fn evict_tracks_if_needed(&mut self) {
-        while self.tracks.len() >= Self::MAX_TRACKS {
-            let eviction_candidate = self
-                .tracks
-                .iter_keys()
-                .min_by_key(|(_, idx)| {
-                    self.tracks
-                        .get_by_index(**idx)
-                        .map_or(0, |t| eviction_priority(t.state()))
-                })
-                .map(|(key, idx)| {
-                    let state = self.tracks.get_by_index(*idx).map(PlayerTrack::state);
-                    (Arc::clone(key), state)
-                });
-
-            if let Some((key, state)) = eviction_candidate {
-                if state == Some(TrackState::Playing) {
-                    warn!(
-                        src = &*key,
-                        "evicting a Playing track to make room for a new track"
-                    );
-                }
-                if self.tracks.remove(&key).is_some() {
-                    self.shared_state
-                        .notification_tx
-                        .lock_sync()
-                        .try_push(PlayerNotification::TrackUnloaded(key))
-                        .ok();
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Apply seek to active tracks.
-    fn apply_seek(&mut self, seconds: f64, seek_epoch: u64) {
-        if seek_epoch != self.shared_state.seek_epoch.load(Ordering::SeqCst) {
-            return;
+    /// Load a new track into the arena.
+    fn load_track(&mut self, resource: Arc<Mutex<PlayerResource>>, src: Arc<str>) {
+        if self.tracks.remove(&src).is_some() {
+            self.shared_state
+                .notification_tx
+                .lock_sync()
+                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(&src)))
+                .ok();
         }
 
-        for (_, track) in self.tracks.iter_mut() {
-            match track.state() {
-                TrackState::FadingIn | TrackState::Playing => {
-                    track.seek(seconds);
-                    track.play();
-                }
-                TrackState::FadingOut => {
-                    track.stop();
-                }
-                _ => {}
-            }
-        }
-    }
+        self.evict_tracks_if_needed();
 
-    /// Update fade duration for all tracks.
-    fn apply_fade_duration(&mut self, duration: f32) {
-        self.crossfade.duration = duration;
-        for (_, track) in self.tracks.iter_mut() {
-            track.update_fade_duration(duration, self.sample_rate);
-        }
-    }
-
-    /// Clean up finished tracks.
-    ///
-    /// Uses a stack-allocated array instead of `Vec` since `Self::MAX_TRACKS` is 4,
-    /// avoiding heap allocation on every `process()` call.
-    fn cleanup_finished_tracks(&mut self) {
-        let mut finished_indices: [Option<Index>; Self::MAX_TRACKS] = [None; Self::MAX_TRACKS];
-        let mut count = 0;
-
-        for (idx, track) in self.tracks.iter() {
-            if track.state() == TrackState::Finished && count < Self::MAX_TRACKS {
-                finished_indices[count] = Some(idx);
-                count += 1;
-            }
+        if let Ok(res) = resource.try_lock() {
+            res.set_host_sample_rate(self.sample_rate);
         }
 
-        for idx in finished_indices[..count].iter().flatten() {
-            if let Some(track) = self.tracks.remove_by_index(*idx) {
-                let src = Arc::clone(track.src());
-                self.shared_state
-                    .notification_tx
-                    .lock_sync()
-                    .try_push(PlayerNotification::TrackUnloaded(src))
-                    .ok();
-            }
-        }
-    }
+        let track = PlayerTrack::new(
+            resource,
+            Arc::clone(&src),
+            self.crossfade.duration,
+            self.sample_rate,
+            self.crossfade.fade_curve(),
+        );
+        self.tracks.insert(Arc::clone(&src), track);
 
-    /// Update position and duration from the leading track.
-    fn update_position_duration(&self) {
-        for (_, track) in self.tracks.iter() {
-            if track.state().is_leading() {
-                self.shared_state
-                    .position
-                    .store(track.position(), Ordering::Relaxed);
-                self.shared_state
-                    .duration
-                    .store(track.duration(), Ordering::Relaxed);
-                break;
-            }
-        }
+        self.shared_state
+            .notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackLoaded(src))
+            .ok();
     }
 
     /// Render audio for all active tracks into the output buffers.
@@ -433,6 +408,32 @@ impl PlayerNodeProcessor {
 
         playback_started
     }
+
+    /// Unload a track from the arena.
+    fn unload_track(&mut self, src: &Arc<str>) {
+        if self.tracks.remove(src).is_some() {
+            self.shared_state
+                .notification_tx
+                .lock_sync()
+                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(src)))
+                .ok();
+        }
+    }
+
+    /// Update position and duration from the leading track.
+    fn update_position_duration(&self) {
+        for (_, track) in self.tracks.iter() {
+            if track.state().is_leading() {
+                self.shared_state
+                    .position
+                    .store(track.position(), Ordering::Relaxed);
+                self.shared_state
+                    .duration
+                    .store(track.duration(), Ordering::Relaxed);
+                break;
+            }
+        }
+    }
 }
 
 /// Returns eviction priority for a track state (lower = evicted first).
@@ -447,7 +448,7 @@ fn eviction_priority(state: TrackState) -> u8 {
     const EVICT_PLAYING: u8 = 5;
 
     match state {
-        TrackState::Finished => 0,
+        TrackState::Finished | TrackState::Failed => 0,
         TrackState::FadingOut => 1,
         TrackState::Preloading => EVICT_PRELOADING,
         TrackState::Paused => EVICT_PAUSED,
@@ -487,7 +488,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         self.drain_commands();
 
         // 2. Cleanup finished tracks
-        self.cleanup_finished_tracks();
+        self.cleanup_terminal_tracks();
 
         // 3. Get current playing state
         let is_playing = self.shared_state.playing.load(Ordering::SeqCst);
@@ -508,12 +509,17 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc as TestArc, Mutex,
-        atomic::{AtomicU32, Ordering as AtomicOrdering},
+    use std::{
+        num::NonZeroUsize,
+        sync::{
+            Arc as TestArc, Mutex,
+            atomic::{AtomicBool, AtomicU32, Ordering as AtomicOrdering},
+        },
     };
 
-    use kithara_audio::{DecodeResult, PcmReader, mock::TestPcmReader};
+    use kithara_audio::{
+        DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome, mock::TestPcmReader,
+    };
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::{Mutex as PlatformMutex, time::Duration};
@@ -542,16 +548,18 @@ mod tests {
         let (tx, rx) = HeapRb::<PlayerCmd>::new(32).split();
         let sample_rate = NonZeroU32::new(44100).expect("non-zero");
         let processor =
-            PlayerNodeProcessor::new(rx, shared_state, sample_rate, kithara_bufpool::pcm_pool());
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
         (processor, tx)
     }
 
     /// Reader that records the last `host_sample_rate` set via `set_host_sample_rate`.
     struct SampleRateTrackingReader {
-        spec: PcmSpec,
-        meta: TrackMetadata,
         bus: EventBus,
+        spec: PcmSpec,
         recorded_host_rate: TestArc<AtomicU32>,
+        meta: TrackMetadata,
     }
 
     impl SampleRateTrackingReader {
@@ -568,45 +576,53 @@ mod tests {
     }
 
     impl PcmReader for SampleRateTrackingReader {
-        fn read(&mut self, _buf: &mut [f32]) -> usize {
-            0
-        }
-
-        fn read_planar<'a>(&mut self, _output: &'a mut [&'a mut [f32]]) -> usize {
-            0
-        }
-
-        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
-            Ok(())
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            false
-        }
-
-        fn position(&self) -> Duration {
-            Duration::ZERO
-        }
-
         fn duration(&self) -> Option<Duration> {
             Some(Duration::from_secs(60))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
         }
 
         fn event_bus(&self) -> &EventBus {
             &self.bus
         }
 
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+            Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: Duration::ZERO,
+            })
+        }
+
+        fn read_planar<'a>(
+            &mut self,
+            _output: &'a mut [&'a mut [f32]],
+        ) -> Result<ReadOutcome, DecodeError> {
+            Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: Duration::ZERO,
+            })
+        }
+
+        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
+        }
+
         fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
             self.recorded_host_rate
                 .store(sample_rate.get(), AtomicOrdering::Relaxed);
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
         }
     }
 
@@ -623,14 +639,18 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
-            kithara_bufpool::pcm_pool(),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            &PcmPool::default(),
         )));
 
         let shared_state = make_shared_state();
         let (tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
         let sample_rate = NonZeroU32::new(host_rate).expect("non-zero");
         let mut processor =
-            PlayerNodeProcessor::new(rx, shared_state, sample_rate, kithara_bufpool::pcm_pool());
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
 
         let mut tx = tx;
         tx.try_push(PlayerCmd::LoadTrack {
@@ -773,7 +793,7 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn processor_cleanup_finished_tracks() {
+    async fn processor_cleanup_terminal_tracks() {
         let (mut processor, mut tx) = make_processor();
 
         let resource = create_mock_player_resource("track1.mp3");
@@ -790,7 +810,7 @@ mod tests {
             track.stop();
         }
 
-        processor.cleanup_finished_tracks();
+        processor.cleanup_terminal_tracks();
         assert_eq!(processor.tracks.len(), 0);
     }
 
@@ -805,7 +825,9 @@ mod tests {
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
-            kithara_bufpool::pcm_pool(),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            &PcmPool::default(),
         )))
     }
 
@@ -822,16 +844,25 @@ mod tests {
         }
 
         impl PcmReader for SeekTrackingReader {
-            fn read(&mut self, _buf: &mut [f32]) -> usize {
-                0
+            fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+                Ok(ReadOutcome::Pending {
+                    reason: PendingReason::Buffering,
+                    position: Duration::ZERO,
+                })
             }
 
-            fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
+            fn read_planar<'a>(
+                &mut self,
+                output: &'a mut [&'a mut [f32]],
+            ) -> Result<ReadOutcome, DecodeError> {
                 let _ = output;
-                0
+                Ok(ReadOutcome::Pending {
+                    reason: PendingReason::Buffering,
+                    position: Duration::ZERO,
+                })
             }
 
-            fn seek(&mut self, position: Duration) -> DecodeResult<()> {
+            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
                 // Log position in millis to distinguish seek sources.
                 #[expect(clippy::cast_possible_truncation, reason = "test values fit in u64")]
                 let ms = position.as_millis() as u64;
@@ -839,15 +870,14 @@ mod tests {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(ms);
-                Ok(())
+                Ok(SeekOutcome::Landed {
+                    target: position,
+                    landed_at: position,
+                })
             }
 
             fn spec(&self) -> PcmSpec {
                 self.spec
-            }
-
-            fn is_eof(&self) -> bool {
-                false
             }
 
             fn position(&self) -> Duration {
@@ -868,6 +898,7 @@ mod tests {
         }
 
         let reader = SeekTrackingReader {
+            seek_log,
             spec: PcmSpec {
                 channels: 2,
                 sample_rate: 44_100,
@@ -878,7 +909,6 @@ mod tests {
                 artwork: None,
                 title: Some("Tracking".to_owned()),
             },
-            seek_log,
             bus: EventBus::default(),
         };
 
@@ -886,8 +916,409 @@ mod tests {
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
-            kithara_bufpool::pcm_pool(),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            &PcmPool::default(),
         )))
+    }
+
+    /// `PcmReader` that flips between "producing frames" (flag `false`)
+    /// and "transient stall" (flag `true`). A transient stall under the
+    /// new API is modelled as `Ok(ReadOutcome::Frames { count: 0, .. })`
+    /// — alive but no data this tick. Permanent failures would surface
+    /// as `Err(DecodeError)` (terminal, see `TerminalFailReader` below).
+    struct TransientStallReader {
+        bus: EventBus,
+        spec: PcmSpec,
+        stall_flag: TestArc<AtomicBool>,
+        meta: TrackMetadata,
+    }
+
+    impl TransientStallReader {
+        fn new() -> (Self, TestArc<AtomicBool>) {
+            let flag = TestArc::new(AtomicBool::new(false));
+            let reader = Self {
+                spec: PcmSpec {
+                    channels: 2,
+                    sample_rate: 44_100,
+                },
+                meta: TrackMetadata::default(),
+                bus: EventBus::default(),
+                stall_flag: TestArc::clone(&flag),
+            };
+            (reader, flag)
+        }
+
+        fn outcome(&self, buf_frames: usize) -> Result<ReadOutcome, DecodeError> {
+            if self.stall_flag.load(AtomicOrdering::Acquire) {
+                Ok(ReadOutcome::Pending {
+                    reason: PendingReason::Buffering,
+                    position: Duration::from_secs(10),
+                })
+            } else {
+                let Some(count) = NonZeroUsize::new(buf_frames) else {
+                    return Ok(ReadOutcome::Pending {
+                        reason: PendingReason::Buffering,
+                        position: Duration::from_secs(10),
+                    });
+                };
+                Ok(ReadOutcome::Frames {
+                    count,
+                    position: Duration::from_secs(10),
+                })
+            }
+        }
+    }
+
+    impl PcmReader for TransientStallReader {
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn position(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+
+        fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+            for sample in buf.iter_mut() {
+                *sample = 0.0;
+            }
+            self.outcome(buf.len())
+        }
+
+        fn read_planar<'a>(
+            &mut self,
+            output: &'a mut [&'a mut [f32]],
+        ) -> Result<ReadOutcome, DecodeError> {
+            let frames = output.first().map_or(0, |ch| ch.len());
+            for ch in output.iter_mut() {
+                for sample in ch.iter_mut() {
+                    *sample = 0.0;
+                }
+            }
+            self.outcome(frames)
+        }
+
+        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    // Transient stall (`Ok(Frames { count: 0, .. })`) while the decoder
+    // catches up after a seek must NOT evict the track from the arena.
+    // Under the new API a stall is a positive alive-but-no-data signal,
+    // distinct from both natural EOF (`Ok(ReadOutcome::Eof)`) and
+    // terminal failure (`Err(DecodeError)`).
+    #[kithara::test(tokio)]
+    async fn track_arena_survives_transient_stall_mid_clip() {
+        let (reader, stall_flag) = TransientStallReader::new();
+        let resource = Resource::from_reader(reader);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            &PcmPool::default(),
+        )));
+
+        let (mut processor, mut tx) = make_processor();
+        let src: Arc<str> = Arc::from("track.mp3");
+
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: player_resource,
+            src: Arc::clone(&src),
+        })
+        .ok();
+        processor.drain_commands();
+        tx.try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+            &src,
+        ))))
+        .ok();
+        processor.drain_commands();
+        processor.shared_state.playing.store(true, Ordering::SeqCst);
+        assert_eq!(processor.tracks.len(), 1, "track loaded");
+
+        let seek_epoch = processor.shared_state.next_seek_epoch();
+        processor
+            .shared_state
+            .seek_epoch
+            .store(seek_epoch, Ordering::SeqCst);
+        tx.try_push(PlayerCmd::Seek {
+            seek_epoch,
+            seconds: 30.0,
+        })
+        .ok();
+        processor.drain_commands();
+        stall_flag.store(true, AtomicOrdering::Release);
+
+        let mut scratch_bufs: [Vec<f32>; 4] = [
+            vec![0.0; 128],
+            vec![0.0; 128],
+            vec![0.0; 128],
+            vec![0.0; 128],
+        ];
+        for _ in 0..4 {
+            let [ref mut s0, ref mut s1, ref mut m0, ref mut m1] = scratch_bufs;
+            let mut read_bufs: [&mut [f32]; 2] = [s0, s1];
+            let mut mix_bufs: [&mut [f32]; 2] = [m0, m1];
+            for (_, track) in processor.tracks.iter_mut() {
+                if track.state().is_playing() {
+                    track.read(
+                        &mut read_bufs,
+                        &mut mix_bufs,
+                        0..128,
+                        &processor.shared_state.notification_tx,
+                    );
+                }
+            }
+            processor.cleanup_terminal_tracks();
+        }
+
+        assert!(
+            processor.tracks.len() > 0,
+            "track arena must not be emptied by a transient stall \
+             (Ok(Frames {{ count: 0 }})) mid-clip during seek recovery"
+        );
+    }
+
+    // Transient stall must NOT transition `PlayerTrack` into `Finished`
+    // or `Failed`. Narrow pin at the `PlayerTrack::read` state-machine
+    // boundary, complementing the arena-level test above.
+    #[kithara::test(tokio)]
+    async fn player_track_does_not_finalize_on_transient_stall() {
+        use firewheel::dsp::fade::FadeCurve;
+
+        let (reader, stall_flag) = TransientStallReader::new();
+        let resource = Resource::from_reader(reader);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            &PcmPool::default(),
+        )));
+
+        let sample_rate = NonZeroU32::new(44_100).expect("non-zero");
+        let mut track = PlayerTrack::new(
+            Arc::clone(&player_resource),
+            Arc::from("track.mp3"),
+            0.0,
+            sample_rate,
+            FadeCurve::Linear,
+        );
+        track.play();
+        assert!(
+            track.state().is_playing(),
+            "precondition: track is actively playing before the stall"
+        );
+
+        stall_flag.store(true, AtomicOrdering::Release);
+
+        let (_notification_tx, _notification_rx) = HeapRb::<PlayerNotification>::new(32).split();
+        let notification_tx = PlatformMutex::new(_notification_tx);
+
+        let mut scratch0 = vec![0.0f32; 128];
+        let mut scratch1 = vec![0.0f32; 128];
+        let mut mix0 = vec![0.0f32; 128];
+        let mut mix1 = vec![0.0f32; 128];
+        let mut scratch: [&mut [f32]; 2] = [&mut scratch0, &mut scratch1];
+        let mut mix: [&mut [f32]; 2] = [&mut mix0, &mut mix1];
+        track.read(&mut scratch, &mut mix, 0..128, &notification_tx);
+
+        assert!(
+            !track.state().is_terminal(),
+            "PlayerTrack must not enter a terminal state on a transient stall \
+             (Ok(Frames {{ count: 0 }})) while position (10s) is well below \
+             duration (60s)"
+        );
+    }
+
+    /// Reader that always reports a terminal producer failure — models
+    /// `ConsumerPhase::Failed` one-shot surfaced through the new API.
+    struct TerminalFailReader {
+        bus: EventBus,
+        spec: PcmSpec,
+        meta: TrackMetadata,
+    }
+
+    impl TerminalFailReader {
+        fn new() -> Self {
+            Self {
+                spec: PcmSpec {
+                    channels: 2,
+                    sample_rate: 44_100,
+                },
+                meta: TrackMetadata::default(),
+                bus: EventBus::default(),
+            }
+        }
+
+        fn fail() -> DecodeError {
+            DecodeError::Io(std::io::Error::other("simulated terminal producer failure"))
+        }
+    }
+
+    impl PcmReader for TerminalFailReader {
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn position(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+
+        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+            Err(Self::fail())
+        }
+
+        fn read_planar<'a>(
+            &mut self,
+            _output: &'a mut [&'a mut [f32]],
+        ) -> Result<ReadOutcome, DecodeError> {
+            Err(Self::fail())
+        }
+
+        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    // A terminal producer failure (`Err(DecodeError)`, i.e.
+    // `ConsumerPhase::Failed`) must transition the track to `Failed`
+    // and evict it from the arena on the next cleanup pass. Pinning
+    // the storm-avoidance invariant: zero-filling alive forever was
+    // the bug that manifested as a 10s hang-detector storm.
+    #[kithara::test(tokio)]
+    async fn track_arena_evicts_on_terminal_failure() {
+        let reader = TerminalFailReader::new();
+        let resource = Resource::from_reader(reader);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            &PcmPool::default(),
+        )));
+
+        let (mut processor, mut tx) = make_processor();
+        let src: Arc<str> = Arc::from("track.mp3");
+
+        tx.try_push(PlayerCmd::LoadTrack {
+            resource: player_resource,
+            src: Arc::clone(&src),
+        })
+        .ok();
+        processor.drain_commands();
+        tx.try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+            &src,
+        ))))
+        .ok();
+        processor.drain_commands();
+        processor.shared_state.playing.store(true, Ordering::SeqCst);
+        assert_eq!(processor.tracks.len(), 1, "track loaded");
+
+        let mut scratch_bufs: [Vec<f32>; 4] = [
+            vec![0.0; 128],
+            vec![0.0; 128],
+            vec![0.0; 128],
+            vec![0.0; 128],
+        ];
+        let [ref mut s0, ref mut s1, ref mut m0, ref mut m1] = scratch_bufs;
+        let mut read_bufs: [&mut [f32]; 2] = [s0, s1];
+        let mut mix_bufs: [&mut [f32]; 2] = [m0, m1];
+        for (_, track) in processor.tracks.iter_mut() {
+            if track.state().is_playing() {
+                track.read(
+                    &mut read_bufs,
+                    &mut mix_bufs,
+                    0..128,
+                    &processor.shared_state.notification_tx,
+                );
+            }
+        }
+        processor.cleanup_terminal_tracks();
+
+        assert_eq!(
+            processor.tracks.len(),
+            0,
+            "terminal producer failure must evict the track from the arena"
+        );
+    }
+
+    // `PlayerTrack::read` narrow pin — one `Err` must flip the track to
+    // `TrackState::Failed` (not `Finished`, not zero-fill-forever).
+    #[kithara::test(tokio)]
+    async fn player_track_transitions_to_failed_on_terminal_error() {
+        use firewheel::dsp::fade::FadeCurve;
+
+        let reader = TerminalFailReader::new();
+        let resource = Resource::from_reader(reader);
+        let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from("track.mp3"),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            &PcmPool::default(),
+        )));
+
+        let sample_rate = NonZeroU32::new(44_100).expect("non-zero");
+        let mut track = PlayerTrack::new(
+            Arc::clone(&player_resource),
+            Arc::from("track.mp3"),
+            0.0,
+            sample_rate,
+            FadeCurve::Linear,
+        );
+        track.play();
+        assert!(track.state().is_playing());
+
+        let (_notification_tx, _notification_rx) = HeapRb::<PlayerNotification>::new(32).split();
+        let notification_tx = PlatformMutex::new(_notification_tx);
+
+        let mut scratch0 = vec![0.0f32; 128];
+        let mut scratch1 = vec![0.0f32; 128];
+        let mut mix0 = vec![0.0f32; 128];
+        let mut mix1 = vec![0.0f32; 128];
+        let mut scratch: [&mut [f32]; 2] = [&mut scratch0, &mut scratch1];
+        let mut mix: [&mut [f32]; 2] = [&mut mix0, &mut mix1];
+        track.read(&mut scratch, &mut mix, 0..128, &notification_tx);
+
+        assert_eq!(
+            track.state(),
+            TrackState::Failed,
+            "terminal Err(DecodeError) must transition PlayerTrack to \
+             TrackState::Failed — distinct from natural-EOF Finished"
+        );
     }
 
     #[kithara::test(tokio)]

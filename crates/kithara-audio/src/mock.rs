@@ -6,24 +6,25 @@
     reason = "test mock code; values are small and positive by construction"
 )]
 
-use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+use std::num::NonZeroUsize;
+
+use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 
-use crate::traits::PcmReader;
 pub use crate::traits::{AudioEffectMock, PcmReaderMock};
+use crate::traits::{PcmReader, PendingReason, ReadOutcome, SeekOutcome};
 
 /// A stateful `PcmReader` for testing facades that depend on audio playback.
 ///
-/// Produces a constant sample value (0.5), tracks seek position and EOF,
-/// and exposes an `EventBus` for event publishing in tests.
+/// Produces a constant sample value (0.5), tracks seek position and reports
+/// [`ReadOutcome::Eof`] once the total-frame budget is consumed.
 pub struct TestPcmReader {
+    bus: EventBus,
     spec: PcmSpec,
     metadata: TrackMetadata,
-    total_frames: u64,
     position_frames: u64,
-    eof: bool,
-    bus: EventBus,
+    total_frames: u64,
 }
 
 impl TestPcmReader {
@@ -33,16 +34,23 @@ impl TestPcmReader {
         let total_frames = (f64::from(spec.sample_rate) * duration_secs) as u64;
         Self {
             spec,
-            metadata: TrackMetadata {
-                album: None,
-                artist: None,
-                artwork: None,
-                title: Some("Mock".to_owned()),
-            },
             total_frames,
+            metadata: TrackMetadata {
+                title: Some("Mock".to_owned()),
+                ..TrackMetadata::default()
+            },
             position_frames: 0,
-            eof: false,
             bus: EventBus::default(),
+        }
+    }
+
+    fn at_natural_end(&self) -> bool {
+        self.position_frames >= self.total_frames
+    }
+
+    fn eof_outcome(&self) -> ReadOutcome {
+        ReadOutcome::Eof {
+            position: self.frames_to_duration(self.position_frames),
         }
     }
 
@@ -54,7 +62,7 @@ impl TestPcmReader {
 
     fn frames_to_duration(&self, frames: u64) -> Duration {
         if self.spec.sample_rate == 0 {
-            return Duration::ZERO;
+            return Duration::from_secs(0);
         }
         Duration::from_secs_f64(frames as f64 / f64::from(self.spec.sample_rate))
     }
@@ -63,13 +71,33 @@ impl TestPcmReader {
 const SAMPLE_VALUE: f32 = 0.5;
 
 impl PcmReader for TestPcmReader {
-    fn read(&mut self, buf: &mut [f32]) -> usize {
-        if self.eof {
-            return 0;
+    fn duration(&self) -> Option<Duration> {
+        Some(self.frames_to_duration(self.total_frames))
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+
+    fn position(&self) -> Duration {
+        self.frames_to_duration(self.position_frames)
+    }
+
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        if self.at_natural_end() {
+            return Ok(self.eof_outcome());
         }
         let channels = u64::from(self.spec.channels);
-        if channels == 0 {
-            return 0;
+        let position = self.frames_to_duration(self.position_frames);
+        if channels == 0 || buf.is_empty() {
+            return Ok(ReadOutcome::Pending {
+                position,
+                reason: PendingReason::Buffering,
+            });
         }
         let remaining_samples = (self.total_frames - self.position_frames) * channels;
         let to_write = (buf.len() as u64).min(remaining_samples) as usize;
@@ -78,19 +106,39 @@ impl PcmReader for TestPcmReader {
         }
         let frames_advanced = to_write as u64 / channels;
         self.position_frames += frames_advanced;
-        if self.position_frames >= self.total_frames {
-            self.eof = true;
-        }
-        to_write
+        let new_position = self.frames_to_duration(self.position_frames);
+        let Some(count) = NonZeroUsize::new(to_write) else {
+            return Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: new_position,
+            });
+        };
+        Ok(ReadOutcome::Frames {
+            count,
+            position: new_position,
+        })
     }
 
-    fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
-        if self.eof || output.is_empty() {
-            return 0;
+    fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        if self.at_natural_end() {
+            return Ok(self.eof_outcome());
+        }
+        let position = self.frames_to_duration(self.position_frames);
+        if output.is_empty() {
+            return Ok(ReadOutcome::Pending {
+                position,
+                reason: PendingReason::Buffering,
+            });
         }
         let channels = usize::from(self.spec.channels);
         if channels == 0 || output.len() < channels {
-            return 0;
+            return Ok(ReadOutcome::Pending {
+                position,
+                reason: PendingReason::Buffering,
+            });
         }
         let frames_per_channel = output[0].len();
         let remaining = (self.total_frames - self.position_frames) as usize;
@@ -101,40 +149,33 @@ impl PcmReader for TestPcmReader {
             }
         }
         self.position_frames += frames_to_write as u64;
-        if self.position_frames >= self.total_frames {
-            self.eof = true;
-        }
-        frames_to_write
+        let new_position = self.frames_to_duration(self.position_frames);
+        let Some(count) = NonZeroUsize::new(frames_to_write) else {
+            return Ok(ReadOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: new_position,
+            });
+        };
+        Ok(ReadOutcome::Frames {
+            count,
+            position: new_position,
+        })
     }
 
-    fn seek(&mut self, position: Duration) -> DecodeResult<()> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        let target = position;
         let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate)) as u64;
         self.position_frames = frame.min(self.total_frames);
-        self.eof = self.position_frames >= self.total_frames;
-        Ok(())
+        let landed_at = self.frames_to_duration(self.position_frames);
+        if let Some(duration) = self.duration()
+            && position >= duration
+        {
+            return Ok(SeekOutcome::PastEof { target, duration });
+        }
+        Ok(SeekOutcome::Landed { target, landed_at })
     }
 
     fn spec(&self) -> PcmSpec {
         self.spec
-    }
-
-    fn is_eof(&self) -> bool {
-        self.eof
-    }
-
-    fn position(&self) -> Duration {
-        self.frames_to_duration(self.position_frames)
-    }
-
-    fn duration(&self) -> Option<Duration> {
-        Some(self.frames_to_duration(self.total_frames))
-    }
-
-    fn metadata(&self) -> &TrackMetadata {
-        &self.metadata
-    }
-
-    fn event_bus(&self) -> &EventBus {
-        &self.bus
     }
 }

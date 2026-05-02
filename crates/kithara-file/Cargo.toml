@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 derivative = { workspace = true }
 derive_setters = { workspace = true }
+kithara-abr = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-events = { workspace = true }
 kithara-net = { workspace = true }
@@ -20,6 +21,7 @@ kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 futures = { workspace = true }
+re_mp4 = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
@@ -29,21 +31,18 @@ hotpath = { workspace = true, optional = true }
 [features]
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
-internal = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
-kithara-file = { path = ".", default-features = false, features = ["internal"] }
 tempfile = { workspace = true }
 kithara-test-utils = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
-rodio = { workspace = true, features = ["playback"] }
 tracing-subscriber = { workspace = true }
 memory-stats = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }

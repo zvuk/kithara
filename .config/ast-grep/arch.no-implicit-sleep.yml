@@ -1,0 +1,43 @@
+id: arch.no-implicit-sleep
+message: |
+  Library code calls `std::thread::sleep` or `tokio::time::sleep` directly.
+  Hidden waits couple correctness to wall-clock pacing — tests have to wait
+  for real time, simulation cannot fast-forward, and timing-sensitive bugs
+  surface as flaky tests instead of as deterministic failures.
+
+  Per AGENTS.md: "Tests must be deterministic". Inject a `Timer` or `Clock`
+  port that exposes `wait_until(deadline)` (or similar) and let tests pin
+  a `ManualTimer` that advances on demand:
+
+      // ❌  tokio::time::sleep(d).await;
+      // ✅  self.timer.wait(d).await;
+
+  App / FFI / wasm / xtask / test-support crates may keep the direct
+  calls — they own the timer impl that lib crates consume.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/main.rs"
+  - "crates/kithara-app/**"
+  - "crates/kithara-ffi/**"
+  - "crates/kithara-wasm/**"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-test-macros/**"
+  - "crates/kithara-hang-detector-macros/**"
+  - "crates/kithara-wasm-macros/**"
+  - "crates/kithara-probe-macros/**"
+rule:
+  any:
+    - pattern: std::thread::sleep($_)
+    - pattern: thread::sleep($_)
+    - pattern: tokio::time::sleep($_)
+    - pattern: tokio::time::sleep_until($_)
+    - pattern: std::thread::park_timeout($_)
+    - pattern: thread::park_timeout($_)

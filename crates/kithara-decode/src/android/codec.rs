@@ -1,390 +1,261 @@
+//! `AndroidCodec` — Android `MediaCodec` as a [`FrameCodec`].
+//!
+//! Container parsing happens upstream in a [`crate::Demuxer`]; this codec
+//! consumes already-demuxed frame bytes and produces interleaved f32 PCM.
+//! `AMediaFormat` is built from [`TrackInfo`] alone (MIME + sample-rate +
+//! channel-count + `csd-0`), with no `AMediaExtractor` and no per-codec
+//! container glue.
+//!
+//! Initial scope: AAC-LC and FLAC (the codecs that flow through
+//! [`crate::fmp4::Fmp4SegmentDemuxer`]). MP3 / ALAC follow alongside the
+//! file-Symphonia migration when [`TrackInfo`] carries codec-specific
+//! extra-data shape.
+
 #![allow(unsafe_code)]
 
-use std::{ffi::CString, ptr::NonNull};
+use std::{ffi::c_void, ptr::NonNull, time::Duration};
 
-use tracing::{debug, info};
+use kithara_bufpool::PcmBuf;
+use kithara_stream::AudioCodec;
 
 use super::{
+    aformat::OwnedFormat,
+    ensure_current_thread_attached,
     error::AndroidBackendError,
-    extractor::{OwnedExtractor, SelectedTrack},
     ffi::{
-        self, KEY_CHANNEL_COUNT, KEY_PCM_ENCODING, KEY_SAMPLE_RATE, MEDIA_STATUS_OK,
-        PCM_ENCODING_16BIT, PCM_ENCODING_FLOAT,
+        self, KEY_CHANNEL_COUNT, KEY_CSD_0, KEY_MIME, KEY_PCM_ENCODING, KEY_SAMPLE_RATE, MIME_AAC,
+        MIME_FLAC, PCM_ENCODING_16BIT, PCM_ENCODING_FLOAT,
     },
-    media_format::OwnedFormat,
+    media_codec::{AndroidPcmEncoding, DequeueOutput, OwnedCodec},
 };
-use crate::types::PcmSpec;
+use crate::{
+    codec::FrameCodec,
+    demuxer::TrackInfo,
+    error::{DecodeError, DecodeResult},
+    types::PcmSpec,
+};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AndroidPcmEncoding {
-    Pcm16,
-    Float,
+struct Consts;
+
+impl Consts {
+    const INPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
+    const OUTPUT_DEQUEUE_TIMEOUT_US: i64 = 10_000;
+    const PCM16_SCALE: f32 = 32_768.0;
 }
 
-pub(crate) struct OutputFormat {
-    pub(crate) spec: PcmSpec,
-    pub(crate) pcm_encoding: AndroidPcmEncoding,
+/// Frame-level codec wrapping Android's `AMediaCodec`.
+pub(crate) struct AndroidCodec {
+    pcm_encoding: AndroidPcmEncoding,
+    codec: OwnedCodec,
+    spec: PcmSpec,
 }
 
-pub(crate) struct InputBuffer {
-    pub(crate) index: usize,
-    ptr: NonNull<u8>,
-    len: usize,
-}
-
-impl InputBuffer {
-    pub(crate) fn data_mut(&mut self) -> &mut [u8] {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+impl AndroidCodec {
+    /// Whether `MediaCodec` accepts this codec at the codec layer alone
+    /// (i.e. without an extractor providing per-track metadata).
+    /// Initial scope: AAC family + FLAC.
+    pub(crate) fn supports(codec: AudioCodec) -> bool {
+        matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
     }
 }
 
-pub(crate) struct OutputBuffer {
-    pub(crate) index: usize,
-    pub(crate) presentation_time_us: i64,
-    pub(crate) flags: u32,
-    ptr: NonNull<u8>,
-    len: usize,
-}
-
-impl OutputBuffer {
-    pub(crate) fn data(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
-    }
-}
-
-pub(crate) enum DequeueOutput {
-    TryAgainLater,
-    OutputFormatChanged(OutputFormat),
-    Output(OutputBuffer),
-}
-
-pub(crate) struct CodecBootstrap {
-    pub(crate) codec: OwnedCodec,
-    pub(crate) spec: PcmSpec,
-    pub(crate) pcm_encoding: AndroidPcmEncoding,
-}
-
-pub(crate) struct OwnedCodec {
-    raw: NonNull<ffi::AMediaCodec>,
-    started: bool,
-}
-
-unsafe impl Send for OwnedCodec {}
-
-impl OwnedCodec {
-    pub(crate) fn raw(&self) -> *mut ffi::AMediaCodec {
-        self.raw.as_ptr()
-    }
-
-    pub(crate) fn flush(&mut self) -> Result<(), AndroidBackendError> {
-        let status = unsafe { ffi::AMediaCodec_flush(self.raw()) };
-        if status != MEDIA_STATUS_OK {
-            return Err(AndroidBackendError::operation(
-                "codec-flush",
-                format!("status={status}"),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn dequeue_input_buffer(
+impl FrameCodec for AndroidCodec {
+    fn decode_frame(
         &mut self,
-        timeout_us: i64,
-    ) -> Result<Option<InputBuffer>, AndroidBackendError> {
-        let index = unsafe { ffi::AMediaCodec_dequeueInputBuffer(self.raw(), timeout_us) };
-        if index == ffi::MEDIA_CODEC_INFO_TRY_AGAIN_LATER as isize {
-            return Ok(None);
-        }
-        if index < 0 {
-            return Err(AndroidBackendError::operation(
-                "codec-dequeue-input-buffer",
-                format!("status={index}"),
-            ));
+        frame_data: &[u8],
+        pts: Duration,
+        out: &mut PcmBuf,
+    ) -> DecodeResult<u32> {
+        if frame_data.is_empty() {
+            out.clear();
+            return Ok(0);
         }
 
-        let index = usize::try_from(index).map_err(|_| {
-            AndroidBackendError::operation(
-                "codec-dequeue-input-buffer",
-                format!("buffer index out of range: {index}"),
-            )
-        })?;
-
-        let mut size = 0usize;
-        let data =
-            NonNull::new(unsafe { ffi::AMediaCodec_getInputBuffer(self.raw(), index, &mut size) })
-                .ok_or_else(|| {
-                    AndroidBackendError::operation(
-                        "codec-get-input-buffer",
-                        format!("buffer={index} pointer was null"),
-                    )
-                })?;
-        Ok(Some(InputBuffer {
-            index,
-            ptr: data,
-            len: size,
-        }))
-    }
-
-    pub(crate) fn queue_input_buffer(
-        &mut self,
-        index: usize,
-        size: usize,
-        presentation_time_us: i64,
-        flags: u32,
-    ) -> Result<(), AndroidBackendError> {
-        let presentation_time_us = u64::try_from(presentation_time_us).map_err(|_| {
-            AndroidBackendError::operation(
-                "codec-queue-input-buffer",
-                format!("negative timestamp {presentation_time_us}"),
-            )
-        })?;
-        let status = unsafe {
-            ffi::AMediaCodec_queueInputBuffer(
-                self.raw(),
-                index,
-                0,
-                size,
-                presentation_time_us,
-                flags,
-            )
-        };
-        if status != MEDIA_STATUS_OK {
-            return Err(AndroidBackendError::operation(
-                "codec-queue-input-buffer",
-                format!("buffer={index} size={size} status={status}"),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn queue_end_of_stream(&mut self, index: usize) -> Result<(), AndroidBackendError> {
-        self.queue_input_buffer(index, 0, 0, ffi::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM)
-    }
-
-    pub(crate) fn dequeue_output_buffer(
-        &mut self,
-        timeout_us: i64,
-    ) -> Result<DequeueOutput, AndroidBackendError> {
-        let mut info = ffi::AMediaCodecBufferInfo {
-            offset: 0,
-            size: 0,
-            presentation_time_us: 0,
-            flags: 0,
-        };
-        let index =
-            unsafe { ffi::AMediaCodec_dequeueOutputBuffer(self.raw(), &mut info, timeout_us) };
-        match index as i32 {
-            ffi::MEDIA_CODEC_INFO_TRY_AGAIN_LATER => Ok(DequeueOutput::TryAgainLater),
-            ffi::MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED => {
-                let format = load_output_format(self)?;
-                Ok(DequeueOutput::OutputFormatChanged(format))
+        match self
+            .codec
+            .dequeue_input_buffer(Consts::INPUT_DEQUEUE_TIMEOUT_US)
+            .map_err(AndroidBackendError::into_decode_error)?
+        {
+            Some(mut buf) => {
+                let dst = buf.data_mut();
+                let copy_len = dst.len().min(frame_data.len());
+                dst[..copy_len].copy_from_slice(&frame_data[..copy_len]);
+                let pts_us = i64::try_from(pts.as_micros()).unwrap_or(i64::MAX);
+                self.codec
+                    .queue_input_buffer(buf.index, copy_len, pts_us, 0)
+                    .map_err(AndroidBackendError::into_decode_error)?;
             }
-            ffi::MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED => Ok(DequeueOutput::TryAgainLater),
-            negative if negative < 0 => Err(AndroidBackendError::operation(
-                "codec-dequeue-output-buffer",
-                format!("status={negative}"),
-            )),
-            _ => {
-                let index = usize::try_from(index).map_err(|_| {
-                    AndroidBackendError::operation(
-                        "codec-dequeue-output-buffer",
-                        format!("buffer index out of range: {index}"),
-                    )
-                })?;
-                let mut size = 0usize;
-                let data = NonNull::new(unsafe {
-                    ffi::AMediaCodec_getOutputBuffer(self.raw(), index, &mut size)
-                })
-                .ok_or_else(|| {
-                    AndroidBackendError::operation(
-                        "codec-get-output-buffer",
-                        format!("buffer={index} pointer was null"),
-                    )
-                })?;
+            None => {
+                // Codec backpressure — caller will retry the frame on the
+                // next pump. UniversalDecoder loops on zero-frame returns.
+                out.clear();
+                return Ok(0);
+            }
+        }
 
-                let offset = usize::try_from(info.offset).map_err(|_| {
-                    AndroidBackendError::operation(
-                        "codec-output-buffer-offset",
-                        format!("buffer={index} offset={} is negative", info.offset),
-                    )
-                })?;
-                let payload_size = usize::try_from(info.size).map_err(|_| {
-                    AndroidBackendError::operation(
-                        "codec-output-buffer-size",
-                        format!("buffer={index} size={} is negative", info.size),
-                    )
-                })?;
-                let end = offset.checked_add(payload_size).ok_or_else(|| {
-                    AndroidBackendError::operation(
-                        "codec-output-buffer-range",
-                        format!("buffer={index} offset={offset} size={payload_size} overflowed"),
-                    )
-                })?;
-                if end > size {
-                    return Err(AndroidBackendError::operation(
-                        "codec-output-buffer-range",
-                        format!("buffer={index} range {offset}..{end} exceeds capacity {size}"),
-                    ));
-                }
-
-                Ok(DequeueOutput::Output(OutputBuffer {
-                    index,
-                    presentation_time_us: info.presentation_time_us,
-                    flags: info.flags,
-                    ptr: NonNull::new(unsafe { data.as_ptr().add(offset) }).ok_or_else(|| {
-                        AndroidBackendError::operation(
-                            "codec-get-output-buffer",
-                            format!("buffer={index} offset {offset} produced null pointer"),
-                        )
-                    })?,
-                    len: payload_size,
-                }))
+        match self
+            .codec
+            .dequeue_output_buffer(Consts::OUTPUT_DEQUEUE_TIMEOUT_US)
+            .map_err(AndroidBackendError::into_decode_error)?
+        {
+            DequeueOutput::Output(buffer) => {
+                let bytes = buffer.data();
+                match self.pcm_encoding {
+                    AndroidPcmEncoding::Pcm16 => decode_pcm16_into(bytes, out)?,
+                    AndroidPcmEncoding::Float => decode_pcm_float_into(bytes, out)?,
+                };
+                let index = buffer.index;
+                self.codec
+                    .release_output_buffer(index)
+                    .map_err(AndroidBackendError::into_decode_error)?;
+                let channels = self.spec.channels as usize;
+                let frames = if channels == 0 {
+                    0
+                } else {
+                    u32::try_from(out.len() / channels).unwrap_or(u32::MAX)
+                };
+                Ok(frames)
+            }
+            DequeueOutput::OutputFormatChanged(new_format) => {
+                self.spec = new_format.spec;
+                self.pcm_encoding = new_format.pcm_encoding;
+                out.clear();
+                Ok(0)
+            }
+            DequeueOutput::TryAgainLater => {
+                out.clear();
+                Ok(0)
             }
         }
     }
 
-    pub(crate) fn release_output_buffer(
-        &mut self,
-        index: usize,
-    ) -> Result<(), AndroidBackendError> {
-        let status = unsafe { ffi::AMediaCodec_releaseOutputBuffer(self.raw(), index, false) };
-        if status != MEDIA_STATUS_OK {
-            return Err(AndroidBackendError::operation(
-                "codec-release-output-buffer",
-                format!("buffer={index} status={status}"),
-            ));
-        }
-        Ok(())
+    fn flush(&mut self) {
+        let _ = self.codec.flush();
     }
 
-    pub(crate) fn output_format(&self) -> Result<OwnedFormat, AndroidBackendError> {
-        let raw = NonNull::new(unsafe { ffi::AMediaCodec_getOutputFormat(self.raw()) })
-            .ok_or_else(|| {
-                AndroidBackendError::operation("codec-output-format", "output format was null")
-            })?;
-        Ok(OwnedFormat::from_raw(raw))
+    fn open(track: &TrackInfo) -> DecodeResult<Self> {
+        ensure_current_thread_attached().map_err(AndroidBackendError::into_decode_error)?;
+
+        let mime = match track.codec {
+            AudioCodec::AacLc => MIME_AAC,
+            AudioCodec::Flac => MIME_FLAC,
+            other => return Err(DecodeError::UnsupportedCodec(other)),
+        };
+
+        let format = build_format(mime, track).map_err(AndroidBackendError::into_decode_error)?;
+        let codec = OwnedCodec::create_with_format(mime, &format)
+            .map_err(AndroidBackendError::into_decode_error)?;
+        let (spec, pcm_encoding) =
+            read_output_format(&codec).map_err(AndroidBackendError::into_decode_error)?;
+
+        Ok(Self {
+            codec,
+            spec,
+            pcm_encoding,
+        })
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
     }
 }
 
-impl Drop for OwnedCodec {
-    fn drop(&mut self) {
-        if self.started {
-            let _ = unsafe { ffi::AMediaCodec_stop(self.raw()) };
-        }
-        let _ = unsafe { ffi::AMediaCodec_delete(self.raw()) };
-    }
-}
+fn build_format(
+    mime: &std::ffi::CStr,
+    track: &TrackInfo,
+) -> Result<OwnedFormat, AndroidBackendError> {
+    // SAFETY: AMediaFormat_new returns a freshly allocated AMediaFormat
+    // we own; non-null on success.
+    let raw = NonNull::new(unsafe { ffi::AMediaFormat_new() })
+        .ok_or_else(|| AndroidBackendError::operation("media-format-new", "returned null"))?;
+    let mut format = OwnedFormat::from_raw(raw);
 
-pub(crate) fn bootstrap_codec(
-    extractor: &OwnedExtractor,
-    track: &SelectedTrack,
-) -> Result<CodecBootstrap, AndroidBackendError> {
-    debug!(
-        track_index = track.index,
-        mime = %track.mime,
-        "Configuring Android MediaCodec decoder"
-    );
-    let mime = CString::new(track.mime.as_str())
-        .map_err(|error| AndroidBackendError::operation("codec-mime-cstring", error.to_string()))?;
-    let codec_raw = NonNull::new(unsafe { ffi::AMediaCodec_createDecoderByType(mime.as_ptr()) })
-        .ok_or_else(|| {
-            AndroidBackendError::operation(
-                "codec-create-decoder",
-                format!("mime={} returned null", track.mime),
-            )
-        })?;
-    let mut codec = OwnedCodec {
-        raw: codec_raw,
-        started: false,
-    };
-
-    let mut format = extractor.track_format(track.index)?;
-    if !format.set_i32(KEY_PCM_ENCODING, PCM_ENCODING_16BIT) {
-        debug!(
-            mime = %track.mime,
-            "Android MediaCodec ignored requested PCM 16-bit output; continuing with negotiated output format"
-        );
+    // SAFETY: format is live; key/value are static null-terminated CStrs.
+    unsafe {
+        ffi::AMediaFormat_setString(format.raw(), KEY_MIME.as_ptr(), mime.as_ptr());
     }
 
-    let status = unsafe {
-        ffi::AMediaCodec_configure(
-            codec.raw(),
-            format.raw(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            0,
+    let sample_rate = i32::try_from(track.sample_rate).map_err(|_| {
+        AndroidBackendError::operation(
+            "media-format-sample-rate",
+            format!("rate={} out of range", track.sample_rate),
         )
-    };
-    if status != MEDIA_STATUS_OK {
+    })?;
+    let channels = i32::from(track.channels);
+    if !format.set_i32(KEY_SAMPLE_RATE, sample_rate) {
         return Err(AndroidBackendError::operation(
-            "codec-configure",
-            format!("mime={} status={status}", track.mime),
+            "media-format-set-sample-rate",
+            format!("rate={sample_rate}"),
         ));
     }
-
-    let status = unsafe { ffi::AMediaCodec_start(codec.raw()) };
-    if status != MEDIA_STATUS_OK {
+    if !format.set_i32(KEY_CHANNEL_COUNT, channels) {
         return Err(AndroidBackendError::operation(
-            "codec-start",
-            format!("mime={} status={status}", track.mime),
+            "media-format-set-channels",
+            format!("channels={channels}"),
         ));
     }
-    codec.started = true;
+    // Non-fatal: codec may negotiate a different output PCM encoding via
+    // OUTPUT_FORMAT_CHANGED later.
+    let _ = format.set_i32(KEY_PCM_ENCODING, PCM_ENCODING_16BIT);
 
-    let output = load_output_format(&codec)?;
-    info!(
-        mime = %track.mime,
-        sample_rate = output.spec.sample_rate,
-        channels = output.spec.channels,
-        pcm_encoding = ?output.pcm_encoding,
-        "Android MediaCodec decoder started"
-    );
+    if !track.extra_data.is_empty() {
+        // SAFETY: format is live; extra_data is a readable byte slice.
+        unsafe {
+            ffi::AMediaFormat_setBuffer(
+                format.raw(),
+                KEY_CSD_0.as_ptr(),
+                track.extra_data.as_ptr() as *const c_void,
+                track.extra_data.len(),
+            );
+        }
+    }
 
-    Ok(CodecBootstrap {
-        codec,
-        spec: output.spec,
-        pcm_encoding: output.pcm_encoding,
-    })
+    Ok(format)
 }
 
-fn load_output_format(codec: &OwnedCodec) -> Result<OutputFormat, AndroidBackendError> {
-    let output = codec.output_format()?;
-    let sample_rate = output.get_u32(KEY_SAMPLE_RATE)?.ok_or_else(|| {
+fn read_output_format(
+    codec: &OwnedCodec,
+) -> Result<(PcmSpec, AndroidPcmEncoding), AndroidBackendError> {
+    let format = codec.output_format()?;
+    let sample_rate = format.get_u32(KEY_SAMPLE_RATE)?.ok_or_else(|| {
         AndroidBackendError::operation("codec-output-format", "missing sample-rate")
     })?;
-    let channels = output.get_u16(KEY_CHANNEL_COUNT)?.ok_or_else(|| {
+    let channels = format.get_u16(KEY_CHANNEL_COUNT)?.ok_or_else(|| {
         AndroidBackendError::operation("codec-output-format", "missing channel-count")
     })?;
-    let pcm_encoding = match output.get_i32(KEY_PCM_ENCODING) {
+    let pcm_encoding = match format.get_i32(KEY_PCM_ENCODING) {
         None | Some(PCM_ENCODING_16BIT) => AndroidPcmEncoding::Pcm16,
         Some(PCM_ENCODING_FLOAT) => AndroidPcmEncoding::Float,
         Some(other) => return Err(AndroidBackendError::UnsupportedPcmEncoding { encoding: other }),
     };
-
-    Ok(OutputFormat {
-        spec: PcmSpec {
+    Ok((
+        PcmSpec {
             sample_rate,
             channels,
         },
         pcm_encoding,
-    })
+    ))
 }
 
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn pcm_encoding_variants_are_distinct() {
-        assert!(matches!(
-            AndroidPcmEncoding::Pcm16,
-            AndroidPcmEncoding::Pcm16
-        ));
-        assert!(matches!(
-            AndroidPcmEncoding::Float,
-            AndroidPcmEncoding::Float
-        ));
+fn decode_pcm16_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
+    let count = bytes.len() / 2;
+    out.ensure_len(count)
+        .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+    for (dst, chunk) in out.iter_mut().zip(bytes.chunks_exact(2)) {
+        let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+        *dst = f32::from(s) / Consts::PCM16_SCALE;
     }
+    out.truncate(count);
+    Ok(())
+}
+
+fn decode_pcm_float_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
+    let count = bytes.len() / 4;
+    out.ensure_len(count)
+        .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+    for (dst, chunk) in out.iter_mut().zip(bytes.chunks_exact(4)) {
+        *dst = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+    out.truncate(count);
+    Ok(())
 }

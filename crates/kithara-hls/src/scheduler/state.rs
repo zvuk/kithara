@@ -1,12 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
-use kithara_abr::{AbrController, AbrDecision, AbrReason, ThroughputEstimator};
+use kithara_abr::{AbrDecision, AbrState};
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_events::{EventBus, HlsEvent, SeekEpoch};
+use kithara_events::{AbrReason, EventBus, HlsError as PublicHlsError, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 use tracing::debug;
 
@@ -24,23 +27,55 @@ use crate::{
 
 /// HLS downloader: fetches segments and maintains ABR state.
 pub(crate) struct HlsScheduler {
-    pub(crate) active_seek_epoch: SeekEpoch,
+    /// Shared ABR state — same `Arc` the owning `HlsPeer` exposes via
+    /// `Abr::state()`. Lock/unlock drives the seek-no-switch invariant;
+    /// `current_variant_index()` is the source of truth for the scheduler.
+    pub(crate) abr: Arc<AbrState>,
+    /// One past the highest segment index ever committed — shared with the
+    /// owning `HlsPeer::committed_segment` cursor so `HlsPeer::progress`
+    /// can expose `download_head_playback_time` to the ABR controller.
+    pub(crate) committed_segment: Arc<AtomicUsize>,
+    pub(crate) coord: Arc<HlsCoord>,
+    pub(crate) playlist_state: Arc<PlaylistState>,
+    pub(crate) segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     /// Direct disk-cache access — no `FetchManager` wrapper.
     pub(crate) backend: AssetStore<DecryptContext>,
-    pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) cursor: DownloadCursor<SegmentIndex>,
-    pub(crate) force_init_for_seek: bool,
-    pub(crate) sent_init_for_variant: HashSet<VariantIndex>,
-    pub(crate) abr: AbrController<ThroughputEstimator>,
-    pub(crate) coord: Arc<HlsCoord>,
-    pub(crate) segments: Arc<kithara_platform::Mutex<StreamIndex>>,
     pub(crate) bus: EventBus,
+    /// Highest cached-segment count already announced via
+    /// `SegmentComplete { cached: true }` per variant. Prevents
+    /// `apply_cached_segment_progress` from re-publishing the same events
+    /// on every `poll_next` tick.
+    pub(crate) announced_cached_count: HashMap<VariantIndex, usize>,
+    /// Highest cached-segment count already populated into `StreamIndex`
+    /// by `populate_cached_segments_if_needed` per variant. Prevents
+    /// repeated full-playlist disk scans on every `poll_next` tick — the
+    /// scan is heavy (per-segment `resource_state` + `commit_segment`)
+    /// and unconditionally fires `coord.condvar.notify_all()` which wakes
+    /// the audio worker, which polls again, which re-scans: a CPU-bound
+    /// hot loop that exhausts the test budget under stress.
+    ///
+    /// Only meaningful for non-ephemeral backends — ephemeral stores
+    /// short-circuit `populate_cached_segments` directly.
+    pub(crate) populated_cached_count: HashMap<VariantIndex, usize>,
+    /// Segments whose `FetchCmd` has been emitted and whose `on_complete`
+    /// has not yet fired. Used by `process_demand` to skip rewinding the
+    /// cursor onto an in-flight segment (which would issue a duplicate
+    /// `FetchCmd` that races the original writer on the same cached
+    /// `AssetResource`). Cleared on new seek epoch (the old epoch's
+    /// cancel token drops any in-flight fetches).
+    pub(crate) in_flight_segments: HashSet<(VariantIndex, SegmentIndex)>,
+    pub(crate) sent_init_for_variant: HashSet<VariantIndex>,
+    /// After a demand, caps cursor advancement so prefetch doesn't evict
+    /// the demanded segment from an ephemeral LRU. Set to
+    /// `demand_seg + look_ahead_segments` when a demand is processed;
+    /// cleared on the next seek (new epoch) or when reader advances past.
+    pub(crate) demand_throttle_until: Option<usize>,
     /// Backpressure threshold (segments ahead of reader). None = no limit.
     /// For ephemeral backends, derived from cache capacity to prevent
     /// evicting segments the reader still needs.
     pub(crate) look_ahead_segments: Option<usize>,
-    /// Max segments to download in parallel per batch.
-    pub(crate) prefetch_count: usize,
+    pub(crate) active_seek_epoch: SeekEpoch,
     /// Variant the downloader is currently targeting. Used for transition
     /// classification instead of shared `layout_variant` to avoid racing
     /// with the decoder thread.
@@ -50,39 +85,29 @@ pub(crate) struct HlsScheduler {
     /// on subsequent `poll_next` cycles (avoids hot loop: ABR cached commit
     /// → tail gap detect → reset → ABR override → repeat).
     pub(crate) filling_layout_gap: bool,
-    /// After a demand, caps cursor advancement so prefetch doesn't evict
-    /// the demanded segment from an ephemeral LRU. Set to
-    /// `demand_seg + look_ahead_segments` when a demand is processed;
-    /// cleared on the next seek (new epoch) or when reader advances past.
-    pub(crate) demand_throttle_until: Option<usize>,
-    /// Highest cached-segment count already announced via
-    /// `SegmentComplete { cached: true }` per variant. Prevents
-    /// `apply_cached_segment_progress` from re-publishing the same events
-    /// on every `poll_next` tick.
-    pub(crate) announced_cached_count: HashMap<VariantIndex, usize>,
-    /// Segments whose `FetchCmd` has been emitted and whose `on_complete`
-    /// has not yet fired. Used by `process_demand` to skip rewinding the
-    /// cursor onto an in-flight segment (which would issue a duplicate
-    /// `FetchCmd` that races the original writer on the same cached
-    /// `AssetResource`). Cleared on new seek epoch (the old epoch's
-    /// cancel token drops any in-flight fetches).
-    pub(crate) in_flight_segments: HashSet<(VariantIndex, SegmentIndex)>,
+    pub(crate) force_init_for_seek: bool,
+    /// Max segments to download in parallel per batch.
+    pub(crate) prefetch_count: usize,
 }
 
 /// Maximum initial segment index for verbose logging.
 pub(super) const VERBOSE_SEGMENT_LIMIT: usize = 8;
 
 impl HlsScheduler {
-    pub(crate) fn layout_variant(&self) -> VariantIndex {
-        self.segments.lock_sync().layout_variant()
+    pub(crate) fn advance_current_segment_index(&mut self, segment_index: SegmentIndex) {
+        self.cursor.advance_fill_to(segment_index);
+    }
+
+    pub(crate) fn classify_variant_transition(
+        &self,
+        variant: usize,
+        segment_index: usize,
+    ) -> (bool, bool) {
+        classify_layout_transition(self.download_variant, variant, segment_index)
     }
 
     pub(crate) fn current_segment_index(&self) -> SegmentIndex {
         self.cursor.fill_next()
-    }
-
-    pub(super) fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
-        self.playlist_state.num_segments(variant)
     }
 
     pub(super) fn effective_total_bytes(&self) -> Option<u64> {
@@ -97,36 +122,6 @@ impl HlsScheduler {
         self.cursor.fill_floor()
     }
 
-    /// Segment index the reader is currently inside, in the layout variant.
-    ///
-    /// Tail-state gap scans must not consider segments strictly behind the
-    /// reader as "missing": in an ephemeral LRU these were evicted by design
-    /// once played, and re-fetching them only evicts the segments the reader
-    /// is actively reading next — a hot loop.
-    pub(crate) fn reader_segment_floor(&self) -> SegmentIndex {
-        let byte_pos = self.coord.timeline().byte_position();
-        if byte_pos == 0 {
-            return 0;
-        }
-        let layout = self.layout_variant();
-        self.segments
-            .lock_sync()
-            .find_at_offset_in(layout, byte_pos)
-            .map_or(0, |seg| seg.segment_index)
-    }
-
-    pub(crate) fn reset_cursor(&mut self, segment_index: SegmentIndex) {
-        self.cursor.reset_fill(segment_index);
-    }
-
-    pub(crate) fn advance_current_segment_index(&mut self, segment_index: SegmentIndex) {
-        self.cursor.advance_fill_to(segment_index);
-    }
-
-    pub(crate) fn rewind_current_segment_index(&mut self, segment_index: SegmentIndex) {
-        self.cursor.rewind_fill_to(segment_index);
-    }
-
     pub(super) fn is_below_switch_floor(
         &self,
         variant: VariantIndex,
@@ -139,27 +134,8 @@ impl HlsScheduler {
         if variant == layout {
             return false;
         }
-        let current_variant = self.abr.get_current_variant_index();
+        let current_variant = self.abr.current_variant_index();
         variant == current_variant && segment_index < self.gap_scan_start_segment()
-    }
-
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "layout scan must hold the StreamIndex lock while item_range walks the current map"
-    )]
-    pub(super) fn switched_layout_anchor(&self) -> Option<(VariantIndex, u64)> {
-        let variant = self.abr.get_current_variant_index();
-        let anchor = {
-            let segments = self.segments.lock_sync();
-            let vs = segments.variant_segments(variant)?;
-            vs.iter().find_map(|(segment_index, _data)| {
-                segments
-                    .item_range((variant, segment_index))
-                    .map(|range| (segment_index, range.start))
-            })
-        };
-        let (segment_index, byte_offset) = anchor?;
-        ((segment_index > 0) || (byte_offset > 0)).then_some((variant, byte_offset))
     }
 
     pub(super) fn is_stale_cross_codec(&self, variant: VariantIndex, seg_idx: usize) -> bool {
@@ -180,12 +156,48 @@ impl HlsScheduler {
         fetch_offset >= anchor_offset
     }
 
-    pub(crate) fn classify_variant_transition(
-        &self,
-        variant: usize,
-        segment_index: usize,
-    ) -> (bool, bool) {
-        classify_layout_transition(self.download_variant, variant, segment_index)
+    pub(crate) fn layout_variant(&self) -> VariantIndex {
+        self.segments.lock_sync().layout_variant()
+    }
+
+    pub(super) fn num_segments(&self, variant: VariantIndex) -> Option<usize> {
+        self.playlist_state.num_segments(variant)
+    }
+
+    pub(crate) fn publish_download_error(&self, context: &str, error: &HlsError) {
+        debug!(?error, context, "hls downloader error");
+        // Network errors are reported through `DownloaderEvent::RequestFailed`
+        // — do not duplicate them on `HlsEvent::Error`.
+        let public = match error {
+            HlsError::Net(_) => return,
+            HlsError::PlaylistParse(msg) => PublicHlsError::Playlist(format!("{context}: {msg}")),
+            HlsError::KeyProcessing(msg) => PublicHlsError::Decryption(format!("{context}: {msg}")),
+            other => PublicHlsError::Other(format!("{context}: {other}")),
+        };
+        self.bus.publish(HlsEvent::Error { error: public });
+    }
+
+    /// Segment index the reader is currently inside, in the layout variant.
+    ///
+    /// Tail-state gap scans must not consider segments strictly behind the
+    /// reader as "missing": in an ephemeral LRU these were evicted by design
+    /// once played, and re-fetching them only evicts the segments the reader
+    /// is actively reading next — a hot loop.
+    pub(crate) fn reader_segment_floor(&self) -> SegmentIndex {
+        let byte_pos = self.coord.timeline().byte_position();
+        if byte_pos == 0 {
+            return 0;
+        }
+        let layout = self.layout_variant();
+        self.segments
+            .lock_sync()
+            .find_at_offset_in(layout, byte_pos)
+            .filter(|seg| seg.data.is_some())
+            .map_or(0, |seg| seg.segment_index)
+    }
+
+    pub(crate) fn reset_cursor(&mut self, segment_index: SegmentIndex) {
+        self.cursor.reset_fill(segment_index);
     }
 
     pub(super) fn reset_for_seek_epoch(
@@ -241,7 +253,7 @@ impl HlsScheduler {
         self.download_variant = variant;
         self.filling_layout_gap = false;
 
-        let current_variant = self.abr.get_current_variant_index();
+        let current_variant = self.abr.current_variant_index();
         if current_variant != variant {
             self.abr.apply(
                 &AbrDecision {
@@ -252,6 +264,23 @@ impl HlsScheduler {
                 Instant::now(),
             );
         }
+    }
+
+    pub(crate) fn rewind_current_segment_index(&mut self, segment_index: SegmentIndex) {
+        self.cursor.rewind_fill_to(segment_index);
+    }
+
+    pub(super) fn segment_resources_available(&self, data: &SegmentData) -> bool {
+        if data.init_len > 0
+            && let Some(ref init_url) = data.init_url
+            && !self
+                .backend
+                .contains_range(&ResourceKey::from_url(init_url), 0..data.init_len)
+        {
+            return false;
+        }
+        self.backend
+            .contains_range(&ResourceKey::from_url(&data.media_url), 0..data.media_len)
     }
 
     pub(crate) fn switch_needs_init(
@@ -268,27 +297,26 @@ impl HlsScheduler {
         previous != variant && is_cross_codec_switch(&self.playlist_state, previous, variant)
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "layout scan must hold the StreamIndex lock while item_range walks the current map"
+    )]
+    pub(super) fn switched_layout_anchor(&self) -> Option<(VariantIndex, u64)> {
+        let variant = self.abr.current_variant_index();
+        let anchor = {
+            let segments = self.segments.lock_sync();
+            let vs = segments.variant_segments(variant)?;
+            vs.iter().find_map(|(segment_index, _data)| {
+                segments
+                    .item_range((variant, segment_index))
+                    .map(|range| (segment_index, range.start))
+            })
+        };
+        let (segment_index, byte_offset) = anchor?;
+        ((segment_index > 0) || (byte_offset > 0)).then_some((variant, byte_offset))
+    }
+
     pub(crate) fn variant_has_init(&self, variant: usize) -> bool {
         self.playlist_state.init_url(variant).is_some()
-    }
-
-    pub(crate) fn publish_download_error(&self, context: &str, error: &HlsError) {
-        debug!(?error, context, "hls downloader error");
-        self.bus.publish(HlsEvent::DownloadError {
-            error: format!("{context}: {error}"),
-        });
-    }
-
-    pub(super) fn segment_resources_available(&self, data: &SegmentData) -> bool {
-        if data.init_len > 0
-            && let Some(ref init_url) = data.init_url
-            && !self
-                .backend
-                .contains_range(&ResourceKey::from_url(init_url), 0..data.init_len)
-        {
-            return false;
-        }
-        self.backend
-            .contains_range(&ResourceKey::from_url(&data.media_url), 0..data.media_len)
     }
 }

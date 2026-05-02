@@ -14,10 +14,10 @@ use crate::{
 /// Prefer [`PackagedTestServer`] or `HlsFixtureBuilder::packaged_audio_*` for new
 /// audio HLS tests.
 pub struct TestServer {
-    _helper: TestServerHelper,
-    plain: CreatedHls,
-    init: CreatedHls,
     encrypted: CreatedHls,
+    init: CreatedHls,
+    plain: CreatedHls,
+    _helper: TestServerHelper,
 }
 
 impl TestServer {
@@ -37,10 +37,10 @@ impl TestServer {
             .await
             .expect("create fixed encrypted HLS fixture");
         Self {
-            _helper: helper,
             plain,
             init,
             encrypted,
+            _helper: helper,
         }
     }
 
@@ -187,23 +187,23 @@ pub fn test_media_playlist_encrypted(_variant: usize) -> String {
 
 /// AES-128 encryption configuration for configurable HLS fixtures.
 pub struct EncryptionConfig {
-    pub key: [u8; 16],
     pub iv: Option<[u8; 16]>,
+    pub key: [u8; 16],
 }
 
 /// Configuration for [`HlsTestServer`].
 pub struct HlsTestServerConfig {
-    pub variant_count: usize,
-    pub segments_per_variant: usize,
-    pub segment_size: usize,
-    pub segment_duration_secs: f64,
     pub custom_data: Option<Arc<Vec<u8>>>,
     pub custom_data_per_variant: Option<Vec<Arc<Vec<u8>>>>,
+    pub encryption: Option<EncryptionConfig>,
+    pub head_reported_segment_size: Option<usize>,
     pub init_data_per_variant: Option<Vec<Arc<Vec<u8>>>>,
     pub variant_bandwidths: Option<Vec<u64>>,
     pub delay_rules: Vec<DelayRule>,
-    pub encryption: Option<EncryptionConfig>,
-    pub head_reported_segment_size: Option<usize>,
+    pub segment_duration_secs: f64,
+    pub segment_size: usize,
+    pub segments_per_variant: usize,
+    pub variant_count: usize,
 }
 
 impl Default for HlsTestServerConfig {
@@ -229,9 +229,9 @@ impl Default for HlsTestServerConfig {
 /// This server keeps the historical test-pattern byte contract and therefore
 /// remains the right choice for `expected_byte_at()`-style assertions.
 pub struct HlsTestServer {
-    _helper: TestServerHelper,
-    config: HlsTestServerConfig,
     created: CreatedHls,
+    config: HlsTestServerConfig,
+    _helper: TestServerHelper,
 }
 
 impl HlsTestServer {
@@ -243,58 +243,15 @@ impl HlsTestServer {
             .await
             .expect("create configurable HLS fixture");
         Self {
-            _helper: helper,
             config,
             created,
-        }
-    }
-
-    #[must_use]
-    pub fn url(&self, path: &str) -> Url {
-        match path {
-            "/master.m3u8" => self.created.master_url(),
-            "/key.bin" => self.created.key_url(),
-            other if other.starts_with("/playlist/v") && other.ends_with(".m3u8") => {
-                let variant = parse_variant(other, "/playlist/v", ".m3u8")
-                    .unwrap_or_else(|| panic!("invalid HlsTestServer playlist path `{other}`"));
-                self.created.media_url(variant)
-            }
-            other if other.starts_with("/seg/v") && other.ends_with(".bin") => {
-                let (variant, segment) = parse_segment(other)
-                    .unwrap_or_else(|| panic!("invalid HlsTestServer segment path `{other}`"));
-                self.created.segment_url(variant, segment)
-            }
-            other if other.starts_with("/init/v") && other.ends_with("_init.bin") => {
-                let variant = parse_variant(other, "/init/v", "_init.bin")
-                    .unwrap_or_else(|| panic!("invalid HlsTestServer init path `{other}`"));
-                self.created.init_url(variant)
-            }
-            other => panic!("unknown HlsTestServer path `{other}`"),
+            _helper: helper,
         }
     }
 
     #[must_use]
     pub fn config(&self) -> &HlsTestServerConfig {
         &self.config
-    }
-
-    #[must_use]
-    pub fn init_len(&self) -> u64 {
-        self.config
-            .init_data_per_variant
-            .as_ref()
-            .and_then(|d| d.first())
-            .map_or(0, |d| d.len() as u64)
-    }
-
-    #[must_use]
-    pub fn total_bytes(&self) -> u64 {
-        self.init_len() + self.config.segments_per_variant as u64 * self.config.segment_size as u64
-    }
-
-    #[must_use]
-    pub fn total_duration_secs(&self) -> f64 {
-        self.config.segments_per_variant as f64 * self.config.segment_duration_secs
     }
 
     #[must_use]
@@ -337,32 +294,68 @@ impl HlsTestServer {
             0xFF
         }
     }
+
+    #[must_use]
+    pub fn init_len(&self) -> u64 {
+        self.config
+            .init_data_per_variant
+            .as_ref()
+            .and_then(|d| d.first())
+            .map_or(0, |d| d.len() as u64)
+    }
+
+    #[must_use]
+    pub fn total_bytes(&self) -> u64 {
+        self.init_len() + self.config.segments_per_variant as u64 * self.config.segment_size as u64
+    }
+
+    #[must_use]
+    pub fn total_duration_secs(&self) -> f64 {
+        self.config.segments_per_variant as f64 * self.config.segment_duration_secs
+    }
+
+    #[must_use]
+    pub fn url(&self, path: &str) -> Url {
+        match path {
+            "/master.m3u8" => self.created.master_url(),
+            "/key.bin" => self.created.key_url(),
+            other if other.starts_with("/playlist/v") && other.ends_with(".m3u8") => {
+                let variant = parse_variant(other, "/playlist/v", ".m3u8")
+                    // formatted message captures `other` via closure binding
+                    // ast-grep-ignore: style.prefer-expect
+                    .unwrap_or_else(|| panic!("invalid HlsTestServer playlist path `{other}`"));
+                self.created.media_url(variant)
+            }
+            other if other.starts_with("/seg/v") && other.ends_with(".bin") => {
+                let (variant, segment) = parse_segment(other)
+                    // formatted message captures `other` via closure binding
+                    // ast-grep-ignore: style.prefer-expect
+                    .unwrap_or_else(|| panic!("invalid HlsTestServer segment path `{other}`"));
+                self.created.segment_url(variant, segment)
+            }
+            other if other.starts_with("/init/v") && other.ends_with("_init.bin") => {
+                let variant = parse_variant(other, "/init/v", "_init.bin")
+                    // formatted message captures `other` via closure binding
+                    // ast-grep-ignore: style.prefer-expect
+                    .unwrap_or_else(|| panic!("invalid HlsTestServer init path `{other}`"));
+                self.created.init_url(variant)
+            }
+            other => panic!("unknown HlsTestServer path `{other}`"),
+        }
+    }
 }
 
 /// Preferred packaged-audio fixture for new synthetic HLS audio tests.
 pub struct PackagedTestServer {
-    _helper: TestServerHelper,
-    plain: CreatedHls,
     encrypted: CreatedHls,
+    plain: CreatedHls,
+    _helper: TestServerHelper,
 }
 
 impl PackagedTestServer {
     #[must_use]
     pub async fn new() -> Self {
-        let helper = TestServerHelper::new().await;
-        let plain = helper
-            .create_hls(packaged_plain_builder())
-            .await
-            .expect("create packaged plain HLS fixture");
-        let encrypted = helper
-            .create_hls(packaged_encrypted_builder())
-            .await
-            .expect("create packaged encrypted HLS fixture");
-        Self {
-            _helper: helper,
-            plain,
-            encrypted,
-        }
+        Self::with_delay_rules(Vec::new()).await
     }
 
     #[must_use]
@@ -389,6 +382,28 @@ impl PackagedTestServer {
             "/key.bin" | "/aes/key.bin" => self.encrypted.key_url(),
             "/aes/seg0.m4s" => self.encrypted.segment_url(0, 0),
             other => panic!("unknown PackagedTestServer path `{other}`"),
+        }
+    }
+
+    /// Build a server whose plain (3-variant AAC fMP4) fixture applies the
+    /// given per-segment server-side delays. Lets tests pin behaviour
+    /// under simulated slow connections — the encrypted fixture is built
+    /// without delays as it is unaffected by these scenarios.
+    #[must_use]
+    pub async fn with_delay_rules(delay_rules: Vec<DelayRule>) -> Self {
+        let helper = TestServerHelper::new().await;
+        let plain = helper
+            .create_hls(packaged_plain_builder().delay_rules(delay_rules))
+            .await
+            .expect("create packaged plain HLS fixture");
+        let encrypted = helper
+            .create_hls(packaged_encrypted_builder())
+            .await
+            .expect("create packaged encrypted HLS fixture");
+        Self {
+            plain,
+            encrypted,
+            _helper: helper,
         }
     }
 }
@@ -420,8 +435,8 @@ pub mod packaged {
 
 /// Compatibility-only ABR fixture backed by the unified synthetic stream routes.
 pub struct AbrTestServer {
-    _helper: TestServerHelper,
     created: CreatedHls,
+    _helper: TestServerHelper,
 }
 
 impl AbrTestServer {
@@ -437,8 +452,8 @@ impl AbrTestServer {
             .await
             .expect("create ABR HLS fixture");
         Self {
-            _helper: helper,
             created,
+            _helper: helper,
         }
     }
 

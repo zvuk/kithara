@@ -9,14 +9,14 @@ use std::sync::{Arc, atomic::AtomicU32};
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     audio::{AudioEffect, ResamplerParams, ResamplerProcessor, ResamplerQuality},
-    bufpool::pcm_pool,
+    bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
 };
 
 /// Create a test PCM chunk with specified sample count.
 fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
     let samples = frames * spec.channels as usize;
-    let pool = pcm_pool();
+    let pool = PcmPool::default();
     let pcm = pool.get_with(|b| {
         b.clear();
         b.resize(samples, 0.0);
@@ -68,7 +68,6 @@ enum PerfScenario {
 #[case("resampler_passthrough", PerfScenario::PassthroughDetection)]
 #[case("resampler_deinterleave", PerfScenario::DeinterleaveOverhead)]
 #[case("resampler_breakdown", PerfScenario::DetailedBreakdown)]
-#[ignore]
 fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {

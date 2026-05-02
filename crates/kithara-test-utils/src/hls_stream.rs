@@ -49,10 +49,10 @@ pub(crate) fn load_hls(
 }
 
 pub(crate) struct GeneratedHls {
+    body: MaterializedHlsBody,
     spec: ResolvedHlsSpec,
     master_playlist: String,
     media_playlists: Vec<String>,
-    body: MaterializedHlsBody,
 }
 
 enum MaterializedDataMode {
@@ -81,19 +81,38 @@ impl GeneratedHls {
             .collect();
 
         Ok(Self {
+            body,
             spec,
             master_playlist,
             media_playlists,
-            body,
         })
     }
 
-    pub(crate) fn master_playlist(&self, encoded_spec: &str) -> String {
-        self.master_playlist.replace("{spec}", encoded_spec)
+    fn encrypt_if_needed(&self, data: &[u8], sequence: usize) -> Vec<u8> {
+        let Some(enc) = &self.spec.encryption else {
+            return data.to_vec();
+        };
+        let iv = derive_iv(enc, sequence);
+        encrypt_aes128_cbc(data, &enc.key, &iv)
     }
 
-    pub(crate) fn media_playlist(&self, variant: usize) -> Option<&str> {
-        self.media_playlists.get(variant).map(String::as_str)
+    pub(crate) fn init_bytes(&self, variant: usize) -> Option<Vec<u8>> {
+        let plaintext = match &self.body {
+            MaterializedHlsBody::Legacy { init_segments, .. } => {
+                init_segments.get(variant)?.as_slice()
+            }
+            MaterializedHlsBody::Packaged { variants } => {
+                variants.get(variant)?.init_segment.as_slice()
+            }
+        };
+        Some(self.encrypt_if_needed(plaintext, 0))
+    }
+
+    pub(crate) fn init_content_type(&self) -> Option<&'static str> {
+        match self.body {
+            MaterializedHlsBody::Legacy { .. } => None,
+            MaterializedHlsBody::Packaged { .. } => Some("audio/mp4"),
+        }
     }
 
     pub(crate) fn key_bytes(&self) -> Option<Vec<u8>> {
@@ -109,11 +128,17 @@ impl GeneratedHls {
             })
     }
 
-    pub(crate) fn init_content_type(&self) -> Option<&'static str> {
-        match self.body {
-            MaterializedHlsBody::Legacy { .. } => None,
-            MaterializedHlsBody::Packaged { .. } => Some("audio/mp4"),
-        }
+    pub(crate) fn master_playlist(&self, encoded_spec: &str) -> String {
+        self.master_playlist.replace("{spec}", encoded_spec)
+    }
+
+    pub(crate) fn media_playlist(&self, variant: usize) -> Option<&str> {
+        self.media_playlists.get(variant).map(String::as_str)
+    }
+
+    pub(crate) fn segment_bytes(&self, variant: usize, segment: usize) -> Option<Vec<u8>> {
+        let plaintext = self.segment_plaintext(variant, segment)?;
+        Some(self.encrypt_if_needed(&plaintext, segment))
     }
 
     pub(crate) fn segment_content_type(&self) -> Option<&'static str> {
@@ -123,16 +148,12 @@ impl GeneratedHls {
         }
     }
 
-    pub(crate) fn init_bytes(&self, variant: usize) -> Option<Vec<u8>> {
-        let plaintext = match &self.body {
-            MaterializedHlsBody::Legacy { init_segments, .. } => {
-                init_segments.get(variant)?.as_slice()
-            }
-            MaterializedHlsBody::Packaged { variants } => {
-                variants.get(variant)?.init_segment.as_slice()
-            }
-        };
-        Some(self.encrypt_if_needed(plaintext, 0))
+    pub(crate) fn segment_delay_ms(&self, variant: usize, segment: usize) -> u64 {
+        self.spec
+            .delay_rules
+            .iter()
+            .find_map(|rule| rule.matches(variant, segment))
+            .unwrap_or(0)
     }
 
     pub(crate) fn segment_len(
@@ -152,19 +173,6 @@ impl GeneratedHls {
                 plaintext.len()
             }
         })
-    }
-
-    pub(crate) fn segment_bytes(&self, variant: usize, segment: usize) -> Option<Vec<u8>> {
-        let plaintext = self.segment_plaintext(variant, segment)?;
-        Some(self.encrypt_if_needed(&plaintext, segment))
-    }
-
-    pub(crate) fn segment_delay_ms(&self, variant: usize, segment: usize) -> u64 {
-        self.spec
-            .delay_rules
-            .iter()
-            .find_map(|rule| rule.matches(variant, segment))
-            .unwrap_or(0)
     }
 
     fn segment_plaintext(&self, variant: usize, segment: usize) -> Option<Vec<u8>> {
@@ -203,18 +211,11 @@ impl GeneratedHls {
                 .map(|segment| segment.as_slice().to_vec()),
         }
     }
-
-    fn encrypt_if_needed(&self, data: &[u8], sequence: usize) -> Vec<u8> {
-        let Some(enc) = &self.spec.encryption else {
-            return data.to_vec();
-        };
-        let iv = derive_iv(enc, sequence);
-        encrypt_aes128_cbc(data, &enc.key, &iv)
-    }
 }
 
 fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSpecError> {
     if let Some(packaged) = &spec.packaged_audio {
+        let include_sidx = packaged.include_sidx;
         let variants = packaged
             .variants
             .iter()
@@ -222,7 +223,7 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
                 encode_packaged_variant(packaged, variant)
                     .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
                     .and_then(|track| {
-                        mux_audio_track(&track)
+                        mux_audio_track(&track, include_sidx)
                             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
                     })
             })
@@ -259,10 +260,10 @@ fn encode_packaged_variant(
     let encode = |pcm: &dyn kithara_encode::PcmSource| {
         encoder.encode_packaged(PackagedEncodeRequest {
             pcm,
+            packets_per_segment,
             media_info: media_info.clone(),
             timescale: packaged.timescale,
             bit_rate: variant.bit_rate,
-            packets_per_segment,
         })
     };
 

@@ -19,9 +19,9 @@ pub enum CrossfadeCurve {
 #[derivative(Default)]
 #[non_exhaustive]
 pub struct CrossfadeConfig {
+    pub curve: CrossfadeCurve,
     #[derivative(Default(value = "Duration::from_secs(5)"))]
     pub duration: Duration,
-    pub curve: CrossfadeCurve,
     pub beat_aligned: bool,
     pub cut_incoming_at: f32,
     #[derivative(Default(value = "1.0"))]
@@ -33,8 +33,6 @@ pub struct CrossfadeConfig {
     unimock::unimock(api = CrossfadeControllerMock)
 )]
 pub trait CrossfadeController: MaybeSend + MaybeSync + 'static {
-    fn start(&self, from: SlotId, to: SlotId, config: CrossfadeConfig) -> Result<(), PlayError>;
-
     fn cancel(&self) -> Result<(), PlayError>;
 
     fn is_active(&self) -> bool;
@@ -43,11 +41,13 @@ pub trait CrossfadeController: MaybeSend + MaybeSync + 'static {
 
     fn remaining(&self) -> Duration;
 
-    fn source_slot(&self) -> Option<SlotId>;
-
-    fn target_slot(&self) -> Option<SlotId>;
-
     fn set_curve(&self, curve: CrossfadeCurve);
 
     fn set_duration(&self, duration: Duration);
+
+    fn source_slot(&self) -> Option<SlotId>;
+
+    fn start(&self, from: SlotId, to: SlotId, config: CrossfadeConfig) -> Result<(), PlayError>;
+
+    fn target_slot(&self) -> Option<SlotId>;
 }

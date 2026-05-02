@@ -1,0 +1,40 @@
+id: perf.no-global-pool-accessor
+message: |
+  Constructing a default `BytePool` / `PcmPool` from a library crate.
+  Pools are an injected dependency: the top of the application builds
+  one `BytePool` and one `PcmPool` and passes them down through
+  config structs or constructor arguments. Library code must read
+  the pool from `self`/`cfg`, not call `BytePool::default()` /
+  `PcmPool::default()` directly.
+
+      // ❌  let buf = BytePool::default().get_with(...);
+      // ✅  let buf = self.byte_pool.get_with(...);
+      // ✅  let buf = cfg.pcm_pool.get_with(...);
+
+  `Default::default()` stays available for the very top layer (main /
+  FFI entrypoint / test fixtures) where building the singleton is
+  the right thing to do.
+severity: warning
+language: Rust
+files:
+  - crates/kithara-audio/src/**/*.rs
+  - crates/kithara-decode/src/**/*.rs
+  - crates/kithara-stream/src/**/*.rs
+  - crates/kithara-hls/src/**/*.rs
+  - crates/kithara-file/src/**/*.rs
+  - crates/kithara-assets/src/**/*.rs
+  - crates/kithara-play/src/**/*.rs
+  - crates/kithara-queue/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: "BytePool::default()"
+    - pattern: "PcmPool::default()"
+    - pattern: "kithara_bufpool::BytePool::default()"
+    - pattern: "kithara_bufpool::PcmPool::default()"

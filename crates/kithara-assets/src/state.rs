@@ -22,7 +22,13 @@ pub enum AssetResourceState {
 impl From<ResourceStatus> for AssetResourceState {
     fn from(status: ResourceStatus) -> Self {
         match status {
-            ResourceStatus::Active => Self::Active,
+            // Cancellation surfaces as Active here so cache lookups,
+            // status probes, and resume-after-cancel paths keep their
+            // pre-Cancelled semantics: a token-fired resource still
+            // has a live handle, partial bytes on disk, and a valid
+            // `reactivate()` path. Observers that want a shutdown
+            // signal query `ResourceStatus::Cancelled` directly.
+            ResourceStatus::Active | ResourceStatus::Cancelled => Self::Active,
             ResourceStatus::Committed { final_len } => Self::Committed { final_len },
             ResourceStatus::Failed(reason) => Self::Failed(reason),
         }

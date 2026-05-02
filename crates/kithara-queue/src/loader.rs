@@ -35,8 +35,8 @@ impl Loader {
     ) -> Self {
         Self {
             player,
-            semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             tracks,
+            semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
         }
     }
 
@@ -76,7 +76,7 @@ impl Loader {
             let Some(bus) = bus_for_slow else { return };
             let mut rx = bus.subscribe();
             while let Ok(ev) = rx.recv().await {
-                if matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow)) {
+                if matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
                     tracks.set_status(id, TrackStatus::Slow);
                     break;
                 }
@@ -171,8 +171,9 @@ mod tests {
             let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
+            let loader = Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks)));
             LoaderFixture {
-                loader: Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks))),
+                loader,
                 tracks,
                 bus,
             }
@@ -252,8 +253,8 @@ mod tests {
         let fx = LoaderBuilder::default().build();
         fx.tracks.lock().push(TrackEntry {
             id: TrackId(42),
-            name: String::new(),
             url: None,
+            name: String::new(),
             status: TrackStatus::Pending,
         });
         let mut rx = fx.bus.subscribe();

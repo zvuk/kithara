@@ -15,6 +15,12 @@ pub(crate) struct DownloadCursor<I> {
 }
 
 impl<I: Copy + Ord + std::fmt::Debug> DownloadCursor<I> {
+    pub(crate) fn advance_fill_to(&mut self, next: I) {
+        if next > self.next {
+            self.next = next;
+        }
+    }
+
     /// Cursor starting at `start`, with both floor and next set to it.
     #[must_use]
     pub(crate) fn fill(start: I) -> Self {
@@ -22,6 +28,11 @@ impl<I: Copy + Ord + std::fmt::Debug> DownloadCursor<I> {
             floor: start,
             next: start,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn fill_floor(&self) -> I {
+        self.floor
     }
 
     /// Cursor with an explicit floor. `next` is clamped to `>= floor`.
@@ -34,18 +45,8 @@ impl<I: Copy + Ord + std::fmt::Debug> DownloadCursor<I> {
     }
 
     #[must_use]
-    pub(crate) fn fill_floor(&self) -> I {
-        self.floor
-    }
-
-    #[must_use]
     pub(crate) fn fill_next(&self) -> I {
         self.next
-    }
-
-    pub(crate) fn reset_fill(&mut self, target: I) {
-        tracing::debug!(from_next = ?self.next, from_floor = ?self.floor, to = ?target, "cursor::reset_fill");
-        *self = Self::fill(target);
     }
 
     pub(crate) fn reopen_fill(&mut self, floor: I, next: I) {
@@ -53,10 +54,9 @@ impl<I: Copy + Ord + std::fmt::Debug> DownloadCursor<I> {
         *self = Self::fill_from(floor, next);
     }
 
-    pub(crate) fn advance_fill_to(&mut self, next: I) {
-        if next > self.next {
-            self.next = next;
-        }
+    pub(crate) fn reset_fill(&mut self, target: I) {
+        tracing::debug!(from_next = ?self.next, from_floor = ?self.floor, to = ?target, "cursor::reset_fill");
+        *self = Self::fill(target);
     }
 
     pub(crate) fn rewind_fill_to(&mut self, next: I) {

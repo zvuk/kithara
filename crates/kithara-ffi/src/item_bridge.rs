@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use kithara::abr::AbrMode;
-use kithara_events::{AudioEvent, Event, FileEvent, HlsEvent};
+use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Event, FileEvent, HlsEvent};
 use kithara_platform::{tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
@@ -17,9 +17,6 @@ pub(crate) struct ItemEventBridge {
 }
 
 impl ItemEventBridge {
-    /// Threshold for suppressing redundant duration/buffered updates (seconds).
-    const UPDATE_THRESHOLD: f64 = 0.01;
-
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
@@ -28,6 +25,164 @@ impl ItemEventBridge {
 
     /// Bit shift width for extracting the high 32 bits of a u64.
     const U64_HIGH_SHIFT: u32 = 32;
+
+    /// Threshold for suppressing redundant duration/buffered updates (seconds).
+    const UPDATE_THRESHOLD: f64 = 0.01;
+
+    fn buffered_seconds_from_event(event: &Event, duration_seconds: Option<f64>) -> Option<f64> {
+        let duration_seconds = duration_seconds?;
+        match event {
+            // Bytes consumed by the reader. Reader-side proxy for
+            // "the player has data up to this point". Not sink-truth.
+            Event::File(FileEvent::ReadProgress {
+                position,
+                total: Some(total),
+            })
+            | Event::Hls(HlsEvent::ReadProgress {
+                position,
+                total: Some(total),
+            }) => Self::scaled_seconds(*position, *total, duration_seconds),
+            Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => Some(duration_seconds),
+            _ => None,
+        }
+    }
+
+    fn dispatch(
+        observer: &Arc<dyn ItemObserver>,
+        event: &Event,
+        duration_seconds: &mut Option<f64>,
+        last_buffered: &mut Option<f64>,
+        variants: &mut Vec<crate::types::FfiVariant>,
+    ) {
+        if let Some(duration) = Self::duration_from_event(event)
+            && duration_seconds
+                .is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
+        {
+            *duration_seconds = Some(duration);
+            observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
+        }
+
+        if let Some(buffered) = Self::buffered_seconds_from_event(event, *duration_seconds)
+            && last_buffered
+                .is_none_or(|current| (current - buffered).abs() > Self::UPDATE_THRESHOLD)
+        {
+            *last_buffered = Some(buffered);
+            observer.on_event(FfiItemEvent::BufferedDurationChanged { seconds: buffered });
+        }
+
+        Self::dispatch_variant_events(observer, event, variants);
+
+        if let Some(error) = Self::error_from_event(event) {
+            observer.on_event(FfiItemEvent::StatusChanged {
+                status: FfiItemStatus::Failed,
+            });
+            observer.on_event(FfiItemEvent::Error {
+                error: error.to_string(),
+            });
+        }
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "variant index/count fits u32"
+    )]
+    fn dispatch_variant_events(
+        observer: &Arc<dyn ItemObserver>,
+        event: &Event,
+        variants: &mut Vec<crate::types::FfiVariant>,
+    ) {
+        match event {
+            Event::Abr(AbrEvent::VariantsRegistered {
+                variants: v,
+                initial,
+            }) => {
+                let ffi_variants: Vec<crate::types::FfiVariant> = v
+                    .iter()
+                    .map(|vi| crate::types::FfiVariant {
+                        index: vi.index as u32,
+                        bandwidth_bps: vi.bandwidth_bps.unwrap_or(0),
+                        name: vi.name.clone(),
+                    })
+                    .collect();
+                variants.clone_from(&ffi_variants);
+                observer.on_event(FfiItemEvent::VariantsDiscovered {
+                    variants: ffi_variants,
+                });
+                // Synthesize initial VariantApplied so the UI immediately
+                // knows the current quality without waiting for an ABR change.
+                let initial_u32 = *initial as u32;
+                if let Some(initial) = variants.iter().find(|v| v.index == initial_u32) {
+                    observer.on_event(FfiItemEvent::VariantApplied {
+                        variant: initial.clone(),
+                    });
+                }
+            }
+            Event::Abr(AbrEvent::ModeChanged {
+                mode: AbrMode::Manual(idx),
+            }) => {
+                let idx_u32 = *idx as u32;
+                let variant = variants
+                    .iter()
+                    .find(|v| v.index == idx_u32)
+                    .cloned()
+                    .unwrap_or(crate::types::FfiVariant {
+                        index: idx_u32,
+                        bandwidth_bps: 0,
+                        name: None,
+                    });
+                observer.on_event(FfiItemEvent::VariantSelected { variant });
+            }
+            Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
+                let idx_u32 = *to as u32;
+                let variant = variants
+                    .iter()
+                    .find(|v| v.index == idx_u32)
+                    .cloned()
+                    .unwrap_or(crate::types::FfiVariant {
+                        index: idx_u32,
+                        bandwidth_bps: 0,
+                        name: None,
+                    });
+                observer.on_event(FfiItemEvent::VariantApplied { variant });
+            }
+            _ => {}
+        }
+    }
+
+    fn duration_from_event(event: &Event) -> Option<f64> {
+        match event {
+            Event::Audio(AudioEvent::PlaybackProgress {
+                total_ms: Some(total_ms),
+                ..
+            }) => Some(Self::u64_to_f64(*total_ms)? / Self::MS_PER_SECOND),
+            _ => None,
+        }
+    }
+
+    fn error_from_event(event: &Event) -> Option<FfiError> {
+        match event {
+            Event::File(FileEvent::Error { error }) => Some(FfiError::ItemFailed {
+                reason: error.to_string(),
+            }),
+            Event::Hls(HlsEvent::Error { error }) => Some(FfiError::ItemFailed {
+                reason: error.to_string(),
+            }),
+            Event::Downloader(DownloaderEvent::RequestFailed { error, .. }) => {
+                Some(FfiError::ItemFailed {
+                    reason: error.to_string(),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn scaled_seconds(progress: u64, total: u64, duration_seconds: f64) -> Option<f64> {
+        if total == 0 {
+            return None;
+        }
+        let ratio = Self::u64_to_f64(progress)? / Self::u64_to_f64(total)?;
+        Some((duration_seconds * ratio).clamp(0.0, duration_seconds))
+    }
 
     /// Spawn a task that translates resource events into item callbacks.
     pub(crate) fn spawn(
@@ -76,159 +231,10 @@ impl ItemEventBridge {
         });
     }
 
-    fn dispatch(
-        observer: &Arc<dyn ItemObserver>,
-        event: &Event,
-        duration_seconds: &mut Option<f64>,
-        last_buffered: &mut Option<f64>,
-        variants: &mut Vec<crate::types::FfiVariant>,
-    ) {
-        if let Some(duration) = Self::duration_from_event(event)
-            && duration_seconds
-                .is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
-        {
-            *duration_seconds = Some(duration);
-            observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
-        }
-
-        if let Some(buffered) = Self::buffered_seconds_from_event(event, *duration_seconds)
-            && last_buffered
-                .is_none_or(|current| (current - buffered).abs() > Self::UPDATE_THRESHOLD)
-        {
-            *last_buffered = Some(buffered);
-            observer.on_event(FfiItemEvent::BufferedDurationChanged { seconds: buffered });
-        }
-
-        Self::dispatch_variant_events(observer, event, variants);
-
-        if let Some(error) = Self::error_from_event(event) {
-            observer.on_event(FfiItemEvent::StatusChanged {
-                status: FfiItemStatus::Failed,
-            });
-            observer.on_event(FfiItemEvent::Error {
-                error: error.to_string(),
-            });
-        }
-    }
-
-    fn duration_from_event(event: &Event) -> Option<f64> {
-        match event {
-            Event::Audio(AudioEvent::PlaybackProgress {
-                total_ms: Some(total_ms),
-                ..
-            }) => Some(Self::u64_to_f64(*total_ms)? / Self::MS_PER_SECOND),
-            _ => None,
-        }
-    }
-
-    fn buffered_seconds_from_event(event: &Event, duration_seconds: Option<f64>) -> Option<f64> {
-        let duration_seconds = duration_seconds?;
-        match event {
-            Event::File(FileEvent::DownloadProgress {
-                offset,
-                total: Some(total),
-            })
-            | Event::Hls(HlsEvent::DownloadProgress {
-                offset,
-                total: Some(total),
-            }) => Self::scaled_seconds(*offset, *total, duration_seconds),
-            Event::File(FileEvent::DownloadComplete { .. })
-            | Event::Hls(HlsEvent::DownloadComplete { .. }) => Some(duration_seconds),
-            _ => None,
-        }
-    }
-
-    fn scaled_seconds(progress: u64, total: u64, duration_seconds: f64) -> Option<f64> {
-        if total == 0 {
-            return None;
-        }
-        let ratio = Self::u64_to_f64(progress)? / Self::u64_to_f64(total)?;
-        Some((duration_seconds * ratio).clamp(0.0, duration_seconds))
-    }
-
     fn u64_to_f64(value: u64) -> Option<f64> {
         let hi = u32::try_from(value >> Self::U64_HIGH_SHIFT).ok()?;
         let lo = u32::try_from(value & u64::from(u32::MAX)).ok()?;
         Some(f64::from(hi) * Self::U32_MAX_PLUS_ONE + f64::from(lo))
-    }
-
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "variant index/count fits u32"
-    )]
-    fn dispatch_variant_events(
-        observer: &Arc<dyn ItemObserver>,
-        event: &Event,
-        variants: &mut Vec<crate::types::FfiVariant>,
-    ) {
-        match event {
-            Event::Hls(HlsEvent::VariantsDiscovered {
-                variants: v,
-                initial_variant,
-            }) => {
-                let ffi_variants: Vec<crate::types::FfiVariant> = v
-                    .iter()
-                    .map(|vi| crate::types::FfiVariant {
-                        index: vi.index as u32,
-                        bandwidth_bps: vi.bandwidth_bps.unwrap_or(0),
-                        name: vi.name.clone(),
-                    })
-                    .collect();
-                variants.clone_from(&ffi_variants);
-                observer.on_event(FfiItemEvent::VariantsDiscovered {
-                    variants: ffi_variants,
-                });
-                // Synthesize initial VariantApplied so the UI immediately
-                // knows the current quality without waiting for an ABR change.
-                let initial_u32 = *initial_variant as u32;
-                if let Some(initial) = variants.iter().find(|v| v.index == initial_u32) {
-                    observer.on_event(FfiItemEvent::VariantApplied {
-                        variant: initial.clone(),
-                    });
-                }
-            }
-            Event::Hls(HlsEvent::AbrModeChanged {
-                mode: AbrMode::Manual(idx),
-            }) => {
-                let idx_u32 = *idx as u32;
-                let variant = variants
-                    .iter()
-                    .find(|v| v.index == idx_u32)
-                    .cloned()
-                    .unwrap_or(crate::types::FfiVariant {
-                        index: idx_u32,
-                        bandwidth_bps: 0,
-                        name: None,
-                    });
-                observer.on_event(FfiItemEvent::VariantSelected { variant });
-            }
-            Event::Hls(HlsEvent::VariantApplied { to_variant, .. }) => {
-                let idx_u32 = *to_variant as u32;
-                let variant = variants
-                    .iter()
-                    .find(|v| v.index == idx_u32)
-                    .cloned()
-                    .unwrap_or(crate::types::FfiVariant {
-                        index: idx_u32,
-                        bandwidth_bps: 0,
-                        name: None,
-                    });
-                observer.on_event(FfiItemEvent::VariantApplied { variant });
-            }
-            _ => {}
-        }
-    }
-
-    fn error_from_event(event: &Event) -> Option<FfiError> {
-        match event {
-            Event::File(FileEvent::DownloadError { error })
-            | Event::File(FileEvent::Error { error, .. })
-            | Event::Hls(HlsEvent::DownloadError { error })
-            | Event::Hls(HlsEvent::Error { error, .. }) => Some(FfiError::ItemFailed {
-                reason: error.clone(),
-            }),
-            _ => None,
-        }
     }
 }
 
@@ -240,7 +246,7 @@ impl Drop for ItemEventBridge {
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Event, FileEvent};
+    use kithara_events::{Event, FileError, FileEvent};
 
     use super::ItemEventBridge;
     use crate::types::FfiError;
@@ -258,9 +264,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn file_download_progress_maps_to_buffered_seconds() {
-        let event = Event::File(FileEvent::DownloadProgress {
-            offset: 50,
+    fn file_read_progress_maps_to_buffered_seconds() {
+        let event = Event::File(FileEvent::ReadProgress {
+            position: 50,
             total: Some(100),
         });
         let buffered = ItemEventBridge::buffered_seconds_from_event(&event, Some(12.0));
@@ -269,13 +275,13 @@ mod tests {
 
     #[kithara::test]
     fn file_error_maps_to_item_failed() {
-        let event = Event::File(FileEvent::DownloadError {
-            error: "boom".into(),
+        let event = Event::File(FileEvent::Error {
+            error: FileError::Io("boom".into()),
         });
         let error = ItemEventBridge::error_from_event(&event);
         assert!(matches!(
             error,
-            Some(FfiError::ItemFailed { reason }) if reason == "boom"
+            Some(FfiError::ItemFailed { reason }) if reason == "io: boom"
         ));
     }
 }

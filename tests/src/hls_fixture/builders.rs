@@ -11,7 +11,7 @@ use std::path::Path;
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_test_utils::hls_fixture::TestServer;
@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 /// ```
 pub struct HlsStreamBuilder {
     master_path: &'static str,
-    abr_options: AbrOptions,
+    initial_abr_mode: AbrMode,
     store_subdir: Option<&'static str>,
     max_assets: Option<usize>,
     max_bytes: Option<u64>,
@@ -41,10 +41,7 @@ impl HlsStreamBuilder {
     pub fn new() -> Self {
         Self {
             master_path: "/master.m3u8",
-            abr_options: AbrOptions {
-                mode: AbrMode::Manual(0),
-                ..AbrOptions::default()
-            },
+            initial_abr_mode: AbrMode::Manual(0),
             store_subdir: None,
             max_assets: None,
             max_bytes: None,
@@ -53,13 +50,13 @@ impl HlsStreamBuilder {
 
     /// Set the ABR variant index (default: `Manual(0)`).
     pub fn variant(mut self, variant: usize) -> Self {
-        self.abr_options.mode = AbrMode::Manual(variant);
+        self.initial_abr_mode = AbrMode::Manual(variant);
         self
     }
 
-    /// Override ABR options entirely for non-standard configurations.
-    pub fn abr(mut self, options: AbrOptions) -> Self {
-        self.abr_options = options;
+    /// Override the initial ABR mode entirely.
+    pub fn abr_mode(mut self, mode: AbrMode) -> Self {
+        self.initial_abr_mode = mode;
         self
     }
 
@@ -118,7 +115,7 @@ impl HlsStreamBuilder {
         let config = HlsConfig::new(url)
             .with_store(store_opts)
             .with_cancel(cancel_token)
-            .with_abr_options(self.abr_options);
+            .with_initial_abr_mode(self.initial_abr_mode);
 
         Stream::<Hls>::new(config)
             .await

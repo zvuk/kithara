@@ -18,6 +18,7 @@ use kithara_platform::Mutex;
 use ringbuf::{HeapProd, traits::Producer};
 
 use super::{player_notification::PlayerNotification, player_resource::PlayerResource};
+use crate::PlayError;
 
 /// Minimum number of channels required for stereo processing.
 const MIN_STEREO_CHANNELS: usize = 2;
@@ -46,19 +47,29 @@ pub(crate) enum TrackState {
     FadingIn,
     /// Track is fading out (volume ramping down).
     FadingOut,
-    /// Track has finished playback (EOF or stopped).
+    /// Track finished naturally (decoder reached end-of-stream).
     Finished,
+    /// Track was aborted by an unrecoverable producer failure
+    /// (pcm channel closed, decoder backend error). Semantically distinct
+    /// from `Finished`: the track did NOT reach its duration.
+    Failed,
 }
 
 impl TrackState {
+    /// Whether the track is the "leading" track (playing or fading in).
+    pub(crate) fn is_leading(self) -> bool {
+        matches!(self, Self::Playing | Self::FadingIn)
+    }
+
     /// Whether the track is producing audible audio.
     pub(crate) fn is_playing(self) -> bool {
         matches!(self, Self::Playing | Self::FadingIn | Self::FadingOut)
     }
 
-    /// Whether the track is the "leading" track (playing or fading in).
-    pub(crate) fn is_leading(self) -> bool {
-        matches!(self, Self::Playing | Self::FadingIn)
+    /// Whether the track has reached a terminal state and should be evicted
+    /// from the arena. Terminal = `Finished` (natural EOF) or `Failed`.
+    pub(crate) fn is_terminal(self) -> bool {
+        matches!(self, Self::Finished | Self::Failed)
     }
 }
 
@@ -77,21 +88,21 @@ pub(crate) enum TrackTransition {
 /// and notification logic for a single loaded track.
 pub(crate) struct PlayerTrack {
     resource: Arc<Mutex<PlayerResource>>,
+    src: Arc<str>,
+    fade_curve: FadeCurve,
+    mix: MixDSP,
     state: TrackState,
-    state_dirty: bool,
     notified_about_to_end: bool,
     notified_track_requested: bool,
-    mix: MixDSP,
-    fade_curve: FadeCurve,
-    /// Last observed playback position snapshot.
-    ///
-    /// This is a fallback value only. Source of truth is `PlayerResource`.
-    observed_position: f64,
+    state_dirty: bool,
     /// Last observed duration snapshot.
     ///
     /// This is a fallback value only. Source of truth is `PlayerResource`.
     observed_duration: f64,
-    src: Arc<str>,
+    /// Last observed playback position snapshot.
+    ///
+    /// This is a fallback value only. Source of truth is `PlayerResource`.
+    observed_position: f64,
 }
 
 impl PlayerTrack {
@@ -125,84 +136,6 @@ impl PlayerTrack {
         // Push initial ServiceClass::Warm for the Preloading state.
         track.update_service_class(TrackState::Preloading);
         track
-    }
-
-    /// Read audio from this track into scratch/mix buffers.
-    ///
-    /// 1. Tries to lock the resource (non-blocking).
-    /// 2. Reads PCM into `scratch_bufs`.
-    /// 3. Mixes through `MixDSP` into `mix_bufs`.
-    /// 4. Detects fade completion and updates state.
-    pub(crate) fn read(
-        &mut self,
-        scratch_bufs: &mut [&mut [f32]],
-        mix_bufs: &mut [&mut [f32]],
-        range: Range<usize>,
-        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
-    ) {
-        // Read data from resource inside a scoped lock
-        let read_outcome = {
-            let Some(mut guard) = self.resource.try_lock().ok() else {
-                return; // Can't lock, skip this cycle
-            };
-            match guard.read(scratch_bufs, range.clone()) {
-                Ok(()) => {
-                    let position = guard.position();
-                    let duration = guard.duration();
-                    drop(guard);
-                    Ok((position, duration))
-                }
-                Err(e) => Err(e),
-            }
-        };
-
-        // Process outcome outside the lock
-        if let Ok((position, duration)) = read_outcome {
-            self.observed_position = position;
-            self.observed_duration = duration;
-
-            if scratch_bufs.len() >= MIN_STEREO_CHANNELS && mix_bufs.len() >= MIN_STEREO_CHANNELS {
-                let (output_l_slice, output_r_slice) = mix_bufs.split_at_mut(1);
-                let output_l = &mut output_l_slice[0];
-                let output_r = &mut output_r_slice[0];
-
-                self.mix.mix_dry_into_wet_stereo(
-                    scratch_bufs[0],
-                    scratch_bufs[1],
-                    output_l,
-                    output_r,
-                    range.len(),
-                );
-            }
-
-            self.check_notifications(notification_tx);
-        } else {
-            self.handle_eof(notification_tx);
-            return;
-        }
-
-        // Post-processing: check if fade settled
-        if self.mix.has_settled() {
-            self.update_state_after_fade();
-        }
-
-        if self.state_dirty {
-            self.notify_state_change(notification_tx);
-        }
-    }
-
-    /// Handle EOF or read error.
-    fn handle_eof(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.state == TrackState::Finished {
-            return;
-        }
-        self.set_state(TrackState::Finished);
-        notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
-                &self.src,
-            )))
-            .ok();
     }
 
     /// Check position-based notifications.
@@ -252,71 +185,15 @@ impl PlayerTrack {
         }
     }
 
-    /// Transition state after a fade completes.
+    /// Current duration in seconds.
     ///
-    /// `FadingIn` → `Playing` (track is now audible).
-    /// `FadingOut` → `Finished` (track is silent and should be cleaned up).
-    ///
-    /// Using `Finished` instead of `Paused` ensures `cleanup_finished_tracks()`
-    /// removes the track from the arena. Previously `Paused` left the track
-    /// in the arena indefinitely, leaking resources on every crossfade.
-    fn update_state_after_fade(&mut self) {
-        let new_state = match self.state {
-            TrackState::FadingIn => TrackState::Playing,
-            TrackState::FadingOut => TrackState::Finished,
-            current => current,
-        };
-        self.set_state(new_state);
-    }
-
-    /// Emit notification when state changes.
-    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if !self.state_dirty {
-            return;
-        }
-        let notification = match self.state {
-            TrackState::Preloading => PlayerNotification::TrackLoaded(Arc::clone(&self.src)),
-            TrackState::FadingIn => PlayerNotification::TrackFadingIn(Arc::clone(&self.src)),
-            TrackState::FadingOut => PlayerNotification::TrackFadingOut(Arc::clone(&self.src)),
-            TrackState::Playing => PlayerNotification::TrackPlaybackStarted(Arc::clone(&self.src)),
-            TrackState::Paused => PlayerNotification::TrackPlaybackPaused(Arc::clone(&self.src)),
-            TrackState::Finished => PlayerNotification::TrackPlaybackStopped(Arc::clone(&self.src)),
-        };
-
-        if notification_tx.lock_sync().try_push(notification).is_ok() {
-            self.state_dirty = false;
-        }
-    }
-
-    /// Set the track state and mark as dirty.
-    ///
-    /// Also updates the shared worker's scheduling priority via
-    /// [`ServiceClass`] bridge: Audible tracks get highest priority.
-    fn set_state(&mut self, new_state: TrackState) {
-        if self.state != new_state {
-            self.state = new_state;
-            self.state_dirty = true;
-            self.update_service_class(new_state);
-        }
-    }
-
-    /// Map track state to worker scheduling priority and push the update.
-    ///
-    /// Uses `try_lock()` + `mpsc::send` — not strictly lock-free, but the
-    /// update is a best-effort scheduling hint. If the lock is contended or
-    /// the send briefly blocks, the track keeps its previous priority until
-    /// the next state change.
-    fn update_service_class(&self, state: TrackState) {
-        let class = match state {
-            TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => {
-                ServiceClass::Audible
-            }
-            TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
-        };
-        if let Ok(resource) = self.resource.try_lock() {
-            resource.set_service_class(class);
-        }
+    /// Source of truth is `PlayerResource` (`Timeline` underneath).
+    /// Uses snapshot fallback only if lock is temporarily unavailable.
+    pub(crate) fn duration(&self) -> f64 {
+        self.resource
+            .try_lock()
+            .ok()
+            .map_or(self.observed_duration, |resource| resource.duration())
     }
 
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
@@ -333,6 +210,68 @@ impl PlayerTrack {
         self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
     }
 
+    /// Handle natural end-of-stream (decoder reached duration).
+    fn handle_eof(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.state.is_terminal() {
+            return;
+        }
+        self.set_state(TrackState::Finished);
+        notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
+                &self.src,
+            )))
+            .ok();
+    }
+
+    /// Handle unrecoverable producer failure (pcm channel closed, decoder fault).
+    ///
+    /// Sets state to `Failed` and emits `TrackError`. Distinct from natural
+    /// EOF so the queue can differentiate "track played to end" from "track
+    /// aborted due to failure".
+    fn handle_failure(
+        &mut self,
+        err: PlayError,
+        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
+    ) {
+        if self.state.is_terminal() {
+            return;
+        }
+        tracing::warn!(
+            src = %self.src,
+            error = %err,
+            "PlayerTrack: terminal producer failure — aborting track"
+        );
+        self.set_state(TrackState::Failed);
+        notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::TrackError(Arc::clone(&self.src), err))
+            .ok();
+    }
+
+    /// Emit notification when state changes.
+    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if !self.state_dirty {
+            return;
+        }
+        let notification = match self.state {
+            TrackState::Preloading => PlayerNotification::TrackLoaded(Arc::clone(&self.src)),
+            TrackState::FadingIn => PlayerNotification::TrackFadingIn(Arc::clone(&self.src)),
+            TrackState::FadingOut => PlayerNotification::TrackFadingOut(Arc::clone(&self.src)),
+            TrackState::Playing => PlayerNotification::TrackPlaybackStarted(Arc::clone(&self.src)),
+            TrackState::Paused => PlayerNotification::TrackPlaybackPaused(Arc::clone(&self.src)),
+            TrackState::Finished => PlayerNotification::TrackPlaybackStopped(Arc::clone(&self.src)),
+            // `Failed` notifications are emitted by `handle_failure` directly
+            // (carrying the `PlayError`); `notify_state_change` has no error
+            // value to forward, so skip the dirty flag reset for this branch.
+            TrackState::Failed => return,
+        };
+
+        if notification_tx.lock_sync().try_push(notification).is_ok() {
+            self.state_dirty = false;
+        }
+    }
+
     /// Instantly start playing at full volume.
     pub(crate) fn play(&mut self) {
         self.set_state(TrackState::Playing);
@@ -340,20 +279,6 @@ impl PlayerTrack {
         self.mix.reset_to_target();
         self.notified_about_to_end = false;
         self.notified_track_requested = false;
-    }
-
-    /// Instantly stop (silent, finished state).
-    pub(crate) fn stop(&mut self) {
-        self.set_state(TrackState::Finished);
-        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
-        self.mix.reset_to_target();
-    }
-
-    /// Seek the underlying resource.
-    pub(crate) fn seek(&mut self, seconds: f64) {
-        if let Ok(mut resource) = self.resource.try_lock() {
-            resource.seek(seconds);
-        }
     }
 
     /// Current position in seconds.
@@ -367,20 +292,119 @@ impl PlayerTrack {
             .map_or(self.observed_position, |resource| resource.position())
     }
 
-    /// Current duration in seconds.
+    /// Read audio from this track into scratch/mix buffers.
     ///
-    /// Source of truth is `PlayerResource` (`Timeline` underneath).
-    /// Uses snapshot fallback only if lock is temporarily unavailable.
-    pub(crate) fn duration(&self) -> f64 {
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_duration, |resource| resource.duration())
+    /// 1. Tries to lock the resource (non-blocking).
+    /// 2. Reads PCM into `scratch_bufs`.
+    /// 3. Mixes through `MixDSP` into `mix_bufs`.
+    /// 4. Detects fade completion and updates state.
+    pub(crate) fn read(
+        &mut self,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
+    ) {
+        // Read data from resource inside a scoped lock
+        let read_outcome = {
+            let Some(mut guard) = self.resource.try_lock().ok() else {
+                return; // Can't lock, skip this cycle
+            };
+            match guard.read(scratch_bufs, range.clone()) {
+                Ok(()) => {
+                    let position = guard.position();
+                    let duration = guard.duration();
+                    drop(guard);
+                    Ok((position, duration))
+                }
+                Err(e) => Err(e),
+            }
+        };
+
+        // Process outcome outside the lock
+        match read_outcome {
+            Ok((position, duration)) => {
+                self.observed_position = position;
+                self.observed_duration = duration;
+
+                if scratch_bufs.len() >= MIN_STEREO_CHANNELS
+                    && mix_bufs.len() >= MIN_STEREO_CHANNELS
+                {
+                    let (output_l_slice, output_r_slice) = mix_bufs.split_at_mut(1);
+                    let output_l = &mut output_l_slice[0];
+                    let output_r = &mut output_r_slice[0];
+
+                    self.mix.mix_dry_into_wet_stereo(
+                        scratch_bufs[0],
+                        scratch_bufs[1],
+                        output_l,
+                        output_r,
+                        range.len(),
+                    );
+                }
+
+                self.check_notifications(notification_tx);
+            }
+            Err(PlayError::Eof) => {
+                self.handle_eof(notification_tx);
+                return;
+            }
+            Err(err) => {
+                // Terminal producer failure (ConsumerPhase::Failed is a
+                // one-way latch — pcm channel closed / decoder backend
+                // fault). Route through `handle_failure` so the track enters
+                // `TrackState::Failed` and a distinct `TrackError`
+                // notification is emitted. Zero-fill this render cycle so
+                // the audio callback does not read stale buffer data before
+                // the arena evicts the track.
+                if mix_bufs.len() >= MIN_STEREO_CHANNELS {
+                    let range_len = range.len();
+                    for ch in mix_bufs.iter_mut() {
+                        ch[..range_len].fill(0.0);
+                    }
+                }
+                self.handle_failure(err, notification_tx);
+                return;
+            }
+        }
+
+        // Post-processing: check if fade settled
+        if self.mix.has_settled() {
+            self.update_state_after_fade();
+        }
+
+        if self.state_dirty {
+            self.notify_state_change(notification_tx);
+        }
     }
 
-    /// Current track state.
-    pub(crate) fn state(&self) -> TrackState {
-        self.state
+    /// Reference to the underlying shared resource.
+    pub(crate) fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
+        &self.resource
+    }
+
+    /// Seek the underlying resource.
+    pub(crate) fn seek(&mut self, seconds: f64) {
+        if let Ok(mut resource) = self.resource.try_lock() {
+            resource.seek(seconds);
+        }
+    }
+
+    /// Update the fade curve used for future fade operations.
+    pub(crate) fn set_fade_curve(&mut self, curve: FadeCurve) {
+        self.fade_curve = curve;
+    }
+
+    /// Set the track state and mark as dirty.
+    ///
+    /// Also updates the shared worker's scheduling priority via
+    /// [`ServiceClass`] bridge: Audible tracks get highest priority.
+    fn set_state(&mut self, new_state: TrackState) {
+        if self.state != new_state {
+            self.state = new_state;
+            self.state_dirty = true;
+            self.update_service_class(new_state);
+        }
     }
 
     /// Source identifier.
@@ -388,9 +412,16 @@ impl PlayerTrack {
         &self.src
     }
 
-    /// Reference to the underlying shared resource.
-    pub(crate) fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
-        &self.resource
+    /// Current track state.
+    pub(crate) fn state(&self) -> TrackState {
+        self.state
+    }
+
+    /// Instantly stop (silent, finished state).
+    pub(crate) fn stop(&mut self) {
+        self.set_state(TrackState::Finished);
+        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
+        self.mix.reset_to_target();
     }
 
     /// Re-create the `MixDSP` with a new fade duration.
@@ -408,9 +439,40 @@ impl PlayerTrack {
         self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
     }
 
-    /// Update the fade curve used for future fade operations.
-    pub(crate) fn set_fade_curve(&mut self, curve: FadeCurve) {
-        self.fade_curve = curve;
+    /// Map track state to worker scheduling priority and push the update.
+    ///
+    /// Uses `try_lock()` + `mpsc::send` — not strictly lock-free, but the
+    /// update is a best-effort scheduling hint. If the lock is contended or
+    /// the send briefly blocks, the track keeps its previous priority until
+    /// the next state change.
+    fn update_service_class(&self, state: TrackState) {
+        let class = match state {
+            TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => {
+                ServiceClass::Audible
+            }
+            TrackState::Preloading => ServiceClass::Warm,
+            TrackState::Paused | TrackState::Finished | TrackState::Failed => ServiceClass::Idle,
+        };
+        if let Ok(resource) = self.resource.try_lock() {
+            resource.set_service_class(class);
+        }
+    }
+
+    /// Transition state after a fade completes.
+    ///
+    /// `FadingIn` → `Playing` (track is now audible).
+    /// `FadingOut` → `Finished` (track is silent and should be cleaned up).
+    ///
+    /// Using `Finished` instead of `Paused` ensures `cleanup_finished_tracks()`
+    /// removes the track from the arena. Previously `Paused` left the track
+    /// in the arena indefinitely, leaking resources on every crossfade.
+    fn update_state_after_fade(&mut self) {
+        let new_state = match self.state {
+            TrackState::FadingIn => TrackState::Playing,
+            TrackState::FadingOut => TrackState::Finished,
+            current => current,
+        };
+        self.set_state(new_state);
     }
 }
 
@@ -445,8 +507,13 @@ mod tests {
     fn make_track() -> PlayerTrack {
         let src: Arc<str> = Arc::from("test.mp3");
         let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), 60.0));
-        let player_resource =
-            PlayerResource::new(resource, Arc::clone(&src), kithara_bufpool::pcm_pool());
+        let player_resource = PlayerResource::new(
+            resource,
+            Arc::clone(&src),
+            // test fixture
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            &kithara_bufpool::PcmPool::default(),
+        );
         let arc_resource = Arc::new(Mutex::new(player_resource));
         let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
         PlayerTrack::new(arc_resource, src, 1.0, sample_rate, FadeCurve::SquareRoot)
@@ -519,6 +586,7 @@ mod tests {
     #[case(TrackState::Preloading, ServiceClass::Warm)]
     #[case(TrackState::Paused, ServiceClass::Idle)]
     #[case(TrackState::Finished, ServiceClass::Idle)]
+    #[case(TrackState::Failed, ServiceClass::Idle)]
     fn track_state_maps_to_service_class(
         #[case] state: TrackState,
         #[case] expected: ServiceClass,
@@ -528,7 +596,7 @@ mod tests {
                 ServiceClass::Audible
             }
             TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
+            TrackState::Paused | TrackState::Finished | TrackState::Failed => ServiceClass::Idle,
         };
         assert_eq!(class, expected);
     }

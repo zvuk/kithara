@@ -36,6 +36,7 @@
 
 mod base;
 pub(crate) mod cache;
+mod deleter;
 mod disk_store;
 mod error;
 mod evict;
@@ -54,10 +55,10 @@ pub mod internal;
 // Public API - used by other crates
 pub use cache::CachedResource;
 pub use error::{AssetsError, AssetsResult};
-pub use index::EvictConfig;
+pub use index::{EvictConfig, FlushHub, FlushPolicy};
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
-pub use kithara_bufpool::{BytePool, byte_pool};
+pub use kithara_bufpool::BytePool;
 pub use process::ProcessChunkFn;
 pub use state::AssetResourceState;
 pub use store::{AssetResource, AssetStoreBuilder, OnInvalidatedFn, StoreOptions};

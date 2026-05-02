@@ -11,7 +11,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use kithara::{
-    abr::{AbrController, AbrMode, AbrOptions},
+    abr::AbrMode,
     audio::generate_log_spaced_bands,
     hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
     net::NetOptions,
@@ -34,23 +34,23 @@ use crate::{
 /// FFI-facing audio player.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayer {
+    /// Swift-owned items indexed by `TrackId`. Populated by [`insert`],
+    /// drained by [`remove`] / [`remove_all_items`]. Lets [`items`] return
+    /// the same `AudioPlayerItem` instances that Swift handed in (preserves
+    /// identity + active per-item observer wiring).
+    items: Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
     queue: Arc<Queue>,
     /// Shared downloader for every track created through this player.
     /// Pinned to `FFI_RUNTIME` so its async tasks land on a runtime that
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
-    /// Shared storage options (cache dir, etc.) applied to every item.
-    store: StoreOptions,
     /// Immutable [`KeyOptions`] built once from [`FfiPlayerConfig`].
     key_options: KeyOptions,
-    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     event_bridge: Mutex<Option<EventBridge>>,
-    /// Swift-owned items indexed by `TrackId`. Populated by [`insert`],
-    /// drained by [`remove`] / [`remove_all_items`]. Lets [`items`] return
-    /// the same `AudioPlayerItem` instances that Swift handed in (preserves
-    /// identity + active per-item observer wiring).
-    items: Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
+    /// Shared storage options (cache dir, etc.) applied to every item.
+    store: StoreOptions,
 }
 
 /// Convert the FFI-level [`crate::types::FfiKeyOptions`] into a
@@ -82,19 +82,12 @@ impl AudioPlayer {
     #[must_use]
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
-        let player_config = PlayerConfig {
-            eq_layout: generate_log_spaced_bands(config.eq_band_count as usize),
-            ..PlayerConfig::default()
-        };
+        let player_config = PlayerConfig::default()
+            .with_eq_layout(generate_log_spaced_bands(config.eq_band_count as usize));
         let player = Arc::new(PlayerImpl::new(player_config));
-        let queue_config = QueueConfig::default()
-            .with_player(player)
-            .with_autoplay(false);
+        let queue_config = QueueConfig::default().with_player(player);
         #[cfg(feature = "dev")]
-        let net = NetOptions {
-            insecure: true,
-            ..NetOptions::default()
-        };
+        let net = NetOptions::default().with_insecure(true);
         #[cfg(not(feature = "dev"))]
         let net = NetOptions::default();
         let downloader = Downloader::new(
@@ -104,10 +97,10 @@ impl AudioPlayer {
         );
         let key_options = build_key_options(config.key_options);
         Arc::new(Self {
-            queue: Arc::new(Queue::new(queue_config)),
             downloader,
-            store: config.store,
             key_options,
+            queue: Arc::new(Queue::new(queue_config)),
+            store: config.store,
             observer: Mutex::new(None),
             event_bridge: Mutex::new(None),
             items: Arc::new(Mutex::new(HashMap::new())),
@@ -130,7 +123,7 @@ impl AudioPlayer {
     #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
     pub fn seek(&self, to_seconds: f64, callback: Arc<dyn SeekCallback>) {
         match self.queue.seek(to_seconds) {
-            Ok(()) => callback.on_complete(true),
+            Ok(_outcome) => callback.on_complete(true),
             Err(_) => callback.on_complete(false),
         }
     }
@@ -310,15 +303,36 @@ impl AudioPlayer {
     }
 
     pub fn set_abr_mode(&self, mode: FfiAbrMode) {
+        let Some(handle) = self.queue.current_abr_handle() else {
+            return;
+        };
         let abr_mode = match mode {
             FfiAbrMode::Auto => AbrMode::Auto(None),
             FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
         };
-        self.queue.player().set_abr_mode(abr_mode);
+        if let Err(err) = handle.set_mode(abr_mode) {
+            tracing::warn!(?err, "set_abr_mode rejected by ABR state");
+        }
+    }
+
+    /// Cap the ABR controller's choice by a preferred peak bitrate (bps).
+    ///
+    /// Pass `0` to clear the cap and let ABR consider all variants again.
+    /// No-op when no adaptive item is currently loaded.
+    pub fn set_preferred_peak_bitrate(&self, bitrate_bps: u64) {
+        let Some(handle) = self.queue.current_abr_handle() else {
+            return;
+        };
+        let cap = if bitrate_bps == 0 {
+            None
+        } else {
+            Some(bitrate_bps)
+        };
+        handle.set_max_bandwidth_bps(cap);
     }
 
     pub fn rate(&self) -> f32 {
-        self.queue.player().rate()
+        self.queue.rate()
     }
 
     pub fn volume(&self) -> f32 {
@@ -367,15 +381,17 @@ impl AudioPlayer {
     /// Return a snapshot of the player's current state.
     #[must_use]
     pub fn snapshot(&self) -> FfiPlayerSnapshot {
-        let player = self.queue.player();
+        // `Queue::position_seconds` returns the cached, transient-zero-filtered
+        // value updated on every `tick()`; the live engine value would flash
+        // back to 0.0 on pause/resume.
         FfiPlayerSnapshot {
-            status: FfiPlayerStatus::from(player.status()),
-            current_time: player.position_seconds(),
-            duration: player.duration_seconds(),
-            rate: player.rate(),
-            default_rate: player.default_rate(),
-            volume: player.volume(),
-            muted: player.is_muted(),
+            status: FfiPlayerStatus::from(self.queue.status()),
+            current_time: self.queue.position_seconds(),
+            duration: self.queue.duration_seconds(),
+            rate: self.queue.rate(),
+            default_rate: self.queue.default_rate(),
+            volume: self.queue.volume(),
+            muted: self.queue.is_muted(),
         }
     }
 
@@ -401,11 +417,6 @@ impl AudioPlayer {
 
 /// Internal methods not exported across FFI.
 impl AudioPlayer {
-    #[expect(dead_code, reason = "reserved for future event bridge extensions")]
-    pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
-        self.observer.lock_sync().clone()
-    }
-
     /// Build a [`TrackSource::Config`] from the item's fields. Also
     /// attaches a scoped bus so the item's per-resource event bridge
     /// captures events published during `Resource::new`
@@ -428,7 +439,7 @@ impl AudioPlayer {
             config = config.with_headers(headers.into());
         }
 
-        let scoped = self.queue.player().bus().scoped();
+        let scoped = self.queue.bus().scoped();
         config.bus = Some(scoped.clone());
         *item.bus.lock_sync() = Some(scoped);
 
@@ -443,13 +454,15 @@ impl AudioPlayer {
                 FfiAbrMode::Auto => AbrMode::Auto(None),
                 FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
             };
-            config.abr = Some(AbrController::new(AbrOptions {
-                mode: abr_mode,
-                ..AbrOptions::default()
-            }));
+            config = config.with_initial_abr_mode(abr_mode);
         }
 
         Ok(TrackSource::Config(Box::new(config)))
+    }
+
+    #[expect(dead_code, reason = "reserved for future event bridge extensions")]
+    pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
+        self.observer.lock_sync().clone()
     }
 }
 

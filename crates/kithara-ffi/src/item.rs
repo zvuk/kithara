@@ -29,10 +29,6 @@ use crate::{
 /// FFI-facing audio player item with UUID identity.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayerItem {
-    id: Uuid,
-    config: FfiItemConfig,
-    event_bridge: Mutex<Option<ItemEventBridge>>,
-    observer: Mutex<Option<Arc<dyn ItemObserver>>>,
     /// Scoped event bus — set by `AudioPlayer::insert` so per-resource
     /// events (Hls/File/Audio) published during `Resource::new` are
     /// captured even when [`set_observer`] is called later.
@@ -41,6 +37,10 @@ pub struct AudioPlayerItem {
     /// accepts the source. `None` before insert, `None` again after
     /// `remove`.
     pub(crate) track_id: Mutex<Option<TrackId>>,
+    config: FfiItemConfig,
+    event_bridge: Mutex<Option<ItemEventBridge>>,
+    observer: Mutex<Option<Arc<dyn ItemObserver>>>,
+    id: Uuid,
 }
 
 /// Methods exported across the FFI boundary.
@@ -53,8 +53,8 @@ impl AudioPlayerItem {
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new(config: FfiItemConfig) -> Arc<Self> {
         Arc::new(Self {
-            id: Uuid::new_v4(),
             config,
+            id: Uuid::new_v4(),
             event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
             bus: Mutex::new(None),
@@ -65,10 +65,6 @@ impl AudioPlayerItem {
     /// String representation of the item's unique ID.
     pub fn id(&self) -> String {
         self.id.to_string()
-    }
-
-    pub fn url(&self) -> String {
-        self.config.url.clone()
     }
 
     pub fn preferred_peak_bitrate(&self) -> f64 {
@@ -83,20 +79,24 @@ impl AudioPlayerItem {
         *self.observer.lock_sync() = Some(observer);
         self.restart_bridge();
     }
+
+    pub fn url(&self) -> String {
+        self.config.url.clone()
+    }
 }
 
 /// Internal methods not exported across FFI.
 impl AudioPlayerItem {
-    pub(crate) fn observer(&self) -> Option<Arc<dyn ItemObserver>> {
-        self.observer.lock_sync().clone()
+    pub(crate) fn abr_mode(&self) -> Option<FfiAbrMode> {
+        self.config.abr_mode
     }
 
     pub(crate) fn headers(&self) -> Option<HashMap<String, String>> {
         self.config.headers.clone()
     }
 
-    pub(crate) fn abr_mode(&self) -> Option<FfiAbrMode> {
-        self.config.abr_mode
+    pub(crate) fn observer(&self) -> Option<Arc<dyn ItemObserver>> {
+        self.observer.lock_sync().clone()
     }
 
     /// (Re)subscribe the bridge to the currently-attached scoped bus.

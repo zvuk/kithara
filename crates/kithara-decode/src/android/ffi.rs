@@ -12,13 +12,25 @@ pub(crate) const MEDIA_CODEC_INFO_TRY_AGAIN_LATER: i32 = -1;
 pub(crate) const PCM_ENCODING_16BIT: i32 = 2;
 pub(crate) const PCM_ENCODING_FLOAT: i32 = 4;
 pub(crate) const SEEK_MODE_PREVIOUS_SYNC: u32 = 0;
-pub(crate) const MIN_HARDWARE_API_LEVEL: u32 = 28;
 
 pub(crate) const KEY_MIME: &CStr = c"mime";
 pub(crate) const KEY_SAMPLE_RATE: &CStr = c"sample-rate";
 pub(crate) const KEY_CHANNEL_COUNT: &CStr = c"channel-count";
 pub(crate) const KEY_DURATION_US: &CStr = c"durationUs";
 pub(crate) const KEY_PCM_ENCODING: &CStr = c"pcm-encoding";
+/// `AMEDIAFORMAT_KEY_SAMPLE_FILE_OFFSET` — present on the per-sample
+/// format returned by `AMediaExtractor_getSampleFormat` (API 28+).
+/// Carries the byte offset of the current sample in the source file.
+pub(crate) const KEY_SAMPLE_FILE_OFFSET: &CStr = c"sample-file-offset";
+/// Codec-specific data payload (`csd-0`) — `AudioSpecificConfig` for AAC,
+/// `STREAMINFO` for FLAC. Required when configuring the codec without
+/// an `AMediaExtractor`-supplied format.
+pub(crate) const KEY_CSD_0: &CStr = c"csd-0";
+
+/// Android MediaCodec MIME type for AAC (raw frames or fMP4-stripped).
+pub(crate) const MIME_AAC: &CStr = c"audio/mp4a-latm";
+/// Android MediaCodec MIME type for FLAC.
+pub(crate) const MIME_FLAC: &CStr = c"audio/flac";
 
 #[cfg(target_os = "android")]
 pub(crate) type MediaStatus = i32;
@@ -124,6 +136,15 @@ unsafe extern "C" {
     pub(crate) fn AMediaExtractor_getSampleTime(extractor: *mut AMediaExtractor) -> i64;
     pub(crate) fn AMediaExtractor_getSampleTrackIndex(extractor: *mut AMediaExtractor) -> i32;
     pub(crate) fn AMediaExtractor_advance(extractor: *mut AMediaExtractor) -> bool;
+    /// Available since API 28 (Android 9). Populates `*out_format` with a
+    /// new `AMediaFormat` carrying per-sample metadata, including
+    /// `"sample-file-offset"` (the byte offset of the current sample in
+    /// the source file).  Caller owns the returned format and must free
+    /// it with [`AMediaFormat_delete`].
+    pub(crate) fn AMediaExtractor_getSampleFormat(
+        extractor: *mut AMediaExtractor,
+        out_format: *mut *mut AMediaFormat,
+    ) -> MediaStatus;
 
     pub(crate) fn AMediaCodec_createDecoderByType(mime_type: *const c_char) -> *mut AMediaCodec;
     pub(crate) fn AMediaCodec_delete(codec: *mut AMediaCodec) -> MediaStatus;
@@ -169,7 +190,19 @@ unsafe extern "C" {
         render: bool,
     ) -> MediaStatus;
 
+    pub(crate) fn AMediaFormat_new() -> *mut AMediaFormat;
     pub(crate) fn AMediaFormat_delete(format: *mut AMediaFormat);
+    pub(crate) fn AMediaFormat_setString(
+        format: *mut AMediaFormat,
+        name: *const c_char,
+        value: *const c_char,
+    );
+    pub(crate) fn AMediaFormat_setBuffer(
+        format: *mut AMediaFormat,
+        name: *const c_char,
+        data: *const c_void,
+        size: usize,
+    );
     pub(crate) fn AMediaFormat_getString(
         format: *mut AMediaFormat,
         name: *const c_char,
@@ -207,6 +240,8 @@ pub(crate) fn current_api_level() -> Option<u32> {
 
 #[must_use]
 pub(crate) fn api_level_allows_hardware(api_level: Option<u32>) -> bool {
+    /// Minimum Android API level that supports the hardware decoder path.
+    const MIN_HARDWARE_API_LEVEL: u32 = 28;
     api_level.is_some_and(|level| level >= MIN_HARDWARE_API_LEVEL)
 }
 
@@ -231,6 +266,9 @@ mod tests {
         assert_eq!(KEY_CHANNEL_COUNT.to_str().ok(), Some("channel-count"));
         assert_eq!(KEY_DURATION_US.to_str().ok(), Some("durationUs"));
         assert_eq!(KEY_PCM_ENCODING.to_str().ok(), Some("pcm-encoding"));
+        // mirrors `MIN_HARDWARE_API_LEVEL` defined inside
+        // `api_level_allows_hardware`.
+        const MIN_HARDWARE_API_LEVEL: u32 = 28;
         assert!(api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL)));
         assert!(!api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL - 1)));
     }

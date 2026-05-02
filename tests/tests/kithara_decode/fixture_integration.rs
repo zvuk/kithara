@@ -129,7 +129,7 @@ async fn test_signal_server_encoded_formats_are_decodable(
     )
     .unwrap();
 
-    let chunk = decoder.next_chunk().unwrap().unwrap();
+    let chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
     assert!(!chunk.pcm.is_empty());
 }
 
@@ -182,19 +182,17 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     let mut total_frames = 0usize;
     let mut ascending_chunks = 0usize;
     for chunk_idx in 0..8 {
-        let Some(chunk) = decoder.next_chunk().unwrap_or_else(|error| {
+        let outcome = decoder.next_chunk().unwrap_or_else(|error| {
             panic!("decode chunk {chunk_idx} failed for {format:?}: {error}")
-        }) else {
+        });
+        let Some(chunk) = outcome.into_chunk() else {
             break;
         };
         assert_eq!(chunk.spec().sample_rate, 44_100);
         assert_eq!(chunk.spec().channels, 2);
-        assert_valid_pcm_samples(
-            chunk.samples(),
-            format!("{format:?} chunk {chunk_idx}").as_str(),
-        );
+        assert_valid_pcm_samples(&chunk.pcm, format!("{format:?} chunk {chunk_idx}").as_str());
         total_frames += chunk.frames();
-        if detect_direction(chunk.samples(), chunk.spec().channels as usize)
+        if detect_direction(&chunk.pcm, chunk.spec().channels as usize)
             == SignalDirection::Ascending
         {
             ascending_chunks += 1;
@@ -473,7 +471,7 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
     let mut direct_decoder = DecoderFactory::create_from_media_info(
         Cursor::new(mp4_bytes.clone()),
         &media_info,
-        DecoderConfig::default(),
+        &DecoderConfig::default(),
     )
     .unwrap_or_else(|error| panic!("create decoder from packaged {label} fmp4: {error}"));
 
@@ -491,8 +489,8 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
         .next_chunk()
         .unwrap_or_else(|error| panic!("decode first probe chunk for packaged {label}: {error}"));
 
-    let chunk = direct_chunk.unwrap_or_else(|| {
-        if probe_chunk.is_some() {
+    let chunk = direct_chunk.into_chunk().unwrap_or_else(|| {
+        if probe_chunk.is_chunk() {
             panic!(
                 "packaged {label} direct fmp4 decoder returned EOF, but probe-based decoder produced PCM; total_len={}, boxes={box_summaries:?}",
                 total_len

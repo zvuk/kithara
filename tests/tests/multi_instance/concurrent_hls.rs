@@ -1,143 +1,64 @@
 //! Concurrent HLS instance tests.
 //!
-//! Verifies that 2, 4, and 8 `Audio<Stream<Hls>>` instances can run
-//! concurrently and each reads PCM data to EOF.
-//! Tests both manual variant (no ABR) and auto ABR modes.
+//! Verifies that N `Audio<Stream<Hls>>` instances can run concurrently and
+//! each reads PCM data to EOF, under manual-variant and auto-ABR modes.
 
 use std::{path::Path, sync::Arc};
 
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::thread;
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, wav::create_test_wav};
+use kithara_test_utils::TestTempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::common::{
+    reader_helpers::{ReadLimit, read_for_concurrency_check},
+    test_defaults::SawWav,
+};
 
 struct Consts;
 impl Consts {
-    const D: SawWav = SawWav::DEFAULT;
     #[cfg(not(target_arch = "wasm32"))]
     const SEGMENT_COUNT: usize = 10; // Smaller than stress test — enough for concurrency check.
     #[cfg(target_arch = "wasm32")]
     const SEGMENT_COUNT: usize = 4; // Keep fixture session payload small in browser-runner tests.
-    #[cfg(target_arch = "wasm32")]
-    const MAX_ZERO_READS: usize = 200;
-    #[cfg(target_arch = "wasm32")]
-    const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
 }
 
-/// Read all PCM data from an `Audio<Stream<Hls>>` instance to EOF.
-///
-/// Returns the total number of samples read.
-fn read_to_eof(audio: &mut Audio<Stream<Hls>>) -> u64 {
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    loop {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            break;
-        }
-        for &s in &buf[..n] {
-            assert!(s.is_finite(), "non-finite sample at offset {total}");
-        }
-        total += n as u64;
-    }
-    assert!(audio.is_eof(), "expected EOF after reading all data");
-    total
-}
-
-#[cfg(target_arch = "wasm32")]
-fn read_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    let mut zero_reads = 0usize;
-
-    while total < Consts::MIN_SAMPLES_PER_INSTANCE && zero_reads < Consts::MAX_ZERO_READS {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            if audio.is_eof() {
-                break;
-            }
-            zero_reads += 1;
-            thread::sleep(Duration::from_millis(10));
-            continue;
-        }
-
-        zero_reads = 0;
-        for &sample in &buf[..n] {
-            assert!(sample.is_finite(), "non-finite sample at offset {total}");
-        }
-        total += n as u64;
-    }
-
-    assert!(
-        total >= Consts::MIN_SAMPLES_PER_INSTANCE,
-        "expected at least {Consts::MIN_SAMPLES_PER_INSTANCE} samples, got {total}",
-    );
-    total
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_for_concurrency_check(audio: &mut Audio<Stream<Hls>>) -> u64 {
-    read_to_eof(audio)
-}
-
-/// Create an HLS server with WAV segments.
-async fn create_hls_server(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
-
-    HlsTestServer::new(HlsTestServerConfig {
+/// Create an HLS server; `abr_variants == 1` → single variant, otherwise ABR.
+async fn create_hls_server(wav_data: Arc<Vec<u8>>, abr_variants: usize) -> HlsTestServer {
+    let config = HlsTestServerConfig {
+        variant_count: abr_variants,
         segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
-        segment_duration_secs: segment_duration,
+        segment_size: SawWav::DEFAULT.segment_size,
+        segment_duration_secs: SawWav::DEFAULT.segment_duration_secs(),
         custom_data: Some(wav_data),
+        variant_bandwidths: (abr_variants > 1).then(|| vec![5_000_000, 1_000_000]),
         ..Default::default()
-    })
-    .await
+    };
+    HlsTestServer::new(config).await
 }
 
-/// Create an HLS server with 2 ABR variants of different bandwidth.
-async fn create_hls_server_abr(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
-    let segment_duration = Consts::D.segment_size as f64
-        / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
-
-    HlsTestServer::new(HlsTestServerConfig {
-        variant_count: 2,
-        segments_per_variant: Consts::SEGMENT_COUNT,
-        segment_size: Consts::D.segment_size,
-        segment_duration_secs: segment_duration,
-        custom_data: Some(wav_data),
-        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        ..Default::default()
-    })
-    .await
-}
-
-/// Create an `Audio<Stream<Hls>>` for a single-variant (manual ABR) stream.
-async fn create_hls_audio(server: &HlsTestServer, cache_dir: &Path) -> Audio<Stream<Hls>> {
+/// Create an `Audio<Stream<Hls>>` for `abr` mode (Manual(0) or Auto(Some(0))).
+async fn create_hls_audio(
+    server: &HlsTestServer,
+    cache_dir: &Path,
+    abr: AbrMode,
+) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8");
     let cancel = CancellationToken::new();
 
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(cache_dir))
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(abr);
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
 
     Audio::<Stream<Hls>>::new(config)
@@ -145,66 +66,25 @@ async fn create_hls_audio(server: &HlsTestServer, cache_dir: &Path) -> Audio<Str
         .expect("create Audio<Stream<Hls>>")
 }
 
-/// Create an `Audio<Stream<Hls>>` with auto ABR.
-async fn create_hls_audio_abr(server: &HlsTestServer, cache_dir: &Path) -> Audio<Stream<Hls>> {
-    let url = server.url("/master.m3u8");
-    let cancel = CancellationToken::new();
-
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(cache_dir))
-        .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
-
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
-
-    Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create Audio<Stream<Hls>> with ABR")
-}
-
-/// Generate WAV data for the test (total size = segments * `segment_size`).
 fn generate_wav_data() -> Arc<Vec<u8>> {
-    let total_bytes = Consts::SEGMENT_COUNT * Consts::D.segment_size;
-    let bytes_per_frame = Consts::D.channels as usize * 2;
-    let header_size = 44;
-    let sample_count = (total_bytes - header_size) / bytes_per_frame;
-    Arc::new(create_test_wav(
-        sample_count,
-        Consts::D.sample_rate,
-        Consts::D.channels,
-    ))
+    SawWav::DEFAULT.build_wav(Consts::SEGMENT_COUNT)
 }
 
-// Tests
-
-/// 2 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
-async fn two_hls_instances() {
+/// Spawn `n` concurrent HLS readers and assert each reads non-zero samples.
+async fn run_concurrent_hls(n: usize, abr: AbrMode, variants: usize) {
     let wav_data = generate_wav_data();
 
-    // Each instance needs its own server (binds a random port) and cache dir.
     let mut handles = Vec::new();
-    for i in 0..2 {
-        let server = create_hls_server(Arc::clone(&wav_data)).await;
+    for i in 0..n {
+        // Each instance needs its own server (binds a random port) and cache dir.
+        let server = create_hls_server(Arc::clone(&wav_data), variants).await;
         let temp = TestTempDir::new();
-        let audio = create_hls_audio(&server, temp.path()).await;
-        // Keep server and temp alive until reader finishes.
+        let audio = create_hls_audio(&server, temp.path(), abr).await;
         handles.push(spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
-            let total = read_for_concurrency_check(&mut audio);
+            let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
             info!(instance = i, total_samples = total, "instance finished");
             (i, total)
         }));
@@ -221,7 +101,6 @@ async fn two_hls_instances() {
     }
 }
 
-/// 4 concurrent HLS instances (manual variant, no ABR).
 #[kithara::test(
     tokio,
     browser,
@@ -229,105 +108,14 @@ async fn two_hls_instances() {
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
-async fn four_hls_instances() {
-    let wav_data = generate_wav_data();
-
-    let mut handles = Vec::new();
-    for i in 0..4 {
-        let server = create_hls_server(Arc::clone(&wav_data)).await;
-        let temp = TestTempDir::new();
-        let audio = create_hls_audio(&server, temp.path()).await;
-        handles.push(spawn_blocking(move || {
-            let _server = server;
-            let _temp = temp;
-            let mut audio = audio;
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, total_samples = total, "instance finished");
-            (i, total)
-        }));
-    }
-
-    let mut results = Vec::new();
-    for h in handles {
-        results.push(h.await.expect("join"));
-    }
-
-    info!(?results, "all HLS instances done");
-    for (id, total) in &results {
-        assert!(*total > 0, "HLS instance {id} read 0 samples");
-    }
-}
-
-/// 8 concurrent HLS instances (manual variant, no ABR).
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
-async fn eight_hls_instances() {
-    let wav_data = generate_wav_data();
-
-    let mut handles = Vec::new();
-    for i in 0..8 {
-        let server = create_hls_server(Arc::clone(&wav_data)).await;
-        let temp = TestTempDir::new();
-        let audio = create_hls_audio(&server, temp.path()).await;
-        handles.push(spawn_blocking(move || {
-            let _server = server;
-            let _temp = temp;
-            let mut audio = audio;
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, total_samples = total, "instance finished");
-            (i, total)
-        }));
-    }
-
-    let mut results = Vec::new();
-    for h in handles {
-        results.push(h.await.expect("join"));
-    }
-
-    info!(?results, "all HLS instances done");
-    for (id, total) in &results {
-        assert!(*total > 0, "HLS instance {id} read 0 samples");
-    }
-}
-
-/// 4 concurrent HLS instances with auto ABR (2 variants).
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
-async fn four_hls_instances_with_abr() {
-    let wav_data = generate_wav_data();
-
-    let mut handles = Vec::new();
-    for i in 0..4 {
-        let server = create_hls_server_abr(Arc::clone(&wav_data)).await;
-        let temp = TestTempDir::new();
-        let audio = create_hls_audio_abr(&server, temp.path()).await;
-        handles.push(spawn_blocking(move || {
-            let _server = server;
-            let _temp = temp;
-            let mut audio = audio;
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, total_samples = total, "instance finished");
-            (i, total)
-        }));
-    }
-
-    let mut results = Vec::new();
-    for h in handles {
-        results.push(h.await.expect("join"));
-    }
-
-    info!(?results, "all HLS+ABR instances done");
-    for (id, total) in &results {
-        assert!(*total > 0, "HLS+ABR instance {id} read 0 samples");
-    }
+#[case::n2_manual(2, AbrMode::Manual(0), 1)]
+#[case::n4_manual(4, AbrMode::Manual(0), 1)]
+#[case::n8_manual(8, AbrMode::Manual(0), 1)]
+#[case::n4_auto_abr(4, AbrMode::Auto(Some(0)), 2)]
+async fn concurrent_hls_instances(
+    #[case] instances: usize,
+    #[case] abr: AbrMode,
+    #[case] variants: usize,
+) {
+    run_concurrent_hls(instances, abr, variants).await;
 }

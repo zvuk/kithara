@@ -8,6 +8,13 @@ repository.workspace = true
 description = "Cross-platform FFI adapter for the kithara audio player"
 publish = false
 
+# kithara-play is only consumed by src/android_test.rs, gated on
+# target_os = "android" + feature = "test". On native host targets the
+# module isn't compiled, so cargo-machete on a macOS/linux dev machine
+# flags the dep as unused — suppress it explicitly.
+[package.metadata.cargo-machete]
+ignored = ["kithara-play"]
+
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 

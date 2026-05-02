@@ -64,18 +64,27 @@ impl From<HlsSpecError> for CreateHlsError {
 
 #[derive(Clone, Debug)]
 pub struct CreatedHls {
-    base_url: Url,
     token: String,
+    base_url: Url,
 }
 
 impl CreatedHls {
     pub(crate) fn new(base_url: Url, token: String) -> Self {
-        Self { base_url, token }
+        Self { token, base_url }
     }
 
     #[must_use]
-    pub fn token(&self) -> &str {
-        &self.token
+    pub fn init_url(&self, variant: usize) -> Url {
+        self.base_url
+            .join(&hls_init_path_from_ref(&self.token, variant))
+            .expect("join HLS init URL")
+    }
+
+    #[must_use]
+    pub fn key_url(&self) -> Url {
+        self.base_url
+            .join(&hls_key_path_from_ref(&self.token))
+            .expect("join HLS key URL")
     }
 
     #[must_use]
@@ -93,13 +102,6 @@ impl CreatedHls {
     }
 
     #[must_use]
-    pub fn init_url(&self, variant: usize) -> Url {
-        self.base_url
-            .join(&hls_init_path_from_ref(&self.token, variant))
-            .expect("join HLS init URL")
-    }
-
-    #[must_use]
     pub fn segment_url(&self, variant: usize, segment: usize) -> Url {
         self.base_url
             .join(&hls_segment_path_from_ref(&self.token, variant, segment))
@@ -107,18 +109,16 @@ impl CreatedHls {
     }
 
     #[must_use]
-    pub fn key_url(&self) -> Url {
-        self.base_url
-            .join(&hls_key_path_from_ref(&self.token))
-            .expect("join HLS key URL")
+    pub fn token(&self) -> &str {
+        &self.token
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct HlsFixtureBuilder {
-    spec: HlsSpec,
     data: HlsFixtureData,
     init: HlsFixtureInit,
+    spec: HlsSpec,
 }
 
 #[derive(Debug, Clone)]
@@ -140,45 +140,8 @@ impl HlsFixtureBuilder {
         Self::from_spec(HlsSpec::default())
     }
 
-    #[must_use]
-    pub fn from_spec(spec: HlsSpec) -> Self {
-        Self {
-            data: HlsFixtureData::Spec(spec.data_mode.clone()),
-            init: HlsFixtureInit::Spec(spec.init_mode.clone()),
-            spec,
-        }
-    }
-
-    #[must_use]
-    pub fn variant_count(mut self, variant_count: usize) -> Self {
-        self.spec.variant_count = variant_count;
-        self
-    }
-
-    #[must_use]
-    pub fn segments_per_variant(mut self, segments_per_variant: usize) -> Self {
-        self.spec.segments_per_variant = segments_per_variant;
-        self
-    }
-
-    #[must_use]
-    pub fn segment_size(mut self, segment_size: usize) -> Self {
-        self.spec.segment_size = segment_size;
-        self
-    }
-
-    #[must_use]
-    pub fn segment_duration_secs(mut self, segment_duration_secs: f64) -> Self {
-        self.spec.segment_duration_secs = segment_duration_secs;
-        self
-    }
-
-    #[must_use]
-    pub fn data_mode(mut self, data_mode: DataMode) -> Self {
-        self.clear_packaged_audio();
-        self.spec.data_mode = data_mode.clone();
-        self.data = HlsFixtureData::Spec(data_mode);
-        self
+    fn clear_packaged_audio(&mut self) {
+        self.spec.packaged_audio = None;
     }
 
     #[must_use]
@@ -196,10 +159,50 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn init_mode(mut self, init_mode: InitMode) -> Self {
+    pub fn data_mode(mut self, data_mode: DataMode) -> Self {
         self.clear_packaged_audio();
-        self.spec.init_mode = init_mode.clone();
-        self.init = HlsFixtureInit::Spec(init_mode);
+        self.spec.data_mode = data_mode.clone();
+        self.data = HlsFixtureData::Spec(data_mode);
+        self
+    }
+
+    #[must_use]
+    pub fn delay_rules(mut self, delay_rules: Vec<DelayRule>) -> Self {
+        self.spec.delay_rules = delay_rules;
+        self
+    }
+
+    #[must_use]
+    pub fn encryption(mut self, encryption: EncryptionRequest) -> Self {
+        self.spec.encryption = Some(encryption);
+        self
+    }
+
+    #[must_use]
+    pub fn from_spec(spec: HlsSpec) -> Self {
+        Self {
+            data: HlsFixtureData::Spec(spec.data_mode.clone()),
+            init: HlsFixtureInit::Spec(spec.init_mode.clone()),
+            spec,
+        }
+    }
+
+    #[must_use]
+    pub fn head_reported_segment_size(mut self, head_reported_segment_size: usize) -> Self {
+        self.spec.head_reported_segment_size = Some(head_reported_segment_size);
+        self
+    }
+
+    /// Toggle the optional `sidx` index in the init segment of packaged
+    /// fMP4 fixtures. Default is `false` — bit-stable with existing
+    /// fixtures. Set to `true` to mirror real-world packagers (DASH,
+    /// HLS-fMP4 from CDNs) where `sidx` lets the demuxer resolve
+    /// `seek_track_by_time` in O(1).
+    #[must_use]
+    pub fn include_sidx(mut self, include: bool) -> Self {
+        if let Some(req) = self.spec.packaged_audio.as_mut() {
+            req.include_sidx = include;
+        }
         self
     }
 
@@ -211,149 +214,11 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn variant_bandwidths(mut self, variant_bandwidths: Vec<u64>) -> Self {
-        self.spec.variant_bandwidths = Some(variant_bandwidths);
+    pub fn init_mode(mut self, init_mode: InitMode) -> Self {
+        self.clear_packaged_audio();
+        self.spec.init_mode = init_mode.clone();
+        self.init = HlsFixtureInit::Spec(init_mode);
         self
-    }
-
-    #[must_use]
-    pub fn delay_rules(mut self, delay_rules: Vec<DelayRule>) -> Self {
-        self.spec.delay_rules = delay_rules;
-        self
-    }
-
-    #[must_use]
-    pub fn push_delay_rule(mut self, delay_rule: DelayRule) -> Self {
-        self.spec.delay_rules.push(delay_rule);
-        self
-    }
-
-    #[must_use]
-    pub fn encryption(mut self, encryption: EncryptionRequest) -> Self {
-        self.spec.encryption = Some(encryption);
-        self
-    }
-
-    #[must_use]
-    pub fn head_reported_segment_size(mut self, head_reported_segment_size: usize) -> Self {
-        self.spec.head_reported_segment_size = Some(head_reported_segment_size);
-        self
-    }
-
-    #[must_use]
-    pub fn key_hex(mut self, key_hex: String) -> Self {
-        self.spec.key_hex = Some(key_hex);
-        self.spec.key_blob_ref = None;
-        self
-    }
-
-    #[must_use]
-    pub fn packaged_audio(mut self, packaged_audio: PackagedAudioRequest) -> Self {
-        self.set_packaged_audio(packaged_audio);
-        self
-    }
-
-    #[must_use]
-    pub fn packaged_audio_aac_lc(self, sample_rate: u32, channels: u16) -> Self {
-        self.packaged_audio_signal_aac_lc(sample_rate, channels, PackagedSignal::Sawtooth)
-    }
-
-    #[must_use]
-    pub fn packaged_audio_sine_aac_lc(self, sample_rate: u32, channels: u16, freq_hz: f64) -> Self {
-        self.packaged_audio_signal_aac_lc(sample_rate, channels, PackagedSignal::Sine { freq_hz })
-    }
-
-    #[must_use]
-    pub fn packaged_audio_signal_aac_lc(
-        mut self,
-        sample_rate: u32,
-        channels: u16,
-        signal: PackagedSignal,
-    ) -> Self {
-        self.set_packaged_audio(PackagedAudioRequest {
-            codec: AudioCodec::AacLc,
-            sample_rate,
-            channels,
-            timescale: Some(sample_rate),
-            bit_rate: Some(128_000),
-            source: PackagedAudioSource::Signal(signal),
-            variant_overrides: Vec::new(),
-        });
-        self
-    }
-
-    #[must_use]
-    pub fn packaged_audio_per_variant_pcm_aac_lc(
-        mut self,
-        sample_rate: u32,
-        channels: u16,
-        patterns: Vec<PcmPattern>,
-    ) -> Self {
-        self.set_packaged_audio(PackagedAudioRequest {
-            codec: AudioCodec::AacLc,
-            sample_rate,
-            channels,
-            timescale: Some(sample_rate),
-            bit_rate: Some(128_000),
-            source: PackagedAudioSource::PerVariantPcm { patterns },
-            variant_overrides: Vec::new(),
-        });
-        self
-    }
-
-    #[must_use]
-    pub fn packaged_audio_flac(self, sample_rate: u32, channels: u16) -> Self {
-        self.packaged_audio_signal_flac(sample_rate, channels, PackagedSignal::Sawtooth)
-    }
-
-    #[must_use]
-    pub fn packaged_audio_sine_flac(self, sample_rate: u32, channels: u16, freq_hz: f64) -> Self {
-        self.packaged_audio_signal_flac(sample_rate, channels, PackagedSignal::Sine { freq_hz })
-    }
-
-    #[must_use]
-    pub fn packaged_audio_signal_flac(
-        mut self,
-        sample_rate: u32,
-        channels: u16,
-        signal: PackagedSignal,
-    ) -> Self {
-        self.set_packaged_audio(PackagedAudioRequest {
-            codec: AudioCodec::Flac,
-            sample_rate,
-            channels,
-            timescale: Some(sample_rate),
-            bit_rate: Some(512_000),
-            source: PackagedAudioSource::Signal(signal),
-            variant_overrides: Vec::new(),
-        });
-        self
-    }
-
-    #[must_use]
-    pub fn packaged_audio_per_variant_pcm_flac(
-        mut self,
-        sample_rate: u32,
-        channels: u16,
-        patterns: Vec<PcmPattern>,
-    ) -> Self {
-        self.set_packaged_audio(PackagedAudioRequest {
-            codec: AudioCodec::Flac,
-            sample_rate,
-            channels,
-            timescale: Some(sample_rate),
-            bit_rate: Some(512_000),
-            source: PackagedAudioSource::PerVariantPcm { patterns },
-            variant_overrides: Vec::new(),
-        });
-        self
-    }
-
-    pub(crate) fn into_spec_with_blob_registrar<F>(self, register_blob: F) -> HlsSpec
-    where
-        F: Fn(&[u8]) -> String,
-    {
-        self.into_spec_inner(Some(&register_blob))
     }
 
     #[cfg_attr(
@@ -399,8 +264,148 @@ impl HlsFixtureBuilder {
         self.spec
     }
 
-    fn clear_packaged_audio(&mut self) {
-        self.spec.packaged_audio = None;
+    pub(crate) fn into_spec_with_blob_registrar<F>(self, register_blob: F) -> HlsSpec
+    where
+        F: Fn(&[u8]) -> String,
+    {
+        self.into_spec_inner(Some(&register_blob))
+    }
+
+    #[must_use]
+    pub fn key_hex(mut self, key_hex: String) -> Self {
+        self.spec.key_hex = Some(key_hex);
+        self.spec.key_blob_ref = None;
+        self
+    }
+
+    #[must_use]
+    pub fn packaged_audio(mut self, packaged_audio: PackagedAudioRequest) -> Self {
+        self.set_packaged_audio(packaged_audio);
+        self
+    }
+
+    #[must_use]
+    pub fn packaged_audio_aac_lc(self, sample_rate: u32, channels: u16) -> Self {
+        self.packaged_audio_signal_aac_lc(sample_rate, channels, PackagedSignal::Sawtooth)
+    }
+
+    #[must_use]
+    pub fn packaged_audio_flac(self, sample_rate: u32, channels: u16) -> Self {
+        self.packaged_audio_signal_flac(sample_rate, channels, PackagedSignal::Sawtooth)
+    }
+
+    #[must_use]
+    pub fn packaged_audio_per_variant_pcm_aac_lc(
+        mut self,
+        sample_rate: u32,
+        channels: u16,
+        patterns: Vec<PcmPattern>,
+    ) -> Self {
+        self.set_packaged_audio(PackagedAudioRequest {
+            codec: AudioCodec::AacLc,
+            sample_rate,
+            channels,
+            timescale: Some(sample_rate),
+            bit_rate: Some(128_000),
+            source: PackagedAudioSource::PerVariantPcm { patterns },
+            variant_overrides: Vec::new(),
+            include_sidx: false,
+        });
+        self
+    }
+
+    #[must_use]
+    pub fn packaged_audio_per_variant_pcm_flac(
+        mut self,
+        sample_rate: u32,
+        channels: u16,
+        patterns: Vec<PcmPattern>,
+    ) -> Self {
+        self.set_packaged_audio(PackagedAudioRequest {
+            codec: AudioCodec::Flac,
+            sample_rate,
+            channels,
+            timescale: Some(sample_rate),
+            bit_rate: Some(512_000),
+            source: PackagedAudioSource::PerVariantPcm { patterns },
+            variant_overrides: Vec::new(),
+            include_sidx: false,
+        });
+        self
+    }
+
+    #[must_use]
+    pub fn packaged_audio_signal_aac_lc(
+        mut self,
+        sample_rate: u32,
+        channels: u16,
+        signal: PackagedSignal,
+    ) -> Self {
+        self.set_packaged_audio(PackagedAudioRequest {
+            codec: AudioCodec::AacLc,
+            sample_rate,
+            channels,
+            timescale: Some(sample_rate),
+            bit_rate: Some(128_000),
+            source: PackagedAudioSource::Signal(signal),
+            variant_overrides: Vec::new(),
+            include_sidx: false,
+        });
+        self
+    }
+
+    #[must_use]
+    pub fn packaged_audio_signal_flac(
+        mut self,
+        sample_rate: u32,
+        channels: u16,
+        signal: PackagedSignal,
+    ) -> Self {
+        self.set_packaged_audio(PackagedAudioRequest {
+            codec: AudioCodec::Flac,
+            sample_rate,
+            channels,
+            timescale: Some(sample_rate),
+            bit_rate: Some(512_000),
+            source: PackagedAudioSource::Signal(signal),
+            variant_overrides: Vec::new(),
+            include_sidx: false,
+        });
+        self
+    }
+
+    #[must_use]
+    pub fn packaged_audio_sine_aac_lc(self, sample_rate: u32, channels: u16, freq_hz: f64) -> Self {
+        self.packaged_audio_signal_aac_lc(sample_rate, channels, PackagedSignal::Sine { freq_hz })
+    }
+
+    #[must_use]
+    pub fn packaged_audio_sine_flac(self, sample_rate: u32, channels: u16, freq_hz: f64) -> Self {
+        self.packaged_audio_signal_flac(sample_rate, channels, PackagedSignal::Sine { freq_hz })
+    }
+
+    #[must_use]
+    pub fn push_delay_rule(mut self, delay_rule: DelayRule) -> Self {
+        self.spec.delay_rules.push(delay_rule);
+        self
+    }
+
+    #[must_use]
+    pub fn segment_duration_secs(mut self, segment_duration_secs: f64) -> Self {
+        self.spec.segment_duration_secs = segment_duration_secs;
+        self
+    }
+
+    #[must_use]
+    pub fn segment_size(mut self, segment_size: usize) -> Self {
+        self.spec.segment_size = segment_size;
+        self
+    }
+
+    #[must_use]
+    pub fn segments_per_variant(mut self, segments_per_variant: usize) -> Self {
+        self.spec.segments_per_variant = segments_per_variant;
+        self
     }
 
     fn set_packaged_audio(&mut self, packaged_audio: PackagedAudioRequest) {
@@ -409,6 +414,18 @@ impl HlsFixtureBuilder {
         self.data = HlsFixtureData::Spec(DataMode::TestPattern);
         self.init = HlsFixtureInit::Spec(InitMode::None);
         self.spec.packaged_audio = Some(packaged_audio);
+    }
+
+    #[must_use]
+    pub fn variant_bandwidths(mut self, variant_bandwidths: Vec<u64>) -> Self {
+        self.spec.variant_bandwidths = Some(variant_bandwidths);
+        self
+    }
+
+    #[must_use]
+    pub fn variant_count(mut self, variant_count: usize) -> Self {
+        self.spec.variant_count = variant_count;
+        self
     }
 }
 

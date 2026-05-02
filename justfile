@@ -1,7 +1,5 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-ast-grep-bin := "$(command -v ast-grep || command -v sg || true)"
-
 # Show available commands.
 default:
     @just --list
@@ -21,6 +19,13 @@ fmt-check:
 clippy:
     cargo clippy --workspace -- -D warnings
 
+# Apply clippy's machine-applicable suggestions in place. Refuses to run
+# on a dirty working tree by default — pass --allow-dirty to override.
+#   just clippy-fix
+#   just clippy-fix --allow-dirty
+clippy-fix *ARGS:
+    cargo clippy --fix --workspace --all-targets {{ARGS}} -- -D warnings
+
 # Type-check the workspace (also used as MSRV gate in CI).
 check:
     cargo check --workspace
@@ -33,96 +38,35 @@ deny:
 machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests examples xtask
 
-# Validate workspace architecture.
-arch:
-    cargo xtask quality arch
+# AST-grep policy scan. Discovers every rule in `.config/ast-grep/`
+# and lets each rule's `severity:` field decide whether a hit blocks
+# (`error`) or just reports (`warning`/`info`/`hint`).
+# Pass `--strict` to promote every warning to an error.
+#   just ast-grep
+#   just ast-grep --strict
+ast-grep *ARGS:
+    cargo xtask ast-grep {{ARGS}}
 
-# Generate and open API docs.
-doc:
-    cargo doc --workspace --no-deps --open
+# Workspace linters: arch, style, idioms.
+#   just lint                       # all three
+#   just lint arch                  # only arch (or style / idioms)
+#   just lint arch --check NAME     # forward any subcommand args
+#   just lint arch --update-baseline
+#   just lint arch --report path.md
+#   just lint arch --json
+lint *ARGS:
+    cargo xtask lint {{ARGS}}
 
-# --- tests ---
-
-# Cargo profile for test binaries: "dev" (debug) or "test-release" (optimised).
-# Run all tests in the workspace (excluding fuzzing).
-test *ARGS:
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
-
-# Run tests for a specific package.
-test-p name *ARGS:
-    cargo nextest run -p {{name}} --cargo-profile test-release {{ARGS}}
-
-test-ci:
-    cargo nextest run --workspace --exclude kithara-fuzz --profile ci --no-fail-fast --cargo-profile test-release
-
-test-doc:
-    cargo test --doc --workspace --exclude kithara-fuzz
-
-test-stress:
-    cargo nextest run --workspace --exclude kithara-fuzz --profile stress -E 'binary(suite_heavy)' --cargo-profile test-release
-
-test-all: test test-doc
-
-# Full project health check: lint + all tests + wasm + selenium + perf + benchmarks.
-test-ultimate:
-    just lint-fast
-    cargo nextest run --workspace --exclude kithara-fuzz --no-fail-fast
-    just test-doc
-    just wasm-test
-    cargo +nightly test -p kithara-integration-tests --test suite_heavy selenium -- --ignored --nocapture
-    just bench-build
-    cargo test -p kithara-integration-tests --features perf --release --test memory_rss -- --test-threads=1 --nocapture
-    echo "==> all checks passed"
-
-xtask-test:
-    cargo test -p xtask
-
-# --- ast-grep ---
-
-ast-grep-blocking:
-    @if [[ -z "{{ast-grep-bin}}" ]]; then \
-      echo "FAILED: ast-grep is required but not installed."; \
-      exit 1; \
-    fi; \
-    {{ast-grep-bin}} scan --config sgconfig.yml --report-style short \
-      --filter '^(style.no-tests-in-lib-or-mod-rs|rust.no-thin-async-wrapper|style.no-separator-comments-toml|style.no-noop-in-impl|style.no-duplicate-impl|style.no-masked-unused-arg|style.multiple-private-module-consts|style.no-impl-only-consts)$'
-
-ast-grep-advisory:
-    @if [[ -z "{{ast-grep-bin}}" ]]; then \
-      echo "FAILED: ast-grep is required but not installed."; \
-      exit 1; \
-    fi; \
-    {{ast-grep-bin}} scan --config sgconfig.yml --report-style short --warning
-
-# --- quality ---
-
-quality-report *ARGS:
-    cargo xtask quality report {{ARGS}}
-
-quality-report-ci:
-    cargo xtask quality report \
-        --min-unimock-traits "${QUALITY_MIN_UNIMOCK_TRAITS:-0}" \
-        --min-rstest-cases "${QUALITY_MIN_RSTEST_CASES:-0}" \
-        --min-perf-test-files "${QUALITY_MIN_PERF_TEST_FILES:-0}" \
-        --min-bench-targets "${QUALITY_MIN_BENCH_TARGETS:-0}" \
-        --max-local-http-servers "${QUALITY_MAX_LOCAL_HTTP_SERVERS:-999}"
-
-play-unimock-check:
-    cargo xtask quality unimock-check
-
-rstest-audit:
-    cargo xtask quality rstest-audit
-
-trait-mock-audit:
-    cargo xtask quality trait-mock-audit
-
-trait-mock-exceptions:
-    cargo xtask quality trait-mock-exceptions
+# Workspace quality checks (forwarded to xtask quality).
+#   just quality report
+#   just quality unimock-check
+#   just quality rstest-audit
+#   just quality trait-mock-audit
+#   just quality trait-mock-exceptions
+quality *ARGS:
+    cargo xtask quality {{ARGS}}
 
 # Feature-powerset check (requires cargo-hack).
-# kithara-wasm: wasm-only crate, not checkable on native host.
-# kithara-play, kithara-app: use compile_error! to enforce required feature combinations.
-# kithara-fuzz: depends on kithara-play without backend-cpal feature.
 hack:
     cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace \
       --exclude kithara-wasm \
@@ -134,14 +78,241 @@ hack:
 semver:
     cargo semver-checks check-release --workspace --exclude kithara-fuzz
 
+# Generate and open API docs.
+doc:
+    cargo doc --workspace --no-deps --open
+
+# --- tests ---
+
+# Run workspace tests via nextest.
+#
+# Backend features are activated automatically by `tests/Cargo.toml`:
+# `kithara-integration-tests` declares `[target.cfg(macos|ios).dependencies]`
+# with `kithara/apple` (and `target_os = "android"` with `kithara/android`),
+# which cargo's feature-unification then propagates to every workspace
+# member. So `cargo nextest run --workspace` already exercises:
+#   * macOS / iOS   → apple AudioToolbox + Symphonia software
+#   * Android       → Android MediaCodec + Symphonia software
+#   * Linux / other → Symphonia only
+# To verify each backend in isolation (no feature-unification crossover),
+# see `just test-decoders`.
+#
+#   just test                 # whole workspace, all available backends
+#   just test -p kithara-hls  # one package
+#   just test --profile ci    # CI nextest profile
+#   just test EXPR            # nextest filter expression
+test *ARGS:
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+
+# Run the cross-decoder protocol suite once per backend in isolation so a
+# regression in one backend's feature-gating cannot hide behind feature
+# unification (e.g. an apple-only build still passing because symphonia is
+# silently picking up the slack on macOS). Skipped backends are no-ops.
+test-decoders *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    run() {
+        echo "===> cargo nextest with features: $1"
+        cargo nextest run --cargo-profile test-release \
+            -p kithara-decode --no-default-features --features "$1" \
+            --test decoder_protocol {{ARGS}}
+    }
+    # Software-only Symphonia path (cross-platform).
+    run "symphonia"
+    case "$(uname -s)" in
+        Darwin)
+            # Apple AudioToolbox in isolation (no Symphonia fallback).
+            run "apple"
+            # Combined (default `just test` shape) — sanity check.
+            run "apple,symphonia"
+            ;;
+        Linux)
+            if [[ "$(uname -o 2>/dev/null || true)" == "Android" ]]; then
+                run "android"
+                run "android,symphonia"
+            fi
+            ;;
+    esac
+
+# Doc-tests (cargo nextest doesn't run them).
+test-doc:
+    cargo test --doc --workspace --exclude kithara-fuzz
+
+# Real-network + cpal-hardware end-to-end tests (gated by `e2e` feature).
+#   just test-e2e
+#   just test-e2e kithara_play::silvercomet_seek_hang
+test-e2e *ARGS:
+    cargo nextest run -p kithara-integration-tests --features e2e --cargo-profile test-release \
+        --test suite_e2e --run-ignored all {{ARGS}}
+
+# Selenium WebDriver tests (trunk + chromedriver, native target).
+test-selenium *ARGS:
+    cargo +nightly test -p kithara-integration-tests --features selenium --test suite_heavy selenium -- --nocapture {{ARGS}}
+
+# Convenience: workspace tests + doc-tests in one run.
+test-all: test test-doc
+
+# Run all linters scoped to a crate / path / workspace. With
+# `--autofix`, run each tool's autofix first (where available), then
+# re-validate.
+# Argument parsing is in `cargo xtask scope`; filter list is in
+# `cargo xtask ast-grep`. This recipe is a thin orchestrator.
+#
+#   just audit                              # whole workspace, report only
+#   just audit --autofix                    # apply every available autofix, then re-validate
+#   just audit kithara-queue                # crate by name
+#   just audit crates/kithara-abr/src       # path inside a crate
+#   just audit tests tests/bench            # one or more workspace paths
+#   just audit ./xtask/src                  # leading ./ ok
+#   just audit --autofix kithara-queue      # autofix scoped to one crate
+#
+# Autofix pipeline order matters and runs before the read-only audit:
+#   1. fmt — establish a stable baseline.
+#   2. clippy --fix — initial pass; may remove imports.
+#   3. typos --fix — operates on identifiers in stable text.
+#   4. ast-grep --fix — textual rewrites.
+#   5. xtask lint --fix — reorders struct fields / trait items; this
+#      can break clippy's `inconsistent_struct_constructor` if a
+#      shorthand init relied on the previous field order.
+#   6. clippy --fix again — catch any inconsistencies introduced by
+#      step 5.
+#   7. fmt again — clean up whitespace from byte-range swaps.
+#   8. audit — read-only re-validation.
+#
+# Autofix implicitly passes `--allow-dirty` to each tool: a single fix
+# step would otherwise dirty the tree and block subsequent steps. Use
+# the per-tool recipes (`just clippy-fix`, `cargo xtask typos --fix`,
+# `cargo xtask ast-grep --fix`, `cargo xtask lint --fix`) when you
+# want the dirty-tree safety net.
+audit *ARGS:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    section() { echo; echo "── $1"; }
+
+    # Strip the recipe-level `--autofix` flag before forwarding the
+    # remainder to scope resolution.
+    autofix=0
+    scope_args=()
+    for a in {{ARGS}}; do
+        if [[ "$a" == "--autofix" ]]; then
+            autofix=1
+        else
+            scope_args+=("$a")
+        fi
+    done
+
+    if [[ $autofix -eq 1 ]]; then
+        section "autofix: fmt";              cargo +nightly fmt --all
+        section "autofix: clippy (1/2)";     cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
+        section "autofix: typos";            cargo xtask typos --fix --allow-dirty
+        section "autofix: ast-grep";         cargo xtask ast-grep --fix --allow-dirty
+        section "autofix: xtask lint";       cargo xtask lint --fix --allow-dirty
+        section "autofix: clippy (2/2)";     cargo clippy --fix --workspace --all-targets --allow-dirty -- -D warnings
+        section "autofix: fmt cleanup";      cargo +nightly fmt --all
+    fi
+
+    # Validate scope tokens up front so a typo doesn't silently fall back to
+    # a workspace-wide audit. `cargo xtask scope` exits non-zero on bad scope.
+    if ! XTASK_FLAGS=$(cargo xtask scope --for=xtask "${scope_args[@]}"); then exit 2; fi
+    CLIPPY_FLAGS=$(cargo xtask scope --for=clippy "${scope_args[@]}")
+    FMT_FLAGS=$(cargo xtask scope --for=fmt "${scope_args[@]}")
+    AST_GREP_PATHS=$(cargo xtask scope --for=ast-grep "${scope_args[@]}")
+    TYPOS_PATHS=$(cargo xtask scope --for=typos "${scope_args[@]}")
+    SIMILARITY_PATHS=$(cargo xtask scope --for=similarity "${scope_args[@]}")
+    ORPHANS_FLAGS=$(cargo xtask scope --for=orphans "${scope_args[@]}")
+
+    fail=0
+    section "fmt-check";    cargo +nightly fmt $FMT_FLAGS --check || fail=1
+    section "clippy";       cargo clippy $CLIPPY_FLAGS -- -D warnings || fail=1
+    section "ast-grep";     cargo xtask ast-grep $AST_GREP_PATHS || fail=1
+    section "xtask lint";   cargo xtask lint $XTASK_FLAGS || fail=1
+    section "typos";        cargo xtask typos $TYPOS_PATHS || fail=1
+    section "similarity";   cargo xtask similarity --profile audit $SIMILARITY_PATHS || fail=1
+    if [[ "$ORPHANS_FLAGS" == "__skip__" ]]; then
+        section "orphans"; echo "orphans: skipped (non-crate scope)"
+    else
+        section "orphans"; cargo xtask orphans --deny --audit-mode $ORPHANS_FLAGS || fail=1
+    fi
+
+    echo
+    [[ $fail -eq 0 ]] && echo "audit: OK" || { echo "audit: FAILED"; exit 1; }
+
+# --- internal: xtask self-tests ---
+
+[private]
+xtask-test:
+    cargo test -p xtask
+
+# --- internal: quality variants used by composites ---
+
+[private]
+_quality-unimock:
+    cargo xtask quality unimock-check
+
+[private]
+_quality-rstest:
+    cargo xtask quality rstest-audit
+
+[private]
+_quality-trait-mock:
+    cargo xtask quality trait-mock-audit
+
+[private]
+_quality-trait-mock-exceptions:
+    cargo xtask quality trait-mock-exceptions
+
+# CI-tuned quality report; thresholds from QUALITY_* env vars.
+[private]
+quality-report-ci:
+    cargo xtask quality report \
+        --min-unimock-traits "${QUALITY_MIN_UNIMOCK_TRAITS:-0}" \
+        --min-rstest-cases "${QUALITY_MIN_RSTEST_CASES:-0}" \
+        --min-perf-test-files "${QUALITY_MIN_PERF_TEST_FILES:-0}" \
+        --min-bench-targets "${QUALITY_MIN_BENCH_TARGETS:-0}" \
+        --max-local-http-servers "${QUALITY_MAX_LOCAL_HTTP_SERVERS:-999}"
+
 # --- lint composites ---
 
-lint-fast: fmt-check clippy ast-grep-blocking arch
+# Fast lint chain: fmt-check + clippy + ast-grep + arch.
+lint-fast: fmt-check clippy ast-grep
+    cargo xtask lint arch
 
-lint-full: lint-fast xtask-test play-unimock-check rstest-audit trait-mock-audit trait-mock-exceptions
+# Full lint: fast chain plus xtask self-tests and the quality scans.
+lint-full: lint-fast xtask-test _quality-unimock _quality-rstest _quality-trait-mock _quality-trait-mock-exceptions
+
+# --- CI cycle ---
+
+# Full CI cycle: lint + test + e2e + workspace-mutants. Each stage writes its
+# own stage-<name>.log and stage-<name>.exit under OUTPUT; the pipeline
+# continues even if earlier stages fail so the remote run still produces
+# mutant results for inspection.
+ci-full-run OUTPUT:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+    mkdir -p "{{OUTPUT}}"
+    echo "$RUN_ID" > "{{OUTPUT}}/run-id"
+    echo "=== ci-full-run $RUN_ID starting at $(date -u -Iseconds) ==="
+
+    run_stage() {
+        local name=$1; shift
+        echo ">>> stage $name started at $(date -u -Iseconds)"
+        "$@" > "{{OUTPUT}}/stage-$name.log" 2>&1
+        local rc=$?
+        echo "$rc" > "{{OUTPUT}}/stage-$name.exit"
+        echo ">>> stage $name finished with exit=$rc at $(date -u -Iseconds)"
+    }
+
+    run_stage lint    just lint-fast
+    run_stage test    just test
+    run_stage e2e     just test-e2e
+    run_stage mutants just mutants ci "{{OUTPUT}}/mutants"
+
+    echo "=== ci-full-run $RUN_ID done at $(date -u -Iseconds) ==="
 
 # --- coverage ---
 
+# Cobertura line-coverage report; threshold from COVERAGE_MIN env (default 80).
 coverage:
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"; \
     COVERAGE_MIN="${COVERAGE_MIN:-80}"; \
@@ -156,9 +327,153 @@ coverage:
     echo "==> coverage report written to $OUTPUT_DIR/cobertura.xml"; \
     echo "==> line coverage threshold: $COVERAGE_MIN%"
 
+# Show lines not executed by any test (dead / uncovered code).
+# Accumulates coverage across unit/integration (+ rodio feature) and e2e
+# (real network + cpal hardware) runs.
+dead:
+    cargo llvm-cov clean --workspace
+    cargo llvm-cov nextest --no-report --workspace --exclude kithara-fuzz \
+      --features kithara-audio/rodio \
+      --cargo-profile test-release --no-fail-fast || true
+    cargo llvm-cov nextest --no-report \
+      -p kithara-integration-tests --features e2e \
+      --cargo-profile test-release \
+      --test suite_e2e --run-ignored all --no-fail-fast || true
+    cargo llvm-cov report \
+      --ignore-filename-regex '(tests/|examples/|benches/)' \
+      --show-missing-lines
+
+# Find near-duplicate functions (AST similarity) across production code.
+# Default profile: advisory (0.85 threshold, informational, no fail).
+#   just similarity                              # advisory full sweep
+#   just similarity --profile=audit              # blocking, low-noise (0.96)
+#   just similarity --profile=strict             # comprehensive (0.80, includes tests)
+#   just similarity crates/kithara-abr/src       # scoped roots
+similarity *ARGS:
+    cargo xtask similarity {{ARGS}}
+
+# Workspace spell-check via `typos` with the pinned config in `.config/typos.toml`.
+#   just typos                                   # whole workspace
+#   just typos crates/kithara-queue              # scoped
+typos *ARGS:
+    cargo xtask typos {{ARGS}}
+
+# Per-package orphan-module detection (`cargo modules orphans` with `--cfg-test`).
+#   just orphans                                 # advisory full sweep (~1.5 min)
+#   just orphans --deny                          # fail on any orphans
+#   just orphans --package kithara-queue         # single crate
+orphans *ARGS:
+    cargo xtask orphans {{ARGS}}
+
+# Comprehensive workspace health check (15-30 min).
+# Runs lint + quality + audit tools + heavy stages (lockbud / hack /
+# semver-checks / unused-pub) + workspace tests, writes
+# target/health-report.md plus per-stage logs in target/health-logs/.
+# Excluded by design (run separately): mutants, coverage, dead, test-e2e,
+# test-selenium, wasm, bench, perf, memory-check.
+# Install every external tool that `just health`, `just audit`, and the
+# standalone diagnostic recipes depend on. Idempotent — `cargo install --locked`
+# is a no-op when the binary is already current. `lockbud` is rebuilt from
+# source against the active toolchain to avoid `librustc_driver` mismatches.
+install-tools:
+    cargo install --locked cargo-deny
+    cargo install --locked cargo-machete
+    cargo install --locked cargo-hack
+    cargo install --locked cargo-semver-checks
+    cargo install --locked cargo-modules
+    cargo install --locked cargo-workspace-unused-pub
+    cargo install --locked cargo-bloat
+    cargo install --locked cargo-depgraph
+    cargo install --locked cargo-llvm-cov
+    cargo install --locked cargo-mutants
+    cargo install --locked typos-cli
+    cargo install --locked similarity-rs
+    cargo install --locked --force lockbud
+    @echo "==> tools installed; run 'just health' to verify"
+
+# Comprehensive workspace health check with markdown report.
+# Runs every applicable static analysis and test stage; report goes to
+# `target/health-report.md` and per-stage logs to `target/health-logs/`.
+# Stages requiring tools that are missing or broken are reported as SKIP.
+health:
+    cargo xtask health
+
+# Static deadlock detection across the workspace (`cargo lockbud`).
+# Heavy: relies on MIR analysis; first install warms up nightly toolchain.
+deadlock *ARGS:
+    cargo lockbud -k deadlock --workspace {{ARGS}}
+
+# Detect unused public items workspace-wide (`cargo workspace-unused-pub`).
+# Heavy: ~1.5 min — runs rust-analyzer SCIP under the hood.
+unused-pub:
+    cargo workspace-unused-pub
+
+# Show top contributors to release binary size (`cargo bloat`).
+bloat *ARGS:
+    cargo bloat --release --crates -n 50 {{ARGS}}
+
+# Visualise a crate's internal module structure (`cargo modules structure`).
+#   just modules kithara-stream
+modules CRATE:
+    cargo modules structure --package {{CRATE}}
+
+# Render workspace dependency graph as SVG to target/depgraph.svg.
+# Requires graphviz `dot` to be installed.
+depgraph:
+    @command -v dot >/dev/null || { echo "graphviz 'dot' is required (brew install graphviz)"; exit 2; }
+    @mkdir -p target
+    cargo depgraph --workspace-only --dedup-transitive-deps | dot -Tsvg > target/depgraph.svg
+    @echo "==> target/depgraph.svg"
+
+# --- mutation testing ---
+
+# Mutation testing.
+#   just mutants                          # whole workspace
+#   just mutants kithara-audio            # one crate
+#   just mutants kithara-audio --jobs 8   # crate + extra cargo-mutants flags
+#   just mutants ci /tmp/mutants/output   # CI cycle: workspace-wide + flags
+mutants TARGET="" *ARGS:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if [[ "{{TARGET}}" == "ci" ]]; then
+      OUTPUT="${1:-target/mutants-ci}"
+      DEFAULT_JOBS=$(( $(nproc) - 1 ))
+      if [ "$DEFAULT_JOBS" -gt 12 ]; then DEFAULT_JOBS=12; fi
+      if [ "$DEFAULT_JOBS" -lt 1 ]; then DEFAULT_JOBS=1; fi
+      JOBS="${MUTANTS_JOBS:-$DEFAULT_JOBS}"
+      mkdir -p "$OUTPUT"
+      RESUME_FLAG=""
+      if [ -f "$OUTPUT/mutants.out/outcomes.json" ]; then
+        RESUME_FLAG="--resume"
+        echo "==> resuming from previous run at $OUTPUT/mutants.out"
+      fi
+      cargo mutants --workspace --test-workspace=true --baseline=skip \
+        --test-tool=nextest --profile test-release \
+        --exclude 'crates/kithara-test-utils/**' \
+        --exclude 'crates/kithara-test-macros/**' \
+        --exclude 'tests/**' \
+        --exclude 'crates/kithara-ffi/**' \
+        --exclude 'crates/kithara-app/**' \
+        --exclude 'crates/kithara-wasm/**' \
+        --exclude 'crates/kithara-wasm-macros/**' \
+        --exclude 'crates/kithara-hang-detector/**' \
+        --exclude 'crates/kithara-hang-detector-macros/**' \
+        --exclude 'xtask/**' \
+        --exclude-re 'src/.*test.*\.rs' \
+        -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
+        --no-shuffle $RESUME_FLAG --output "$OUTPUT"
+    elif [[ -z "{{TARGET}}" ]]; then
+      cargo mutants --workspace --test-workspace=true --profile test-release \
+        --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
+    else
+      cargo mutants -p "{{TARGET}}" --test-workspace=true --profile test-release \
+        --test-tool=nextest --timeout 120 --no-shuffle {{ARGS}}
+    fi
+
 # --- perf & benchmarks ---
 
-perf-test:
+# Run perf tests (writes perf-results.txt).
+perf:
     cargo test -p kithara-integration-tests --features perf --release \
       -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
 
@@ -166,52 +481,52 @@ perf-test:
 perf-compare *ARGS:
     cargo xtask perf-compare {{ARGS}}
 
-bench-build:
-    cargo bench -p kithara-integration-tests --bench abr_estimator --no-run
-    cargo bench -p kithara-integration-tests --bench bufpool --no-run
-    cargo bench -p kithara-integration-tests --bench refactor_hotpaths --no-run
-
-bench-run:
-    sample_size="${BENCH_SAMPLE_SIZE:-20}"; \
-    cargo bench -p kithara-integration-tests --bench abr_estimator -- --sample-size "$sample_size" 2>&1 | tee bench-results.txt; \
-    cargo bench -p kithara-integration-tests --bench bufpool -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt; \
-    cargo bench -p kithara-integration-tests --bench refactor_hotpaths -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt
-
-# Lint + main suite + perf sanity + bench compile + fuzz compile.
-# Not part of `just test` (~5-10 min). Run on PR as optional CI job.
-test-with-perf:
-    just lint-fast
-    just test
-    cargo test -p kithara-integration-tests --features perf --profile test-release \
-      --test suite_perf --test memory_rss -- --test-threads=1
-    just bench-build
-    cargo +nightly fuzz build --fuzz-dir tests/fuzz --release
-
-bench-ci:
-    just bench-build; \
-    if [[ "${RUN_BENCHMARKS:-0}" != "1" ]]; then \
-      echo "==> benchmark execution skipped (set RUN_BENCHMARKS=1 to execute)" | tee bench-results.txt; \
-      exit 0; \
-    fi; \
-    sample_size="${BENCH_SAMPLE_SIZE:-20}"; \
-    candidate_name="${BENCH_CANDIDATE_NAME:-ci}"; \
-    cargo bench -p kithara-integration-tests --bench abr_estimator \
-      -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
-      2>&1 | tee bench-results.txt; \
-    cargo bench -p kithara-integration-tests --bench bufpool \
-      -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
-      2>&1 | tee -a bench-results.txt; \
-    cargo bench -p kithara-integration-tests --bench refactor_hotpaths \
-      -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
-      2>&1 | tee -a bench-results.txt; \
-    if [[ -n "${BENCH_COMPARE_BASELINE_NAME:-}" ]]; then \
-      if ! command -v critcmp >/dev/null 2>&1; then \
-        echo "FAILED: critcmp is required when BENCH_COMPARE_BASELINE_NAME is set" | tee -a bench-results.txt; \
-        exit 1; \
-      fi; \
-      baseline_name="${BENCH_COMPARE_BASELINE_NAME}"; \
-      critcmp "$baseline_name" "$candidate_name" 2>&1 | tee -a bench-results.txt; \
-    fi
+# Run benchmarks. Default: build only.
+#   just bench                # build benches
+#   just bench run            # execute (writes bench-results.txt)
+#   just bench ci             # CI mode (RUN_BENCHMARKS env gates execution)
+bench MODE="build":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    case "{{MODE}}" in
+      build)
+        cargo bench -p kithara-integration-tests --bench abr_estimator --no-run
+        cargo bench -p kithara-integration-tests --bench bufpool --no-run
+        cargo bench -p kithara-integration-tests --bench refactor_hotpaths --no-run
+        ;;
+      run)
+        sample_size="${BENCH_SAMPLE_SIZE:-20}"
+        for b in abr_estimator bufpool refactor_hotpaths; do
+          cargo bench -p kithara-integration-tests --bench "$b" -- --sample-size "$sample_size" 2>&1 | tee -a bench-results.txt
+        done
+        ;;
+      ci)
+        cargo bench -p kithara-integration-tests --bench abr_estimator --no-run
+        cargo bench -p kithara-integration-tests --bench bufpool --no-run
+        cargo bench -p kithara-integration-tests --bench refactor_hotpaths --no-run
+        if [[ "${RUN_BENCHMARKS:-0}" != "1" ]]; then
+          echo "==> benchmark execution skipped (set RUN_BENCHMARKS=1 to execute)" | tee bench-results.txt
+          exit 0
+        fi
+        sample_size="${BENCH_SAMPLE_SIZE:-20}"
+        candidate_name="${BENCH_CANDIDATE_NAME:-ci}"
+        for b in abr_estimator bufpool refactor_hotpaths; do
+          cargo bench -p kithara-integration-tests --bench "$b" \
+            -- --sample-size "$sample_size" --save-baseline "$candidate_name" 2>&1 | tee -a bench-results.txt
+        done
+        if [[ -n "${BENCH_COMPARE_BASELINE_NAME:-}" ]]; then
+          if ! command -v critcmp >/dev/null 2>&1; then
+            echo "FAILED: critcmp is required when BENCH_COMPARE_BASELINE_NAME is set" | tee -a bench-results.txt
+            exit 1
+          fi
+          critcmp "${BENCH_COMPARE_BASELINE_NAME}" "$candidate_name" 2>&1 | tee -a bench-results.txt
+        fi
+        ;;
+      *)
+        echo "unknown bench mode: {{MODE}} (use build|run|ci)"
+        exit 2
+        ;;
+    esac
 
 # --- memory ---
 
@@ -238,70 +553,126 @@ publish *ARGS:
 
 # --- wasm ---
 
-# Check that key crates compile for wasm32 target.
-wasm-check:
-    cargo check -p kithara-wasm --target wasm32-unknown-unknown --no-default-features
-    cargo check -p kithara-storage --target wasm32-unknown-unknown
-    cargo check -p kithara-net --target wasm32-unknown-unknown
-    cargo check -p kithara-stream --target wasm32-unknown-unknown
-    cargo check -p kithara-assets --target wasm32-unknown-unknown
-    cargo check -p kithara-hls --target wasm32-unknown-unknown
-    cargo check -p kithara-decode --target wasm32-unknown-unknown
-
-# Run wasm integration tests in browser.
-wasm-test:
-    CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
-    WASM_BINDGEN_TEST_TIMEOUT=300 \
-    WASM_BINDGEN_USE_BROWSER=1 \
-    cargo +nightly test --target wasm32-unknown-unknown \
-        -p kithara-integration-tests
-
-# Build wasm demo app.
-wasm-build:
-    cargo xtask wasm build
-
-wasm-size-check:
-    @toolchain="${WASM_SLIM_TOOLCHAIN:-nightly}"; \
-    if command -v wasm-slim >/dev/null 2>&1; then \
-        slim_cmd="wasm-slim"; \
-    elif command -v cargo-wasm-slim >/dev/null 2>&1; then \
-        slim_cmd="cargo wasm-slim"; \
-    else \
-        echo "wasm-slim is not installed"; exit 2; \
-    fi; \
-    mkdir -p target; \
-    ln -sfn ../../target crates/kithara-wasm/target; \
-    cd crates/kithara-wasm && \
-    RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json; \
-    echo "wasm-slim report: target/wasm-slim-result.json"
+# WASM tasks.
+#   just wasm                  # cargo check across wasm-target crates (default)
+#   just wasm test             # browser integration tests
+#   just wasm build            # build the wasm demo app
+#   just wasm size-check       # wasm-slim binary-size check
+wasm MODE="check":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    case "{{MODE}}" in
+      check)
+        for c in kithara-wasm kithara-storage kithara-net kithara-stream kithara-assets kithara-hls kithara-decode; do
+          if [[ "$c" == "kithara-wasm" ]]; then
+            cargo check -p "$c" --target wasm32-unknown-unknown --no-default-features
+          else
+            cargo check -p "$c" --target wasm32-unknown-unknown
+          fi
+        done
+        ;;
+      test)
+        CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
+        WASM_BINDGEN_TEST_TIMEOUT=300 \
+        WASM_BINDGEN_USE_BROWSER=1 \
+        cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
+        ;;
+      build)
+        cargo xtask wasm build
+        ;;
+      size-check)
+        toolchain="${WASM_SLIM_TOOLCHAIN:-nightly}"
+        if command -v wasm-slim >/dev/null 2>&1; then
+          slim_cmd="wasm-slim"
+        elif command -v cargo-wasm-slim >/dev/null 2>&1; then
+          slim_cmd="cargo wasm-slim"
+        else
+          echo "wasm-slim is not installed"; exit 2
+        fi
+        mkdir -p target
+        ln -sfn ../../target crates/kithara-wasm/target
+        cd crates/kithara-wasm
+        RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json
+        echo "wasm-slim report: target/wasm-slim-result.json"
+        ;;
+      *)
+        echo "unknown wasm mode: {{MODE}} (use check|test|build|size-check)"
+        exit 2
+        ;;
+    esac
 
 # --- android ---
 
-# Build Android JNI libraries and Kotlin bindings.
-android *ARGS:
-    cargo xtask android build {{ARGS}}
+# Android tasks.
+#   just android                    # build (forwards remaining args)
+#   just android build --release
+#   just android aar                # release AAR
+android MODE="build" *ARGS:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    case "{{MODE}}" in
+      build)
+        cargo xtask android build {{ARGS}}
+        ;;
+      aar)
+        cargo xtask android build --profile release
+        cd android && ./gradlew :lib:exportReleaseAars -Pkithara.release=true -x generateKitharaFfi
+        echo "==> AARs:"
+        echo "    android/lib/build/outputs/aar/kithara.aar"
+        echo "    android/lib/build/outputs/aar/rust-tls.aar"
+        ;;
+      *)
+        cargo xtask android {{MODE}} {{ARGS}}
+        ;;
+    esac
 
-# Build release AAR (includes JNI libs and Kotlin bindings).
-android-aar:
-    cargo xtask android build --profile release
-    cd android && ./gradlew :lib:exportReleaseAars -Pkithara.release=true -x generateKitharaFfi
-    @echo "==> AARs:"
-    @echo "    android/lib/build/outputs/aar/kithara.aar"
-    @echo "    android/lib/build/outputs/aar/rust-tls.aar"
 # --- apple ---
 
-# Build XCFramework for Apple platforms.
-xcframework *ARGS:
-    cargo xtask apple build {{ARGS}}
-
-# Build XCFramework (debug) and run the Swift demo app.
-apple-demo:
-    just xcframework --profile debug
-    KITHARA_LOCAL_DEV=1 swift run KitharaDemo
+# Apple tasks.
+#   just apple                          # build XCFramework (default)
+#   just apple xcframework --profile debug
+#   just apple demo                     # XCFramework + run KitharaDemo
+#   just apple xcode                    # XCFramework + open xcodeproj
+#   just apple ios SCHEME [DESTINATION] # build for iOS Simulator
+#   just apple release                  # XCFramework + zip + checksum
+apple MODE="xcframework" *ARGS:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    case "{{MODE}}" in
+      xcframework)
+        cargo xtask apple build {{ARGS}}
+        ;;
+      demo)
+        just apple xcframework --profile debug
+        KITHARA_LOCAL_DEV=1 swift run KitharaDemo
+        ;;
+      xcode)
+        just apple xcframework --profile debug
+        just _xcodegen-local
+        open apple/Examples/KitharaDemo/KitharaDemo.xcodeproj
+        ;;
+      ios)
+        scheme="${1:-KitharaDemo_iOS}"
+        destination="${2:-generic/platform=iOS Simulator}"
+        just apple xcframework --profile debug
+        just _xcodegen-local
+        KITHARA_LOCAL_DEV=1 xcodebuild -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
+            -scheme "$scheme" -destination "$destination" build
+        ;;
+      release)
+        just apple xcframework
+        cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
+        swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip
+        ;;
+      *)
+        echo "unknown apple mode: {{MODE}} (use xcframework|demo|xcode|ios|release)"
+        exit 2
+        ;;
+    esac
 
 # Temporarily patch project.yml to use local package path for xcodegen.
 [private]
-xcodegen-local:
+_xcodegen-local:
     cd apple/Examples/KitharaDemo && \
     sed -i.bak \
       -e 's|url: https://github.com/zvuk/kithara|path: ../../..|' \
@@ -309,24 +680,3 @@ xcodegen-local:
       project.yml && \
     KITHARA_LOCAL_DEV=1 xcodegen generate && \
     mv project.yml.bak project.yml
-
-# Generate Xcode project for KitharaDemo and open it.
-apple-xcode:
-    just xcframework --profile debug
-    just xcodegen-local
-    open apple/Examples/KitharaDemo/KitharaDemo.xcodeproj
-
-# Build KitharaDemo for iOS Simulator.
-apple-ios-build scheme="KitharaDemo_iOS" destination="generic/platform=iOS Simulator":
-    just xcframework --profile debug
-    just xcodegen-local
-    KITHARA_LOCAL_DEV=1 xcodebuild -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
-        -scheme {{scheme}} \
-        -destination '{{destination}}' \
-        build
-
-# Build XCFramework, zip, and compute checksum for SPM distribution.
-release-apple:
-    just xcframework
-    cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
-    swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip

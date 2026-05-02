@@ -15,7 +15,7 @@ fn test_progressive_file_timeline_monotonic() {
     let mut prev_frame_end = 0u64;
     let mut chunk_count = 0u64;
 
-    while let Ok(Some(chunk)) = decoder.next_chunk() {
+    while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         let meta = chunk.meta;
 
         // Ensure the spec is correct
@@ -68,7 +68,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
     // Seek to 0.5s
     decoder.seek(Duration::from_millis(500)).unwrap();
 
-    let chunk = decoder.next_chunk().unwrap().unwrap();
+    let chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
     let expected_frame = (0.5 * 44100.0) as u64;
 
     // frame_offset should be approximately at the seek position
@@ -90,7 +90,7 @@ mod hls_timeline {
     use kithara::{
         assets::StoreOptions,
         decode::{DecoderConfig, DecoderFactory},
-        hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+        hls::{AbrMode, Hls, HlsConfig},
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
     };
     use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -136,32 +136,27 @@ mod hls_timeline {
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp_dir.path()))
             .with_cancel(cancel)
-            .with_abr_options(AbrOptions {
-                mode: AbrMode::Manual(0),
-                ..AbrOptions::default()
-            });
+            .with_initial_abr_mode(AbrMode::Manual(0));
 
         // Create an HLS stream and build StreamContext before moving stream to decoder
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
         let stream_ctx = Hls::build_stream_context(stream.source(), stream.timeline());
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let decoder_config = DecoderConfig {
-            stream_ctx: Some(stream_ctx),
-            hint: Some("wav".to_string()),
-            ..Default::default()
-        };
+        let decoder_config = DecoderConfig::default()
+            .with_stream_ctx(stream_ctx)
+            .with_hint("wav".to_string());
 
         // Decode in blocking thread (Stream<Hls> is sync Read+Seek)
         let result = tokio::task::spawn_blocking(move || {
             let mut decoder =
-                DecoderFactory::create_from_media_info(stream, &wav_info, decoder_config).unwrap();
+                DecoderFactory::create_from_media_info(stream, &wav_info, &decoder_config).unwrap();
 
             let mut prev_frame_end = 0u64;
             let mut chunk_count = 0u64;
             let mut max_segment_index = 0u32;
 
-            while let Ok(Some(chunk)) = decoder.next_chunk() {
+            while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
                 let meta = chunk.meta;
 
                 assert_eq!(meta.spec.sample_rate, SawWav::DEFAULT.sample_rate);

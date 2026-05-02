@@ -2,11 +2,9 @@
 
 //! HLS stream context for lock-free segment/variant access.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
+use kithara_abr::AbrState;
 use kithara_platform::Mutex;
 use kithara_stream::{StreamContext, Timeline};
 
@@ -14,21 +12,21 @@ use crate::stream_index::StreamIndex;
 
 /// `StreamContext` for HLS segmented sources.
 pub struct HlsStreamContext {
+    abr_state: Arc<AbrState>,
     segments: Arc<Mutex<StreamIndex>>,
     timeline: Timeline,
-    variant_index: Arc<AtomicUsize>,
 }
 
 impl HlsStreamContext {
     pub fn new(
         timeline: Timeline,
         segments: Arc<Mutex<StreamIndex>>,
-        variant_index: Arc<AtomicUsize>,
+        abr_state: Arc<AbrState>,
     ) -> Self {
         Self {
+            abr_state,
             segments,
             timeline,
-            variant_index,
         }
     }
 }
@@ -54,17 +52,26 @@ impl StreamContext for HlsStreamContext {
             .find_at_offset(offset)
             .map(|seg_ref| seg_ref.variant);
         drop(segments);
-        result.or_else(|| Some(self.variant_index.load(Ordering::Relaxed)))
+        result.or_else(|| Some(self.abr_state.current_variant_index()))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use kithara_abr::AbrState;
+    use kithara_events::AbrMode;
     use kithara_test_utils::kithara;
     use url::Url;
 
     use super::*;
     use crate::stream_index::SegmentData;
+
+    fn fresh_abr(initial_variant: usize) -> Arc<AbrState> {
+        Arc::new(AbrState::new(
+            Vec::new(),
+            AbrMode::Auto(Some(initial_variant)),
+        ))
+    }
 
     #[kithara::test]
     fn test_hls_stream_context_reads_atomics() {
@@ -84,13 +91,9 @@ mod tests {
                 media_url: Url::parse("https://example.com/seg.m4s").unwrap(),
             },
         );
-        let variant = Arc::new(AtomicUsize::new(2));
+        let abr = fresh_abr(2);
 
-        let ctx = HlsStreamContext::new(
-            timeline.clone(),
-            Arc::clone(&segments),
-            Arc::clone(&variant),
-        );
+        let ctx = HlsStreamContext::new(timeline.clone(), Arc::clone(&segments), Arc::clone(&abr));
 
         assert_eq!(ctx.byte_offset(), 1000);
         // segment_index uses segment_position (set before byte_position advances)
@@ -110,7 +113,7 @@ mod tests {
                 media_url: Url::parse("https://example.com/seg-2.m4s").unwrap(),
             },
         );
-        variant.store(3, Ordering::Relaxed);
+        abr.set_variant_for_test(3);
 
         // Variant 3 segment 10 covers byte range 0..200
         timeline.set_segment_position(100);
@@ -132,12 +135,8 @@ mod tests {
                 media_url: Url::parse("https://example.com/seg-0.m4s").unwrap(),
             },
         );
-        let variant = Arc::new(AtomicUsize::new(0));
-        let ctx = HlsStreamContext::new(
-            timeline.clone(),
-            Arc::clone(&segments),
-            Arc::clone(&variant),
-        );
+        let abr = fresh_abr(0);
+        let ctx = HlsStreamContext::new(timeline.clone(), Arc::clone(&segments), Arc::clone(&abr));
 
         // byte_position has advanced past segment 0's end (as Stream::read does),
         // but segment_position still points inside segment 0

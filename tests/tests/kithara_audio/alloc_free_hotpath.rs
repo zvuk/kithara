@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, atomic::AtomicU32},
-    time::Duration,
-};
+use std::sync::{Arc, atomic::AtomicU32};
 
 use assert_no_alloc::*;
 use kithara_bufpool::{PcmPool, SharedPool};
@@ -38,11 +35,7 @@ fn make_chunk(pool: &PcmPool, frames: usize, channels: u16) -> PcmChunk {
             channels,
             sample_rate: 44100,
         },
-        timestamp: Duration::ZERO,
-        segment_index: None,
-        variant_index: None,
-        epoch: 0,
-        frame_offset: 0,
+        ..Default::default()
     };
     PcmChunk::new(meta, pcm)
 }
@@ -81,12 +74,12 @@ fn test_pcm_chunk_access_allocation_free() {
 
     // Accessing samples, frames, spec should never allocate
     assert_no_alloc(|| {
-        let _samples = chunk.samples();
+        let _samples: &[f32] = &chunk.pcm;
         let _frames = chunk.frames();
         let _spec = chunk.spec();
         // Read some values to prevent optimization
-        if !chunk.samples().is_empty() {
-            let _ = chunk.samples()[0];
+        if !chunk.pcm.is_empty() {
+            let _ = chunk.pcm[0];
         }
     });
 
@@ -128,7 +121,7 @@ fn test_resampler_passthrough_allocation_free() {
         let result = processor.process(chunk);
         // In passthrough mode, the chunk passes through without resampling
         if let Some(output) = result {
-            let _ = output.samples().len();
+            let _ = output.pcm.len();
             // Drop output inside assert_no_alloc — it returns to pool (no alloc)
             drop(output);
         }

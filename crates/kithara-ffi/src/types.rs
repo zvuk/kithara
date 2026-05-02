@@ -31,12 +31,12 @@ pub enum FfiError {
 
 pub type FfiResult<T> = Result<T, FfiError>;
 impl FfiError {
-    const ERROR_CODE_INTERNAL: i32 = 0;
-    const ERROR_CODE_NOT_READY: i32 = 1;
-    const ERROR_CODE_ITEM_FAILED: i32 = 2;
-    const ERROR_CODE_SEEK_FAILED: i32 = 3;
     const ERROR_CODE_ENGINE_NOT_RUNNING: i32 = 4;
+    const ERROR_CODE_INTERNAL: i32 = 0;
     const ERROR_CODE_INVALID_ARGUMENT: i32 = 5;
+    const ERROR_CODE_ITEM_FAILED: i32 = 2;
+    const ERROR_CODE_NOT_READY: i32 = 1;
+    const ERROR_CODE_SEEK_FAILED: i32 = 3;
 
     #[must_use]
     pub fn observer_code(&self) -> i32 {
@@ -122,13 +122,13 @@ pub fn parse_url(s: &str) -> FfiResult<Url> {
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiPlayerConfig {
-    /// Number of EQ bands (log-spaced). Default: 10.
-    pub eq_band_count: u32,
     /// DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
     /// no DRM is needed.
     pub key_options: FfiKeyOptions,
     /// Storage options shared by all items (cache directory, etc.).
     pub store: crate::config::StoreOptions,
+    /// Number of EQ bands (log-spaced). Default: 10.
+    pub eq_band_count: u32,
 }
 
 /// Default number of log-spaced EQ bands.
@@ -168,11 +168,11 @@ impl std::fmt::Debug for FfiKeyOptions {
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiKeyRule {
     pub processor: std::sync::Arc<dyn crate::observer::FfiKeyProcessor>,
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    pub query_params: Option<std::collections::HashMap<String, String>>,
     /// Domain patterns — exact (`"example.com"`) or wildcard
     /// subdomain (`"*.example.com"`).
     pub domains: Vec<String>,
-    pub headers: Option<std::collections::HashMap<String, String>>,
-    pub query_params: Option<std::collections::HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for FfiKeyRule {
@@ -190,14 +190,14 @@ impl std::fmt::Debug for FfiKeyRule {
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiItemConfig {
-    pub url: String,
+    pub abr_mode: Option<FfiAbrMode>,
     pub headers: Option<std::collections::HashMap<String, String>>,
+    pub url: String,
     /// Peak bitrate ceiling in bits/sec. `0.0` means no cap.
     pub preferred_peak_bitrate: f64,
     /// Peak bitrate ceiling on expensive networks (cellular). `0.0`
     /// means no cap.
     pub preferred_peak_bitrate_expensive: f64,
-    pub abr_mode: Option<FfiAbrMode>,
 }
 
 impl FfiItemConfig {
@@ -273,7 +273,8 @@ impl From<TimeControlStatus> for FfiTimeControlStatus {
 /// FFI-friendly mirror of [`kithara_events::TrackStatus`].
 ///
 /// Mirrors the Queue-side track lifecycle: pending -> loading -> slow ->
-/// loaded -> consumed, or `failed` on error.
+/// loaded -> consumed, or `failed` on error. `Cancelled` covers
+/// loads that were overridden by a later `select` of a different track.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
 pub enum FfiTrackStatus {
@@ -283,6 +284,7 @@ pub enum FfiTrackStatus {
     Loaded,
     Failed { reason: String },
     Consumed,
+    Cancelled,
 }
 
 impl From<kithara_events::TrackStatus> for FfiTrackStatus {
@@ -293,6 +295,7 @@ impl From<kithara_events::TrackStatus> for FfiTrackStatus {
             TS::Loaded => Self::Loaded,
             TS::Failed(reason) => Self::Failed { reason },
             TS::Consumed => Self::Consumed,
+            TS::Cancelled => Self::Cancelled,
             // `TrackStatus` is `#[non_exhaustive]`; fall back to `Pending`
             // for `Pending` itself + any future variants.
             _ => Self::Pending,
@@ -304,8 +307,8 @@ impl From<kithara_events::TrackStatus> for FfiTrackStatus {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiTimeRange {
-    pub start_seconds: f64,
     pub duration_seconds: f64,
+    pub start_seconds: f64,
 }
 
 impl From<TimeRange> for FfiTimeRange {
@@ -410,9 +413,9 @@ pub enum FfiItemEvent {
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiVariant {
+    pub name: Option<String>,
     pub index: u32,
     pub bandwidth_bps: u64,
-    pub name: Option<String>,
 }
 
 /// FFI-friendly ABR mode.
@@ -433,10 +436,10 @@ pub struct FfiPlayerSnapshot {
     pub status: FfiPlayerStatus,
     pub current_time: Option<f64>,
     pub duration: Option<f64>,
-    pub rate: f32,
-    pub default_rate: f32,
-    pub volume: f32,
     pub muted: bool,
+    pub default_rate: f32,
+    pub rate: f32,
+    pub volume: f32,
 }
 
 #[cfg(test)]

@@ -1,0 +1,108 @@
+schema_version = 1
+
+[accumulator_loops]
+"crates/kithara-assets/src/index/pin.rs:417:8" = 1
+"crates/kithara-assets/src/index/pin.rs:427:8" = 1
+"crates/kithara-audio/src/effects/eq.rs:359:16" = 1
+"crates/kithara-audio/src/resampler.rs:578:8" = 1
+"crates/kithara-hls/src/stream_index.rs:490:8" = 1
+"crates/kithara-play/src/impls/player_processor.rs:399:20" = 1
+"crates/kithara-stream/src/dl/tests.rs:325:4" = 1
+"crates/kithara-test-utils/src/fmp4/bytes.rs:94:4" = 1
+
+[arc_mutex_collection]
+"crates/kithara-app/src/gui/app.rs:177:21" = 1
+"crates/kithara-app/src/gui/app.rs:26:36" = 1
+"crates/kithara-assets/src/cache.rs:121:12" = 1
+"crates/kithara-assets/src/cache.rs:23:12" = 1
+"crates/kithara-assets/src/evict.rs:48:10" = 1
+"crates/kithara-assets/src/lease.rs:87:10" = 1
+"crates/kithara-decode/src/fmp4/tests.rs:142:4" = 1
+"crates/kithara-decode/src/fmp4/tests.rs:147:15" = 1
+"crates/kithara-decode/src/fmp4/tests.rs:30:11" = 1
+"crates/kithara-ffi/src/event_bridge.rs:144:16" = 1
+"crates/kithara-ffi/src/event_bridge.rs:159:15" = 1
+"crates/kithara-ffi/src/event_bridge.rs:40:16" = 1
+"crates/kithara-ffi/src/event_bridge.rs:57:16" = 1
+"crates/kithara-ffi/src/player.rs:41:11" = 1
+"crates/kithara-hls/src/loading/keys.rs:43:20" = 1
+"crates/kithara-queue/src/queue/state.rs:59:24" = 1
+"crates/kithara-stream/src/dl/tests.rs:613:20" = 1
+"crates/kithara-test-utils/src/probe_capture.rs:77:17" = 1
+
+[box_concrete_type]
+"crates/kithara-decode/src/fmp4/tests.rs:149:30" = 1
+
+[branch_chains]
+"crates/kithara-stream/src/media.rs:111:8" = 1
+
+[guard_cascade]
+"crates/kithara-audio/src/pipeline/source.rs:590:8" = 1
+"crates/kithara-hls/src/loading/segment_loader.rs:259:8" = 1
+"crates/kithara-hls/src/source/source_impl.rs:505:12" = 1
+"crates/kithara-play/src/impls/session_engine.rs:1328:4" = 1
+"crates/kithara-stream/src/media.rs:143:8" = 1
+"crates/kithara-test-utils/src/hls_spec.rs:209:4" = 1
+"crates/kithara-test-utils/src/signal_spec.rs:142:4" = 1
+"crates/kithara-test-utils/src/signal_spec.rs:270:4" = 1
+
+[loop_allocation]
+"crates/kithara-app/src/gui/app.rs:199:39" = 1
+"crates/kithara-app/src/gui/app.rs:200:40" = 1
+"crates/kithara-app/src/tui/dashboard.rs:181:23" = 1
+"crates/kithara-app/src/tui/runner.rs:105:33" = 1
+"crates/kithara-app/src/tui/runner.rs:117:33" = 1
+"crates/kithara-app/src/tui/runner.rs:118:42" = 1
+"crates/kithara-app/src/tui/runner.rs:170:53" = 1
+"crates/kithara-app/src/tui/runner.rs:172:59" = 1
+"crates/kithara-assets/src/index/availability.rs:264:27" = 1
+"crates/kithara-assets/src/index/availability.rs:286:33" = 1
+"crates/kithara-assets/src/index/availability.rs:382:27" = 1
+"crates/kithara-assets/src/index/pin.rs:311:26" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:226:54" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:230:54" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:236:50" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:249:54" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:254:50" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:292:48" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:300:54" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:308:54" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:313:52" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:321:54" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:337:50" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:384:41" = 1
+"crates/kithara-decode/src/fmp4/parsing.rs:390:52" = 1
+"crates/kithara-decode/src/fmp4/source_io.rs:86:52" = 1
+"crates/kithara-decode/src/fmp4/tests.rs:115:38" = 1
+"crates/kithara-decode/src/symphonia/demuxer.rs:198:58" = 1
+"crates/kithara-encode/src/ffmpeg/aac.rs:196:19" = 1
+"crates/kithara-encode/src/ffmpeg/flac.rs:298:19" = 1
+"crates/kithara-ffi/src/player.rs:66:76" = 1
+"crates/kithara-file/src/session/download.rs:269:35" = 1
+"crates/kithara-hang-detector-macros/src/lib.rs:63:18" = 1
+"crates/kithara-hang-detector-macros/src/lib.rs:79:24" = 1
+"crates/kithara-hls/src/source/source_impl.rs:439:38" = 1
+"crates/kithara-hls/src/source/tests.rs:1177:24" = 1
+"crates/kithara-net/src/error.rs:87:20" = 1
+"crates/kithara-net/src/types.rs:195:28" = 1
+"crates/kithara-net/src/types.rs:195:43" = 1
+"crates/kithara-play/src/impls/player.rs:229:21" = 1
+"crates/kithara-probe-macros/src/expand.rs:245:49" = 1
+"crates/kithara-probe-macros/src/expand.rs:64:24" = 1
+"crates/kithara-stream/src/dl/response.rs:104:61" = 1
+"crates/kithara-stream/src/dl/tests.rs:508:57" = 1
+"crates/kithara-stream/src/dl/tests.rs:520:30" = 1
+"crates/kithara-stream/src/stream.rs:307:30" = 1
+"crates/kithara-stream/src/stream.rs:351:68" = 1
+"crates/kithara-test-macros/src/lib.rs:117:28" = 1
+"crates/kithara-test-macros/src/lib.rs:141:24" = 1
+"crates/kithara-test-macros/src/lib.rs:244:20" = 1
+"crates/kithara-test-macros/src/lib.rs:633:30" = 1
+"crates/kithara-test-macros/src/lib.rs:99:18" = 1
+"crates/kithara-test-utils/src/hls_stream.rs:423:69" = 1
+"crates/kithara-test-utils/src/hls_stream.rs:430:35" = 1
+"crates/kithara-test-utils/src/hls_stream.rs:488:27" = 1
+"crates/kithara-test-utils/src/signal_spec.rs:431:16" = 1
+
+[parallel_loops]
+"crates/kithara-stream/src/dl/registry.rs:181:8::self.peers" = 1

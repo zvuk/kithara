@@ -1,0 +1,28 @@
+[package]
+name = "kithara-probes"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runtime support for #[kithara::probe] — IntoProbeArg trait + USDT registration"
+
+[lints]
+workspace = true
+
+[dependencies]
+kithara-probe-macros = { workspace = true }
+kithara-events = { workspace = true, features = ["downloader"] }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+usdt = { workspace = true, optional = true }
+
+[features]
+# Activates USDT probe registration. Probe-attributed functions in the
+# *consumer* crate gate their USDT/tracing emission on the consumer's
+# own `usdt-probes` feature; this flag only enables the runtime
+# `register_probes()` helper.
+usdt-probes = ["dep:usdt"]

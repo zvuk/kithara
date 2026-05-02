@@ -28,10 +28,6 @@ pub(crate) struct AacFFmpegEncoder;
 impl AacFFmpegEncoder {
     pub(crate) const AAC_FRAME_SAMPLES: usize = 1024;
 
-    pub(crate) const fn frame_samples() -> usize {
-        Self::AAC_FRAME_SAMPLES
-    }
-
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
         if request.timescale == 0 {
             return Err(EncodeError::InvalidInput(
@@ -83,14 +79,18 @@ impl AacFFmpegEncoder {
             access_units: encoder.into_units(),
         })
     }
+
+    pub(crate) const fn frame_samples() -> usize {
+        Self::AAC_FRAME_SAMPLES
+    }
 }
 
 struct PacketCollectingEncoder {
-    filter: ffmpeg::filter::Graph,
     encoder: AudioEncoder,
+    filter: ffmpeg::filter::Graph,
+    timestamp_origin: Option<i64>,
     encoder_time_base: Rational,
     target_time_base: Rational,
-    timestamp_origin: Option<i64>,
     units: Vec<EncodedAccessUnit>,
 }
 
@@ -140,6 +140,10 @@ impl PacketCollectingEncoder {
         })
     }
 
+    fn into_units(self) -> Vec<EncodedAccessUnit> {
+        self.units
+    }
+
     fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {
         let encoder_time_base = self.encoder_time_base;
         let target_time_base = self.target_time_base;
@@ -165,10 +169,6 @@ impl PacketCollectingEncoder {
             &mut self.timestamp_origin,
             &mut self.units,
         );
-    }
-
-    fn into_units(self) -> Vec<EncodedAccessUnit> {
-        self.units
     }
 }
 
@@ -227,8 +227,8 @@ mod tests {
             .with_container(ContainerFormat::Fmp4);
 
         let encoded = EncoderFactory::encode_packaged(PackagedEncodeRequest {
-            pcm: &pcm,
             media_info,
+            pcm: &pcm,
             timescale: SAMPLE_RATE,
             bit_rate: 128_000,
             packets_per_segment: 2,

@@ -1,28 +1,87 @@
 #![forbid(unsafe_code)]
 
-use std::error::Error as StdError;
+use std::{error::Error as StdError, io};
 
 use thiserror::Error;
 
-/// Errors produced by `kithara-stream` (generic over source error).
+/// Unified source error, surfaced by every `Source` impl.
 ///
-/// Currently the single variant `Source(E)` wraps a domain-specific
-/// failure surfaced by a concrete `Source` implementation (network,
-/// storage, parsing, DRM, etc.). Additional framework-level variants
-/// were removed in Phase 4b-redo after workspace audit showed zero
-/// production constructors — callers can reintroduce them honestly
-/// if a future flow needs them.
+/// Concrete adapters (file, HLS, mocks) flatten their crate-local error
+/// types into one of these variants at the `Source` impl boundary so that
+/// `Source` itself stays object-safe (no associated `Error` type).
+///
+/// Adapter-specific failures that don't map to a generic variant flow
+/// through [`SourceError::Other`], which boxes the original typed error
+/// for `downcast` access.
 #[derive(Debug, Error)]
-pub enum StreamError<E>
-where
-    E: StdError + Send + Sync + 'static,
-{
-    #[error("source error: {0}")]
-    Source(#[source] E),
+#[non_exhaustive]
+pub enum SourceError {
+    #[error("network: {0}")]
+    Net(#[from] kithara_net::NetError),
+
+    #[error("storage: {0}")]
+    Storage(#[from] kithara_storage::StorageError),
+
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
+
+    #[error("playlist parse: {0}")]
+    PlaylistParse(String),
+
+    #[error("variant not found: {0}")]
+    VariantNotFound(String),
+
+    #[error("segment not found: {0}")]
+    SegmentNotFound(String),
+
+    #[error("key processing: {0}")]
+    KeyProcessing(String),
+
+    #[error("invalid url: {0}")]
+    InvalidUrl(String),
+
+    #[error("cancelled")]
+    Cancelled,
+
+    #[error("timeout: {0}")]
+    Timeout(String),
+
+    #[error("io: {0}")]
+    Io(#[from] io::Error),
+
+    #[error("{0}")]
+    Other(Box<dyn StdError + Send + Sync>),
 }
 
-/// Result type for `kithara-stream` (generic over source error).
-pub type StreamResult<T, E> = Result<T, StreamError<E>>;
+impl SourceError {
+    /// Wrap an arbitrary error in `Other`.
+    pub fn other<E>(err: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::Other(Box::new(err))
+    }
+}
+
+/// Errors produced by `kithara-stream`.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum StreamError {
+    #[error("source error: {0}")]
+    Source(#[source] SourceError),
+}
+
+impl<E> From<E> for StreamError
+where
+    E: Into<SourceError>,
+{
+    fn from(err: E) -> Self {
+        Self::Source(err.into())
+    }
+}
+
+/// Result type for `kithara-stream`.
+pub type StreamResult<T> = Result<T, StreamError>;
 
 #[cfg(test)]
 mod tests {
@@ -30,20 +89,21 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::io::{self, Error as IoError, ErrorKind};
+    use std::io::{Error as IoError, ErrorKind};
 
     use super::*;
 
     #[kithara::test]
     fn test_source_error_display() {
         let io_err = IoError::new(ErrorKind::NotFound, "file missing");
-        let err: StreamError<io::Error> = StreamError::Source(io_err);
-        assert_eq!(err.to_string(), "source error: file missing");
+        let err = StreamError::Source(SourceError::Io(io_err));
+        assert!(err.to_string().contains("file missing"));
     }
 
     #[kithara::test]
     fn test_stream_error_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<StreamError<io::Error>>();
+        assert_send_sync::<StreamError>();
+        assert_send_sync::<SourceError>();
     }
 }

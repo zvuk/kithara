@@ -10,6 +10,38 @@ use std::{
 
 use bitflags::bitflags;
 
+/// Decoder-reported chunk position used to advance the timeline.
+///
+/// This struct is the kithara-stream-local mirror of the fields
+/// [`Timeline::advance_committed_chunk`] needs from a decoder's
+/// per-chunk metadata. It exists because `PcmMeta` lives in
+/// `kithara-decode` (which depends on `kithara-stream`); a tiny mirror
+/// avoids the circular dep without forcing decoders to fragment their
+/// existing meta type.
+///
+/// Decoder backends fill it from their own meta — see
+/// `From<&PcmMeta> for ChunkPosition` in `kithara-decode`.
+#[derive(Debug, Clone, Copy)]
+pub struct ChunkPosition {
+    /// Absolute byte offset of the chunk's source data when the
+    /// decoder reports it (Apple `mStartOffset`, Android API 28+).
+    pub source_byte_offset: Option<u64>,
+    pub sample_rate: u32,
+    /// Decoder-reported wall-clock position **after** the chunk has
+    /// been emitted (or, for [`Timeline::commit_seek_landed`], the
+    /// landed position). Authoritative — derived from the decoder's
+    /// own frame counter inside its own arithmetic, so the timeline
+    /// never recomputes `frames * 1e9 / sample_rate`. Always strictly
+    /// greater than (or equal to, for seek landings) the chunk start.
+    pub end_position_ns: u64,
+    /// Absolute frame offset of the *first* frame in the chunk.
+    pub frame_offset: u64,
+    /// Number of frames the chunk covers.
+    pub frames: u64,
+    /// Source bytes the chunk decoded from (decoder ground truth).
+    pub source_bytes: u64,
+}
+
 bitflags! {
     /// Boolean playback-state flags stored in a single `AtomicU8` on [`Timeline`].
     ///
@@ -35,28 +67,38 @@ bitflags! {
 #[derive(Clone, Debug)]
 pub struct Timeline {
     byte_position: Arc<AtomicU64>,
+    /// Frame end (exclusive) of the last consumed slice — the consumer's
+    /// playhead in frame space. Single source of truth for "where is the
+    /// consumer in the stream"; both `committed_position_ns` (UI) and
+    /// the per-chunk consumption offset (`Audio::read`) are derived
+    /// from it. Decoder-driven via [`Self::advance_committed_to`].
+    committed_frame_end: Arc<AtomicU64>,
     committed_position_ns: Arc<AtomicU64>,
     download_position: Arc<AtomicU64>,
+    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `EOF`, `PLAYING`.
+    flags: Arc<AtomicU8>,
+    /// Sample rate (Hz) of the most recently committed chunk; lets
+    /// readers convert `committed_frame_end` ↔ `committed_position`
+    /// without external state.
+    last_sample_rate: Arc<AtomicU64>,
     pending_seek_epoch: Arc<AtomicU64>,
-    total_duration_ns: Arc<AtomicU64>,
 
+    // Seek coordinator fields (GStreamer FLUSH_START/STOP pattern)
+    seek_epoch: Arc<AtomicU64>,
+
+    seek_target_ns: Arc<AtomicU64>,
     /// Byte offset at the start of the most recent `Stream::read()` call.
     /// Used by `StreamContext::segment_index()` to resolve which segment
     /// the last-read data belongs to — `byte_position` has already advanced
     /// past the data boundary by the time the decoder queries metadata.
     segment_position: Arc<AtomicU64>,
 
-    // Seek coordinator fields (GStreamer FLUSH_START/STOP pattern)
-    seek_epoch: Arc<AtomicU64>,
-    seek_target_ns: Arc<AtomicU64>,
-
-    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `EOF`, `PLAYING`.
-    flags: Arc<AtomicU8>,
+    total_duration_ns: Arc<AtomicU64>,
 }
 
 impl Timeline {
-    const NO_PENDING_SEEK: u64 = u64::MAX;
     const NO_DURATION: u64 = u64::MAX;
+    const NO_PENDING_SEEK: u64 = u64::MAX;
     const NO_SEEK_TARGET: u64 = u64::MAX;
 
     #[must_use]
@@ -64,6 +106,8 @@ impl Timeline {
         Self {
             byte_position: Arc::new(AtomicU64::new(0)),
             committed_position_ns: Arc::new(AtomicU64::new(0)),
+            committed_frame_end: Arc::new(AtomicU64::new(0)),
+            last_sample_rate: Arc::new(AtomicU64::new(0)),
             download_position: Arc::new(AtomicU64::new(0)),
             pending_seek_epoch: Arc::new(AtomicU64::new(Self::NO_PENDING_SEEK)),
             total_duration_ns: Arc::new(AtomicU64::new(Self::NO_DURATION)),
@@ -74,33 +118,30 @@ impl Timeline {
         }
     }
 
-    #[inline]
-    fn flags_snapshot_with(&self, order: Ordering) -> TimelineFlags {
-        TimelineFlags::from_bits_truncate(self.flags.load(order))
-    }
-
-    #[inline]
-    fn insert_flags_with(&self, flags: TimelineFlags, order: Ordering) {
-        self.flags.fetch_or(flags.bits(), order);
-    }
-
-    #[inline]
-    fn remove_flags_with(&self, flags: TimelineFlags, order: Ordering) {
-        self.flags.fetch_and(!flags.bits(), order);
-    }
-
-    #[inline]
-    fn replace_flags(&self, flags: TimelineFlags, on: bool) {
-        if on {
-            self.insert_flags_with(flags, Ordering::Release);
-        } else {
-            self.remove_flags_with(flags, Ordering::Release);
-        }
-    }
-
-    #[inline]
-    fn contains_flag(&self, flag: TimelineFlags) -> bool {
-        self.flags_snapshot_with(Ordering::Acquire).contains(flag)
+    /// Advance the consumer's playhead to the end of the consumed
+    /// region described by `pos`. `pos.frame_offset + pos.frames`
+    /// must equal the absolute frame the consumer has now finished
+    /// playing through; the decoder owns these numbers, callers do
+    /// not invent them.
+    ///
+    /// `committed_position_ns` (UI) is derived from the new playhead
+    /// frame divided by `pos.sample_rate`. `byte_position` is set
+    /// from `pos.source_byte_offset + pos.source_bytes` when the
+    /// decoder reports absolute offsets (Apple, Android API 28+);
+    /// otherwise it is left untouched so the producer-side cursor
+    /// (`Stream::try_read` / `Stream::seek`) continues to drive it.
+    ///
+    /// Validates against `total_duration` in dev/test builds: a chunk
+    /// pushing the playhead past the declared duration is a real
+    /// arithmetic bug — the decoder's frame counter disagrees with
+    /// `total_duration`, somebody is wrong.
+    pub fn advance_committed_chunk(&self, pos: &ChunkPosition) {
+        self.write_playhead(
+            pos,
+            pos.frame_offset.saturating_add(pos.frames),
+            pos.source_byte_offset
+                .map(|off| off.saturating_add(pos.source_bytes)),
+        );
     }
 
     #[must_use]
@@ -108,107 +149,11 @@ impl Timeline {
         self.byte_position.load(Ordering::Acquire)
     }
 
-    pub fn set_byte_position(&self, position: u64) {
-        self.byte_position.store(position, Ordering::Release);
-    }
-
+    /// Cheap clone of the shared atomic byte cursor — for hooks that
+    /// need to read it without holding a Timeline.
     #[must_use]
-    pub fn segment_position(&self) -> u64 {
-        self.segment_position.load(Ordering::Acquire)
-    }
-
-    pub fn set_segment_position(&self, position: u64) {
-        self.segment_position.store(position, Ordering::Release);
-    }
-
-    #[must_use]
-    pub fn download_position(&self) -> u64 {
-        self.download_position.load(Ordering::Acquire)
-    }
-
-    pub fn set_download_position(&self, position: u64) {
-        self.download_position.store(position, Ordering::Release);
-    }
-
-    #[must_use]
-    pub fn committed_position(&self) -> Duration {
-        Duration::from_nanos(self.committed_position_ns.load(Ordering::Acquire))
-    }
-
-    pub fn set_committed_position(&self, position: Duration) {
-        let nanos = u64::try_from(position.as_nanos()).unwrap_or(u64::MAX);
-        self.committed_position_ns.store(nanos, Ordering::Release);
-    }
-
-    pub fn set_eof(&self, eof: bool) {
-        self.replace_flags(TimelineFlags::EOF, eof);
-    }
-
-    #[must_use]
-    pub fn eof(&self) -> bool {
-        self.contains_flag(TimelineFlags::EOF)
-    }
-
-    pub fn set_total_duration(&self, duration: Option<Duration>) {
-        let nanos = duration
-            .and_then(|value| u64::try_from(value.as_nanos()).ok())
-            .unwrap_or(Self::NO_DURATION);
-        self.total_duration_ns.store(nanos, Ordering::Release);
-    }
-
-    #[must_use]
-    pub fn total_duration(&self) -> Option<Duration> {
-        let nanos = self.total_duration_ns.load(Ordering::Acquire);
-        if nanos == Self::NO_DURATION {
-            None
-        } else {
-            Some(Duration::from_nanos(nanos))
-        }
-    }
-
-    pub fn advance_committed_samples(
-        &self,
-        interleaved_samples: u64,
-        sample_rate: u32,
-        channels: u16,
-    ) {
-        const NANOS_PER_SECOND: u128 = 1_000_000_000;
-
-        if sample_rate == 0 || channels == 0 || interleaved_samples == 0 {
-            return;
-        }
-
-        let frames = interleaved_samples / u64::from(channels);
-        if frames == 0 {
-            return;
-        }
-        let delta_nanos = (u128::from(frames) * NANOS_PER_SECOND) / u128::from(sample_rate);
-        let delta = u64::try_from(delta_nanos).unwrap_or(u64::MAX);
-        loop {
-            let current = self.committed_position_ns.load(Ordering::Acquire);
-            let next = current.saturating_add(delta);
-            if self
-                .committed_position_ns
-                .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                break;
-            }
-        }
-    }
-
-    pub fn mark_pending_seek_epoch(&self, seek_epoch: u64) {
-        self.pending_seek_epoch.store(seek_epoch, Ordering::Release);
-    }
-
-    #[must_use]
-    pub fn pending_seek_epoch(&self) -> Option<u64> {
-        let epoch = self.pending_seek_epoch.load(Ordering::Acquire);
-        if epoch == Self::NO_PENDING_SEEK {
-            None
-        } else {
-            Some(epoch)
-        }
+    pub fn byte_position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.byte_position)
     }
 
     #[must_use]
@@ -223,23 +168,39 @@ impl Timeline {
             .is_ok()
     }
 
-    /// Initiate a seek (`FLUSH_START`).
+    /// Clear seek-pending flag after the decoder successfully applied the seek.
     ///
-    /// Sets flushing flag, records target position, increments epoch.
-    /// All blocking reads (`wait_range`) will observe `is_flushing()` and abort.
-    ///
-    /// Returns the new seek epoch.
+    /// Only clears if `epoch` matches the current seek epoch, preventing a
+    /// stale completion from clearing a newer seek.
+    pub fn clear_seek_pending(&self, epoch: u64) {
+        if self.seek_epoch.load(Ordering::Acquire) == epoch {
+            self.remove_flags_with(TimelineFlags::SEEK_PENDING, Ordering::Release);
+        }
+    }
+
+    /// Pin the playhead to the decoder's actual landing frame after a
+    /// seek. Called by the worker once `decoder.seek` returns
+    /// [`DecoderSeekOutcome::Landed`] — the only authoritative source
+    /// for "where did we actually end up". `pos.frame_offset` carries
+    /// the landed frame; `pos.frames` should be `0` (we have not yet
+    /// consumed any chunk, just repositioned). `pos.source_byte_offset`
+    /// (if known) is the byte offset the decoder is now reading from.
+    pub fn commit_seek_landed(&self, pos: &ChunkPosition) {
+        self.write_playhead(pos, pos.frame_offset, pos.source_byte_offset);
+    }
+
+    /// Frame end (exclusive) of the consumer's playhead. `Audio::read`
+    /// derives the per-chunk consumption offset from this and the
+    /// chunk's `frame_offset`, so we don't need a separate
+    /// `chunk_offset` field outside the timeline.
     #[must_use]
-    pub fn initiate_seek(&self, target: Duration) -> u64 {
-        let nanos = u64::try_from(target.as_nanos()).unwrap_or(u64::MAX - 1);
-        let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
-        self.seek_target_ns.store(nanos, Ordering::Release);
-        self.set_committed_position(target);
-        self.insert_flags_with(TimelineFlags::SEEK_PENDING, Ordering::Release);
-        // FLUSHING must be observed AFTER the seek target is published so
-        // readers that see FLUSHING=true also see the updated target.
-        self.insert_flags_with(TimelineFlags::FLUSHING, Ordering::Release);
-        epoch
+    pub fn committed_frame_end(&self) -> u64 {
+        self.committed_frame_end.load(Ordering::Acquire)
+    }
+
+    #[must_use]
+    pub fn committed_position(&self) -> Duration {
+        Duration::from_nanos(self.committed_position_ns.load(Ordering::Acquire))
     }
 
     /// Complete a seek (`FLUSH_STOP`).
@@ -267,47 +228,67 @@ impl Timeline {
         }
     }
 
+    #[inline]
+    fn contains_flag(&self, flag: TimelineFlags) -> bool {
+        self.flags_snapshot_with(Ordering::Acquire).contains(flag)
+    }
+
+    #[must_use]
+    pub fn download_position(&self) -> u64 {
+        self.download_position.load(Ordering::Acquire)
+    }
+
+    #[must_use]
+    pub fn eof(&self) -> bool {
+        self.contains_flag(TimelineFlags::EOF)
+    }
+
+    #[inline]
+    fn flags_snapshot_with(&self, order: Ordering) -> TimelineFlags {
+        TimelineFlags::from_bits_truncate(self.flags.load(order))
+    }
+
+    /// Initiate a seek (`FLUSH_START`).
+    ///
+    /// Sets flushing flag, records target position, increments epoch.
+    /// All blocking reads (`wait_range`) will observe `is_flushing()` and abort.
+    ///
+    /// Returns the new seek epoch.
+    ///
+    /// # Panics
+    /// Panics if `target` overflows `u64::MAX` nanoseconds (≈584 years —
+    /// not reachable for any realistic seek target).
+    #[must_use]
+    pub fn initiate_seek(&self, target: Duration) -> u64 {
+        let nanos = u64::try_from(target.as_nanos())
+            .expect("initiate_seek: target.as_nanos() exceeds u64::MAX");
+        let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        self.seek_target_ns.store(nanos, Ordering::Release);
+        // NOTE: do NOT pre-set `committed_position` to `target` here.
+        // The decoder is the single source of truth for playback
+        // position; the first chunk it emits after the seek lands
+        // updates `committed_position` via [`advance_committed_chunk`]
+        // using its own `frame_offset + frames`. Setting it here
+        // creates a race where the timeline shows `target` while the
+        // decoder is still mid-seek, and the next decoded chunk's
+        // frames push `committed_position` past `total_duration`
+        // (the textbook overshoot panic).
+        self.insert_flags_with(TimelineFlags::SEEK_PENDING, Ordering::Release);
+        // FLUSHING must be observed AFTER the seek target is published so
+        // readers that see FLUSHING=true also see the updated target.
+        self.insert_flags_with(TimelineFlags::FLUSHING, Ordering::Release);
+        epoch
+    }
+
+    #[inline]
+    fn insert_flags_with(&self, flags: TimelineFlags, order: Ordering) {
+        self.flags.fetch_or(flags.bits(), order);
+    }
+
     /// Check if the pipeline is being flushed (seek pending).
     #[must_use]
     pub fn is_flushing(&self) -> bool {
         self.contains_flag(TimelineFlags::FLUSHING)
-    }
-
-    /// Read the pending seek target position.
-    #[must_use]
-    pub fn seek_target(&self) -> Option<Duration> {
-        let ns = self.seek_target_ns.load(Ordering::Acquire);
-        if ns == Self::NO_SEEK_TARGET {
-            None
-        } else {
-            Some(Duration::from_nanos(ns))
-        }
-    }
-
-    /// Read the current seek epoch.
-    #[must_use]
-    pub fn seek_epoch(&self) -> u64 {
-        self.seek_epoch.load(Ordering::Acquire)
-    }
-
-    /// Check if a seek has been initiated but not yet applied by the decoder.
-    ///
-    /// Unlike `is_flushing()` (which gates I/O via `wait_range`), this flag
-    /// stays set until the decoder successfully repositions. Used by the worker
-    /// loop to trigger seek retry.
-    #[must_use]
-    pub fn is_seek_pending(&self) -> bool {
-        self.contains_flag(TimelineFlags::SEEK_PENDING)
-    }
-
-    /// Clear seek-pending flag after the decoder successfully applied the seek.
-    ///
-    /// Only clears if `epoch` matches the current seek epoch, preventing a
-    /// stale completion from clearing a newer seek.
-    pub fn clear_seek_pending(&self, epoch: u64) {
-        if self.seek_epoch.load(Ordering::Acquire) == epoch {
-            self.remove_flags_with(TimelineFlags::SEEK_PENDING, Ordering::Release);
-        }
     }
 
     /// Whether the audio FSM has claimed this Timeline as the currently
@@ -322,12 +303,161 @@ impl Timeline {
         self.contains_flag(TimelineFlags::PLAYING)
     }
 
+    /// Check if a seek has been initiated but not yet applied by the decoder.
+    ///
+    /// Unlike `is_flushing()` (which gates I/O via `wait_range`), this flag
+    /// stays set until the decoder successfully repositions. Used by the worker
+    /// loop to trigger seek retry.
+    #[must_use]
+    pub fn is_seek_pending(&self) -> bool {
+        self.contains_flag(TimelineFlags::SEEK_PENDING)
+    }
+
+    /// Sample rate of the most recently committed chunk.
+    #[must_use]
+    pub fn last_sample_rate(&self) -> u32 {
+        u32::try_from(self.last_sample_rate.load(Ordering::Acquire)).unwrap_or(0)
+    }
+
+    pub fn mark_pending_seek_epoch(&self, seek_epoch: u64) {
+        self.pending_seek_epoch.store(seek_epoch, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn pending_seek_epoch(&self) -> Option<u64> {
+        let epoch = self.pending_seek_epoch.load(Ordering::Acquire);
+        if epoch == Self::NO_PENDING_SEEK {
+            None
+        } else {
+            Some(epoch)
+        }
+    }
+
+    #[inline]
+    fn remove_flags_with(&self, flags: TimelineFlags, order: Ordering) {
+        self.flags.fetch_and(!flags.bits(), order);
+    }
+
+    #[inline]
+    fn replace_flags(&self, flags: TimelineFlags, on: bool) {
+        if on {
+            self.insert_flags_with(flags, Ordering::Release);
+        } else {
+            self.remove_flags_with(flags, Ordering::Release);
+        }
+    }
+
+    /// Read the current seek epoch.
+    #[must_use]
+    pub fn seek_epoch(&self) -> u64 {
+        self.seek_epoch.load(Ordering::Acquire)
+    }
+
+    /// Cheap clone of the shared atomic seek epoch — same use case.
+    #[must_use]
+    pub fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.seek_epoch)
+    }
+
+    /// Read the pending seek target position.
+    #[must_use]
+    pub fn seek_target(&self) -> Option<Duration> {
+        let ns = self.seek_target_ns.load(Ordering::Acquire);
+        if ns == Self::NO_SEEK_TARGET {
+            None
+        } else {
+            Some(Duration::from_nanos(ns))
+        }
+    }
+
+    #[must_use]
+    pub fn segment_position(&self) -> u64 {
+        self.segment_position.load(Ordering::Acquire)
+    }
+
+    pub fn set_byte_position(&self, position: u64) {
+        self.byte_position.store(position, Ordering::Release);
+    }
+
+    /// # Panics
+    /// Panics if `position` overflows `u64::MAX` nanoseconds (≈584 years);
+    /// no realistic media stream can hit this.
+    pub fn set_committed_position(&self, position: Duration) {
+        let nanos =
+            u64::try_from(position.as_nanos()).expect("position.as_nanos() exceeds u64::MAX");
+        self.committed_position_ns.store(nanos, Ordering::Release);
+    }
+
+    pub fn set_download_position(&self, position: u64) {
+        self.download_position.store(position, Ordering::Release);
+    }
+
+    pub fn set_eof(&self, eof: bool) {
+        self.replace_flags(TimelineFlags::EOF, eof);
+    }
+
     /// Toggle the `PLAYING` flag.
     ///
     /// Orthogonal to `FLUSHING` / `SEEK_PENDING` / `EOF`: toggling
     /// `PLAYING` does not affect the seek or EOF state.
     pub fn set_playing(&self, playing: bool) {
         self.replace_flags(TimelineFlags::PLAYING, playing);
+    }
+
+    pub fn set_segment_position(&self, position: u64) {
+        self.segment_position.store(position, Ordering::Release);
+    }
+
+    pub fn set_total_duration(&self, duration: Option<Duration>) {
+        let nanos = duration
+            .and_then(|value| u64::try_from(value.as_nanos()).ok())
+            .unwrap_or(Self::NO_DURATION);
+        self.total_duration_ns.store(nanos, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn total_duration(&self) -> Option<Duration> {
+        let nanos = self.total_duration_ns.load(Ordering::Acquire);
+        if nanos == Self::NO_DURATION {
+            None
+        } else {
+            Some(Duration::from_nanos(nanos))
+        }
+    }
+
+    fn write_playhead(&self, pos: &ChunkPosition, end_frame: u64, _source_byte_end: Option<u64>) {
+        let sr = u64::from(pos.sample_rate);
+        if sr == 0 {
+            return;
+        }
+        // Trust the decoder's own end-position arithmetic — it owns the
+        // frame counter and any container-side rounding. Frame-based
+        // decoders (MP3, AAC) emit fixed-size frames; the last frame
+        // may extend a few ms past the rounded `total_duration`. We
+        // clamp `committed_position_ns` to `total_duration_ns` so the
+        // UI never shows a position past the end, but we don't treat
+        // boundary-crossing chunks as an error — the clamp is the
+        // contract. Real bugs (decoder reporting a chunk that *starts*
+        // past EOF) are caught earlier in
+        // `commit_decoder_seek_outcome`.
+        let duration_ns = self.total_duration_ns.load(Ordering::Acquire);
+        let cap = if duration_ns == Self::NO_DURATION {
+            u64::MAX
+        } else {
+            duration_ns
+        };
+        self.committed_position_ns
+            .store(pos.end_position_ns.min(cap), Ordering::Release);
+        self.committed_frame_end.store(end_frame, Ordering::Release);
+        self.last_sample_rate.store(sr, Ordering::Release);
+        // Note: `byte_position` is the **producer-side cursor** owned by
+        // `Stream::try_read` / `Stream::seek`. Decoders' chunk-side
+        // `source_byte_offset` lags behind it (stream has already read
+        // ahead) and writing it back here would rewind the stream
+        // cursor, causing AudioFile to re-read stale bytes and surface
+        // `dta?`. The decoder's per-chunk byte info lives only on
+        // `PcmMeta::source_byte_offset` for downstream consumers; the
+        // stream cursor stays untouched.
     }
 }
 
@@ -370,13 +500,17 @@ mod tests {
         let tl = Timeline::new();
         assert!(!tl.is_flushing());
         assert!(tl.seek_target().is_none());
+        let initial_committed = tl.committed_position();
 
         let epoch = tl.initiate_seek(Duration::from_secs(10));
         assert_eq!(epoch, 1);
         assert!(tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(10)));
         assert_eq!(tl.seek_epoch(), 1);
-        assert_eq!(tl.committed_position(), Duration::from_secs(10));
+        // `committed_position` is NOT pre-set to the seek target — the
+        // first chunk the decoder emits after the seek lands updates
+        // it via [`advance_committed_chunk`].
+        assert_eq!(tl.committed_position(), initial_committed);
     }
 
     #[kithara::test]

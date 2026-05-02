@@ -13,7 +13,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::{
@@ -177,14 +177,7 @@ async fn drm_stream_byte_integrity(
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel.clone())
-        .with_abr_options(AbrOptions {
-            mode: abr_mode,
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_millis(100),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(abr_mode);
 
     let mut stream = Stream::<Hls>::new(hls_config)
         .await

@@ -33,7 +33,7 @@ use axum::{
 };
 use kithara::{
     assets::StoreOptions,
-    events::{Event, EventBus, FileEvent},
+    events::{DownloaderEvent, Event, EventBus, FileEvent},
     file::{File, FileConfig},
     stream::Stream,
 };
@@ -112,9 +112,14 @@ fn collect_cache_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 
 /// After `Stream<File>::new` returns, the async download task races; wait on
 /// the event bus for a terminal `DownloadError` (or `DownloadComplete`)
-/// before inspecting the cache.
-async fn wait_for_download_terminal(bus: &EventBus, within: Duration) -> bool {
-    let mut rx = bus.subscribe();
+/// before inspecting the cache. `rx` must be subscribed BEFORE the
+/// stream starts downloading — `RequestFailed` is fanned out
+/// synchronously in the validator-reject path and a late subscriber
+/// would race the publish.
+async fn wait_for_download_terminal(
+    rx: &mut kithara_events::EventReceiver,
+    within: Duration,
+) -> bool {
     let deadline = Instant::now() + within;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -123,8 +128,13 @@ async fn wait_for_download_terminal(bus: &EventBus, within: Duration) -> bool {
         }
         let recv = timeout(remaining, rx.recv());
         match recv.await {
-            Ok(Ok(Event::File(FileEvent::DownloadError { .. }))) => return true,
-            Ok(Ok(Event::File(FileEvent::DownloadComplete { .. }))) => return true,
+            Ok(Ok(Event::Downloader(DownloaderEvent::RequestFailed { .. }))) => return true,
+            Ok(Ok(Event::Downloader(DownloaderEvent::RequestCompleted { .. }))) => return true,
+            // `peer.execute` uses the Channel response target, which
+            // routes the network error back to `run_full_download`
+            // instead of publishing it as `RequestFailed`. The file
+            // layer mirrors that error as `FileEvent::Error`.
+            Ok(Ok(Event::File(FileEvent::Error { .. }))) => return true,
             Ok(Ok(_)) => {} // unrelated event — keep waiting
             Ok(Err(_)) | Err(_) => return false,
         }
@@ -148,6 +158,11 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     let url = Url::parse(&format!("http://{addr}/track/streamhq?id=27390231")).unwrap();
 
     let bus = EventBus::new(64);
+    // Subscribe BEFORE Stream::new — `RequestFailed` from the
+    // validator-reject path is broadcast synchronously the moment the
+    // download task hits the html response, so a later `bus.subscribe()`
+    // would miss it.
+    let mut rx = bus.subscribe();
     let cancel = CancellationToken::new();
     let config = FileConfig::new(url.into())
         .with_events(bus.clone())
@@ -159,7 +174,7 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     // Download task is async. Block on the bus until it emits a terminal
     // event (DownloadError on html) so we inspect the cache at the right
     // moment — not racing the fetch.
-    let saw_terminal = wait_for_download_terminal(&bus, Duration::from_secs(5)).await;
+    let saw_terminal = wait_for_download_terminal(&mut rx, Duration::from_secs(5)).await;
     assert!(
         saw_terminal,
         "expected DownloadError on html response within 5 s",
@@ -197,6 +212,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let url = Url::parse(&format!("http://{addr}/track/streamhq?id=27390231")).unwrap();
 
     let bus = EventBus::new(64);
+    let mut rx = bus.subscribe();
     let cancel = CancellationToken::new();
     let config = FileConfig::new(url.into())
         .with_events(bus.clone())
@@ -204,7 +220,7 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
         .with_cancel(cancel.clone());
 
     let stream = Stream::<File>::new(config).await.unwrap();
-    let _ = wait_for_download_terminal(&bus, Duration::from_secs(5)).await;
+    let _ = wait_for_download_terminal(&mut rx, Duration::from_secs(5)).await;
 
     // Hold the Stream alive and watch for new hits.
     let baseline = server_state.track_hits.load(Ordering::Relaxed);

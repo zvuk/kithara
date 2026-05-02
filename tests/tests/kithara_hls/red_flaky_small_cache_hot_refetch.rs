@@ -7,7 +7,7 @@
 //! Observed pattern (from `.docs/test-run-rc2-fix1.log`):
 //!   * 37 segments commit in rapid succession (variant 0).
 //!   * LRU (cap=4) evicts segments the reader has NOT yet read because
-//!     the reader is stuck inside segment 0 at byte ~31_744 waiting for
+//!     the reader is stuck inside segment 0 at byte ~`31_744` waiting for
 //!     segment 0 to be `range_ready`.
 //!   * `rewind_to_first_missing_segment` clamps by `reader_segment_floor()`,
 //!     which returns 0 because the reader's `byte_position` never advanced
@@ -46,8 +46,8 @@ use std::{num::NonZeroUsize, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::time::{Instant, sleep};
@@ -89,15 +89,12 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     // Warmup: read a few chunks so byte_position advances past seg 0.
     info!("warmup: reading {} chunks", Consts::WARMUP_CHUNKS);
@@ -114,12 +111,14 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
                 Consts::WARMUP_CHUNKS
             );
         }
-        if let Some(_chunk) = PcmReader::next_chunk(&mut audio) {
-            chunks_read += 1;
-            continue;
-        }
-        if audio.is_eof() {
-            break;
+        match PcmReader::next_chunk(&mut audio) {
+            Ok(ChunkOutcome::Chunk(_)) => {
+                chunks_read += 1;
+                continue;
+            }
+            Ok(ChunkOutcome::Eof { .. }) => break,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("warmup decode error: {e}"),
         }
         sleep(Duration::from_micros(100)).await;
     }
@@ -132,30 +131,39 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     let mut drained = 0usize;
     let mut stall_at: Option<Duration> = None;
     let started = Instant::now();
+    let mut reached_eof = false;
     while Instant::now() < deadline {
         let chunk_deadline = Instant::now() + Consts::NEXT_CHUNK_TIMEOUT;
         let mut got_chunk = false;
+        let mut inner_eof = false;
         while Instant::now() < chunk_deadline {
-            if let Some(_chunk) = PcmReader::next_chunk(&mut audio) {
-                drained += 1;
-                got_chunk = true;
-                // Rate-limit the reader.
-                sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
-                break;
-            }
-            if audio.is_eof() {
-                break;
+            match PcmReader::next_chunk(&mut audio) {
+                Ok(ChunkOutcome::Chunk(_)) => {
+                    drained += 1;
+                    got_chunk = true;
+                    // Rate-limit the reader.
+                    sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
+                    break;
+                }
+                Ok(ChunkOutcome::Eof { .. }) => {
+                    inner_eof = true;
+                    break;
+                }
+                Ok(ChunkOutcome::Pending { .. }) => {}
+                Err(e) => panic!("drain decode error: {e}"),
             }
             sleep(Duration::from_micros(100)).await;
         }
-        if !got_chunk && !audio.is_eof() {
+        if inner_eof {
+            reached_eof = true;
+            break;
+        }
+        if !got_chunk {
             stall_at = Some(started.elapsed());
             break;
         }
-        if audio.is_eof() {
-            break;
-        }
     }
+    let _ = reached_eof;
 
     let elapsed = started.elapsed();
     info!(drained, ?elapsed, ?stall_at, "drain done");

@@ -34,60 +34,7 @@ impl HlsScheduler {
         init_url: Option<url::Url>,
         duration: std::time::Duration,
     ) {
-        let current_epoch = self.coord.timeline().seek_epoch();
-
-        if is_stale_epoch(seek_epoch, current_epoch) {
-            trace!(
-                fetch_epoch = seek_epoch,
-                current_epoch,
-                variant,
-                segment_index = seg_idx,
-                "dropping stale fetch before commit"
-            );
-            self.bus.publish(HlsEvent::StaleFetchDropped {
-                seek_epoch,
-                current_epoch,
-                variant,
-                segment_index: seg_idx,
-            });
-            self.coord.clear_pending_segment_request(SegmentRequest {
-                segment_index: seg_idx,
-                variant,
-                seek_epoch,
-            });
-            self.coord.condvar.notify_all();
-            return;
-        }
-
-        if self.is_stale_cross_codec(variant, seg_idx) {
-            debug!(
-                variant,
-                segment_index = seg_idx,
-                current_variant = self.abr.get_current_variant_index(),
-                "dropping stale cross-codec fetch after switched anchor"
-            );
-            self.coord.clear_pending_segment_request(SegmentRequest {
-                segment_index: seg_idx,
-                variant,
-                seek_epoch,
-            });
-            self.coord.condvar.notify_all();
-            return;
-        }
-
-        if self.is_below_switch_floor(variant, seg_idx) {
-            debug!(
-                variant,
-                segment_index = seg_idx,
-                floor = self.gap_scan_start_segment(),
-                "dropping fetch below switched-layout floor"
-            );
-            self.coord.clear_pending_segment_request(SegmentRequest {
-                segment_index: seg_idx,
-                variant,
-                seek_epoch,
-            });
-            self.coord.condvar.notify_all();
+        if self.reject_stale_fetch(variant, seg_idx, seek_epoch) {
             return;
         }
 
@@ -109,11 +56,96 @@ impl HlsScheduler {
         }
 
         self.coord.clear_pending_segment_request(SegmentRequest {
-            segment_index: seg_idx,
             variant,
             seek_epoch,
+            segment_index: seg_idx,
         });
 
         self.commit_segment(variant, seg_idx, media, init_len, init_url, duration);
+    }
+
+    fn drop_pending(
+        &mut self,
+        variant: VariantIndex,
+        seg_idx: usize,
+        seek_epoch: kithara_events::SeekEpoch,
+    ) {
+        self.coord.clear_pending_segment_request(SegmentRequest {
+            variant,
+            seek_epoch,
+            segment_index: seg_idx,
+        });
+        self.coord.condvar.notify_all();
+    }
+
+    fn reject_if_stale_epoch(
+        &mut self,
+        variant: VariantIndex,
+        seg_idx: usize,
+        seek_epoch: kithara_events::SeekEpoch,
+    ) -> bool {
+        let current_epoch = self.coord.timeline().seek_epoch();
+        if !is_stale_epoch(seek_epoch, current_epoch) {
+            return false;
+        }
+        trace!(
+            fetch_epoch = seek_epoch,
+            current_epoch,
+            variant,
+            segment_index = seg_idx,
+            "dropping stale fetch before commit"
+        );
+        self.bus.publish(HlsEvent::StaleFetchDropped {
+            seek_epoch,
+            current_epoch,
+            variant,
+            segment_index: seg_idx,
+        });
+        self.drop_pending(variant, seg_idx, seek_epoch);
+        true
+    }
+
+    fn reject_if_stale_geometry(
+        &mut self,
+        variant: VariantIndex,
+        seg_idx: usize,
+        seek_epoch: kithara_events::SeekEpoch,
+    ) -> bool {
+        if self.is_stale_cross_codec(variant, seg_idx) {
+            debug!(
+                variant,
+                segment_index = seg_idx,
+                current_variant = self.abr.current_variant_index(),
+                "dropping stale cross-codec fetch after switched anchor"
+            );
+            self.drop_pending(variant, seg_idx, seek_epoch);
+            return true;
+        }
+
+        if self.is_below_switch_floor(variant, seg_idx) {
+            debug!(
+                variant,
+                segment_index = seg_idx,
+                floor = self.gap_scan_start_segment(),
+                "dropping fetch below switched-layout floor"
+            );
+            self.drop_pending(variant, seg_idx, seek_epoch);
+            return true;
+        }
+
+        false
+    }
+
+    /// Returns true if the fetch is stale and was dropped.
+    fn reject_stale_fetch(
+        &mut self,
+        variant: VariantIndex,
+        seg_idx: usize,
+        seek_epoch: kithara_events::SeekEpoch,
+    ) -> bool {
+        if self.reject_if_stale_epoch(variant, seg_idx, seek_epoch) {
+            return true;
+        }
+        self.reject_if_stale_geometry(variant, seg_idx, seek_epoch)
     }
 }

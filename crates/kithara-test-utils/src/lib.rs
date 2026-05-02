@@ -35,6 +35,8 @@ pub mod hls_url;
 pub mod http_server;
 mod log_filter;
 pub mod memory_source;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod probe_capture;
 pub mod rng;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod routes;

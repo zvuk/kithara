@@ -1,35 +1,9 @@
 use std::{
-    fs,
     io::{BufRead, BufReader},
-    path::Path,
     process::{Command, Stdio},
 };
 
 use anyhow::{Context, Result, bail};
-
-/// Recursively collect all `.rs` files under `dir`, returning them sorted.
-pub(crate) fn walk_rs_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let mut out = Vec::new();
-    walk_rs_files_inner(dir, &mut out)?;
-    out.sort();
-    Ok(out)
-}
-
-fn walk_rs_files_inner(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Ok(());
-    };
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk_rs_files_inner(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
 
 /// Check that an external tool is available.
 pub(crate) fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Result<()> {
@@ -42,6 +16,41 @@ pub(crate) fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Resul
         .unwrap_or(false);
     if !ok {
         bail!("{tool} not found. Install with: {install_hint}");
+    }
+    Ok(())
+}
+
+/// Refuse to proceed with destructive autofix when there are uncommitted
+/// changes in the working tree. Mirrors `cargo fmt` / `cargo fix` UX:
+/// the user can override with `--allow-dirty` once they understand that
+/// our edits will mix with their own.
+///
+/// `scope_label` identifies the caller in the error message (e.g. "typos").
+pub(crate) fn ensure_clean_tree(allow_dirty: bool, scope_label: &str) -> Result<()> {
+    if allow_dirty {
+        return Ok(());
+    }
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .context("failed to run `git status --porcelain`")?;
+    if !output.status.success() {
+        bail!(
+            "`git status --porcelain` failed (exit {:?}); cannot verify working tree is clean",
+            output.status.code()
+        );
+    }
+    if !output.stdout.is_empty() {
+        let preview: String = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .take(5)
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!(
+            "{scope_label} --fix refuses to run on a dirty working tree.\n\
+             Commit or stash your changes first, or pass --allow-dirty to mix our edits in.\n\
+             First few uncommitted entries:\n{preview}"
+        );
     }
     Ok(())
 }
@@ -59,37 +68,4 @@ pub(crate) fn check_rust_target(target: &str) -> Result<bool> {
         }
     }
     Ok(false)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn patch_file(path: &Path, replacements: &[(&str, &str)]) -> Result<()> {
-        let mut content =
-            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        for (needle, replacement) in replacements {
-            content = content.replace(needle, replacement);
-        }
-        fs::write(path, content).with_context(|| format!("write {}", path.display()))?;
-        Ok(())
-    }
-
-    #[test]
-    fn patch_file_applies_replacements() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.txt");
-        fs::write(&path, "hello world, hello rust").unwrap();
-        patch_file(&path, &[("hello", "hi")]).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "hi world, hi rust");
-    }
-
-    #[test]
-    fn patch_file_no_match_is_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.txt");
-        fs::write(&path, "unchanged content").unwrap();
-        patch_file(&path, &[("missing", "replacement")]).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "unchanged content");
-    }
 }

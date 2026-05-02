@@ -1,0 +1,61 @@
+[default]
+extend-ignore-identifiers-re = [
+    "^[A-F0-9]+$",
+    ".*_[a-f0-9]{8,}.*",
+]
+
+[default.extend-words]
+caf = "caf"
+abr = "abr"
+aac = "aac"
+flac = "flac"
+alac = "alac"
+hls = "hls"
+drm = "drm"
+ffi = "ffi"
+rfc = "rfc"
+pts = "pts"
+dts = "dts"
+crc = "crc"
+mp4 = "mp4"
+m4a = "m4a"
+m3u = "m3u"
+icy = "icy"
+nack = "nack"
+fract = "fract"
+fmp4 = "fmp4"
+cbcs = "cbcs"
+cenc = "cenc"
+clonable = "clonable"
+seeked = "seeked"
+ratatui = "ratatui"
+trak = "trak"
+trun = "trun"
+truns = "truns"
+alikes = "alikes"
+slq = "slq"
+numer = "numer"
+unparseable = "unparseable"
+wht = "wht"
+ot = "ot"
+nt = "nt"
+
+[files]
+extend-exclude = [
+    "target/**",
+    ".build/**",
+    ".worktrees/**",
+    ".logs/**",
+    "Cargo.lock",
+    "*.log",
+    "*.snap",
+    "tests/fixtures/**",
+    "tests/data/**",
+    "assets/**",
+    "crates/kithara-workspace-hack/**",
+    ".swiftpm/**",
+    "apple/**/*.pbxproj",
+    "apple/**/*.xcworkspace/**",
+    "android/**/build/**",
+    "package-lock.json",
+]

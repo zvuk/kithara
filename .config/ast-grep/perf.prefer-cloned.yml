@@ -1,0 +1,32 @@
+id: perf.prefer-cloned
+message: |
+  Detected `.map(|x| x.clone())` / `.map(|x| x.to_owned())` on an
+  iterator of references.
+
+  Why it matters: `.cloned()` (for `T: Clone`) and `.copied()` (for
+  `T: Copy`) are the idiomatic adapters and read better. They also
+  let `clippy::cloned_instead_of_copied` flag cases where `T: Copy`
+  and the cheaper `.copied()` would suffice — the `.map(|x| x.clone())`
+  form hides that distinction.
+
+      // ❌  items.iter().map(|e| e.clone()).collect::<Vec<_>>()
+      // ✅  items.iter().cloned().collect::<Vec<_>>()
+
+  Suppress with `// ast-grep-ignore: perf.prefer-cloned` when the
+  closure does more than `clone()` (e.g. clones a sub-field via two
+  chained accesses: `.map(|e| e.name.clone())`).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: $X.map(|$Y| $Y.clone())
+    - pattern: $X.map(|$Y| $Y.to_owned())

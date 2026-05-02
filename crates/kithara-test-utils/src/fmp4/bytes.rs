@@ -15,8 +15,16 @@ impl Mp4Bytes {
         self.buf.len()
     }
 
-    pub(crate) fn push_u8(&mut self, value: u8) {
-        self.buf.push(value);
+    pub(crate) fn push_bytes(&mut self, value: &[u8]) {
+        self.buf.extend_from_slice(value);
+    }
+
+    pub(crate) fn push_fourcc(&mut self, value: [u8; 4]) {
+        self.push_bytes(&value);
+    }
+
+    pub(crate) fn push_i32(&mut self, value: i32) {
+        self.buf.extend_from_slice(&value.to_be_bytes());
     }
 
     pub(crate) fn push_u16(&mut self, value: u16) {
@@ -35,16 +43,8 @@ impl Mp4Bytes {
         self.buf.extend_from_slice(&value.to_be_bytes());
     }
 
-    pub(crate) fn push_i32(&mut self, value: i32) {
-        self.buf.extend_from_slice(&value.to_be_bytes());
-    }
-
-    pub(crate) fn push_bytes(&mut self, value: &[u8]) {
-        self.buf.extend_from_slice(value);
-    }
-
-    pub(crate) fn push_fourcc(&mut self, value: [u8; 4]) {
-        self.push_bytes(&value);
+    pub(crate) fn push_u8(&mut self, value: u8) {
+        self.buf.push(value);
     }
 
     pub(crate) fn push_zeroes(&mut self, count: usize) {

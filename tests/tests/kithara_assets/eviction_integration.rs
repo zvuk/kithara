@@ -72,7 +72,7 @@ fn eviction_max_assets_skips_pinned_assets(
                 let pins_file: PinsIndexFile =
                     rkyv::deserialize::<PinsIndexFile, rkyv::rancor::Error>(archived).unwrap();
                 let mut is_pinned = false;
-                for (k, v) in pins_file.pinned.iter() {
+                for (k, v) in &pins_file.pinned {
                     if *v && k.as_str() == format!("asset-{}", i) {
                         is_pinned = true;
                         break;

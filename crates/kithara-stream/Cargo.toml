@@ -16,10 +16,12 @@ bytes = { workspace = true }
 delegate = { workspace = true }
 derive_setters = { workspace = true }
 futures = { workspace = true }
-kithara-events = { workspace = true, features = ["downloader"] }
+kithara-abr = { workspace = true }
+kithara-events = { workspace = true, features = ["abr", "downloader"] }
 kithara-net = { workspace = true }
 kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-probes = { workspace = true }
 kithara-storage = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -33,6 +35,16 @@ unimock = { workspace = true, optional = true }
 perf = ["dep:hotpath", "hotpath/hotpath"]
 test-utils = ["unimock"]
 internal = []
+# USDT probes for production observability (dtrace/bpftrace) and
+# defense-in-depth in tests against EventBus broadcast overflow.
+# Disabled by default — release builds compile probes to no-ops.
+# Tests and dev builds opt in via `kithara-stream/usdt-probes` or
+# the workspace-level `--features` flag.
+#
+# Pulls `dep:usdt` because `#[kithara::probe]` expansion references
+# `::usdt::provider!` paths directly (the attribute hard-codes
+# `::usdt::...` so it must resolve from the consumer crate's deps).
+usdt-probes = ["dep:usdt", "kithara-probes/usdt-probes"]
 disable-hang-detector = [
     "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
@@ -42,6 +54,7 @@ disable-hang-detector = [
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
+usdt = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = { workspace = true }

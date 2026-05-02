@@ -1,0 +1,31 @@
+id: perf.no-iter-count
+message: |
+  `iter().count()` / `into_iter().count()` walks the whole collection (O(n)).
+  Built-in `.len()` on `Vec`, slices, `String`, `HashMap`, `BTreeMap`, etc. is
+  O(1) and reads the stored length directly.
+
+  Why it matters: in hot paths (HLS scheduler, audio decode, render
+  callback) the iterator-walk pulls every element through the iterator
+  state machine — pure overhead when the type already tracks length.
+
+      // ❌  pub fn segments(&self) -> usize { self.segments.iter().count() }
+      // ✅  pub fn segments(&self) -> usize { self.segments.len() }
+
+  Suppress with `// ast-grep-ignore: perf.no-iter-count` when the
+  iterator is filtered/mapped first — `iter().filter(p).count()` is
+  legitimate (no `.len()` equivalent post-filter).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: $X.iter().count()
+    - pattern: $X.into_iter().count()

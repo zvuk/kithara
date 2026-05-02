@@ -16,42 +16,42 @@ use crate::theme::tui::TuiPalette;
 /// Renders playlist, progress bar, volume, and status information
 /// using ratatui inline viewport.
 pub struct Dashboard {
-    colors: TuiPalette,
     crossfade_progress: Option<f32>,
-    current_index: usize,
-    frame_count: u64,
-    item_count: usize,
     last_note: Option<String>,
-    playing: bool,
-    tracks: Vec<TrackEntry>,
-    position_ms: u64,
     total_ms: Option<u64>,
+    colors: TuiPalette,
+    tracks: Vec<TrackEntry>,
+    playing: bool,
     volume: f32,
+    frame_count: u64,
+    position_ms: u64,
+    current_index: usize,
+    item_count: usize,
 }
 
 impl Dashboard {
-    const MIN_PROGRESS_BAR_WIDTH: usize = 4;
-    const NOTE_MAX_CHARS: usize = 26;
-
-    const PROGRESS_BAR_OVERHEAD: usize = 14;
-
-    const BAR_COL_TRACK_PCT: u16 = 25;
-    const BAR_COL_PROGRESS_PCT: u16 = 25;
-    const BAR_COL_QUEUE_PCT: u16 = 12;
     const BAR_COL_CROSSFADE_PCT: u16 = 10;
-    const BAR_COL_VOLUME_PCT: u16 = 8;
     const BAR_COL_NOTE_PCT: u16 = 20;
 
-    const ELLIPSIS_LEN: usize = 3;
+    const BAR_COL_PROGRESS_PCT: u16 = 25;
 
-    const PERCENT_SCALE: f32 = 100.0;
-
-    const MS_PER_SECOND: u64 = 1000;
-    const SECONDS_PER_MINUTE: u64 = 60;
-
+    const BAR_COL_QUEUE_PCT: u16 = 12;
+    const BAR_COL_TRACK_PCT: u16 = 25;
+    const BAR_COL_VOLUME_PCT: u16 = 8;
     /// Frames between blink toggles (~500ms at 100ms poll).
     const BLINK_DIVISOR: u64 = 5;
     const BLINK_PERIOD: u64 = 2;
+    const ELLIPSIS_LEN: usize = 3;
+
+    const MIN_PROGRESS_BAR_WIDTH: usize = 4;
+
+    const MS_PER_SECOND: u64 = 1000;
+
+    const NOTE_MAX_CHARS: usize = 26;
+    const PERCENT_SCALE: f32 = 100.0;
+
+    const PROGRESS_BAR_OVERHEAD: usize = 14;
+    const SECONDS_PER_MINUTE: u64 = 60;
 
     #[must_use]
     pub fn new(palette: TuiPalette) -> Self {
@@ -70,49 +70,34 @@ impl Dashboard {
         }
     }
 
-    pub fn refresh_tracks(&mut self, queue: &Queue) {
-        self.tracks = queue.tracks();
-    }
-
-    #[must_use]
-    pub fn track_count(&self) -> usize {
-        self.tracks.len()
-    }
-
     #[must_use]
     #[expect(clippy::cast_possible_truncation)]
     pub fn height(&self) -> u16 {
         self.tracks.len() as u16 + 1
     }
 
-    pub fn set_crossfade_progress(&mut self, progress: Option<f32>) {
-        self.crossfade_progress = progress.map(|value| value.clamp(0.0, 1.0));
+    fn progress_bar(&self, width: usize) -> String {
+        if width == 0 {
+            return String::new();
+        }
+        let Some(total_ms) = self.total_ms else {
+            return "▱".repeat(width);
+        };
+        if total_ms == 0 {
+            return "▱".repeat(width);
+        }
+        let width_u64 = u64::try_from(width).unwrap_or(u64::MAX);
+        let filled_u64 = self.position_ms.min(total_ms).saturating_mul(width_u64) / total_ms;
+        let filled = usize::try_from(filled_u64).unwrap_or(width).min(width);
+        format!(
+            "{}{}",
+            "▰".repeat(filled),
+            "▱".repeat(width.saturating_sub(filled))
+        )
     }
 
-    pub fn set_note<S: Into<String>>(&mut self, note: S) {
-        self.last_note = Some(note.into());
-    }
-
-    pub fn set_playing(&mut self, playing: bool) {
-        self.playing = playing;
-    }
-
-    pub fn set_position(&mut self, position: Duration) {
-        self.position_ms = u64::try_from(position.as_millis()).unwrap_or(u64::MAX);
-    }
-
-    pub fn set_queue(&mut self, current_index: usize, item_count: usize) {
-        self.current_index = current_index;
-        self.item_count = item_count;
-    }
-
-    pub fn set_total(&mut self, total: Option<Duration>) {
-        self.total_ms =
-            total.map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
-    }
-
-    pub fn set_volume(&mut self, volume: f32) {
-        self.volume = volume.clamp(0.0, 1.0);
+    pub fn refresh_tracks(&mut self, queue: &Queue) {
+        self.tracks = queue.tracks();
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
@@ -127,37 +112,6 @@ impl Dashboard {
 
         self.render_playlist(frame, chunks[0]);
         self.render_bar(frame, chunks[1]);
-    }
-
-    fn render_playlist(&self, frame: &mut Frame, area: Rect) {
-        let c = &self.colors;
-        for (i, entry) in self.tracks.iter().enumerate() {
-            let track_name = &entry.name;
-            let is_active = i == self.current_index;
-            let is_failed = matches!(entry.status, TrackStatus::Failed(_));
-            let is_slow = matches!(entry.status, TrackStatus::Slow);
-            let number = i + 1;
-            let marker = if is_active { "▶" } else { " " };
-            let text = format!(" {marker} {number}  {track_name}");
-            let style = if is_failed {
-                Style::default().fg(c.danger).bg(c.bg)
-            } else if is_slow && is_active {
-                let blink_on =
-                    (self.frame_count / Self::BLINK_DIVISOR).is_multiple_of(Self::BLINK_PERIOD);
-                let fg = if blink_on { c.warning } else { c.muted };
-                Style::default().fg(fg).bg(c.bg_panel)
-            } else if is_slow {
-                Style::default().fg(c.warning).bg(c.bg)
-            } else if is_active {
-                Style::default().fg(c.accent).bg(c.bg_panel)
-            } else {
-                Style::default().fg(c.muted).bg(c.bg)
-            };
-            #[expect(clippy::cast_possible_truncation)]
-            let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
-            let padded = fit_cell(&text, usize::from(row.width));
-            frame.render_widget(Paragraph::new(Line::raw(padded)).style(style), row);
-        }
     }
 
     fn render_bar(&self, frame: &mut Frame, area: Rect) {
@@ -215,24 +169,70 @@ impl Dashboard {
         }
     }
 
-    fn progress_bar(&self, width: usize) -> String {
-        if width == 0 {
-            return String::new();
+    fn render_playlist(&self, frame: &mut Frame, area: Rect) {
+        let c = &self.colors;
+        for (i, entry) in self.tracks.iter().enumerate() {
+            let track_name = &entry.name;
+            let is_active = i == self.current_index;
+            let is_failed = matches!(entry.status, TrackStatus::Failed(_));
+            let is_slow = matches!(entry.status, TrackStatus::Slow);
+            let number = i + 1;
+            let marker = if is_active { "▶" } else { " " };
+            let text = format!(" {marker} {number}  {track_name}");
+            let style = if is_failed {
+                Style::default().fg(c.danger).bg(c.bg)
+            } else if is_slow && is_active {
+                let blink_on =
+                    (self.frame_count / Self::BLINK_DIVISOR).is_multiple_of(Self::BLINK_PERIOD);
+                let fg = if blink_on { c.warning } else { c.muted };
+                Style::default().fg(fg).bg(c.bg_panel)
+            } else if is_slow {
+                Style::default().fg(c.warning).bg(c.bg)
+            } else if is_active {
+                Style::default().fg(c.accent).bg(c.bg_panel)
+            } else {
+                Style::default().fg(c.muted).bg(c.bg)
+            };
+            #[expect(clippy::cast_possible_truncation)]
+            let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
+            let padded = fit_cell(&text, usize::from(row.width));
+            frame.render_widget(Paragraph::new(Line::raw(padded)).style(style), row);
         }
-        let Some(total_ms) = self.total_ms else {
-            return "▱".repeat(width);
-        };
-        if total_ms == 0 {
-            return "▱".repeat(width);
-        }
-        let width_u64 = u64::try_from(width).unwrap_or(u64::MAX);
-        let filled_u64 = self.position_ms.min(total_ms).saturating_mul(width_u64) / total_ms;
-        let filled = usize::try_from(filled_u64).unwrap_or(width).min(width);
-        format!(
-            "{}{}",
-            "▰".repeat(filled),
-            "▱".repeat(width.saturating_sub(filled))
-        )
+    }
+
+    pub fn set_crossfade_progress(&mut self, progress: Option<f32>) {
+        self.crossfade_progress = progress.map(|value| value.clamp(0.0, 1.0));
+    }
+
+    pub fn set_note<S: Into<String>>(&mut self, note: S) {
+        self.last_note = Some(note.into());
+    }
+
+    pub fn set_playing(&mut self, playing: bool) {
+        self.playing = playing;
+    }
+
+    pub fn set_position(&mut self, position: Duration) {
+        self.position_ms = u64::try_from(position.as_millis()).unwrap_or(u64::MAX);
+    }
+
+    pub fn set_queue(&mut self, current_index: usize, item_count: usize) {
+        self.current_index = current_index;
+        self.item_count = item_count;
+    }
+
+    pub fn set_total(&mut self, total: Option<Duration>) {
+        self.total_ms =
+            total.map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
+    }
+
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+    }
+
+    #[must_use]
+    pub fn track_count(&self) -> usize {
+        self.tracks.len()
     }
 }
 

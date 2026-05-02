@@ -1,0 +1,32 @@
+id: style.prefer-expect
+message: |
+  Detected `.unwrap_or_else(|| panic!(msg))` or
+  `.unwrap_or_else(|_| panic!(msg))`. Use `.expect(msg)` instead.
+
+  Why it matters: `.expect(msg)` is the canonical "panic on None/Err
+  with this message" — same runtime behaviour, half the code, no
+  unused closure. The `unwrap_or_else(|| panic!(...))` form bypasses
+  lint rules tuned for `.expect()` (e.g. `clippy::expect_fun_call`)
+  and reads as "compute a fallback" when the intent is "fail loudly".
+
+      // ❌  let cfg = lookup(key).unwrap_or_else(|| panic!("missing config"));
+      // ✅  let cfg = lookup(key).expect("missing config");
+
+  Suppress with `// ast-grep-ignore: style.prefer-expect` when the
+  message contains formatted captures that depend on the closure
+  binding — `.unwrap_or_else(|err| panic!("io failed: {err}"))`.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: $X.unwrap_or_else(|| panic!($$$))
+    - pattern: $X.unwrap_or_else(|_| panic!($$$))

@@ -28,3 +28,8 @@ mod kithara_hls {
     mod stress_seek_audio;
     mod stress_seek_lifecycle;
 }
+
+mod kithara_play {
+    #[path = "../kithara_play/hls_seek_middle_stress_long.rs"]
+    mod hls_seek_middle_stress_long;
+}

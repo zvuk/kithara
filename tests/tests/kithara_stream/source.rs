@@ -66,49 +66,32 @@ fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
 
 // SeekFrom::Current tests
 
+/// `SeekFrom::Current(offset)` after reading `initial_read` bytes must land
+/// at `initial_read + offset` and return `expected` on the next read.
 #[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn seek_current_forward(test_data: Vec<u8>) {
+#[case::forward(5, 5, 10, b"KLMNO")]
+#[case::backward(10, -5, 5, b"FGHIJ")]
+fn seek_current_moves_and_reads(
+    test_data: Vec<u8>,
+    #[case] initial_read: usize,
+    #[case] offset: i64,
+    #[case] expected_pos: u64,
+    #[case] expected: &[u8],
+) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
 
-    // Read 5 bytes (position = 5)
-    let mut buf = [0u8; 5];
+    let mut buf = vec![0u8; initial_read];
     let n = stream.read(&mut buf).unwrap();
-    assert_eq!(n, 5);
-    assert_eq!(&buf, b"ABCDE");
+    assert_eq!(n, initial_read);
 
-    // Seek forward 5 bytes (position = 10)
-    let pos = stream.seek(SeekFrom::Current(5)).unwrap();
-    assert_eq!(pos, 10);
+    let pos = stream.seek(SeekFrom::Current(offset)).unwrap();
+    assert_eq!(pos, expected_pos);
 
-    // Read from position 10
-    let mut buf = [0u8; 5];
+    let mut buf = vec![0u8; expected.len()];
     let n = stream.read(&mut buf).unwrap();
-
-    assert_eq!(n, 5);
-    assert_eq!(&buf[..n], b"KLMNO");
-}
-
-#[kithara::test]
-fn seek_current_backward(test_data: Vec<u8>) {
-    let source = MemorySource::new(test_data);
-    let mut stream = memory_stream(source);
-
-    // Read 10 bytes (position = 10)
-    let mut buf = [0u8; 10];
-    let n = stream.read(&mut buf).unwrap();
-    assert_eq!(n, 10);
-
-    // Seek backward 5 bytes (position = 5)
-    let pos = stream.seek(SeekFrom::Current(-5)).unwrap();
-    assert_eq!(pos, 5);
-
-    // Read from position 5
-    let mut buf = [0u8; 5];
-    let n = stream.read(&mut buf).unwrap();
-
-    assert_eq!(n, 5);
-    assert_eq!(&buf[..n], b"FGHIJ");
+    assert_eq!(n, expected.len());
+    assert_eq!(&buf[..n], expected);
 }
 
 #[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
@@ -179,40 +162,17 @@ fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
 // Error cases
 
 #[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn seek_past_eof_fails(test_data: Vec<u8>) {
-    let data_len = test_data.len() as u64;
+#[case::past_eof_from_start(SeekFrom::Start(36))]
+#[case::negative_from_current(SeekFrom::Current(-100))]
+#[case::positive_offset_from_end(SeekFrom::End(10))]
+fn seek_invalid_input_errors(test_data: Vec<u8>, #[case] seek_from: SeekFrom) {
     let source = MemorySource::new(test_data);
     let mut stream = memory_stream(source);
 
-    let result = stream.seek(SeekFrom::Start(data_len + 10));
+    let result = stream.seek(seek_from);
 
     assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-}
-
-#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn seek_negative_position_fails(test_data: Vec<u8>) {
-    let source = MemorySource::new(test_data);
-    let mut stream = memory_stream(source);
-
-    let result = stream.seek(SeekFrom::Current(-100));
-
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-}
-
-#[kithara::test(timeout(Duration::from_secs(3)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
-    let source = MemorySource::new(test_data);
-    let mut stream = memory_stream(source);
-
-    let result = stream.seek(SeekFrom::End(10));
-
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
 }
 
 // Multiple seeks

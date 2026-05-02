@@ -15,8 +15,8 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -117,10 +117,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
@@ -187,12 +184,20 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
             });
 
             // Read
-            let n = audio.read(&mut buf);
-            assert!(
-                n > 0,
-                "read returned 0 after seek #{i} to {pos_secs:.4}s (is_eof={})",
-                audio.is_eof(),
-            );
+            let n = match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+                Ok(ReadOutcome::Pending { .. }) => {
+                    panic!(
+                        "read returned 0 after seek #{i} to {pos_secs:.4}s",
+                    );
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    panic!(
+                        "read returned Eof after seek #{i} to {pos_secs:.4}s",
+                    );
+                }
+                Err(e) => panic!("read error after seek #{i}: {e}"),
+            };
 
             let frames = n / channels;
 
@@ -332,23 +337,29 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
             });
 
         let mut remaining_samples = 0u64;
+        let mut saw_eof = false;
         loop {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
-            }
-            remaining_samples += n as u64;
-
-            for &sample in &buf[..n] {
-                assert!(
-                    sample.is_finite() && (-1.0..=1.0).contains(&sample),
-                    "invalid sample in final tail read",
-                );
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    remaining_samples += count.get() as u64;
+                    for &sample in &buf[..count.get()] {
+                        assert!(
+                            sample.is_finite() && (-1.0..=1.0).contains(&sample),
+                            "invalid sample in final tail read",
+                        );
+                    }
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("final tail read error: {e}"),
             }
         }
 
         assert!(
-            audio.is_eof(),
+            saw_eof,
             "expected EOF after reading all remaining data from {final_seek_secs:.4}s"
         );
 
@@ -363,12 +374,15 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
                 .seek(Duration::from_secs_f64(pos_secs))
                 .unwrap_or_else(|e| panic!("seek-after-eof #{i} to {pos_secs:.4}s failed: {e}"));
 
-            let n = audio.read(&mut buf);
-            assert!(
-                n > 0,
-                "seek-after-eof #{i} returned 0 samples at {pos_secs:.4}s (is_eof={})",
-                audio.is_eof(),
-            );
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { .. }) => {}
+                Ok(other) => {
+                    panic!(
+                        "seek-after-eof #{i} at {pos_secs:.4}s produced no samples: {other:?}"
+                    );
+                }
+                Err(e) => panic!("seek-after-eof #{i} read error: {e}"),
+            }
         }
     })
     .await;

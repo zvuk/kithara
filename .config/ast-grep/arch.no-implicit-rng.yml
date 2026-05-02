@@ -1,0 +1,45 @@
+id: arch.no-implicit-rng
+message: |
+  Library code reads randomness directly via `thread_rng()` /
+  `rand::random()` / `rand::thread_rng()`. Hidden RNG access defeats
+  determinism: tests cannot pin a seed, simulation cannot replay, and
+  reproducing a bug becomes impossible.
+
+  Per AGENTS.md: "Tests must be deterministic". Inject a seeded
+  `Rng` (or whatever the crate names its randomness port) from the top
+  of the app:
+
+      // ❌  let n: u64 = rand::random();
+      // ✅  let n: u64 = self.rng.next_u64();
+
+  Tests can then pin a `SeedableRng` to reproduce the exact sequence.
+  App / FFI / wasm / xtask / test-support crates may keep the direct
+  calls because they own the seed.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/main.rs"
+  - "crates/kithara-app/**"
+  - "crates/kithara-ffi/**"
+  - "crates/kithara-wasm/**"
+  - "crates/kithara-test-utils/**"
+  - "crates/kithara-test-macros/**"
+  - "crates/kithara-hang-detector-macros/**"
+  - "crates/kithara-wasm-macros/**"
+  - "crates/kithara-probe-macros/**"
+rule:
+  any:
+    - pattern: thread_rng()
+    - pattern: rand::thread_rng()
+    - pattern: rand::random()
+    - pattern: rand::random::<$T>()
+    - pattern: rand::rngs::ThreadRng::default()
+    - pattern: OsRng::default()
+    - pattern: rand::rngs::OsRng::default()

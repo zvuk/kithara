@@ -1,4 +1,8 @@
-use std::io::{self, Write};
+use std::{
+    fs::OpenOptions,
+    io::{self, Write},
+    sync::Mutex,
+};
 
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
@@ -20,6 +24,10 @@ impl<W> CrlfWriter<W> {
 }
 
 impl<W: Write> Write for CrlfWriter<W> {
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         const CRLF_OVERHEAD: usize = 8;
 
@@ -38,10 +46,6 @@ impl<W: Write> Write for CrlfWriter<W> {
         self.inner.write_all(&out)?;
         Ok(buf.len())
     }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
 }
 
 fn make_log_writer() -> CrlfWriter<io::Stderr> {
@@ -50,34 +54,48 @@ fn make_log_writer() -> CrlfWriter<io::Stderr> {
 
 /// Initialize tracing subscriber for TUI mode.
 ///
-/// When `use_crlf_writer` is true, output is wrapped in [`CrlfWriter`]
-/// to produce correct line endings in raw-mode terminals.
+/// Filter precedence: `RUST_LOG` env if set, otherwise the `directives`
+/// passed in. If `KITHARA_LOG_FILE` is set, output goes to that path
+/// (append mode); otherwise to stderr (wrapped with [`CrlfWriter`] when
+/// `use_crlf_writer` is true).
 ///
 /// # Errors
-/// Returns an error if a tracing directive cannot be parsed.
+/// Returns an error if a tracing directive cannot be parsed or the log
+/// file cannot be opened.
 pub fn init_tracing(directives: &[&str], use_crlf_writer: bool) -> TuiResult {
-    let mut filter = EnvFilter::default();
-    for directive in directives {
-        filter = filter.add_directive((*directive).parse()?);
-    }
-    let has_global_level = directives.iter().any(|directive| !directive.contains('='));
-    if !has_global_level {
-        filter = filter.add_directive(LevelFilter::WARN.into());
-    }
-
-    if use_crlf_writer {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(make_log_writer)
-            .with_line_number(false)
-            .with_file(false)
-            .init();
+    let filter = if let Ok(env_filter) = EnvFilter::try_from_default_env() {
+        env_filter
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_line_number(false)
-            .with_file(false)
+        let mut filter = EnvFilter::default();
+        for directive in directives {
+            filter = filter.add_directive((*directive).parse()?);
+        }
+        let has_global_level = directives.iter().any(|directive| !directive.contains('='));
+        if !has_global_level {
+            filter = filter.add_directive(LevelFilter::WARN.into());
+        }
+        filter
+    };
+
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_line_number(false)
+        .with_file(false);
+
+    if let Some(path) = std::env::var_os("KITHARA_LOG_FILE") {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+        builder
+            .with_writer(Mutex::new(file))
+            .with_ansi(false)
             .init();
+    } else if use_crlf_writer {
+        builder.with_writer(make_log_writer).init();
+    } else {
+        builder.init();
     }
 
     Ok(())

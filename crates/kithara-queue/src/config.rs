@@ -30,20 +30,16 @@ const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Debug, Default)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct QueueConfig {
-    /// Externally-owned player. `None` means Queue builds a default.
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
-    pub player: Option<Arc<PlayerImpl>>,
-
     /// Max concurrent `Loader` in-flight loads. Default: 3.
     #[derivative(Default(value = "DEFAULT_MAX_CONCURRENT_LOADS"))]
     pub max_concurrent_loads: NonZeroUsize,
 
-    /// Whether the Queue should start playing as soon as the first track
-    /// enters [`TrackStatus::Loaded`](crate::TrackStatus::Loaded).
-    /// Default: `false`.
-    pub autoplay: bool,
+    /// Externally-owned player. `None` means Queue builds a default.
+    #[setters(skip)]
+    #[derivative(Debug = "ignore")]
+    pub player: Option<Arc<PlayerImpl>>,
 }
 
 impl QueueConfig {
@@ -72,13 +68,6 @@ mod tests {
     fn default_config_has_reasonable_loader_cap() {
         let cfg = QueueConfig::default();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
-        assert!(!cfg.autoplay);
         assert!(cfg.player.is_none());
-    }
-
-    #[kithara::test]
-    fn with_autoplay_sets_field() {
-        let cfg = QueueConfig::default().with_autoplay(true);
-        assert!(cfg.autoplay);
     }
 }

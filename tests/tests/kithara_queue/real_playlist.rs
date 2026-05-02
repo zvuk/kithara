@@ -22,12 +22,14 @@ use std::{
 };
 
 use kithara_app::{config::AppConfig, sources::build_source};
-use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
+use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
+use kithara_decode::DecoderBackend;
+use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_net::NetOptions;
 use kithara_play::internal::init_offline_backend;
-use kithara_queue::{Queue, QueueConfig, Transition};
+use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{Xorshift64, kithara};
+use kithara_test_utils::{TestTempDir, Xorshift64, kithara};
 use tokio::{
     sync::OnceCell,
     time::{sleep, timeout},
@@ -41,6 +43,31 @@ use tokio::{
 struct TestCtx {
     config: AppConfig,
     queue: Arc<Queue>,
+    /// Isolated cache dir, shared by every track this test binary
+    /// loads. Auto-deletes when the process exits, so real-network
+    /// runs don't pollute the shared app cache at
+    /// `env::temp_dir()/kithara`.
+    cache: TestTempDir,
+}
+
+/// Same as [`build_source`] but overrides `store.cache_dir` with this
+/// process's private temp dir so the real `kithara-app` cache stays
+/// clean.
+fn build_track_source(
+    url: &str,
+    ctx: &TestCtx,
+    backend: DecoderBackend,
+    abr: AbrMode,
+) -> TrackSource {
+    match build_source(url, &ctx.config) {
+        TrackSource::Config(mut cfg) => {
+            cfg.store = StoreOptions::new(ctx.cache.path());
+            cfg.decoder_backend = backend;
+            cfg.initial_abr_mode = abr;
+            TrackSource::Config(cfg)
+        }
+        other => other,
+    }
 }
 
 mod test_statics {
@@ -57,13 +84,14 @@ async fn shared_test_ctx() -> &'static TestCtx {
             // guarantees exactly one initialization per process.
             test_statics::INIT_OFFLINE.call_once(init_offline_backend);
 
-            let net = NetOptions {
-                insecure: true,
-                ..NetOptions::default()
-            };
+            let net = NetOptions::default().with_insecure(true);
             let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
-            let config = AppConfig::new(downloader);
-            let queue = Arc::new(Queue::new(QueueConfig::default().with_autoplay(true)));
+            let flush_hub = FlushHub::new(
+                tokio_util::sync::CancellationToken::new(),
+                FlushPolicy::default(),
+            );
+            let config = AppConfig::new(downloader, flush_hub);
+            let queue = Arc::new(Queue::new(QueueConfig::default()));
 
             // Background tick driver: Queue::tick updates cached
             // position, drains engine events, and arms crossfade. In
@@ -77,7 +105,11 @@ async fn shared_test_ctx() -> &'static TestCtx {
                 }
             });
 
-            TestCtx { config, queue }
+            TestCtx {
+                config,
+                queue,
+                cache: TestTempDir::new(),
+            }
         })
         .await
 }
@@ -205,31 +237,325 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 /// (DRM 403, MP3 seek-near-end hang, position drift).
 #[kithara::test(tokio)]
 #[ignore] // real network
-#[case::silvercomet_mp3("https://stream.silvercomet.top/track.mp3", 42)]
-#[case::silvercomet_hls("https://stream.silvercomet.top/hls/master.m3u8", 42)]
-#[case::silvercomet_drm("https://stream.silvercomet.top/drm/master.m3u8", 42)]
-#[case::zvuk_hq_1("https://cdn-edge.zvq.me/track/streamhq?id=27390231", 42)]
-#[case::zvuk_hq_2("https://cdn-edge.zvq.me/track/streamhq?id=151585912", 42)]
-#[case::zvuk_hq_3("https://cdn-edge.zvq.me/track/streamhq?id=125475417", 42)]
-#[case::zvuk_drm_1(
+// silvercomet MP3
+#[case::silvercomet_mp3_symphonia(
+    "https://stream.silvercomet.top/track.mp3",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_mp3_apple(
+        "https://stream.silvercomet.top/track.mp3",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::silvercomet_mp3_android(
+        "https://stream.silvercomet.top/track.mp3",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+// silvercomet HLS — параметризовано по ABR режиму (auto / locked_low / locked_high).
+// `locked_*` закрепляют вариант; если locked_* PASS и auto FAIL — виноват ABR flip во время seek.
+#[case::silvercomet_hls_symphonia_auto(
+    "https://stream.silvercomet.top/hls/master.m3u8",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
+)]
+#[case::silvercomet_hls_symphonia_locked_low(
+    "https://stream.silvercomet.top/hls/master.m3u8",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Manual(0)
+)]
+#[case::silvercomet_hls_symphonia_locked_high(
+    "https://stream.silvercomet.top/hls/master.m3u8",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Manual(2)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_hls_apple_auto(
+        "https://stream.silvercomet.top/hls/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_hls_apple_locked_low(
+        "https://stream.silvercomet.top/hls/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Manual(0)
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_hls_apple_locked_high(
+        "https://stream.silvercomet.top/hls/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Manual(2)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::silvercomet_hls_android(
+        "https://stream.silvercomet.top/hls/master.m3u8",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+// silvercomet DRM — параметризовано по ABR (auto / locked_low / locked_high).
+#[case::silvercomet_drm_symphonia_auto(
+    "https://stream.silvercomet.top/drm/master.m3u8",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
+)]
+#[case::silvercomet_drm_symphonia_locked_low(
+    "https://stream.silvercomet.top/drm/master.m3u8",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Manual(0)
+)]
+#[case::silvercomet_drm_symphonia_locked_high(
+    "https://stream.silvercomet.top/drm/master.m3u8",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Manual(2)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_drm_apple_auto(
+        "https://stream.silvercomet.top/drm/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_drm_apple_locked_low(
+        "https://stream.silvercomet.top/drm/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Manual(0)
+    )
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::silvercomet_drm_apple_locked_high(
+        "https://stream.silvercomet.top/drm/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Manual(2)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::silvercomet_drm_android(
+        "https://stream.silvercomet.top/drm/master.m3u8",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+// zvuk HQ 1
+#[case::zvuk_hq_1_symphonia(
+    "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_hq_1_apple(
+        "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_hq_1_android(
+        "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+// zvuk HQ 2
+#[case::zvuk_hq_2_symphonia(
+    "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_hq_2_apple(
+        "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_hq_2_android(
+        "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+// zvuk HQ 3
+#[case::zvuk_hq_3_symphonia(
+    "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_hq_3_apple(
+        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_hq_3_android(
+        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+// zvuk DRM 1
+#[case::zvuk_drm_1_symphonia(
     "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8",
-    42
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
 )]
-#[case::zvuk_hls_1(
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_drm_1_apple(
+        "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_drm_1_android(
+        "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+// zvuk HLS 1
+#[case::zvuk_hls_1_symphonia(
     "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
-    42
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
 )]
-#[case::zvuk_drm_2(
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_hls_1_apple(
+        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_hls_1_android(
+        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+// zvuk DRM 2
+#[case::zvuk_drm_2_symphonia(
     "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
-    42
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
 )]
-#[case::zvuk_hls_2(
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_drm_2_apple(
+        "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_drm_2_android(
+        "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+// zvuk HLS 2
+#[case::zvuk_hls_2_symphonia(
     "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
-    42
+    42,
+    DecoderBackend::Symphonia,
+    AbrMode::Auto(None)
 )]
-async fn track_plays_end_to_end(#[case] url: &str, #[case] rng_seed: u64) {
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::zvuk_hls_2_apple(
+        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
+        42,
+        DecoderBackend::Apple,
+        AbrMode::Auto(None)
+    )
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::zvuk_hls_2_android(
+        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
+        42,
+        DecoderBackend::Android,
+        AbrMode::Auto(None)
+    )
+)]
+async fn track_plays_end_to_end(
+    #[case] url: &str,
+    #[case] rng_seed: u64,
+    #[case] backend: DecoderBackend,
+    #[case] abr: AbrMode,
+) {
     let ctx = shared_test_ctx().await;
-    let source = build_source(url, &ctx.config);
+    let source = build_track_source(url, ctx, backend, abr);
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx.queue.append(source);
 
@@ -267,31 +593,37 @@ async fn track_plays_end_to_end(#[case] url: &str, #[case] rng_seed: u64) {
         wait_for_position_near(&ctx.queue, target, 1.0, Duration::from_secs(5))
             .await
             .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail [{url}]: {e}"));
-        // Hang detection: decoder must advance by ≥1s over next 2s.
-        // OfflineBackend runs at ~70% realtime so 1s is a comfortable
-        // floor below real advance (~1.4s expected) but above any
-        // decoder stall.
+        // Hang detection: decoder must advance by ≥0.5s over next 2s.
+        // OfflineBackend is not strictly realtime-capped — ratio floats
+        // roughly in 0.85–1.2× realtime depending on host CPU load. On
+        // real-network MP3 a single post-seek fetch can stall the decoder
+        // for up to 1.5s of wall clock; the 0.5s floor catches full
+        // decoder stalls (>75% starved) without flaking on transient
+        // network latency.
         let before = ctx.queue.position_seconds().unwrap_or(0.0);
         sleep(Duration::from_secs(2)).await;
         let after = ctx.queue.position_seconds().unwrap_or(0.0);
         assert!(
-            after - before >= 1.0,
+            after - before >= 0.5,
             "seek #{i} hang [{url}]: {before:.2}→{after:.2} over 2s"
         );
     }
 
-    // (d) Position consistency — 2s wall clock should produce ~1.4s
-    // audio position advance on OfflineBackend (~70% realtime). Any
-    // drift beyond ±0.5s of that window indicates a real bug in
-    // position reporting (slider-ahead, PTS reset, or similar).
+    // (d) Position consistency — OfflineBackend drives the firewheel
+    // graph via best-effort `park_timeout`, so audio gain over a wall-
+    // clock sleep lands around realtime with jitter: observed 0.95–1.2×
+    // wall on a quiet host, depending on decoder cost. Lower bound 0.9s
+    // catches silent stalls; upper bound 2.5s catches position-ahead
+    // bugs (PTS double-counting, slider-ahead, sample-rate mismatch)
+    // while tolerating the non-strict pacing.
     let start_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     sleep(Duration::from_secs(2)).await;
     let end_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     let gain = end_pos - start_pos;
     assert!(
-        (0.9..=1.9).contains(&gain),
+        (0.9..=2.5).contains(&gain),
         "position gain out of offline-realtime window [{url}]: got \
-         {gain:.2}s over 2s wall clock (expected 0.9..1.9; start=\
+         {gain:.2}s over 2s wall clock (expected 0.9..2.5; start=\
          {start_pos:.2} end={end_pos:.2})",
     );
 
@@ -325,15 +657,21 @@ where
 
 /// Drive `AppConfig::DEFAULT_TRACKS` (all 10 URLs including DRM) end-
 /// to-end: play first, pause/resume, seek, manual crossfade, auto-
-/// advance through the rest, QueueEnded on the last. Per-track
+/// advance through the rest, `QueueEnded` on the last. Per-track
 /// failures are collected and reported in a structured final panic
 /// so DRM regressions surface as a list instead of killing the whole
 /// test at the first bad entry.
 #[kithara::test(tokio)]
 #[ignore] // real network + ~3-5 min wallclock
-async fn queue_playlist_behavior() {
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
+async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     let ctx = shared_test_ctx().await;
-    let urls: Vec<&'static str> = AppConfig::DEFAULT_TRACKS.iter().copied().collect();
+    let urls: Vec<&'static str> = AppConfig::DEFAULT_TRACKS.to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
 
     // Short crossfade so transitions don't dominate wall-clock.
@@ -342,7 +680,10 @@ async fn queue_playlist_behavior() {
     let mut rx = ctx.queue.subscribe();
     let ids: Vec<TrackId> = urls
         .iter()
-        .map(|u| ctx.queue.append(build_source(u, &ctx.config)))
+        .map(|u| {
+            ctx.queue
+                .append(build_track_source(u, ctx, backend, AbrMode::Auto(None)))
+        })
         .collect();
 
     // (1) First track starts

@@ -70,6 +70,71 @@ Samples below 16,000 bytes are filtered as noise. Cache hits set `initial_bps = 
 
 Used by `kithara-hls` for variant selection. Fully independent of HLS specifics -- can be used with any adaptive streaming protocol.
 
+## Module layout
+
+```
+src/
+├── abr.rs          — Abr trait (per-peer ABR capability surface)
+├── controller/
+│   ├── core.rs     — AbrController struct + AbrSettings + AbrPeerId
+│   │                 + lifecycle (new, with_estimator, register, unregister)
+│   │                 + peer-state callbacks (on_locked / on_unlocked /
+│   │                   on_mode_changed / on_max_bandwidth_cap_changed)
+│   ├── tick.rs     — record_bandwidth + tick (decision orchestration)
+│   ├── throttle.rs — EventThrottleCache + emit_throttled
+│   ├── incoherence.rs — schedule_incoherence_watch + check_incoherence
+│   └── peer.rs     — internal PeerEntry struct
+├── estimator.rs    — ThroughputEstimator + Estimator trait + private Ewma helper
+├── handle.rs       — AbrHandle (Drop-driven unregister; safe external API)
+├── state/
+│   ├── core.rs     — AbrState struct + accessors + commands (apply,
+│   │                 set_mode / set_variants / lock / unlock / …)
+│   ├── decision.rs — pure `evaluate(state, view, now) -> AbrDecision`
+│   │                 (parallel compute + single tuple-match)
+│   ├── view.rs     — AbrView<'a> (decision inputs)
+│   └── error.rs    — AbrError
+├── types.rs        — re-exports of cross-crate vocabulary owned by kithara-events
+├── internal.rs     — feature-gated test/internal exports
+└── lib.rs          — module declarations + public re-exports
+```
+
+## Architecture invariants
+
+- **`AbrState::current_variant` has two legitimate writers**, both go through
+  [`AbrState::apply`](src/state/core.rs):
+  1. `controller::tick` when the auto-mode FSM picks a new variant;
+  2. `kithara-hls` scheduler when the user manually selects a variant — HLS
+     holds `Arc<AbrState>` and applies a `Manual` decision so the layout
+     switch and the ABR state stay in sync.
+  `kithara-hls`'s `HlsCoord` reads the variant via `Arc<AbrState>` (no
+  cloneable `Arc<AtomicUsize>` handle is exposed) — see `redundant_accessors`
+  in `xtask/src/arch/checks` for the rationale.
+- **`AbrState::set_variant_for_test`** is a `#[cfg(any(test, feature = "internal"))]`
+  escape hatch for HLS integration tests that want to reproduce a midstream
+  variant switch without simulating a full ABR tick.
+
+## Decision flow
+
+```
+Downloader → AbrController::record_bandwidth(peer_id, bytes, dur, source)
+           → ThroughputEstimator::push_sample()
+           → AbrController::tick(peer_id, now)
+             ├─ peer.variants() / peer.progress()        (pull from peer)
+             ├─ AbrView { estimate_bps, buffer, … }
+             ├─ state::decision::evaluate(state, view, now)
+             │  ├─ Phase 1: parallel compute (5 independent let-bindings)
+             │  ├─ Phase 2: single tuple-match → AbrDecision
+             │  └─ Phase 3: bandwidth-aware up_switch / down_switch
+             ├─ if changed: AbrState::apply()
+             │              + bus.publish(AbrEvent::VariantApplied)
+             │              + schedule_incoherence_watch (5 s deadline)
+             └─ else: bus.publish(AbrEvent::DecisionSkipped)
+```
+
+The decision function avoids a heterogeneous guard-cascade for branch
+prediction reasons — see `xtask/src/idioms/checks/guard_cascade.rs` for
+why and what NOT to do as a workaround.
+
 ## Benchmarking
 
 Run Criterion microbenchmarks for ABR estimator/decision hot paths:

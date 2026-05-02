@@ -1,7 +1,7 @@
 //! Concurrent File instance tests.
 //!
-//! Verifies that 2, 4, and 8 `Audio<Stream<File>>` instances can run
-//! concurrently and each reads PCM data to EOF.
+//! Verifies that N `Audio<Stream<File>>` instances can run concurrently
+//! and each reads PCM data to EOF with roughly matching sample counts.
 
 use std::path::Path;
 
@@ -11,78 +11,16 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::thread;
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestServerHelper, TestTempDir};
 use tracing::info;
 
-/// Read all PCM data from an `Audio` instance to EOF.
-///
-/// Returns the total number of samples read.
-fn read_to_eof(audio: &mut Audio<Stream<File>>) -> u64 {
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    loop {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            break;
-        }
-        // Sanity: all samples must be finite
-        for &s in &buf[..n] {
-            assert!(s.is_finite(), "non-finite sample at offset {total}");
-        }
-        total += n as u64;
-    }
-    assert!(audio.is_eof(), "expected EOF after reading all data");
-    total
-}
-
-#[cfg(target_arch = "wasm32")]
-fn read_for_concurrency_check(audio: &mut Audio<Stream<File>>) -> u64 {
-    const MAX_ZERO_READS: usize = 200;
-    const MIN_SAMPLES_PER_INSTANCE: u64 = 8192;
-
-    let mut buf = vec![0.0f32; 4096];
-    let mut total = 0u64;
-    let mut zero_reads = 0usize;
-
-    while total < MIN_SAMPLES_PER_INSTANCE && zero_reads < MAX_ZERO_READS {
-        let n = audio.read(&mut buf);
-        if n == 0 {
-            if audio.is_eof() {
-                break;
-            }
-            zero_reads += 1;
-            thread::sleep(Duration::from_millis(10));
-            continue;
-        }
-
-        zero_reads = 0;
-        for &sample in &buf[..n] {
-            assert!(sample.is_finite(), "non-finite sample at offset {total}");
-        }
-        total += n as u64;
-    }
-
-    assert!(
-        total >= MIN_SAMPLES_PER_INSTANCE,
-        "expected at least {MIN_SAMPLES_PER_INSTANCE} samples, got {total}",
-    );
-    total
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_for_concurrency_check(audio: &mut Audio<Stream<File>>) -> u64 {
-    read_to_eof(audio)
-}
+use crate::common::reader_helpers::{ReadLimit, read_for_concurrency_check};
 
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
 async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File>> {
     let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(cache_dir));
-
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
-
     Audio::<Stream<File>>::new(config)
         .await
         .expect("create Audio<Stream<File>>")
@@ -103,9 +41,38 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
     }
 }
 
-// Tests
+async fn run_concurrent_file(n: usize) {
+    let server = TestServerHelper::new().await;
 
-/// 2 concurrent File instances on a shared pool.
+    let mut handles = Vec::new();
+    let mut temps = Vec::new();
+    for i in 0..n {
+        let temp = TestTempDir::new();
+        let audio = create_file_audio(server.asset("test.mp3"), temp.path()).await;
+        temps.push(temp);
+        handles.push(spawn_blocking(move || {
+            let mut audio = audio;
+            let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
+            info!(instance = i, total_samples = total, "instance finished");
+            (i, total)
+        }));
+    }
+
+    let mut results = Vec::new();
+    for h in handles {
+        results.push(h.await.expect("join"));
+    }
+    drop(temps);
+
+    info!(?results, "all instances done");
+    for (id, total) in &results {
+        assert!(*total > 0, "instance {id} read 0 samples");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    assert_consistent_counts(&results);
+}
+
+/// N concurrent File instances on a shared pool.
 ///
 /// Each Audio instance uses 2 pool threads (downloader + `audio_loop`),
 /// so pool size must be >= 2 * N to avoid starvation.
@@ -116,111 +83,9 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
     timeout(Duration::from_secs(20)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
-async fn two_file_instances() {
-    let server = TestServerHelper::new().await;
-
-    let mut handles = Vec::new();
-    let mut temps = Vec::new();
-    for i in 0..2 {
-        let temp = TestTempDir::new();
-        let audio = create_file_audio(server.asset("test.mp3"), temp.path()).await;
-        temps.push(temp);
-        handles.push(spawn_blocking(move || {
-            let mut audio = audio;
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, total_samples = total, "instance finished");
-            (i, total)
-        }));
-    }
-
-    let mut results = Vec::new();
-    for h in handles {
-        results.push(h.await.expect("join"));
-    }
-    drop(temps);
-
-    info!(?results, "all instances done");
-    for (id, total) in &results {
-        assert!(*total > 0, "instance {id} read 0 samples");
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    assert_consistent_counts(&results);
-}
-
-/// 4 concurrent File instances on a shared pool.
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
-async fn four_file_instances() {
-    let server = TestServerHelper::new().await;
-
-    let mut handles = Vec::new();
-    let mut temps = Vec::new();
-    for i in 0..4 {
-        let temp = TestTempDir::new();
-        let audio = create_file_audio(server.asset("test.mp3"), temp.path()).await;
-        temps.push(temp);
-        handles.push(spawn_blocking(move || {
-            let mut audio = audio;
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, total_samples = total, "instance finished");
-            (i, total)
-        }));
-    }
-
-    let mut results = Vec::new();
-    for h in handles {
-        results.push(h.await.expect("join"));
-    }
-    drop(temps);
-
-    info!(?results, "all instances done");
-    for (id, total) in &results {
-        assert!(*total > 0, "instance {id} read 0 samples");
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    assert_consistent_counts(&results);
-}
-
-/// 8 concurrent File instances on a shared pool.
-#[kithara::test(
-    tokio,
-    browser,
-    serial,
-    timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
-async fn eight_file_instances() {
-    let server = TestServerHelper::new().await;
-
-    let mut handles = Vec::new();
-    let mut temps = Vec::new();
-    for i in 0..8 {
-        let temp = TestTempDir::new();
-        let audio = create_file_audio(server.asset("test.mp3"), temp.path()).await;
-        temps.push(temp);
-        handles.push(spawn_blocking(move || {
-            let mut audio = audio;
-            let total = read_for_concurrency_check(&mut audio);
-            info!(instance = i, total_samples = total, "instance finished");
-            (i, total)
-        }));
-    }
-
-    let mut results = Vec::new();
-    for h in handles {
-        results.push(h.await.expect("join"));
-    }
-    drop(temps);
-
-    info!(?results, "all instances done");
-    for (id, total) in &results {
-        assert!(*total > 0, "instance {id} read 0 samples");
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    assert_consistent_counts(&results);
+#[case::n2(2)]
+#[case::n4(4)]
+#[case::n8(8)]
+async fn concurrent_file_instances(#[case] instances: usize) {
+    run_concurrent_file(instances).await;
 }

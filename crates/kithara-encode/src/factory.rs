@@ -31,9 +31,7 @@ impl EncoderFactory {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = target;
-            Err(EncodeError::InvalidInput(
-                "encoding is not supported on wasm32".to_owned(),
-            ))
+            Self::wasm_unsupported()
         }
     }
 
@@ -55,19 +53,8 @@ impl EncoderFactory {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = codec;
-            Err(EncodeError::InvalidInput(
-                "encoding is not supported on wasm32".to_owned(),
-            ))
+            Self::wasm_unsupported()
         }
-    }
-
-    /// Return the natural frame size for packaged encoding of `codec`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the codec does not support packaged encoding.
-    pub fn frame_samples(codec: AudioCodec) -> EncodeResult<usize> {
-        Self::create_packaged(codec)?.packaged_frame_samples(codec)
     }
 
     /// Encode a finite PCM source into complete encoded bytes.
@@ -91,6 +78,22 @@ impl EncoderFactory {
             .codec
             .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
         Self::create_packaged(codec)?.encode_packaged(request)
+    }
+
+    /// Return the natural frame size for packaged encoding of `codec`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the codec does not support packaged encoding.
+    pub fn frame_samples(codec: AudioCodec) -> EncodeResult<usize> {
+        Self::create_packaged(codec)?.packaged_frame_samples(codec)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn wasm_unsupported() -> EncodeResult<Box<dyn InnerEncoder>> {
+        Err(EncodeError::InvalidInput(
+            "encoding is not supported on wasm32".to_owned(),
+        ))
     }
 }
 

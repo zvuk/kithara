@@ -30,11 +30,6 @@ use crate::{HlsError, HlsResult};
 /// host is looked up in the registry to pick the matching rule.
 #[derive(Clone)]
 pub struct KeyManager {
-    downloader: PeerHandle,
-    backend: AssetStore<DecryptContext>,
-    /// Cache-wide headers (typically equal to `HlsConfig::headers`).
-    base_headers: Option<Headers>,
-    key_registry: Option<KeyProcessorRegistry>,
     /// In-memory store of decrypted keys for rule-matched URLs.
     ///
     /// Rule-matched (DRM) key responses are seed-dependent: the server
@@ -46,6 +41,13 @@ pub struct KeyManager {
     /// the lifetime of the stream — `get_cached_key` stays zero-I/O
     /// on the segment hot path.
     decrypted_keys: Arc<Mutex<HashMap<Url, Bytes>>>,
+    backend: AssetStore<DecryptContext>,
+    /// Cache-wide headers (typically equal to `HlsConfig::headers`).
+    base_headers: Option<Headers>,
+    key_registry: Option<KeyProcessorRegistry>,
+    downloader: PeerHandle,
+    /// Byte buffer pool for reading cached key bodies.
+    byte_pool: kithara_bufpool::BytePool,
 }
 
 impl KeyManager {
@@ -61,14 +63,28 @@ impl KeyManager {
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,
         key_registry: Option<KeyProcessorRegistry>,
+        byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
         Self {
             downloader,
             backend,
             base_headers,
             key_registry,
+            byte_pool,
             decrypted_keys: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub(crate) fn derive_iv(
+        key_info: &crate::parsing::KeyInfo,
+        sequence: u64,
+    ) -> [u8; Self::AES_KEY_LEN] {
+        if let Some(iv) = key_info.iv {
+            return iv;
+        }
+        let mut iv = [0u8; Self::AES_KEY_LEN];
+        iv[Self::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
+        iv
     }
 
     /// Convenience constructor from [`crate::config::KeyOptions`].
@@ -78,8 +94,52 @@ impl KeyManager {
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,
         options: crate::config::KeyOptions,
+        byte_pool: kithara_bufpool::BytePool,
     ) -> Self {
-        Self::new(downloader, backend, base_headers, options.key_registry)
+        Self::new(
+            downloader,
+            backend,
+            base_headers,
+            options.key_registry,
+            byte_pool,
+        )
+    }
+
+    /// Synchronous key lookup — no I/O.
+    ///
+    /// DRM keys come from the in-memory map populated by a prior
+    /// [`Self::get_raw_key`] call on this session. Non-DRM keys come
+    /// from the persistent [`AssetStore`] disk cache.
+    ///
+    /// # Errors
+    /// Returns an error when the key hasn't been fetched yet.
+    pub fn get_cached_key(&self, url: &Url) -> HlsResult<Bytes> {
+        let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
+        if rule.is_some() {
+            return self
+                .decrypted_keys
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(url)
+                .cloned()
+                .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
+        }
+
+        let cache_key = ResourceKey::from_url(url);
+        let res = self
+            .backend
+            .open_resource(&cache_key)
+            .map_err(|e| HlsError::KeyProcessing(format!("key not in cache: {url} — {e}")))?;
+        let mut buf = self.byte_pool.get();
+        let n = res.read_into(&mut buf).map_err(|e| {
+            HlsError::KeyProcessing(format!("failed to read cached key: {url} — {e}"))
+        })?;
+        if n == 0 {
+            return Err(HlsError::KeyProcessing(format!(
+                "cached key is empty: {url}",
+            )));
+        }
+        Ok(Bytes::copy_from_slice(&buf[..n]))
     }
 
     /// Load, optionally preprocess, and return the final key bytes.
@@ -116,6 +176,7 @@ impl KeyManager {
             return fetch_atomic_body(
                 &self.downloader,
                 &self.backend,
+                &self.byte_pool,
                 headers,
                 url,
                 rel_path.as_str(),
@@ -160,43 +221,6 @@ impl KeyManager {
         Ok(decrypted)
     }
 
-    /// Synchronous key lookup — no I/O.
-    ///
-    /// DRM keys come from the in-memory map populated by a prior
-    /// [`Self::get_raw_key`] call on this session. Non-DRM keys come
-    /// from the persistent [`AssetStore`] disk cache.
-    ///
-    /// # Errors
-    /// Returns an error when the key hasn't been fetched yet.
-    pub fn get_cached_key(&self, url: &Url) -> HlsResult<Bytes> {
-        let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
-        if rule.is_some() {
-            return self
-                .decrypted_keys
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(url)
-                .cloned()
-                .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
-        }
-
-        let cache_key = ResourceKey::from_url(url);
-        let res = self
-            .backend
-            .open_resource(&cache_key)
-            .map_err(|e| HlsError::KeyProcessing(format!("key not in cache: {url} — {e}")))?;
-        let mut buf = kithara_bufpool::byte_pool().get();
-        let n = res.read_into(&mut buf).map_err(|e| {
-            HlsError::KeyProcessing(format!("failed to read cached key: {url} — {e}"))
-        })?;
-        if n == 0 {
-            return Err(HlsError::KeyProcessing(format!(
-                "cached key is empty: {url}",
-            )));
-        }
-        Ok(Bytes::copy_from_slice(&buf[..n]))
-    }
-
     /// Merge per-rule headers on top of base headers.
     /// Rule-specific entries take precedence on key conflict.
     fn merged_headers(&self, rule_headers: Option<&HashMap<String, String>>) -> Option<Headers> {
@@ -231,18 +255,6 @@ impl KeyManager {
                 .join(key_uri)
                 .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve key URL: {e}")))
         }
-    }
-
-    pub(crate) fn derive_iv(
-        key_info: &crate::parsing::KeyInfo,
-        sequence: u64,
-    ) -> [u8; Self::AES_KEY_LEN] {
-        if let Some(iv) = key_info.iv {
-            return iv;
-        }
-        let mut iv = [0u8; Self::AES_KEY_LEN];
-        iv[Self::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
-        iv
     }
 }
 

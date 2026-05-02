@@ -11,6 +11,36 @@ use crate::{
 };
 
 impl HlsScheduler {
+    pub(crate) fn apply_cached_segment_progress(
+        &mut self,
+        variant: usize,
+        cached_count: usize,
+        cached_end_offset: u64,
+    ) {
+        if cached_count == 0 {
+            return;
+        }
+
+        let current_download = self.coord.timeline().download_position();
+        if cached_end_offset > current_download {
+            self.coord
+                .timeline()
+                .set_download_position(cached_end_offset);
+        }
+        if cached_count > self.current_segment_index() {
+            self.advance_current_segment_index(cached_count);
+        }
+        self.sent_init_for_variant.insert(variant);
+
+        // Cached-segment "completion" announcement was a download-fact
+        // dupe of `DownloaderEvent::RequestCompleted` and is no longer
+        // emitted from this layer. Reader-side `SegmentReadStart`/
+        // `SegmentReadComplete` come from `source_impl::read_at` once
+        // the reader actually crosses the segment boundary.
+        let _ = cached_count;
+        let _ = self.announced_cached_count.entry(variant);
+    }
+
     pub(crate) fn populate_cached_segments(
         segments: &Mutex<StreamIndex>,
         coord: &HlsCoord,
@@ -25,6 +55,48 @@ impl HlsScheduler {
         Self::populate_cached_segments_with_open(segments, coord, playlist_state, variant, |key| {
             backend.resource_state(key).ok()
         })
+    }
+
+    pub(crate) fn populate_cached_segments_if_needed(&mut self, variant: usize) -> (usize, u64) {
+        // Steady-state short-circuit: once the disk scan has discovered
+        // every committed segment for this variant, re-scanning is a no-op
+        // that re-commits identical `SegmentData` and fires
+        // `coord.condvar.notify_all()` — which wakes the audio worker, which
+        // re-polls, which calls this again. That feedback loop is what
+        // makes `live_stress_real_stream_seek_read_cache_drm_mmap` exceed
+        // its 60s budget under stress.
+        //
+        // The tracker is only meaningful for non-ephemeral backends:
+        // ephemeral stores short-circuit `populate_cached_segments`
+        // directly (no durable cache to scan). For non-ephemeral backends
+        // there is no LRU eviction, so a previously-populated count
+        // cannot become stale — fresh segments only ever push the count
+        // forward, and the live-playlist case (`num_segments` grows)
+        // re-enters the slow path because `prev_count < num_segments`.
+        if self.backend.is_ephemeral() {
+            return (0, 0);
+        }
+        let num_segments = self.playlist_state.num_segments(variant).unwrap_or(0);
+        if num_segments > 0
+            && self
+                .populated_cached_count
+                .get(&variant)
+                .copied()
+                .is_some_and(|prev| prev >= num_segments)
+        {
+            let cumulative_offset = self.segments.lock_sync().max_end_offset();
+            return (num_segments, cumulative_offset);
+        }
+
+        let (count, cumulative_offset) = Self::populate_cached_segments(
+            &self.segments,
+            &self.coord,
+            &self.backend,
+            &self.playlist_state,
+            variant,
+        );
+        self.populated_cached_count.insert(variant, count);
+        (count, cumulative_offset)
     }
 
     pub(crate) fn populate_cached_segments_with_open<F>(
@@ -106,8 +178,8 @@ impl HlsScheduler {
                 }
 
                 let data = SegmentData {
-                    init_len: actual_init_len,
                     media_len,
+                    init_len: actual_init_len,
                     init_url: seg_init_url,
                     media_url: segment_url,
                 };
@@ -129,62 +201,5 @@ impl HlsScheduler {
         }
 
         (count, cumulative_offset)
-    }
-
-    pub(crate) fn populate_cached_segments_if_needed(&self, variant: usize) -> (usize, u64) {
-        Self::populate_cached_segments(
-            &self.segments,
-            &self.coord,
-            &self.backend,
-            &self.playlist_state,
-            variant,
-        )
-    }
-
-    pub(crate) fn apply_cached_segment_progress(
-        &mut self,
-        variant: usize,
-        cached_count: usize,
-        cached_end_offset: u64,
-    ) {
-        if cached_count == 0 {
-            return;
-        }
-
-        let current_download = self.coord.timeline().download_position();
-        if cached_end_offset > current_download {
-            self.coord
-                .timeline()
-                .set_download_position(cached_end_offset);
-        }
-        if cached_count > self.current_segment_index() {
-            self.advance_current_segment_index(cached_count);
-        }
-        self.sent_init_for_variant.insert(variant);
-
-        let already_announced = self
-            .announced_cached_count
-            .get(&variant)
-            .copied()
-            .unwrap_or(0);
-        if cached_count <= already_announced {
-            return;
-        }
-
-        for seg_idx in already_announced..cached_count {
-            let bytes = self
-                .segments
-                .lock_sync()
-                .stored_segment(variant, seg_idx)
-                .map_or(0, |s| s.media_len + s.init_len);
-            self.bus.publish(kithara_events::HlsEvent::SegmentComplete {
-                variant,
-                segment_index: seg_idx,
-                bytes_transferred: bytes,
-                cached: true,
-                duration: std::time::Duration::ZERO,
-            });
-        }
-        self.announced_cached_count.insert(variant, cached_count);
     }
 }

@@ -33,10 +33,10 @@ pub struct VariantId(pub usize);
 /// Codec/container information extracted from playlist attributes (best-effort).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodecInfo {
-    /// The raw `CODECS="..."` string from the playlist.
-    pub codecs: Option<String>,
     /// Parsed audio codec from the CODECS string.
     pub audio_codec: Option<AudioCodec>,
+    /// The raw `CODECS="..."` string from the playlist.
+    pub codecs: Option<String>,
     /// A best-effort guess at the container format.
     pub container: Option<ContainerFormat>,
 }
@@ -57,10 +57,10 @@ pub enum EncryptionMethod {
 pub struct KeyInfo {
     /// The encryption method to be used.
     pub method: EncryptionMethod,
-    /// The URI of the encryption key. Can be relative to the playlist.
-    pub uri: Option<String>,
     /// The initialization vector (IV), if specified.
     pub iv: Option<[u8; IV_LEN]>,
+    /// The URI of the encryption key. Can be relative to the playlist.
+    pub uri: Option<String>,
 }
 
 /// The effective encryption key for a specific segment.
@@ -82,63 +82,63 @@ pub struct MasterPlaylist {
 /// One variant stream entry from a master playlist.
 #[derive(Debug, Clone)]
 pub struct VariantStream {
-    /// Variant identifier (stable for this parsed master playlist).
-    pub id: VariantId,
-    /// Absolute or relative URL of the media playlist for this variant.
-    pub uri: String,
     /// Optional advertised bandwidth in bits per second.
     pub bandwidth: Option<u64>,
-    /// Optional human-readable name.
-    pub name: Option<String>,
     /// Codec and format information for this variant.
     pub codec: Option<CodecInfo>,
+    /// Optional human-readable name.
+    pub name: Option<String>,
+    /// Absolute or relative URL of the media playlist for this variant.
+    pub uri: String,
+    /// Variant identifier (stable for this parsed master playlist).
+    pub id: VariantId,
 }
 
 /// Parsed init segment information (for fMP4 streams).
 #[derive(Debug, Clone)]
 pub struct InitSegment {
-    /// URL of the initialization segment (absolute or relative to playlist URI).
-    pub uri: String,
     /// Optional encryption information effective for this init segment.
     pub key: Option<SegmentKey>,
+    /// URL of the initialization segment (absolute or relative to playlist URI).
+    pub uri: String,
 }
 
 /// Parsed media playlist.
 #[derive(Debug, Clone)]
 pub struct MediaPlaylist {
-    /// List of segments in the order they appear.
-    pub segments: Vec<MediaSegment>,
-    /// Target segment duration if present.
-    pub target_duration: Option<Duration>,
-    /// Optional initialization segment (for fMP4 streams).
-    pub init_segment: Option<InitSegment>,
-    /// Media sequence number of the first segment.
-    pub media_sequence: u64,
-    /// Whether the playlist is finished (VOD or live that ended).
-    pub end_list: bool,
     /// Informational: first key found in the playlist (if any).
     pub current_key: Option<KeyInfo>,
     /// Container format detected from segment/init URIs.
     pub detected_container: Option<ContainerFormat>,
+    /// Optional initialization segment (for fMP4 streams).
+    pub init_segment: Option<InitSegment>,
+    /// Target segment duration if present.
+    pub target_duration: Option<Duration>,
+    /// List of segments in the order they appear.
+    pub segments: Vec<MediaSegment>,
     /// Whether the playlist allows caching.
     ///
     /// `false` when the playlist contains `#EXT-X-ALLOW-CACHE:NO` (HLS v3, deprecated in v7).
     pub allow_cache: bool,
+    /// Whether the playlist is finished (VOD or live that ended).
+    pub end_list: bool,
+    /// Media sequence number of the first segment.
+    pub media_sequence: u64,
 }
 
 /// One media segment entry.
 #[derive(Debug, Clone)]
 pub struct MediaSegment {
-    /// Sequence number of the segment (media-sequence + index in playlist).
-    pub sequence: u64,
-    /// URL of the segment (absolute or relative to playlist URI).
-    pub uri: String,
     /// Duration of the segment if known.
     pub duration: Duration,
-    /// Optional encryption information effective for this segment.
-    pub key: Option<SegmentKey>,
     /// Byte length from `#EXT-X-BYTERANGE` if present in the playlist.
     pub byte_range_len: Option<u64>,
+    /// Optional encryption information effective for this segment.
+    pub key: Option<SegmentKey>,
+    /// URL of the segment (absolute or relative to playlist URI).
+    pub uri: String,
+    /// Sequence number of the segment (media-sequence + index in playlist).
+    pub sequence: u64,
 }
 
 /// Detect container format from URI extension.
@@ -192,18 +192,18 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                 let container = detect_container_from_uri(&uri);
 
                 CodecInfo {
-                    codecs: Some(c),
                     audio_codec,
                     container,
+                    codecs: Some(c),
                 }
             });
 
             VariantStream {
-                id: VariantId(index),
                 uri,
                 bandwidth,
-                name: None,
                 codec,
+                id: VariantId(index),
+                name: None,
             }
         })
         .collect();
@@ -317,14 +317,14 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
         });
 
     Ok(MediaPlaylist {
-        segments,
-        target_duration,
-        init_segment,
-        media_sequence,
-        end_list,
         current_key,
         detected_container,
+        init_segment,
+        target_duration,
+        segments,
         allow_cache,
+        end_list,
+        media_sequence,
     })
 }
 
@@ -574,9 +574,9 @@ audio_flac.m3u8"
         #[case] name: Option<String>,
     ) {
         let variant = VariantStream {
+            bandwidth,
             id: VariantId(id as usize),
             uri: uri.to_string(),
-            bandwidth,
             name: name.clone(),
             codec: None,
         };

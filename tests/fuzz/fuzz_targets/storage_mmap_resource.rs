@@ -1,7 +1,7 @@
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
-use kithara_storage::{MmapOptions, MmapResource, OpenMode, ResourceExt};
+use kithara_storage::{MmapOptions, MmapResource, ResourceExt};
 use libfuzzer_sys::fuzz_target;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -55,11 +55,7 @@ fuzz_target!(|input: Input| {
     let path = dir.path().join("mmap_fuzz.bin");
     let res = match MmapResource::open(
         CancellationToken::new(),
-        MmapOptions {
-            path,
-            initial_len: Some(u64::from(input.initial_len)),
-            mode: OpenMode::Auto,
-        },
+        MmapOptions::new(path).with_initial_len(u64::from(input.initial_len)),
     ) {
         Ok(res) => res,
         Err(_) => return,

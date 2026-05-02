@@ -87,6 +87,7 @@ pub fn create_test_downloader() -> Downloader {
 /// Create a private test [`PeerHandle`] via `Downloader::register`.
 fn create_test_peer_handle() -> PeerHandle {
     struct TestPeer;
+    impl kithara::abr::Abr for TestPeer {}
     impl Peer for TestPeer {}
     let cancel = CancellationToken::new();
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
@@ -96,7 +97,11 @@ fn create_test_peer_handle() -> PeerHandle {
 /// Build a test [`PlaylistCache`] backed by the supplied
 /// [`TestAssets`] + a fresh private [`PeerHandle`].
 pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCache {
-    PlaylistCache::new(assets.assets().clone(), create_test_peer_handle())
+    PlaylistCache::new(
+        assets.assets().clone(),
+        create_test_peer_handle(),
+        kithara_bufpool::BytePool::default(),
+    )
 }
 
 /// Build a test [`KeyManager`] backed by a fresh [`PeerHandle`] and
@@ -111,6 +116,7 @@ pub fn test_key_manager(
         assets.assets().clone(),
         None,
         key_registry,
+        kithara_bufpool::BytePool::default(),
     )
 }
 

@@ -44,13 +44,13 @@ pub(crate) struct PlayerNode {
     #[diff(skip)]
     cmd_rx: Arc<Mutex<Option<HeapCons<PlayerCmd>>>>,
 
-    /// PCM buffer pool for scratch buffer allocation.
-    #[diff(skip)]
-    pcm_pool: PcmPool,
-
     /// Shared atomic state for position, duration, notifications, etc.
     #[diff(skip)]
     shared_state: Arc<SharedPlayerState>,
+
+    /// PCM buffer pool for scratch buffer allocation.
+    #[diff(skip)]
+    pcm_pool: PcmPool,
 }
 
 impl PlayerNode {
@@ -65,9 +65,23 @@ impl PlayerNode {
         Self {
             active: true,
             cmd_rx: Arc::new(Mutex::new(Some(rx))),
-            pcm_pool: kithara_bufpool::pcm_pool().clone(),
+            // PlayerNode test-only constructor
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            pcm_pool: PcmPool::default().clone(),
             shared_state: Arc::new(SharedPlayerState::new()),
         }
+    }
+
+    /// Get a reference to the command receiver.
+    #[expect(dead_code, reason = "accessor for future use")]
+    pub(crate) fn cmd_rx(&self) -> &Arc<Mutex<Option<HeapCons<PlayerCmd>>>> {
+        &self.cmd_rx
+    }
+
+    /// Get a reference to the shared player state.
+    #[cfg_attr(not(test), expect(dead_code, reason = "accessor for future use"))]
+    pub(crate) fn shared_state(&self) -> &Arc<SharedPlayerState> {
+        &self.shared_state
     }
 
     /// Create a player node wired to the given command channel and shared state.
@@ -77,37 +91,16 @@ impl PlayerNode {
         pcm_pool: PcmPool,
     ) -> Self {
         Self {
-            active: true,
-            cmd_rx: Arc::new(Mutex::new(Some(cmd_rx))),
             pcm_pool,
             shared_state,
+            active: true,
+            cmd_rx: Arc::new(Mutex::new(Some(cmd_rx))),
         }
-    }
-
-    /// Get a reference to the shared player state.
-    #[cfg_attr(not(test), expect(dead_code, reason = "accessor for future use"))]
-    pub(crate) fn shared_state(&self) -> &Arc<SharedPlayerState> {
-        &self.shared_state
-    }
-
-    /// Get a reference to the command receiver.
-    #[expect(dead_code, reason = "accessor for future use")]
-    pub(crate) fn cmd_rx(&self) -> &Arc<Mutex<Option<HeapCons<PlayerCmd>>>> {
-        &self.cmd_rx
     }
 }
 
 impl AudioNode for PlayerNode {
     type Configuration = EmptyConfig;
-
-    fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
-            .debug_name("Player")
-            .channel_config(ChannelConfig {
-                num_inputs: ChannelCount::ZERO,
-                num_outputs: ChannelCount::STEREO,
-            })
-    }
 
     fn construct_processor(
         &self,
@@ -125,6 +118,15 @@ impl AudioNode for PlayerNode {
             sample_rate,
             &self.pcm_pool,
         )
+    }
+
+    fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
+        AudioNodeInfo::new()
+            .debug_name("Player")
+            .channel_config(ChannelConfig {
+                num_inputs: ChannelCount::ZERO,
+                num_outputs: ChannelCount::STEREO,
+            })
     }
 }
 
@@ -159,7 +161,9 @@ mod tests {
     fn player_node_with_channel(#[case] cmd: PlayerCmd) {
         let (mut tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
         let shared_state = Arc::new(SharedPlayerState::new());
-        let node = PlayerNode::with_channel(rx, shared_state, kithara_bufpool::pcm_pool().clone());
+        // test fixture
+        // ast-grep-ignore: perf.no-global-pool-accessor
+        let node = PlayerNode::with_channel(rx, shared_state, PcmPool::default().clone());
         assert!(node.active);
 
         // Verify the channel is connected

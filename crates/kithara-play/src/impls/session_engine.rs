@@ -46,6 +46,14 @@ use crate::{
 
 pub(crate) type PlayerId = u64;
 
+/// Wiring returned by `allocate_slot`: slot id plus producer/state/eq handles.
+type AllocatedSlot = (
+    SlotId,
+    HeapProd<PlayerCmd>,
+    Arc<SharedPlayerState>,
+    SharedEq,
+);
+
 /// Function pointer that starts a firewheel audio stream with the given
 /// sample-rate hint on a context parametrised over backend `B`. Each
 /// backend (cpal, web-audio, offline) provides its own implementation.
@@ -53,25 +61,25 @@ type StartStreamFn<B> = fn(&mut FirewheelCtx<B>, u32) -> Result<(), String>;
 
 #[derive(Debug)]
 struct SlotNodes {
-    slot_id: SlotId,
-    player_node_id: NodeID,
     vol_pan_memo: Memo<VolumePanNode>,
+    player_node_id: NodeID,
     vol_pan_node_id: NodeID,
+    slot_id: SlotId,
 }
 
 struct PlayerState {
-    eq_layout: Vec<EqBandConfig>,
     master_eq_memo: Option<Memo<MasterEqNode>>,
     master_eq_node_id: Option<NodeID>,
-    master_volume: f32,
     master_vol_pan_memo: Option<Memo<VolumePanNode>>,
     master_vol_pan_node_id: Option<NodeID>,
-    next_slot_id: u64,
     pcm_pool: PcmPool,
     player_id: PlayerId,
     shared_eq: SharedEq,
+    eq_layout: Vec<EqBandConfig>,
     slots: Vec<SlotNodes>,
     started: bool,
+    master_volume: f32,
+    next_slot_id: u64,
 }
 
 impl PlayerState {
@@ -79,14 +87,14 @@ impl PlayerState {
         let band_count = eq_layout.len();
         Self {
             eq_layout,
+            pcm_pool,
+            player_id,
             master_eq_memo: None,
             master_eq_node_id: None,
             master_volume: 1.0,
             master_vol_pan_memo: None,
             master_vol_pan_node_id: None,
             next_slot_id: 1,
-            pcm_pool,
-            player_id,
             shared_eq: SharedEq::new(band_count),
             slots: Vec::new(),
             started: false,
@@ -96,27 +104,28 @@ impl PlayerState {
 
 struct SessionState<B: AudioBackend> {
     ctx: Option<FirewheelCtx<B>>,
-    next_player_id: PlayerId,
-    players: Vec<PlayerState>,
-    sample_rate_hint: u32,
-    session_ducking: SessionDuckingMode,
     session_output_memo: Option<Memo<VolumePanNode>>,
     session_output_node_id: Option<NodeID>,
+    next_player_id: PlayerId,
+    session_ducking: SessionDuckingMode,
     /// Backend-specific stream starter baked in at engine-thread spawn
     /// time. Lets [`ensure_ctx`] start the stream without knowing `B`
     /// concretely.
     start_stream_fn: StartStreamFn<B>,
+    players: Vec<PlayerState>,
+    sample_rate_hint: u32,
 }
 
 impl<B: AudioBackend> SessionState<B> {
-    /// Default sample rate hint for the audio session.
-    const DEFAULT_SAMPLE_RATE: u32 = 44_100;
-
     /// Capacity of the session command ring buffer.
     const CMD_RINGBUF_CAPACITY: usize = 64;
 
+    /// Default sample rate hint for the audio session.
+    const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+
     fn new(start_stream_fn: StartStreamFn<B>) -> Self {
         Self {
+            start_stream_fn,
             ctx: None,
             next_player_id: 1,
             players: Vec::new(),
@@ -124,7 +133,6 @@ impl<B: AudioBackend> SessionState<B> {
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
-            start_stream_fn,
         }
     }
 }
@@ -211,20 +219,14 @@ impl SessionClient {
     /// Capacity of the player command ring buffer within a slot.
     const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
-        let mut pending = msg;
-        loop {
-            match self.cmd_tx.lock_sync().try_push(pending) {
-                Ok(()) => {
-                    self.engine_thread.unpark();
-                    return Ok(());
-                }
-                Err(returned) => {
-                    pending = returned;
-                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
-                }
+    pub(crate) fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
+        match self.call_ok(Cmd::AllocateSlot { player_id })? {
+            Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
+                Ok((slot_id, cmd_tx, shared_state, eq))
             }
+            _ => Err(PlayError::Internal(
+                "unexpected reply for session allocate slot".into(),
+            )),
         }
     }
 
@@ -282,34 +284,29 @@ impl SessionClient {
         Ok(reply)
     }
 
-    pub(crate) fn allocate_slot(
-        &self,
-        player_id: PlayerId,
-    ) -> Result<
-        (
-            SlotId,
-            HeapProd<PlayerCmd>,
-            Arc<SharedPlayerState>,
-            SharedEq,
-        ),
-        PlayError,
-    > {
-        match self.call_ok(Cmd::AllocateSlot { player_id })? {
-            Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
-                Ok((slot_id, cmd_tx, shared_state, eq))
-            }
-            _ => Err(PlayError::Internal(
-                "unexpected reply for session allocate slot".into(),
-            )),
-        }
-    }
-
     pub(crate) fn ducking(&self) -> Result<SessionDuckingMode, PlayError> {
         match self.call_ok(Cmd::SessionDucking)? {
             Reply::SessionDucking(mode) => Ok(mode),
             _ => Err(PlayError::Internal(
                 "unexpected reply for session ducking query".into(),
             )),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
+        let mut pending = msg;
+        loop {
+            match self.cmd_tx.lock_sync().try_push(pending) {
+                Ok(()) => {
+                    self.engine_thread.unpark();
+                    return Ok(());
+                }
+                Err(returned) => {
+                    pending = returned;
+                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
+                }
+            }
         }
     }
 
@@ -443,8 +440,8 @@ fn spawn_session_client<B: AudioBackend + Send + 'static>(
     });
     let engine_thread = handle.thread().clone();
     Arc::new(SessionClient {
-        cmd_tx: Mutex::new(cmd_tx),
         engine_thread,
+        cmd_tx: Mutex::new(cmd_tx),
     })
 }
 
@@ -871,6 +868,13 @@ fn start_stream_offline(
 /// calls `ctx.active_backend_mut().render(OFFLINE_BLOCK_FRAMES)` to
 /// pull samples through the firewheel graph — without which the decoder
 /// and `PlayerNode` stay idle and integration tests see `position=0`.
+///
+/// Pacing is best-effort via `park_timeout` at roughly one block at
+/// 44.1kHz. The loop does not strictly cap rendering to wall clock, so
+/// audio position may advance slightly faster than realtime when the
+/// decoder has no network stalls (common for fully-buffered progressive
+/// files). Callers that need a tight upper bound should derive their
+/// expectations from the block cadence, not from `sleep(wall)`.
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
 fn engine_thread_offline(mut cmd_rx: HeapCons<CmdMsg>) {
     /// Offline render block size. Matches `offline_backend::OFFLINE_BLOCK_FRAMES`.
@@ -923,8 +927,8 @@ pub(crate) fn try_init_offline_session() -> Result<(), String> {
     });
     let engine_thread = handle.thread().clone();
     let client = Arc::new(SessionClient {
-        cmd_tx: Mutex::new(cmd_tx),
         engine_thread,
+        cmd_tx: Mutex::new(cmd_tx),
     });
     session_holder::SESSION_CLIENT.set(client).map_err(|_| {
         "session client already initialized — call init_offline_backend() \
@@ -1093,14 +1097,33 @@ fn remove_player_graph<B: AudioBackend>(fw_ctx: &mut FirewheelCtx<B>, player: &m
     let player_id = player.player_id;
     let slots = player.slots.drain(..).collect::<Vec<_>>();
     for slot in slots {
-        if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
-            warn!(player_id, ?err, "failed to remove slot vol_pan node");
-        }
-        if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
-            warn!(player_id, ?err, "failed to remove slot player node");
-        }
+        remove_slot_nodes(fw_ctx, player_id, &slot);
     }
+    remove_player_master_nodes(fw_ctx, player);
+    clear_player_graph_state(player);
+}
 
+/// Remove a slot's vol/pan and player nodes, logging failures.
+fn remove_slot_nodes<B: AudioBackend>(
+    fw_ctx: &mut FirewheelCtx<B>,
+    player_id: PlayerId,
+    slot: &SlotNodes,
+) {
+    if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
+        warn!(player_id, ?err, "failed to remove slot vol_pan node");
+    }
+    if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
+        warn!(player_id, ?err, "failed to remove slot player node");
+    }
+}
+
+/// Take and remove the player's master vol-pan and master EQ nodes,
+/// logging failures.
+fn remove_player_master_nodes<B: AudioBackend>(
+    fw_ctx: &mut FirewheelCtx<B>,
+    player: &mut PlayerState,
+) {
+    let player_id = player.player_id;
     if let Some(master_id) = player.master_vol_pan_node_id.take()
         && let Err(err) = fw_ctx.remove_node(master_id)
     {
@@ -1111,7 +1134,6 @@ fn remove_player_graph<B: AudioBackend>(fw_ctx: &mut FirewheelCtx<B>, player: &m
     {
         warn!(player_id, ?err, "failed to remove player master eq node");
     }
-    clear_player_graph_state(player);
 }
 
 fn clear_player_graph_state(player: &mut PlayerState) {
@@ -1216,30 +1238,27 @@ fn release_slot<B: AudioBackend>(
         return Err("player not running".into());
     }
 
-    let Some(slot_idx) = state.players[idx]
-        .slots
-        .iter()
-        .position(|s| s.slot_id == slot)
-    else {
-        return Err(format!("slot not found: {slot:?}"));
-    };
-    let slot = state.players[idx].slots.remove(slot_idx);
+    let slot = take_player_slot(&mut state.players[idx], slot)?;
 
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err("session context is not initialised".into());
     };
 
-    if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
-        warn!(player_id, ?err, "failed to remove slot vol_pan node");
-    }
-    if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
-        warn!(player_id, ?err, "failed to remove slot player node");
-    }
+    remove_slot_nodes(fw_ctx, player_id, &slot);
     if let Err(err) = fw_ctx.update() {
         warn!(player_id, "graph update after slot release failed: {err:?}");
     }
 
     Ok(())
+}
+
+/// Locate and remove a slot from the player's slot list by `SlotId`.
+/// Returns the removed `SlotNodes` so callers can drop its graph nodes.
+fn take_player_slot(player: &mut PlayerState, slot: SlotId) -> Result<SlotNodes, String> {
+    let Some(slot_idx) = player.slots.iter().position(|s| s.slot_id == slot) else {
+        return Err(format!("slot not found: {slot:?}"));
+    };
+    Ok(player.slots.remove(slot_idx))
 }
 
 fn set_player_master_volume<B: AudioBackend>(

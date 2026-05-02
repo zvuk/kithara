@@ -7,7 +7,7 @@ pub use kithara_assets::internal::{Assets, PinsIndex};
 #[cfg(feature = "hls")]
 pub use kithara_hls::internal::{
     KeyManager, MasterPlaylist, PlaylistCache, SegmentLoader, VariantId, parse_master_playlist,
-    source_variant_index_handle,
+    set_source_variant_for_test, source_variant_index,
 };
 #[cfg(feature = "net")]
 pub use kithara_net::internal::TimeoutNet;

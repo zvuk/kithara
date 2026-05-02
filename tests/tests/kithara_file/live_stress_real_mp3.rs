@@ -8,9 +8,9 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
     decode::PcmChunk,
-    events::{Event, FileEvent},
+    events::{DownloaderEvent, Event, FileEvent},
     file::{File, FileConfig},
     stream::Stream,
 };
@@ -36,26 +36,26 @@ impl Consts {
 
 #[derive(Default)]
 struct LiveStats {
-    byte_progress_events: usize,
-    download_complete_events: usize,
-    download_progress_events: usize,
+    read_progress_events: usize,
+    request_started_events: usize,
+    request_completed_events: usize,
     errors: usize,
 }
 
 #[derive(Clone, Default)]
 struct LiveSnapshot {
-    byte_progress_events: usize,
-    download_complete_events: usize,
-    download_progress_events: usize,
+    read_progress_events: usize,
+    request_started_events: usize,
+    request_completed_events: usize,
     errors: usize,
 }
 
 impl LiveStats {
     fn snapshot(&self) -> LiveSnapshot {
         LiveSnapshot {
-            byte_progress_events: self.byte_progress_events,
-            download_complete_events: self.download_complete_events,
-            download_progress_events: self.download_progress_events,
+            read_progress_events: self.read_progress_events,
+            request_started_events: self.request_started_events,
+            request_completed_events: self.request_completed_events,
             errors: self.errors,
         }
     }
@@ -97,16 +97,15 @@ async fn next_chunk_with_timeout(
 ) -> Option<PcmChunk> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(chunk) = PcmReader::next_chunk(audio) {
-            return Some(chunk);
-        }
-        if audio.is_eof() {
-            return None;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
+            Ok(ChunkOutcome::Eof { .. }) => return None,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
         }
         assert!(
             Instant::now() <= deadline,
-            "next_chunk timeout at stage='{stage}' (is_eof={})",
-            audio.is_eof()
+            "next_chunk timeout at stage='{stage}'"
         );
         sleep(Duration::from_micros(500)).await;
     }
@@ -146,31 +145,29 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     let mut events = audio.events();
     let events_task = spawn(async move {
         while let Ok(event) = events.recv().await {
-            let Event::File(file_event) = event else {
-                continue;
-            };
-
             let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match file_event {
-                FileEvent::ByteProgress { .. } => {
-                    locked.byte_progress_events = locked.byte_progress_events.saturating_add(1);
+            match event {
+                Event::File(FileEvent::ReadProgress { .. }) => {
+                    locked.read_progress_events = locked.read_progress_events.saturating_add(1);
                 }
-                FileEvent::DownloadProgress { .. } => {
-                    locked.download_progress_events =
-                        locked.download_progress_events.saturating_add(1);
+                Event::File(FileEvent::Error { .. }) => {
+                    locked.errors = locked.errors.saturating_add(1);
                 }
-                FileEvent::DownloadComplete { .. } => {
-                    locked.download_complete_events =
-                        locked.download_complete_events.saturating_add(1);
+                Event::Downloader(DownloaderEvent::RequestStarted { .. }) => {
+                    locked.request_started_events = locked.request_started_events.saturating_add(1);
                 }
-                FileEvent::DownloadError { .. } | FileEvent::Error { .. } => {
+                Event::Downloader(DownloaderEvent::RequestCompleted { .. }) => {
+                    locked.request_completed_events =
+                        locked.request_completed_events.saturating_add(1);
+                }
+                Event::Downloader(DownloaderEvent::RequestFailed { .. }) => {
                     locked.errors = locked.errors.saturating_add(1);
                 }
                 _ => {}
             }
         }
     });
-    audio.preload();
+    audio.preload().expect("preload must succeed");
 
     info!(ephemeral, "Phase 1: warmup");
     let warmup_deadline = Instant::now() + Duration::from_secs(Consts::WARMUP_TIMEOUT_SECS);
@@ -207,7 +204,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .expect("seek must not fail");
-        audio.preload();
+        audio.preload().expect("preload must succeed");
         random_ops_done = random_ops_done.saturating_add(1);
 
         for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
@@ -239,14 +236,14 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
             .seek(Duration::from_secs_f64(pos_secs))
             .expect("fast seek must not fail");
     }
-    audio.preload();
+    audio.preload().expect("preload must succeed");
 
     let sequential_seek_max = (max_seek_secs - 20.0).max(5.0);
     let final_seek = rng.range_f64(1.0, sequential_seek_max);
     audio
         .seek(Duration::from_secs_f64(final_seek))
         .expect("final seek before sequential read must not fail");
-    audio.preload();
+    audio.preload().expect("preload must succeed");
 
     info!(
         sequential_chunks = Consts::SEQUENTIAL_CHUNKS_AFTER_BURST,
@@ -295,7 +292,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         audio
             .seek(Duration::from_secs_f64(*pos_secs))
             .expect("revisit seek must not fail");
-        audio.preload();
+        audio.preload().expect("preload must succeed");
         let stage = format!("revisit_{idx}");
         let _ = next_chunk_with_timeout(
             &mut audio,
@@ -311,9 +308,9 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         "expected no file download/read errors during stress"
     );
     let transfer_events = final_stats
-        .byte_progress_events
-        .saturating_add(final_stats.download_progress_events)
-        .saturating_add(final_stats.download_complete_events);
+        .read_progress_events
+        .saturating_add(final_stats.request_started_events)
+        .saturating_add(final_stats.request_completed_events);
     if transfer_events == 0 {
         info!("MP3 stress: no transfer events observed");
     }

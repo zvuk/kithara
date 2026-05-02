@@ -1,34 +1,63 @@
 id: rust.no-thin-sync-wrapper
-message: Thin sync wrappers with a single call are discouraged.
-severity: error
+message: Thin sync wrappers with a single call (with or without surrounding log macros) are discouraged.
+severity: warning
 language: Rust
 files:
   - crates/**/src/**/*.rs
 ignores:
   - crates/kithara-test-macros/**
 rule:
-  all:
-    - kind: function_item
-    - regex: '(?s)^\s*fn\s+\w+\s*\([^)]*\)\s*(?:->\s*[^\{]+)?\{\s*[A-Za-z0-9_:.]+\([^\n\)]*\);?\s*\}$'
-    - not:
-        inside:
-          kind: impl_item
-          stopBy: end
-    - not:
-        inside:
-          kind: trait_item
-          stopBy: end
-    - not:
-        inside:
-          all:
-            - kind: mod_item
-            - follows:
-                kind: attribute_item
-                regex: 'cfg\(test\)'
-                stopBy: end
-          stopBy: end
-    - not:
-        has:
-          kind: identifier
-          field: name
-          regex: '^(default|from|into|drop|fmt|fmt_\w+|clone|new|main|fallback_timeout|to_iced|to_ratatui|wait_range_hang_timeout)$'
+  any:
+    # Plain single-call wrapper at module level.
+    - all:
+        - kind: function_item
+        - regex: '(?s)^\s*fn\s+\w+\s*\([^)]*\)\s*(?:->\s*[^\{]+)?\{\s*[A-Za-z0-9_:.]+\([^\n\)]*\);?\s*\}$'
+        - not:
+            inside:
+              kind: impl_item
+              stopBy: end
+        - not:
+            inside:
+              kind: trait_item
+              stopBy: end
+        - not:
+            inside:
+              all:
+                - kind: mod_item
+                - follows:
+                    kind: attribute_item
+                    regex: 'cfg\(test\)'
+                    stopBy: end
+              stopBy: end
+        - not:
+            has:
+              kind: identifier
+              field: name
+              regex: '^(default|from|into|drop|fmt|fmt_\w+|clone|new|main|fallback_timeout|to_iced|to_ratatui|wait_range_hang_timeout)$'
+    # Single call wrapped by log macros (trace/debug/info/warn/error).
+    # At least one log macro is required, on either side. This is a
+    # debug-only shape: a real call belongs in its caller, not behind a
+    # logging proxy.
+    - all:
+        - kind: function_item
+        - any:
+            - regex: '(?s)^\s*fn\s+\w+\s*\([^)]*\)\s*(?:->\s*[^\{]+)?\{\s*(?:(?:trace|debug|info|warn|error)!\([^;]*\);\s*)+[A-Za-z0-9_:.]+\([^;]*\);?\s*(?:(?:trace|debug|info|warn|error)!\([^;]*\);\s*)*\}$'
+            - regex: '(?s)^\s*fn\s+\w+\s*\([^)]*\)\s*(?:->\s*[^\{]+)?\{\s*(?:(?:trace|debug|info|warn|error)!\([^;]*\);\s*)*[A-Za-z0-9_:.]+\([^;]*\);?\s*(?:(?:trace|debug|info|warn|error)!\([^;]*\);\s*)+\}$'
+        - not:
+            inside:
+              kind: trait_item
+              stopBy: end
+        - not:
+            inside:
+              all:
+                - kind: mod_item
+                - follows:
+                    kind: attribute_item
+                    regex: 'cfg\(test\)'
+                    stopBy: end
+              stopBy: end
+        - not:
+            has:
+              kind: identifier
+              field: name
+              regex: '^(default|from|into|drop|fmt|fmt_\w+|clone|new|main|fallback_timeout|to_iced|to_ratatui|wait_range_hang_timeout)$'

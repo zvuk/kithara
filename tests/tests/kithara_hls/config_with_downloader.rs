@@ -9,7 +9,7 @@ use std::{io::Read, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{
         Stream,
         dl::{Downloader, DownloaderConfig},
@@ -53,18 +53,12 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     let config_a = HlsConfig::new(server_a.url("/master.m3u8"))
         .with_cancel(cancel.clone())
         .with_store(StoreOptions::new(&temp_a))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..Default::default()
-        })
+        .with_initial_abr_mode(AbrMode::Manual(0))
         .with_downloader(downloader.clone());
     let config_b = HlsConfig::new(server_b.url("/master.m3u8"))
         .with_cancel(cancel.clone())
         .with_store(StoreOptions::new(&temp_b))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..Default::default()
-        })
+        .with_initial_abr_mode(AbrMode::Manual(0))
         .with_downloader(downloader.clone());
 
     let mut stream_a = Stream::<Hls>::new(config_a).await.unwrap();
