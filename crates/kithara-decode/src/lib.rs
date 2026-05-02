@@ -40,7 +40,7 @@ mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
 
-pub use error::{DecodeError, DecodeResult};
+pub use error::{DecodeError, DecodeResult, ErrorClass};
 // Factory for runtime selection
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
 // Public traits

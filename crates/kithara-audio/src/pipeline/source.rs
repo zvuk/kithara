@@ -14,7 +14,8 @@ use std::{
 
 use delegate::delegate;
 use kithara_decode::{
-    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, PcmChunk, PcmSpec,
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, ErrorClass,
+    PcmChunk, PcmSpec,
 };
 use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage};
 use kithara_platform::{Mutex, thread::yield_now};
@@ -1263,6 +1264,7 @@ enum DecodeStep {
 
 impl<T: StreamType> StreamAudioSource<T> {
     /// Handle decoder EOF: try format change recovery, then true EOF.
+    #[cold]
     fn handle_decode_eof(&mut self) -> DecodeAction {
         let pos_at_eof = self.shared_stream.position();
         if let Some((new_info, target_offset)) = self.detect_format_change() {
@@ -1299,12 +1301,14 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     /// Handle decode error without boundary fallback.
+    #[cold]
     fn handle_decode_error(e: DecodeError) -> DecodeAction {
         warn!(?e, "decode error");
         DecodeAction::Return(Err(e))
     }
 
     /// Handle an explicit source-level variant boundary signal.
+    #[cold]
     fn handle_variant_change(&mut self, e: DecodeError) -> DecodeAction {
         if let Some((new_info, target_offset)) = self.detect_format_change() {
             debug!(
@@ -1383,16 +1387,16 @@ impl<T: StreamType> StreamAudioSource<T> {
                     // `yield_now()` between iterations.
                     continue;
                 }
-                Err(e) if e.is_variant_change() => match self.handle_variant_change(e) {
-                    DecodeAction::Yield => return Err(DecodeError::Interrupted),
-                    DecodeAction::Return(result) => return result,
-                },
-                Err(e) if e.is_interrupted() => {
-                    continue;
-                }
-                Err(e) => match Self::handle_decode_error(e) {
-                    DecodeAction::Yield => return Err(DecodeError::Interrupted),
-                    DecodeAction::Return(result) => return result,
+                Err(e) => match e.classify() {
+                    ErrorClass::VariantChange => match self.handle_variant_change(e) {
+                        DecodeAction::Yield => return Err(DecodeError::Interrupted),
+                        DecodeAction::Return(result) => return result,
+                    },
+                    ErrorClass::Interrupted => continue,
+                    _ => match Self::handle_decode_error(e) {
+                        DecodeAction::Yield => return Err(DecodeError::Interrupted),
+                        DecodeAction::Return(result) => return result,
+                    },
                 },
             }
         }

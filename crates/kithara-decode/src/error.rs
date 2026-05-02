@@ -117,25 +117,64 @@ fn error_chain_is_variant_change(err: &(dyn StdError + 'static)) -> bool {
     })
 }
 
+/// Single-discriminant classification of a [`DecodeError`].
+///
+/// Walking the source chain via `is_interrupted` + `is_variant_change`
+/// in sequence forces the chain to be traversed twice on the failure
+/// path. [`DecodeError::classify`] runs the walk once and returns this
+/// tag so callers can `match` instead of cascading boolean predicates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ErrorClass {
+    /// Interrupted by seek / cooperative pending — caller should retry.
+    Interrupted,
+    /// Cross-variant boundary — caller must recreate the decoder.
+    VariantChange,
+    /// Anything else — caller surfaces as terminal failure.
+    Other,
+}
+
 impl DecodeError {
     /// Returns `true` if the error is an [`Interrupted`](Self::Interrupted) variant.
     #[must_use]
     pub fn is_interrupted(&self) -> bool {
-        match self {
-            Self::Interrupted => true,
-            Self::Io(err) => is_seek_pending_io(err),
-            Self::Backend(err) => error_chain_is_interrupted(err.as_ref()),
-            _ => false,
-        }
+        matches!(self.classify(), ErrorClass::Interrupted)
     }
 
     /// Returns `true` if the error signals a non-retriable cross-variant boundary.
     #[must_use]
     pub fn is_variant_change(&self) -> bool {
+        matches!(self.classify(), ErrorClass::VariantChange)
+    }
+
+    /// Tag the error in one source-chain pass so hot decode loops can
+    /// replace `is_interrupted()` + `is_variant_change()` predicate
+    /// ladders with a single `match` over the discriminant.
+    #[must_use]
+    #[inline]
+    pub fn classify(&self) -> ErrorClass {
         match self {
-            Self::Io(err) => is_variant_change_io(err),
-            Self::Backend(err) => error_chain_is_variant_change(err.as_ref()),
-            _ => false,
+            Self::Interrupted => ErrorClass::Interrupted,
+            Self::Io(err) => {
+                if is_variant_change_io(err) {
+                    ErrorClass::VariantChange
+                } else if is_seek_pending_io(err) {
+                    ErrorClass::Interrupted
+                } else {
+                    ErrorClass::Other
+                }
+            }
+            Self::Backend(err) => {
+                let leaf = err.as_ref();
+                if error_chain_is_variant_change(leaf) {
+                    ErrorClass::VariantChange
+                } else if error_chain_is_interrupted(leaf) {
+                    ErrorClass::Interrupted
+                } else {
+                    ErrorClass::Other
+                }
+            }
+            _ => ErrorClass::Other,
         }
     }
 }
