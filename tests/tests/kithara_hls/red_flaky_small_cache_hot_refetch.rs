@@ -94,7 +94,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     // Warmup: read a few chunks so byte_position advances past seg 0.
     info!("warmup: reading {} chunks", Consts::WARMUP_CHUNKS);

@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{thread, time::Duration};
+use std::{hint::black_box, thread, time::Duration};
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use kithara_bufpool::{BytePool, PcmPool, Pool, internal};
 
 fn run_threaded_get_put(pool: BytePool, threads: usize, iters_per_thread: usize) {

@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    hint::black_box,
     io::{Read, Seek, SeekFrom},
     sync::{
         Arc,
@@ -19,7 +20,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use criterion::{BatchSize, Criterion, SamplingMode, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioEffect, ResamplerQuality},
@@ -48,6 +49,7 @@ impl Consts {
     const HLS_READ_TARGET_BYTES: usize = 196_608;
     const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
 
+    #[allow(dead_code, reason = "exposed for future bench cases")]
     const fn hls_total_bytes() -> usize {
         Self::HLS_SEGMENT_COUNT * Self::HLS_SEGMENT_SIZE
     }

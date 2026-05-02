@@ -12,6 +12,10 @@
 //! Packing constants into structs eliminates per-file `#[cfg]` gates and
 //! provides a discoverable location for test configuration.
 
+// Shared test fixture: items below are used by some test binaries but not all.
+// `cargo build --all-targets` flags them as dead per-binary.
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;

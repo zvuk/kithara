@@ -101,7 +101,7 @@ async fn run_drm_seek_resume_cycle(
     )
     .await
     .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     // Warmup chunks so the DRM pipeline is fully live before we seek.
     for w in 0..4 {
@@ -113,7 +113,7 @@ async fn run_drm_seek_resume_cycle(
         audio
             .seek(Duration::from_secs_f64(seek_secs))
             .expect("seek must succeed");
-        audio.preload();
+        let _ = audio.preload();
 
         for c in 0..3 {
             next_chunk_or_timeout(

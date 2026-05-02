@@ -91,7 +91,7 @@ async fn open_packaged_hls_audio(
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("packaged ABR audio should open for {url}: {err}"));
-    audio.preload();
+    let _ = audio.preload();
     audio
 }
 
@@ -100,7 +100,7 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
     let mut buf = [0.0f32; 4096];
 
     loop {
-        audio.preload();
+        let _ = audio.preload();
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
             Ok(ReadOutcome::Pending { .. }) => {}
@@ -143,7 +143,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
     // Read for 15 seconds. If ABR switch hangs the worker,
     // HangDetector (3s) will panic before the 30s test timeout.
@@ -215,7 +215,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let deadline = Instant::now() + Duration::from_secs(8);
 
     while Instant::now() < deadline {
-        progress_audio.preload();
+        let _ = progress_audio.preload();
         let read: usize = match progress_audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => count.get(),
             Ok(ReadOutcome::Pending { .. }) => 0,
@@ -284,7 +284,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let decode_audio =
         open_packaged_hls_audio(&url, store, forced_downswitch_abr_options(), None).await;
     let mut resource = resource_from_reader(decode_audio);
-    timeout(Duration::from_secs(5), resource.preload())
+    let _ = timeout(Duration::from_secs(5), resource.preload())
         .await
         .expect("packaged ABR preload must complete");
     let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
@@ -372,7 +372,7 @@ async fn stream_continues_after_seek(
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
     let mut buf = vec![0f32; 4096];
 
@@ -458,7 +458,7 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut buf = vec![0f32; 4096];
@@ -513,7 +513,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
     let mut buf = vec![0f32; 4096];
 
@@ -577,7 +577,7 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
     let mut buf = vec![0f32; 4096];
 
@@ -663,13 +663,13 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     // Helper: read one chunk with timeout.
     async fn next_chunk(audio: &mut Audio<Stream<Hls>>, timeout_ms: u64) -> Option<PcmChunk> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         loop {
-            audio.preload();
+            let _ = audio.preload();
             match PcmReader::next_chunk(audio) {
                 Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
                 Ok(ChunkOutcome::Eof { .. }) => return None,
@@ -730,7 +730,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     audio
         .seek(Duration::from_secs(50))
         .expect("seek must not fail");
-    audio.preload();
+    let _ = audio.preload();
 
     let post_seek_chunk = next_chunk(&mut audio, 500).await;
     assert!(

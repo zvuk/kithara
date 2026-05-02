@@ -208,7 +208,7 @@ async fn build_live_audio(
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
     audio
 }
 
@@ -335,7 +335,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
     .expect("audio creation timed out")
     .expect("audio creation");
     info!("audio created, preloading");
-    audio.preload();
+    let _ = audio.preload();
     info!("preload issued, waiting for chunks");
 
     let mut chunks_read = 0usize;
@@ -404,7 +404,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
@@ -481,7 +481,7 @@ async fn live_ephemeral_revisit_sequence_regression(
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|_| panic!("{label} seek must not fail at idx={idx}"));
-        audio.preload();
+        let _ = audio.preload();
         for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("repro_random_seek_{idx}_chunk_{read_idx}");
             let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
@@ -496,13 +496,13 @@ async fn live_ephemeral_revisit_sequence_regression(
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|_| panic!("{label} fast seek must not fail"));
     }
-    audio.preload();
+    let _ = audio.preload();
 
     let final_seek = rng.range_f64(1.0, (max_seek_secs - 20.0).max(5.0));
     audio
         .seek(Duration::from_secs_f64(final_seek))
         .unwrap_or_else(|_| panic!("{label} final seek before sequential read must not fail"));
-    audio.preload();
+    let _ = audio.preload();
 
     for idx in 0..Consts::SEQUENTIAL_CHUNKS_AFTER_BURST {
         let stage = format!("repro_sequential_after_burst_{idx}");
@@ -515,7 +515,7 @@ async fn live_ephemeral_revisit_sequence_regression(
         audio
             .seek(Duration::from_secs_f64(*pos_secs))
             .unwrap_or_else(|_| panic!("{label} revisit seek must not fail at idx={idx}"));
-        audio.preload();
+        let _ = audio.preload();
         let stage = format!("repro_revisit_{idx}");
         let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
             .await
@@ -562,7 +562,7 @@ async fn live_real_stream_fixed_seek_window_regression(
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|_| panic!("{label} fixed-window seek must not fail at idx={idx}"));
-        audio.preload();
+        let _ = audio.preload();
         for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("fixed_window_{idx}_chunk_{read_idx}");
             let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
@@ -607,7 +607,7 @@ async fn live_real_stream_random_seek_prefix_regression(
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|_| panic!("{label} rng-prefix seek must not fail at idx={idx}"));
-        audio.preload();
+        let _ = audio.preload();
         for read_idx in 0..Consts::CHUNKS_PER_RANDOM_SEEK {
             let stage = format!("rng_prefix_{idx}_chunk_{read_idx}");
             let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage)
@@ -650,7 +650,7 @@ async fn live_real_stream_seek_resume_native(
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     for warmup_idx in 0..4 {
         let stage = format!("drm_seek_warmup_{warmup_idx}");
@@ -664,7 +664,7 @@ async fn live_real_stream_seek_resume_native(
         audio
             .seek(Duration::from_secs_f64(seek_secs))
             .expect("seek must succeed");
-        audio.preload();
+        let _ = audio.preload();
 
         let mut resumed_chunks = 0usize;
         let mut seek_applied = false;
@@ -742,7 +742,7 @@ async fn live_stress_real_stream_seek_read_cache(
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
@@ -842,7 +842,7 @@ async fn live_stress_real_stream_seek_read_cache(
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .expect("seek must not fail");
-        audio.preload();
+        let _ = audio.preload();
         random_ops_done = random_ops_done.saturating_add(1);
 
         let expected_variant = current_variant(&stats);
@@ -894,14 +894,14 @@ async fn live_stress_real_stream_seek_read_cache(
             .seek(Duration::from_secs_f64(pos_secs))
             .expect("fast seek must not fail");
     }
-    audio.preload();
+    let _ = audio.preload();
 
     let sequential_seek_max = (max_seek_secs - 20.0).max(5.0);
     let final_seek = rng.range_f64(1.0, sequential_seek_max);
     audio
         .seek(Duration::from_secs_f64(final_seek))
         .expect("final seek before sequential read must not fail");
-    audio.preload();
+    let _ = audio.preload();
 
     info!(
         sequential_chunks = Consts::browser_usize(
@@ -951,7 +951,7 @@ async fn live_stress_real_stream_seek_read_cache(
         audio
             .seek(Duration::from_secs_f64(*pos_secs))
             .expect("revisit seek must not fail");
-        audio.preload();
+        let _ = audio.preload();
         let stage = format!("revisit_{idx}");
         let _ = next_chunk_with_timeout(&mut audio, Consts::next_chunk_timeout(), &stage).await;
     }
@@ -1039,7 +1039,7 @@ async fn live_ephemeral_small_cache_playback(
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     info!(%path, label, "Reading audio chunks for 60 seconds with small ephemeral cache");
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -1117,7 +1117,7 @@ async fn live_ephemeral_small_cache_seek_stress(
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
     // Warmup: read a few chunks so the stream is initialized
     info!(%path, label, "Warmup: reading initial chunks");
@@ -1159,7 +1159,7 @@ async fn live_ephemeral_small_cache_seek_stress(
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .expect("seek must not fail");
-        audio.preload();
+        let _ = audio.preload();
         seeks_done += 1;
 
         // Read a few chunks after each seek

@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use std::{hint::black_box, sync::Arc};
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use kithara_abr::{
     Abr, AbrController, AbrMode, AbrSettings, AbrState, BandwidthSource, Estimator,
     ThroughputEstimator,
