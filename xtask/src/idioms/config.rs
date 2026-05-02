@@ -33,6 +33,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) parallel_loops: ParallelLoopsConfig,
     #[serde(default)]
     pub(crate) manual_question_mark: ManualQuestionMarkConfig,
+    #[serde(default)]
+    pub(crate) loop_allocation: LoopAllocationConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,6 +210,21 @@ pub(crate) struct ManualQuestionMarkConfig {
 }
 
 impl Default for ManualQuestionMarkConfig {
+    fn default() -> Self {
+        Self {
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LoopAllocationConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for LoopAllocationConfig {
     fn default() -> Self {
         Self {
             exempt_files: default_exempt_files(),
