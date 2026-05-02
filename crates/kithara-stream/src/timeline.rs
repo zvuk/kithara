@@ -94,6 +94,12 @@ pub struct Timeline {
     /// `swap(false, Acquire)`. A single bool load replaces two
     /// `Arc<AtomicU64>` Acquire loads on the typical no-seek tick.
     seek_preempt_latch: Arc<AtomicBool>,
+    /// Independent latch for `DecoderNode::sync_seek_epoch`: the
+    /// preempt latch above is destructively consumed inside
+    /// `StreamAudioSource`, so the wrapping decoder node — which has to
+    /// reset its preload counters / drop parked chunks on each new
+    /// epoch — needs its own one-shot signal. `initiate_seek` arms both.
+    decoder_node_seek_latch: Arc<AtomicBool>,
     /// Byte offset at the start of the most recent `Stream::read()` call.
     /// Used by `StreamContext::segment_index()` to resolve which segment
     /// the last-read data belongs to — `byte_position` has already advanced
@@ -122,6 +128,7 @@ impl Timeline {
             seek_epoch: Arc::new(AtomicU64::new(0)),
             seek_target_ns: Arc::new(AtomicU64::new(Self::NO_SEEK_TARGET)),
             seek_preempt_latch: Arc::new(AtomicBool::new(false)),
+            decoder_node_seek_latch: Arc::new(AtomicBool::new(false)),
             flags: Arc::new(AtomicU8::new(TimelineFlags::empty().bits())),
         }
     }
@@ -285,11 +292,12 @@ impl Timeline {
         // FLUSHING must be observed AFTER the seek target is published so
         // readers that see FLUSHING=true also see the updated target.
         self.insert_flags_with(TimelineFlags::FLUSHING, Ordering::Release);
-        // Hot-path latch: the audio worker swaps this to false on each
-        // tick, falling through cheaply when no seek is pending.
-        // Released here AFTER the target/flag stores so that the worker's
-        // Acquire-swap synchronises with all of them.
+        // Hot-path latches: each worker swaps its own to false on every
+        // tick, falling through cheaply when no seek is pending. Both
+        // are Released here AFTER the target/flag stores so that the
+        // workers' Acquire-swap synchronises with all of them.
         self.seek_preempt_latch.store(true, Ordering::Release);
+        self.decoder_node_seek_latch.store(true, Ordering::Release);
         epoch
     }
 
@@ -304,6 +312,19 @@ impl Timeline {
     #[must_use]
     pub fn take_seek_preempt(&self) -> bool {
         self.seek_preempt_latch.swap(false, Ordering::Acquire)
+    }
+
+    /// Consume the decoder-node seek latch with an Acquire swap.
+    ///
+    /// Independent from `take_seek_preempt`: the inner audio source
+    /// consumes that one inside `step_track`, while `DecoderNode` (the
+    /// wrapping scheduler node) needs its own signal so it can reset
+    /// preload state and drop parked chunks on a new epoch. `true`
+    /// here means `seek_epoch` was just bumped and the node must run
+    /// the cleanup branch; otherwise the tick falls through.
+    #[must_use]
+    pub fn take_decoder_node_seek(&self) -> bool {
+        self.decoder_node_seek_latch.swap(false, Ordering::Acquire)
     }
 
     #[inline]

@@ -69,7 +69,19 @@ impl DecoderNode {
         }
     }
 
+    /// Reset preload state when a new seek epoch arrives.
+    ///
+    /// Fast path: `Timeline::take_decoder_node_seek` is a one-shot
+    /// `AtomicBool` armed by `initiate_seek`. The typical no-seek tick
+    /// reads a single bool and falls through; only the rare epoch-bump
+    /// tick goes through the `Arc<AtomicU64>` deref to refresh the
+    /// cached value. The slow path still re-reads the canonical
+    /// `seek_epoch` so a spurious latch consume costs at most one
+    /// no-op compare.
     fn sync_seek_epoch(&mut self) {
+        if !self.source.timeline().take_decoder_node_seek() {
+            return;
+        }
         let current = self.source.timeline().seek_epoch();
         if current == self.seek_epoch {
             return;
