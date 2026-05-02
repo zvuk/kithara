@@ -1155,6 +1155,11 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        // Public PcmReader API never blocks. Flip the preload latch on first
+        // call so `recv_valid_chunk` takes the non-blocking path instead of
+        // `recv_outcome_blocking`'s spin loop. Mirrors the contract documented
+        // on `Audio::seek` (preloaded is a one-way latch).
+        self.preloaded = true;
         // Reuse preloaded chunk if any, else pull from the channel.
         let chunk = if let Some(c) = self.current_chunk.take() {
             c
