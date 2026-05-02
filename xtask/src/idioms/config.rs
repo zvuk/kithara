@@ -35,6 +35,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) manual_question_mark: ManualQuestionMarkConfig,
     #[serde(default)]
     pub(crate) loop_allocation: LoopAllocationConfig,
+    #[serde(default)]
+    pub(crate) box_concrete_type: BoxConcreteTypeConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -225,6 +227,21 @@ pub(crate) struct LoopAllocationConfig {
 }
 
 impl Default for LoopAllocationConfig {
+    fn default() -> Self {
+        Self {
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BoxConcreteTypeConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for BoxConcreteTypeConfig {
     fn default() -> Self {
         Self {
             exempt_files: default_exempt_files(),

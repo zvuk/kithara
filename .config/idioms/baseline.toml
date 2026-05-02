@@ -10,6 +10,9 @@ schema_version = 1
 "crates/kithara-stream/src/dl/tests.rs:325:4" = 1
 "crates/kithara-test-utils/src/fmp4/bytes.rs:94:4" = 1
 
+[box_concrete_type]
+"crates/kithara-decode/src/fmp4/tests.rs:149:30" = 1
+
 [branch_chains]
 "crates/kithara-stream/src/media.rs:111:8" = 1
 
