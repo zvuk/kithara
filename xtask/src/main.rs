@@ -19,6 +19,7 @@ mod similarity;
 mod style;
 mod typos;
 mod util;
+mod viz;
 mod wasm;
 
 use android::AndroidCommand;
@@ -32,6 +33,7 @@ use quality::QualityCommand;
 use scope::ScopeArgs;
 use similarity::SimilarityArgs;
 use typos::TyposArgs;
+use viz::VizArgs;
 use wasm::WasmCommand;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -104,6 +106,8 @@ enum Command {
     Orphans(OrphansArgs),
     /// Comprehensive workspace health check with markdown report.
     Health(HealthArgs),
+    /// Architecture visualization tools (hierarchy, arc-map).
+    Viz(VizArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -127,5 +131,6 @@ fn main() -> anyhow::Result<()> {
         Command::Similarity(ref args) => similarity::run(args),
         Command::Orphans(ref args) => orphans::run(args),
         Command::Health(ref args) => health::run(args),
+        Command::Viz(ref args) => viz::run(args),
     }
 }
