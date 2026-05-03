@@ -150,13 +150,58 @@ pub enum PackagedSignal {
 }
 
 /// Per-variant override for packaged audio fixtures.
+///
+/// `codec = Some(_)` swaps the encoder for THIS variant only — used by
+/// ABR fixtures that mirror production master playlists carrying mixed
+/// codecs (e.g. AAC LQ/MQ/HQ + FLAC lossless). Unset fields fall back
+/// to the spec-level [`PackagedAudioRequest`] defaults.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct PackagedAudioVariantOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_rate: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_audio_codec_opt"
+    )]
+    pub codec: Option<AudioCodec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<PcmPattern>,
     pub variant: usize,
+}
+
+mod serde_audio_codec_opt {
+    use kithara_stream::AudioCodec;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::serde_audio_codec;
+
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde with = module requires fn(&T, serializer)"
+    )]
+    pub(super) fn serialize<S>(value: &Option<AudioCodec>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(codec) => {
+                #[derive(Serialize)]
+                struct Wrap(#[serde(with = "serde_audio_codec")] AudioCodec);
+                Wrap(*codec).serialize(serializer)
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Option<AudioCodec>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wrap(#[serde(with = "serde_audio_codec")] AudioCodec);
+        Option::<Wrap>::deserialize(deserializer).map(|opt| opt.map(|wrap| wrap.0))
+    }
 }
 
 /// Preferred description for real audio fMP4 packaging in new audio HLS fixtures.

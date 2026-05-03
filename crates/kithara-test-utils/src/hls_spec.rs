@@ -67,7 +67,6 @@ pub(crate) struct ResolvedEncryption {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackagedAudioSpec {
-    pub(crate) codec: AudioCodec,
     pub(crate) container: ContainerFormat,
     pub(crate) variants: Vec<ResolvedPackagedVariant>,
     pub(crate) include_sidx: bool,
@@ -82,6 +81,11 @@ pub(crate) struct ResolvedPackagedAudioSpec {
 pub(crate) struct ResolvedPackagedVariant {
     pub(crate) signal: ResolvedPackagedSignal,
     pub(crate) bit_rate: u64,
+    /// Per-variant codec. Defaults to the spec-level
+    /// [`PackagedAudioRequest::codec`]; overridden by
+    /// `PackagedAudioVariantOverride.codec` so a single fixture can carry
+    /// mixed codecs (production AAC LQ/MQ/HQ + FLAC lossless).
+    pub(crate) codec: AudioCodec,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -388,20 +392,33 @@ fn resolve_packaged_audio(
                     .unwrap_or(PcmPattern::Ascending),
             ),
         };
+        let mut codec = packaged.codec;
         if let Some(override_spec) = packaged
             .variant_overrides
             .iter()
             .find(|override_spec| override_spec.variant == variant)
         {
-            apply_variant_override(override_spec, &mut bit_rate, &mut signal);
+            apply_variant_override(override_spec, &mut bit_rate, &mut signal, &mut codec);
         }
-        variants.push(ResolvedPackagedVariant { signal, bit_rate });
+        if !audio_codec_supports_fmp4_packaging(codec) {
+            return Err(HlsSpecError::UnsupportedPackagedCodec(codec));
+        }
+        if matches!(codec, AudioCodec::AacLc) && timescale != packaged.sample_rate {
+            return Err(HlsSpecError::InvalidField {
+                field: "packaged_audio.timescale",
+                message: "AAC-LC currently requires timescale == sample_rate",
+            });
+        }
+        variants.push(ResolvedPackagedVariant {
+            signal,
+            bit_rate,
+            codec,
+        });
     }
 
     Ok(ResolvedPackagedAudioSpec {
         timescale,
         variants,
-        codec: packaged.codec,
         container: ContainerFormat::Fmp4,
         sample_rate: packaged.sample_rate,
         channels: packaged.channels,
@@ -415,12 +432,16 @@ fn apply_variant_override(
     override_spec: &PackagedAudioVariantOverride,
     bit_rate: &mut u64,
     signal: &mut ResolvedPackagedSignal,
+    codec: &mut AudioCodec,
 ) {
     if let Some(override_rate) = override_spec.bit_rate {
         *bit_rate = override_rate;
     }
     if let Some(pattern) = override_spec.pattern {
         *signal = ResolvedPackagedSignal::Pattern(pattern);
+    }
+    if let Some(override_codec) = override_spec.codec {
+        *codec = override_codec;
     }
 }
 

@@ -16,6 +16,8 @@ mod common;
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;
 
+mod abr_contract;
+
 mod kithara_hls {
     mod abr_auto_switch;
     mod abr_mode_switch;

@@ -753,9 +753,13 @@ fn build_batch(
 
 /// Build a `FetchCmd` for `(variant, segment_index)`, mark it
 /// in-flight in the scheduler, and advance the scheduler cursor past
-/// it. The probe records the emit fact (`seek_epoch`, `segment_index`,
-/// `variant`) — the scheduler decision the test suite asserts on.
-#[kithara::probe(seek_epoch, segment_index, variant)]
+/// it. The probe records the emit fact
+/// (`seek_epoch`, `segment_index`, `variant`, `plan_need_init`) — the
+/// scheduler decision the test suite asserts on. `plan_need_init`
+/// distinguishes init-segment fetches from media-segment fetches so
+/// the contract suite can count A5 (exactly one init fetch per
+/// `variant_to` switch) without URL-string parsing.
+#[kithara::probe(seek_epoch, segment_index, variant, plan_need_init)]
 fn emit_fetch_cmd(
     state: &mut HlsState,
     state_arc: &Arc<Mutex<Option<HlsState>>>,

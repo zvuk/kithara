@@ -25,7 +25,7 @@ use crate::token_store::{TokenRequest, TokenResponse};
 use crate::{
     fixture_protocol::{
         DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
-        PackagedAudioSource, PackagedSignal, PcmPattern,
+        PackagedAudioSource, PackagedAudioVariantOverride, PackagedSignal, PcmPattern,
     },
     hls_spec::HlsSpecError,
     hls_url::{
@@ -387,6 +387,37 @@ impl HlsFixtureBuilder {
     #[must_use]
     pub fn push_delay_rule(mut self, delay_rule: DelayRule) -> Self {
         self.spec.delay_rules.push(delay_rule);
+        self
+    }
+
+    /// Override the encoder for a specific variant on top of the
+    /// spec-level codec. Used to mirror production master playlists
+    /// carrying mixed codecs across variants (e.g. AAC LQ/MQ/HQ + FLAC
+    /// lossless on `assets/hls/master.m3u8`).
+    ///
+    /// Must be called AFTER one of the `packaged_audio_*` builders so
+    /// `packaged_audio` is populated.
+    #[must_use]
+    pub fn override_variant_codec(mut self, variant: usize, codec: AudioCodec) -> Self {
+        let packaged =
+            self.spec.packaged_audio.as_mut().expect(
+                "override_variant_codec: call packaged_audio_* before override_variant_codec",
+            );
+        if let Some(existing) = packaged
+            .variant_overrides
+            .iter_mut()
+            .find(|o| o.variant == variant)
+        {
+            existing.codec = Some(codec);
+        } else {
+            packaged
+                .variant_overrides
+                .push(PackagedAudioVariantOverride {
+                    variant,
+                    codec: Some(codec),
+                    ..Default::default()
+                });
+        }
         self
     }
 
