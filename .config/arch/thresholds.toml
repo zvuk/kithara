@@ -85,6 +85,20 @@ warn = 5
 warn_params = 3
 warn_where = 4
 
+[module_fan_out]
+# Number of distinct sibling-modules of the same crate that one file imports
+# from. High count → file is acting as an orchestrator/wiring hub. Detection
+# is import-graph (use statements), not call-graph: see crate doc-comment of
+# `xtask::arch::checks::module_fan_out` for the resolution rules.
+warn = 4
+# Per-crate overrides: app/test/macro crates may relax the threshold.
+[module_fan_out.overrides]
+"kithara-app" = 8
+"kithara-ffi" = 8
+"kithara-wasm" = 8
+"kithara-test-utils" = 8
+"xtask" = 8
+
 [no_lib_statics]
 # Hidden globals (`static`, `OnceLock`/`OnceCell`/`LazyLock`/`Lazy` typed
 # constants, `lazy_static!`) declared at item scope inside library crates.

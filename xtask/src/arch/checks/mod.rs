@@ -25,6 +25,7 @@ pub(crate) mod god_struct;
 pub(crate) mod god_trait;
 pub(crate) mod max_nesting;
 pub(crate) mod mixed_entities;
+pub(crate) mod module_fan_out;
 pub(crate) mod module_layers;
 pub(crate) mod no_lib_statics;
 pub(crate) mod pub_struct_open_fields;
@@ -59,6 +60,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(god_module::GodModule),
         Box::new(god_struct::GodStruct),
         Box::new(god_trait::GodTrait),
+        Box::new(module_fan_out::ModuleFanOut),
         Box::new(no_lib_statics::NoLibStatics),
         Box::new(pub_struct_open_fields::PubStructOpenFields),
         Box::new(trait_impl_count::TraitImplCount),

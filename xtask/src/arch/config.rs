@@ -93,6 +93,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) no_lib_statics: NoLibStaticsThreshold,
     #[serde(default)]
+    pub(crate) module_fan_out: ModuleFanOutThreshold,
+    #[serde(default)]
     pub(crate) flat_directory: FlatDirectoryThreshold,
     #[serde(default)]
     pub(crate) max_nesting: MaxNestingThreshold,
@@ -280,6 +282,27 @@ pub(crate) struct FnArgCountThreshold {
 impl Default for FnArgCountThreshold {
     fn default() -> Self {
         Self { warn: 5 }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ModuleFanOutThreshold {
+    /// Default warn threshold = number of distinct intra-crate sibling
+    /// modules a single file imports from before being flagged as an
+    /// orchestrator candidate.
+    pub(crate) warn: usize,
+    /// Per-crate override map: crate-name → custom warn threshold.
+    #[serde(default)]
+    pub(crate) overrides: BTreeMap<String, usize>,
+}
+
+impl Default for ModuleFanOutThreshold {
+    fn default() -> Self {
+        Self {
+            warn: 4,
+            overrides: BTreeMap::new(),
+        }
     }
 }
 
