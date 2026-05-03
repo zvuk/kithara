@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use fast_interleave::deinterleave_variable;
 use kithara_bufpool::PcmPool;
 use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
@@ -1247,11 +1248,14 @@ impl<S: Send> PcmReader for Audio<S> {
                     "Audio::read_planar Frames contract: actual_frames={actual_frames} \
                      > per-channel buf frames={frames}",
                 );
-                for frame in 0..actual_frames {
-                    for (ch, out_ch) in output.iter_mut().enumerate() {
-                        out_ch[frame] = interleaved[frame * channels + ch];
-                    }
-                }
+                // SIMD deinterleave via the same crate the resampler uses
+                // (~14 profiler samples on the apple sentinel come from
+                // its inner kernels). Replaces a manual nested
+                // per-frame×per-channel loop whose strided writes defeated
+                // L1 locality.
+                let num_channels =
+                    NonZeroUsize::new(channels).expect("channels checked non-zero above");
+                deinterleave_variable(&interleaved, num_channels, output, 0..actual_frames);
                 let Some(actual) = NonZeroUsize::new(actual_frames) else {
                     return Ok(ReadOutcome::Pending {
                         position,
