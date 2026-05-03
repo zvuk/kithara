@@ -67,7 +67,7 @@ impl Queue {
         const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
 
         match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd) => {
+            Event::Player(PlayerEvent::ItemDidPlayToEnd { .. }) => {
                 let pos = self.player.position_seconds().unwrap_or(0.0);
                 let dur = self.player.duration_seconds().unwrap_or(0.0);
                 // Crossfade fade-outs emit ItemDidPlayToEnd for the
@@ -167,6 +167,8 @@ impl Queue {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use kithara_events::TrackId;
     use kithara_test_utils::kithara;
 
@@ -182,7 +184,10 @@ mod tests {
         queue
             .player
             .bus()
-            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd));
+            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
+                src: Arc::from(""),
+                item_id: None,
+            }));
 
         queue.tick().expect("tick");
 
