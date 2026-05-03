@@ -174,6 +174,7 @@ fn engine_instances_share_session_ducking() {
     assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Soft);
 
     EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
+    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
 }
 
 // Tests that require actual audio hardware should be marked #[ignore].

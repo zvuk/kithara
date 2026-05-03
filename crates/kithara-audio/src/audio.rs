@@ -29,6 +29,7 @@ use crate::{
     pipeline::{
         config::{AudioConfig, create_effects, expected_output_spec},
         fetch::{EpochValidator, Fetch},
+        gapless::visible_duration,
         source::{OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
@@ -80,7 +81,7 @@ enum RecvOutcome {
 /// ```
 pub struct Audio<S> {
     /// PCM chunk receiver.
-    pcm_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
+    pub(crate) pcm_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
 
     /// Shared epoch counter with worker (kept alive for `Arc` shared ownership).
     _epoch: Arc<AtomicU64>,
@@ -171,13 +172,6 @@ impl<S> Audio<S> {
     #[must_use]
     pub fn is_preloaded(&self) -> bool {
         self.preloaded
-    }
-
-    /// Get reference to PCM receiver for direct channel access.
-    #[must_use]
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) fn pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
-        &mut self.pcm_rx
     }
 
     /// Enable non-blocking mode for `read()`.
@@ -731,6 +725,7 @@ where
             hint,
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
+            gapless_mode,
             pcm_buffer_chunks,
             pcm_pool: mut pool,
             playback_rate: config_playback_rate,
@@ -769,7 +764,12 @@ where
         .await?;
 
         let initial_spec = decoder.spec();
-        let total_duration = decoder.duration().or_else(|| timeline.total_duration());
+        // Report visible (post-gapless-trim) duration so downstream timeline
+        // consumers see the same coordinate space the trimmed PCM stream
+        // actually exposes — not the raw container duration that includes
+        // encoder priming/padding the trimmer is about to drop.
+        let total_duration =
+            visible_duration(decoder.as_ref(), gapless_mode).or_else(|| timeline.total_duration());
         timeline.set_total_duration(total_duration);
         let metadata = decoder.metadata();
 
@@ -811,6 +811,7 @@ where
             decoder_factory,
             stream_media_info,
             Arc::clone(&epoch),
+            gapless_mode,
             effects,
         )
         .with_emit(emit);

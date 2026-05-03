@@ -76,27 +76,27 @@ impl EventBridge {
         });
     }
 
-    /// Dedicated OS thread that drives `Queue::tick` and polls current
-    /// time / duration at ~10 Hz. Uses a plain thread instead of an
-    /// async task to avoid blocking the single-threaded tokio runtime
-    /// with sync locks held inside the engine.
+    /// Dedicated OS thread that drives `Queue::tick` and polls the current
+    /// time / duration at ~10 Hz. Uses a plain thread instead of an async
+    /// task to avoid blocking the single-threaded tokio runtime with sync
+    /// locks held inside the engine.
     fn spawn_time_thread(
         queue: Arc<Queue>,
         observer: Arc<dyn PlayerObserver>,
         cancel: CancellationToken,
     ) -> JoinHandle<()> {
         spawn(move || {
+            // Tokio context for sync engine paths that fan out via `tokio::spawn`.
+            let _rt = crate::FFI_RUNTIME.enter();
             let interval = Duration::from_millis(Self::TIME_POLL_INTERVAL_MS);
             let mut last_time: Option<f64> = None;
             let mut last_duration: Option<f64> = None;
 
             while !cancel.is_cancelled() {
                 sleep(interval);
-                // Pump engine updates and drain `ItemDidPlayToEnd` /
-                // `CurrentItemChanged` into QueueEvents for consistent
-                // handling below.
+                // `Queue::tick` pumps audio-thread notifications onto
+                // the bus and drains queue/engine events.
                 let _ = queue.tick();
-                queue.player().process_notifications();
                 let time = queue.position_seconds();
                 let duration = queue.player().duration_seconds();
 
@@ -223,9 +223,9 @@ impl EventBridge {
                 FfiPlayerEvent::VolumeChanged { volume: *volume }
             }
             PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
-            PlayerEvent::ItemDidPlayToEnd => FfiPlayerEvent::ItemDidPlayToEnd,
-            // `PlayerEvent::CurrentItemChanged` is shadowed by
-            // `QueueEvent::CurrentTrackChanged` (carries the item id).
+            // `PlayerEvent::CurrentItemChanged` and `ItemDidPlayToEnd` are
+            // shadowed by `QueueEvent::CurrentTrackChanged` /
+            // `QueueEvent::QueueEnded`, which carry the item id.
             _ => return None,
         })
     }

@@ -3,7 +3,9 @@ use std::{fmt, sync::Arc, time::Duration};
 use derivative::Derivative;
 use kithara_bufpool::{PcmBuf, pcm_pool};
 
-/// Audio track metadata extracted from Symphonia tags.
+use crate::GaplessInfo;
+
+/// User-facing track metadata extracted from the container or tags.
 #[derive(Debug, Clone, Default)]
 pub struct TrackMetadata {
     /// Album name.
@@ -14,6 +16,14 @@ pub struct TrackMetadata {
     pub artwork: Option<Arc<Vec<u8>>>,
     /// Track title.
     pub title: Option<String>,
+}
+
+/// Decoder-owned per-track playback contract.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DecoderTrackInfo {
+    /// Gapless trim information applied by the engine pipeline.
+    pub gapless: Option<GaplessInfo>,
 }
 
 /// PCM specification - core audio format information

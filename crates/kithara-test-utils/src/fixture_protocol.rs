@@ -9,6 +9,8 @@
 //! both server (generates data) and client (computes `expected_byte_at`)
 //! share the exact same logic.
 
+use std::num::NonZeroU32;
+
 use kithara_stream::AudioCodec;
 use serde::{Deserialize, Serialize};
 
@@ -98,7 +100,7 @@ pub enum PcmPattern {
     Ascending,
     /// Descending saw-tooth: frame 0 → 32767, frame 65535 → -32768.
     Descending,
-    /// Ascending saw-tooth with half-period phase offset.
+    /// Ascending saw-tooth with the half-period phase offset.
     ShiftedAscending,
 }
 
@@ -149,6 +151,39 @@ pub enum PackagedSignal {
     Sine { freq_hz: f64 },
 }
 
+/// How the fmp4 mux should encode `encoder_delay` / `trailing_delay` into
+/// the init segment. Decoders can read either path; real-world players rely
+/// on different sources (`AVPlayer` reads `iTunSMPB`, our decoder prefers
+/// `elst`), so fixtures must be able to pin which path is exercised.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GaplessEncoding {
+    /// Don't write any gapless metadata. Decoders fall back to heuristics or
+    /// pass through the full PCM (priming + trailing included).
+    None,
+    /// Write only an edit list (`edts`/`elst`) inside `trak`.
+    #[default]
+    Edts,
+    /// Write only an iTunes freeform tag (`udta`/`meta`/`ilst`/`----` with
+    /// `iTunSMPB`) inside `moov`.
+    ItunSmpb,
+    /// Write both `edts` and `iTunSMPB`. The decoder contract is that `elst`
+    /// wins over `iTunSMPB` here.
+    Both,
+}
+
+impl GaplessEncoding {
+    #[must_use]
+    pub fn writes_edts(self) -> bool {
+        matches!(self, Self::Edts | Self::Both)
+    }
+
+    #[must_use]
+    pub fn writes_itunsmpb(self) -> bool {
+        matches!(self, Self::ItunSmpb | Self::Both)
+    }
+}
+
 /// Per-variant override for packaged audio fixtures.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct PackagedAudioVariantOverride {
@@ -167,9 +202,17 @@ pub struct PackagedAudioRequest {
     pub sample_rate: u32,
     pub channels: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_frame: Option<NonZeroU32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timescale: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_rate: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoder_delay: Option<NonZeroU32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing_delay: Option<NonZeroU32>,
+    #[serde(default)]
+    pub gapless_encoding: GaplessEncoding,
     pub source: PackagedAudioSource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variant_overrides: Vec<PackagedAudioVariantOverride>,
@@ -297,6 +340,8 @@ mod tests {
         assert_eq!(req.codec, AudioCodec::AacLc);
         assert_eq!(req.sample_rate, 44100);
         assert_eq!(req.channels, 2);
+        assert_eq!(req.encoder_delay, None);
+        assert_eq!(req.trailing_delay, None);
     }
 
     #[kithara::test]
@@ -309,10 +354,50 @@ mod tests {
         });
         let req: PackagedAudioRequest = serde_json::from_value(value).unwrap();
         assert_eq!(req.codec, AudioCodec::AacLc);
+        assert!(req.start_frame.is_none());
         assert!(matches!(
             req.source,
             PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 440.0 })
         ));
+    }
+
+    #[kithara::test]
+    fn packaged_audio_start_frame_roundtrips() {
+        let value = serde_json::json!({
+            "codec": "aac_lc",
+            "sample_rate": 44100,
+            "channels": 2,
+            "start_frame": 123,
+            "source": { "Signal": { "Sine": { "freq_hz": 440.0 } } }
+        });
+        let req: PackagedAudioRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            req.start_frame,
+            NonZeroU32::new(123),
+            "start_frame JSON number maps to NonZero"
+        );
+
+        let encoded = serde_json::to_value(&req).unwrap();
+        assert_eq!(encoded["start_frame"], 123);
+    }
+
+    #[kithara::test]
+    fn packaged_audio_gapless_fields_roundtrip() {
+        let value = serde_json::json!({
+            "codec": "aac_lc",
+            "sample_rate": 48000,
+            "channels": 2,
+            "encoder_delay": 2112,
+            "trailing_delay": 960,
+            "source": { "Signal": "Sawtooth" }
+        });
+        let req: PackagedAudioRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(req.encoder_delay, NonZeroU32::new(2_112));
+        assert_eq!(req.trailing_delay, NonZeroU32::new(960));
+
+        let encoded = serde_json::to_value(&req).unwrap();
+        assert_eq!(encoded["encoder_delay"], 2_112);
+        assert_eq!(encoded["trailing_delay"], 960);
     }
 
     #[kithara::test]

@@ -3,19 +3,22 @@
 //! Tests that verify the audio fixtures work correctly and can be used
 //! by decode tests without external network access.
 
-use std::{fs, io::Cursor, process::Command};
+use std::{fs, io::Cursor, num::NonZeroU32, process::Command};
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory},
+    decode::{DecoderConfig, DecoderFactory, probe_mp4_gapless},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
 use kithara_platform::time::Duration;
 use kithara_test_utils::{
     HlsFixtureBuilder, PackagedTestServer, SignalDirection, SignalFormat, SignalSpec,
-    SignalSpecLength, TestServerHelper, detect_direction, fixture_protocol::PackagedSignal,
+    SignalSpecLength, SweepMode, TestServerHelper, detect_direction,
+    fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
 use reqwest::Client;
+
+const AAC_NATIVE_ENCODER_DELAY: u64 = 1_024;
 
 #[kithara::test(
     tokio,
@@ -131,6 +134,87 @@ async fn test_signal_server_encoded_formats_are_decodable(
 
     let chunk = decoder.next_chunk().unwrap().unwrap();
     assert!(!chunk.pcm.is_empty());
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[case(SignalFormat::Mp3, "mp3", "audio/mpeg")]
+#[case(SignalFormat::Flac, "flac", "audio/flac")]
+#[case(SignalFormat::Aac, "aac", "audio/aac")]
+#[case(SignalFormat::M4a, "m4a", "audio/mp4")]
+async fn test_signal_server_sweep_encoded_formats_are_decodable(
+    #[case] format: SignalFormat,
+    #[case] ext: &str,
+    #[case] content_type: &str,
+) {
+    let server = TestServerHelper::new().await;
+    let client = Client::new();
+    let spec = SignalSpec {
+        sample_rate: 44_100,
+        channels: 2,
+        length: SignalSpecLength::Seconds(1.0),
+        format,
+    };
+
+    let response = client
+        .get(server.sweep(&spec, 100.0, 8_000.0, SweepMode::Linear).await)
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("Failed to fetch /signal sweep encoded fixture: {error}"));
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        content_type
+    );
+
+    let bytes = response.bytes().await.unwrap();
+    assert!(!bytes.is_empty());
+
+    let mut decoder = DecoderFactory::create_with_probe(
+        Cursor::new(bytes.to_vec()),
+        Some(ext),
+        DecoderConfig::default(),
+    )
+    .unwrap();
+
+    let chunk = decoder.next_chunk().unwrap().unwrap();
+    assert!(!chunk.pcm.is_empty());
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn test_signal_server_sweep_wav_roundtrip_hits_target_end_frequency() {
+    let server = TestServerHelper::new().await;
+    let client = Client::new();
+    let spec = wav_spec();
+    let response = client
+        .get(server.sweep(&spec, 100.0, 8_000.0, SweepMode::Linear).await)
+        .send()
+        .await
+        .unwrap_or_else(|error| panic!("Failed to fetch /signal sweep wav fixture: {error}"));
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers().get("content-type").unwrap(), "audio/wav");
+
+    let bytes = response.bytes().await.unwrap();
+    let samples = decode_wav_channel_samples(&bytes, spec.channels as usize);
+    assert_eq!(samples.first().copied(), Some(0));
+
+    let tail_frequency =
+        estimate_frequency_i16(&samples[samples.len() - 2_048..], spec.sample_rate);
+    assert!(
+        (tail_frequency - 8_000.0).abs() < 300.0,
+        "tail frequency {tail_frequency} did not converge to the expected end frequency"
+    );
 }
 
 #[kithara::test(
@@ -512,6 +596,159 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
     assert_eq!(chunk.spec().channels, 2);
 }
 
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn test_packaged_hls_init_segment_exposes_configured_gapless_delays() {
+    let server = TestServerHelper::new().await;
+    let encoder_delay = 2_112;
+    let trailing_delay = 960;
+    let expected_leading = u64::from(encoder_delay) + AAC_NATIVE_ENCODER_DELAY;
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(4)
+                .segment_duration_secs(1.0)
+                .packaged_audio(PackagedAudioRequest {
+                    codec: AudioCodec::AacLc,
+                    sample_rate: 48_000,
+                    channels: 2,
+                    start_frame: None,
+                    timescale: Some(48_000),
+                    bit_rate: Some(128_000),
+                    encoder_delay: NonZeroU32::new(encoder_delay),
+                    trailing_delay: NonZeroU32::new(trailing_delay),
+                    source: PackagedAudioSource::Signal(PackagedSignal::Sawtooth),
+                    gapless_encoding: Default::default(),
+                    variant_overrides: Vec::new(),
+                }),
+        )
+        .await
+        .expect("create delayed packaged HLS fixture");
+
+    let init = Client::new()
+        .get(created.init_url(0))
+        .send()
+        .await
+        .expect("fetch delayed init")
+        .bytes()
+        .await
+        .expect("read delayed init bytes");
+    let gapless = probe_mp4_gapless(&mut Cursor::new(init.to_vec())).expect("probe gapless");
+
+    let gapless = gapless.expect("expected gapless metadata");
+    assert_eq!(gapless.leading_frames, expected_leading);
+    assert_eq!(gapless.trailing_frames, u64::from(trailing_delay));
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+async fn test_symphonia_aac_decoder_exposes_gapless_metadata_only_when_enabled() {
+    let server = TestServerHelper::new().await;
+    let encoder_delay = 2_112;
+    let trailing_delay = 960;
+    let expected_leading = u64::from(encoder_delay) + AAC_NATIVE_ENCODER_DELAY;
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(1)
+                .segment_duration_secs(1.0)
+                .packaged_audio(PackagedAudioRequest {
+                    codec: AudioCodec::AacLc,
+                    sample_rate: 48_000,
+                    channels: 2,
+                    start_frame: None,
+                    timescale: Some(48_000),
+                    bit_rate: Some(128_000),
+                    encoder_delay: NonZeroU32::new(encoder_delay),
+                    trailing_delay: NonZeroU32::new(trailing_delay),
+                    source: PackagedAudioSource::Signal(PackagedSignal::Sawtooth),
+                    gapless_encoding: Default::default(),
+                    variant_overrides: Vec::new(),
+                }),
+        )
+        .await
+        .expect("create delayed packaged HLS fixture");
+
+    let client = Client::new();
+    let init = client
+        .get(created.init_url(0))
+        .send()
+        .await
+        .expect("fetch delayed init")
+        .bytes()
+        .await
+        .expect("read delayed init bytes");
+    let segment = client
+        .get(created.segment_url(0, 0))
+        .send()
+        .await
+        .expect("fetch delayed segment")
+        .bytes()
+        .await
+        .expect("read delayed segment bytes");
+
+    let mut mp4_bytes = Vec::with_capacity(init.len() + segment.len());
+    mp4_bytes.extend_from_slice(&init);
+    mp4_bytes.extend_from_slice(&segment);
+
+    let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4))
+        .with_sample_rate(48_000)
+        .with_channels(2);
+
+    let direct_decoder = DecoderFactory::create_from_media_info(
+        Cursor::new(mp4_bytes.clone()),
+        &media_info,
+        DecoderConfig::default(),
+    )
+    .expect("create Symphonia direct decoder");
+    let direct_gapless = direct_decoder.track_info().gapless;
+    assert_eq!(
+        direct_gapless.as_ref().map(|info| info.leading_frames),
+        Some(expected_leading)
+    );
+    assert_eq!(
+        direct_gapless.as_ref().map(|info| info.trailing_frames),
+        Some(u64::from(trailing_delay))
+    );
+
+    let probe_decoder = DecoderFactory::create_with_probe(
+        Cursor::new(mp4_bytes.clone()),
+        Some("m4a"),
+        DecoderConfig::default(),
+    )
+    .expect("create Symphonia probe decoder");
+    let probe_gapless = probe_decoder.track_info().gapless;
+    assert_eq!(
+        probe_gapless.as_ref().map(|info| info.leading_frames),
+        Some(expected_leading)
+    );
+    assert_eq!(
+        probe_gapless.as_ref().map(|info| info.trailing_frames),
+        Some(u64::from(trailing_delay))
+    );
+
+    let disabled_decoder = DecoderFactory::create_from_media_info(
+        Cursor::new(mp4_bytes),
+        &media_info,
+        DecoderConfig {
+            gapless: false,
+            ..DecoderConfig::default()
+        },
+    )
+    .expect("create Symphonia decoder with gapless disabled");
+    assert_eq!(disabled_decoder.track_info().gapless, None);
+}
+
 #[kithara::test]
 fn test_embedded_audio_contains_data() {
     let audio = EmbeddedAudio::get();
@@ -535,6 +772,44 @@ fn wav_spec() -> SignalSpec {
         length: SignalSpecLength::Seconds(1.0),
         format: SignalFormat::Wav,
     }
+}
+
+fn decode_wav_channel_samples(bytes: &[u8], channels: usize) -> Vec<i16> {
+    assert!(bytes.len() >= 44, "WAV fixture must include a header");
+    let frame_width = channels * 2;
+    bytes[44..]
+        .chunks_exact(frame_width)
+        .map(|frame| i16::from_le_bytes([frame[0], frame[1]]))
+        .collect()
+}
+
+fn estimate_frequency_i16(samples: &[i16], sample_rate: u32) -> f64 {
+    let mut zero_crossings = 0usize;
+    let mut prev_sign = 0i8;
+
+    for &sample in samples {
+        let sign = if sample > 0 {
+            1
+        } else if sample < 0 {
+            -1
+        } else {
+            0
+        };
+
+        if sign == 0 {
+            continue;
+        }
+
+        if prev_sign != 0 && sign != prev_sign {
+            zero_crossings += 1;
+        }
+        prev_sign = sign;
+    }
+
+    let zero_crossings = u32::try_from(zero_crossings).expect("zero crossings fit into u32");
+    let sample_count = u32::try_from(samples.len()).expect("sample count fits into u32");
+
+    f64::from(zero_crossings) / (2.0 * f64::from(sample_count) / f64::from(sample_rate))
 }
 
 fn assert_valid_pcm_samples(samples: &[f32], context: &str) {

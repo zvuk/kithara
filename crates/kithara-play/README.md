@@ -153,6 +153,48 @@ Events use `tokio::sync::broadcast`. Subscribe via `player.subscribe()` or `engi
 <tr><td><code>DjEvent</code></td><td>BPM detection, beat tick, sync engage/disengage</td></tr>
 </table>
 
+## Queue Auto-Advance
+
+`PlayerImpl` exposes a small handover API for external orchestrators
+(e.g. `kithara-queue::Queue`):
+
+- `arm_next(idx) -> Option<Arc<str>>` — load `items[idx]` into the
+  audio-thread arena in `Preloading` state, ready for sample-accurate
+  gapless stitch (cf=0) or parallel fade (cf>0).
+- `commit_next(idx) -> Result<(), PlayError>` — promote the armed slot:
+  send `FadeIn`, update `current_index`, publish `CurrentItemChanged`.
+  Used by orchestrators when the cf>0 handover threshold fires; **must
+  not** be called for cf=0 (the audio thread handles handover internally).
+- `unarm_next()` — drop the armed slot without committing. Skips the
+  unload if the slot was already activated for the current index.
+- `armed_next() -> Option<usize>` — snapshot of the armed-next index.
+
+Two near-end triggers are emitted on the public bus:
+
+- `PlayerEvent::PrefetchRequested` — the leading track entered the
+  prefetch lead window (`max(prefetch_duration, fade_duration) +
+  block_seconds` before EOF). Subscribers should arm the next track via
+  `arm_next`.
+- `PlayerEvent::TrackHandoverRequested` — the leading track entered the
+  crossfade window (`fade_duration + block_seconds` before EOF). Emitted
+  **only when** `crossfade_duration > 0`; subscribers commit via
+  `commit_next`. For `crossfade_duration == 0` this event is suppressed —
+  the audio thread does sample-accurate handover at EOF and the player
+  publishes `CurrentItemChanged` after the leading track's
+  `ItemDidPlayToEnd`.
+
+`PlayerConfig::auto_advance_enabled` (default `true`) controls a built-in
+linear `next = current + 1` policy that wires the events to the public API
+internally. Standalone callers (tests, demos) get gapless playback for
+free; orchestrators (`Queue::new`) toggle it off and drive auto-advance
+themselves.
+
+Internal audio-thread → main-thread channel signals
+(`PlayerNotification::TrackRequested` / `HandoverRequested` /
+`TrackPlaybackStopped { reason: Eof | Stop }`) remain the source of
+truth; the public events are translations of the first two, gated on
+`crossfade_duration` for the handover event.
+
 ## Engine Lifecycle
 
 1. `Engine::start()` -- activate audio output
@@ -202,11 +244,47 @@ gantt
 <tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
 <tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL backend via <code>firewheel/cpal</code></td></tr>
 <tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend via <code>firewheel-web-audio</code></td></tr>
+<tr><td><code>backend-offline</code></td><td>no</td><td>Offline Firewheel backend for deterministic engine/player tests</td></tr>
 <tr><td><code>rodio</code></td><td>no</td><td><code>rodio</code> integration (<code>kithara-audio/rodio</code>)</td></tr>
 <tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM backend via <code>firewheel/wasm-bindgen</code></td></tr>
-<tr><td><code>test-utils</code></td><td>no</td><td>Mock trait generation via <code>unimock</code></td></tr>
+<tr><td><code>test-utils</code></td><td>no</td><td>Mock trait generation via <code>unimock</code> plus offline test backend wiring</td></tr>
 <tr><td><code>internal</code></td><td>no</td><td>Internal-only exports for workspace testing/debug</td></tr>
 </table>
+
+## Offline Backend (Testing)
+
+`backend-offline` exists for deterministic native tests that need the full
+`EngineImpl + PlayerImpl + session_engine` stack without CPAL or real audio
+hardware. Use `EngineImpl::new_offline(...)` to create an engine and
+`engine.render_offline(frames)` to drive the graph manually.
+
+```rust
+use kithara_play::{Engine, EngineConfig, EngineImpl};
+use kithara_play::impls::offline_backend::OfflineConfig;
+use kithara_events::EventBus;
+
+let engine = EngineImpl::new_offline(
+    EngineConfig::default(),
+    EventBus::default(),
+    OfflineConfig::default(),
+);
+engine.start()?;
+let pcm = engine.render_offline(512)?;
+```
+
+This is different from `internal::offline::OfflinePlayer`: `OfflinePlayer`
+is a single-node helper for focused render tests, while `new_offline(...)`
+exercises the full engine/session orchestration path.
+
+For integration-style tests, prefer the shared harness under
+`tests/tests/common/offline_player_harness.rs` so player-facing scenarios can
+inject an offline engine without duplicating setup.
+
+`backend-offline` is test-only infrastructure. Do not use it in production
+runtime selection or app-facing engine setup. The default runtime path
+(`EngineImpl::new(...)` with the default backend features) keeps using the
+normal session transport and should not change behavior because this testing
+backend is enabled.
 
 ## Invariants
 

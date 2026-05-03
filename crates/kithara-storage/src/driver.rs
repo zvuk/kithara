@@ -22,7 +22,6 @@ use kithara_platform::{
 };
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 
 use crate::{
     StorageError, StorageResult,
@@ -408,14 +407,6 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 prev_available_len = current_available_len;
                 hang_reset!();
             }
-
-            debug!(
-                range_start = range.start,
-                range_end = range.end,
-                committed = state.committed,
-                final_len = ?state.final_len,
-                "storage::wait_range spinning"
-            );
 
             hang_tick!();
             yield_now();

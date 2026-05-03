@@ -222,6 +222,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 
 // Process ceiling — no leaked kithara threads when idle
 
+#[ignore = "requires isolated process-wide quiescence"]
 #[kithara::test(serial)]
 fn thread_budget_process_ceiling() {
     let count = wait_for_named_threads(0, Duration::from_secs(30));

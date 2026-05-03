@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::{
     consts::Consts,
     fixture_protocol::{
-        DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
+        DataMode, DelayRule, EncryptionRequest, GaplessEncoding, InitMode, PackagedAudioRequest,
         PackagedAudioSource, PackagedAudioVariantOverride, PackagedSignal, PcmPattern,
     },
     hls_url::HlsSpec,
@@ -72,6 +72,9 @@ pub(crate) struct ResolvedPackagedAudioSpec {
     pub(crate) sample_rate: u32,
     pub(crate) channels: u16,
     pub(crate) timescale: u32,
+    pub(crate) encoder_delay: u32,
+    pub(crate) trailing_delay: u32,
+    pub(crate) gapless_encoding: GaplessEncoding,
     pub(crate) segments_per_variant: usize,
     pub(crate) segment_duration_secs: f64,
     pub(crate) variants: Vec<ResolvedPackagedVariant>,
@@ -80,6 +83,7 @@ pub(crate) struct ResolvedPackagedAudioSpec {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackagedVariant {
     pub(crate) bit_rate: u64,
+    pub(crate) start_frame: u64,
     pub(crate) signal: ResolvedPackagedSignal,
 }
 
@@ -394,7 +398,11 @@ fn resolve_packaged_audio(
         {
             apply_variant_override(override_spec, &mut bit_rate, &mut signal);
         }
-        variants.push(ResolvedPackagedVariant { bit_rate, signal });
+        variants.push(ResolvedPackagedVariant {
+            bit_rate,
+            start_frame: packaged.start_frame.map_or(0, |n| u64::from(n.get())),
+            signal,
+        });
     }
 
     Ok(ResolvedPackagedAudioSpec {
@@ -403,6 +411,9 @@ fn resolve_packaged_audio(
         sample_rate: packaged.sample_rate,
         channels: packaged.channels,
         timescale,
+        encoder_delay: packaged.encoder_delay.map(Into::into).unwrap_or_default(),
+        trailing_delay: packaged.trailing_delay.map(Into::into).unwrap_or_default(),
+        gapless_encoding: packaged.gapless_encoding,
         segments_per_variant: spec.segments_per_variant,
         segment_duration_secs: spec.segment_duration_secs,
         variants,
@@ -501,7 +512,7 @@ impl ResolvedEncryption {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, num::NonZeroU32};
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use kithara_stream::AudioCodec;
@@ -570,14 +581,45 @@ mod tests {
                 codec: AudioCodec::AacLc,
                 sample_rate: 44_100,
                 channels: 2,
+                start_frame: None,
                 timescale: None,
                 bit_rate: None,
+                encoder_delay: None,
+                trailing_delay: None,
                 source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 50_000.0 }),
+                gapless_encoding: Default::default(),
                 variant_overrides: Vec::new(),
             }),
             ..HlsSpec::default()
         };
         let err = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
         assert!(err.to_string().contains("Nyquist"));
+    }
+
+    #[test]
+    fn resolves_packaged_audio_start_frame_on_sine() {
+        let spec = HlsSpec {
+            packaged_audio: Some(PackagedAudioRequest {
+                codec: AudioCodec::AacLc,
+                sample_rate: 44_100,
+                channels: 2,
+                start_frame: NonZeroU32::new(256),
+                timescale: None,
+                bit_rate: None,
+                encoder_delay: None,
+                trailing_delay: None,
+                source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 440.0 }),
+                gapless_encoding: Default::default(),
+                variant_overrides: Vec::new(),
+            }),
+            ..HlsSpec::default()
+        };
+        let resolved = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap();
+        let packaged = resolved.packaged_audio.unwrap();
+        assert_eq!(packaged.variants[0].start_frame, 256);
+        assert!(matches!(
+            packaged.variants[0].signal,
+            ResolvedPackagedSignal::Sine { freq_hz: 440.0 }
+        ));
     }
 }

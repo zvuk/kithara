@@ -14,7 +14,7 @@ use unimock::unimock;
 
 use crate::{
     error::DecodeResult,
-    types::{PcmChunk, PcmSpec, TrackMetadata},
+    types::{DecoderTrackInfo, PcmChunk, PcmSpec, TrackMetadata},
 };
 
 /// Combined trait for decoder input sources.
@@ -33,14 +33,6 @@ impl<T: Read + Seek + Send + Sync> DecoderInput for T {}
 /// to runtime [`AudioCodec`] values.
 pub(crate) trait CodecType: Send + 'static {
     /// The codec this type represents.
-    #[cfg_attr(
-        not(any(
-            test,
-            all(feature = "apple", any(target_os = "macos", target_os = "ios")),
-            all(feature = "android", target_os = "android")
-        )),
-        expect(dead_code, reason = "used by apple backend and tests")
-    )]
     const CODEC: AudioCodec;
 }
 
@@ -189,6 +181,13 @@ pub trait InnerDecoder: Send + 'static {
     /// Returns default metadata if not available.
     fn metadata(&self) -> TrackMetadata {
         TrackMetadata::default()
+    }
+
+    /// Get decoder-owned per-track playback info.
+    ///
+    /// Returns default info if not available.
+    fn track_info(&self) -> DecoderTrackInfo {
+        DecoderTrackInfo::default()
     }
 }
 

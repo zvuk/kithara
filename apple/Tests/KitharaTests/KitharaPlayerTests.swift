@@ -18,6 +18,14 @@ struct KitharaPlayerTests {
         #expect(player.defaultRate == 1.0)
     }
 
+    @Test("init accepts gapless mode config")
+    func initAcceptsGaplessModeConfig() {
+        let player = KitharaPlayer(
+            config: KitharaPlayer.Config(gaplessMode: .codecPriming)
+        )
+        #expect(player.status == .unknown)
+    }
+
     @Test("items starts empty")
     func itemsStartsEmpty() {
         let player = KitharaPlayer()

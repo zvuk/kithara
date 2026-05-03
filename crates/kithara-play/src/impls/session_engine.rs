@@ -33,7 +33,7 @@ use ringbuf::{
 use ringbuf::{HeapProd, HeapRb, traits::Split};
 use tracing::warn;
 
-#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
+#[cfg(any(test, feature = "test-utils"))]
 use super::offline_backend::OfflineBackend;
 use super::{
     master_eq_node::MasterEqNode, player_node::PlayerNode, player_processor::PlayerCmd,
@@ -129,7 +129,7 @@ impl<B: AudioBackend> SessionState<B> {
     }
 }
 
-enum Cmd {
+pub(crate) enum Cmd {
     RegisterPlayer {
         eq_layout: Vec<EqBandConfig>,
         pcm_pool: PcmPool,
@@ -179,7 +179,7 @@ struct CmdMsg {
     reply_tx: mpsc::Sender<Reply>,
 }
 
-enum Reply {
+pub(crate) enum Reply {
     Ok,
     PlayerRegistered(PlayerId),
     SessionDucking(SessionDuckingMode),
@@ -191,6 +191,154 @@ enum Reply {
     ),
     SampleRate(u32),
     Err(String),
+}
+
+/// Object-safe view of the session: every operation `EngineImpl` invokes on
+/// the audio session goes through `exec`. Production (cpal/web-audio,
+/// async via `engine_thread`) and per-instance offline (synchronous,
+/// owned by a test harness) plug in interchangeably.
+///
+/// Typed methods are default-impl'd in terms of `exec`, so backends only
+/// implement the dispatch primitive.
+pub(crate) trait SessionDispatcher: Send + Sync + 'static {
+    /// Run a command synchronously. Returns the raw [`Reply`] — typed
+    /// methods unpack it.
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+
+    fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        let reply = self.exec(cmd)?;
+        if let Reply::Err(msg) = &reply {
+            return Err(PlayError::Internal(msg.clone()));
+        }
+        Ok(reply)
+    }
+
+    fn allocate_slot(
+        &self,
+        player_id: PlayerId,
+    ) -> Result<
+        (
+            SlotId,
+            HeapProd<PlayerCmd>,
+            Arc<SharedPlayerState>,
+            SharedEq,
+        ),
+        PlayError,
+    > {
+        match self.exec_ok(Cmd::AllocateSlot { player_id })? {
+            Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
+                Ok((slot_id, cmd_tx, shared_state, eq))
+            }
+            _ => Err(PlayError::Internal(
+                "unexpected reply for session allocate slot".into(),
+            )),
+        }
+    }
+
+    fn ducking(&self) -> Result<SessionDuckingMode, PlayError> {
+        match self.exec_ok(Cmd::SessionDucking)? {
+            Reply::SessionDucking(mode) => Ok(mode),
+            _ => Err(PlayError::Internal(
+                "unexpected reply for session ducking query".into(),
+            )),
+        }
+    }
+
+    fn query_sample_rate(&self, fallback: u32) -> u32 {
+        match self.exec(Cmd::QuerySampleRate) {
+            Ok(Reply::SampleRate(sr)) => sr,
+            _ => fallback,
+        }
+    }
+
+    fn register_player(
+        &self,
+        eq_layout: Vec<EqBandConfig>,
+        pcm_pool: PcmPool,
+    ) -> Result<PlayerId, PlayError> {
+        match self.exec_ok(Cmd::RegisterPlayer {
+            eq_layout,
+            pcm_pool,
+        })? {
+            Reply::PlayerRegistered(id) => Ok(id),
+            _ => Err(PlayError::Internal(
+                "unexpected reply for session player registration".into(),
+            )),
+        }
+    }
+
+    fn release_slot(&self, player_id: PlayerId, slot: SlotId) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::ReleaseSlot { player_id, slot })
+            .map(|_| ())
+    }
+
+    fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
+    }
+
+    fn set_player_eq_gain(
+        &self,
+        player_id: PlayerId,
+        band: usize,
+        gain_db: f32,
+    ) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::SetPlayerEqGain {
+            band,
+            gain_db,
+            player_id,
+        })
+        .map(|_| ())
+    }
+
+    fn set_player_master_volume(
+        &self,
+        player_id: PlayerId,
+        volume: f32,
+    ) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::SetPlayerMasterVolume { player_id, volume })
+            .map(|_| ())
+    }
+
+    fn set_player_slot_volume(
+        &self,
+        player_id: PlayerId,
+        slot: SlotId,
+        volume: f32,
+    ) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::SetPlayerSlotVolume {
+            player_id,
+            slot,
+            volume,
+        })
+        .map(|_| ())
+    }
+
+    fn start_player(
+        &self,
+        player_id: PlayerId,
+        sample_rate: u32,
+        master_volume: f32,
+    ) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::StartPlayer {
+            master_volume,
+            player_id,
+            sample_rate,
+        })
+        .map(|_| ())
+    }
+
+    fn stop_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::StopPlayer { player_id }).map(|_| ())
+    }
+
+    fn tick(&self) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::Tick).map(|_| ())
+    }
+
+    fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::UnregisterPlayer { player_id })
+            .map(|_| ())
+    }
 }
 
 pub(crate) struct SessionClient {
@@ -274,139 +422,11 @@ impl SessionClient {
         }
     }
 
-    fn call_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        let reply = self.call(cmd)?;
-        if let Reply::Err(msg) = &reply {
-            return Err(PlayError::Internal(msg.clone()));
-        }
-        Ok(reply)
-    }
+}
 
-    pub(crate) fn allocate_slot(
-        &self,
-        player_id: PlayerId,
-    ) -> Result<
-        (
-            SlotId,
-            HeapProd<PlayerCmd>,
-            Arc<SharedPlayerState>,
-            SharedEq,
-        ),
-        PlayError,
-    > {
-        match self.call_ok(Cmd::AllocateSlot { player_id })? {
-            Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
-                Ok((slot_id, cmd_tx, shared_state, eq))
-            }
-            _ => Err(PlayError::Internal(
-                "unexpected reply for session allocate slot".into(),
-            )),
-        }
-    }
-
-    pub(crate) fn ducking(&self) -> Result<SessionDuckingMode, PlayError> {
-        match self.call_ok(Cmd::SessionDucking)? {
-            Reply::SessionDucking(mode) => Ok(mode),
-            _ => Err(PlayError::Internal(
-                "unexpected reply for session ducking query".into(),
-            )),
-        }
-    }
-
-    pub(crate) fn query_sample_rate(&self, fallback: u32) -> u32 {
-        match self.call(Cmd::QuerySampleRate) {
-            Ok(Reply::SampleRate(sr)) => sr,
-            _ => fallback,
-        }
-    }
-
-    pub(crate) fn register_player(
-        &self,
-        eq_layout: Vec<EqBandConfig>,
-        pcm_pool: PcmPool,
-    ) -> Result<PlayerId, PlayError> {
-        match self.call_ok(Cmd::RegisterPlayer {
-            eq_layout,
-            pcm_pool,
-        })? {
-            Reply::PlayerRegistered(id) => Ok(id),
-            _ => Err(PlayError::Internal(
-                "unexpected reply for session player registration".into(),
-            )),
-        }
-    }
-
-    pub(crate) fn release_slot(&self, player_id: PlayerId, slot: SlotId) -> Result<(), PlayError> {
-        self.call_ok(Cmd::ReleaseSlot { player_id, slot })
-            .map(|_| ())
-    }
-
-    pub(crate) fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.call_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
-    }
-
-    pub(crate) fn set_player_eq_gain(
-        &self,
-        player_id: PlayerId,
-        band: usize,
-        gain_db: f32,
-    ) -> Result<(), PlayError> {
-        self.call_ok(Cmd::SetPlayerEqGain {
-            band,
-            gain_db,
-            player_id,
-        })
-        .map(|_| ())
-    }
-
-    pub(crate) fn set_player_master_volume(
-        &self,
-        player_id: PlayerId,
-        volume: f32,
-    ) -> Result<(), PlayError> {
-        self.call_ok(Cmd::SetPlayerMasterVolume { player_id, volume })
-            .map(|_| ())
-    }
-
-    pub(crate) fn set_player_slot_volume(
-        &self,
-        player_id: PlayerId,
-        slot: SlotId,
-        volume: f32,
-    ) -> Result<(), PlayError> {
-        self.call_ok(Cmd::SetPlayerSlotVolume {
-            player_id,
-            slot,
-            volume,
-        })
-        .map(|_| ())
-    }
-
-    pub(crate) fn start_player(
-        &self,
-        player_id: PlayerId,
-        sample_rate: u32,
-        master_volume: f32,
-    ) -> Result<(), PlayError> {
-        self.call_ok(Cmd::StartPlayer {
-            master_volume,
-            player_id,
-            sample_rate,
-        })
-        .map(|_| ())
-    }
-
-    pub(crate) fn stop_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
-        self.call_ok(Cmd::StopPlayer { player_id }).map(|_| ())
-    }
-
-    pub(crate) fn tick(&self) -> Result<(), PlayError> {
-        self.call_ok(Cmd::Tick).map(|_| ())
-    }
-
-    pub(crate) fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
-        self.call_ok(Cmd::UnregisterPlayer { player_id })
-            .map(|_| ())
+impl SessionDispatcher for SessionClient {
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        self.call(cmd)
     }
 }
 
@@ -1348,4 +1368,119 @@ fn set_session_ducking<B: AudioBackend>(state: &mut SessionState<B>, mode: Sessi
     memo.volume = Volume::Linear(ducking_gain(mode));
     let mut queue = fw_ctx.event_queue(session_id);
     memo.update_memo(&mut queue);
+}
+
+// Per-instance offline session (test-only, native).
+//
+// Owns a worker thread that holds `SessionState<OfflineBackend>`. Test
+// thread requests render or session-cmd dispatch via channel and waits
+// for the reply — the worker holds non-`Send` firewheel internals
+// (`Box<dyn DynAudioNode>` etc.) but the OfflineSession handle remains
+// `Send + Sync` because it only carries the command sender.
+//
+// The render contract is *synchronous*: `render(N)` blocks until the
+// worker has driven `ctx.update()` + `OfflineBackend::render(N)` and
+// returned the rendered stereo block. Tests step the audio chain at
+// arbitrary block sizes without realtime pacing.
+
+#[cfg(any(test, feature = "test-utils"))]
+enum OfflineMsg {
+    Cmd {
+        cmd: Cmd,
+        reply_tx: mpsc::Sender<Reply>,
+    },
+    Render {
+        frames: usize,
+        reply_tx: mpsc::Sender<Vec<f32>>,
+    },
+    Shutdown,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(crate) struct OfflineSession {
+    cmd_tx: Mutex<mpsc::Sender<OfflineMsg>>,
+    worker: Mutex<Option<kithara_platform::thread::JoinHandle<()>>>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl OfflineSession {
+    pub(crate) fn new() -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OfflineMsg>();
+        let handle = spawn_named("kithara-engine-offline-instance", move || {
+            offline_session_thread(cmd_rx);
+        });
+        Self {
+            cmd_tx: Mutex::new(cmd_tx),
+            worker: Mutex::new(Some(handle)),
+        }
+    }
+
+    /// Synchronously drive one render iteration on the offline worker.
+    /// Returns stereo-interleaved samples, or an empty `Vec` if the
+    /// firewheel context has not been initialised yet (no player
+    /// started).
+    pub(crate) fn render(&self, frames: usize) -> Vec<f32> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        if self
+            .cmd_tx
+            .lock_sync()
+            .send_sync(OfflineMsg::Render { frames, reply_tx })
+            .is_err()
+        {
+            return Vec::new();
+        }
+        reply_rx.recv_sync().unwrap_or_default()
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Drop for OfflineSession {
+    fn drop(&mut self) {
+        let _ = self.cmd_tx.lock_sync().send_sync(OfflineMsg::Shutdown);
+        if let Some(handle) = self.worker.lock_sync().take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl SessionDispatcher for OfflineSession {
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.cmd_tx
+            .lock_sync()
+            .send_sync(OfflineMsg::Cmd { cmd, reply_tx })
+            .map_err(|_| PlayError::Internal("offline session worker gone".into()))?;
+        reply_rx
+            .recv_sync()
+            .map_err(|_| PlayError::Internal("offline session worker gone (reply)".into()))
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn offline_session_thread(cmd_rx: mpsc::Receiver<OfflineMsg>) {
+    let mut state = SessionState::<OfflineBackend>::new(start_stream_offline);
+    while let Ok(msg) = cmd_rx.recv_sync() {
+        match msg {
+            OfflineMsg::Cmd { cmd, reply_tx } => {
+                let reply = run_cmd(&mut state, cmd);
+                let _ = reply_tx.send_sync(reply);
+            }
+            OfflineMsg::Render { frames, reply_tx } => {
+                let block = if let Some(ref mut ctx) = state.ctx {
+                    if let Err(err) = ctx.update() {
+                        warn!("offline session graph update failed: {err:?}");
+                    }
+                    match ctx.active_backend_mut() {
+                        Some(backend) => backend.render(frames),
+                        None => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                };
+                let _ = reply_tx.send_sync(block);
+            }
+            OfflineMsg::Shutdown => break,
+        }
+    }
 }

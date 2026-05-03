@@ -24,7 +24,7 @@ use url::Url;
 use crate::token_store::{TokenRequest, TokenResponse};
 use crate::{
     fixture_protocol::{
-        DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
+        DataMode, DelayRule, EncryptionRequest, GaplessEncoding, InitMode, PackagedAudioRequest,
         PackagedAudioSource, PackagedSignal, PcmPattern,
     },
     hls_spec::HlsSpecError,
@@ -274,9 +274,13 @@ impl HlsFixtureBuilder {
             codec: AudioCodec::AacLc,
             sample_rate,
             channels,
+            start_frame: None,
             timescale: Some(sample_rate),
             bit_rate: Some(128_000),
+            encoder_delay: None,
+            trailing_delay: None,
             source: PackagedAudioSource::Signal(signal),
+            gapless_encoding: GaplessEncoding::default(),
             variant_overrides: Vec::new(),
         });
         self
@@ -293,9 +297,13 @@ impl HlsFixtureBuilder {
             codec: AudioCodec::AacLc,
             sample_rate,
             channels,
+            start_frame: None,
             timescale: Some(sample_rate),
             bit_rate: Some(128_000),
+            encoder_delay: None,
+            trailing_delay: None,
             source: PackagedAudioSource::PerVariantPcm { patterns },
+            gapless_encoding: GaplessEncoding::default(),
             variant_overrides: Vec::new(),
         });
         self
@@ -322,9 +330,13 @@ impl HlsFixtureBuilder {
             codec: AudioCodec::Flac,
             sample_rate,
             channels,
+            start_frame: None,
             timescale: Some(sample_rate),
             bit_rate: Some(512_000),
+            encoder_delay: None,
+            trailing_delay: None,
             source: PackagedAudioSource::Signal(signal),
+            gapless_encoding: GaplessEncoding::default(),
             variant_overrides: Vec::new(),
         });
         self
@@ -341,9 +353,13 @@ impl HlsFixtureBuilder {
             codec: AudioCodec::Flac,
             sample_rate,
             channels,
+            start_frame: None,
             timescale: Some(sample_rate),
             bit_rate: Some(512_000),
+            encoder_delay: None,
+            trailing_delay: None,
             source: PackagedAudioSource::PerVariantPcm { patterns },
+            gapless_encoding: GaplessEncoding::default(),
             variant_overrides: Vec::new(),
         });
         self
@@ -449,7 +465,7 @@ mod tests {
     use crate::{
         fixture_protocol::{DataMode, InitMode},
         kithara,
-        signal_url::{SignalFormat, SignalSpec, SignalSpecLength},
+        signal_url::{SignalFormat, SignalSpec, SignalSpecLength, SweepMode},
     };
 
     #[kithara::test(tokio)]
@@ -464,6 +480,21 @@ mod tests {
         let url = helper.sine(&spec, 440.0).await;
 
         assert!(url.path().starts_with("/signal/sine/"));
+        assert!(url.path().ends_with(".wav"));
+    }
+
+    #[kithara::test(tokio)]
+    async fn sweep_helper_builds_expected_url() {
+        let spec = SignalSpec {
+            sample_rate: 44_100,
+            channels: 2,
+            length: SignalSpecLength::Seconds(1.0),
+            format: SignalFormat::Wav,
+        };
+        let helper = TestServerHelper::new().await;
+        let url = helper.sweep(&spec, 100.0, 8_000.0, SweepMode::Linear).await;
+
+        assert!(url.path().starts_with("/signal/sweep/"));
         assert!(url.path().ends_with(".wav"));
     }
 

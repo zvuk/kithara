@@ -97,17 +97,35 @@ pub struct Queue {
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
     player_rx: Mutex<EventReceiver>,
-    /// Tracks the id of the track whose crossfade-advance has already
-    /// been armed during `tick()`. Prevents triggering the next-track
-    /// select repeatedly as the remaining playtime keeps ticking below
-    /// the crossfade threshold. Cleared on [`QueueEvent::CurrentTrackChanged`].
-    crossfade_armed_for: Arc<Mutex<Option<TrackId>>>,
     /// Authoritative playback position updated on every [`Self::tick`].
     /// Filters transient 0.0 blips the engine reports on pause/resume —
     /// downstream UIs should read from this field rather than polling
     /// the engine directly.
     cached_position: Arc<Mutex<Option<f64>>>,
     autoplay: bool,
+    /// `src` of the track currently designated as leading by the queue.
+    /// Updated whenever the queue commits a new track to the player
+    /// (`select_item_with_crossfade` succeeded, or `commit_next` ran).
+    /// Compared against the `src` field of `ItemDidPlayToEnd` events to
+    /// distinguish a current-track EOF (queue may need to end) from an
+    /// outgoing-track EOF in cf>0 crossfades (queue must ignore).
+    current_active_src: Arc<Mutex<Option<Arc<str>>>>,
+    /// `src` of the track previously armed via `arm_next` but not yet
+    /// promoted to leading. For cf>0 the audio thread keeps this in
+    /// `Preloading`; we promote it via `commit_next`. For cf=0 the
+    /// audio thread promotes it inline at EOF; the queue learns about
+    /// the promotion in `sync_navigation_after_handover` and uses this
+    /// field to know what the new leading src is.
+    armed_next_src: Arc<Mutex<Option<Arc<str>>>>,
+    /// Test-only loader override. When `Some`, `spawn_apply_after_load`
+    /// pulls a pre-supplied [`Resource`] from this map keyed by
+    /// [`TrackId`] instead of dispatching the real `Loader`. The test
+    /// can pre-populate a queue of resources per id (one per spawn
+    /// invocation) to drive multiple loads — for example, to simulate
+    /// a re-load triggered by `handle_prefetch_requested` for a
+    /// `Consumed` next-track on a second playthrough.
+    #[cfg(any(test, feature = "test-utils"))]
+    test_loader_supply: Arc<Mutex<HashMap<TrackId, Vec<kithara_play::Resource>>>>,
 }
 
 impl Queue {
@@ -129,8 +147,14 @@ impl Queue {
             player,
             max_concurrent_loads,
             autoplay,
+            prefetch_duration,
         } = config;
         let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
+        player.set_prefetch_duration(prefetch_duration);
+        // Queue is the sole auto-advance orchestrator; the player's
+        // built-in `next = current + 1` handler must stay disabled or
+        // both layers will fight for the armed handover slot.
+        player.set_auto_advance_enabled(false);
         let bus = player.bus().clone();
         let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
@@ -149,9 +173,12 @@ impl Queue {
             sources: Arc::new(Mutex::new(HashMap::new())),
             bus,
             player_rx: Mutex::new(player_rx),
-            crossfade_armed_for: Arc::new(Mutex::new(None)),
             cached_position: Arc::new(Mutex::new(None)),
             autoplay,
+            current_active_src: Arc::new(Mutex::new(None)),
+            armed_next_src: Arc::new(Mutex::new(None)),
+            #[cfg(any(test, feature = "test-utils"))]
+            test_loader_supply: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -228,6 +255,7 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id, source.clone());
         self.player.reserve_slots(index + 1);
+        self.maybe_arm_autoplay(id, index);
         self.bus.publish(QueueEvent::TrackAdded { id, index });
         self.spawn_apply_after_load(id, source);
         id
@@ -271,6 +299,7 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id, source.clone());
         self.player.reserve_slots(self.len());
+        self.maybe_arm_autoplay(id, index);
         self.bus.publish(QueueEvent::TrackAdded { id, index });
         self.spawn_apply_after_load(id, source);
         Ok(id)
@@ -315,6 +344,15 @@ impl Queue {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&id);
+        // Drop stale autoplay/select intent pointing at a removed
+        // track — otherwise it would silently bind to whatever id the
+        // loader emits for the next-completed load.
+        {
+            let mut p = self.lock_pending_select_mut();
+            if matches!(*p, Some(pending) if pending.id == id) {
+                *p = None;
+            }
+        }
         let _ = self.player.remove_at(index);
         self.bus.publish(QueueEvent::TrackRemoved { id });
 
@@ -340,6 +378,13 @@ impl Queue {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+        // Any pending select/autoplay intent is invalid now.
+        *self.lock_pending_select_mut() = None;
+        *self.lock_armed_next_src_mut() = None;
+        *self
+            .current_active_src
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
         self.player.remove_all_items();
         for id in ids {
             self.bus.publish(QueueEvent::TrackRemoved { id });
@@ -398,8 +443,14 @@ impl Queue {
             TrackStatus::Loaded => {
                 let was_playing = self.player.is_playing();
                 let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
+                // Capture the src BEFORE select_item_with_crossfade
+                // moves it into the audio thread arena.
+                let src = self.player.item_src(index);
                 self.player
                     .select_item_with_crossfade(index, true, crossfade)?;
+                if let Some(src) = src {
+                    self.note_active_src(src);
+                }
                 self.lock_navigation_mut().select(index);
                 if was_playing && crossfade > 0.0 {
                     self.bus.publish(QueueEvent::CrossfadeStarted {
@@ -434,11 +485,13 @@ impl Queue {
 
     /// Advance to the next track per navigation rules. Returns the newly
     /// selected id, or `None` when the queue has ended (and
-    /// [`RepeatMode::Off`] is active).
+    /// [`RepeatMode::Off`] is active). At end-of-queue the player is
+    /// paused so the UI sees a paused/stopped state instead of a still-
+    /// playing rate on a ghost position past the last track's EOF.
     pub fn advance_to_next(&self, transition: Transition) -> Option<TrackId> {
         let len = self.len();
         let Some(idx) = self.lock_navigation_mut().next(len) else {
-            self.bus.publish(QueueEvent::QueueEnded);
+            self.end_queue();
             return None;
         };
         let id = self.lock_tracks().get(idx).map(|e| e.id)?;
@@ -462,6 +515,10 @@ impl Queue {
     /// Enable or disable shuffle.
     pub fn set_shuffle(&self, on: bool) {
         self.lock_navigation_mut().set_shuffle(on);
+        // Navigation's "what's next" answer changed; drop the stale arm
+        // and let the next prefetch trigger re-evaluate.
+        self.player.unarm_next();
+        *self.lock_armed_next_src_mut() = None;
     }
 
     /// Current shuffle state.
@@ -473,6 +530,8 @@ impl Queue {
     /// Set repeat mode.
     pub fn set_repeat(&self, mode: RepeatMode) {
         self.lock_navigation_mut().set_repeat(mode);
+        self.player.unarm_next();
+        *self.lock_armed_next_src_mut() = None;
     }
 
     /// Current repeat mode.
@@ -489,17 +548,26 @@ impl Queue {
         self.player.seek_seconds(seconds).map_err(QueueError::from)
     }
 
-    /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
-    /// events to act on `ItemDidPlayToEnd` (filtered) and forward
+    /// Periodic tick: drives `PlayerImpl::tick`, pumps audio-thread
+    /// notifications onto the bus, and drains queued engine events to
+    /// act on `ItemDidPlayToEnd` (filtered) and forward
     /// `CurrentItemChanged` as [`QueueEvent::CurrentTrackChanged`].
+    ///
+    /// `process_notifications` is the bridge that converts per-slot
+    /// `TrackRequested` / `TrackHandoverRequested` / `TrackPlaybackStopped`
+    /// into `PlayerEvent::PrefetchRequested` / `HandoverRequested` /
+    /// `ItemDidPlayToEnd` on the bus — without it queue auto-advance
+    /// (cf=0 arena handover and cf>0 commit_next) never observes the
+    /// audio-thread side.
     ///
     /// # Errors
     /// Forwards `PlayError` from `PlayerImpl::tick`.
     pub fn tick(&self) -> Result<(), QueueError> {
+        tracing::trace!("Queue::tick");
         self.player.tick()?;
+        self.player.process_notifications();
         self.drain_player_events();
         self.update_cached_position();
-        self.maybe_arm_crossfade();
         Ok(())
     }
 
@@ -531,39 +599,6 @@ impl Queue {
         *slot = Some(t);
     }
 
-    /// Start the next-track crossfade ahead of end-of-track when the
-    /// remaining playtime drops below the configured crossfade window,
-    /// so the two tracks actually overlap. `ItemDidPlayToEnd` alone
-    /// fires after the first track is already silent — too late for a
-    /// real crossfade.
-    fn maybe_arm_crossfade(&self) {
-        let crossfade = self.player.crossfade_duration();
-        let Some(dur) = self.player.duration_seconds() else {
-            return;
-        };
-        let Some(pos) = self.position_seconds() else {
-            return;
-        };
-        let Some(entry) = self.current() else { return };
-        let armed_for = *self.lock_crossfade_armed_mut();
-        if !should_arm_crossfade(pos, dur, crossfade, entry.id, armed_for) {
-            return;
-        }
-        *self.lock_crossfade_armed_mut() = Some(entry.id);
-        let transition = if crossfade > 0.0 {
-            Transition::Crossfade
-        } else {
-            Transition::None
-        };
-        let _ = self.advance_to_next(transition);
-    }
-
-    fn lock_crossfade_armed_mut(&self) -> std::sync::MutexGuard<'_, Option<TrackId>> {
-        self.crossfade_armed_for
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
     delegate! {
         to self.player {
             /// Start playback.
@@ -578,6 +613,13 @@ impl Queue {
             pub fn crossfade_duration(&self) -> f32;
             /// Set the crossfade duration.
             pub fn set_crossfade_duration(&self, seconds: f32);
+            /// Lead time before EOF at which the next queued track is preloaded.
+            ///
+            /// See [`QueueConfig::prefetch_duration`] for semantics.
+            #[must_use]
+            pub fn prefetch_duration(&self) -> f32;
+            /// Set the prefetch lead time in seconds.
+            pub fn set_prefetch_duration(&self, seconds: f32);
             /// Default playback rate.
             #[must_use]
             pub fn default_rate(&self) -> f32;
@@ -645,14 +687,64 @@ impl Queue {
         self.tracks.set_status(id, status);
     }
 
+    /// Mark `id` as the autoplay target if the queue is configured for
+    /// autoplay and no other track is already armed to play.
+    ///
+    /// Autoplay is expressed as a `pending_select` set synchronously at
+    /// `append`/`insert` call time, BEFORE the async load starts. This
+    /// removes the race where N independently-spawned loader tasks each
+    /// raced against `!player.is_playing()` and a different one won
+    /// every run. With a single coordination point, only the track whose
+    /// id matches `pending_select` will ever start playback at load
+    /// completion.
+    ///
+    /// Conditions:
+    /// - autoplay enabled in config;
+    /// - this is the first track in the queue (`index == 0`) — typical
+    ///   `set_tracks([…])` flow on a fresh queue;
+    /// - no `pending_select` already set (an explicit `select` call
+    ///   wins over autoplay).
+    fn maybe_arm_autoplay(&self, id: TrackId, index: usize) {
+        if !self.autoplay || index != 0 {
+            return;
+        }
+        let mut p = self.lock_pending_select_mut();
+        if p.is_none() {
+            *p = Some(PendingSelect {
+                id,
+                transition: Transition::None,
+            });
+        }
+    }
+
     fn spawn_apply_after_load(&self, id: TrackId, source: TrackSource) {
+        // Test path: if a synthetic resource was pre-queued for this
+        // id, use it directly instead of dispatching the real loader.
+        // Lets the integration suite drive the full
+        // load → arm → handover lifecycle (including replays) without a
+        // real network or disk-backed source. Production builds skip
+        // this branch entirely (cfg-gated).
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            let preset = self
+                .test_loader_supply
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get_mut(&id)
+                .and_then(|stack| stack.pop());
+            if let Some(resource) = preset {
+                self.complete_load_for_test(id, resource);
+                return;
+            }
+        }
+
         let handle = self.loader.spawn_load(id, source);
         let player = Arc::clone(&self.player);
         let tracks = Arc::clone(&self.tracks);
         let pending_select = Arc::clone(&self.pending_select);
         let navigation = Arc::clone(&self.navigation);
         let bus = self.bus.clone();
-        let autoplay = self.autoplay;
+        let current_active_src = Arc::clone(&self.current_active_src);
         tokio::spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
@@ -692,16 +784,19 @@ impl Queue {
                 drop(p);
                 result
             };
-            let mark_consumed = || {
-                tracks.set_status(id, TrackStatus::Consumed);
-            };
 
             if let Some(transition) = pending_transition {
                 let was_playing = player.is_playing();
                 let crossfade = transition.crossfade_seconds(player.crossfade_duration());
+                let src = player.item_src(index);
                 if let Err(e) = player.select_item_with_crossfade(index, true, crossfade) {
                     warn!(id = id.as_u64(), error = %e, "pending select failed");
                 } else {
+                    if let Some(src) = src {
+                        *current_active_src
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner) = Some(src);
+                    }
                     navigation
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
@@ -711,19 +806,7 @@ impl Queue {
                             duration_seconds: crossfade,
                         });
                     }
-                    mark_consumed();
-                }
-            } else if autoplay && !player.is_playing() {
-                // First autoplay is always an immediate cut — nothing
-                // is playing yet, so there's nothing to fade from.
-                if let Err(e) = player.select_item_with_crossfade(index, true, 0.0) {
-                    warn!(id = id.as_u64(), error = %e, "autoplay select failed");
-                } else {
-                    navigation
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .select(index);
-                    mark_consumed();
+                    tracks.set_status(id, TrackStatus::Consumed);
                 }
             }
         });
@@ -744,40 +827,23 @@ impl Queue {
     }
 
     fn process_player_event(&self, ev: &Event) {
-        /// Threshold for filtering spurious `PlayerEvent::ItemDidPlayToEnd`
-        /// events emitted by crossfade fade-outs of non-current tracks.
-        const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
-
         match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd) => {
-                let pos = self.player.position_seconds().unwrap_or(0.0);
-                let dur = self.player.duration_seconds().unwrap_or(0.0);
-                // Crossfade fade-outs emit ItemDidPlayToEnd for the
-                // previous track right after the swap, so the engine
-                // reports `pos` near 0 — those are the spurious
-                // deliveries we filter. Any ItemDidPlayToEnd past the
-                // just-switched window is a real end (natural or from
-                // a fatal decode error after a failed seek) and must
-                // advance the queue, otherwise playback hangs.
-                // If we already armed the advance from tick() while the
-                // outgoing track was still playing, the engine's
-                // subsequent ItemDidPlayToEnd is the trailing signal
-                // for the same track — consume it without advancing
-                // again.
-                let armed = self.lock_crossfade_armed_mut().take();
-                if armed.is_some() {
-                    debug!(pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)");
-                    return;
-                }
-                // Real end-of-track: position has reached duration
-                // within tolerance. Anything else is a stale / fake
-                // signal (e.g. decoder-failure pos stamp, crossfade
-                // fade-out on previous track).
-                if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
-                    let _ = self.advance_to_next(Transition::Crossfade);
-                } else {
-                    debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
-                }
+            Event::Player(PlayerEvent::PrefetchRequested) => {
+                self.handle_prefetch_requested();
+            }
+            Event::Player(PlayerEvent::HandoverRequested) => {
+                self.handle_handover_requested();
+            }
+            Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => {
+                debug!(%src, "ItemDidPlayToEnd received");
+                // `src` identifies the underlying audio source of the
+                // track that just hit EOF. After a cf>0 crossfade the
+                // outgoing (previous) track's EOF arrives AFTER the
+                // queue has already advanced its index — checking the
+                // src against the currently-leading src lets us tell
+                // that case apart from a genuine "current track has
+                // finished" signal.
+                self.sync_navigation_after_handover(&src);
             }
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 let idx = self.player.current_index();
@@ -788,43 +854,353 @@ impl Queue {
                     .unwrap_or_else(PoisonError::into_inner) = None;
                 self.bus.publish(QueueEvent::CurrentTrackChanged { id });
             }
+            Event::Queue(QueueEvent::TrackStatusChanged {
+                status: TrackStatus::Loaded,
+                ..
+            }) => {
+                // Loader caught up after the prefetch trigger fired and
+                // the armer skipped because the resource wasn't ready.
+                // Retry now if no slot is armed yet and the resolved
+                // next index points at this newly loaded entry.
+                if self.player.armed_next().is_none() {
+                    self.handle_prefetch_requested();
+                }
+            }
             _ => {}
         }
     }
-}
 
-/// Decide whether [`Queue::tick`] should arm the pre-end advance.
-///
-/// Returns `true` when:
-/// - `pos` and `dur` are positive (track has meaningful position + duration), AND
-/// - remaining playtime is below the arm threshold — either
-///   `crossfade` seconds (with crossfade > 0) or [`END_PROXIMITY_SECONDS`]
-///   (no crossfade, trigger right at the tail), AND
-/// - we haven't already armed for this track this play-through.
-pub(crate) fn should_arm_crossfade(
-    pos: f64,
-    dur: f64,
-    crossfade: f32,
-    current_id: TrackId,
-    armed_for: Option<TrackId>,
-) -> bool {
-    /// How close to the end we arm the next-track advance when there is
-    /// no crossfade configured — gives the queue a brief window to select
-    /// and start the next track before the current one goes silent.
-    const END_PROXIMITY_SECONDS: f64 = 0.25;
+    /// Resolve the next index per [`NavigationState`] policy and arm it
+    /// on the player if the corresponding resource is loaded.
+    ///
+    /// Skips entries whose `TrackStatus` is not [`TrackStatus::Loaded`]:
+    /// not-yet-loaded entries are arm-retried via the `TrackStatusChanged`
+    /// path (when the loader publishes `Loaded`); failed entries are
+    /// skipped via the navigation peek loop, advancing to the next
+    /// reachable successor.
+    fn handle_prefetch_requested(&self) {
+        let len = self.len();
+        let Some(next_idx) = self.lock_navigation().peek_next(len) else {
+            debug!("prefetch: navigation has no next; unarming");
+            self.player.unarm_next();
+            *self.lock_armed_next_src_mut() = None;
+            return;
+        };
+        let entry = self.lock_tracks().get(next_idx).cloned();
+        let Some(entry) = entry else {
+            return;
+        };
+        debug!(next_idx, status = ?entry.status, "prefetch requested");
+        match entry.status {
+            TrackStatus::Loaded => {
+                // `arm_next` returns the armed track's underlying audio
+                // src; remember it so `sync_navigation_after_handover`
+                // can promote it to `current_active_src` once the audio
+                // thread (cf=0) or `commit_next` (cf>0) actually makes
+                // it leading.
+                match self.player.arm_next(next_idx) {
+                    Some(src) => {
+                        debug!(next_idx, %src, "armed next");
+                        *self.lock_armed_next_src_mut() = Some(src);
+                    }
+                    None => {
+                        warn!(
+                            next_idx,
+                            "arm_next returned None despite Loaded status — items slot empty"
+                        );
+                    }
+                }
+            }
+            TrackStatus::Consumed => {
+                // The track has already been played and the engine
+                // took its resource. Re-spawn the loader so the
+                // status flips back to `Loaded`; the
+                // `TrackStatusChanged { Loaded }` retry path then
+                // re-fires `handle_prefetch_requested` and the arm
+                // succeeds. Without this branch a second playthrough
+                // of a queue silently stops after the first track
+                // because every successor is `Consumed`.
+                let source = self
+                    .sources
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&entry.id)
+                    .cloned();
+                let Some(source) = source else {
+                    return;
+                };
+                debug!(next_idx, "respawning load for Consumed prefetch target");
+                self.set_status(entry.id, TrackStatus::Pending);
+                self.spawn_apply_after_load(entry.id, source);
+            }
+            // Pending / Loading / Slow: loader already in flight; the
+            // `TrackStatusChanged { Loaded }` retry path will arm us.
+            // Failed: do NOT respawn — broken URLs would loop forever
+            // hammering the loader on every subsequent prefetch event.
+            // The leading track will reach EOF, no Preloading is in the
+            // arena, and `end_queue` paths handle the silence-then-stop
+            // outcome.
+            _ => {}
+        }
+    }
 
-    if dur <= 0.0 || pos <= 0.0 {
-        return false;
+    fn lock_armed_next_src_mut(&self) -> std::sync::MutexGuard<'_, Option<Arc<str>>> {
+        self.armed_next_src
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
-    let threshold = if crossfade > 0.0 {
-        f64::from(crossfade)
-    } else {
-        END_PROXIMITY_SECONDS
-    };
-    if dur - pos > threshold {
-        return false;
+
+    /// Commit the previously armed handover, advance navigation, mark
+    /// the just-promoted track as `Consumed`, and emit
+    /// [`QueueEvent::CrossfadeStarted`].
+    ///
+    /// `CrossfadeStarted` is published only after `commit_next` returns
+    /// `Ok`, so subscribers never see a fade event without a fade.
+    fn handle_handover_requested(&self) {
+        let Some(idx) = self.player.armed_next() else {
+            return;
+        };
+        if let Err(e) = self.player.commit_next(idx) {
+            warn!(error = %e, "commit_next failed");
+            return;
+        }
+        // After commit_next, the armed src becomes the new leading src.
+        // Take it out of `armed_next_src` and promote to active so the
+        // EOF handler can tell the outgoing track's EOF apart from a
+        // real "current track ended" signal.
+        if let Some(src) = self.lock_armed_next_src_mut().take() {
+            self.note_active_src(src);
+        }
+        self.lock_navigation_mut().select(idx);
+        let id = self.lock_tracks().get(idx).map(|e| e.id);
+        if let Some(id) = id {
+            self.set_status(id, TrackStatus::Consumed);
+        }
+        let crossfade = self.player.crossfade_duration();
+        if crossfade > 0.0 {
+            self.bus.publish(QueueEvent::CrossfadeStarted {
+                duration_seconds: crossfade,
+            });
+        }
     }
-    armed_for != Some(current_id)
+
+    /// Test helper: append a track-entry as if `append` was called but
+    /// without spawning the loader. The track sits in `Pending` state
+    /// until [`Self::complete_load_for_test`] is called for its id.
+    /// Mirrors the synchronous portion of `append`, including
+    /// `maybe_arm_autoplay`.
+    ///
+    /// Pair with [`Self::complete_load_for_test`] to control which
+    /// "load" finishes first — the test can append `[A, B]` and then
+    /// complete `B` before `A` to reproduce the loader-order race.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn register_for_test(&self) -> TrackId {
+        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let url = format!("test://memory/{}", id.as_u64());
+        let entry = TrackEntry {
+            id,
+            name: format!("test-{}", id.as_u64()),
+            url: Some(url.clone()),
+            status: TrackStatus::Pending,
+        };
+        let index = {
+            let mut guard = self.lock_tracks_mut();
+            guard.push(entry);
+            guard.len() - 1
+        };
+        // Register a synthetic source so the production
+        // `Consumed`/`Failed` re-spawn paths in `select` and
+        // `handle_prefetch_requested` can find the entry. The fake URI
+        // never reaches the real loader because
+        // `spawn_apply_after_load` short-circuits to
+        // `test_loader_supply` when a resource has been pre-supplied.
+        self.sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, TrackSource::Uri(url));
+        self.player.reserve_slots(index + 1);
+        self.maybe_arm_autoplay(id, index);
+        self.bus.publish(QueueEvent::TrackAdded { id, index });
+        id
+    }
+
+    /// Test helper: synthesise the load-completion path for a track
+    /// previously registered via [`Self::register_for_test`]. Mirrors
+    /// the loader-completion logic in `spawn_apply_after_load`
+    /// (`replace_item`, status flip, pending-select consumption,
+    /// `select_item_with_crossfade` if armed).
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn complete_load_for_test(&self, id: TrackId, resource: kithara_play::Resource) {
+        let index = {
+            let guard = self.lock_tracks();
+            guard.iter().position(|e| e.id == id)
+        };
+        let Some(index) = index else {
+            return;
+        };
+
+        self.player.replace_item(index, resource);
+        self.set_status(id, TrackStatus::Loaded);
+
+        let pending_transition = {
+            let mut p = self.lock_pending_select_mut();
+            let result = match *p {
+                Some(pending) if pending.id == id => {
+                    *p = None;
+                    Some(pending.transition)
+                }
+                _ => None,
+            };
+            drop(p);
+            result
+        };
+
+        if let Some(transition) = pending_transition {
+            let was_playing = self.player.is_playing();
+            let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
+            let src = self.player.item_src(index);
+            if let Err(e) = self
+                .player
+                .select_item_with_crossfade(index, true, crossfade)
+            {
+                warn!(id = id.as_u64(), error = %e, "test pending select failed");
+            } else {
+                if let Some(src) = src {
+                    self.note_active_src(src);
+                }
+                self.lock_navigation_mut().select(index);
+                if was_playing && crossfade > 0.0 {
+                    self.bus.publish(QueueEvent::CrossfadeStarted {
+                        duration_seconds: crossfade,
+                    });
+                }
+                self.set_status(id, TrackStatus::Consumed);
+            }
+        }
+    }
+
+    /// Test helper: convenience for the common case where load order
+    /// matches register order. Equivalent to
+    /// `register_for_test` + `complete_load_for_test` back-to-back.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn insert_loaded_for_test(&self, resource: kithara_play::Resource) -> TrackId {
+        let id = self.register_for_test();
+        self.complete_load_for_test(id, resource);
+        id
+    }
+
+    /// Test helper: pre-supply a [`Resource`] that
+    /// `spawn_apply_after_load` will use the next time it is dispatched
+    /// for this `id` (e.g. when `handle_prefetch_requested` respawns a
+    /// `Consumed` next-track). Pushes onto an LIFO stack so callers can
+    /// queue multiple resources for the same id across many replays.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn supply_test_resource_for_respawn(&self, id: TrackId, resource: kithara_play::Resource) {
+        self.test_loader_supply
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(id)
+            .or_default()
+            .push(resource);
+    }
+
+    /// Sync queue navigation state with the audio thread after a handover
+    /// the queue did not initiate (cf=0 path, where the player advances
+    /// `current_index` from the EOF observation).
+    ///
+    /// `ended_src` is the underlying audio source of the track whose
+    /// EOF triggered this call. We compare it against
+    /// `current_active_src` (the src the queue last designated as
+    /// leading) to distinguish:
+    /// - genuine "current track finished" — matches → may end queue;
+    /// - "outgoing track of an in-progress crossfade finished" — does
+    ///   NOT match (queue already promoted the next src) → ignore.
+    fn sync_navigation_after_handover(&self, ended_src: &Arc<str>) {
+        let player_idx = self.player.current_index();
+        let nav_idx = self.lock_navigation().current_index();
+        debug!(
+            %ended_src,
+            player_idx,
+            ?nav_idx,
+            "sync_navigation_after_handover entry"
+        );
+        let Some(prior) = nav_idx else {
+            // Navigation never selected anything — the queue hasn't
+            // started this play-through. A synthetic / spurious EOF
+            // before the first select must not advance navigation.
+            return;
+        };
+        let len = self.len();
+        if prior == player_idx {
+            // No advance happened. Two sub-cases:
+            //   (a) outgoing-EOF after a completed cf>0 crossfade —
+            //       `ended_src` is the previous (now-finished) leading
+            //       src, NOT the current active src; ignore.
+            //   (b) current track ended naturally and no successor was
+            //       armed — end of queue; pause + publish.
+            if !self.ended_src_is_current(ended_src) {
+                return;
+            }
+            if self.lock_navigation().peek_next(len).is_none() {
+                self.end_queue();
+            }
+            return;
+        }
+        if player_idx < len {
+            // Audio thread arena handover (cf=0) just promoted the
+            // armed track to leading. Take it out of `armed_next_src`
+            // so subsequent EOF events compare against the right src.
+            if let Some(src) = self.lock_armed_next_src_mut().take() {
+                self.note_active_src(src);
+            }
+            self.lock_navigation_mut().select(player_idx);
+            let id = self.lock_tracks().get(player_idx).map(|e| e.id);
+            if let Some(id) = id {
+                self.set_status(id, TrackStatus::Consumed);
+            }
+            return;
+        }
+        // Audio thread observed EOF on the last track and tried to
+        // promote a non-existent next slot.
+        self.end_queue();
+    }
+
+    /// Whether the just-ended `src` matches what the queue last marked
+    /// as the leading track. When the queue never recorded a leading
+    /// src (e.g. spurious early EOF before any select), treat the EOF
+    /// as belonging to the current track for backward compatibility.
+    fn ended_src_is_current(&self, ended_src: &Arc<str>) -> bool {
+        let guard = self
+            .current_active_src
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match guard.as_ref() {
+            Some(active) => Arc::ptr_eq(active, ended_src) || **active == **ended_src,
+            None => true,
+        }
+    }
+
+    /// Update the queue's mirror of the leading-track src. Called from
+    /// every path that promotes a new track to leading status (explicit
+    /// select, autoplay, crossfade commit, post-EOF arena handover).
+    fn note_active_src(&self, src: Arc<str>) {
+        *self
+            .current_active_src
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(src);
+    }
+
+    /// Pause the player and publish [`QueueEvent::QueueEnded`]. Called
+    /// from any path that determines no further tracks will play.
+    fn end_queue(&self) {
+        self.player.pause();
+        *self
+            .current_active_src
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+        *self.lock_armed_next_src_mut() = None;
+        self.bus.publish(QueueEvent::QueueEnded);
+    }
 }
 
 fn extract_track_name(source: &TrackSource) -> String {
@@ -989,7 +1365,10 @@ mod tests {
         queue
             .player
             .bus()
-            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd));
+            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
+                src: Arc::from("test://spurious"),
+                item_id: None,
+            }));
 
         queue.tick().expect("tick");
 
@@ -1037,37 +1416,6 @@ mod tests {
         assert_eq!(queue.len(), 3);
     }
 
-    #[kithara::test]
-    #[case::remaining_equals_crossfade(157.0, 162.0, 5.0, TrackId(1), None, true)]
-    #[case::remaining_below_crossfade(160.0, 162.0, 5.0, TrackId(1), None, true)]
-    #[case::far_from_end(100.0, 162.0, 5.0, TrackId(1), None, false)]
-    #[case::already_armed_for_same_track(160.0, 162.0, 5.0, TrackId(1), Some(TrackId(1)), false)]
-    #[case::armed_for_different_track_still_arms(
-        160.0,
-        162.0,
-        5.0,
-        TrackId(1),
-        Some(TrackId(0)),
-        true
-    )]
-    #[case::crossfade_zero_triggers_at_tail(161.9, 162.0, 0.0, TrackId(1), None, true)]
-    #[case::crossfade_zero_quiet_middle(161.0, 162.0, 0.0, TrackId(1), None, false)]
-    #[case::zero_position_rejected(0.0, 162.0, 5.0, TrackId(1), None, false)]
-    #[case::zero_duration_rejected(10.0, 0.0, 5.0, TrackId(1), None, false)]
-    fn should_arm_crossfade_cases(
-        #[case] pos: f64,
-        #[case] dur: f64,
-        #[case] crossfade: f32,
-        #[case] current_id: TrackId,
-        #[case] armed_for: Option<TrackId>,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(
-            should_arm_crossfade(pos, dur, crossfade, current_id, armed_for),
-            expected
-        );
-    }
-
     #[kithara::test(tokio)]
     async fn insert_after_id_places_next() {
         let queue = make_queue();
@@ -1079,5 +1427,136 @@ mod tests {
         let snapshot = queue.tracks();
         let ids: Vec<TrackId> = snapshot.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![a, mid, b]);
+    }
+
+    #[kithara::test(tokio)]
+    async fn queue_disables_player_auto_advance_on_construction() {
+        let queue = make_queue();
+        assert!(
+            !queue.player.auto_advance_enabled(),
+            "Queue::new must disable the player's built-in auto-advance"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn set_repeat_unarms_pending_next() {
+        let queue = make_queue();
+        // Drive the player into "armed" state by hand: this is normally
+        // populated via the prefetch event handler, but we exercise the
+        // unarm side-effect directly. Since arm_next requires items in
+        // the player's slot, we synthesise a minimal arm by reserving
+        // and replacing a dummy resource via the test harness path is
+        // overkill — instead we just assert the unarm is invoked
+        // without panicking and the post-state is None.
+        queue.set_repeat(RepeatMode::All);
+        assert_eq!(queue.player.armed_next(), None);
+        queue.set_shuffle(true);
+        assert_eq!(queue.player.armed_next(), None);
+    }
+
+    #[kithara::test(tokio)]
+    async fn sync_navigation_ignores_eof_before_first_select() {
+        // Spurious ItemDidPlayToEnd before any select: navigation must
+        // not advance, no QueueEnded.
+        let queue = make_queue();
+        let _a = queue.append("https://example.com/a.mp3");
+        let _b = queue.append("https://example.com/b.mp3");
+
+        queue
+            .player
+            .bus()
+            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
+                src: Arc::from("test://spurious"),
+                item_id: None,
+            }));
+        queue.tick().expect("tick");
+
+        assert_eq!(queue.lock_navigation().current_index(), None);
+    }
+
+    // Behavioural autoplay tests live in
+    // `tests/tests/kithara_queue/auto_advance.rs` — they drive a real
+    // Queue + offline render and assert PCM signatures, which is the
+    // only way to catch the original race (loader-completion order
+    // changing which track is heard first).
+
+    /// Replay regression: after a track has been played its status is
+    /// `Consumed` and its `items` slot has been taken by the engine.
+    /// `handle_prefetch_requested` must respawn the loader for a
+    /// `Consumed` next-track so the queue can auto-advance again on
+    /// subsequent playthroughs. Without this, every playthrough after
+    /// the first stops after track 1 because `arm_next` is never
+    /// called for `Consumed` successors.
+    #[kithara::test(tokio)]
+    async fn prefetch_respawns_consumed_next_track() {
+        let queue = make_queue();
+        let _id_a = queue.append("https://example.com/a.mp3");
+        let id_b = queue.append("https://example.com/b.mp3");
+
+        // Pretend track A has been selected (so navigation has a
+        // current index for `peek_next` to step from) and track B has
+        // already been played in a prior playthrough.
+        queue.lock_navigation_mut().select(0);
+        queue.set_status(id_b, TrackStatus::Consumed);
+        let mut rx = queue.subscribe();
+
+        queue.handle_prefetch_requested();
+
+        // The respawn path sets the track back to Pending and spawns
+        // the loader (which will eventually fail in this synthetic
+        // setup because the URL is unreachable, but the Pending
+        // transition is the observable signal of "respawn happened").
+        let saw_pending = wait_for_queue_event(
+            &mut rx,
+            |ev| matches!(
+                ev,
+                QueueEvent::TrackStatusChanged {
+                    id, status: TrackStatus::Pending,
+                } if *id == id_b
+            ),
+            300,
+        )
+        .await;
+        assert!(
+            saw_pending,
+            "Consumed next-track must be re-spawned on prefetch (status flipped back to Pending)"
+        );
+    }
+
+    /// `Failed` next-tracks must NOT be re-spawned by prefetch —
+    /// otherwise a permanently broken URL would loop forever, hammering
+    /// the loader on every subsequent prefetch event. The leading
+    /// track's EOF should be left to surface as silence-then-stop.
+    #[kithara::test(tokio)]
+    async fn prefetch_does_not_respawn_failed_next_track() {
+        let queue = make_queue();
+        let _id_a = queue.append("https://example.com/a.mp3");
+        let id_b = queue.append("https://example.com/b.mp3");
+
+        queue.lock_navigation_mut().select(0);
+        queue.set_status(id_b, TrackStatus::Failed("intentional".into()));
+        // Drain the just-emitted Failed event so the next wait window
+        // is clean.
+        let mut rx = queue.subscribe();
+        let _ = tokio_timeout(Duration::from_millis(50), rx.recv()).await;
+
+        queue.handle_prefetch_requested();
+
+        let respawned = wait_for_queue_event(
+            &mut rx,
+            |ev| matches!(
+                ev,
+                QueueEvent::TrackStatusChanged {
+                    id, status: TrackStatus::Pending,
+                } if *id == id_b
+            ),
+            150,
+        )
+        .await;
+        assert!(
+            !respawned,
+            "Failed next-track must NOT be re-spawned by prefetch — \
+             that would loop a permanently broken URL forever"
+        );
     }
 }

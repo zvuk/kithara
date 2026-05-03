@@ -539,7 +539,7 @@ fn build_batch(
             let init_len = init_meta.as_ref().map_or(0, |m| m.len);
             let init_url = init_meta.map(|m| m.url);
 
-            let meta = match state.loader.complete_media(&prepared, cached_len) {
+            let meta = match SegmentLoader::complete_media(&prepared, cached_len) {
                 Ok(m) => m,
                 Err(e) => {
                     state
@@ -674,14 +674,7 @@ fn build_fetch_cmd(
                 }
                 return;
             }
-            let loader = {
-                let guard = state_arc.lock_sync();
-                let Some(ref st) = *guard else {
-                    return;
-                };
-                Arc::clone(&st.loader)
-            };
-            let meta = loader.complete_media(&prepared, bytes_written);
+            let meta = SegmentLoader::complete_media(&prepared, bytes_written);
             let mut guard = state_arc.lock_sync();
             let Some(ref mut st) = *guard else {
                 return;
@@ -856,8 +849,8 @@ mod tests {
             .backend
             .acquire_resource(&key)
             .expect("acquire");
-        res.write_at(0, &vec![0u8; media_len as usize])
-            .expect("write");
+        let media_len_bytes = usize::try_from(media_len).expect("test media_len fits usize");
+        res.write_at(0, &vec![0u8; media_len_bytes]).expect("write");
         res.commit(None).expect("commit");
 
         state.scheduler.segments.lock_sync().commit_segment(
@@ -872,11 +865,11 @@ mod tests {
         );
     }
 
-    /// RED test #5 (integration: live_stress_real_stream_seek_read_cache_drm_ephemeral)
+    /// RED test #5 (integration: `live_stress_real_stream_seek_read_cache_drm_ephemeral`)
     ///
     /// `process_demand` calls `next_valid_demand_request` (which `take()`s
     /// the demand slot) BEFORE the flushing gate runs. If the timeline is
-    /// flushing (new seek just started), poll_next returns `Poll::Pending`
+    /// flushing (new seek just started), `poll_next` returns `Poll::Pending`
     /// after the demand was already drained — so no `FetchCmd` is emitted
     /// and the reader never gets data: deadlock.
     ///
@@ -925,7 +918,7 @@ mod tests {
         );
     }
 
-    /// RED test #7 (integration: live_ephemeral_small_cache_playback_hls)
+    /// RED test #7 (integration: `live_ephemeral_small_cache_playback_hls`)
     ///
     /// With a small ephemeral LRU cache, once the downloader has fetched
     /// every segment of the playlist, older segments are invalidated as
@@ -1017,7 +1010,7 @@ mod tests {
         );
     }
 
-    /// RED test #9 (integration: stress_seek_lifecycle_with_zero_reset_ephemeral)
+    /// RED test #9 (integration: `stress_seek_lifecycle_with_zero_reset_ephemeral`)
     ///
     /// Phase 3 of the stress test: after 2000 random seeks (which cause
     /// ABR to up/down-switch repeatedly), the reader seeks back to 0 and
@@ -1045,13 +1038,13 @@ mod tests {
     /// download_variant=0, 0, ephemeral=true)` — which points BEHIND
     /// the reader at the oldest LRU-evicted seg on variant 0.
     ///
-    /// Then build_batch runs on variant 1, where seg 27..40 are all
+    /// Then `build_batch` runs on variant 1, where seg 27..40 are all
     /// loaded (LRU kept them), so every seg is skipped. cursor sweeps
     /// 27..40 again. Tail. Rewind. Loop.
     ///
     /// Invariant under test: when the layout variant has all segments
     /// committed (no missing in the reader's forward window) and the
-    /// cursor is at the tail, a subsequent poll_next must NOT reopen
+    /// cursor is at the tail, a subsequent `poll_next` must NOT reopen
     /// the cursor onto an LRU-evicted segment strictly behind the
     /// reader's byte position. Doing so spins the scheduler on already
     /// played-back data while the reader starves for the next segment
@@ -1139,12 +1132,11 @@ mod tests {
         let mut cx = Context::from_waker(&waker);
 
         let (demand_segment, demand_variant_override) = match process_demand(&mut state, &mut cx) {
-            DemandResult::ResetAndPend => (None, None),
             DemandResult::Demand {
                 segment,
                 variant_override,
             } => (Some(segment), variant_override),
-            DemandResult::None => (None, None),
+            DemandResult::ResetAndPend | DemandResult::None => (None, None),
         };
 
         let (old_variant, variant) = resolve_variant(&mut state.scheduler, demand_variant_override);
@@ -1191,13 +1183,13 @@ mod tests {
         );
     }
 
-    /// RED test #6 (integration: stress_seek_lifecycle_with_zero_reset_mmap)
+    /// RED test #6 (integration: `stress_seek_lifecycle_with_zero_reset_mmap`)
     ///
     /// `process_demand` unconditionally rewinds the cursor when
     /// `req.segment_index < current_segment_index`, even if that segment
-    /// is already committed in the StreamIndex. This drives a hot loop:
-    /// demand → rewind → `build_batch` re-issues FetchCmd → commit
-    /// (on_complete wakes reader) → reader re-demands → rewind → ...
+    /// is already committed in the `StreamIndex`. This drives a hot loop:
+    /// demand → rewind → `build_batch` re-issues `FetchCmd` → commit
+    /// (`on_complete` wakes reader) → reader re-demands → rewind → ...
     ///
     /// Invariant under test: when the demand targets an already-committed
     /// segment, the cursor must NOT regress.
@@ -1235,7 +1227,7 @@ mod tests {
         );
     }
 
-    /// RED test #8 (integration: stress_seek_lifecycle_with_zero_reset_mmap).
+    /// RED test #8 (integration: `stress_seek_lifecycle_with_zero_reset_mmap`).
     ///
     /// The existing fix at peer.rs:272..297 (commit `38d51adfb`) covers only
     /// the case where the demanded segment is already committed in the
@@ -1258,7 +1250,7 @@ mod tests {
     /// 55.956343Z poll_next: returning 3 FetchCmds variant=0 count=3 cursor=16
     /// ```
     ///
-    /// At 55.431134 the scheduler issued the FIRST FetchCmd for segment 12
+    /// At 55.431134 the scheduler issued the FIRST `FetchCmd` for segment 12
     /// and advanced `cursor` to 13. `count=12` in the preceding `size_map`
     /// event confirms segment 12 is NOT yet committed — the fetch is in
     /// flight, writing into a freshly acquired `AssetResource`. Between
@@ -1350,7 +1342,7 @@ mod tests {
         );
     }
 
-    /// RED test (integration: live_ephemeral_small_cache_playback_hls).
+    /// RED test (integration: `live_ephemeral_small_cache_playback_hls`).
     ///
     /// Reproduces the flake observed under CPU contention when running
     /// `live_ephemeral_small_cache_playback_hls` with 8-way parallel
@@ -1378,7 +1370,7 @@ mod tests {
     /// 4. `build_batch` starts re-downloading segments 0, 1, 2, … which
     ///    evicts the reader's live window. Reader starves → `wait_range`
     ///    exceeds its 3-second budget → `next_chunk_with_timeout` fires
-    ///    the assert at tests/tests/kithara_hls/live_stress_real_stream.rs:190.
+    ///    the assert at `tests/tests/kithara_hls/live_stress_real_stream.rs:190`.
     ///
     /// Invariant under test: with forward-only playback on an ephemeral
     /// LRU store, an ABR up-switch at the tail must NOT rewind the
@@ -1468,12 +1460,11 @@ mod tests {
         let mut cx = Context::from_waker(&waker);
 
         let (demand_segment, demand_variant_override) = match process_demand(&mut state, &mut cx) {
-            DemandResult::ResetAndPend => (None, None),
             DemandResult::Demand {
                 segment,
                 variant_override,
             } => (Some(segment), variant_override),
-            DemandResult::None => (None, None),
+            DemandResult::ResetAndPend | DemandResult::None => (None, None),
         };
 
         let (old_variant, variant) = resolve_variant(&mut state.scheduler, demand_variant_override);

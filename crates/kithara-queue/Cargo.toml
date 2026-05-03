@@ -14,6 +14,9 @@ workspace = true
 default = ["backend-cpal"]
 backend-cpal = ["kithara-play/backend-cpal"]
 backend-web-audio = ["kithara-play/backend-web-audio"]
+# Exposes test-only helpers (`Queue::insert_loaded_for_test`) for
+# integration tests that drive Queue against an offline backend.
+test-utils = ["kithara-play/test-utils"]
 
 [dependencies]
 kithara-play = { workspace = true, features = ["file", "hls"] }

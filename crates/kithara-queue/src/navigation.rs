@@ -77,6 +77,33 @@ impl NavigationState {
         self.current_index = Some(idx);
     }
 
+    /// Non-mutating preview of the auto-advance successor.
+    ///
+    /// Returns the index the auto-advance armer should preload, without
+    /// touching `current_index` or `history`.
+    ///
+    /// Unlike [`Self::next`], returns `None` (not `Some(0)`) when no track
+    /// is selected — preloading slot 0 before selection races the loader
+    /// commit and would arm against the already-playing decoder.
+    #[must_use]
+    pub fn peek_next(&self, len: usize) -> Option<usize> {
+        if len == 0 {
+            return None;
+        }
+        let current = self.current_index?;
+        if self.repeat_mode == RepeatMode::One {
+            return Some(current);
+        }
+        if current + 1 < len {
+            Some(current + 1)
+        } else {
+            match self.repeat_mode {
+                RepeatMode::All => Some(0),
+                RepeatMode::Off | RepeatMode::One => None,
+            }
+        }
+    }
+
     /// Advance to the next track.
     ///
     /// Returns `None` when the queue is empty or when the end has been
@@ -173,6 +200,14 @@ mod tests {
     fn next_from_unselected_starts_at_zero() {
         let mut nav = NavigationState::new();
         assert_eq!(nav.next(3), Some(0));
+    }
+
+    #[kithara::test]
+    fn peek_next_from_unselected_is_none() {
+        // PrefetchRequested can race navigation.select(0) on autoplay start;
+        // peek_next must not default None->Some(0) and arm the playing slot.
+        let nav = NavigationState::new();
+        assert_eq!(nav.peek_next(7), None);
     }
 
     #[kithara::test]

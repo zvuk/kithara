@@ -65,6 +65,6 @@ pub use traits::{
     },
 };
 pub use types::{
-    ActionAtItemEnd, ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId,
-    TimeControlStatus, TimeRange, WaitingReason,
+    ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId, TimeControlStatus, TimeRange,
+    WaitingReason,
 };

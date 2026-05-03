@@ -36,7 +36,7 @@ use std::{
 };
 
 use kithara_bufpool::PcmPool;
-use kithara_stream::{ContainerFormat, StreamContext};
+use kithara_stream::{AudioCodec, ContainerFormat, StreamContext};
 use symphonia::{
     core::{
         codecs::{
@@ -57,8 +57,9 @@ use symphonia::{
 
 use crate::{
     error::{DecodeError, DecodeResult},
+    gapless::probe_mp4_gapless_dyn,
     traits::{Aac, AudioDecoder, CodecType, DecoderInput, Flac, Mp3, Vorbis},
-    types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
+    types::{DecoderTrackInfo, PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
 
 /// Default audio channel count (stereo).
@@ -117,6 +118,7 @@ struct SymphoniaInner {
     frame_offset: u64,
     duration: Option<Duration>,
     metadata: TrackMetadata,
+    track_info: DecoderTrackInfo,
     /// Handle for dynamic byte length updates.
     byte_len_handle: Arc<AtomicU64>,
     /// Stream context for segment/variant metadata.
@@ -153,7 +155,12 @@ impl SymphoniaInner {
     /// When `container` is specified in config, creates the format reader
     /// directly without probing. Otherwise falls back to probe which can
     /// automatically detect format and skip junk data.
-    fn new<R>(source: R, config: &SymphoniaConfig) -> DecodeResult<Self>
+    fn new<R>(
+        source: R,
+        config: &SymphoniaConfig,
+        metadata: TrackMetadata,
+        track_info: DecoderTrackInfo,
+    ) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
@@ -163,14 +170,14 @@ impl SymphoniaInner {
         if let Some(container) = config.container {
             // Direct reader creation (no probe) - needed for HLS fMP4
             // where we know the container and need to avoid seek-to-end behavior
-            Self::new_direct(source, config, container, format_opts)
+            Self::new_direct(source, config, container, format_opts, metadata, track_info)
         } else if config.probe_no_seek {
             // Probe with seek disabled — prevents format readers from seeking
             // to end to validate file/chunk sizes (ABR switch scenario)
-            Self::new_with_probe_no_seek(source, config, format_opts)
+            Self::new_with_probe_no_seek(source, config, format_opts, metadata, track_info)
         } else {
             // Fallback to probe - handles files with junk data, auto-detects format
-            Self::new_with_probe(source, config, format_opts)
+            Self::new_with_probe(source, config, format_opts, metadata, track_info)
         }
     }
 
@@ -182,6 +189,8 @@ impl SymphoniaInner {
         config: &SymphoniaConfig,
         container: ContainerFormat,
         format_opts: FormatOptions,
+        metadata: TrackMetadata,
+        track_info: DecoderTrackInfo,
     ) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -216,7 +225,7 @@ impl SymphoniaInner {
         seek_enabled_handle.store(true, Ordering::Release);
         tracing::debug!("Re-enabled seek after decoder initialization");
 
-        Self::init_from_reader(format_reader, config, byte_len_handle)
+        Self::init_from_reader(format_reader, config, byte_len_handle, metadata, track_info)
     }
 
     /// Create decoder using Symphonia's probe mechanism.
@@ -227,11 +236,13 @@ impl SymphoniaInner {
         source: R,
         config: &SymphoniaConfig,
         format_opts: FormatOptions,
+        metadata: TrackMetadata,
+        track_info: DecoderTrackInfo,
     ) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        Self::probe_with_seek(source, config, format_opts, true)
+        Self::probe_with_seek(source, config, format_opts, true, metadata, track_info)
     }
 
     /// Create decoder using Symphonia's probe with seek disabled.
@@ -244,11 +255,13 @@ impl SymphoniaInner {
         source: R,
         config: &SymphoniaConfig,
         format_opts: FormatOptions,
+        metadata: TrackMetadata,
+        track_info: DecoderTrackInfo,
     ) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        Self::probe_with_seek(source, config, format_opts, false)
+        Self::probe_with_seek(source, config, format_opts, false, metadata, track_info)
     }
 
     /// Shared implementation for probe-based decoder creation.
@@ -257,6 +270,8 @@ impl SymphoniaInner {
         config: &SymphoniaConfig,
         format_opts: FormatOptions,
         seek_enabled: bool,
+        metadata: TrackMetadata,
+        track_info: DecoderTrackInfo,
     ) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -299,7 +314,7 @@ impl SymphoniaInner {
             tracing::debug!("Re-enabled seek after probe");
         }
 
-        Self::init_from_reader(format_reader, config, byte_len_handle)
+        Self::init_from_reader(format_reader, config, byte_len_handle, metadata, track_info)
     }
 
     /// Create format reader directly based on container format (no probe).
@@ -373,6 +388,8 @@ impl SymphoniaInner {
         format_reader: Box<dyn FormatReader>,
         config: &SymphoniaConfig,
         byte_len_handle: Arc<AtomicU64>,
+        metadata: TrackMetadata,
+        track_info: DecoderTrackInfo,
     ) -> DecodeResult<Self> {
         // Find audio track
         let track = format_reader
@@ -424,9 +441,6 @@ impl SymphoniaInner {
             Some(Duration::new(seconds.cast_unsigned(), nanos))
         });
 
-        // Extract metadata (will be populated from format_reader later if available)
-        let metadata = TrackMetadata::default();
-
         let pool = config
             .pcm_pool
             .clone()
@@ -441,6 +455,7 @@ impl SymphoniaInner {
             frame_offset: 0,
             duration,
             metadata,
+            track_info,
             byte_len_handle,
             stream_ctx: config.stream_ctx.clone(),
             epoch: config.epoch,
@@ -625,11 +640,13 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
     type Config = SymphoniaConfig;
     type Source = Box<dyn DecoderInput>;
 
-    fn create(source: Self::Source, config: Self::Config) -> DecodeResult<Self>
+    fn create(mut source: Self::Source, config: Self::Config) -> DecodeResult<Self>
     where
         Self: Sized,
     {
-        let inner = SymphoniaInner::new(source, &config)?;
+        let metadata = TrackMetadata::default();
+        let track_info = Self::probe_track_info(&mut *source, &config)?;
+        let inner = SymphoniaInner::new(source, &config, metadata, track_info)?;
 
         Ok(Self {
             inner,
@@ -651,6 +668,31 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
 
     fn duration(&self) -> Option<Duration> {
         self.inner.duration
+    }
+}
+
+impl<C: CodecType> Symphonia<C> {
+    fn probe_track_info(
+        source: &mut dyn DecoderInput,
+        config: &SymphoniaConfig,
+    ) -> DecodeResult<DecoderTrackInfo> {
+        let gapless = if config.gapless && C::CODEC == AudioCodec::AacLc {
+            let gapless = probe_mp4_gapless_dyn(source)?;
+            if let Some(info) = gapless {
+                tracing::debug!(
+                    target: "kithara::gapless",
+                    codec = ?C::CODEC,
+                    leading_frames = info.leading_frames,
+                    trailing_frames = info.trailing_frames,
+                    "captured AAC gapless metadata for Symphonia"
+                );
+            }
+            gapless
+        } else {
+            None
+        };
+
+        Ok(DecoderTrackInfo { gapless })
     }
 }
 
@@ -679,6 +721,10 @@ impl<C: CodecType> InnerDecoder for Symphonia<C> {
 
     fn metadata(&self) -> TrackMetadata {
         self.inner.metadata.clone()
+    }
+
+    fn track_info(&self) -> DecoderTrackInfo {
+        self.inner.track_info.clone()
     }
 }
 

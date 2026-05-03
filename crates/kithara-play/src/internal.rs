@@ -48,6 +48,7 @@ pub mod offline {
         traits::{Producer, Split},
     };
 
+    pub use crate::impls::engine::OfflineSessionHandle;
     use crate::impls::{
         offline_backend::{OfflineBackend, OfflineConfig},
         player_node::PlayerNode,
@@ -135,6 +136,7 @@ pub mod offline {
             self.cmd_tx
                 .try_push(PlayerCmd::LoadTrack {
                     resource: Arc::new(Mutex::new(pr)),
+                    item_id: None,
                     src: Arc::clone(&src),
                 })
                 .expect("send LoadTrack");
@@ -185,11 +187,28 @@ pub mod offline {
     ) -> crate::Resource {
         crate::Resource::from_reader(reader)
     }
+
+    /// Create a [`Resource`](crate::Resource) from any [`PcmReader`] with
+    /// an explicit source identifier.
+    ///
+    /// Use distinct `src` values when loading multiple test resources
+    /// into the same player — the processor arena keys tracks by `src`,
+    /// so duplicates evict each other. Test-only wrapper around the
+    /// `pub(crate)` constructor.
+    ///
+    /// [`PcmReader`]: kithara_audio::PcmReader
+    #[expect(clippy::impl_trait_in_params, reason = "test utility, ergonomic API")]
+    pub fn resource_from_reader_with_src(
+        reader: impl kithara_audio::PcmReader + 'static,
+        src: Arc<str>,
+    ) -> crate::Resource {
+        crate::Resource::from_reader_with_src(reader, src)
+    }
 }
 
 pub use crate::{
-    ActionAtItemEnd, DjEvent, EngineConfig, EngineEvent, EngineImpl, ItemStatus, MediaTime,
-    ObserverId, PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource,
-    ResourceConfig, ResourceSrc, SessionDuckingMode, SessionEvent, SlotId, SourceType,
-    TimeControlStatus, TimeRange, WaitingReason,
+    DjEvent, EngineConfig, EngineEvent, EngineImpl, ItemStatus, MediaTime, ObserverId, PlayError,
+    PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource, ResourceConfig, ResourceSrc,
+    SessionDuckingMode, SessionEvent, SlotId, SourceType, TimeControlStatus, TimeRange,
+    WaitingReason,
 };

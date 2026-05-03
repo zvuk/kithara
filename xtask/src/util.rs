@@ -38,8 +38,7 @@ pub(crate) fn check_tool(tool: &str, args: &[&str], install_hint: &str) -> Resul
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+        .is_ok_and(|status| status.success());
     if !ok {
         bail!("{tool} not found. Install with: {install_hint}");
     }

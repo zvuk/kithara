@@ -13,10 +13,16 @@ use kithara_platform::time::Duration;
 use crate::traits::PcmReader;
 pub use crate::traits::{AudioEffectMock, PcmReaderMock};
 
+/// Default per-sample value emitted by [`TestPcmReader::new`]. Use
+/// [`TestPcmReader::with_value`] to override (e.g. when a test needs
+/// distinguishable per-track signatures in the rendered PCM).
+pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
+
 /// A stateful `PcmReader` for testing facades that depend on audio playback.
 ///
-/// Produces a constant sample value (0.5), tracks seek position and EOF,
-/// and exposes an `EventBus` for event publishing in tests.
+/// Produces a constant sample value (default `0.5`, configurable via
+/// [`TestPcmReader::with_value`]), tracks seek position and EOF, and
+/// exposes an `EventBus` for event publishing in tests.
 pub struct TestPcmReader {
     spec: PcmSpec,
     metadata: TrackMetadata,
@@ -24,25 +30,34 @@ pub struct TestPcmReader {
     position_frames: u64,
     eof: bool,
     bus: EventBus,
+    value: f32,
 }
 
 impl TestPcmReader {
     /// Create a new test reader with the given spec and duration.
+    /// Emits [`TEST_PCM_DEFAULT_VALUE`] for every sample.
     #[must_use]
     pub fn new(spec: PcmSpec, duration_secs: f64) -> Self {
+        Self::with_value(spec, duration_secs, TEST_PCM_DEFAULT_VALUE)
+    }
+
+    /// Create a new test reader emitting the given constant `value` for
+    /// every sample. Distinguishable per-track values let integration
+    /// tests verify which track a rendered PCM window belongs to.
+    #[must_use]
+    pub fn with_value(spec: PcmSpec, duration_secs: f64, value: f32) -> Self {
         let total_frames = (f64::from(spec.sample_rate) * duration_secs) as u64;
         Self {
             spec,
             metadata: TrackMetadata {
-                album: None,
-                artist: None,
-                artwork: None,
                 title: Some("Mock".to_owned()),
+                ..Default::default()
             },
             total_frames,
             position_frames: 0,
             eof: false,
             bus: EventBus::default(),
+            value,
         }
     }
 
@@ -60,8 +75,6 @@ impl TestPcmReader {
     }
 }
 
-const SAMPLE_VALUE: f32 = 0.5;
-
 impl PcmReader for TestPcmReader {
     fn read(&mut self, buf: &mut [f32]) -> usize {
         if self.eof {
@@ -74,7 +87,7 @@ impl PcmReader for TestPcmReader {
         let remaining_samples = (self.total_frames - self.position_frames) * channels;
         let to_write = (buf.len() as u64).min(remaining_samples) as usize;
         for sample in &mut buf[..to_write] {
-            *sample = SAMPLE_VALUE;
+            *sample = self.value;
         }
         let frames_advanced = to_write as u64 / channels;
         self.position_frames += frames_advanced;
@@ -97,7 +110,7 @@ impl PcmReader for TestPcmReader {
         let frames_to_write = frames_per_channel.min(remaining);
         for ch in output.iter_mut().take(channels) {
             for sample in ch.iter_mut().take(frames_to_write) {
-                *sample = SAMPLE_VALUE;
+                *sample = self.value;
             }
         }
         self.position_frames += frames_to_write as u64;

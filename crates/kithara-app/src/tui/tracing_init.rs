@@ -56,14 +56,23 @@ fn make_log_writer() -> CrlfWriter<io::Stderr> {
 /// # Errors
 /// Returns an error if a tracing directive cannot be parsed.
 pub fn init_tracing(directives: &[&str], use_crlf_writer: bool) -> TuiResult {
-    let mut filter = EnvFilter::default();
-    for directive in directives {
-        filter = filter.add_directive((*directive).parse()?);
-    }
-    let has_global_level = directives.iter().any(|directive| !directive.contains('='));
-    if !has_global_level {
-        filter = filter.add_directive(LevelFilter::WARN.into());
-    }
+    // Honour `RUST_LOG` when set; otherwise fall back to the caller's
+    // hardcoded directives. Without this the env var is silently dropped
+    // and debug/trace logging from playback / queue paths is impossible
+    // to enable for ad-hoc diagnosis.
+    let filter = if let Ok(filter) = EnvFilter::try_from_default_env() {
+        filter
+    } else {
+        let mut filter = EnvFilter::default();
+        for directive in directives {
+            filter = filter.add_directive((*directive).parse()?);
+        }
+        let has_global_level = directives.iter().any(|directive| !directive.contains('='));
+        if !has_global_level {
+            filter = filter.add_directive(LevelFilter::WARN.into());
+        }
+        filter
+    };
 
     if use_crlf_writer {
         tracing_subscriber::fmt()

@@ -22,7 +22,7 @@ kithara-bufpool = { workspace = true, features = ["internal"] }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-hls = { workspace = true, features = ["internal"] }
-kithara-queue = { workspace = true }
+kithara-queue = { workspace = true, features = ["test-utils"] }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
 kithara-test-utils = { workspace = true }
 rkyv = { workspace = true }

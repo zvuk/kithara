@@ -3,7 +3,7 @@ pub mod config;
 pub(crate) mod crossfade;
 pub mod engine;
 pub(crate) mod master_eq_node;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "backend-offline"))]
 pub mod offline_backend;
 pub mod player;
 pub(crate) mod player_node;

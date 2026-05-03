@@ -2436,9 +2436,13 @@ public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer 
  */
 public struct FfiPlayerConfig {
     /**
-     * Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
+     * Number of EQ bands (log-spaced). Default: 10.
      */
     public let eqBandCount: UInt32
+    /**
+     * How resources loaded for this player trim leading/trailing PCM.
+     */
+    public let gaplessMode: FfiGaplessMode
     /**
      * DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
      * no DRM is needed.
@@ -2453,8 +2457,11 @@ public struct FfiPlayerConfig {
     // declare one manually.
     public init(
         /**
-         * Number of EQ bands (log-spaced). Default: [`DEFAULT_EQ_BAND_COUNT`].
+         * Number of EQ bands (log-spaced). Default: 10.
          */eqBandCount: UInt32, 
+        /**
+         * How resources loaded for this player trim leading/trailing PCM.
+         */gaplessMode: FfiGaplessMode, 
         /**
          * DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
          * no DRM is needed.
@@ -2463,6 +2470,7 @@ public struct FfiPlayerConfig {
          * Storage options shared by all items (cache directory, etc.).
          */store: StoreOptions) {
         self.eqBandCount = eqBandCount
+        self.gaplessMode = gaplessMode
         self.keyOptions = keyOptions
         self.store = store
     }
@@ -2484,6 +2492,7 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
         return
             try FfiPlayerConfig(
                 eqBandCount: FfiConverterUInt32.read(from: &buf), 
+                gaplessMode: FfiConverterTypeFfiGaplessMode.read(from: &buf), 
                 keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf), 
                 store: FfiConverterTypeStoreOptions.read(from: &buf)
         )
@@ -2491,6 +2500,7 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
 
     public static func write(_ value: FfiPlayerConfig, into buf: inout [UInt8]) {
         FfiConverterUInt32.write(value.eqBandCount, into: &buf)
+        FfiConverterTypeFfiGaplessMode.write(value.gaplessMode, into: &buf)
         FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
         FfiConverterTypeStoreOptions.write(value.store, into: &buf)
     }
@@ -2589,6 +2599,71 @@ public func FfiConverterTypeFfiPlayerSnapshot_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeFfiPlayerSnapshot_lower(_ value: FfiPlayerSnapshot) -> RustBuffer {
     return FfiConverterTypeFfiPlayerSnapshot.lower(value)
+}
+
+
+/**
+ * FFI-friendly tunables for silence-based gapless trimming.
+ */
+public struct FfiSilenceTrimParams: Equatable, Hashable {
+    public let thresholdDb: Float
+    public let minTrimFrames: UInt64
+    public let scanWindowFrames: UInt64
+    public let trimTrailing: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(thresholdDb: Float, minTrimFrames: UInt64, scanWindowFrames: UInt64, trimTrailing: Bool) {
+        self.thresholdDb = thresholdDb
+        self.minTrimFrames = minTrimFrames
+        self.scanWindowFrames = scanWindowFrames
+        self.trimTrailing = trimTrailing
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiSilenceTrimParams: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiSilenceTrimParams: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSilenceTrimParams {
+        return
+            try FfiSilenceTrimParams(
+                thresholdDb: FfiConverterFloat.read(from: &buf), 
+                minTrimFrames: FfiConverterUInt64.read(from: &buf), 
+                scanWindowFrames: FfiConverterUInt64.read(from: &buf), 
+                trimTrailing: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiSilenceTrimParams, into buf: inout [UInt8]) {
+        FfiConverterFloat.write(value.thresholdDb, into: &buf)
+        FfiConverterUInt64.write(value.minTrimFrames, into: &buf)
+        FfiConverterUInt64.write(value.scanWindowFrames, into: &buf)
+        FfiConverterBool.write(value.trimTrailing, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSilenceTrimParams_lift(_ buf: RustBuffer) throws -> FfiSilenceTrimParams {
+    return try FfiConverterTypeFfiSilenceTrimParams.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiSilenceTrimParams_lower(_ value: FfiSilenceTrimParams) -> RustBuffer {
+    return FfiConverterTypeFfiSilenceTrimParams.lower(value)
 }
 
 
@@ -2957,6 +3032,93 @@ public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
+ * FFI-friendly mirror of [`GaplessMode`].
+ */
+
+public enum FfiGaplessMode: Equatable, Hashable {
+    
+    case disabled
+    case mediaOnly
+    case codecPriming
+    case silenceTrim(params: FfiSilenceTrimParams
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiGaplessMode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiGaplessMode: FfiConverterRustBuffer {
+    typealias SwiftType = FfiGaplessMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiGaplessMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .disabled
+        
+        case 2: return .mediaOnly
+        
+        case 3: return .codecPriming
+        
+        case 4: return .silenceTrim(params: try FfiConverterTypeFfiSilenceTrimParams.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiGaplessMode, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .disabled:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .mediaOnly:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .codecPriming:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .silenceTrim(params):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeFfiSilenceTrimParams.write(params, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGaplessMode_lift(_ buf: RustBuffer) throws -> FfiGaplessMode {
+    return try FfiConverterTypeFfiGaplessMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGaplessMode_lower(_ value: FfiGaplessMode) -> RustBuffer {
+    return FfiConverterTypeFfiGaplessMode.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
  * Typed item event dispatched through [`ItemObserver::on_event`].
  */
 
@@ -3184,6 +3346,8 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     )
     case currentItemChanged(itemId: String?
     )
+    case queueItemRemoved(itemId: String
+    )
     case statusChanged(status: FfiPlayerStatus
     )
     case timeControlStatusChanged(status: FfiTimeControlStatus
@@ -3198,7 +3362,6 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     )
     case muteChanged(muted: Bool
     )
-    case itemDidPlayToEnd
     /**
      * Queue-level: the loading/playback status of an item changed.
      * `item_id` matches `AudioPlayerItem::id()`.
@@ -3250,28 +3413,29 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         case 3: return .currentItemChanged(itemId: try FfiConverterOptionString.read(from: &buf)
         )
         
-        case 4: return .statusChanged(status: try FfiConverterTypeFfiPlayerStatus.read(from: &buf)
+        case 4: return .queueItemRemoved(itemId: try FfiConverterString.read(from: &buf)
         )
         
-        case 5: return .timeControlStatusChanged(status: try FfiConverterTypeFfiTimeControlStatus.read(from: &buf)
+        case 5: return .statusChanged(status: try FfiConverterTypeFfiPlayerStatus.read(from: &buf)
         )
         
-        case 6: return .error(error: try FfiConverterString.read(from: &buf)
+        case 6: return .timeControlStatusChanged(status: try FfiConverterTypeFfiTimeControlStatus.read(from: &buf)
         )
         
-        case 7: return .durationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        case 7: return .error(error: try FfiConverterString.read(from: &buf)
         )
         
-        case 8: return .bufferedDurationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        case 8: return .durationChanged(seconds: try FfiConverterDouble.read(from: &buf)
         )
         
-        case 9: return .volumeChanged(volume: try FfiConverterFloat.read(from: &buf)
+        case 9: return .bufferedDurationChanged(seconds: try FfiConverterDouble.read(from: &buf)
         )
         
-        case 10: return .muteChanged(muted: try FfiConverterBool.read(from: &buf)
+        case 10: return .volumeChanged(volume: try FfiConverterFloat.read(from: &buf)
         )
         
-        case 11: return .itemDidPlayToEnd
+        case 11: return .muteChanged(muted: try FfiConverterBool.read(from: &buf)
+        )
         
         case 12: return .trackStatusChanged(itemId: try FfiConverterString.read(from: &buf), status: try FfiConverterTypeFfiTrackStatus.read(from: &buf)
         )
@@ -3307,44 +3471,45 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
             FfiConverterOptionString.write(itemId, into: &buf)
             
         
-        case let .statusChanged(status):
+        case let .queueItemRemoved(itemId):
             writeInt(&buf, Int32(4))
+            FfiConverterString.write(itemId, into: &buf)
+            
+        
+        case let .statusChanged(status):
+            writeInt(&buf, Int32(5))
             FfiConverterTypeFfiPlayerStatus.write(status, into: &buf)
             
         
         case let .timeControlStatusChanged(status):
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(6))
             FfiConverterTypeFfiTimeControlStatus.write(status, into: &buf)
             
         
         case let .error(error):
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(7))
             FfiConverterString.write(error, into: &buf)
             
         
         case let .durationChanged(seconds):
-            writeInt(&buf, Int32(7))
-            FfiConverterDouble.write(seconds, into: &buf)
-            
-        
-        case let .bufferedDurationChanged(seconds):
             writeInt(&buf, Int32(8))
             FfiConverterDouble.write(seconds, into: &buf)
             
         
-        case let .volumeChanged(volume):
+        case let .bufferedDurationChanged(seconds):
             writeInt(&buf, Int32(9))
+            FfiConverterDouble.write(seconds, into: &buf)
+            
+        
+        case let .volumeChanged(volume):
+            writeInt(&buf, Int32(10))
             FfiConverterFloat.write(volume, into: &buf)
             
         
         case let .muteChanged(muted):
-            writeInt(&buf, Int32(10))
+            writeInt(&buf, Int32(11))
             FfiConverterBool.write(muted, into: &buf)
             
-        
-        case .itemDidPlayToEnd:
-            writeInt(&buf, Int32(11))
-        
         
         case let .trackStatusChanged(itemId,status):
             writeInt(&buf, Int32(12))
@@ -3974,15 +4139,6 @@ fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
         return dict
     }
 }
-/**
- * Initialize Rust tracing for FFI consumers.
- *
- * Writes formatted events to stderr. Idempotent — subsequent calls are
- * no-ops.
- *
- * `level` ordinal: 0=trace, 1=debug, 2=info, 3=warn, 4=error, anything
- * else = off.
- */
 public func initLogging(level: UInt8)  {try! rustCall() {
     uniffi_kithara_ffi_fn_func_init_logging(
         FfiConverterUInt8.lower(level),$0
@@ -4005,7 +4161,7 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_kithara_ffi_checksum_func_init_logging() != 21302) {
+    if (uniffi_kithara_ffi_checksum_func_init_logging() != 42652) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_fficipher_decrypt() != 15435) {

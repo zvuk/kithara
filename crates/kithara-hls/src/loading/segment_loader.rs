@@ -421,11 +421,7 @@ impl SegmentLoader {
     ///
     /// # Errors
     /// Returns an error when commit fails or zero bytes were written.
-    pub fn complete_media(
-        &self,
-        prepared: &PreparedMedia,
-        bytes_written: u64,
-    ) -> HlsResult<SegmentMeta> {
+    pub fn complete_media(prepared: &PreparedMedia, bytes_written: u64) -> HlsResult<SegmentMeta> {
         if bytes_written == 0 && prepared.cached_len.is_none() {
             return Err(HlsError::SegmentNotFound(format!(
                 "0 bytes downloaded for {}",

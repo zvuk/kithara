@@ -11,7 +11,7 @@ use kithara_bufpool::pcm_pool;
 use unimock::{MockFn, Unimock, matching};
 
 pub use crate::traits::InnerDecoderMock;
-use crate::{DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
+use crate::{DecodeResult, DecoderTrackInfo, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
 
 /// Minimal mutex wrapper with infallible `lock()` for tests.
 pub struct MockLog<T> {
@@ -66,7 +66,14 @@ pub fn scripted_inner_decoder(
     seek_results: Vec<DecodeResult<()>>,
     duration: Option<Duration>,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
-    build_scripted_inner_decoder(spec, chunks, seek_results, duration, true)
+    build_scripted_inner_decoder(
+        spec,
+        chunks,
+        seek_results,
+        duration,
+        DecoderTrackInfo::default(),
+        true,
+    )
 }
 
 /// Create a scripted decoder mock with verification disabled in `Drop`.
@@ -80,7 +87,29 @@ pub fn scripted_inner_decoder_loose(
     seek_results: Vec<DecodeResult<()>>,
     duration: Option<Duration>,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
-    build_scripted_inner_decoder(spec, chunks, seek_results, duration, false)
+    build_scripted_inner_decoder(
+        spec,
+        chunks,
+        seek_results,
+        duration,
+        DecoderTrackInfo::default(),
+        false,
+    )
+}
+
+/// Create a scripted decoder mock with explicit decoder-owned playback info.
+///
+/// Use this for pipeline tests that need `track_info()` contracts such as
+/// gapless trimming metadata.
+#[must_use]
+pub fn scripted_inner_decoder_with_track_info_loose(
+    spec: PcmSpec,
+    chunks: Vec<PcmChunk>,
+    seek_results: Vec<DecodeResult<()>>,
+    duration: Option<Duration>,
+    track_info: DecoderTrackInfo,
+) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
+    build_scripted_inner_decoder(spec, chunks, seek_results, duration, track_info, false)
 }
 
 fn build_scripted_inner_decoder(
@@ -88,6 +117,7 @@ fn build_scripted_inner_decoder(
     chunks: Vec<PcmChunk>,
     seek_results: Vec<DecodeResult<()>>,
     duration: Option<Duration>,
+    track_info: DecoderTrackInfo,
     verify_in_drop: bool,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
     let chunk_queue = Arc::new(MockLog::new(VecDeque::from(chunks)));
@@ -128,6 +158,10 @@ fn build_scripted_inner_decoder(
         InnerDecoderMock::duration
             .each_call(matching!())
             .returns(duration)
+            .at_least_times(0),
+        InnerDecoderMock::track_info
+            .each_call(matching!())
+            .returns(track_info)
             .at_least_times(0),
     ));
     let mock = if verify_in_drop {
@@ -224,6 +258,10 @@ fn build_infinite_inner_decoder(
         InnerDecoderMock::duration
             .each_call(matching!())
             .returns(Some(Duration::from_secs(MOCK_DURATION_SECS)))
+            .at_least_times(0),
+        InnerDecoderMock::track_info
+            .each_call(matching!())
+            .returns(DecoderTrackInfo::default())
             .at_least_times(0),
     ));
     let mock = if verify_in_drop {

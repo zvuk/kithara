@@ -67,8 +67,18 @@ impl Resource {
     ///
     /// The resource shares the reader's event bus directly.
     /// Use this for custom sources.
-    #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
+        Self::from_reader_with_src(reader, Arc::from("unknown"))
+    }
+
+    /// Create a resource from any `PcmReader` with an explicit source identifier.
+    ///
+    /// This is primarily useful for tests that need distinct in-memory readers
+    /// to coexist in the processor arena without colliding on the default
+    /// placeholder source key.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(crate) fn from_reader_with_src(reader: impl PcmReader + 'static, src: Arc<str>) -> Self {
         let bus = reader.event_bus().clone();
         let mut inner: Box<dyn PcmReader> = Box::new(reader);
         // Player resources are consumed from the audio render thread,
@@ -76,11 +86,7 @@ impl Resource {
         // immediately. Callers that want to wait for the first decoded
         // chunk still use `Resource::preload()` explicitly.
         inner.preload();
-        Self {
-            inner,
-            bus,
-            src: Arc::from("unknown"),
-        }
+        Self { inner, bus, src }
     }
 
     /// Create a resource from a file audio config.
@@ -225,6 +231,7 @@ impl Resource {
     pub fn set_service_class(&self, class: ServiceClass) {
         self.inner.set_service_class(class);
     }
+
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
     ///
     /// After preload completes, the first `read()` returns data without blocking.
@@ -238,13 +245,6 @@ impl Resource {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless,
-    reason = "test mock code; values are small and positive by construction"
-)]
 mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;

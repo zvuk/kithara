@@ -39,6 +39,10 @@ impl Mp4Bytes {
         self.buf.extend_from_slice(&value.to_be_bytes());
     }
 
+    pub(crate) fn push_i64(&mut self, value: i64) {
+        self.buf.extend_from_slice(&value.to_be_bytes());
+    }
+
     pub(crate) fn push_bytes(&mut self, value: &[u8]) {
         self.buf.extend_from_slice(value);
     }
