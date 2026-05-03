@@ -178,6 +178,24 @@ fn clamp_sample(sample: f32) -> f32 {
     if sample.is_finite() { sample } else { 0.0 }
 }
 
+/// Whether every band sits at unity gain with no smoothing in flight.
+/// Computed only when gain state changes; cached on `IsolatorEq`.
+fn compute_bypass_active(gains: &[GainState]) -> bool {
+    !gains.is_empty()
+        && gains.iter().all(|g| {
+            (g.target_linear - 1.0).abs() < f32::EPSILON
+                && (g.current_linear - 1.0).abs() < f32::EPSILON
+        })
+}
+
+/// Whether every band is at full kill (linear 0) with no smoothing in flight.
+fn compute_silence_active(gains: &[GainState]) -> bool {
+    !gains.is_empty()
+        && gains
+            .iter()
+            .all(|g| g.target_linear.abs() < f32::EPSILON && g.current_linear.abs() < f32::EPSILON)
+}
+
 /// Convert dB to linear gain. Full kill at [`MIN_GAIN_DB`].
 #[inline]
 fn db_to_linear(db: f32) -> f32 {
@@ -312,6 +330,15 @@ pub struct IsolatorEq {
     block_counter: usize,
     /// Write position in [`Self::bypass_history`] (modulo its length).
     bypass_history_pos: usize,
+    /// Cached result of [`Self::compute_silence_active`] — read on every
+    /// sample inside [`Self::process_sample`]. Refreshed only at the
+    /// points where gain state can change: `set_gain`, `reset`, and
+    /// the per-block smoother tick. Eliminates the `Vec::iter().all()`
+    /// walk per sample (~9-10 profiler samples on the apple sentinel).
+    cached_silence_active: bool,
+    /// Cached result of [`Self::compute_bypass_active`]. Same lifecycle
+    /// as `cached_silence_active`.
+    cached_bypass_active: bool,
 }
 
 impl IsolatorEq {
@@ -363,7 +390,10 @@ impl IsolatorEq {
         }
         ap_offsets.push(ap_filters.len());
 
-        let gains = bands.iter().map(|b| GainState::new(b.gain_db)).collect();
+        let gains: Vec<GainState> = bands.iter().map(|b| GainState::new(b.gain_db)).collect();
+
+        let cached_silence_active = compute_silence_active(&gains);
+        let cached_bypass_active = compute_bypass_active(&gains);
 
         Self {
             lps,
@@ -379,6 +409,8 @@ impl IsolatorEq {
             bypass_history: vec![0.0; Self::BYPASS_HISTORY_LEN],
             bypass_history_pos: 0,
             was_in_fastpath: false,
+            cached_silence_active,
+            cached_bypass_active,
         }
     }
 
@@ -392,16 +424,12 @@ impl IsolatorEq {
     /// flight — in that case `process_sample` can skip the LR-4 + allpass
     /// chain entirely and return the input unchanged.
     ///
-    /// Instruments traces show `process_sample` as ~3 % of total CPU during
-    /// HLS playback; gating the filter chain on non-neutral gain eliminates
-    /// that cost for the common case of a user who never touches the EQ.
+    /// O(1) read of cached state — refreshed only when gain state actually
+    /// changes (`set_gain`, `reset`, per-block smoother tick), keeping
+    /// the `process_sample` hot path off the gain-band walk.
     #[must_use]
     pub fn is_bypass_active(&self) -> bool {
-        !self.gains.is_empty()
-            && self.gains.iter().all(|g| {
-                (g.target_linear - 1.0).abs() < f32::EPSILON
-                    && (g.current_linear - 1.0).abs() < f32::EPSILON
-            })
+        self.cached_bypass_active
     }
 
     /// Whether every band is at full kill (linear 0) with no smoothing in
@@ -410,13 +438,22 @@ impl IsolatorEq {
     ///
     /// Mirrors [`Self::is_bypass_active`] for the opposite extreme: a user
     /// who slammed every fader to [`MIN_GAIN_DB`] wants silence, not a
-    /// near-zero filtered signal.
+    /// near-zero filtered signal. O(1) read of cached state.
     #[must_use]
     pub fn is_silence_active(&self) -> bool {
-        !self.gains.is_empty()
-            && self.gains.iter().all(|g| {
-                g.target_linear.abs() < f32::EPSILON && g.current_linear.abs() < f32::EPSILON
-            })
+        self.cached_silence_active
+    }
+
+    /// Recompute both fast-path predicates after a gain mutation.
+    ///
+    /// Callers MUST invoke this whenever `target_linear` or
+    /// `current_linear` may have changed: smoother tick in
+    /// `process_sample`, `set_gain`, `reset`. Tests that mutate
+    /// `gains[i]` fields directly must also call this before relying on
+    /// `is_silence_active` / `is_bypass_active`.
+    fn refresh_fastpath_cache(&mut self) {
+        self.cached_silence_active = compute_silence_active(&self.gains);
+        self.cached_bypass_active = compute_bypass_active(&self.gains);
     }
 
     /// Whether any band is still smoothing toward its target.
@@ -438,18 +475,19 @@ impl IsolatorEq {
             for gain in &mut self.gains {
                 gain.smooth(self.smooth_coeff);
             }
+            self.refresh_fastpath_cache();
         }
 
         // Fast paths skip the LR-4 + allpass chain when the result is
         // trivially known. Filter state freezes while a fast path is active
         // and is rehydrated from a ring buffer on exit, so resuming filter
         // work doesn't jump from zero-state (see rehydrate_filter_state).
-        if self.is_silence_active() {
+        if self.cached_silence_active {
             self.record_bypass_input(input);
             self.was_in_fastpath = true;
             return 0.0;
         }
-        if self.is_bypass_active() {
+        if self.cached_bypass_active {
             self.record_bypass_input(input);
             self.was_in_fastpath = true;
             return input;
@@ -558,6 +596,7 @@ impl IsolatorEq {
         self.bypass_history.fill(0.0);
         self.bypass_history_pos = 0;
         self.was_in_fastpath = false;
+        self.refresh_fastpath_cache();
     }
 
     /// Set the target gain for a band (dB, clamped to min/max).
@@ -565,6 +604,7 @@ impl IsolatorEq {
         if let Some(state) = self.gains.get_mut(band) {
             state.set_target(gain_db);
         }
+        self.refresh_fastpath_cache();
     }
 
     /// Current target gain for a band (dB).
@@ -1278,10 +1318,10 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let mut eq = IsolatorEq::new(&bands, 44100);
         for i in 0..3 {
-            eq.gains[i].target_linear = 0.0;
+            eq.set_gain(i, MIN_GAIN_DB);
             eq.gains[i].current_linear = 0.0;
-            eq.gains[i].target_db = MIN_GAIN_DB;
         }
+        eq.refresh_fastpath_cache();
         assert!(eq.is_silence_active(), "precondition: silence is active");
 
         let inputs = [0.0_f32, 0.25, -0.5, 0.999, -0.999];
@@ -1300,10 +1340,10 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let mut eq = IsolatorEq::new(&bands, 44100);
         for i in 0..3 {
-            eq.gains[i].target_linear = 0.0;
+            eq.set_gain(i, MIN_GAIN_DB);
             eq.gains[i].current_linear = 0.0;
-            eq.gains[i].target_db = MIN_GAIN_DB;
         }
+        eq.refresh_fastpath_cache();
         assert!(eq.is_silence_active(), "precondition: silence is active");
 
         eq.set_gain(1, -3.0);
