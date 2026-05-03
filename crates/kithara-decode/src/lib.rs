@@ -24,6 +24,7 @@ mod demuxer;
 mod error;
 mod factory;
 mod fmp4;
+mod gapless;
 mod pcm;
 #[cfg(feature = "symphonia")]
 mod symphonia;
@@ -43,9 +44,11 @@ mod apple;
 pub use error::{DecodeError, DecodeResult, ErrorClass};
 // Factory for runtime selection
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
+// Gapless contract types — populated wholesale in P3.
+pub use gapless::GaplessInfo;
 // Public traits
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };
 // Core types
-pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+pub use types::{DecoderTrackInfo, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
