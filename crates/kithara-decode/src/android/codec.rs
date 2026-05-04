@@ -51,6 +51,12 @@ pub(crate) struct AndroidCodec {
     pcm_encoding: AndroidPcmEncoding,
     codec: OwnedCodec,
     spec: PcmSpec,
+    /// Decoder-owned playback contract. Populated from container-level
+    /// gapless metadata (MP4 udta) when [`AndroidConfig::gapless`] is
+    /// set; left empty otherwise. `MediaCodec` itself does not surface
+    /// encoder priming, so the contract value comes solely from
+    /// container probing.
+    track_info: DecoderTrackInfo,
 }
 
 impl AndroidCodec {
@@ -213,11 +219,16 @@ impl FrameCodec for AndroidCodec {
             codec,
             spec,
             pcm_encoding,
+            track_info: DecoderTrackInfo::default(),
         })
     }
 
     fn spec(&self) -> PcmSpec {
         self.spec
+    }
+
+    fn track_info(&self) -> DecoderTrackInfo {
+        self.track_info.clone()
     }
 }
 

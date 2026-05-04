@@ -51,6 +51,10 @@ const TRACK_ID: u32 = 0;
 pub(crate) struct SymphoniaCodec {
     decoder: Box<dyn AudioDecoder>,
     spec: PcmSpec,
+    /// Decoder-owned playback contract. Populated from container-level
+    /// gapless metadata captured via [`Self::probe_track_info`] before
+    /// the codec is opened; left empty otherwise.
+    track_info: DecoderTrackInfo,
 }
 
 impl SymphoniaCodec {
@@ -82,7 +86,11 @@ impl SymphoniaCodec {
             channels,
             sample_rate,
         };
-        Ok(Self { decoder, spec })
+        Ok(Self {
+            decoder,
+            spec,
+            track_info: DecoderTrackInfo::default(),
+        })
     }
 
     /// Whether `SymphoniaCodec::open` can accept this codec via
@@ -135,7 +143,11 @@ impl SymphoniaCodec {
             channels: track.channels,
             sample_rate: track.sample_rate,
         };
-        Ok(Self { decoder, spec })
+        Ok(Self {
+            decoder,
+            spec,
+            track_info: DecoderTrackInfo::default(),
+        })
     }
 
     /// Probe the source for container-level gapless metadata before
@@ -224,6 +236,10 @@ impl FrameCodec for SymphoniaCodec {
         self.decoder.reset();
     }
 
+    fn track_info(&self) -> DecoderTrackInfo {
+        self.track_info.clone()
+    }
+
     fn open(track: &TrackInfo) -> DecodeResult<Self> {
         let (codec_id, profile) = map_codec(track.codec)?;
         let mut params = AudioCodecParameters::new();
@@ -248,7 +264,11 @@ impl FrameCodec for SymphoniaCodec {
             channels: track.channels,
             sample_rate: track.sample_rate,
         };
-        Ok(Self { decoder, spec })
+        Ok(Self {
+            decoder,
+            spec,
+            track_info: DecoderTrackInfo::default(),
+        })
     }
 
     fn spec(&self) -> PcmSpec {

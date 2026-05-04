@@ -122,18 +122,6 @@ impl AppleCodec {
         Ok(codec)
     }
 
-    /// Decoder-owned playback contract — captured
-    /// [`crate::GaplessInfo`] from `kAudioConverterPrimeInfo`. Returned
-    /// by-value (clone) so callers don't pin a borrow on `&self` across
-    /// the `decode_frame` mutation barrier.
-    #[expect(
-        dead_code,
-        reason = "exposed via Decoder::track_info trait extension in a follow-up"
-    )]
-    pub(crate) fn track_info(&self) -> DecoderTrackInfo {
-        self.track_info.clone()
-    }
-
     /// AAC's converter populates `kAudioConverterPrimeInfo` only after
     /// at least one input packet is consumed; FLAC fills it at init.
     /// We arm a one-shot refresh during `open_with_config` and run it
@@ -321,6 +309,10 @@ impl FrameCodec for AppleCodec {
 
     fn spec(&self) -> PcmSpec {
         self.spec
+    }
+
+    fn track_info(&self) -> DecoderTrackInfo {
+        self.track_info.clone()
     }
 }
 
