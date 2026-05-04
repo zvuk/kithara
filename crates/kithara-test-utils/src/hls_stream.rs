@@ -15,7 +15,7 @@ use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRe
 use kithara_stream::MediaInfo;
 
 use crate::{
-    fixture_protocol::{create_wav_init_header, generate_segment},
+    fixture_protocol::{GaplessEncoding, create_wav_init_header, generate_segment},
     fmp4::{PackagedVariantData, mux_audio_track},
     hls_spec::{
         HlsSpecError, ResolvedDataMode, ResolvedEncryption, ResolvedHlsSpec, ResolvedInitMode,
@@ -223,7 +223,8 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
                 encode_packaged_variant(packaged, variant)
                     .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
                     .and_then(|track| {
-                        mux_audio_track(&track, include_sidx)
+                        let _ = include_sidx;
+                        mux_audio_track(&track, GaplessEncoding::default())
                             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
                     })
             })
@@ -264,6 +265,8 @@ fn encode_packaged_variant(
             media_info: media_info.clone(),
             timescale: packaged.timescale,
             bit_rate: variant.bit_rate,
+            encoder_delay: 0,
+            trailing_delay: 0,
         })
     };
 

@@ -32,13 +32,13 @@ impl OfflinePlayerHarness {
         let bus = player_config.bus.clone().unwrap_or_default();
         player_config.bus = Some(bus.clone());
 
-        let engine_config = EngineConfig {
-            eq_layout: player_config.eq_layout.clone(),
-            max_slots: player_config.max_slots,
-            pcm_pool: player_config.pcm_pool.clone(),
-            sample_rate,
-            ..EngineConfig::default()
-        };
+        let mut engine_config = EngineConfig::default()
+            .with_eq_layout(player_config.eq_layout.clone())
+            .with_max_slots(player_config.max_slots)
+            .with_sample_rate(sample_rate);
+        if let Some(pool) = player_config.pcm_pool.clone() {
+            engine_config = engine_config.with_pcm_pool(pool);
+        }
         let (engine, session) = EngineImpl::new_offline(engine_config, bus);
         let player = Arc::new(PlayerImpl::with_engine(player_config, engine));
         let events = player.subscribe();

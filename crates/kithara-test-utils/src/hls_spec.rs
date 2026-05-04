@@ -424,7 +424,7 @@ fn resolve_packaged_audio(
         channels: packaged.channels,
         segments_per_variant: spec.segments_per_variant,
         segment_duration_secs: spec.segment_duration_secs,
-        include_sidx: packaged.include_sidx,
+        include_sidx: false,
     })
 }
 
@@ -597,7 +597,10 @@ mod tests {
                 bit_rate: None,
                 source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 50_000.0 }),
                 variant_overrides: Vec::new(),
-                include_sidx: false,
+                start_frame: None,
+                encoder_delay: None,
+                trailing_delay: None,
+                gapless_encoding: Default::default(),
             }),
             ..HlsSpec::default()
         };

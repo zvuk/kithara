@@ -12,7 +12,8 @@ use unimock::{MockFn, Unimock, matching};
 
 pub use crate::traits::DecoderMock;
 use crate::{
-    DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, PcmChunk, PcmMeta, PcmSpec,
+    DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DecoderTrackInfo, PcmChunk,
+    PcmMeta, PcmSpec,
 };
 
 /// Minimal mutex wrapper with infallible `lock()` for tests.
@@ -70,7 +71,14 @@ pub fn scripted_decoder(
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
 ) -> (Box<dyn Decoder>, DecoderLogs) {
-    build_scripted_decoder(spec, chunks, seek_results, duration, true)
+    build_scripted_decoder(
+        spec,
+        chunks,
+        seek_results,
+        duration,
+        DecoderTrackInfo::default(),
+        true,
+    )
 }
 
 /// Create a scripted decoder mock with verification disabled in `Drop`.
@@ -84,7 +92,31 @@ pub fn scripted_decoder_loose(
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
 ) -> (Box<dyn Decoder>, DecoderLogs) {
-    build_scripted_decoder(spec, chunks, seek_results, duration, false)
+    build_scripted_decoder(
+        spec,
+        chunks,
+        seek_results,
+        duration,
+        DecoderTrackInfo::default(),
+        false,
+    )
+}
+
+/// Create a scripted decoder mock that exposes a custom
+/// [`DecoderTrackInfo`] via [`Decoder::track_info`]. Verification disabled
+/// in `Drop`.
+///
+/// Use this for pipeline tests that need `track_info()` contracts such as
+/// gapless trimming metadata.
+#[must_use]
+pub fn scripted_inner_decoder_with_track_info_loose(
+    spec: PcmSpec,
+    chunks: Vec<PcmChunk>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
+    duration: Option<Duration>,
+    track_info: DecoderTrackInfo,
+) -> (Box<dyn Decoder>, DecoderLogs) {
+    build_scripted_decoder(spec, chunks, seek_results, duration, track_info, false)
 }
 
 fn build_scripted_decoder(
@@ -92,6 +124,7 @@ fn build_scripted_decoder(
     chunks: Vec<PcmChunk>,
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
+    track_info: DecoderTrackInfo,
     verify_in_drop: bool,
 ) -> (Box<dyn Decoder>, DecoderLogs) {
     let chunk_queue = Arc::new(MockLog::new(VecDeque::from(chunks)));
@@ -107,6 +140,7 @@ fn build_scripted_decoder(
         },
         seek_results,
         duration,
+        track_info,
         verify_in_drop,
     )
 }
@@ -161,6 +195,7 @@ fn build_infinite_decoder(
         },
         Vec::new(),
         Some(Duration::from_secs(MOCK_DURATION_SECS)),
+        DecoderTrackInfo::default(),
         verify_in_drop,
     )
 }
@@ -170,6 +205,7 @@ fn build_decoder_mock<F>(
     next_chunk: F,
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
+    track_info: DecoderTrackInfo,
     verify_in_drop: bool,
 ) -> (Box<dyn Decoder>, DecoderLogs)
 where
@@ -214,6 +250,10 @@ where
         DecoderMock::duration
             .each_call(matching!())
             .returns(duration)
+            .at_least_times(0),
+        DecoderMock::track_info
+            .each_call(matching!())
+            .returns(track_info)
             .at_least_times(0),
     ));
     let mock = if verify_in_drop {

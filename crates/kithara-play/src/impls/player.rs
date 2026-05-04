@@ -14,6 +14,7 @@ use derive_setters::Setters;
 use kithara_abr::AbrMode;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
+use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
@@ -72,6 +73,15 @@ pub struct PlayerConfig {
     /// Maximum concurrent slots in the engine. Default: 4.
     #[derivative(Default(value = "4"))]
     pub max_slots: usize,
+    /// How leading/trailing PCM is trimmed after the decode. Propagated to
+    /// the underlying [`AudioConfig`] via `with_gapless_mode`.
+    pub gapless_mode: GaplessMode,
+    /// Look-ahead window for the prefetch trigger, in seconds. Default: 3.5.
+    ///
+    /// Mirrors `QueueConfig::prefetch_duration`. Currently captured for
+    /// API parity with production; full prefetch wiring is a follow-up.
+    #[derivative(Default(value = "3.5"))]
+    pub prefetch_duration: f32,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -119,9 +129,7 @@ impl PlayerImpl {
             // PlayerImpl::new fallback — caller injects pcm_pool via PlayerConfig
             // ast-grep-ignore: perf.no-global-pool-accessor
             .unwrap_or_else(|| PcmPool::default().clone());
-
         let bus = config.bus.clone().unwrap_or_default();
-
         let engine_config = EngineConfig {
             eq_layout: config.eq_layout.clone(),
             max_slots: config.max_slots,
@@ -129,7 +137,33 @@ impl PlayerImpl {
             ..EngineConfig::default()
         };
         let engine = EngineImpl::new(engine_config, bus.clone());
+        Self::new_with_parts(config, resolved_pool, bus, engine)
+    }
 
+    /// Construct a player around an externally supplied [`EngineImpl`].
+    ///
+    /// Pair with [`EngineImpl::new_offline`](super::engine::EngineImpl::new_offline)
+    /// to get a per-instance offline player driven synchronously from
+    /// the test thread (no global session, no realtime audio device).
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn with_engine(config: PlayerConfig, engine: EngineImpl) -> Self {
+        let resolved_pool = config
+            .pcm_pool
+            .clone()
+            // PlayerImpl::with_engine fallback — caller injects pcm_pool via PlayerConfig
+            // ast-grep-ignore: perf.no-global-pool-accessor
+            .unwrap_or_else(|| PcmPool::default().clone());
+        let bus = config.bus.clone().unwrap_or_default();
+        Self::new_with_parts(config, resolved_pool, bus, engine)
+    }
+
+    fn new_with_parts(
+        config: PlayerConfig,
+        resolved_pool: PcmPool,
+        bus: EventBus,
+        engine: EngineImpl,
+    ) -> Self {
         Self {
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
@@ -295,11 +329,24 @@ impl PlayerImpl {
     }
 
     /// Insert a resource at a specific position, or append to the end.
-    pub fn insert(&self, resource: Resource, at_position: Option<usize>) {
+    ///
+    /// `item_id` is logged but not stored — full per-item identity tracking
+    /// is a follow-up; the queue still keys items by index + the resource's
+    /// own `src` tag.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "item_id is part of the production API surface; full identity tracking lands in a follow-up"
+    )]
+    pub fn insert(
+        &self,
+        resource: Resource,
+        item_id: Option<Arc<str>>,
+        at_position: Option<usize>,
+    ) {
         let mut items = self.items.lock_sync();
         let pos = at_position.map_or(items.len(), |i| i.min(items.len()));
         items.insert(pos, Some(resource));
-        debug!(count = items.len(), pos, "item inserted");
+        debug!(count = items.len(), pos, ?item_id, "item inserted");
     }
 
     /// Returns `true` if the player is muted.
@@ -409,7 +456,7 @@ impl PlayerImpl {
 
     /// Insert a resource at the end and immediately crossfade to it.
     pub fn play_resource(&self, resource: Resource) -> Result<(), PlayError> {
-        self.insert(resource, None);
+        self.insert(resource, None, None);
         let index = self.item_count().saturating_sub(1);
         self.select_item(index, true)
     }
@@ -543,11 +590,26 @@ impl PlayerImpl {
     /// Use this to re-load a track that was previously played and consumed
     /// by [`load_current_item`]. Does nothing if `index` is out of bounds.
     pub fn replace_item(&self, index: usize, resource: Resource) {
+        self.replace_item_tagged(index, resource, None);
+    }
+
+    /// Replace a consumed (or existing) resource at the given index with
+    /// optional item identity metadata.
+    ///
+    /// The `item_id` parameter is part of the production API surface; our
+    /// queue still keys items by index + the resource's own `src` tag,
+    /// so the supplied id is currently logged but not stored. Wire-up
+    /// to per-item identity tracking is a follow-up.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "item_id is part of the production API surface; full identity tracking lands in a follow-up"
+    )]
+    pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>) {
         let mut items = self.items.lock_sync();
         if index < items.len() {
             items[index] = Some(resource);
             drop(items);
-            debug!(index, "item replaced");
+            debug!(index, ?item_id, "item replaced");
         }
     }
 
@@ -986,6 +1048,8 @@ mod tests {
             eq_layout: generate_log_spaced_bands(5),
             max_slots: 2,
             pcm_pool: None,
+            gapless_mode: GaplessMode::default(),
+            prefetch_duration: 3.5,
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -1012,10 +1076,10 @@ mod tests {
         #[case] expected_count: usize,
     ) {
         let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        player.insert(make_resource(2.0), None);
+        player.insert(make_resource(1.0), None, None);
+        player.insert(make_resource(2.0), None, None);
         if matches!(scenario, InsertScenario::InsertAtPosition) {
-            player.insert(make_resource(3.0), Some(0));
+            player.insert(make_resource(3.0), None, Some(0));
         }
         assert_eq!(player.item_count(), expected_count);
     }
@@ -1028,21 +1092,21 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         match scenario {
             RemoveAtScenario::ExistingItem => {
-                player.insert(make_resource(1.0), None);
-                player.insert(make_resource(2.0), None);
+                player.insert(make_resource(1.0), None, None);
+                player.insert(make_resource(2.0), None, None);
                 let removed = player.remove_at(0);
                 assert!(removed.is_some());
                 assert_eq!(player.item_count(), 1);
             }
             RemoveAtScenario::OutOfBounds => {
-                player.insert(make_resource(1.0), None);
+                player.insert(make_resource(1.0), None, None);
                 assert!(player.remove_at(5).is_none());
                 assert_eq!(player.item_count(), 1);
             }
             RemoveAtScenario::ShiftCurrentIndex => {
-                player.insert(make_resource(1.0), None);
-                player.insert(make_resource(2.0), None);
-                player.insert(make_resource(3.0), None);
+                player.insert(make_resource(1.0), None, None);
+                player.insert(make_resource(2.0), None, None);
+                player.insert(make_resource(3.0), None, None);
                 player.advance_to_next_item();
                 player.advance_to_next_item();
                 assert_eq!(player.current_index(), 2);
@@ -1059,9 +1123,9 @@ mod tests {
     async fn player_remove_all_resets_state(#[case] with_resources: bool) {
         let player = PlayerImpl::new(PlayerConfig::default());
         if with_resources {
-            player.insert(make_resource(1.0), None);
-            player.insert(make_resource(2.0), None);
-            player.insert(make_resource(3.0), None);
+            player.insert(make_resource(1.0), None, None);
+            player.insert(make_resource(2.0), None, None);
+            player.insert(make_resource(3.0), None, None);
             assert_eq!(player.item_count(), 3);
         }
         player.remove_all_items();
@@ -1073,9 +1137,9 @@ mod tests {
     #[kithara::test(tokio)]
     async fn player_advance_through_queue() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        player.insert(make_resource(2.0), None);
-        player.insert(make_resource(3.0), None);
+        player.insert(make_resource(1.0), None, None);
+        player.insert(make_resource(2.0), None, None);
+        player.insert(make_resource(3.0), None, None);
         assert_eq!(player.current_index(), 0);
         player.advance_to_next_item();
         assert_eq!(player.current_index(), 1);
@@ -1089,8 +1153,8 @@ mod tests {
     #[kithara::test(tokio)]
     async fn player_advance_emits_event() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        player.insert(make_resource(2.0), None);
+        player.insert(make_resource(1.0), None, None);
+        player.insert(make_resource(2.0), None, None);
         let mut rx = player.subscribe();
         player.advance_to_next_item();
         let event = rx.try_recv();
@@ -1104,7 +1168,7 @@ mod tests {
     async fn player_play_without_audio_hardware_logs_warning() {
         // play() should not panic even when audio hardware is unavailable.
         let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
+        player.insert(make_resource(1.0), None, None);
         // This will attempt to start engine, fail gracefully, and return.
         player.play();
         // After a failed play, rate may or may not be set depending on

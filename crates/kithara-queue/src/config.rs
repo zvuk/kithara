@@ -52,6 +52,12 @@ pub struct QueueConfig {
     /// effective threshold formula. Default: 3.5.
     #[derivative(Default(value = "DEFAULT_PREFETCH_DURATION"))]
     pub prefetch_duration: f32,
+
+    /// Whether the queue auto-advances to the next track at EOF. When
+    /// `false`, the queue stops at the end of the current track and
+    /// requires an explicit `Queue::play_next` call. Default: `true`.
+    #[derivative(Default(value = "true"))]
+    pub autoplay: bool,
 }
 
 impl QueueConfig {

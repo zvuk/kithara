@@ -1,7 +1,9 @@
 use std::{io::Cursor, num::NonZeroU32};
 
 use kithara::{
-    decode::{DecodeResult, DecoderConfig, DecoderFactory, GaplessTrimmer, InnerDecoder},
+    decode::{
+        DecodeResult, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer, InnerDecoder,
+    },
     platform::time::Duration,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
@@ -45,10 +47,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
     let probe = create_decoder_with_probe(
         fixture.bytes.clone(),
         "m4a",
-        DecoderConfig {
-            hint: Some("m4a".to_string()),
-            ..DecoderConfig::default()
-        },
+        DecoderConfig::default().with_hint("m4a".to_string()),
     )
     .expect("create probe AAC fMP4 decoder");
     let probe_gapless = probe.track_info().gapless.expect("probe gapless metadata");
@@ -57,10 +56,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
 
     let preferred = create_decoder_from_media_info(
         &fixture,
-        DecoderConfig {
-            prefer_hardware: true,
-            ..DecoderConfig::default()
-        },
+        DecoderConfig::default().with_backend(DecoderBackend::default()),
     )
     .expect("create preferred-backend AAC fMP4 decoder");
     let preferred_pcm = decode_visible_frames(preferred).expect("decode preferred AAC fMP4");
@@ -169,7 +165,7 @@ fn create_decoder_from_media_info(
     DecoderFactory::create_from_media_info(
         Cursor::new(fixture.bytes.clone()),
         &fixture.media_info,
-        config,
+        &config,
     )
 }
 
@@ -182,15 +178,22 @@ fn create_decoder_with_probe(
 }
 
 fn decode_visible_frames(mut decoder: Box<dyn InnerDecoder>) -> DecodeResult<DecodedFrames> {
+    use kithara::decode::DecoderChunkOutcome;
     let mut trimmer = decoder
         .track_info()
         .gapless
         .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from_info);
     let mut frames = 0usize;
 
-    while let Some(chunk) = decoder.next_chunk()? {
-        for chunk in trimmer.push(chunk) {
-            frames = frames.saturating_add(chunk.frames());
+    loop {
+        match decoder.next_chunk()? {
+            DecoderChunkOutcome::Chunk(chunk) => {
+                for chunk in trimmer.push(chunk) {
+                    frames = frames.saturating_add(chunk.frames());
+                }
+            }
+            DecoderChunkOutcome::Pending(_) => continue,
+            DecoderChunkOutcome::Eof => break,
         }
     }
 
@@ -265,10 +268,7 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
         create_decoder_with_probe(
             bytes,
             hint,
-            DecoderConfig {
-                prefer_hardware: true,
-                ..DecoderConfig::default()
-            },
+            DecoderConfig::default().with_backend(DecoderBackend::default()),
         )
         .expect("create preferred decoder"),
     )

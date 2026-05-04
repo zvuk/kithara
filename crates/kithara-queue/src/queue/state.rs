@@ -98,6 +98,10 @@ impl Queue {
             // QueueConfig surfaces the knob so callers can set it,
             // ready to be threaded once the player accepts it.
             prefetch_duration: _,
+            // Surfaced for API parity with production; the queue does
+            // not yet honour autoplay = false (auto-advance toggle wires
+            // through PlayerConfig in a follow-up).
+            autoplay: _,
         } = config;
         let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
         let bus = player.bus().clone();

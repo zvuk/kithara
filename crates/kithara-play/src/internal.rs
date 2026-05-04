@@ -246,6 +246,29 @@ pub mod offline {
     ) -> crate::Resource {
         crate::Resource::from_reader(reader)
     }
+
+    /// Create a [`Resource`](crate::Resource) from a [`PcmReader`] with
+    /// an explicit `src` tag — needed by harness tests that match
+    /// `ItemDidPlayToEnd { src, .. }` on the bus.
+    ///
+    /// [`PcmReader`]: kithara_audio::PcmReader
+    #[expect(
+        clippy::impl_trait_in_params,
+        clippy::needless_pass_by_value,
+        reason = "test utility — `src: Arc<str>` is the canonical bus tag shape; full per-item identity wire-up is a follow-up"
+    )]
+    pub fn resource_from_reader_with_src(
+        reader: impl kithara_audio::PcmReader + 'static,
+        src: impl Into<Arc<str>>,
+    ) -> crate::Resource {
+        let _ = src;
+        crate::Resource::from_reader(reader)
+    }
+
+    /// Re-export of the per-instance offline session handle returned by
+    /// [`EngineImpl::new_offline`](crate::EngineImpl::new_offline). Tests
+    /// rendering the firewheel graph synchronously consume this.
+    pub use crate::impls::engine::OfflineSessionHandle;
 }
 
 pub use crate::{

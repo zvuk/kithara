@@ -20,6 +20,68 @@ impl Queue {
         self.insert_entry(source.into(), Placement::Append)
     }
 
+    /// Test helper: register a placeholder track entry without starting
+    /// a real loader. Pair with [`Self::complete_load_for_test`] to
+    /// drive the loaded resource into the player on demand.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn register_for_test(&self) -> TrackId {
+        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let url = format!("test://memory/{}", id.as_u64());
+        let entry = TrackEntry {
+            id,
+            name: format!("test-{}", id.as_u64()),
+            url: Some(url.clone()),
+            status: TrackStatus::Pending,
+        };
+        let index = {
+            let mut guard = self.lock_tracks_mut();
+            guard.push(entry);
+            guard.len() - 1
+        };
+        self.sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, TrackSource::Uri(url));
+        self.player.reserve_slots(self.len());
+        self.bus.publish(QueueEvent::TrackAdded { id, index });
+        id
+    }
+
+    /// Test helper: drive a pre-built [`kithara_play::Resource`] into the
+    /// player slot for an id previously created via
+    /// [`Self::register_for_test`]. Mirrors the synchronous portion of
+    /// the loader's `apply_after_load` callback.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn complete_load_for_test(&self, id: TrackId, resource: kithara_play::Resource) {
+        let index = {
+            let guard = self.lock_tracks();
+            guard.iter().position(|e| e.id == id)
+        };
+        if let Some(index) = index {
+            self.player.replace_item(index, resource);
+            self.set_status(id, TrackStatus::Loaded);
+        }
+    }
+
+    /// Test helper: convenience for the common case where load order
+    /// matches register order. Equivalent to
+    /// [`Self::register_for_test`] + [`Self::complete_load_for_test`].
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn insert_loaded_for_test(&self, resource: kithara_play::Resource) -> TrackId {
+        let id = self.register_for_test();
+        self.complete_load_for_test(id, resource);
+        id
+    }
+
+    /// Test helper stub for production's loader-respawn path. The full
+    /// respawn replay buffer wires through the loader; this no-op
+    /// signature keeps the new gapless tests compiling. Hooking it to
+    /// the real loader is a follow-up.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn supply_test_resource_for_respawn(&self, id: TrackId, resource: kithara_play::Resource) {
+        let _ = (id, resource);
+    }
+
     /// Remove all tracks from the queue.
     pub fn clear(&self) {
         let ids: Vec<TrackId> = {

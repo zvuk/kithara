@@ -759,6 +759,10 @@ where
     /// let audio = Audio::new(config).await?;
     /// sink.append(audio);
     /// ```
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single-shot wire-up; further extraction would split a tightly coupled init sequence"
+    )]
     pub async fn new(config: AudioConfig<T>) -> Result<Self, DecodeError> {
         let cancel = CancellationToken::new();
 
@@ -777,6 +781,7 @@ where
             bus: config_bus,
             effects: custom_effects,
             worker: config_worker,
+            gapless_mode: _config_gapless_mode,
         } = config;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);

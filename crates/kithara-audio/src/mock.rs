@@ -25,12 +25,25 @@ pub struct TestPcmReader {
     metadata: TrackMetadata,
     position_frames: u64,
     total_frames: u64,
+    value: f32,
 }
+
+/// Default sample value emitted by [`TestPcmReader::new`].
+pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
 
 impl TestPcmReader {
     /// Create a new test reader with the given spec and duration.
+    /// Emits [`TEST_PCM_DEFAULT_VALUE`] for every sample.
     #[must_use]
     pub fn new(spec: PcmSpec, duration_secs: f64) -> Self {
+        Self::with_value(spec, duration_secs, TEST_PCM_DEFAULT_VALUE)
+    }
+
+    /// Create a test reader emitting the given constant `value` for every
+    /// sample. Distinguishable per-track values let integration tests
+    /// verify which track a rendered PCM window belongs to.
+    #[must_use]
+    pub fn with_value(spec: PcmSpec, duration_secs: f64, value: f32) -> Self {
         let total_frames = (f64::from(spec.sample_rate) * duration_secs) as u64;
         Self {
             spec,
@@ -41,6 +54,7 @@ impl TestPcmReader {
             },
             position_frames: 0,
             bus: EventBus::default(),
+            value,
         }
     }
 
@@ -67,8 +81,6 @@ impl TestPcmReader {
         Duration::from_secs_f64(frames as f64 / f64::from(self.spec.sample_rate))
     }
 }
-
-const SAMPLE_VALUE: f32 = 0.5;
 
 impl PcmReader for TestPcmReader {
     fn duration(&self) -> Option<Duration> {
@@ -102,7 +114,7 @@ impl PcmReader for TestPcmReader {
         let remaining_samples = (self.total_frames - self.position_frames) * channels;
         let to_write = (buf.len() as u64).min(remaining_samples) as usize;
         for sample in &mut buf[..to_write] {
-            *sample = SAMPLE_VALUE;
+            *sample = self.value;
         }
         let frames_advanced = to_write as u64 / channels;
         self.position_frames += frames_advanced;
@@ -145,7 +157,7 @@ impl PcmReader for TestPcmReader {
         let frames_to_write = frames_per_channel.min(remaining);
         for ch in output.iter_mut().take(channels) {
             for sample in ch.iter_mut().take(frames_to_write) {
-                *sample = SAMPLE_VALUE;
+                *sample = self.value;
             }
         }
         self.position_frames += frames_to_write as u64;

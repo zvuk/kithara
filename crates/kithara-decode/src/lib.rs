@@ -53,6 +53,10 @@ pub use gapless::{
     codec_priming_frames, probe_mp4_gapless,
 };
 pub use pcm_time::{duration_for_frames, frames_for_duration};
+/// Compatibility re-export for the legacy `InnerDecoder` name. Renamed to
+/// [`Decoder`] in the 2026-04-29 trait cleanup; the re-export keeps callers
+/// (notably PR #64 ports) compiling without an extra rename pass.
+pub use traits::Decoder as InnerDecoder;
 // Public traits
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
