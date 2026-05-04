@@ -62,10 +62,10 @@ pub(super) enum Placement {
 /// Decide whether `Queue::tick` should arm the pre-end advance.
 ///
 /// Returns `true` when:
+/// - `crossfade > 0` (no pre-arm without crossfade — natural-EOF advance is
+///   handled via [`PlayerEvent::ItemDidPlayToEnd`] instead), AND
 /// - `pos` and `dur` are positive (track has meaningful position + duration), AND
-/// - remaining playtime is below the arm threshold — either
-///   `crossfade` seconds (with crossfade > 0) or `END_PROXIMITY_SECONDS`
-///   (no crossfade, trigger right at the tail), AND
+/// - remaining playtime is below `crossfade` seconds, AND
 /// - we haven't already armed for this track this play-through.
 pub(crate) fn should_arm_crossfade(
     pos: f64,
@@ -74,20 +74,13 @@ pub(crate) fn should_arm_crossfade(
     current_id: TrackId,
     armed_for: Option<TrackId>,
 ) -> bool {
-    /// How close to the end we arm the next-track advance when there is
-    /// no crossfade configured — gives the queue a brief window to select
-    /// and start the next track before the current one goes silent.
-    const END_PROXIMITY_SECONDS: f64 = 0.25;
-
+    if crossfade <= 0.0 {
+        return false;
+    }
     if dur <= 0.0 || pos <= 0.0 {
         return false;
     }
-    let threshold = if crossfade > 0.0 {
-        f64::from(crossfade)
-    } else {
-        END_PROXIMITY_SECONDS
-    };
-    if dur - pos > threshold {
+    if dur - pos > f64::from(crossfade) {
         return false;
     }
     armed_for != Some(current_id)

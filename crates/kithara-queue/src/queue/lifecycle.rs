@@ -43,6 +43,16 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id, TrackSource::Uri(url));
         self.player.reserve_slots(self.len());
+        // Arm autoplay on the first registered id so the load-completion
+        // race (B finishing before A) cannot promote the wrong track.
+        if self.autoplay {
+            let _ = self.autoplay_target.compare_exchange(
+                Self::NO_ARMED_TRACK,
+                id.as_u64(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
         self.bus.publish(QueueEvent::TrackAdded { id, index });
         id
     }
@@ -60,6 +70,23 @@ impl Queue {
         if let Some(index) = index {
             self.player.replace_item(index, resource);
             self.set_status(id, TrackStatus::Loaded);
+            // Honour the autoplay arm: if THIS id is the registered
+            // autoplay target and it just finished loading, select it
+            // so playback starts without an explicit `select` call.
+            if self.autoplay
+                && self
+                    .autoplay_target
+                    .compare_exchange(
+                        id.as_u64(),
+                        Self::NO_ARMED_TRACK,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                && let Err(err) = self.select(id, Transition::None)
+            {
+                tracing::warn!(id = id.as_u64(), %err, "autoplay select failed");
+            }
         }
     }
 
@@ -73,13 +100,17 @@ impl Queue {
         id
     }
 
-    /// Test helper stub for production's loader-respawn path. The full
-    /// respawn replay buffer wires through the loader; this no-op
-    /// signature keeps the new gapless tests compiling. Hooking it to
-    /// the real loader is a follow-up.
+    /// Test helper: pre-supply a fresh [`kithara_play::Resource`] that
+    /// `Queue::select` should plant when a `Consumed` / `Cancelled` /
+    /// `Failed` track is re-selected. This emulates the loader-respawn
+    /// path the production code uses without dispatching the real
+    /// loader, so harness tests can exercise replay-after-EOF.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn supply_test_resource_for_respawn(&self, id: TrackId, resource: kithara_play::Resource) {
-        let _ = (id, resource);
+        self.test_resources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, resource);
     }
 
     /// Remove all tracks from the queue.

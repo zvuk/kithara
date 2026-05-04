@@ -47,6 +47,15 @@ pub struct Queue {
     /// "not armed" — readers and writers run lock-free from the tick
     /// loop and the engine event handler.
     pub(super) crossfade_armed_for: Arc<AtomicU64>,
+    /// Whether this queue auto-starts playback once the first registered
+    /// track finishes loading. Configured via [`QueueConfig::autoplay`].
+    /// `false` means the user must call [`Queue::select`] manually.
+    pub(super) autoplay: bool,
+    /// First registered track id awaiting autoplay-on-load. Set when
+    /// `autoplay = true` and the queue has no active selection;
+    /// consumed when the matching id finishes loading.
+    /// `Self::NO_ARMED_TRACK` sentinel = no pending target.
+    pub(super) autoplay_target: Arc<AtomicU64>,
     pub(super) loader: Arc<Loader>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<Option<PendingSelect>>>,
@@ -57,6 +66,13 @@ pub struct Queue {
     /// net/headers — is preserved; a bare URL wouldn't be enough to
     /// reconstruct a DRM-protected source.
     pub(super) sources: Arc<Mutex<HashMap<TrackId, TrackSource>>>,
+    /// Test-only respawn resource cache. Populated by
+    /// [`Queue::supply_test_resource_for_respawn`] and consumed by
+    /// `select` when a `Consumed` / `Cancelled` / `Failed` track is
+    /// re-selected. Lets harness tests exercise the respawn path
+    /// without a real loader.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(super) test_resources: Arc<Mutex<HashMap<TrackId, kithara_play::Resource>>>,
     /// Sole owner of the `Vec<TrackEntry>`. Shared with [`Loader`]
     /// through `Arc<Tracks>`; every status transition goes through
     /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
@@ -98,10 +114,7 @@ impl Queue {
             // QueueConfig surfaces the knob so callers can set it,
             // ready to be threaded once the player accepts it.
             prefetch_duration: _,
-            // Surfaced for API parity with production; the queue does
-            // not yet honour autoplay = false (auto-advance toggle wires
-            // through PlayerConfig in a follow-up).
-            autoplay: _,
+            autoplay,
         } = config;
         let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
         let bus = player.bus().clone();
@@ -121,8 +134,12 @@ impl Queue {
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(None)),
             sources: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(any(test, feature = "test-utils"))]
+            test_resources: Arc::new(Mutex::new(HashMap::new())),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
+            autoplay,
+            autoplay_target: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
             cached_position: Arc::new(AtomicU64::new(f64::NAN.to_bits())),
         }
     }

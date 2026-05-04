@@ -29,7 +29,15 @@ impl Queue {
         loop {
             let Some(idx) = self.lock_navigation_mut().next(len) else {
                 self.bus.publish(QueueEvent::QueueEnded);
-                self.player.finish_queue();
+                // Pause the player so `is_playing()` flips to false on
+                // queue-end — UI bindings rely on that to drop the
+                // playback indicator from "playing" to "stopped".
+                self.player.pause();
+                // Don't call `finish_queue()`: leaving `player.current_index`
+                // pinned at the last-played track lets `Queue::current_index`
+                // report the actual final position (matches AVQueuePlayer's
+                // semantics — `currentItem` stays on the last item until the
+                // user explicitly seeks/selects elsewhere).
                 return None;
             };
             let Some((id, status)) = self
@@ -168,6 +176,34 @@ impl Queue {
                 Ok(())
             }
             TrackStatus::Cancelled | TrackStatus::Consumed | TrackStatus::Failed(_) => {
+                // Test path: if a respawn resource was pre-supplied via
+                // `supply_test_resource_for_respawn`, plant it directly
+                // and select synchronously — bypasses the real loader.
+                #[cfg(any(test, feature = "test-utils"))]
+                {
+                    let cached = self
+                        .test_resources
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .remove(&id);
+                    if let Some(resource) = cached {
+                        self.player.replace_item(index, resource);
+                        self.set_status(id, TrackStatus::Loaded);
+                        let was_playing = self.player.is_playing();
+                        let crossfade =
+                            transition.crossfade_seconds(self.player.crossfade_duration());
+                        self.player
+                            .select_item_with_crossfade(index, true, crossfade)?;
+                        self.lock_navigation_mut().select(index);
+                        if was_playing && crossfade > 0.0 {
+                            self.bus.publish(QueueEvent::CrossfadeStarted {
+                                duration_seconds: crossfade,
+                            });
+                        }
+                        self.set_status(id, TrackStatus::Consumed);
+                        return Ok(());
+                    }
+                }
                 let source = self
                     .sources
                     .lock()

@@ -112,6 +112,22 @@ pub struct PlayerImpl {
     /// Items drop before engine — Audio tracks unregister from worker
     /// while it is still alive.
     items: Mutex<Vec<Option<Resource>>>,
+    /// Cached `src` tag for items already pushed into the slot via
+    /// [`Self::preload_item_at`] (the original resource is gone from
+    /// `items`). Lets [`Self::load_current_item`] still send the
+    /// matching `FadeIn` when an auto-advance lands on a preloaded
+    /// index. Keyed by `current_index`.
+    preloaded_srcs: Mutex<Vec<Option<Arc<str>>>>,
+    /// Optional per-index item identifier supplied by the queue
+    /// (`replace_item_tagged`). Carried alongside each item so
+    /// `ItemDidPlayToEnd` can be filtered by `item_id` matching the
+    /// queue entry. Indices line up 1:1 with [`Self::items`].
+    item_ids: Mutex<Vec<Option<Arc<str>>>>,
+    /// Item id of the currently-playing track (the one whose audio
+    /// thread will fire `TrackPlaybackStopped`). Mirrors
+    /// `current_index`'s entry in `item_ids` and is used to label
+    /// `ItemDidPlayToEnd { item_id, .. }` from `process_notifications`.
+    current_item_id: Mutex<Option<Arc<str>>>,
     status: Mutex<PlayerStatus>,
 
     pcm_pool: PcmPool,
@@ -172,6 +188,9 @@ impl PlayerImpl {
             default_rate: AtomicF32::new(config.default_rate),
             bus,
             items: Mutex::new(Vec::new()),
+            preloaded_srcs: Mutex::new(Vec::new()),
+            item_ids: Mutex::new(Vec::new()),
+            current_item_id: Mutex::new(None),
             muted: AtomicBool::new(false),
             pcm_pool: resolved_pool,
             playback_rate_shared: Arc::new(AtomicF32::new(config.default_rate)),
@@ -383,6 +402,40 @@ impl PlayerImpl {
         self.bus.publish(PlayerEvent::RateChanged { rate });
     }
 
+    /// Preload a queued item into the slot's arena so the audio thread
+    /// already holds it when the current track hits EOF. The pre-loaded
+    /// track stays paused (state = `Preloading`); a subsequent
+    /// `select_item` (auto-advance from `process_notifications`) flips
+    /// it to `FadingIn` without re-issuing `LoadTrack`.
+    fn preload_item_at(&self, index: usize) {
+        let mut items = self.items.lock_sync();
+        if index >= items.len() {
+            return;
+        }
+        let Some(resource) = items[index].take() else {
+            return;
+        };
+        let host_sr = self.engine.master_sample_rate();
+        if let Some(sr) = std::num::NonZeroU32::new(host_sr) {
+            resource.set_host_sample_rate(sr);
+        }
+        let src = Arc::clone(resource.src());
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);
+        let arc_resource = Arc::new(Mutex::new(player_resource));
+        drop(items);
+        let _ = self.send_to_slot(PlayerCmd::LoadTrack {
+            resource: arc_resource,
+            src: Arc::clone(&src),
+        });
+        // Remember the src so a later auto-advance to this index can
+        // still emit the matching `Transition::FadeIn` even though the
+        // resource is no longer in `items`.
+        if let Some(slot) = self.preloaded_srcs.lock_sync().get_mut(index) {
+            *slot = Some(Arc::clone(&src));
+        }
+        debug!(index, %src, "preloaded queued item into slot");
+    }
+
     /// Load the current queue item into the active slot.
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
@@ -396,7 +449,21 @@ impl PlayerImpl {
 
         // Take the resource out of the queue (if not already consumed).
         let Some(resource) = items[index].take() else {
-            return; // Already loaded
+            drop(items);
+            // Item was already preloaded by `preload_item_at` (auto-advance
+            // hot path). Emit the matching `FadeIn` so the audio thread
+            // promotes the preloaded track from `Preloading` to `FadingIn`.
+            if let Some(Some(preloaded_src)) = self.preloaded_srcs.lock_sync().get(index).cloned() {
+                let item_id = self.item_ids.lock_sync().get(index).cloned().flatten();
+                *self.current_item_id.lock_sync() = item_id;
+                let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(
+                    preloaded_src,
+                )));
+                if let Some(slot) = self.preloaded_srcs.lock_sync().get_mut(index) {
+                    *slot = None;
+                }
+            }
+            return;
         };
 
         // Snapshot the resource's ABR handle — `None` for non-adaptive
@@ -423,6 +490,11 @@ impl PlayerImpl {
         let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);
         let arc_resource = Arc::new(Mutex::new(player_resource));
         drop(items);
+        // Snapshot the current track's item_id (if any) so a later
+        // `TrackPlaybackStopped` notification carries the queue's item
+        // tag back to subscribers as `ItemDidPlayToEnd { item_id, .. }`.
+        let item_id = self.item_ids.lock_sync().get(index).cloned().flatten();
+        *self.current_item_id.lock_sync() = item_id;
 
         // Send LoadTrack and FadeIn to the processor.
         let _ = self.send_to_slot(PlayerCmd::LoadTrack {
@@ -529,6 +601,10 @@ impl PlayerImpl {
 
     /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
     /// when a track finishes via EOF.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "single dispatch loop over PlayerNotification variants — splitting would obscure the flow"
+    )]
     pub fn process_notifications(&self) {
         let Some(slot_id) = *self.current_slot.lock_sync() else {
             return;
@@ -540,8 +616,54 @@ impl PlayerImpl {
         while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
             match notification {
                 PlayerNotification::TrackPlaybackStopped(src) => {
+                    // Natural-EOF advance signal for the queue. Carries the
+                    // queue's item tag captured at load time (None when
+                    // the caller used `replace_item` instead of
+                    // `replace_item_tagged`).
+                    let item_id = self.current_item_id.lock_sync().clone();
                     self.bus
-                        .publish(PlayerEvent::ItemDidPlayToEnd { src, item_id: None });
+                        .publish(PlayerEvent::ItemDidPlayToEnd { src, item_id });
+                    // Honour `ActionAtItemEnd`: when set to `Advance`,
+                    // step `current_index` forward and load the next
+                    // queued resource. Stops at the end of the items
+                    // vec (no `Pause` distinction yet — the queue layer
+                    // handles UI pause via `QueueEnded`).
+                    if matches!(self.action_at_item_end(), ActionAtItemEnd::Advance) {
+                        let next_index = self.current_index.load(Ordering::Relaxed) + 1;
+                        let items_len = self.item_count();
+                        if next_index < items_len {
+                            // Use the configured crossfade so a pre-armed
+                            // FadeIn replaces the current track.
+                            let cf = self.crossfade_duration();
+                            if let Err(err) = self.select_item_with_crossfade(next_index, true, cf)
+                            {
+                                tracing::warn!(?err, next_index, "auto-advance select failed");
+                            }
+                        }
+                    }
+                }
+                PlayerNotification::TrackAboutToEnd(_) => {
+                    // Pre-end signal: the queue uses this to preload the
+                    // next track and arm a pre-end handover.
+                    self.bus.publish(PlayerEvent::PrefetchRequested);
+                    // For ActionAtItemEnd::Advance, eagerly preload the
+                    // next queued resource into the slot so the audio
+                    // thread's arena holds it before the current track
+                    // hits EOF — the boundary gap between item-N and
+                    // item-N+1 then stays under one render block.
+                    if matches!(self.action_at_item_end(), ActionAtItemEnd::Advance) {
+                        let next_index = self.current_index.load(Ordering::Relaxed) + 1;
+                        let items_len = self.item_count();
+                        if next_index < items_len {
+                            self.preload_item_at(next_index);
+                        }
+                    }
+                }
+                PlayerNotification::TrackChanged { .. } => {
+                    // Audio thread switched arenas to the next track; the
+                    // queue listens for HandoverRequested to commit the
+                    // navigation move and publish QueueEvent::CurrentTrackChanged.
+                    self.bus.publish(PlayerEvent::HandoverRequested);
                 }
                 other => {
                     tracing::trace!(?other, "unhandled player notification");
@@ -607,6 +729,11 @@ impl PlayerImpl {
         if index < items.len() {
             items[index] = Some(resource);
             drop(items);
+            let mut ids = self.item_ids.lock_sync();
+            if index < ids.len() {
+                ids[index] = item_id.clone();
+            }
+            drop(ids);
             debug!(index, ?item_id, "item replaced");
         }
     }
@@ -614,6 +741,8 @@ impl PlayerImpl {
     /// Pre-allocate empty slots so `replace_item` can fill them by index.
     pub fn reserve_slots(&self, count: usize) {
         self.items.lock_sync().resize_with(count, || None);
+        self.item_ids.lock_sync().resize_with(count, || None);
+        self.preloaded_srcs.lock_sync().resize_with(count, || None);
         debug!(count, "slots reserved");
     }
 
