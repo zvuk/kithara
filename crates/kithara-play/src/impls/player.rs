@@ -360,14 +360,6 @@ impl PlayerImpl {
     }
 
     /// Insert a resource at a specific position, or append to the end.
-    ///
-    /// `item_id` is logged but not stored — full per-item identity tracking
-    /// is a follow-up; the queue still keys items by index + the resource's
-    /// own `src` tag.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "item_id is part of the production API surface; full identity tracking lands in a follow-up"
-    )]
     pub fn insert(
         &self,
         resource: Resource,
@@ -377,7 +369,23 @@ impl PlayerImpl {
         let mut items = self.items.lock_sync();
         let pos = at_position.map_or(items.len(), |i| i.min(items.len()));
         items.insert(pos, Some(resource));
-        debug!(count = items.len(), pos, ?item_id, "item inserted");
+        let new_len = items.len();
+        debug!(count = new_len, pos, ?item_id, "item inserted");
+        drop(items);
+        // Keep parallel vectors aligned with `items` so by-index lookups in
+        // `preload_item_at` / `load_current_item` find the cached entries
+        // instead of silently missing — losing alignment is a hang root cause.
+        let mut ids = self.item_ids.lock_sync();
+        if ids.len() < new_len - 1 {
+            ids.resize_with(new_len - 1, || None);
+        }
+        ids.insert(pos, item_id);
+        drop(ids);
+        let mut preloaded = self.preloaded_srcs.lock_sync();
+        if preloaded.len() < new_len - 1 {
+            preloaded.resize_with(new_len - 1, || None);
+        }
+        preloaded.insert(pos, None);
     }
 
     /// Returns `true` if the player is muted.
@@ -734,26 +742,27 @@ impl PlayerImpl {
 
     /// Replace a consumed (or existing) resource at the given index with
     /// optional item identity metadata.
-    ///
-    /// The `item_id` parameter is part of the production API surface; our
-    /// queue still keys items by index + the resource's own `src` tag,
-    /// so the supplied id is currently logged but not stored. Wire-up
-    /// to per-item identity tracking is a follow-up.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "item_id is part of the production API surface; full identity tracking lands in a follow-up"
-    )]
     pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>) {
         let mut items = self.items.lock_sync();
         if index < items.len() {
             items[index] = Some(resource);
+            let len = items.len();
             drop(items);
-            let mut ids = self.item_ids.lock_sync();
-            if index < ids.len() {
-                ids[index] = item_id.clone();
-            }
-            drop(ids);
             debug!(index, ?item_id, "item replaced");
+            // Mirror `reserve_slots` semantics — pad parallel vectors to
+            // `items.len()` so writes by `index` always have a slot, and
+            // `preloaded_srcs.get_mut(index)` in `preload_item_at` actually
+            // finds storage. Missing this caused auto-advance hang.
+            let mut ids = self.item_ids.lock_sync();
+            if ids.len() < len {
+                ids.resize_with(len, || None);
+            }
+            ids[index] = item_id;
+            drop(ids);
+            let mut preloaded = self.preloaded_srcs.lock_sync();
+            if preloaded.len() < len {
+                preloaded.resize_with(len, || None);
+            }
         }
     }
 

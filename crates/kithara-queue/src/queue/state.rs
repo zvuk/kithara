@@ -10,7 +10,7 @@ use std::{
 };
 
 use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_play::{PlayerConfig, PlayerImpl};
+use kithara_play::{ActionAtItemEnd, PlayerConfig, PlayerImpl};
 
 use super::types::PendingSelect;
 use crate::{
@@ -117,6 +117,11 @@ impl Queue {
             autoplay,
         } = config;
         let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
+        // Queue owns auto-advance via `tick`/`drain_player_events`; suppress
+        // the player's built-in linear advance so a single EOF does not
+        // race-promote the next track twice (player.select_item +
+        // queue.advance_to_next both fire, leaving inconsistent state).
+        player.set_action_at_item_end(ActionAtItemEnd::None);
         let bus = player.bus().clone();
         let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
