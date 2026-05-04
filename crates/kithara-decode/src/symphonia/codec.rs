@@ -107,7 +107,6 @@ impl SymphoniaCodec {
     /// # Errors
     ///
     /// Same as [`FrameCodec::open`].
-    #[expect(dead_code, reason = "called by the factory in P7")]
     pub(crate) fn open_with_config(
         track: &TrackInfo,
         config: &SymphoniaConfig,

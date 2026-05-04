@@ -27,7 +27,6 @@ use crate::GaplessInfo;
 /// not yet populated (AAC reports priming only after at least one
 /// `AudioConverterFillComplexBuffer` call has consumed an input packet —
 /// see `refresh_after_first_chunk` callsites).
-#[expect(dead_code, reason = "consumed by the factory in P7")]
 pub(crate) fn prime_info_from_converter(
     converter: AudioConverterRef,
 ) -> Option<AudioConverterPrimeInfo> {
@@ -62,7 +61,6 @@ pub(crate) fn prime_info_from_converter(
 /// Returns `None` when the codec reports no encoder priming and no
 /// trailing padding — there is nothing for the [`crate::GaplessTrimmer`] to do
 /// in that case.
-#[expect(dead_code, reason = "consumed by the factory in P7")]
 pub(crate) fn gapless_info_from_prime_info(info: AudioConverterPrimeInfo) -> Option<GaplessInfo> {
     if info.leading_frames == 0 && info.trailing_frames == 0 {
         return None;
@@ -77,9 +75,8 @@ pub(crate) fn gapless_info_from_prime_info(info: AudioConverterPrimeInfo) -> Opt
 /// observation. `stage` distinguishes the init query from the post-first-
 /// chunk refresh.
 #[expect(
-    dead_code,
     clippy::cognitive_complexity,
-    reason = "consumed by the factory in P7; three-arm match mirrors production/main"
+    reason = "three-arm match mirrors production/main one-to-one; splitting hides the diagnostic shape"
 )]
 pub(crate) fn log_gapless_prime_info(
     stage: &'static str,

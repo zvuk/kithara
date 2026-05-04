@@ -19,19 +19,33 @@ use kithara_stream::AudioCodec;
 
 use super::{
     consts::{Consts, os_status_to_string},
-    converter::{ConverterInputState, converter_input_callback},
+    converter::{
+        ConverterInputState, converter_input_callback, gapless_info_from_prime_info,
+        log_gapless_prime_info, prime_info_from_converter,
+    },
     ffi::{
         AudioBuffer, AudioBufferList, AudioConverterDispose, AudioConverterFillComplexBuffer,
-        AudioConverterNew, AudioConverterRef, AudioConverterReset, AudioConverterSetProperty,
-        AudioStreamBasicDescription, AudioStreamPacketDescription, UInt32,
+        AudioConverterNew, AudioConverterPrimeInfo, AudioConverterRef, AudioConverterReset,
+        AudioConverterSetProperty, AudioStreamBasicDescription, AudioStreamPacketDescription,
+        UInt32,
     },
 };
 use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    types::PcmSpec,
+    types::{DecoderTrackInfo, PcmSpec},
 };
+
+/// Configuration knobs for [`AppleCodec`] beyond what `TrackInfo`
+/// carries. Set `gapless = true` to capture `kAudioConverterPrimeInfo`
+/// at init and after the first decoded chunk; the resulting
+/// [`crate::GaplessInfo`] is exposed via [`AppleCodec::track_info`].
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
+pub(crate) struct AppleConfig {
+    pub(crate) gapless: bool,
+}
 
 /// Frame-level codec wrapping Apple's `AudioConverter`.
 pub(crate) struct AppleCodec {
@@ -43,6 +57,19 @@ pub(crate) struct AppleCodec {
     /// converter writes directly into pool memory — no internal scratch
     /// buffer needed.
     frames_per_packet: u32,
+    /// Decoder-owned playback contract. Populated with the captured
+    /// [`crate::GaplessInfo`] when [`AppleConfig::gapless`] is set.
+    track_info: DecoderTrackInfo,
+    /// Last `kAudioConverterPrimeInfo` snapshot. Used to detect when
+    /// the post-first-chunk refresh changes from the init query (AAC
+    /// reports priming only after consuming one input packet).
+    last_prime_info: Option<AudioConverterPrimeInfo>,
+    /// Whether gapless capture was requested in [`AppleConfig::gapless`].
+    gapless_enabled: bool,
+    /// Set to `true` when `gapless_enabled` is on and the init query
+    /// did not yet yield priming numbers; cleared after the first
+    /// post-decode refresh.
+    prime_info_refresh_pending: bool,
 }
 
 // SAFETY: `AudioConverterRef` is an opaque CoreAudio handle. Apple's
@@ -60,6 +87,70 @@ impl AppleCodec {
     #[must_use]
     pub(crate) fn supports(codec: AudioCodec) -> bool {
         matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
+    }
+
+    /// Build an [`AppleCodec`] with extra knobs from [`AppleConfig`].
+    /// When `config.gapless` is true, the codec queries
+    /// `kAudioConverterPrimeInfo` at init and arms a one-shot refresh
+    /// to fire after the first `decode_frame` (AAC populates the
+    /// property only after consuming the first input packet; FLAC
+    /// reports it at init).
+    ///
+    /// `FrameCodec::open` keeps its no-config shape so existing
+    /// `UniversalDecoder<D, C>` callers don't break.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`FrameCodec::open`].
+    pub(crate) fn open_with_config(track: &TrackInfo, config: &AppleConfig) -> DecodeResult<Self> {
+        let mut codec = <Self as FrameCodec>::open(track)?;
+        if config.gapless {
+            codec.gapless_enabled = true;
+            let prime_info = prime_info_from_converter(codec.converter);
+            let gapless = prime_info.and_then(gapless_info_from_prime_info);
+            log_gapless_prime_info("init", prime_info, gapless);
+            codec.last_prime_info = prime_info;
+            codec.track_info = DecoderTrackInfo {
+                gapless,
+                ..DecoderTrackInfo::default()
+            };
+            // Skip the post-first-chunk refresh when init already
+            // produced trim numbers — AAC will repopulate identically
+            // and a duplicate log line is just noise.
+            codec.prime_info_refresh_pending = gapless.is_none();
+        }
+        Ok(codec)
+    }
+
+    /// Decoder-owned playback contract — captured
+    /// [`crate::GaplessInfo`] from `kAudioConverterPrimeInfo`. Returned
+    /// by-value (clone) so callers don't pin a borrow on `&self` across
+    /// the `decode_frame` mutation barrier.
+    #[expect(
+        dead_code,
+        reason = "exposed via Decoder::track_info trait extension in a follow-up"
+    )]
+    pub(crate) fn track_info(&self) -> DecoderTrackInfo {
+        self.track_info.clone()
+    }
+
+    /// AAC's converter populates `kAudioConverterPrimeInfo` only after
+    /// at least one input packet is consumed; FLAC fills it at init.
+    /// We arm a one-shot refresh during `open_with_config` and run it
+    /// after the first `decode_frame` to capture priming on AAC without
+    /// a separate API.
+    fn refresh_gapless_after_first_chunk(&mut self) {
+        if !self.gapless_enabled || !self.prime_info_refresh_pending {
+            return;
+        }
+        self.prime_info_refresh_pending = false;
+        let prime_info = prime_info_from_converter(self.converter);
+        let gapless = prime_info.and_then(gapless_info_from_prime_info);
+        log_gapless_prime_info("post_first_chunk", prime_info, gapless);
+        if let Some(prime_info) = prime_info {
+            self.last_prime_info = Some(prime_info);
+            self.track_info.gapless = gapless;
+        }
     }
 }
 
@@ -150,6 +241,11 @@ impl FrameCodec for AppleCodec {
         let frames = output_packets;
         let samples_len = frames as usize * channels;
         out.truncate(samples_len);
+        // AudioConverter publishes `kAudioConverterPrimeInfo` only
+        // after consuming the first input packet on AAC. We refresh
+        // here so the captured `GaplessInfo` is visible by the time
+        // the universal decoder reads `track_info` upstream.
+        self.refresh_gapless_after_first_chunk();
         Ok(frames)
     }
 
@@ -216,6 +312,10 @@ impl FrameCodec for AppleCodec {
             spec,
             frames_per_packet,
             input_state: Box::new(ConverterInputState::new()),
+            track_info: DecoderTrackInfo::default(),
+            last_prime_info: None,
+            gapless_enabled: false,
+            prime_info_refresh_pending: false,
         })
     }
 
