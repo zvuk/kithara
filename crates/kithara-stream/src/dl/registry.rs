@@ -305,7 +305,7 @@ impl Registry {
             }
         }
 
-        cancels.sort_by(|a, b| b.1.cmp(&a.1));
+        cancels.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         for (slot_idx, i) in cancels {
             if let Some(slot_entry) = self.slots[slot_idx].remove(i) {
                 let SlotEntry { cmd, peer_cancel } = slot_entry;
@@ -313,7 +313,7 @@ impl Registry {
             }
         }
 
-        moves.sort_by(|a, b| b.1.cmp(&a.1));
+        moves.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         for (from_slot, i, to_slot) in moves {
             if let Some(slot_entry) = self.slots[from_slot].remove(i) {
                 self.slots[to_slot].push_back(slot_entry);

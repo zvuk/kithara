@@ -362,7 +362,7 @@ final class PlayerViewModel: ObservableObject {
             // Queue drives auto-advance + crossfade timing; UI updates on
             // the subsequent `.currentItemChanged`.
             break
-        case .itemDidPlayToEnd, .bufferedDurationChanged, .timeControlStatusChanged:
+        case .bufferedDurationChanged, .timeControlStatusChanged:
             break
         @unknown default:
             break

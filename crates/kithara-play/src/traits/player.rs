@@ -4,7 +4,7 @@ use crate::{
     error::PlayError,
     events::PlayerEvent,
     time::MediaTime,
-    types::{ActionAtItemEnd, ObserverId, PlayerStatus, SlotId, TimeControlStatus, WaitingReason},
+    types::{ObserverId, PlayerStatus, SlotId, TimeControlStatus, WaitingReason},
 };
 
 #[cfg_attr(
@@ -29,10 +29,6 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
     fn current_item(&self) -> Option<&Self::Item>;
 
     fn replace_current_item(&self, item: Option<Self::Item>);
-
-    fn action_at_item_end(&self) -> ActionAtItemEnd;
-
-    fn set_action_at_item_end(&self, action: ActionAtItemEnd);
 
     // -- transport --
 

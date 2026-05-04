@@ -1,13 +1,8 @@
 //! Xing/Info/LAME tag extraction for MPEG audio gapless metadata.
-//!
-//! Wholesale port from PR #64. Wired into the symphonia codec MP3 path
-//! in P5; until then nothing inside the crate calls these helpers, so
-//! `dead_code` is suppressed at module level rather than tediously
-//! per-item.
 
 #![expect(
     dead_code,
-    reason = "wholesale port from PR #64; consumed by symphonia codec MP3 wiring (P5)"
+    reason = "consumed in the symphonia codec MP3 path follow-up; wholesale port from PR #64"
 )]
 
 const MPEG_HEADER_LEN: usize = 4;

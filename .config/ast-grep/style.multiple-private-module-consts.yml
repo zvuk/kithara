@@ -10,6 +10,18 @@ ignores:
   - crates/kithara-decode/src/gapless/**
   - crates/kithara-decode/src/mp4.rs
   - crates/kithara-decode/src/pcm_time.rs
+  # PR #64 net-new test fixtures use production's flat module-const style.
+  # Wrapping each fixture in a `struct Consts` would diverge from
+  # production and complicate future merges — sweep is deferred.
+  - tests/tests/common/gapless.rs
+  - tests/tests/common/offline_player_harness.rs
+  - tests/tests/kithara_audio/gapless_*.rs
+  - tests/tests/kithara_decode/gapless_*.rs
+  - tests/tests/kithara_play/gapless_*.rs
+  - tests/tests/kithara_play/offline_harness_smoke.rs
+  - tests/tests/kithara_play/player_queue_api_regressions.rs
+  - tests/tests/kithara_play/seamless_queue_advance.rs
+  - tests/tests/kithara_queue/auto_advance.rs
 rule:
   all:
     - any:

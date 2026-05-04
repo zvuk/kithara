@@ -1,6 +1,6 @@
 #![expect(
     dead_code,
-    reason = "GaplessStage gets constructed by the audio pipeline source wire-up in P12"
+    reason = "GaplessStage gets constructed by the audio pipeline source wire-up follow-up"
 )]
 
 use std::time::Duration;

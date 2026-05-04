@@ -2,10 +2,10 @@
 //!
 //! `AudioPlayer` owns a [`kithara_queue::Queue`] under the hood. All queue
 //! bookkeeping (stable `TrackId`s, auto-respawn of consumed resources,
-//! crossfade-aware select, auto-advance on `ItemDidPlayToEnd`) lives in
-//! the Queue. The FFI layer is a thin adapter: index-based Swift API
-//! maps onto `TrackId`-based Queue calls through a `TrackId ->
-//! AudioPlayerItem` map that preserves Swift-side identity.
+//! crossfade-aware select, auto-advance on item EOF) lives in the Queue.
+//! The FFI layer is a thin adapter: index-based Swift API maps onto
+//! `TrackId`-based Queue calls through a `TrackId -> AudioPlayerItem` map
+//! that preserves Swift-side identity.
 
 use std::{collections::HashMap, sync::Arc};
 

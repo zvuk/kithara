@@ -11,13 +11,13 @@ import KitharaFFI
 /// ```swift
 /// let player = KitharaPlayer()
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
-/// item.load()
 /// try player.insert(item)
 /// player.play()
 /// ```
 public final class KitharaPlayer: @unchecked Sendable {
     private let _inner: AudioPlayer
     private let _eventSubject = PassthroughSubject<PlayerEvent, Never>()
+    private var _eventSink: AnyCancellable?
 
     // MARK: - Event stream
 
@@ -137,6 +137,8 @@ public final class KitharaPlayer: @unchecked Sendable {
     public struct Config: Sendable {
         /// Number of EQ bands (log-spaced). Default: 10.
         public var eqBandCount: Int
+        /// Gapless trimming mode for resources loaded by this player.
+        public var gaplessMode: GaplessMode
         /// Domain-scoped DRM rules. Evaluated in order; first match wins.
         public var keyRules: [KeyRule]
         /// Optional cache directory path. `nil` uses the platform default.
@@ -144,10 +146,12 @@ public final class KitharaPlayer: @unchecked Sendable {
 
         public init(
             eqBandCount: Int = 10,
+            gaplessMode: GaplessMode = .mediaOnly,
             keyRules: [KeyRule] = [],
             cacheDir: String? = nil
         ) {
             self.eqBandCount = eqBandCount
+            self.gaplessMode = gaplessMode
             self.keyRules = keyRules
             self.cacheDir = cacheDir
         }
@@ -165,6 +169,7 @@ public final class KitharaPlayer: @unchecked Sendable {
         }
         let ffiConfig = FfiPlayerConfig(
             eqBandCount: UInt32(config.eqBandCount),
+            gaplessMode: config.gaplessMode.ffi,
             keyOptions: FfiKeyOptions(rules: ffiRules),
             store: StoreOptions(cacheDir: config.cacheDir)
         )
@@ -172,6 +177,9 @@ public final class KitharaPlayer: @unchecked Sendable {
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
+        _eventSink = _eventSubject.sink { [weak self] event in
+            self?.handle(event)
+        }
     }
 
     // MARK: - Playback control
@@ -309,6 +317,12 @@ public final class KitharaPlayer: @unchecked Sendable {
         set { _inner.setCrossfadeDuration(seconds: newValue) }
     }
 
+    private func handle(_ event: PlayerEvent) {
+        if case let .queueItemRemoved(itemId) = event {
+            _knownItems.removeValue(forKey: itemId)
+        }
+    }
+
 }
 
 // MARK: - Key processor
@@ -334,6 +348,32 @@ private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked S
 
     func processKey(key: Data) -> Data {
         processor.processKey(key)
+    }
+}
+
+private extension GaplessMode {
+    var ffi: FfiGaplessMode {
+        switch self {
+        case .disabled:
+            .disabled
+        case .mediaOnly:
+            .mediaOnly
+        case .codecPriming:
+            .codecPriming
+        case let .silenceTrim(params):
+            .silenceTrim(params: params.ffi)
+        }
+    }
+}
+
+private extension SilenceTrimParams {
+    var ffi: FfiSilenceTrimParams {
+        FfiSilenceTrimParams(
+            thresholdDb: thresholdDb,
+            minTrimFrames: minTrimFrames,
+            scanWindowFrames: scanWindowFrames,
+            trimTrailing: trimTrailing
+        )
     }
 }
 
