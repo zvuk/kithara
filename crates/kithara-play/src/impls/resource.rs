@@ -91,6 +91,14 @@ impl Resource {
     /// Use this for custom sources.
     #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
+        Self::from_reader_with_src(reader, Arc::from("unknown"))
+    }
+
+    /// Create a resource from any `PcmReader` with an explicit `src`
+    /// identifier. The src tag rides along on `PlayerEvent::ItemDidPlayToEnd`
+    /// and is what the queue uses to tell which track ended.
+    #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
+    pub(crate) fn from_reader_with_src(reader: impl PcmReader + 'static, src: Arc<str>) -> Self {
         let bus = reader.event_bus().clone();
         let mut inner: Box<dyn PcmReader> = Box::new(reader);
         // Player resources are consumed from the audio render thread,
@@ -100,11 +108,7 @@ impl Resource {
         // preload errors here — they surface again on the first
         // `read()` / `next_chunk()` call.
         let _ = inner.preload();
-        Self {
-            inner,
-            bus,
-            src: Arc::from("unknown"),
-        }
+        Self { inner, src, bus }
     }
 
     /// Create a resource from a concrete stream-backed audio config.
@@ -136,9 +140,9 @@ impl Resource {
         // propagate here.
         let _ = audio.preload();
         Ok(Self {
-            bus,
-            src,
             inner: Box::new(audio),
+            src,
+            bus,
         })
     }
 

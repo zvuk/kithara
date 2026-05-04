@@ -539,11 +539,9 @@ impl PlayerImpl {
 
         while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
             match notification {
-                PlayerNotification::TrackPlaybackStopped(_) => {
-                    self.bus.publish(PlayerEvent::ItemDidPlayToEnd {
-                        src: Arc::from(""),
-                        item_id: None,
-                    });
+                PlayerNotification::TrackPlaybackStopped(src) => {
+                    self.bus
+                        .publish(PlayerEvent::ItemDidPlayToEnd { src, item_id: None });
                 }
                 other => {
                     tracing::trace!(?other, "unhandled player notification");

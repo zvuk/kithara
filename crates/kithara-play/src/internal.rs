@@ -252,17 +252,12 @@ pub mod offline {
     /// `ItemDidPlayToEnd { src, .. }` on the bus.
     ///
     /// [`PcmReader`]: kithara_audio::PcmReader
-    #[expect(
-        clippy::impl_trait_in_params,
-        clippy::needless_pass_by_value,
-        reason = "test utility — `src: Arc<str>` is the canonical bus tag shape; full per-item identity wire-up is a follow-up"
-    )]
+    #[expect(clippy::impl_trait_in_params, reason = "test utility, ergonomic API")]
     pub fn resource_from_reader_with_src(
         reader: impl kithara_audio::PcmReader + 'static,
         src: impl Into<Arc<str>>,
     ) -> crate::Resource {
-        let _ = src;
-        crate::Resource::from_reader(reader)
+        crate::Resource::from_reader_with_src(reader, src.into())
     }
 
     /// Re-export of the per-instance offline session handle returned by

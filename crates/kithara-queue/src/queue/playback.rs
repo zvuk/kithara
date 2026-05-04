@@ -84,12 +84,15 @@ impl Queue {
     /// filtered as a stale crossfade fade-out signal.
     ///
     /// `src` identifies the underlying audio source of the track that
-    /// just hit EOF. Once P13 has the player publish the actual src
-    /// (currently a placeholder `Arc::from("")`), it will become the
-    /// primary discriminator — outgoing-cf-EOF carries the previous
-    /// src, not the current one. Until then the pos/dur tolerance
-    /// heuristic stays the source of truth and `src` is logged for
-    /// diagnostics only.
+    /// just hit EOF. The player only emits `TrackPlaybackStopped` from
+    /// its natural-EOF path (`handle_eof`), so a non-empty `src` is the
+    /// authoritative end-of-track signal: advance unconditionally
+    /// (subject to crossfade pre-arm consumption).
+    ///
+    /// The empty-`src` arm preserves backward compatibility for
+    /// pre-PR-#64 callers and acts as a defensive fallback when the
+    /// player has not yet wired the src through; it falls back to the
+    /// pos/dur tolerance heuristic to filter spurious events.
     fn handle_item_did_play_to_end(&self, src: &std::sync::Arc<str>) {
         let pos = self.player.position_seconds().unwrap_or(0.0);
         let dur = self.player.duration_seconds().unwrap_or(0.0);
@@ -97,7 +100,11 @@ impl Queue {
         if self.consume_armed_advance(pos, dur) {
             return;
         }
-        self.dispatch_real_or_spurious(pos, dur);
+        if src.is_empty() {
+            self.dispatch_real_or_spurious(pos, dur);
+        } else {
+            let _ = self.advance_to_next(Transition::Crossfade);
+        }
     }
 
     /// If an advance was already armed from `tick()`, consume it and
