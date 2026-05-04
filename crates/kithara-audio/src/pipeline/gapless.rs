@@ -1,8 +1,3 @@
-#![expect(
-    dead_code,
-    reason = "GaplessStage gets constructed by the audio pipeline source wire-up follow-up"
-)]
-
 use std::time::Duration;
 
 use kithara_decode::{
@@ -131,6 +126,10 @@ fn resolve_codec_priming(decoder: &dyn Decoder, media_info: Option<&MediaInfo>) 
 /// which is preferable to mispredicting early.
 ///
 /// [`GaplessMode::Disabled`] ignores trim metadata entirely; timeline duration stays raw.
+#[expect(
+    dead_code,
+    reason = "consumed by player_track timeline reconciliation in a follow-up commit"
+)]
 #[must_use]
 pub(crate) fn visible_duration(decoder: &dyn Decoder, mode: GaplessMode) -> Option<Duration> {
     let raw = decoder.duration()?;

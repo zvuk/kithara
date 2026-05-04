@@ -781,7 +781,7 @@ where
             bus: config_bus,
             effects: custom_effects,
             worker: config_worker,
-            gapless_mode: _config_gapless_mode,
+            gapless_mode: config_gapless_mode,
         } = config;
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
@@ -855,6 +855,7 @@ where
             initial_media_info,
             Arc::clone(&epoch),
             effects,
+            config_gapless_mode,
         )
         .with_emit(emit);
 
