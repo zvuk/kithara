@@ -217,10 +217,6 @@ fn resolve_signal_format(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "wholesale port from PR #64; flat shape mirrors the wire fixture format and refactor is deferred"
-)]
 fn normalize_signal_spec(
     kind: SignalKind,
     format: SignalFormat,

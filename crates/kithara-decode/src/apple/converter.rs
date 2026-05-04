@@ -74,10 +74,6 @@ pub(crate) fn gapless_info_from_prime_info(info: AudioConverterPrimeInfo) -> Opt
 /// Emit a `kithara::gapless` debug record describing one `PrimeInfo`
 /// observation. `stage` distinguishes the init query from the post-first-
 /// chunk refresh.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "three-arm match mirrors production/main one-to-one; splitting hides the diagnostic shape"
-)]
 pub(crate) fn log_gapless_prime_info(
     stage: &'static str,
     prime_info: Option<AudioConverterPrimeInfo>,

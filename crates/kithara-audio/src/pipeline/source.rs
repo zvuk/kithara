@@ -2153,10 +2153,6 @@ fn playing_for_state(state: &TrackState) -> bool {
     !matches!(state, TrackState::AtEof | TrackState::Failed(_))
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "trivial 3-arm match; complexity comes from `warn!` macro expansions"
-)]
 fn emit_failure_log(failure: &TrackFailure) {
     match failure {
         TrackFailure::Decode(err) => warn!(?err, "track failed: decode error"),

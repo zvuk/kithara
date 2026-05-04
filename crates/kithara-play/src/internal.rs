@@ -131,6 +131,7 @@ pub mod offline {
                 .try_push(PlayerCmd::LoadTrack {
                     resource: Arc::new(Mutex::new(pr)),
                     src: Arc::clone(&src),
+                    item_id: None,
                 })
                 .expect("send LoadTrack");
             self.cmd_tx
@@ -199,9 +200,9 @@ pub mod offline {
                     N::TrackError(_, _) => NotificationKind::TrackError,
                     N::TrackLoaded(_) => NotificationKind::TrackLoaded,
                     N::TrackUnloaded(_) => NotificationKind::TrackUnloaded,
-                    N::TrackAboutToEnd(_) => NotificationKind::TrackAboutToEnd,
+                    N::TrackHandoverRequested(_) => NotificationKind::TrackHandoverRequested,
                     N::TrackPlaybackStarted(_) => NotificationKind::TrackPlaybackStarted,
-                    N::TrackPlaybackStopped(_) => NotificationKind::TrackPlaybackStopped,
+                    N::TrackPlaybackStopped { .. } => NotificationKind::TrackPlaybackStopped,
                     N::TrackPlaybackPaused(_) => NotificationKind::TrackPlaybackPaused,
                     N::TrackRequested(_) => NotificationKind::TrackRequested,
                     N::TrackChanged { .. } => NotificationKind::TrackChanged,
@@ -225,7 +226,7 @@ pub mod offline {
         TrackError,
         TrackLoaded,
         TrackUnloaded,
-        TrackAboutToEnd,
+        TrackHandoverRequested,
         TrackPlaybackStarted,
         TrackPlaybackStopped,
         TrackPlaybackPaused,

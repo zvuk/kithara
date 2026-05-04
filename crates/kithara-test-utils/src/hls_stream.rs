@@ -332,10 +332,6 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
     })
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "fixture encoder path: signal selection + delay padding + encoder dispatch — splitting would obscure the flow"
-)]
 fn encode_packaged_variant(
     packaged: &ResolvedPackagedAudioSpec,
     variant: &ResolvedPackagedVariant,

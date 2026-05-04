@@ -1,5 +1,4 @@
 #![expect(
-    clippy::cognitive_complexity,
     clippy::needless_pass_by_value,
     clippy::option_if_let_else,
     clippy::type_complexity,

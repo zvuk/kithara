@@ -759,10 +759,6 @@ where
     /// let audio = Audio::new(config).await?;
     /// sink.append(audio);
     /// ```
-    #[expect(
-        clippy::too_many_lines,
-        reason = "single-shot wire-up; further extraction would split a tightly coupled init sequence"
-    )]
     pub async fn new(config: AudioConfig<T>) -> Result<Self, DecodeError> {
         let cancel = CancellationToken::new();
 
