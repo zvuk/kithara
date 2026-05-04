@@ -67,7 +67,6 @@ pub(crate) struct ResolvedEncryption {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackagedAudioSpec {
-    pub(crate) codec: AudioCodec,
     pub(crate) container: ContainerFormat,
     pub(crate) sample_rate: u32,
     pub(crate) channels: u16,
@@ -85,6 +84,11 @@ pub(crate) struct ResolvedPackagedVariant {
     pub(crate) bit_rate: u64,
     pub(crate) start_frame: u64,
     pub(crate) signal: ResolvedPackagedSignal,
+    /// Per-variant codec. Defaults to the spec-level
+    /// [`PackagedAudioRequest::codec`]; overridden by
+    /// `PackagedAudioVariantOverride.codec` so a single fixture can carry
+    /// mixed codecs (production AAC LQ/MQ/HQ + FLAC lossless).
+    pub(crate) codec: AudioCodec,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -382,6 +386,7 @@ fn resolve_packaged_audio(
     let mut variants = Vec::with_capacity(spec.variant_count);
     for variant in 0..spec.variant_count {
         let mut bit_rate = packaged.bit_rate.unwrap_or(128_000);
+        let mut codec = packaged.codec;
         let mut signal = match &packaged.source {
             PackagedAudioSource::Signal(_) => base_signal,
             PackagedAudioSource::PerVariantPcm { patterns } => ResolvedPackagedSignal::Pattern(
@@ -396,17 +401,20 @@ fn resolve_packaged_audio(
             .iter()
             .find(|override_spec| override_spec.variant == variant)
         {
-            apply_variant_override(override_spec, &mut bit_rate, &mut signal);
+            apply_variant_override(override_spec, &mut bit_rate, &mut signal, &mut codec);
+        }
+        if !audio_codec_supports_fmp4_packaging(codec) {
+            return Err(HlsSpecError::UnsupportedPackagedCodec(codec));
         }
         variants.push(ResolvedPackagedVariant {
             bit_rate,
             start_frame: packaged.start_frame.map_or(0, |n| u64::from(n.get())),
             signal,
+            codec,
         });
     }
 
     Ok(ResolvedPackagedAudioSpec {
-        codec: packaged.codec,
         container: ContainerFormat::Fmp4,
         sample_rate: packaged.sample_rate,
         channels: packaged.channels,
@@ -424,12 +432,16 @@ fn apply_variant_override(
     override_spec: &PackagedAudioVariantOverride,
     bit_rate: &mut u64,
     signal: &mut ResolvedPackagedSignal,
+    codec: &mut AudioCodec,
 ) {
     if let Some(override_rate) = override_spec.bit_rate {
         *bit_rate = override_rate;
     }
     if let Some(pattern) = override_spec.pattern {
         *signal = ResolvedPackagedSignal::Pattern(pattern);
+    }
+    if let Some(override_codec) = override_spec.codec {
+        *codec = override_codec;
     }
 }
 

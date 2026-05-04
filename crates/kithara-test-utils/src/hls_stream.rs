@@ -336,8 +336,8 @@ fn encode_packaged_variant(
     packaged: &ResolvedPackagedAudioSpec,
     variant: &ResolvedPackagedVariant,
 ) -> Result<EncodedTrack, EncodeError> {
-    let encoder = EncoderFactory::create_packaged(packaged.codec)?;
-    let frame_samples = encoder.packaged_frame_samples(packaged.codec)?;
+    let encoder = EncoderFactory::create_packaged(variant.codec)?;
+    let frame_samples = encoder.packaged_frame_samples(variant.codec)?;
     let requested_segment_frames =
         (packaged.segment_duration_secs * f64::from(packaged.sample_rate)).round() as usize;
     let packets_per_segment = requested_segment_frames.div_ceil(frame_samples).max(1);
@@ -355,7 +355,7 @@ fn encode_packaged_variant(
     );
 
     let media_info = MediaInfo::default()
-        .with_codec(packaged.codec)
+        .with_codec(variant.codec)
         .with_container(packaged.container)
         .with_sample_rate(packaged.sample_rate)
         .with_channels(packaged.channels);
