@@ -39,7 +39,10 @@ use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    types::PcmSpec,
+    gapless::probe_mp4_gapless_dyn,
+    symphonia::config::SymphoniaConfig,
+    traits::DecoderInput,
+    types::{DecoderTrackInfo, PcmSpec},
 };
 
 const TRACK_ID: u32 = 0;
@@ -90,6 +93,87 @@ impl SymphoniaCodec {
     #[must_use]
     pub(crate) fn supports(codec: AudioCodec) -> bool {
         !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
+    }
+
+    /// Build a [`SymphoniaCodec`] from `TrackInfo` with extra options
+    /// from [`SymphoniaConfig`]. Currently only [`SymphoniaConfig::gapless`]
+    /// matters: when set, `AudioDecoderOptions::gapless = true` so the
+    /// Symphonia codec emits priming-trimmed output internally for codecs
+    /// that report it (FLAC, Opus, Vorbis).
+    ///
+    /// `FrameCodec::open` keeps its no-config shape so existing
+    /// `UniversalDecoder<D, C>` callers don't break.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`FrameCodec::open`].
+    #[expect(dead_code, reason = "called by the factory in P7")]
+    pub(crate) fn open_with_config(
+        track: &TrackInfo,
+        config: &SymphoniaConfig,
+    ) -> DecodeResult<Self> {
+        let (codec_id, profile) = map_codec(track.codec)?;
+        let mut params = AudioCodecParameters::new();
+        params
+            .for_codec(codec_id)
+            .with_sample_rate(track.sample_rate);
+        if let Some(profile) = profile {
+            params.with_profile(profile);
+        }
+        params.with_channels(Channels::Discrete(track.channels));
+        if !track.extra_data.is_empty() {
+            params.with_extra_data(track.extra_data.clone().into_boxed_slice());
+        }
+
+        let registry: &CodecRegistry = symphonia::default::get_codecs();
+        let mut opts = AudioDecoderOptions::default();
+        opts.gapless = config.gapless;
+        let decoder = registry
+            .make_audio_decoder(&params, &opts)
+            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+
+        let spec = PcmSpec {
+            channels: track.channels,
+            sample_rate: track.sample_rate,
+        };
+        Ok(Self { decoder, spec })
+    }
+
+    /// Probe the source for container-level gapless metadata before
+    /// opening the codec. Currently only AAC inside MP4 udta carries
+    /// useful priming/padding numbers (`iTunSMPB`); other Symphonia
+    /// codecs return `DecoderTrackInfo::default()` because their priming
+    /// is handled internally via `AudioDecoderOptions::gapless`.
+    ///
+    /// # Errors
+    ///
+    /// Forwards [`DecodeError`] from the MP4 probe (malformed boxes,
+    /// I/O failures on the input source).
+    #[expect(dead_code, reason = "called by the factory in P7")]
+    pub(crate) fn probe_track_info(
+        source: &mut dyn DecoderInput,
+        codec: AudioCodec,
+        config: &SymphoniaConfig,
+    ) -> DecodeResult<DecoderTrackInfo> {
+        let gapless = if config.gapless && codec == AudioCodec::AacLc {
+            let info = probe_mp4_gapless_dyn(source)?;
+            if let Some(info) = info {
+                tracing::debug!(
+                    target: "kithara::gapless",
+                    codec = ?codec,
+                    leading_frames = info.leading_frames,
+                    trailing_frames = info.trailing_frames,
+                    "captured AAC gapless metadata for Symphonia"
+                );
+            }
+            info
+        } else {
+            None
+        };
+        Ok(DecoderTrackInfo {
+            gapless,
+            ..DecoderTrackInfo::default()
+        })
     }
 }
 

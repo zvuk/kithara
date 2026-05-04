@@ -16,6 +16,13 @@ pub(crate) struct SymphoniaConfig {
     ///
     /// Used by the probe path when no container is known up-front.
     pub hint: Option<String>,
+    /// Enable gapless trim wiring through the Symphonia decoder.
+    ///
+    /// When `true`, [`SymphoniaCodec::open_with_config`](super::codec::SymphoniaCodec::open_with_config)
+    /// flips `AudioDecoderOptions::gapless = true`, and the factory in
+    /// P7 calls [`probe_track_info`](super::codec::SymphoniaCodec::probe_track_info)
+    /// to populate [`crate::DecoderTrackInfo::gapless`] from MP4 udta.
+    pub gapless: bool,
 }
 
 #[cfg(test)]
@@ -29,6 +36,7 @@ mod tests {
         let config = SymphoniaConfig::default();
         assert!(config.byte_len_handle.is_none());
         assert!(config.hint.is_none());
+        assert!(!config.gapless);
     }
 
     #[kithara::test]
@@ -38,5 +46,14 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.hint, Some("mp3".into()));
+    }
+
+    #[kithara::test]
+    fn test_symphonia_config_with_gapless() {
+        let config = SymphoniaConfig {
+            gapless: true,
+            ..Default::default()
+        };
+        assert!(config.gapless);
     }
 }

@@ -152,6 +152,7 @@ impl SymphoniaDemuxer {
         let config = SymphoniaConfig {
             byte_len_handle,
             hint,
+            ..Default::default()
         };
         let format_opts = FormatOptions::default();
         let bootstrap: ReaderBootstrap = if let Some(container) = container {

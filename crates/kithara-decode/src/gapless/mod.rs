@@ -24,9 +24,9 @@ pub use codec_priming::codec_priming_frames;
 pub use heuristic::{GaplessMode, SilenceTrimParams};
 pub use info::GaplessInfo;
 pub use mp4::probe_mp4_gapless;
+pub(crate) use mp4::probe_mp4_gapless_dyn;
 pub use trimmer::{GaplessOutput, GaplessTrimmer};
 
-// `mp3::{LAME_DECODER_DELAY, read_lame_trim}` and `mp4::probe_mp4_gapless_dyn`
-// are wired in via direct path (`crate::gapless::mp3::…`,
-// `crate::gapless::mp4::…`) by the symphonia codec / factory wiring in
-// P5/P7 — no need for module-level re-exports until then.
+// `mp3::{LAME_DECODER_DELAY, read_lame_trim}` are wired in via direct
+// path (`crate::gapless::mp3::…`) by the symphonia codec MP3 path in
+// a follow-up — no need for module-level re-exports until then.
