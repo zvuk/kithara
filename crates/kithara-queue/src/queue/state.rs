@@ -93,6 +93,11 @@ impl Queue {
         let QueueConfig {
             player,
             max_concurrent_loads,
+            // prefetch_duration plumbing through PlayerConfig lands in
+            // P12/P13 alongside the player_track prefetch hook; for now
+            // QueueConfig surfaces the knob so callers can set it,
+            // ready to be threaded once the player accepts it.
+            prefetch_duration: _,
         } = config;
         let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
         let bus = player.bus().clone();
