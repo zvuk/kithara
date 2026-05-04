@@ -182,6 +182,16 @@ impl PcmChunk {
     pub fn spec(&self) -> PcmSpec {
         self.meta.spec
     }
+
+    /// Borrow the raw interleaved sample buffer.
+    ///
+    /// Sugar accessor for `&chunk.pcm[..]`; the underlying field stays
+    /// `pub` for the legacy direct-access call sites that currently rely
+    /// on `Deref<Target = [f32]>` semantics of `PcmBuf`.
+    #[must_use]
+    pub fn samples(&self) -> &[f32] {
+        &self.pcm
+    }
 }
 
 #[cfg(test)]

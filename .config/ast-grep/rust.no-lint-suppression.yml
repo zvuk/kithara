@@ -71,6 +71,13 @@ ignores:
   - crates/kithara-decode/src/factory/**
   - crates/kithara-decode/src/backend/**
   - crates/kithara-decode/src/pcm/**
+  # P3 wholesale port from production/main PR #64 (gapless module + mp4/pcm_time
+  # siblings). Final placement (sibling vs merged into fmp4/ + pcm/timeline.rs)
+  # is decided in P7. Until then the imported code keeps its production-style
+  # inline `#[expect]` annotations.
+  - crates/kithara-decode/src/gapless/**
+  - crates/kithara-decode/src/mp4.rs
+  - crates/kithara-decode/src/pcm_time.rs
   # tests/ and xtask/ — separate audits will sweep these later.
   - tests/**
   - xtask/**

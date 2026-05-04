@@ -25,7 +25,9 @@ mod error;
 mod factory;
 mod fmp4;
 mod gapless;
+mod mp4;
 mod pcm;
+mod pcm_time;
 #[cfg(feature = "symphonia")]
 mod symphonia;
 mod traits;
@@ -44,8 +46,13 @@ mod apple;
 pub use error::{DecodeError, DecodeResult, ErrorClass};
 // Factory for runtime selection
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
-// Gapless contract types — populated wholesale in P3.
-pub use gapless::GaplessInfo;
+// Gapless API — wholesale port from PR #64. Per-platform codec wiring
+// in P4–P6, factory wiring in P7, audio-pipeline wiring in P9.
+pub use gapless::{
+    GaplessInfo, GaplessMode, GaplessOutput, GaplessTrimmer, SilenceTrimParams,
+    codec_priming_frames, probe_mp4_gapless,
+};
+pub use pcm_time::{duration_for_frames, frames_for_duration};
 // Public traits
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
