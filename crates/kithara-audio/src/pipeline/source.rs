@@ -997,10 +997,19 @@ impl<T: StreamType> StreamAudioSource<T> {
     ) {
         let new_duration = new_decoder.duration();
         let variant = new_info.variant_index;
-        // Rebuild gapless from the freshly created decoder before the old one is dropped.
-        self.gapless =
-            GaplessStage::from_decoder(new_decoder.as_ref(), self.gapless_mode, Some(new_info));
-        self.gapless_flushed = false;
+        // Only rebuild gapless when the underlying codec changed: variant
+        // switches inside the same codec keep emitting the same priming
+        // metadata, but their decoder swap does NOT introduce fresh
+        // leading silence — restarting the trimmer would chew through
+        // mid-track audio. Cross-codec recreates (e.g. AAC -> FLAC across
+        // HLS variants) genuinely need a fresh trimmer.
+        let prior_codec = self.session.media_info.as_ref().and_then(|info| info.codec);
+        let new_codec = new_info.codec;
+        if prior_codec != new_codec {
+            self.gapless =
+                GaplessStage::from_decoder(new_decoder.as_ref(), self.gapless_mode, Some(new_info));
+            self.gapless_flushed = false;
+        }
         // Atomic session update — only on success
         self.session = DecoderSession {
             base_offset,

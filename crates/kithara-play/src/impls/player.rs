@@ -557,6 +557,13 @@ impl PlayerImpl {
     pub fn prepare_config(&self, config: &mut super::config::ResourceConfig) {
         config.worker = Some(self.engine.worker().clone());
         config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
+        // Forward the player-configured gapless mode so the resource's
+        // audio pipeline trims leading/trailing silence per the
+        // requested policy. Unconditional override: `ResourceConfig`
+        // defaults to `MediaOnly`, and the player's setting is the
+        // intended source of truth for tracks routed through
+        // `prepare_config`.
+        config.gapless_mode = self.config.gapless_mode;
         #[cfg(feature = "hls")]
         {
             // Apply the player's initial ABR mode only when the caller left
