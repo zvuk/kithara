@@ -790,6 +790,10 @@ fn trim_chunk_start(chunk: &mut PcmChunk, trim_frames: usize) {
     chunk.pcm.copy_within(trim_samples..len, 0);
     chunk.pcm.truncate(len.saturating_sub(trim_samples));
     chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(trim_frames as u64);
+    // Keep the size hint aligned with the new PCM length so downstream
+    // consumers reading `meta.frames` (audio worker copy loop) don't run
+    // off the end of the truncated buffer.
+    chunk.meta.frames = u32::try_from(chunk.pcm.len() / channels.max(1)).unwrap_or(u32::MAX);
     // Leading trim changes the logical start time seen downstream.
     chunk.meta.timestamp = chunk
         .meta
@@ -798,10 +802,12 @@ fn trim_chunk_start(chunk: &mut PcmChunk, trim_frames: usize) {
 }
 
 fn trim_chunk_end(chunk: &mut PcmChunk, trim_frames: u64) {
+    let channels = usize::from(chunk.spec().channels.max(1));
     let keep_frames = usize_from_u64_saturating(chunk_frames(chunk).saturating_sub(trim_frames));
-    let keep_samples = keep_frames.saturating_mul(usize::from(chunk.spec().channels.max(1)));
+    let keep_samples = keep_frames.saturating_mul(channels);
     // EOF trim can cut only the final chunk; earlier chunks stay frame-aligned as-is.
     chunk.pcm.truncate(keep_samples);
+    chunk.meta.frames = u32::try_from(keep_frames).unwrap_or(u32::MAX);
 }
 
 fn output_with(chunk: PcmChunk) -> GaplessOutput {
