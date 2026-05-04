@@ -53,6 +53,16 @@ pub(crate) struct AudioBufferList {
     pub(crate) mBuffers: [AudioBuffer; 1],
 }
 
+/// `kAudioConverterPrimeInfo` payload — codec-reported encoder priming
+/// in PCM frames. Populated by `AudioConverterGetProperty` after the
+/// converter has consumed at least one input packet.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AudioConverterPrimeInfo {
+    pub(crate) leading_frames: UInt32,
+    pub(crate) trailing_frames: UInt32,
+}
+
 /// Callback type for `AudioConverterFillComplexBuffer`.
 pub(crate) type AudioConverterComplexInputDataProc = extern "C" fn(
     inAudioConverter: AudioConverterRef,
@@ -75,6 +85,13 @@ unsafe extern "C" {
         inPropertyID: u32,
         inPropertyDataSize: UInt32,
         inPropertyData: *const c_void,
+    ) -> OSStatus;
+
+    pub(crate) fn AudioConverterGetProperty(
+        inAudioConverter: AudioConverterRef,
+        inPropertyID: u32,
+        ioPropertyDataSize: *mut UInt32,
+        outPropertyData: *mut c_void,
     ) -> OSStatus;
 
     pub(crate) fn AudioConverterFillComplexBuffer(

@@ -23,6 +23,10 @@ impl Consts {
     pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
     pub(crate) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d_6763; // 'dmgc'
     pub(crate) const kAudioConverterErr_NoDataNow: OSStatus = 0x2164_6174; // '!dat'
+    /// `'prim'` — codec-reported `AudioConverterPrimeInfo` (encoder
+    /// priming + trailing padding in PCM frames). Available after the
+    /// converter has consumed at least one input packet.
+    pub(crate) const kAudioConverterPrimeInfo: u32 = 0x7072_696d; // 'prim'
     pub(crate) const kAudioFormatFLAC: AudioFormatID = 0x666c_6163; // 'flac'
     pub(crate) const kAudioFormatFlagIsFloat: AudioFormatFlags = 1 << 0;
     pub(crate) const kAudioFormatFlagIsPacked: AudioFormatFlags = 1 << 3;
