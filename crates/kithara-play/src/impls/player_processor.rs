@@ -60,6 +60,8 @@ pub(crate) enum PlayerCmd {
     SetPaused(bool),
     /// Update the fade duration.
     SetFadeDuration(f32),
+    /// Update the prefetch lead time used by the near-end trigger.
+    SetPrefetchDuration(f32),
     /// Update the crossfade curve.
     SetCrossfadeCurve(CrossfadeCurve),
     /// Update the playback rate for all active tracks.
@@ -194,6 +196,12 @@ impl PlayerNodeProcessor {
                 }
                 PlayerCmd::SetFadeDuration(duration) => {
                     self.apply_fade_duration(duration);
+                }
+                PlayerCmd::SetPrefetchDuration(_duration) => {
+                    // Prefetch trigger lives in `PlayerTrack` and currently
+                    // uses a static near-end threshold; PlayerImpl owns the
+                    // canonical AtomicF32. Wiring this command into a runtime
+                    // track-level prefetch update is a follow-up commit.
                 }
                 PlayerCmd::SetCrossfadeCurve(curve) => {
                     self.crossfade.curve = curve;

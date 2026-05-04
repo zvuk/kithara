@@ -117,15 +117,16 @@ pub struct DecoderConfig {
     pub epoch: u64,
     /// Enable gapless trim wiring through the per-backend codec.
     ///
-    /// `true` flips the matching `*Config::gapless` for the selected
-    /// backend (Apple / Symphonia / Android) so the codec emits
-    /// priming and padding-trimmed PCM for codecs whose encoder reports
-    /// those numbers (FLAC, Opus, Vorbis via Symphonia; AAC via Apple
-    /// `kAudioConverterPrimeInfo`). Container-level priming (MP4
-    /// `iTunSMPB` for AAC) is captured separately via the
+    /// `true` (default) flips the matching `*Config::gapless` for the
+    /// selected backend (Apple / Symphonia / Android) so the codec
+    /// emits priming and padding-trimmed PCM for codecs whose encoder
+    /// reports those numbers (FLAC, Opus, Vorbis via Symphonia; AAC
+    /// via Apple `kAudioConverterPrimeInfo`). Container-level priming
+    /// (MP4 `iTunSMPB` for AAC) is captured separately via the
     /// `*Codec::probe_track_info` helpers — wired in a follow-up
     /// alongside the [`crate::DecoderTrackInfo`] propagation through
     /// the `Decoder` trait.
+    #[derivative(Default(value = "true"))]
     pub gapless: bool,
 }
 

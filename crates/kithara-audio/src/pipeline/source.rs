@@ -212,13 +212,13 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     chunks_decoded: u64,
     total_samples: u64,
-    /// Gapless trim mode applied per-track (rebuilt on every decoder recreate).
+    /// Gapless trim mode applied per-track. Built once at construction;
+    /// ABR variant switches inside one track keep the same trimmer
+    /// (production semantics) so we never retrim audible content
+    /// around a recreate boundary.
     gapless_mode: GaplessMode,
-    /// Per-track gapless trimmer adapter; rebuilt on decoder recreate.
+    /// Per-track gapless trimmer adapter.
     gapless: GaplessStage,
-    /// Set to `true` once `gapless.flush()` was called for the current session.
-    /// Reset on seek and on decoder recreate so a new EOF can flush again.
-    gapless_flushed: bool,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -263,7 +263,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             emit: None,
             gapless_mode,
             gapless,
-            gapless_flushed: false,
         }
     }
 
@@ -977,16 +976,19 @@ impl<T: StreamType> StreamAudioSource<T> {
         frames as usize
     }
 
-    /// Apply the user effect chain to a single PCM chunk and update local stats.
+    /// Drain ready chunks from the gapless trimmer through the effect
+    /// chain, returning the first chunk that survives effects.
     ///
-    /// Returns `Some(processed)` for downstream emission and `None` when an
-    /// effect swallowed the chunk (e.g. resampler buffering).
-    fn consume_chunk_through_effects(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
-        if chunk.pcm.is_empty() {
-            return None;
+    /// `apply_effects` may swallow a chunk (e.g. resampler buffering);
+    /// in that case we keep pulling from `gapless.next()` until we hit
+    /// either an emittable chunk or the trimmer is empty.
+    fn next_gapless_output(&mut self) -> Option<PcmChunk> {
+        while let Some(chunk) = self.gapless.next() {
+            if let Some(processed) = apply_effects(&mut self.effects, chunk) {
+                return Some(processed);
+            }
         }
-        self.track_chunk(&chunk);
-        apply_effects(&mut self.effects, chunk)
+        None
     }
 
     fn install_recreated_session(
@@ -997,19 +999,12 @@ impl<T: StreamType> StreamAudioSource<T> {
     ) {
         let new_duration = new_decoder.duration();
         let variant = new_info.variant_index;
-        // Only rebuild gapless when the underlying codec changed: variant
-        // switches inside the same codec keep emitting the same priming
-        // metadata, but their decoder swap does NOT introduce fresh
-        // leading silence — restarting the trimmer would chew through
-        // mid-track audio. Cross-codec recreates (e.g. AAC -> FLAC across
-        // HLS variants) genuinely need a fresh trimmer.
-        let prior_codec = self.session.media_info.as_ref().and_then(|info| info.codec);
-        let new_codec = new_info.codec;
-        if prior_codec != new_codec {
-            self.gapless =
-                GaplessStage::from_decoder(new_decoder.as_ref(), self.gapless_mode, Some(new_info));
-            self.gapless_flushed = false;
-        }
+        // Intentionally do NOT rebuild `self.gapless` here. ABR variant
+        // switches happen *inside* one track — the gapless contract
+        // (metadata leading/trailing, codec priming, or silence-trim
+        // search) was resolved when the first decoder was created and
+        // must not run again mid-track, otherwise we'd retrim audible
+        // content around the switch boundary.
         // Atomic session update — only on success
         self.session = DecoderSession {
             base_offset,
@@ -1205,8 +1200,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         // rejected.
         self.epoch.store(request.seek.epoch, Ordering::Release);
         self.timeline.clear_seek_pending(request.seek.epoch);
-        self.gapless.notify_seek();
-        self.gapless_flushed = false;
         self.update_state(TrackState::Decoding);
     }
 
@@ -1419,16 +1412,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             hang_tick!();
             yield_now();
 
-            // Drain any chunk previously held by the gapless trimmer first.
-            // The trimmer can release zero, one, or several chunks per push, so
-            // we hand them out one at a time before pulling more from the decoder.
-            if let Some(chunk) = self.gapless.next() {
-                if let Some(out) = self.consume_chunk_through_effects(chunk) {
-                    return Ok(DecoderChunkOutcome::Chunk(out));
-                }
-                continue;
-            }
-
             // Exit immediately when a seek is pending so the worker
             // loop can call apply_pending_seek().  This guard is
             // necessary because Symphonia silently retries
@@ -1437,6 +1420,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             // escape the decoder's internal read loop.
             if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
                 return Err(DecodeError::Interrupted);
+            }
+
+            // Drain any chunk previously held by the gapless trimmer first.
+            // `next_gapless_output` runs each chunk through the effect chain
+            // until it finds one the effects do not swallow.
+            if let Some(ready) = self.next_gapless_output() {
+                return Ok(DecoderChunkOutcome::Chunk(ready));
             }
 
             match self.decoder_next_chunk_safe() {
@@ -1453,19 +1443,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                         continue;
                     }
                     hang_reset!();
-                    // Feed the trimmer; the next loop iteration drains via gapless.next().
+                    self.track_chunk(&chunk);
                     self.gapless.push(chunk);
                     continue;
                 }
                 Ok(DecoderChunkOutcome::Eof) => {
-                    // Flush trimmer once per session: the next loop iteration
-                    // drains tail chunks via the gapless.next() branch above.
-                    // After draining, a follow-up Eof skips this branch and
-                    // falls through to handle_decode_eof.
-                    if !self.gapless_flushed {
-                        self.gapless.flush();
-                        self.gapless_flushed = true;
-                        continue;
+                    self.gapless.flush();
+                    if let Some(ready) = self.next_gapless_output() {
+                        return Ok(DecoderChunkOutcome::Chunk(ready));
                     }
                     match self.handle_decode_eof() {
                         DecodeAction::Yield => return Err(DecodeError::Interrupted),
@@ -1553,8 +1538,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.timeline.complete_seek(epoch);
             self.timeline.clear_seek_pending(epoch);
             self.epoch.store(epoch, Ordering::Release);
-            self.gapless.notify_seek();
-            self.gapless_flushed = false;
             self.update_state(TrackState::AtEof);
             return;
         }
@@ -1608,7 +1591,14 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Decode one chunk using the decode loop.
     fn decode_one_step(&mut self) -> DecodeStep {
-        let decoder_duration = self.session.decoder.duration();
+        // Visible duration mirrors the post-trim coordinate space used by
+        // the consumer; see `crate::pipeline::gapless::visible_duration`
+        // for rationale (raw container duration includes encoder priming
+        // and padding that gapless trim removes).
+        let decoder_duration = crate::pipeline::gapless::visible_duration(
+            self.session.decoder.as_ref(),
+            self.gapless_mode,
+        );
         let timeline_duration = self.timeline.total_duration();
         if decoder_duration > timeline_duration {
             self.timeline.set_total_duration(decoder_duration);
@@ -1765,8 +1755,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                     // advanced epoch after `apply_pending_seek`.
                     self.epoch.store(request.seek.epoch, Ordering::Release);
                     self.timeline.clear_seek_pending(request.seek.epoch);
-                    self.gapless.notify_seek();
-                    self.gapless_flushed = false;
                     TrackStep::StateChanged
                 } else {
                     TrackStep::StateChanged
@@ -1823,8 +1811,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 );
                 self.epoch.store(request.seek.epoch, Ordering::Release);
                 self.timeline.clear_seek_pending(request.seek.epoch);
-                self.gapless.notify_seek();
-                self.gapless_flushed = false;
                 TrackStep::StateChanged
             }
             Err(err) => {
@@ -1867,7 +1853,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.epoch.store(request.seek.epoch, Ordering::Release);
             self.timeline.clear_seek_pending(request.seek.epoch);
             self.gapless.notify_seek();
-            self.gapless_flushed = false;
         }
         TrackStep::StateChanged
     }
@@ -2131,6 +2116,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 },
             }));
             reset_effects(&mut self.effects);
+            self.gapless.notify_seek();
             return TrackStep::StateChanged;
         }
 

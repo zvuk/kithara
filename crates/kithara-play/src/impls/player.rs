@@ -96,6 +96,12 @@ pub struct PlayerImpl {
 
     muted: AtomicBool,
     crossfade_duration: AtomicF32,
+    /// Look-ahead window for the prefetch trigger, in seconds. Mirrors the
+    /// canonical owner [`kithara_queue::QueueConfig::prefetch_duration`].
+    /// `set_prefetch_duration` writes here and forwards `SetPrefetchDuration`
+    /// to the active slot so the running [`super::player_track::PlayerTrack`]
+    /// near-end trigger updates without a track restart.
+    prefetch_duration: AtomicF32,
     default_rate: AtomicF32,
     rate: AtomicF32,
     volume: AtomicF32,
@@ -183,6 +189,7 @@ impl PlayerImpl {
         Self {
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
+            prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
             current_index: AtomicUsize::new(0),
             current_slot: Mutex::new(None),
             default_rate: AtomicF32::new(config.default_rate),
@@ -247,6 +254,11 @@ impl PlayerImpl {
     /// Get crossfade duration in seconds.
     pub fn crossfade_duration(&self) -> f32 {
         self.crossfade_duration.load(Ordering::Relaxed)
+    }
+
+    /// Get prefetch lead time in seconds.
+    pub fn prefetch_duration(&self) -> f32 {
+        self.prefetch_duration.load(Ordering::Relaxed)
     }
 
     /// ABR handle of the currently loaded item.
@@ -892,6 +904,18 @@ impl PlayerImpl {
         let clamped = seconds.max(0.0);
         self.crossfade_duration.store(clamped, Ordering::Relaxed);
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(clamped));
+    }
+
+    /// Set prefetch lead time in seconds.
+    ///
+    /// Canonical owner of this knob is [`kithara_queue::Queue`] — prefer
+    /// `Queue::set_prefetch_duration` for queue-driven applications.
+    /// Controls how early the next queued item is loaded into the processor
+    /// before EOF.
+    pub fn set_prefetch_duration(&self, seconds: f32) {
+        let clamped = seconds.max(0.0);
+        self.prefetch_duration.store(clamped, Ordering::Relaxed);
+        let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(clamped));
     }
 
     /// Set the default playback rate used by `play()` and `select_item()`.

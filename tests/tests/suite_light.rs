@@ -64,6 +64,8 @@ mod kithara_abr_integration;
 mod kithara_net;
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play;
+#[cfg(not(target_arch = "wasm32"))]
+mod kithara_queue;
 mod kithara_storage;
 mod kithara_stream;
 mod thread_budget;
