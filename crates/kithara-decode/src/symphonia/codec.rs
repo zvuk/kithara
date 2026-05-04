@@ -135,6 +135,20 @@ impl SymphoniaCodec {
         let registry: &CodecRegistry = symphonia::default::get_codecs();
         let mut opts = AudioDecoderOptions::default();
         opts.gapless = config.gapless;
+        // Symphonia 0.6.0-alpha.1 does not honor `opts.gapless` for AAC;
+        // the decoder still emits the full 2112-frame native priming as
+        // the first samples of output. When the demuxer surfaced
+        // container-level gapless info (`track.gapless = Some(...)`),
+        // fold the codec priming into `leading_frames` so the downstream
+        // `GaplessTrimmer` strips both the decoder's native priming and
+        // the encoder-delay silence the container metadata announces.
+        let track_gapless = track.gapless.map(|info| {
+            let extra = crate::gapless::codec_priming_frames(track.codec);
+            crate::GaplessInfo {
+                leading_frames: info.leading_frames.saturating_add(extra),
+                trailing_frames: info.trailing_frames,
+            }
+        });
         let decoder = registry
             .make_audio_decoder(&params, &opts)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
@@ -152,7 +166,7 @@ impl SymphoniaCodec {
             decoder,
             spec,
             track_info: DecoderTrackInfo {
-                gapless: track.gapless,
+                gapless: track_gapless,
                 ..DecoderTrackInfo::default()
             },
         })
