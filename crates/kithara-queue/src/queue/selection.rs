@@ -77,6 +77,23 @@ impl Queue {
         };
         if let Some(stale_id) = stale {
             self.set_status(stale_id, TrackStatus::Cancelled);
+            self.evict_player_item(stale_id);
+        }
+    }
+
+    /// Drop a cancelled track's resource from the player so the
+    /// near-EOF `arm_next` prefetch cannot plant it for handover. The
+    /// `spawn_apply_after_load` completion path already skips
+    /// `replace_item` on a cancelled status, but a fast loader can
+    /// finish *before* the override runs and leave the resource in
+    /// `items[index]`. This evict closes that race.
+    fn evict_player_item(&self, id: TrackId) {
+        let index = {
+            let guard = self.lock_tracks();
+            guard.iter().position(|e| e.id == id)
+        };
+        if let Some(index) = index {
+            self.player.clear_item(index);
         }
     }
 
@@ -98,6 +115,7 @@ impl Queue {
         drop(p);
         if let Some(prev_id) = prev_id {
             self.set_status(prev_id, TrackStatus::Cancelled);
+            self.evict_player_item(prev_id);
         }
     }
 

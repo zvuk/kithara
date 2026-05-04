@@ -259,6 +259,23 @@ impl PlayerImpl {
         self.replace_item_tagged(index, resource, None);
     }
 
+    /// Drop the resource at `index` so the auto-advance prefetch path
+    /// (`arm_next`) cannot plant it into the audio thread.
+    ///
+    /// Used by the queue when a previously-loaded track is cancelled by
+    /// a later `select` — without this, a slow track whose loader
+    /// raced ahead of the override stays in `items` and the next
+    /// `TrackRequested` notification near EOF would arm it for
+    /// handover, surfacing as a barge-in.
+    pub fn clear_item(&self, index: usize) {
+        let mut items = self.items.lock_sync();
+        if index < items.len() {
+            items[index] = None;
+            drop(items);
+            debug!(index, "item cleared");
+        }
+    }
+
     /// Replace a consumed (or existing) resource at the given index with item identity metadata.
     pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>) {
         let mut items = self.items.lock_sync();
