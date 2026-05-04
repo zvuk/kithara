@@ -372,6 +372,12 @@ impl PlayerNodeProcessor {
     ///
     /// Uses a stack-allocated array instead of `Vec` since `Self::MAX_TRACKS` is 4,
     /// avoiding heap allocation on every `process()` call.
+    ///
+    /// When the cleanup empties the arena (last track played out to natural
+    /// EOF), drop `state.playing` so `Player::is_playing()` reflects the
+    /// stopped state without a separate `SetPaused` round-trip from the
+    /// queue layer — the queue's `QueueEnded` path can leave the arena
+    /// running so the tail samples drain instead of cutting them off.
     fn cleanup_finished_tracks(&mut self) {
         let mut finished_indices: [Option<Index>; Self::MAX_TRACKS] = [None; Self::MAX_TRACKS];
         let mut count = 0;
@@ -392,6 +398,10 @@ impl PlayerNodeProcessor {
                     .try_push(PlayerNotification::TrackUnloaded(src))
                     .ok();
             }
+        }
+
+        if self.tracks.len() == 0 {
+            self.shared_state.playing.store(false, Ordering::SeqCst);
         }
     }
 

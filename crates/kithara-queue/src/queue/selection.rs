@@ -29,15 +29,14 @@ impl Queue {
         loop {
             let Some(idx) = self.lock_navigation_mut().next(len) else {
                 self.bus.publish(QueueEvent::QueueEnded);
-                // Pause the player so `is_playing()` flips to false on
-                // queue-end — UI bindings rely on that to drop the
-                // playback indicator from "playing" to "stopped".
-                self.player.pause();
-                // Don't call `finish_queue()`: leaving `player.current_index`
-                // pinned at the last-played track lets `Queue::current_index`
-                // report the actual final position (matches AVQueuePlayer's
-                // semantics — `currentItem` stays on the last item until the
-                // user explicitly seeks/selects elsewhere).
+                // Don't drive `Player::pause()` here: it would issue
+                // `SetPaused(true)` and stop the audio thread mid-render,
+                // cutting off tail samples that the seek-near-EOF stress
+                // path relies on to advance position to the natural end.
+                // Instead let the processor flip `state.playing` to false
+                // from `cleanup_finished_tracks` once the last track has
+                // fully drained — `is_playing()` reaches `false` either
+                // way, but the tail is rendered out first.
                 return None;
             };
             let Some((id, status)) = self
