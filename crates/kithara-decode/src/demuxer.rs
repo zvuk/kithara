@@ -71,6 +71,14 @@ pub(crate) struct TrackInfo {
     pub channels: u16,
     /// Decoded sample rate (Hz).
     pub sample_rate: u32,
+    /// Container-level gapless metadata — populated by demuxers that
+    /// can extract it without consuming the decoder (MP4 `iTunSMPB`
+    /// or track `elst`, FLAC `padded_sample_count`, etc.). `None` when
+    /// the demuxer either skipped probing (gapless disabled) or saw no
+    /// recognised source. Codec-level capture (`AppleCodec` `PrimeInfo`
+    /// refresh, `Symphonia` `AudioDecoderOptions::gapless`) supplements
+    /// this for codecs whose priming is not container-visible.
+    pub gapless: Option<crate::GaplessInfo>,
 }
 
 /// One demuxed audio frame, borrowed from the demuxer's internal state.

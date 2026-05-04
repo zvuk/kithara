@@ -269,6 +269,11 @@ fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> Decod
         extra_data,
         channels,
         sample_rate,
+        // Symphonia's own track API does not surface container-level
+        // gapless info. The MP4 udta probe runs at factory level
+        // through `SymphoniaCodec::probe_track_info`; codec-internal
+        // `AudioDecoderOptions::gapless` covers Vorbis/Opus.
+        gapless: None,
     })
 }
 

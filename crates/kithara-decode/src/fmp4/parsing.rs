@@ -49,6 +49,11 @@ pub(crate) struct Fmp4InitInfo {
     pub(crate) sample_rate: u32,
     pub(crate) timescale: u32,
     pub(crate) track_id: u32,
+    /// Container-level gapless info derived from the init segment
+    /// (`elst` edit-list trim or `udta` `iTunSMPB`). `None` when the
+    /// init blob carries neither — codec-side capture (Apple `PrimeInfo`
+    /// refresh) supplements this when the codec exposes priming.
+    pub(crate) gapless: Option<crate::GaplessInfo>,
 }
 
 /// Per-frame view into a single media segment's buffer.
@@ -115,6 +120,11 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
         }
     };
 
+    let gapless = {
+        let mut cursor = Cursor::new(bytes);
+        crate::gapless::probe_mp4_gapless(&mut cursor).unwrap_or(None)
+    };
+
     Ok(Fmp4InitInfo {
         codec,
         config,
@@ -122,6 +132,7 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
         sample_rate,
         timescale,
         track_id,
+        gapless,
     })
 }
 

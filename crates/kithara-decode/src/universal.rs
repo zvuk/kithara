@@ -547,6 +547,7 @@ mod hook_tests {
             channels: 2,
             extra_data: Vec::new(),
             duration: None,
+            gapless: None,
         }
     }
 

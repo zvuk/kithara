@@ -110,14 +110,21 @@ impl AppleCodec {
             let gapless = prime_info.and_then(gapless_info_from_prime_info);
             log_gapless_prime_info("init", prime_info, gapless);
             codec.last_prime_info = prime_info;
+            // Container-level gapless (MP4 `iTunSMPB` / `elst`) takes
+            // priority over codec-only PrimeInfo when both are present:
+            // the container value is authoritative because it survives
+            // re-encoding and matches what the original encoder wrote
+            // (PrimeInfo only reports the decoder's own filter delay).
+            // Falls back to PrimeInfo when the demuxer carried nothing.
+            let resolved = track.gapless.or(gapless);
             codec.track_info = DecoderTrackInfo {
-                gapless,
+                gapless: resolved,
                 ..DecoderTrackInfo::default()
             };
             // Skip the post-first-chunk refresh when init already
             // produced trim numbers — AAC will repopulate identically
             // and a duplicate log line is just noise.
-            codec.prime_info_refresh_pending = gapless.is_none();
+            codec.prime_info_refresh_pending = resolved.is_none();
         }
         Ok(codec)
     }

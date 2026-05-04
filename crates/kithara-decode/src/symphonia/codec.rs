@@ -143,10 +143,18 @@ impl SymphoniaCodec {
             channels: track.channels,
             sample_rate: track.sample_rate,
         };
+        // Carry container-level gapless info (when the demuxer surfaced
+        // `iTunSMPB` / `elst`) into `DecoderTrackInfo` so downstream
+        // gapless trim picks it up. Codecs whose priming Symphonia
+        // strips internally (Vorbis/Opus via `AudioDecoderOptions::gapless`)
+        // leave `track.gapless` as `None` and report nothing here.
         Ok(Self {
             decoder,
             spec,
-            track_info: DecoderTrackInfo::default(),
+            track_info: DecoderTrackInfo {
+                gapless: track.gapless,
+                ..DecoderTrackInfo::default()
+            },
         })
     }
 
