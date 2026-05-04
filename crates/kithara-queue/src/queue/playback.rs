@@ -235,7 +235,12 @@ mod tests {
         Some(TrackId(0)),
         true
     )]
-    #[case::crossfade_zero_triggers_at_tail(161.9, 162.0, 0.0, TrackId(1), None, true)]
+    // cf=0: production replaced the END_PROXIMITY_SECONDS pre-arm window
+    // with sample-accurate handover via the audio thread's
+    // `TrackPlaybackStopped` notification (PR #64). The pre-arm path
+    // returns `false` for cf=0 across all positions; the next-track
+    // promotion happens through the player processor instead.
+    #[case::crossfade_zero_at_tail_no_pre_arm(161.9, 162.0, 0.0, TrackId(1), None, false)]
     #[case::crossfade_zero_quiet_middle(161.0, 162.0, 0.0, TrackId(1), None, false)]
     #[case::zero_position_rejected(0.0, 162.0, 5.0, TrackId(1), None, false)]
     #[case::zero_duration_rejected(10.0, 0.0, 5.0, TrackId(1), None, false)]
