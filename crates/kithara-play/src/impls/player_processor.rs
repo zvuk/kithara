@@ -414,6 +414,35 @@ impl PlayerNodeProcessor {
             }
         }
 
+        // Sample-accurate arena hand-off: when a leading track has just hit
+        // EOF in the loop above (state -> Finished), promote a `Preloading`
+        // sibling track to `FadingIn` *in the same render block* so the
+        // boundary gap stays under one block. This is the cf=0 gapless
+        // hand-off path. The slot driver (`PlayerImpl::process_notifications`)
+        // observes the resulting `TrackPlaybackStopped` notification next
+        // tick and only updates queue bookkeeping (`current_index`,
+        // `CurrentItemChanged`); it does NOT need to dispatch a fresh
+        // `FadeIn` — the arena already promoted the successor here.
+        if is_playing
+            && self
+                .tracks
+                .iter()
+                .any(|(_, t)| matches!(t.state(), TrackState::Finished))
+            && !self.tracks.iter().any(|(_, t)| t.state().is_leading())
+        {
+            for (_, track) in self.tracks.iter_mut() {
+                if matches!(track.state(), TrackState::Preloading) {
+                    track.fade_in();
+                    self.shared_state
+                        .notification_tx
+                        .lock_sync()
+                        .try_push(PlayerNotification::TrackFadingIn(Arc::clone(track.src())))
+                        .ok();
+                    break;
+                }
+            }
+        }
+
         playback_started
     }
 
