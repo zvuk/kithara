@@ -458,6 +458,9 @@ fn parse_elst(payload: &[u8]) -> Result<SmallVec<[Mp4EditListEntry; 1]>, Mp4Meta
                     media_time,
                 }
             }
+            // xtask-lint-ignore: loop_allocation
+            // Cold error path: ELST version is bounded to {0, 1} by the parser
+            // upstream; this arm only fires on malformed input.
             _ => return Err(invalid(format!("unsupported elst version {version}"))),
         };
         entries.push(entry);

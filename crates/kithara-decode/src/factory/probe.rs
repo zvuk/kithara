@@ -42,16 +42,17 @@ pub(super) fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
         return Ok(codec);
     }
 
-    if let Some(ref mime) = hint.mime {
-        if let Some(codec) = AudioCodec::from_mime(mime) {
-            return Ok(codec);
-        }
+    if let Some(ref mime) = hint.mime
+        && let Some(codec) = AudioCodec::from_mime(mime)
+    {
+        return Ok(codec);
+    }
 
-        if let Some(container) = container_from_mime(mime)
-            && let Some(codec) = codec_from_container(container)
-        {
-            return Ok(codec);
-        }
+    if let Some(ref mime) = hint.mime
+        && let Some(container) = container_from_mime(mime)
+        && let Some(codec) = codec_from_container(container)
+    {
+        return Ok(codec);
     }
 
     if let Some(container) = hint.container

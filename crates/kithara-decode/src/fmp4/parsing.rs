@@ -398,6 +398,9 @@ fn collect_frames(
             let size = sample_size_for(trun, tfhd, sample_idx)?;
             let duration = sample_duration_for(trun, tfhd, sample_idx);
 
+            // xtask-lint-ignore: loop_allocation
+            // Cold error path: `format!` only runs when byte_cursor exceeds usize::MAX,
+            // which never happens on the byte sizes fmp4 segments report.
             let start = usize::try_from(byte_cursor).map_err(|_| {
                 DecodeError::InvalidData(format!("frame offset overflows usize: {byte_cursor}"))
             })?;
@@ -405,6 +408,9 @@ fn collect_frames(
                 .checked_add(size as usize)
                 .ok_or_else(|| DecodeError::InvalidData("sample byte range overflow".into()))?;
             if end > segment_bytes.len() {
+                // xtask-lint-ignore: loop_allocation
+                // Cold error path: `format!` only runs when the sample byte range
+                // overflows the segment, which is a malformed-input guard.
                 return Err(DecodeError::InvalidData(format!(
                     "sample byte range {start}..{end} past segment end {}",
                     segment_bytes.len()

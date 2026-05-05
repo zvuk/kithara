@@ -111,6 +111,8 @@ fn build_test_layout(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
     let mut descs = Vec::new();
     let mut byte_cursor = init_len;
     for i in 1..=num_segments {
+        // xtask-lint-ignore: loop_allocation
+        // Test fixture loader: cold path, allocation cost dwarfed by file I/O.
         let seg_bytes = read_fixture(&format!("segment-{i}-slq-a1.m4s"));
         let len = seg_bytes.len() as u64;
         let start = byte_cursor;
