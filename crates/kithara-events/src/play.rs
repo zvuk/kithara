@@ -8,6 +8,7 @@ use std::{cmp, hash, ops, sync::Arc};
 
 use derivative::Derivative;
 use kithara_platform::time::Duration;
+use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -92,8 +93,10 @@ impl MediaTime {
         // Saturating-clamp the f64 product to i64; values past ±i64::MAX
         // ticks already exceed any realistic media duration, so capping is
         // the truthful "out of range" signal.
-        let value = num_traits::cast::ToPrimitive::to_i64(&(seconds * f64::from(timescale)))
-            .unwrap_or(i64::MAX);
+        const SATURATE: i64 = i64::MAX;
+        let value = (seconds * f64::from(timescale))
+            .to_i64()
+            .unwrap_or(SATURATE);
         Self { value, timescale }
     }
 
@@ -119,7 +122,7 @@ impl MediaTime {
         if self.timescale == 0 {
             return 0.0;
         }
-        let value_f64: f64 = num_traits::cast::AsPrimitive::as_(self.value);
+        let value_f64: f64 = self.value.as_();
         value_f64 / f64::from(self.timescale)
     }
 

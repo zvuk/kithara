@@ -71,14 +71,14 @@ impl EventBus {
         let event = event.into();
         let len = self.senders.len();
         if len == 1 {
-            let _ = self.senders[0].send(event);
+            self.senders[0].send(event).ok();
             return;
         }
         // Clone for all but last, consume owned event on last send.
         for sender in &self.senders[..len - 1] {
-            let _ = sender.send(event.clone());
+            sender.send(event.clone()).ok();
         }
-        let _ = self.senders[len - 1].send(event);
+        self.senders[len - 1].send(event).ok();
     }
 
     /// This bus's scope.

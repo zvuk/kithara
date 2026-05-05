@@ -124,7 +124,6 @@ pub struct VariantInfo {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum AbrEvent {
-    // ─── Operational ───
     ThroughputSample {
         bytes_per_second: f64,
         source: BandwidthSource,
@@ -135,8 +134,6 @@ pub enum AbrEvent {
     BufferAhead {
         ahead: Option<Duration>,
     },
-
-    // ─── State transitions ───
     VariantsRegistered {
         variants: Vec<VariantInfo>,
         initial: usize,
@@ -154,8 +151,6 @@ pub enum AbrEvent {
     },
     Locked,
     Unlocked,
-
-    // ─── Diagnostics ───
     DecisionSkipped {
         reason: AbrReason,
     },
