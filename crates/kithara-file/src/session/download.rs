@@ -104,18 +104,19 @@ pub(super) async fn run_full_download(
 
 /// Extract content-length and content-type from response headers.
 fn process_response_headers(inner: &Arc<FileInner>, headers: &Headers) -> Option<u64> {
-    let expected_len = headers
-        .get("content-length")
-        .or_else(|| headers.get("Content-Length"))
-        .and_then(|v| v.parse::<u64>().ok());
+    // HTTP header names are case-insensitive per RFC 7230 §3.2 but the
+    // underlying `Headers::get` is a case-sensitive map lookup, so probe
+    // both common cases. Eager `.or(...)` keeps the call site flat (no
+    // closure-based fallback chain).
+    let cl_lower = headers.get("content-length");
+    let cl_title = headers.get("Content-Length");
+    let expected_len = cl_lower.or(cl_title).and_then(|v| v.parse::<u64>().ok());
     if let Some(len) = expected_len {
         inner.coord.set_total_bytes(Some(len));
     }
-    if let Some(codec) = headers
-        .get("content-type")
-        .or_else(|| headers.get("Content-Type"))
-        .and_then(AudioCodec::from_mime)
-    {
+    let ct_lower = headers.get("content-type");
+    let ct_title = headers.get("Content-Type");
+    if let Some(codec) = ct_lower.or(ct_title).and_then(AudioCodec::from_mime) {
         let _ = inner.content_type_codec.set(codec);
     }
     expected_len

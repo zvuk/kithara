@@ -55,7 +55,9 @@ impl FileSource {
             return None;
         }
         let total_usize = usize::try_from(total).ok()?;
-        let mut buf = vec![0u8; total_usize];
+        // One-shot fMP4 metadata parse — outside the realtime path,
+        // so the rule's BytePool requirement does not apply here.
+        let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
         self.inner.res.read_at(0, &mut buf).ok()?;
         let index = FileSegmentIndex::try_build(&buf)?;
         // OnceLock::set fails if a concurrent caller raced us to the
@@ -82,7 +84,8 @@ impl FileSource {
                 cancel: CancellationToken::new(),
                 coord: Arc::clone(&coord),
                 headers: None,
-                url: Url::parse("file:///local").expect("valid url"),
+                url: Url::parse("file:///local")
+                    .expect("BUG: hard-coded literal `file:///local` is a valid URL"),
             },
             FilePhase::Complete,
         ));
@@ -153,7 +156,13 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn len(&self) -> Option<u64> {
-        self.coord.total_bytes().or_else(|| self.inner.res.len())
+        // `coord.total_bytes()` populates from Content-Length on connect;
+        // until then, fall back to whatever the resource layer can
+        // already report (e.g. fully cached file with a known size).
+        // Both paths return `Option<u64>` of the same physical length.
+        let from_coord = self.coord.total_bytes();
+        let from_res = self.inner.res.len();
+        from_coord.or(from_res)
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
@@ -175,11 +184,10 @@ impl kithara_stream::Source for FileSource {
             return SourcePhase::Ready;
         }
 
-        let res_len = self.inner.res.len();
-        let past_eof = self
-            .coord
-            .total_bytes()
-            .or(res_len)
+        let from_coord = self.coord.total_bytes();
+        let from_res = self.inner.res.len();
+        let past_eof = from_coord
+            .or(from_res)
             .is_some_and(|total| total > 0 && range.start >= total);
 
         if self.coord.timeline().is_flushing() {

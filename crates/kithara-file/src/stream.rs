@@ -99,11 +99,12 @@ impl File {
         config: FileConfig,
         cancel: CancellationToken,
     ) -> Result<FileSource, SourceError> {
-        let name_or_query = config
-            .name
-            .as_deref()
-            .or_else(|| url.query())
-            .filter(|s| !s.is_empty());
+        // Use the explicit `config.name` if provided; otherwise the
+        // URL's query string. Bind both probes first so eager `.or(...)`
+        // avoids the closure-based fallback-chain pattern.
+        let from_config = config.name.as_deref();
+        let from_query = url.query();
+        let name_or_query = from_config.or(from_query).filter(|s| !s.is_empty());
         let asset_root = asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {

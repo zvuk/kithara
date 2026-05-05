@@ -80,7 +80,6 @@ pub(crate) struct FileInnerParams {
 /// Shared inner state for a `FileSource`. All fields are either immutable
 /// (set at construction) or self-synchronizing — there is no `Mutex`.
 pub(crate) struct FileInner {
-    // --- creation-time params (immutable) ---
     pub(crate) backend: Arc<AssetStore>,
     pub(crate) coord: Arc<FileCoord>,
     pub(crate) res: AssetResource,
@@ -98,7 +97,6 @@ pub(crate) struct FileInner {
     pub(crate) key: ResourceKey,
     pub(crate) url: Url,
 
-    // --- mutable state (no Mutex needed) ---
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.
     phase: AtomicU8,
 }

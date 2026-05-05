@@ -40,15 +40,21 @@ impl FileSegmentIndex {
     }
 
     pub(crate) fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.segments
+        // Saturate to the last segment for queries past end-of-stream:
+        // playback timelines may briefly overshoot during seek/teardown,
+        // and "snap to last segment" gives a deterministic boundary
+        // instead of returning None mid-flight. Documented contract.
+        let by_time = self
+            .segments
             .iter()
-            .find(|desc| t < desc.decode_time.saturating_add(desc.duration))
-            .or_else(|| self.segments.last())
-            .cloned()
+            .find(|desc| t < desc.decode_time.saturating_add(desc.duration));
+        let last = self.segments.last();
+        by_time.or(last).cloned()
     }
 
     pub(crate) fn segment_count(&self) -> u32 {
-        u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
+        const SATURATE: u32 = u32::MAX;
+        u32::try_from(self.segments.len()).unwrap_or(SATURATE)
     }
 
     /// Try to derive a fragmented-mp4 index from the given file bytes.
@@ -87,22 +93,11 @@ impl FileSegmentIndex {
                 .map(|t| t.base_media_decode_time)
                 .or(cumulative_decode_time)
                 .unwrap_or(0);
-            let mut frag_duration_ticks: u64 = 0;
-            for trun in &traf.truns {
-                if !trun.sample_durations.is_empty() {
-                    frag_duration_ticks += trun
-                        .sample_durations
-                        .iter()
-                        .map(|d| u64::from(*d))
-                        .sum::<u64>();
-                } else if trun.sample_count > 0 {
-                    // Fall back to tfhd default sample duration when the
-                    // trun does not list per-sample durations.
-                    let default_dur = traf.tfhd.default_sample_duration.unwrap_or(0);
-                    frag_duration_ticks +=
-                        u64::from(trun.sample_count).saturating_mul(u64::from(default_dur));
-                }
-            }
+            let frag_duration_ticks: u64 = traf
+                .truns
+                .iter()
+                .map(|trun| trun_duration_ticks(trun, &traf.tfhd))
+                .sum();
             if frag_duration_ticks == 0 {
                 return None;
             }
@@ -131,6 +126,21 @@ impl FileSegmentIndex {
     }
 }
 
+fn trun_duration_ticks(trun: &re_mp4::TrunBox, tfhd: &re_mp4::TfhdBox) -> u64 {
+    if !trun.sample_durations.is_empty() {
+        return trun
+            .sample_durations
+            .iter()
+            .map(|d| u64::from(*d))
+            .sum::<u64>();
+    }
+    if trun.sample_count > 0 {
+        let default_dur = tfhd.default_sample_duration.unwrap_or(0);
+        return u64::from(trun.sample_count).saturating_mul(u64::from(default_dur));
+    }
+    0
+}
+
 fn audio_track_timescale(mp4: &Mp4) -> Option<u32> {
     mp4.moov
         .traks
@@ -145,12 +155,14 @@ fn audio_track_timescale(mp4: &Mp4) -> Option<u32> {
 }
 
 fn ticks_to_duration(ticks: u64, timescale: u32) -> Duration {
+    const NANOS_PER_SEC: u64 = 1_000_000_000;
+    const NANOS_PER_SEC_MINUS_ONE: u32 = 999_999_999;
     if timescale == 0 {
         return Duration::ZERO;
     }
     let secs = ticks / u64::from(timescale);
     let rem = ticks % u64::from(timescale);
-    let nanos = rem.saturating_mul(1_000_000_000) / u64::from(timescale);
-    let nanos_u32 = u32::try_from(nanos).unwrap_or(999_999_999);
+    let nanos = rem.saturating_mul(NANOS_PER_SEC) / u64::from(timescale);
+    let nanos_u32 = u32::try_from(nanos).unwrap_or(NANOS_PER_SEC_MINUS_ONE);
     Duration::new(secs, nanos_u32)
 }
