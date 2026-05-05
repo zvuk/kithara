@@ -31,12 +31,14 @@ use kithara_stream::AudioCodec;
 #[must_use]
 pub fn codec_priming_frames(codec: AudioCodec) -> u64 {
     match codec {
-        AudioCodec::Mp3 => 1105,
         AudioCodec::Opus => 312,
         // AAC LC / HE / HEv2 — encoder-fold convention covers native
-        // priming. Lossless codecs (FLAC/ALAC/PCM/ADPCM) and Vorbis
-        // (without ogg `pre_skip`) carry no encoder priming.
-        AudioCodec::AacLc
+        // priming. MP3 LAME header (enc_delay + LAME_DECODER_DELAY)
+        // covers MP3's native priming end-to-end. Lossless codecs
+        // (FLAC/ALAC/PCM/ADPCM) and Vorbis (without ogg `pre_skip`)
+        // carry no encoder priming.
+        AudioCodec::Mp3
+        | AudioCodec::AacLc
         | AudioCodec::AacHe
         | AudioCodec::AacHeV2
         | AudioCodec::Vorbis
