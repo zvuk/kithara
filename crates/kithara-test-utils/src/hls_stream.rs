@@ -72,18 +72,6 @@ enum MaterializedHlsBody {
     },
 }
 
-impl MaterializedHlsBody {
-    /// Plaintext byte length of the variant's init segment, computed
-    /// from the materialised body. Used to declare BYTERANGE on
-    /// `EXT-X-MAP` so the demuxer learns the init range up-front.
-    fn init_plaintext_len(&self, variant: usize) -> Option<usize> {
-        match self {
-            Self::Legacy { init_segments, .. } => init_segments.get(variant).map(|b| b.len()),
-            Self::Packaged { variants } => variants.get(variant).map(|v| v.init_segment.len()),
-        }
-    }
-}
-
 struct DelayPaddedPcm<'a> {
     inner: &'a dyn PcmSource,
     encoder_delay_frames: usize,
@@ -638,15 +626,26 @@ fn build_media_playlist(
     if spec.init_mode.is_present_for(variant)
         || matches!(body, MaterializedHlsBody::Packaged { .. })
     {
+        // Only Packaged fmp4 fixtures have a real `ftyp/moov` init segment
+        // the demuxer can parse. Legacy fixtures (raw WAV headers, test
+        // patterns) emit "init" data that an fmp4 demuxer cannot consume,
+        // so declaring BYTERANGE there would feed a bogus init range to
+        // the source's metadata-fast-path. For Legacy keep the bare MAP.
+        let packaged_init_plaintext = match body {
+            MaterializedHlsBody::Packaged { variants } => variants
+                .get(variant)
+                .map(|v| v.init_segment.len())
+                .unwrap_or(0),
+            MaterializedHlsBody::Legacy { .. } => 0,
+        };
         // BYTERANGE on EXT-X-MAP describes bytes within the served URI
         // (encrypted-on-wire when encryption is enabled). Match what the
         // downloader actually fetches so committed init_len agrees with
         // the playlist-declared range.
-        let init_plaintext = body.init_plaintext_len(variant).unwrap_or(0);
-        let init_len = if spec.encryption.is_some() && init_plaintext > 0 {
-            init_plaintext + (16 - init_plaintext % 16)
+        let init_len = if spec.encryption.is_some() && packaged_init_plaintext > 0 {
+            packaged_init_plaintext + (16 - packaged_init_plaintext % 16)
         } else {
-            init_plaintext
+            packaged_init_plaintext
         };
         if init_len > 0 {
             playlist.push_str(&format!(
