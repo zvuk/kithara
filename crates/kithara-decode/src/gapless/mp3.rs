@@ -1,8 +1,11 @@
 //! Xing/Info/LAME tag extraction for MPEG audio gapless metadata.
 
-const MPEG_HEADER_LEN: usize = 4;
-const SYNC_MASK: u32 = 0xFFE0_0000;
-const SYNC_VALUE: u32 = 0xFFE0_0000;
+struct Consts;
+impl Consts {
+    const MPEG_HEADER_LEN: usize = 4;
+    const SYNC_MASK: u32 = 0xFFE0_0000;
+    const SYNC_VALUE: u32 = 0xFFE0_0000;
+}
 
 /// Canonical LAME/Lavc/Lavf decoder convergence delay (528 + 1 samples).
 /// LAME-aware decoders pre-skip `LAME_DECODER_DELAY + enc_delay` and post-skip `enc_padding − LAME_DECODER_DELAY`.
@@ -19,7 +22,7 @@ pub(crate) struct LameTrim {
 pub(crate) fn read_lame_trim(data: &[u8]) -> Option<LameTrim> {
     let frame_start = find_frame_start(data)?;
     let frame_bytes = data.get(frame_start..)?;
-    if frame_bytes.len() < MPEG_HEADER_LEN {
+    if frame_bytes.len() < Consts::MPEG_HEADER_LEN {
         return None;
     }
     let header_word = u32::from_be_bytes([
@@ -30,7 +33,7 @@ pub(crate) fn read_lame_trim(data: &[u8]) -> Option<LameTrim> {
     ]);
     let header = parse_header(header_word)?;
     let side_info = side_info_len(header);
-    let tag_offset = MPEG_HEADER_LEN + side_info;
+    let tag_offset = Consts::MPEG_HEADER_LEN + side_info;
     let tag = frame_bytes.get(tag_offset..)?;
     if tag.len() < 8 {
         return None;
@@ -72,9 +75,9 @@ pub(crate) fn read_lame_trim(data: &[u8]) -> Option<LameTrim> {
 
 fn find_frame_start(data: &[u8]) -> Option<usize> {
     let mut idx = skip_id3v2(data);
-    while idx + MPEG_HEADER_LEN <= data.len() {
+    while idx + Consts::MPEG_HEADER_LEN <= data.len() {
         let word = u32::from_be_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
-        if word & SYNC_MASK == SYNC_VALUE && parse_header(word).is_some() {
+        if word & Consts::SYNC_MASK == Consts::SYNC_VALUE && parse_header(word).is_some() {
             return Some(idx);
         }
         idx += 1;

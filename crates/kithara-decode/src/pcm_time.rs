@@ -12,13 +12,7 @@ pub fn duration_for_frames(sample_rate: u32, frames: u64) -> Duration {
     let nanos = u128::from(frames)
         .saturating_mul(NANOS_PER_SECOND)
         .saturating_div(u128::from(sample_rate));
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "clamped to u64::MAX before cast"
-    )]
-    {
-        Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
-    }
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
 /// Convert `Duration` back into PCM frame count at a given sample rate.
@@ -32,7 +26,7 @@ pub fn frames_for_duration(sample_rate: u32, duration: Duration) -> usize {
         .as_nanos()
         .saturating_mul(u128::from(sample_rate))
         .saturating_div(NANOS_PER_SECOND);
-    frames.min(usize::MAX as u128) as usize
+    usize::try_from(frames).unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]

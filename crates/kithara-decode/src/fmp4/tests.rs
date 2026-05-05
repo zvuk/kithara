@@ -15,10 +15,9 @@ use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use crate::{
-    codec::FrameCodec,
     demuxer::Demuxer,
     fmp4::Fmp4SegmentDemuxer,
-    symphonia::SymphoniaCodec,
+    symphonia::{SymphoniaCodec, SymphoniaConfig},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     universal::UniversalDecoder,
 };
@@ -153,7 +152,8 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
     });
     let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
     let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("build demuxer");
-    let codec = SymphoniaCodec::open(demuxer.track_info()).expect("open codec");
+    let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
+        .expect("open codec");
     let decoder = UniversalDecoder::new(
         demuxer,
         codec,

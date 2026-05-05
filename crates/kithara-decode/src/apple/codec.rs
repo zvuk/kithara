@@ -103,7 +103,7 @@ impl AppleCodec {
     ///
     /// Same as [`FrameCodec::open`].
     pub(crate) fn open_with_config(track: &TrackInfo, config: &AppleConfig) -> DecodeResult<Self> {
-        let mut codec = <Self as FrameCodec>::open(track)?;
+        let mut codec = Self::open(track)?;
         if config.gapless {
             codec.gapless_enabled = true;
             let prime_info = prime_info_from_converter(codec.converter);
@@ -127,6 +127,79 @@ impl AppleCodec {
             codec.prime_info_refresh_pending = resolved.is_none();
         }
         Ok(codec)
+    }
+
+    /// Inherent constructor used by [`Self::open_with_config`] (and only
+    /// there). Builds a base [`AppleCodec`] from `TrackInfo` without
+    /// any of the gapless / `PrimeInfo` follow-up wiring; the
+    /// [`Self::open_with_config`] caller layers gapless on top when
+    /// `AppleConfig::gapless` is set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::Backend`] when `CoreAudio`'s
+    /// `AudioConverterNew` rejects the input/output ASBD pair.
+    fn open(track: &TrackInfo) -> DecodeResult<Self> {
+        let AppleInputFormat {
+            asbd: input_format,
+            frames_per_packet,
+            cookie,
+        } = build_input_format(track)?;
+        let output_format = build_pcm_output_format(track.sample_rate, track.channels);
+
+        let mut converter: AudioConverterRef = ptr::null_mut();
+        // SAFETY: input/output formats are valid stack values; `converter`
+        // is a writable out-pointer.
+        let status = unsafe { AudioConverterNew(&input_format, &output_format, &mut converter) };
+        if status != Consts::noErr {
+            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+                format!("AudioConverterNew failed: {}", os_status_to_string(status)),
+            ))));
+        }
+
+        if let Some(cookie) = cookie.as_ref().filter(|c| !c.is_empty()) {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "magic cookie length fits in u32 for valid configs"
+            )]
+            // SAFETY: `converter` was just successfully created above and
+            // is owned by us; `cookie` is a readable byte slice.
+            let status = unsafe {
+                AudioConverterSetProperty(
+                    converter,
+                    Consts::kAudioConverterDecompressionMagicCookie,
+                    cookie.len() as UInt32,
+                    cookie.as_ptr() as *const c_void,
+                )
+            };
+            // AAC AudioConverter rejects DecompressionMagicCookie with
+            // 'NoDataNow' — it doesn't consume a cookie, ESDS metadata
+            // arrives through the ASBD path. Log + continue.
+            if status != Consts::noErr {
+                tracing::warn!(
+                    status,
+                    err = %os_status_to_string(status),
+                    cookie_size = cookie.len(),
+                    "AppleCodec: AudioConverterSetProperty(MagicCookie) returned non-zero (continuing)",
+                );
+            }
+        }
+
+        let spec = PcmSpec {
+            channels: track.channels,
+            sample_rate: track.sample_rate,
+        };
+
+        Ok(Self {
+            converter,
+            spec,
+            frames_per_packet,
+            input_state: Box::new(ConverterInputState::new()),
+            track_info: DecoderTrackInfo::default(),
+            last_prime_info: None,
+            gapless_enabled: false,
+            prime_info_refresh_pending: false,
+        })
     }
 
     /// AAC's converter populates `kAudioConverterPrimeInfo` only after
@@ -244,74 +317,19 @@ impl FrameCodec for AppleCodec {
         Ok(frames)
     }
 
-    fn flush(&mut self) {
+    fn flush(&mut self) -> DecodeResult<()> {
         // SAFETY: `self.converter` is a live handle.
-        let _ = unsafe { AudioConverterReset(self.converter) };
-        self.input_state.clear();
-    }
-
-    fn open(track: &TrackInfo) -> DecodeResult<Self> {
-        let AppleInputFormat {
-            asbd: input_format,
-            frames_per_packet,
-            cookie,
-        } = build_input_format(track)?;
-        let output_format = build_pcm_output_format(track.sample_rate, track.channels);
-
-        let mut converter: AudioConverterRef = ptr::null_mut();
-        // SAFETY: input/output formats are valid stack values; `converter`
-        // is a writable out-pointer.
-        let status = unsafe { AudioConverterNew(&input_format, &output_format, &mut converter) };
+        let status = unsafe { AudioConverterReset(self.converter) };
         if status != Consts::noErr {
             return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!("AudioConverterNew failed: {}", os_status_to_string(status)),
+                format!(
+                    "AudioConverterReset failed: {}",
+                    os_status_to_string(status)
+                ),
             ))));
         }
-
-        if let Some(cookie) = cookie.as_ref().filter(|c| !c.is_empty()) {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "magic cookie length fits in u32 for valid configs"
-            )]
-            // SAFETY: `converter` was just successfully created above and
-            // is owned by us; `cookie` is a readable byte slice.
-            let status = unsafe {
-                AudioConverterSetProperty(
-                    converter,
-                    Consts::kAudioConverterDecompressionMagicCookie,
-                    cookie.len() as UInt32,
-                    cookie.as_ptr() as *const c_void,
-                )
-            };
-            // AAC AudioConverter rejects DecompressionMagicCookie with
-            // 'NoDataNow' — it doesn't consume a cookie, ESDS metadata
-            // arrives through the ASBD path. Log + continue, mirroring
-            // the legacy `AppleDecoder::apply_magic_cookie` semantics.
-            if status != Consts::noErr {
-                tracing::warn!(
-                    status,
-                    err = %os_status_to_string(status),
-                    cookie_size = cookie.len(),
-                    "AppleCodec: AudioConverterSetProperty(MagicCookie) returned non-zero (continuing)",
-                );
-            }
-        }
-
-        let spec = PcmSpec {
-            channels: track.channels,
-            sample_rate: track.sample_rate,
-        };
-
-        Ok(Self {
-            converter,
-            spec,
-            frames_per_packet,
-            input_state: Box::new(ConverterInputState::new()),
-            track_info: DecoderTrackInfo::default(),
-            last_prime_info: None,
-            gapless_enabled: false,
-            prime_info_refresh_pending: false,
-        })
+        self.input_state.clear();
+        Ok(())
     }
 
     fn spec(&self) -> PcmSpec {

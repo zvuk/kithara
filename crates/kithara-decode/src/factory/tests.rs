@@ -73,7 +73,7 @@ fn test_create_with_probe_without_hint_fails_with_probe_failed() {
     let result = DecoderFactory::create_with_probe(
         Cursor::new(TEST_MP3_BYTES.to_vec()),
         None,
-        DecoderConfig::default(),
+        &DecoderConfig::default(),
     );
     assert!(matches!(result, Err(DecodeError::ProbeFailed)));
 }
@@ -84,7 +84,7 @@ fn test_create_with_probe_with_mp3_hint_succeeds() {
     let decoder = DecoderFactory::create_with_probe(
         Cursor::new(TEST_MP3_BYTES.to_vec()),
         Some("mp3"),
-        DecoderConfig::default(),
+        &DecoderConfig::default(),
     )
     .expect("mp3 hint should produce a decoder");
 

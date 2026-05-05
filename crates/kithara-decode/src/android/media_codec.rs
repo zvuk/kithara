@@ -46,6 +46,16 @@ pub(crate) struct OutputBuffer {
     len: usize,
 }
 
+/// Parameters for `OwnedCodec::queue_input_buffer`. Bundles the related
+/// FFI primitives so callers can't accidentally swap argument positions.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct QueueInput {
+    pub(crate) index: usize,
+    pub(crate) size: usize,
+    pub(crate) presentation_time_us: i64,
+    pub(crate) flags: u32,
+}
+
 impl OutputBuffer {
     pub(crate) fn data(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
@@ -257,16 +267,24 @@ impl OwnedCodec {
     }
 
     pub(crate) fn queue_end_of_stream(&mut self, index: usize) -> Result<(), AndroidBackendError> {
-        self.queue_input_buffer(index, 0, 0, ffi::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM)
+        self.queue_input_buffer(QueueInput {
+            index,
+            size: 0,
+            presentation_time_us: 0,
+            flags: ffi::MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM,
+        })
     }
 
     pub(crate) fn queue_input_buffer(
         &mut self,
-        index: usize,
-        size: usize,
-        presentation_time_us: i64,
-        flags: u32,
+        request: QueueInput,
     ) -> Result<(), AndroidBackendError> {
+        let QueueInput {
+            index,
+            size,
+            presentation_time_us,
+            flags,
+        } = request;
         let presentation_time_us = u64::try_from(presentation_time_us).map_err(|_| {
             AndroidBackendError::operation(
                 "codec-queue-input-buffer",

@@ -10,7 +10,7 @@ fn test_progressive_file_timeline_monotonic() {
     let reader = Cursor::new(audio.wav());
 
     let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("wav"), DecoderConfig::default()).unwrap();
+        DecoderFactory::create_with_probe(reader, Some("wav"), &DecoderConfig::default()).unwrap();
 
     let mut prev_frame_end = 0u64;
     let mut chunk_count = 0u64;
@@ -58,7 +58,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
     let reader = Cursor::new(audio.wav());
 
     let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("wav"), DecoderConfig::default()).unwrap();
+        DecoderFactory::create_with_probe(reader, Some("wav"), &DecoderConfig::default()).unwrap();
 
     // Read a few chunks
     for _ in 0..3 {

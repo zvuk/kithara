@@ -1001,7 +1001,7 @@ where
                 DecoderFactory::create_with_probe(
                     shared_stream,
                     hint_for_decoder.as_deref(),
-                    decoder_config,
+                    &decoder_config,
                 )
             }
         })

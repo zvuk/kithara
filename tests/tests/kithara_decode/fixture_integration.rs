@@ -125,7 +125,7 @@ async fn test_signal_server_encoded_formats_are_decodable(
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some(ext),
-        DecoderConfig::default(),
+        &DecoderConfig::default(),
     )
     .unwrap();
 
@@ -171,7 +171,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some(ext),
-        DecoderConfig::default(),
+        &DecoderConfig::default(),
     )
     .unwrap_or_else(|error| panic!("probe {format:?} decode failed: {error}"));
 
@@ -482,7 +482,7 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
     let mut probe_decoder = DecoderFactory::create_with_probe(
         Cursor::new(mp4_bytes.clone()),
         Some("m4a"),
-        DecoderConfig::default(),
+        &DecoderConfig::default(),
     )
     .unwrap_or_else(|error| panic!("probe packaged {label} fmp4 decode failed: {error}"));
     let probe_chunk = probe_decoder

@@ -58,74 +58,33 @@ impl DecoderLogs {
     }
 }
 
-/// Create a scripted decoder mock backed by unimock.
+/// Options for `scripted_decoder`. Bundles knobs that previously lived
+/// in three near-duplicate constructors (`scripted_decoder`,
+/// `scripted_decoder_loose`, `scripted_inner_decoder_with_track_info_loose`).
+#[derive(Clone, Default)]
+pub struct ScriptedOptions {
+    /// `DecoderTrackInfo` exposed by [`Decoder::track_info`]. Use a
+    /// non-default value when the test cares about gapless metadata.
+    pub track_info: DecoderTrackInfo,
+    /// When `true`, `unimock` verifies in `Drop` that every expected
+    /// call happened. Set `false` for data-plane tests that don't
+    /// exercise every mocked method.
+    pub verify_in_drop: bool,
+}
+
+/// Create a scripted decoder mock backed by `unimock`.
 ///
-/// `next_chunk()` yields from `chunks` then returns EOF.
-/// `seek()` logs positions and consumes preconfigured results in order.
-/// When the queue is exhausted, seek returns
-/// [`DecoderSeekOutcome::Landed`] at the requested position by default.
+/// `next_chunk()` yields from `chunks` then returns EOF. `seek()` logs
+/// positions and consumes preconfigured results in order. When the
+/// queue is exhausted, seek returns [`DecoderSeekOutcome::Landed`] at
+/// the requested position by default.
 #[must_use]
 pub fn scripted_decoder(
     spec: PcmSpec,
     chunks: Vec<PcmChunk>,
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
-) -> (Box<dyn Decoder>, DecoderLogs) {
-    build_scripted_decoder(
-        spec,
-        chunks,
-        seek_results,
-        duration,
-        DecoderTrackInfo::default(),
-        true,
-    )
-}
-
-/// Create a scripted decoder mock with verification disabled in `Drop`.
-///
-/// Use this only for data-plane tests where not all mocked methods are expected
-/// to be called in every scenario.
-#[must_use]
-pub fn scripted_decoder_loose(
-    spec: PcmSpec,
-    chunks: Vec<PcmChunk>,
-    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
-    duration: Option<Duration>,
-) -> (Box<dyn Decoder>, DecoderLogs) {
-    build_scripted_decoder(
-        spec,
-        chunks,
-        seek_results,
-        duration,
-        DecoderTrackInfo::default(),
-        false,
-    )
-}
-
-/// Create a scripted decoder mock that exposes a custom
-/// [`DecoderTrackInfo`] via [`Decoder::track_info`]. Verification disabled
-/// in `Drop`.
-///
-/// Use this for pipeline tests that need `track_info()` contracts such as
-/// gapless trimming metadata.
-#[must_use]
-pub fn scripted_inner_decoder_with_track_info_loose(
-    spec: PcmSpec,
-    chunks: Vec<PcmChunk>,
-    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
-    duration: Option<Duration>,
-    track_info: DecoderTrackInfo,
-) -> (Box<dyn Decoder>, DecoderLogs) {
-    build_scripted_decoder(spec, chunks, seek_results, duration, track_info, false)
-}
-
-fn build_scripted_decoder(
-    spec: PcmSpec,
-    chunks: Vec<PcmChunk>,
-    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
-    duration: Option<Duration>,
-    track_info: DecoderTrackInfo,
-    verify_in_drop: bool,
+    options: ScriptedOptions,
 ) -> (Box<dyn Decoder>, DecoderLogs) {
     let chunk_queue = Arc::new(MockLog::new(VecDeque::from(chunks)));
     let next_chunk_queue = Arc::clone(&chunk_queue);
@@ -140,8 +99,49 @@ fn build_scripted_decoder(
         },
         seek_results,
         duration,
-        track_info,
-        verify_in_drop,
+        options.track_info,
+        options.verify_in_drop,
+    )
+}
+
+/// Convenience wrapper over [`scripted_decoder`] for the common
+/// `verify_in_drop: false` data-plane tests.
+#[must_use]
+pub fn scripted_decoder_loose(
+    spec: PcmSpec,
+    chunks: Vec<PcmChunk>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
+    duration: Option<Duration>,
+) -> (Box<dyn Decoder>, DecoderLogs) {
+    scripted_decoder(
+        spec,
+        chunks,
+        seek_results,
+        duration,
+        ScriptedOptions::default(),
+    )
+}
+
+/// Convenience wrapper over [`scripted_decoder`] for tests that pin a
+/// custom [`DecoderTrackInfo`] (gapless metadata) with verification
+/// disabled.
+#[must_use]
+pub fn scripted_inner_decoder_with_track_info_loose(
+    spec: PcmSpec,
+    chunks: Vec<PcmChunk>,
+    seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
+    duration: Option<Duration>,
+    track_info: DecoderTrackInfo,
+) -> (Box<dyn Decoder>, DecoderLogs) {
+    scripted_decoder(
+        spec,
+        chunks,
+        seek_results,
+        duration,
+        ScriptedOptions {
+            track_info,
+            verify_in_drop: false,
+        },
     )
 }
 

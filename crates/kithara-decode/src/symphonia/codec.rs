@@ -211,43 +211,13 @@ impl FrameCodec for SymphoniaCodec {
         Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
     }
 
-    fn flush(&mut self) {
+    fn flush(&mut self) -> DecodeResult<()> {
         self.decoder.reset();
+        Ok(())
     }
 
     fn track_info(&self) -> DecoderTrackInfo {
         self.track_info.clone()
-    }
-
-    fn open(track: &TrackInfo) -> DecodeResult<Self> {
-        let (codec_id, profile) = map_codec(track.codec)?;
-        let mut params = AudioCodecParameters::new();
-        params
-            .for_codec(codec_id)
-            .with_sample_rate(track.sample_rate);
-        if let Some(profile) = profile {
-            params.with_profile(profile);
-        }
-        params.with_channels(Channels::Discrete(track.channels));
-        if !track.extra_data.is_empty() {
-            params.with_extra_data(track.extra_data.clone().into_boxed_slice());
-        }
-
-        let registry: &CodecRegistry = symphonia::default::get_codecs();
-        let opts = AudioDecoderOptions::default();
-        let decoder = registry
-            .make_audio_decoder(&params, &opts)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
-
-        let spec = PcmSpec {
-            channels: track.channels,
-            sample_rate: track.sample_rate,
-        };
-        Ok(Self {
-            decoder,
-            spec,
-            track_info: DecoderTrackInfo::default(),
-        })
     }
 
     fn spec(&self) -> PcmSpec {

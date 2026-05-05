@@ -5,35 +5,40 @@ use thiserror::Error;
 
 use crate::traits::DecoderInput;
 
-const BOX_MOOV: [u8; 4] = *b"moov";
-const BOX_MVHD: [u8; 4] = *b"mvhd";
-const BOX_TRAK: [u8; 4] = *b"trak";
-const BOX_META: [u8; 4] = *b"meta";
-const BOX_UDTA: [u8; 4] = *b"udta";
-const BOX_MDIA: [u8; 4] = *b"mdia";
-const BOX_MDHD: [u8; 4] = *b"mdhd";
-const BOX_MINF: [u8; 4] = *b"minf";
-const BOX_STBL: [u8; 4] = *b"stbl";
-const BOX_STSD: [u8; 4] = *b"stsd";
-const BOX_EDTS: [u8; 4] = *b"edts";
-const BOX_ELST: [u8; 4] = *b"elst";
-const BOX_ILST: [u8; 4] = *b"ilst";
-const BOX_FREEFORM: [u8; 4] = *b"----";
-const BOX_DATA: [u8; 4] = *b"data";
-const BOX_MEAN: [u8; 4] = *b"mean";
-const BOX_NAME: [u8; 4] = *b"name";
+struct Consts;
+impl Consts {
+    const BOX_MOOV: [u8; 4] = *b"moov";
+    const BOX_MVHD: [u8; 4] = *b"mvhd";
+    const BOX_TRAK: [u8; 4] = *b"trak";
+    const BOX_META: [u8; 4] = *b"meta";
+    const BOX_UDTA: [u8; 4] = *b"udta";
+    const BOX_MDIA: [u8; 4] = *b"mdia";
+    const BOX_MDHD: [u8; 4] = *b"mdhd";
+    const BOX_MINF: [u8; 4] = *b"minf";
+    const BOX_STBL: [u8; 4] = *b"stbl";
+    const BOX_STSD: [u8; 4] = *b"stsd";
+    const BOX_EDTS: [u8; 4] = *b"edts";
+    const BOX_ELST: [u8; 4] = *b"elst";
+    const BOX_ILST: [u8; 4] = *b"ilst";
+    const BOX_FREEFORM: [u8; 4] = *b"----";
+    const BOX_DATA: [u8; 4] = *b"data";
+    const BOX_MEAN: [u8; 4] = *b"mean";
+    const BOX_NAME: [u8; 4] = *b"name";
 
-const ITUNES_MEAN: &str = "com.apple.iTunes";
-const ITUNSMPB_NAME: &str = "iTunSMPB";
+    const ITUNES_MEAN: &str = "com.apple.iTunes";
+    const ITUNSMPB_NAME: &str = "iTunSMPB";
 
-/// Hard ceiling for `elst` entries to keep adversarial inputs from forcing huge
-/// allocations. Real edit lists in audio files are tiny.
-const ELST_MAX_ENTRIES: usize = 4096;
+    /// Hard ceiling for `elst` entries to keep adversarial inputs
+    /// from forcing huge allocations. Real edit lists in audio files
+    /// are tiny.
+    const ELST_MAX_ENTRIES: usize = 4096;
 
-/// Hard ceiling for the `----` payload we are willing to pull into memory while
-/// looking for an iTunSMPB tag. Freeform tags are kilobytes at most; this stops
-/// adversarial inputs from forcing large allocations during a probe.
-const FREEFORM_MAX_BYTES: usize = 64 * 1024;
+    /// Hard ceiling for the `----` payload we are willing to pull
+    /// into memory while looking for an iTunSMPB tag. Freeform tags
+    /// are kilobytes at most; this stops adversarial inputs from
+    /// forcing large allocations during a probe.
+    const FREEFORM_MAX_BYTES: usize = 64 * 1024;
+}
 
 /// Media-timing pair extracted from an `mdhd` box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,7 +161,7 @@ impl<'a> Mp4Scanner<'a> {
 
     fn scan(mut self) -> Result<(), Mp4MetadataError> {
         while let Some(header) = next_box(self.reader, None)? {
-            if header.kind == BOX_MOOV {
+            if header.kind == Consts::BOX_MOOV {
                 // Only one `moov` per file in the wild; nothing else upstream
                 // is interesting either. The visitor's break flow is honored
                 // inside `parse_moov`; either way we stop after `moov`.
@@ -235,16 +240,16 @@ impl<'a> Mp4Scanner<'a> {
 
     fn parse_moov(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_children(end, |this, header| match header.kind {
-            BOX_MVHD => {
+            Consts::BOX_MVHD => {
                 let payload = read_payload(this.reader, header.end, "mvhd")?;
                 if let Some(timescale) = parse_mvhd_timescale(&payload) {
                     return Ok(this.visitor.on_movie_timescale(timescale));
                 }
                 Ok(ControlFlow::Continue(()))
             }
-            BOX_TRAK => this.parse_trak(header.end),
-            BOX_META => this.parse_meta(header.end),
-            BOX_UDTA => this.parse_udta(header.end),
+            Consts::BOX_TRAK => this.parse_trak(header.end),
+            Consts::BOX_META => this.parse_meta(header.end),
+            Consts::BOX_UDTA => this.parse_udta(header.end),
             _ => Ok(ControlFlow::Continue(())),
         })
     }
@@ -255,8 +260,8 @@ impl<'a> Mp4Scanner<'a> {
         }
 
         let walk = self.walk_children(end, |this, header| match header.kind {
-            BOX_MDIA => this.parse_mdia(header.end),
-            BOX_EDTS => this.parse_edts(header.end),
+            Consts::BOX_MDIA => this.parse_mdia(header.end),
+            Consts::BOX_EDTS => this.parse_edts(header.end),
             _ => Ok(ControlFlow::Continue(())),
         })?;
 
@@ -272,24 +277,26 @@ impl<'a> Mp4Scanner<'a> {
 
     fn parse_mdia(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_children(end, |this, header| match header.kind {
-            BOX_MDHD => {
+            Consts::BOX_MDHD => {
                 let payload = read_payload(this.reader, header.end, "mdhd")?;
                 if let Some(timing) = parse_mdhd(&payload) {
                     return Ok(this.visitor.on_track_media_timing(timing));
                 }
                 Ok(ControlFlow::Continue(()))
             }
-            BOX_MINF => this.parse_minf(header.end),
+            Consts::BOX_MINF => this.parse_minf(header.end),
             _ => Ok(ControlFlow::Continue(())),
         })
     }
 
     fn parse_minf(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_matching_child(end, BOX_STBL, |this, header| this.parse_stbl(header.end))
+        self.walk_matching_child(end, Consts::BOX_STBL, |this, header| {
+            this.parse_stbl(header.end)
+        })
     }
 
     fn parse_stbl(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_payload_child(end, BOX_STSD, "stsd", |this, payload| {
+        self.walk_payload_child(end, Consts::BOX_STSD, "stsd", |this, payload| {
             if let Some(sample_rate) = parse_stsd_sample_rate(&payload) {
                 return Ok(this.visitor.on_track_sample_rate(sample_rate));
             }
@@ -298,14 +305,16 @@ impl<'a> Mp4Scanner<'a> {
     }
 
     fn parse_edts(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_payload_child(end, BOX_ELST, "elst", |this, payload| {
+        self.walk_payload_child(end, Consts::BOX_ELST, "elst", |this, payload| {
             let entries = parse_elst(&payload)?;
             Ok(this.visitor.on_track_edit_list(&entries))
         })
     }
 
     fn parse_udta(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_matching_child(end, BOX_META, |this, header| this.parse_meta(header.end))
+        self.walk_matching_child(end, Consts::BOX_META, |this, header| {
+            this.parse_meta(header.end)
+        })
     }
 
     /// Handles both ISO/IEC 14496-12 `meta` (with a `FullBox` header) and
@@ -323,14 +332,16 @@ impl<'a> Mp4Scanner<'a> {
             }
         }
 
-        self.walk_matching_child(end, BOX_ILST, |this, header| this.parse_ilst(header.end))
+        self.walk_matching_child(end, Consts::BOX_ILST, |this, header| {
+            this.parse_ilst(header.end)
+        })
     }
 
     /// Walks `ilst` children but only descends into freeform (`----`) atoms.
     /// Standard items (`covr`, `aART`, `trkn`, …) are skipped without reading
     /// their `data` payloads — that is what keeps cover art out of memory.
     fn parse_ilst(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        self.walk_matching_child(end, BOX_FREEFORM, |this, header| {
+        self.walk_matching_child(end, Consts::BOX_FREEFORM, |this, header| {
             this.parse_freeform_tag(header.end)
         })
     }
@@ -341,7 +352,8 @@ impl<'a> Mp4Scanner<'a> {
     fn parse_freeform_tag(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         let start = self.reader.stream_position()?;
         let payload_len = end.saturating_sub(start);
-        let too_big = usize::try_from(payload_len).map_or(true, |len| len > FREEFORM_MAX_BYTES);
+        let too_big =
+            usize::try_from(payload_len).map_or(true, |len| len > Consts::FREEFORM_MAX_BYTES);
         if payload_len == 0 || too_big {
             return Ok(ControlFlow::Continue(()));
         }
@@ -355,9 +367,9 @@ impl<'a> Mp4Scanner<'a> {
         // decision ourselves below, after we know whether this tag matched.
         let _ = self.walk_children(end, |this, header| {
             match header.kind {
-                BOX_MEAN => mean = this.read_text_fullbox_child(header, "mean")?,
-                BOX_NAME => name = this.read_text_fullbox_child(header, "name")?,
-                BOX_DATA => {
+                Consts::BOX_MEAN => mean = this.read_text_fullbox_child(header, "mean")?,
+                Consts::BOX_NAME => name = this.read_text_fullbox_child(header, "name")?,
+                Consts::BOX_DATA => {
                     let pos = this.reader.stream_position()?;
                     data_range = Some((pos, header.end));
                 }
@@ -366,10 +378,12 @@ impl<'a> Mp4Scanner<'a> {
             Ok(ControlFlow::Continue(()))
         })?;
 
-        let matches = mean.as_deref().is_some_and(|m| m == ITUNES_MEAN.as_bytes())
+        let matches = mean
+            .as_deref()
+            .is_some_and(|m| m == Consts::ITUNES_MEAN.as_bytes())
             && name
                 .as_deref()
-                .is_some_and(|n| n == ITUNSMPB_NAME.as_bytes());
+                .is_some_and(|n| n == Consts::ITUNSMPB_NAME.as_bytes());
         if !matches {
             return Ok(ControlFlow::Continue(()));
         }
@@ -411,7 +425,7 @@ fn parse_elst(payload: &[u8]) -> Result<SmallVec<[Mp4EditListEntry; 1]>, Mp4Meta
     let entry_count = read_be_u32(slice(payload, 4, 4, "elst entry count")?)
         .ok_or_else(|| invalid("elst entry count is truncated"))? as usize;
 
-    let entry_count = entry_count.min(ELST_MAX_ENTRIES);
+    let entry_count = entry_count.min(Consts::ELST_MAX_ENTRIES);
     let mut offset = 8;
     let mut entries = SmallVec::with_capacity(entry_count);
 
@@ -703,36 +717,36 @@ mod tests {
         visitor
     }
 
-    fn atom_parts(kind: &[u8; 4], parts: &[&[u8]]) -> Vec<u8> {
+    fn atom_parts(kind: [u8; 4], parts: &[&[u8]]) -> Vec<u8> {
         let payload_len: usize = parts.iter().map(|part| part.len()).sum();
         let size = u32::try_from(payload_len + 8).unwrap_or(u32::MAX);
         let mut out = Vec::with_capacity(payload_len + 8);
         out.extend_from_slice(&size.to_be_bytes());
-        out.extend_from_slice(kind);
+        out.extend_from_slice(&kind);
         for part in parts {
             out.extend_from_slice(part);
         }
         out
     }
 
-    fn atom(kind: &[u8; 4], payload: Vec<u8>) -> Vec<u8> {
-        atom_parts(kind, &[payload.as_slice()])
+    fn atom(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
+        atom_parts(kind, &[payload])
     }
 
     /// Builds a box with an explicit 64-bit (extended) size header.
-    fn extended_atom(kind: &[u8; 4], payload: Vec<u8>) -> Vec<u8> {
+    fn extended_atom(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let total = (payload.len() + 16) as u64;
         let mut out = Vec::with_capacity(payload.len() + 16);
         out.extend_from_slice(&1u32.to_be_bytes());
-        out.extend_from_slice(kind);
+        out.extend_from_slice(&kind);
         out.extend_from_slice(&total.to_be_bytes());
-        out.extend_from_slice(&payload);
+        out.extend_from_slice(payload);
         out
     }
 
-    fn full_box(kind: &[u8; 4], version: u8, body: Vec<u8>) -> Vec<u8> {
+    fn full_box(kind: [u8; 4], version: u8, body: &[u8]) -> Vec<u8> {
         let header = [version, 0, 0, 0];
-        atom_parts(kind, &[&header, body.as_slice()])
+        atom_parts(kind, &[&header, body])
     }
 
     fn mvhd_v0(movie_timescale: u32) -> Vec<u8> {
@@ -741,7 +755,7 @@ mod tests {
         body.extend_from_slice(&0u32.to_be_bytes()); // modification_time
         body.extend_from_slice(&movie_timescale.to_be_bytes());
         body.extend_from_slice(&0u32.to_be_bytes()); // duration
-        full_box(b"mvhd", 0, body)
+        full_box(*b"mvhd", 0, &body)
     }
 
     fn mvhd_v1(movie_timescale: u32) -> Vec<u8> {
@@ -750,7 +764,7 @@ mod tests {
         body.extend_from_slice(&0u64.to_be_bytes());
         body.extend_from_slice(&movie_timescale.to_be_bytes());
         body.extend_from_slice(&0u64.to_be_bytes());
-        full_box(b"mvhd", 1, body)
+        full_box(*b"mvhd", 1, &body)
     }
 
     fn mdhd_v0(media_timescale: u32, media_duration: u32) -> Vec<u8> {
@@ -760,7 +774,7 @@ mod tests {
         body.extend_from_slice(&media_timescale.to_be_bytes());
         body.extend_from_slice(&media_duration.to_be_bytes());
         body.extend_from_slice(&0u32.to_be_bytes()); // language + pre_defined
-        full_box(b"mdhd", 0, body)
+        full_box(*b"mdhd", 0, &body)
     }
 
     fn mdhd_v1(media_timescale: u32, media_duration: u64) -> Vec<u8> {
@@ -770,7 +784,7 @@ mod tests {
         body.extend_from_slice(&media_timescale.to_be_bytes());
         body.extend_from_slice(&media_duration.to_be_bytes());
         body.extend_from_slice(&0u32.to_be_bytes());
-        full_box(b"mdhd", 1, body)
+        full_box(*b"mdhd", 1, &body)
     }
 
     fn elst_v0_one_entry(segment_duration: u32, media_time: i32) -> Vec<u8> {
@@ -780,7 +794,7 @@ mod tests {
         body.extend_from_slice(&media_time.to_be_bytes());
         body.extend_from_slice(&1u16.to_be_bytes()); // media_rate_integer
         body.extend_from_slice(&0u16.to_be_bytes()); // media_rate_fraction
-        full_box(b"elst", 0, body)
+        full_box(*b"elst", 0, &body)
     }
 
     fn elst_v1_one_entry(segment_duration: u64, media_time: i64) -> Vec<u8> {
@@ -790,10 +804,10 @@ mod tests {
         body.extend_from_slice(&media_time.to_be_bytes());
         body.extend_from_slice(&1u16.to_be_bytes());
         body.extend_from_slice(&0u16.to_be_bytes());
-        full_box(b"elst", 1, body)
+        full_box(*b"elst", 1, &body)
     }
 
-    fn audio_sample_entry(codec: &[u8; 4], sample_rate: u32) -> Vec<u8> {
+    fn audio_sample_entry(codec: [u8; 4], sample_rate: u32) -> Vec<u8> {
         let mut sample_entry = vec![0; 6]; // reserved
         sample_entry.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
         sample_entry.extend_from_slice(&[0; 8]); // reserved
@@ -802,15 +816,15 @@ mod tests {
         sample_entry.extend_from_slice(&0u16.to_be_bytes()); // pre_defined
         sample_entry.extend_from_slice(&0u16.to_be_bytes()); // reserved
         sample_entry.extend_from_slice(&(sample_rate << 16).to_be_bytes());
-        atom(codec, sample_entry)
+        atom(codec, &sample_entry)
     }
 
-    fn stsd(sample_rate: u32, codec: &[u8; 4]) -> Vec<u8> {
+    fn stsd(sample_rate: u32, codec: [u8; 4]) -> Vec<u8> {
         let entry = audio_sample_entry(codec, sample_rate);
         let mut body = Vec::new();
         body.extend_from_slice(&1u32.to_be_bytes());
         body.extend_from_slice(&entry);
-        full_box(b"stsd", 0, body)
+        full_box(*b"stsd", 0, &body)
     }
 
     fn data_box(data_type: u32, value: &[u8]) -> Vec<u8> {
@@ -818,74 +832,74 @@ mod tests {
         body.extend_from_slice(&data_type.to_be_bytes());
         body.extend_from_slice(&0u32.to_be_bytes()); // locale
         body.extend_from_slice(value);
-        atom(b"data", body)
+        atom(*b"data", &body)
     }
 
-    fn freeform_text_box(kind: &[u8; 4], text: &str) -> Vec<u8> {
+    fn freeform_text_box(kind: [u8; 4], text: &str) -> Vec<u8> {
         let mut body = vec![0, 0, 0, 1]; // version + flags
         body.extend_from_slice(text.as_bytes());
-        atom(kind, body)
+        atom(kind, &body)
     }
 
     fn freeform_itunsmpb(text: &str) -> Vec<u8> {
         let mut freeform = Vec::new();
-        freeform.extend_from_slice(&freeform_text_box(b"mean", "com.apple.iTunes"));
-        freeform.extend_from_slice(&freeform_text_box(b"name", "iTunSMPB"));
+        freeform.extend_from_slice(&freeform_text_box(*b"mean", "com.apple.iTunes"));
+        freeform.extend_from_slice(&freeform_text_box(*b"name", "iTunSMPB"));
         freeform.extend_from_slice(&data_box(1, text.as_bytes()));
-        atom(b"----", freeform)
+        atom(*b"----", &freeform)
     }
 
     fn make_track_mp4() -> Vec<u8> {
         let mut stbl = Vec::new();
-        stbl.extend_from_slice(&stsd(48_000, b"mp4a"));
+        stbl.extend_from_slice(&stsd(48_000, *b"mp4a"));
 
         let mut minf = Vec::new();
-        minf.extend_from_slice(&atom(b"stbl", stbl));
+        minf.extend_from_slice(&atom(*b"stbl", &stbl));
 
         let mut mdia = Vec::new();
         mdia.extend_from_slice(&mdhd_v0(48_000, 96_000));
-        mdia.extend_from_slice(&atom(b"minf", minf));
+        mdia.extend_from_slice(&atom(*b"minf", &minf));
 
         let mut edts = Vec::new();
         edts.extend_from_slice(&elst_v0_one_entry(1_916, 2_112));
 
         let mut trak = Vec::new();
-        trak.extend_from_slice(&atom(b"mdia", mdia));
-        trak.extend_from_slice(&atom(b"edts", edts));
+        trak.extend_from_slice(&atom(*b"mdia", &mdia));
+        trak.extend_from_slice(&atom(*b"edts", &edts));
 
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd_v0(1_000));
-        moov.extend_from_slice(&atom(b"trak", trak));
+        moov.extend_from_slice(&atom(*b"trak", &trak));
 
-        atom(b"moov", moov)
+        atom(*b"moov", &moov)
     }
 
     fn make_itunsmpb_mp4(text: &str) -> Vec<u8> {
-        let ilst = atom(b"ilst", freeform_itunsmpb(text));
+        let ilst = atom(*b"ilst", &freeform_itunsmpb(text));
 
         let mut meta_payload = vec![0, 0, 0, 0];
         meta_payload.extend_from_slice(&ilst);
 
-        let udta = atom(b"meta", meta_payload);
+        let udta = atom(*b"meta", &meta_payload);
 
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd_v0(1_000));
-        moov.extend_from_slice(&atom(b"udta", udta));
-        atom(b"moov", moov)
+        moov.extend_from_slice(&atom(*b"udta", &udta));
+        atom(*b"moov", &moov)
     }
 
     /// `moov` containing a `QuickTime`-style `meta` box (no `FullBox` header)
     /// embedded directly under `moov` rather than under `udta`, with an
     /// iTunSMPB freeform tag inside.
     fn make_quicktime_meta_mp4(text: &str) -> Vec<u8> {
-        let ilst = atom(b"ilst", freeform_itunsmpb(text));
+        let ilst = atom(*b"ilst", &freeform_itunsmpb(text));
         // QuickTime meta has no FullBox prefix.
-        let meta = atom(b"meta", ilst);
+        let meta = atom(*b"meta", &ilst);
 
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd_v0(600));
         moov.extend_from_slice(&meta);
-        atom(b"moov", moov)
+        atom(*b"moov", &moov)
     }
 
     struct CountingCursor {
@@ -968,22 +982,22 @@ mod tests {
     #[kithara::test]
     fn emits_v1_mvhd_and_mdhd_with_64bit_durations() {
         let mut stbl = Vec::new();
-        stbl.extend_from_slice(&stsd(48_000, b"alac"));
+        stbl.extend_from_slice(&stsd(48_000, *b"alac"));
 
-        let mut minf = atom(b"stbl", stbl);
-        minf = atom(b"minf", minf);
+        let mut minf = atom(*b"stbl", &stbl);
+        minf = atom(*b"minf", &minf);
 
         let mut mdia = Vec::new();
         mdia.extend_from_slice(&mdhd_v1(96_000, 1u64 << 33));
         mdia.extend_from_slice(&minf);
 
-        let trak = atom(b"trak", atom(b"mdia", mdia));
+        let trak = atom(*b"trak", &atom(*b"mdia", &mdia));
 
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd_v1(48_000));
         moov.extend_from_slice(&trak);
 
-        let mut reader = Cursor::new(atom(b"moov", moov));
+        let mut reader = Cursor::new(atom(*b"moov", &moov));
         let recorded = record(&mut reader);
 
         assert_eq!(recorded.movie_timescale, Some(48_000));
@@ -1005,10 +1019,10 @@ mod tests {
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd_v0(1_000));
 
-        let edts = atom(b"edts", elst_v1_one_entry(2_000, -1));
-        moov.extend_from_slice(&atom(b"trak", edts));
+        let edts = atom(*b"edts", &elst_v1_one_entry(2_000, -1));
+        moov.extend_from_slice(&atom(*b"trak", &edts));
 
-        let mut reader = Cursor::new(atom(b"moov", moov));
+        let mut reader = Cursor::new(atom(*b"moov", &moov));
         let recorded = record(&mut reader);
 
         assert_eq!(
@@ -1022,8 +1036,8 @@ mod tests {
 
     #[kithara::test]
     fn parses_extended_size_box() {
-        let mut file = atom(b"ftyp", b"isom".to_vec());
-        file.extend_from_slice(&extended_atom(b"mdat", vec![0; 32]));
+        let mut file = atom(*b"ftyp", b"isom");
+        file.extend_from_slice(&extended_atom(*b"mdat", &[0; 32]));
         file.extend_from_slice(&make_track_mp4());
 
         let mut reader = Cursor::new(file);
@@ -1071,19 +1085,19 @@ mod tests {
         // and must not consume the data-box payload (we just sanity-check the
         // visitor here; payload-skip is enforced by the parser's contract).
         let mut freeform = Vec::new();
-        freeform.extend_from_slice(&freeform_text_box(b"mean", "com.apple.iTunes"));
-        freeform.extend_from_slice(&freeform_text_box(b"name", "OTHER"));
+        freeform.extend_from_slice(&freeform_text_box(*b"mean", "com.apple.iTunes"));
+        freeform.extend_from_slice(&freeform_text_box(*b"name", "OTHER"));
         freeform.extend_from_slice(&data_box(1, b"value"));
-        let ilst = atom(b"ilst", atom(b"----", freeform));
+        let ilst = atom(*b"ilst", &atom(*b"----", &freeform));
 
         let mut meta_payload = vec![0, 0, 0, 0];
         meta_payload.extend_from_slice(&ilst);
 
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd_v0(1_000));
-        moov.extend_from_slice(&atom(b"udta", atom(b"meta", meta_payload)));
+        moov.extend_from_slice(&atom(*b"udta", &atom(*b"meta", &meta_payload)));
 
-        let mut reader = Cursor::new(atom(b"moov", moov));
+        let mut reader = Cursor::new(atom(*b"moov", &moov));
         let recorded = record(&mut reader);
 
         assert_eq!(recorded.itunsmpb, None);
@@ -1094,8 +1108,8 @@ mod tests {
         // Build an `ilst` containing a fake covr (with a chunky payload) plus
         // a freeform iTunSMPB. Only the freeform tag should reach the visitor.
         let cover_payload = vec![0xFFu8; 1024];
-        let cover = atom(b"covr", data_box(13, &cover_payload));
-        let title = atom(&[0xa9, b'n', b'a', b'm'], data_box(1, b"Title"));
+        let cover = atom(*b"covr", &data_box(13, &cover_payload));
+        let title = atom([0xa9, b'n', b'a', b'm'], &data_box(1, b"Title"));
 
         let mut ilst = Vec::new();
         ilst.extend_from_slice(&cover);
@@ -1105,13 +1119,13 @@ mod tests {
         ));
 
         let mut meta_payload = vec![0, 0, 0, 0];
-        meta_payload.extend_from_slice(&atom(b"ilst", ilst));
+        meta_payload.extend_from_slice(&atom(*b"ilst", &ilst));
 
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd_v0(1_000));
-        moov.extend_from_slice(&atom(b"udta", atom(b"meta", meta_payload)));
+        moov.extend_from_slice(&atom(*b"udta", &atom(*b"meta", &meta_payload)));
 
-        let mut reader = Cursor::new(atom(b"moov", moov));
+        let mut reader = Cursor::new(atom(*b"moov", &moov));
         let recorded = record(&mut reader);
 
         assert_eq!(
@@ -1126,14 +1140,14 @@ mod tests {
     #[kithara::test]
     fn visitor_break_stops_scan_at_track_end() {
         // Two trak boxes; the visitor signals Break after the first one.
-        let trak1 = atom(b"trak", atom(b"mdia", mdhd_v0(48_000, 96_000)));
-        let trak2 = atom(b"trak", atom(b"mdia", mdhd_v0(44_100, 132_300)));
+        let trak1 = atom(*b"trak", &atom(*b"mdia", &mdhd_v0(48_000, 96_000)));
+        let trak2 = atom(*b"trak", &atom(*b"mdia", &mdhd_v0(44_100, 132_300)));
 
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd_v0(1_000));
         moov.extend_from_slice(&trak1);
         moov.extend_from_slice(&trak2);
-        let bytes = atom(b"moov", moov);
+        let bytes = atom(*b"moov", &moov);
 
         struct BreakAfterFirstTrack {
             tracks_seen: u32,
@@ -1153,8 +1167,8 @@ mod tests {
 
     #[kithara::test]
     fn scan_seeks_past_large_boxes_to_find_moov() {
-        let mut file = atom(b"ftyp", b"isom".to_vec());
-        file.extend_from_slice(&atom(b"mdat", vec![0; (4 * 1024 * 1024) + 128]));
+        let mut file = atom(*b"ftyp", b"isom");
+        file.extend_from_slice(&atom(*b"mdat", &vec![0; (4 * 1024 * 1024) + 128]));
         file.extend_from_slice(&make_track_mp4());
 
         let mut reader = CountingCursor::new(file);
@@ -1207,7 +1221,7 @@ mod tests {
 
     #[kithara::test]
     fn top_level_size_zero_terminates_scan_without_error() {
-        let mut file = atom(b"ftyp", b"isom".to_vec());
+        let mut file = atom(*b"ftyp", b"isom");
         // Header that says "size = 0", meaning extends to end of file. With
         // moov before this marker, scanning should still succeed.
         file.extend_from_slice(&make_track_mp4());
@@ -1220,14 +1234,14 @@ mod tests {
 
     #[kithara::test]
     fn rejects_child_box_extending_past_parent() {
-        let mut file = atom(b"ftyp", b"isom".to_vec());
+        let mut file = atom(*b"ftyp", b"isom");
         // moov size 24 (8 header + 16 payload). Inside, declare an mvhd of
         // size 128 — well past the parent's end. The scanner must reject this.
         let mut moov_payload = Vec::new();
         moov_payload.extend_from_slice(&128u32.to_be_bytes());
         moov_payload.extend_from_slice(b"mvhd");
         moov_payload.extend_from_slice(&[0; 8]);
-        file.extend_from_slice(&atom(b"moov", moov_payload));
+        file.extend_from_slice(&atom(*b"moov", &moov_payload));
 
         let mut reader = Cursor::new(file);
         let mut visitor = RecordingVisitor::default();
@@ -1237,7 +1251,7 @@ mod tests {
 
     #[kithara::test]
     fn rejects_box_smaller_than_header() {
-        let mut file = atom(b"ftyp", b"isom".to_vec());
+        let mut file = atom(*b"ftyp", b"isom");
         file.extend_from_slice(&4u32.to_be_bytes()); // size=4, smaller than 8-byte header
         file.extend_from_slice(b"junk");
 

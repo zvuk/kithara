@@ -223,14 +223,10 @@ impl DecoderFactory {
     /// Returns `DecodeError::ProbeFailed` when the hint is missing or too
     /// weak to pick a codec, and `DecodeError::*` for backend failures.
     /// No fallback — callers must supply a usable hint.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "by-value lets callers pass DecoderConfig::default() without explicit borrow"
-    )]
     pub fn create_with_probe<R>(
         source: R,
         hint: Option<&str>,
-        config: DecoderConfig,
+        config: &DecoderConfig,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -242,7 +238,7 @@ impl DecoderFactory {
         };
 
         probe_codec(&probe_hint)?;
-        Self::create(source, &probe_hint, &config)
+        Self::create(source, &probe_hint, config)
     }
 
     pub(super) fn dispatch_backend(
@@ -281,8 +277,19 @@ fn create_apple(
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        if crate::apple::AppleCodec::supports(codec) {
-            return create_fmp4_segment_apple(source, codec, layout, config);
+        use crate::apple::{AppleCodec, AppleConfig};
+        if AppleCodec::supports(codec) {
+            tracing::debug!(
+                ?codec,
+                "fmp4_segment: dispatching to segment-aware Apple HW codec path"
+            );
+            let apple_config = AppleConfig {
+                gapless: config.gapless,
+                ..Default::default()
+            };
+            return build_fmp4_segment_decoder(source, layout, config, |track| {
+                AppleCodec::open_with_config(track, &apple_config)
+            });
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
@@ -298,52 +305,6 @@ fn create_apple(
     }
 }
 
-#[cfg(all(
-    feature = "apple",
-    feature = "symphonia",
-    any(target_os = "macos", target_os = "ios")
-))]
-fn create_fmp4_segment_apple(
-    source: BoxedSource,
-    codec: AudioCodec,
-    layout: Arc<dyn SegmentLayout>,
-    config: &DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
-    use crate::{
-        apple::{AppleCodec, AppleConfig},
-        demuxer::Demuxer,
-        fmp4::Fmp4SegmentDemuxer,
-        universal::UniversalDecoder,
-    };
-
-    tracing::debug!(
-        ?codec,
-        "fmp4_segment: dispatching to segment-aware Apple HW codec path"
-    );
-    let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
-    let apple_config = AppleConfig {
-        gapless: config.gapless,
-        ..Default::default()
-    };
-    let codec = AppleCodec::open_with_config(demuxer.track_info(), &apple_config)?;
-    let pool = config
-        .pcm_pool
-        .clone()
-        // fallback safety net — caller injects pcm_pool via DecoderConfig
-        // ast-grep-ignore: perf.no-global-pool-accessor
-        .unwrap_or_else(|| PcmPool::default().clone());
-    let decoder = UniversalDecoder::new(
-        demuxer,
-        codec,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.stream_ctx.clone(),
-        config.hooks.clone(),
-    );
-    Ok(Box::new(decoder))
-}
-
 #[cfg(all(feature = "android", target_os = "android"))]
 fn create_android(
     source: BoxedSource,
@@ -355,8 +316,19 @@ fn create_android(
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        if crate::android::AndroidCodec::supports(codec) {
-            return create_fmp4_segment_android(source, codec, layout, config);
+        use crate::android::{AndroidCodec, config::AndroidConfig};
+        if AndroidCodec::supports(codec) {
+            tracing::debug!(
+                ?codec,
+                "fmp4_segment: dispatching to segment-aware Android HW codec path"
+            );
+            let android_config = AndroidConfig {
+                gapless: config.gapless,
+                ..Default::default()
+            };
+            return build_fmp4_segment_decoder(source, layout, config, |track| {
+                AndroidCodec::open_with_config(track, &android_config)
+            });
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
@@ -365,49 +337,6 @@ fn create_android(
     // implies `feature = "symphonia"` in the workspace lock; we don't
     // build an Android target without Symphonia.)
     create_symphonia(source, codec, container, config)
-}
-
-#[cfg(all(feature = "android", feature = "symphonia", target_os = "android"))]
-fn create_fmp4_segment_android(
-    source: BoxedSource,
-    codec: AudioCodec,
-    layout: Arc<dyn SegmentLayout>,
-    config: &DecoderConfig,
-) -> DecodeResult<Box<dyn Decoder>> {
-    use crate::{
-        android::{AndroidCodec, config::AndroidConfig},
-        codec::FrameCodec,
-        demuxer::Demuxer,
-        fmp4::Fmp4SegmentDemuxer,
-        universal::UniversalDecoder,
-    };
-
-    tracing::debug!(
-        ?codec,
-        "fmp4_segment: dispatching to segment-aware Android HW codec path"
-    );
-    let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
-    let android_config = AndroidConfig {
-        gapless: config.gapless,
-        ..Default::default()
-    };
-    let codec = AndroidCodec::open_with_config(demuxer.track_info(), &android_config)?;
-    let pool = config
-        .pcm_pool
-        .clone()
-        // fallback safety net — caller injects pcm_pool via DecoderConfig
-        // ast-grep-ignore: perf.no-global-pool-accessor
-        .unwrap_or_else(|| PcmPool::default().clone());
-    let decoder = UniversalDecoder::new(
-        demuxer,
-        codec,
-        pool,
-        config.epoch,
-        config.byte_len_handle.clone(),
-        config.stream_ctx.clone(),
-        config.hooks.clone(),
-    );
-    Ok(Box::new(decoder))
 }
 
 #[cfg(feature = "symphonia")]
@@ -553,12 +482,7 @@ fn create_fmp4_segment_symphonia(
     layout: Arc<dyn SegmentLayout>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
-    use crate::{
-        demuxer::Demuxer,
-        fmp4::Fmp4SegmentDemuxer,
-        symphonia::{SymphoniaCodec, SymphoniaConfig},
-        universal::UniversalDecoder,
-    };
+    use crate::symphonia::{SymphoniaCodec, SymphoniaConfig};
 
     tracing::debug!(
         ?codec,
@@ -566,29 +490,51 @@ fn create_fmp4_segment_symphonia(
     );
     match codec {
         AudioCodec::AacLc | AudioCodec::Flac => {
-            let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
             let symphonia_config = SymphoniaConfig {
                 gapless: config.gapless,
                 ..Default::default()
             };
-            let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?;
-            let pool = config
-                .pcm_pool
-                .clone()
-                // fallback safety net — caller injects pcm_pool via DecoderConfig
-                // ast-grep-ignore: perf.no-global-pool-accessor
-                .unwrap_or_else(|| PcmPool::default().clone());
-            let decoder = UniversalDecoder::new(
-                demuxer,
-                codec,
-                pool,
-                config.epoch,
-                config.byte_len_handle.clone(),
-                config.stream_ctx.clone(),
-                config.hooks.clone(),
-            );
-            Ok(Box::new(decoder))
+            build_fmp4_segment_decoder(source, layout, config, |track| {
+                SymphoniaCodec::open_with_config(track, &symphonia_config)
+            })
         }
         other => Err(DecodeError::UnsupportedCodec(other)),
     }
+}
+
+/// Generic builder for the segment-aware fMP4 path. Owns the
+/// [`Fmp4SegmentDemuxer`] open + pool-resolution + [`UniversalDecoder`]
+/// boilerplate so apple/android/symphonia call-sites collapse into a
+/// single closure that opens the codec from `TrackInfo`.
+#[cfg(feature = "symphonia")]
+fn build_fmp4_segment_decoder<C, F>(
+    source: BoxedSource,
+    layout: Arc<dyn SegmentLayout>,
+    config: &DecoderConfig,
+    open_codec: F,
+) -> DecodeResult<Box<dyn Decoder>>
+where
+    C: crate::codec::FrameCodec + 'static,
+    F: FnOnce(&crate::demuxer::TrackInfo) -> DecodeResult<C>,
+{
+    use crate::{demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer, universal::UniversalDecoder};
+
+    let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
+    let codec = open_codec(demuxer.track_info())?;
+    let pool = config
+        .pcm_pool
+        .clone()
+        // fallback safety net — caller injects pcm_pool via DecoderConfig
+        // ast-grep-ignore: perf.no-global-pool-accessor
+        .unwrap_or_else(|| PcmPool::default().clone());
+    let decoder = UniversalDecoder::new(
+        demuxer,
+        codec,
+        pool,
+        config.epoch,
+        config.byte_len_handle.clone(),
+        config.stream_ctx.clone(),
+        config.hooks.clone(),
+    );
+    Ok(Box::new(decoder))
 }

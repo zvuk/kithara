@@ -174,7 +174,7 @@ fn create_decoder_with_probe(
     hint: &'static str,
     config: DecoderConfig,
 ) -> DecodeResult<Box<dyn InnerDecoder>> {
-    DecoderFactory::create_with_probe(Cursor::new(bytes), Some(hint), config)
+    DecoderFactory::create_with_probe(Cursor::new(bytes), Some(hint), &config)
 }
 
 fn decode_visible_frames(mut decoder: Box<dyn InnerDecoder>) -> DecodeResult<DecodedFrames> {

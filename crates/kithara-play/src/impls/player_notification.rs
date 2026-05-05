@@ -46,6 +46,27 @@ pub(crate) enum PlayerNotification {
     FadingOut,
 }
 
+impl PlayerNotification {
+    /// Returns the track src for variants that carry it.
+    ///
+    /// Used by the offline test harness (`take_notification_kinds`) and by
+    /// tracing call-sites that need to discriminate between concurrent
+    /// tracks beyond what the variant tag alone can express.
+    pub(crate) fn src(&self) -> Option<&Arc<str>> {
+        match self {
+            Self::Loaded { src }
+            | Self::Unloaded { src }
+            | Self::Changed { src }
+            | Self::PlaybackStopped { src, .. } => Some(src),
+            Self::PlaybackStarted
+            | Self::Requested
+            | Self::HandoverRequested
+            | Self::FadingIn
+            | Self::FadingOut => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -83,5 +104,16 @@ mod tests {
             cloned,
             PlayerNotification::PlaybackStopped { ref src, .. } if &**src == "ended.mp3"
         ));
+    }
+
+    #[kithara::test]
+    fn notification_changed_carries_src() {
+        let n = PlayerNotification::Changed {
+            src: Arc::from("next.mp3"),
+        };
+        let PlayerNotification::Changed { src } = n else {
+            panic!("expected Changed");
+        };
+        assert_eq!(&*src, "next.mp3");
     }
 }

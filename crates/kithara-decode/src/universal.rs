@@ -204,7 +204,7 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
                 landed_at,
                 landed_byte,
             } => {
-                self.codec.flush();
+                self.codec.flush()?;
                 // The audio pipeline's timeline anchors at this report;
                 // surface the *requested* target when the demuxer
                 // snapped backward (e.g. HLS segment start) so the user
@@ -222,7 +222,7 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
                 })
             }
             DemuxSeekOutcome::PastEof { duration } => {
-                self.codec.flush();
+                self.codec.flush()?;
                 Ok(DecoderSeekOutcome::PastEof { duration })
             }
         }
@@ -293,8 +293,7 @@ mod smoke_tests {
 
     use super::*;
     use crate::{
-        codec::FrameCodec,
-        symphonia::{SymphoniaCodec, SymphoniaDemuxer},
+        symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
         traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     };
 
@@ -332,7 +331,8 @@ mod smoke_tests {
     fn mp3_universal_decoder_emits_non_empty_chunks() {
         let demuxer = build_mp3_demuxer();
         let track_info = demuxer.track_info().clone();
-        let codec = SymphoniaCodec::open(&track_info).expect("MP3 codec should open");
+        let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
+            .expect("MP3 codec should open");
         let mut decoder = UniversalDecoder::new(
             demuxer,
             codec,
@@ -366,7 +366,8 @@ mod smoke_tests {
     fn mp3_universal_decoder_seeks_back_to_start_after_pulling_chunks() {
         let demuxer = build_mp3_demuxer();
         let track_info = demuxer.track_info().clone();
-        let codec = SymphoniaCodec::open(&track_info).expect("MP3 codec should open");
+        let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
+            .expect("MP3 codec should open");
         let mut decoder = UniversalDecoder::new(
             demuxer,
             codec,
@@ -398,6 +399,60 @@ mod smoke_tests {
             DecoderSeekOutcome::PastEof { .. } => {
                 panic!("seek(0) on a real MP3 must not be PastEof")
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_stub_codec {
+    //! Shared `FrameCodec` stub for `universal.rs` test modules.
+    //! Writes `frames_per_call * channels` zero samples on every
+    //! `decode_frame` call. Hook-tests parameterise with
+    //! `frames_per_call = 1`; pool-budget tests use a larger value
+    //! to fill realistic per-frame buffers.
+
+    use kithara_bufpool::PcmBuf;
+    use kithara_platform::time::Duration;
+
+    use crate::{codec::FrameCodec, error::DecodeResult, types::PcmSpec};
+
+    pub(super) struct ConstFrameCodec {
+        spec: PcmSpec,
+        frames_per_call: u32,
+    }
+
+    impl ConstFrameCodec {
+        pub(super) fn new(spec: PcmSpec, frames_per_call: u32) -> Self {
+            Self {
+                spec,
+                frames_per_call,
+            }
+        }
+    }
+
+    impl FrameCodec for ConstFrameCodec {
+        fn decode_frame(
+            &mut self,
+            _bytes: &[u8],
+            _pts: Duration,
+            out: &mut PcmBuf,
+        ) -> DecodeResult<u32> {
+            let samples = self.frames_per_call as usize * self.spec.channels as usize;
+            out.ensure_len(samples)
+                .map_err(|e| crate::error::DecodeError::Backend(Box::new(e)))?;
+            for slot in out.iter_mut() {
+                *slot = 0.0;
+            }
+            out.truncate(samples);
+            Ok(self.frames_per_call)
+        }
+
+        fn flush(&mut self) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
         }
     }
 }
@@ -511,34 +566,7 @@ mod hook_tests {
         }
     }
 
-    struct StubCodec {
-        spec: PcmSpec,
-    }
-
-    impl FrameCodec for StubCodec {
-        fn decode_frame(
-            &mut self,
-            _bytes: &[u8],
-            _pts: Duration,
-            out: &mut PcmBuf,
-        ) -> DecodeResult<u32> {
-            let samples = self.spec.channels as usize;
-            out.ensure_len(samples)
-                .map_err(|e| crate::error::DecodeError::Backend(Box::new(e)))?;
-            for slot in out.iter_mut() {
-                *slot = 0.0;
-            }
-            out.truncate(samples);
-            Ok(1)
-        }
-        fn flush(&mut self) {}
-        fn open(_track: &TrackInfo) -> DecodeResult<Self> {
-            unreachable!("stub codec is hand-built")
-        }
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-    }
+    use super::test_stub_codec::ConstFrameCodec;
 
     fn empty_track() -> TrackInfo {
         TrackInfo {
@@ -554,13 +582,14 @@ mod hook_tests {
     fn build(
         demuxer: StubDemuxer,
         log: Arc<Mutex<CallLog>>,
-    ) -> UniversalDecoder<StubDemuxer, StubCodec> {
-        let codec = StubCodec {
-            spec: PcmSpec {
+    ) -> UniversalDecoder<StubDemuxer, ConstFrameCodec> {
+        let codec = ConstFrameCodec::new(
+            PcmSpec {
                 channels: 2,
                 sample_rate: 44_100,
             },
-        };
+            1,
+        );
         let hooks: SharedHooks = Arc::new(Mutex::new(LoggingHooks { log }));
         UniversalDecoder::new(
             demuxer,
@@ -655,44 +684,12 @@ mod pool_budget_tests {
     //! Backend-specific equivalents (Apple/Android FFI cookie code paths)
     //! live next to those codecs.
 
-    use kithara_bufpool::{PcmBuf, PcmPool};
+    use kithara_bufpool::PcmPool;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
 
-    use crate::{codec::FrameCodec, demuxer::TrackInfo, error::DecodeResult, types::PcmSpec};
-
-    /// Stub codec that always writes `frames_per_call * channels` samples.
-    /// Mimics a generic `FrameCodec` contract without depending on any
-    /// specific backend.
-    struct ConstFrameCodec {
-        spec: PcmSpec,
-        frames_per_call: u32,
-    }
-
-    impl FrameCodec for ConstFrameCodec {
-        fn decode_frame(
-            &mut self,
-            _bytes: &[u8],
-            _pts: Duration,
-            out: &mut PcmBuf,
-        ) -> DecodeResult<u32> {
-            let samples = self.frames_per_call as usize * self.spec.channels as usize;
-            out.ensure_len(samples)
-                .map_err(|e| crate::error::DecodeError::Backend(Box::new(e)))?;
-            for slot in out.iter_mut() {
-                *slot = 0.0;
-            }
-            out.truncate(samples);
-            Ok(self.frames_per_call)
-        }
-        fn flush(&mut self) {}
-        fn open(_track: &TrackInfo) -> DecodeResult<Self> {
-            unreachable!("hand-built")
-        }
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-    }
+    use super::test_stub_codec::ConstFrameCodec;
+    use crate::{codec::FrameCodec, types::PcmSpec};
 
     #[kithara::test]
     fn codec_warm_pool_does_not_grow_alloc_misses() {
@@ -707,13 +704,13 @@ mod pool_budget_tests {
         }
         let warmup_misses = pool.stats().alloc_misses;
 
-        let mut codec = ConstFrameCodec {
-            spec: PcmSpec {
+        let mut codec = ConstFrameCodec::new(
+            PcmSpec {
                 channels: 2,
                 sample_rate: 44_100,
             },
-            frames_per_call: 1024,
-        };
+            1024,
+        );
         for _ in 0..200 {
             let mut buf = pool.get();
             let frames = codec

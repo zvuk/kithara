@@ -686,7 +686,11 @@ impl PlayerImpl {
                 if let Some(event) = player_event_from_notification(notification.clone()) {
                     self.bus.publish(event);
                 } else {
-                    tracing::trace!(?notification, "unhandled player notification");
+                    tracing::trace!(
+                        src = ?notification.src(),
+                        ?notification,
+                        "unhandled player notification"
+                    );
                 }
             }
         }

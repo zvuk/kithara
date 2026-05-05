@@ -926,8 +926,14 @@ mod tests {
                 processor.shared_state.notification_rx.lock_sync().try_pop()
             {
                 match notification {
-                    PlayerNotification::Loaded { .. } => loaded += 1,
-                    PlayerNotification::Unloaded { .. } => unloaded = true,
+                    PlayerNotification::Loaded { src } => {
+                        tracing::trace!(%src, "duplicate-load loaded");
+                        loaded += 1;
+                    }
+                    PlayerNotification::Unloaded { src } => {
+                        tracing::trace!(%src, "duplicate-load unloaded");
+                        unloaded = true;
+                    }
                     _ => {}
                 }
             }

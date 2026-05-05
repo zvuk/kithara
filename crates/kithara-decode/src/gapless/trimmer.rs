@@ -6,29 +6,33 @@ use crate::{GaplessInfo, PcmChunk, duration_for_frames, gapless::heuristic::Sile
 pub type GaplessOutput = SmallVec<[PcmChunk; 2]>;
 type TailBuffer = SmallVec<[PcmChunk; 4]>;
 
-/// Length of the click-suppression fade-in applied after every
-/// heuristic trim (silence or codec-priming). 3 ms is short enough to
-/// be inaudible as a transient but long enough to mask the level
-/// discontinuity at the trim boundary.
-const FADE_IN_DURATION_MS: u64 = 3;
+struct Consts;
+impl Consts {
+    /// Length of the click-suppression fade-in applied after every
+    /// heuristic trim (silence or codec-priming). 3 ms is short
+    /// enough to be inaudible as a transient but long enough to mask
+    /// the level discontinuity at the trim boundary.
+    const FADE_IN_DURATION_MS: u64 = 3;
 
-/// Length of the click-suppression fade-out applied to the very end
-/// of the buffered audio after a heuristic trailing-silence trim.
-/// Mirror of `FADE_IN_DURATION_MS` for the trailing side; same
-/// reasoning (mask any sub-sample boundary mismatch left by the
-/// trim search).
-const FADE_OUT_DURATION_MS: u64 = 3;
+    /// Length of the click-suppression fade-out applied to the very
+    /// end of the buffered audio after a heuristic trailing-silence
+    /// trim. Mirror of `Consts::FADE_IN_DURATION_MS` for the trailing side;
+    /// same reasoning (mask any sub-sample boundary mismatch left by
+    /// the trim search).
+    const FADE_OUT_DURATION_MS: u64 = 3;
 
-/// Window length (in milliseconds) used by the trailing silence search.
-/// Per-sample threshold tests false-positive on zero-crossings of any
-/// periodic signal — at 800 Hz a sine passes below `1e-3` for ~3
-/// frames every cycle, which the old algorithm classified as silence
-/// and ate into audible content. A 10 ms window contains many full
-/// cycles of typical audio and integrates over them to get a stable
-/// energy estimate; it also averages out lossy-codec quantisation
-/// noise floors (AAC commonly sits around -50..-60 dB in quiet
-/// regions) so a real silent suffix is recognised reliably.
-const TRAILING_SILENCE_WINDOW_MS: u64 = 10;
+    /// Window length (in milliseconds) used by the trailing silence
+    /// search. Per-sample threshold tests false-positive on zero-
+    /// crossings of any periodic signal — at 800 Hz a sine passes
+    /// below `1e-3` for ~3 frames every cycle, which the old
+    /// algorithm classified as silence and ate into audible content.
+    /// A 10 ms window contains many full cycles of typical audio and
+    /// integrates over them to get a stable energy estimate; it also
+    /// averages out lossy-codec quantisation noise floors (AAC
+    /// commonly sits around -50..-60 dB in quiet regions) so a real
+    /// silent suffix is recognised reliably.
+    const TRAILING_SILENCE_WINDOW_MS: u64 = 10;
+}
 
 /// Stateful PCM trimmer that applies one track's gapless contract.
 #[derive(Debug, Default)]
@@ -54,7 +58,7 @@ enum GaplessMode {
     Disabled,
     Fixed {
         leading_remaining: u64,
-        /// Click-suppression fade applied to the first `FADE_IN_DURATION_MS`
+        /// Click-suppression fade applied to the first `Consts::FADE_IN_DURATION_MS`
         /// of audio that survives the leading trim. `None` for
         /// metadata-driven trim — that boundary is sample-exact.
         fade_in: Option<FadeInState>,
@@ -115,7 +119,8 @@ impl FadeInState {
     fn for_sample_rate(sample_rate: u32) -> Self {
         // sample_rate * ms / 1000, rounded up to at least one frame
         // so a misconfigured 0 Hz spec still produces a valid fade.
-        let total_frames = u64::from(sample_rate.max(1)).saturating_mul(FADE_IN_DURATION_MS) / 1000;
+        let total_frames =
+            u64::from(sample_rate.max(1)).saturating_mul(Consts::FADE_IN_DURATION_MS) / 1000;
         let total_frames = u16::try_from(total_frames.clamp(1, 65_535)).unwrap_or(u16::MAX);
         Self {
             total_frames,
@@ -437,20 +442,19 @@ fn flush_heuristic(
     ready
 }
 
-/// Apply a raised-cosine fade-out to the last `FADE_OUT_DURATION_MS`
+/// Apply a raised-cosine fade-out to the last `Consts::FADE_OUT_DURATION_MS`
 /// of audio buffered in `tail_buffer`. Modifies samples in place; if
 /// fewer frames are buffered than the fade window, the entire tail is
 /// shaped (gain still goes from 1.0 down to ~0.0 across whatever is
 /// available).
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "frame indices are bounded by audio chunk sizes; precision loss is acceptable for fade gain math"
-)]
 fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
+    use num_traits::AsPrimitive;
+
     if tail_buffer.is_empty() {
         return;
     }
-    let total_frames = u64::from(sample_rate.max(1)).saturating_mul(FADE_OUT_DURATION_MS) / 1000;
+    let total_frames =
+        u64::from(sample_rate.max(1)).saturating_mul(Consts::FADE_OUT_DURATION_MS) / 1000;
     let total_frames = total_frames.max(1);
 
     let mut frames_remaining = total_frames;
@@ -467,7 +471,9 @@ fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
         }
         let first_to_shape = chunk_total_frames.saturating_sub(to_shape);
         let already_shaped_after_this = total_frames.saturating_sub(frames_remaining);
-        let denom = total_frames.saturating_sub(1).max(1) as f32;
+        // Frame counts are bounded by audio chunk sizes (≤ ~1s at 192 kHz);
+        // routing through `AsPrimitive` documents the intentional narrow.
+        let denom: f32 = total_frames.saturating_sub(1).max(1).as_();
 
         for chunk_local_frame in first_to_shape..chunk_total_frames {
             // Distance from the very last buffered frame (0 = EOF).
@@ -480,7 +486,8 @@ fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
             let frame_in_fade = total_frames
                 .saturating_sub(1)
                 .saturating_sub(distance_from_end);
-            let position = frame_in_fade as f32 / denom;
+            let frame_in_fade_f32: f32 = frame_in_fade.as_();
+            let position = frame_in_fade_f32 / denom;
             let gain = 0.5 + 0.5 * (std::f32::consts::PI * position).cos();
             let frame_start = usize_from_u64_saturating(chunk_local_frame).saturating_mul(channels);
             let frame_end = frame_start.saturating_add(channels).min(chunk.pcm.len());
@@ -623,7 +630,7 @@ fn trim_tail_frames(
 }
 
 /// Walk frames from the end of `tail_buffer`, group them into
-/// `TRAILING_SILENCE_WINDOW_MS` windows, and count frames as silent
+/// `Consts::TRAILING_SILENCE_WINDOW_MS` windows, and count frames as silent
 /// while window-mean-|sample| stays below `threshold_amp`. Returns the
 /// largest tail length whose energy is still below the floor.
 ///
@@ -638,11 +645,9 @@ fn trim_tail_frames(
 /// for a noisy quiet region it tracks the average linear amplitude.
 /// This widens the gap between "real" audio and codec quantisation
 /// noise, making the threshold easier to pick.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "channel and window-frame counts are bounded; precision loss is acceptable for mean-abs threshold math"
-)]
 fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
+    use num_traits::AsPrimitive;
+
     if tail_buffer.is_empty() {
         return 0;
     }
@@ -652,17 +657,21 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
         .map_or(48_000, |chunk| chunk.spec().sample_rate)
         .max(1);
     let window_frames =
-        (u64::from(sample_rate).saturating_mul(TRAILING_SILENCE_WINDOW_MS) / 1000).max(1);
+        (u64::from(sample_rate).saturating_mul(Consts::TRAILING_SILENCE_WINDOW_MS) / 1000).max(1);
     let threshold = f64::from(threshold_amp);
 
     let mut silent_frames = 0u64;
     let mut window_sum_abs = 0.0_f64;
     let mut window_count: u64 = 0;
 
+    // Channel count and window-frame counts are bounded (≤ 32 channels;
+    // window ≤ 1s of audio); routing through `AsPrimitive` documents
+    // the intentional narrow without an inline lint suppression.
     for chunk in tail_buffer.iter().rev() {
         let chunk_total_frames = chunk_frames(chunk);
         let samples = chunk.samples();
         let channels = usize::from(chunk.spec().channels.max(1));
+        let channels_f64: f64 = channels.max(1).as_();
         for frame in (0..chunk_total_frames).rev() {
             let frame_start = usize_from_u64_saturating(frame).saturating_mul(channels);
             let frame_end = frame_start.saturating_add(channels).min(samples.len());
@@ -673,12 +682,13 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
             for &sample in &samples[frame_start..frame_end] {
                 frame_sum_abs += f64::from(sample.abs());
             }
-            let frame_mean_abs = frame_sum_abs / channels.max(1) as f64;
+            let frame_mean_abs = frame_sum_abs / channels_f64;
             window_sum_abs += frame_mean_abs;
             window_count = window_count.saturating_add(1);
 
             if window_count >= window_frames {
-                let mean_abs = window_sum_abs / window_count as f64;
+                let window_count_f64: f64 = window_count.as_();
+                let mean_abs = window_sum_abs / window_count_f64;
                 if mean_abs <= threshold {
                     silent_frames = silent_frames.saturating_add(window_count);
                     window_sum_abs = 0.0;
@@ -693,7 +703,8 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
     // Final partial window at the start of the buffer: count it only
     // if it is still below the floor on its own.
     if window_count > 0 {
-        let mean_abs = window_sum_abs / window_count as f64;
+        let window_count_f64: f64 = window_count.as_();
+        let mean_abs = window_sum_abs / window_count_f64;
         if mean_abs <= threshold {
             silent_frames = silent_frames.saturating_add(window_count);
         }
@@ -831,7 +842,7 @@ mod tests {
     use kithara_bufpool::PcmPool;
     use kithara_test_utils::kithara;
 
-    use super::{FADE_IN_DURATION_MS, GaplessTrimmer};
+    use super::{Consts, GaplessTrimmer};
     use crate::{GaplessInfo, PcmChunk, PcmMeta, PcmSpec, gapless::heuristic::SilenceTrimParams};
 
     fn chunk(spec: PcmSpec, frame_offset: u64, frames: usize) -> PcmChunk {
@@ -889,7 +900,7 @@ mod tests {
     fn fade_frames_for(spec: PcmSpec) -> usize {
         // Mirrors FadeInState::for_sample_rate; cast safe for typical
         // sample rates well below usize::MAX.
-        let computed = (u64::from(spec.sample_rate.max(1)) * FADE_IN_DURATION_MS) / 1000;
+        let computed = (u64::from(spec.sample_rate.max(1)) * Consts::FADE_IN_DURATION_MS) / 1000;
         computed.max(1) as usize
     }
 
@@ -1259,7 +1270,7 @@ mod tests {
         // least one full window (5 ms @ 48 kHz = 240 frames). Use a
         // 480-frame silent tail and verify it gets dropped, while the
         // audible head is preserved (modulo the new trailing fade-out
-        // applied to the last `FADE_OUT_DURATION_MS` of audio).
+        // applied to the last `Consts::FADE_OUT_DURATION_MS` of audio).
         let spec = mono_spec();
         let params = SilenceTrimParams {
             threshold_db: 60.0,
@@ -1280,7 +1291,7 @@ mod tests {
         assert_eq!(pcm_out.len(), audible_frames);
 
         let fade_frames =
-            (u64::from(spec.sample_rate) * super::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
+            (u64::from(spec.sample_rate) * Consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
         // Pre-fade region keeps the original signal.
         let untouched = pcm_out.len().saturating_sub(fade_frames);
         for &sample in &pcm_out[..untouched] {
@@ -1300,7 +1311,7 @@ mod tests {
             pcm_out
                 .last()
                 .copied()
-                .map_or(false, |sample| sample.abs() < 0.05),
+                .is_some_and(|sample| sample.abs() < 0.05),
             "last sample must be near zero after fade-out"
         );
     }
@@ -1323,28 +1334,37 @@ mod tests {
 
         // 4800 frames of an 800 Hz sine at amplitude 0.5 (100 ms @ 48 kHz),
         // followed by 480 frames of true silence (10 ms padding).
-        let sine_frames: usize = 4_800;
-        let silent_frames: usize = 480;
-        let mut pcm = Vec::with_capacity(sine_frames + silent_frames);
+        let sine_frames: u32 = 4_800;
+        let silent_frames: u32 = 480;
+        let mut pcm = Vec::with_capacity((sine_frames + silent_frames) as usize);
         for n in 0..sine_frames {
-            let t = n as f32 / spec.sample_rate as f32;
-            pcm.push(0.5 * (2.0 * std::f32::consts::PI * 800.0 * t).sin());
+            let t = f64::from(n) / f64::from(spec.sample_rate);
+            let s: f64 = 0.5 * (2.0 * std::f64::consts::PI * 800.0 * t).sin();
+            // f64 → f32 narrowing is the canonical PCM-sample conversion;
+            // routing through `AsPrimitive` documents that intent and
+            // keeps the cast outside Clippy's `as`-keyword lints.
+            pcm.push(num_traits::cast::AsPrimitive::<f32>::as_(s));
         }
-        pcm.extend(std::iter::repeat_n(0.0, silent_frames));
+        pcm.extend(std::iter::repeat_n(0.0, silent_frames as usize));
         assert!(trimmer.push(custom_chunk(spec, 0, pcm)).is_empty());
 
         let flushed = trimmer.flush();
         let pcm_out = collect_pcm(&flushed);
         // Trim must drop only the silent padding, not any audible cycles.
-        assert_eq!(pcm_out.len(), sine_frames);
+        assert_eq!(pcm_out.len(), sine_frames as usize);
 
         // RMS of the surviving signal, *excluding* the fade-out window,
         // must match a 0.5-amplitude sine (≈ 0.354).
         let fade_frames =
-            (u64::from(spec.sample_rate) * super::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
+            (u64::from(spec.sample_rate) * Consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
         let pre_fade_end = pcm_out.len().saturating_sub(fade_frames);
         let pre_fade = &pcm_out[..pre_fade_end];
-        let rms: f32 = (pre_fade.iter().map(|s| s * s).sum::<f32>() / pre_fade.len() as f32).sqrt();
+        let pre_fade_len = u32::try_from(pre_fade.len()).expect("pre-fade window fits in u32");
+        let sum_sq: f64 = pre_fade.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
+        let rms_f64: f64 = (sum_sq / f64::from(pre_fade_len)).sqrt();
+        // f64 → f32 narrowing is the canonical PCM-sample conversion;
+        // routing through `AsPrimitive` keeps it outside `as`-cast lints.
+        let rms: f32 = num_traits::cast::AsPrimitive::<f32>::as_(rms_f64);
         assert!(
             (rms - 0.5 / std::f32::consts::SQRT_2).abs() < 0.02,
             "RMS of surviving signal should match a 0.5 sine: got {rms}"

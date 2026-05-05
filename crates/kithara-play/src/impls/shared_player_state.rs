@@ -108,8 +108,10 @@ mod tests {
         assert!(sent.is_ok());
 
         let received = state.notification_rx.lock_sync().try_pop();
-        assert!(received.is_some());
-        assert!(matches!(received.unwrap(), PlayerNotification::Loaded { .. }));
+        let Some(PlayerNotification::Loaded { src }) = received else {
+            panic!("expected Loaded notification, got {received:?}");
+        };
+        assert_eq!(&*src, "a.mp3");
     }
 
     #[kithara::test]

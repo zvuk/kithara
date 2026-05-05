@@ -359,6 +359,13 @@ fn collect_frames(
     segment_bytes: &[u8],
     out: &mut Vec<Fmp4Frame>,
 ) -> DecodeResult<()> {
+    // Single-track fMP4: prefer the traf whose tfhd.track_id matches the
+    // init segment's canonical track_id; fall back to the first traf when
+    // the segment's tfhd reports a divergent id. Real-world HLS fragments
+    // (e.g. silvercomet) sometimes ship inconsistent track ids while still
+    // carrying the only audio track in their first traf — degraded-mode
+    // playback over a strict error keeps these streams playable.
+    // ast-grep-ignore: rust.no-fallback-or-else-fn
     let traf = moof
         .trafs
         .iter()

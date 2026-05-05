@@ -137,8 +137,6 @@ pub struct PcmMeta {
 #[derive(Debug, Derivative)]
 #[derivative(Default)]
 pub struct PcmChunk {
-    // Derivative-driven Default — no pool parameter
-    // ast-grep-ignore: perf.no-global-pool-accessor
     #[derivative(Default(value = "PcmPool::default().get()"))]
     pub pcm: PcmBuf,
     pub meta: PcmMeta,

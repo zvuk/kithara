@@ -14,7 +14,7 @@ use kithara_test_utils::create_test_wav;
 fn create_wav_decoder(frames: usize) -> Box<dyn Decoder> {
     let wav_data = create_test_wav(frames, 44100, 2);
     let cursor = Cursor::new(wav_data);
-    DecoderFactory::create_with_probe(cursor, Some("wav"), DecoderConfig::default()).unwrap()
+    DecoderFactory::create_with_probe(cursor, Some("wav"), &DecoderConfig::default()).unwrap()
 }
 
 #[hotpath::measure]
@@ -26,7 +26,7 @@ fn decoder_next_chunk_measured(decoder: &mut Box<dyn Decoder>) -> Option<()> {
 fn decoder_probe_single(wav_data: &[u8]) {
     let cursor = Cursor::new(wav_data.to_vec());
     let _decoder =
-        DecoderFactory::create_with_probe(cursor, Some("wav"), DecoderConfig::default()).unwrap();
+        DecoderFactory::create_with_probe(cursor, Some("wav"), &DecoderConfig::default()).unwrap();
 }
 
 #[hotpath::measure]

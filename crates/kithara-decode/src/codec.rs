@@ -3,7 +3,7 @@
 use kithara_bufpool::PcmBuf;
 use kithara_platform::time::Duration;
 
-use crate::{demuxer::TrackInfo, error::DecodeResult, types::PcmSpec};
+use crate::{error::DecodeResult, types::PcmSpec};
 
 /// Frame-level codec contract paired with a [`crate::demuxer::Demuxer`] in
 /// `UniversalDecoder<D, C>`.
@@ -39,20 +39,15 @@ pub(crate) trait FrameCodec: Send + 'static {
         out: &mut PcmBuf,
     ) -> DecodeResult<u32>;
 
-    /// Reset internal codec state — called after seek.
-    fn flush(&mut self);
-
-    /// Construct a codec from track-level metadata produced by the
-    /// demuxer (`extra_data` carries codec-specific config such as AAC
-    /// `AudioSpecificConfig` or FLAC `STREAMINFO`).
+    /// Reset internal codec state — called after seek. Backends that
+    /// can fail to reset (Android `AMediaCodec_flush`) propagate the
+    /// error through `DecodeResult` so the seek path can surface it.
     ///
     /// # Errors
     ///
-    /// Returns a [`crate::DecodeError`] when the codec rejects the
-    /// track (unsupported codec id, malformed extra-data, etc.).
-    fn open(track: &TrackInfo) -> DecodeResult<Self>
-    where
-        Self: Sized;
+    /// Returns [`crate::DecodeError`] when the codec rejects the
+    /// reset.
+    fn flush(&mut self) -> DecodeResult<()>;
 
     /// PCM output specification.
     fn spec(&self) -> PcmSpec;

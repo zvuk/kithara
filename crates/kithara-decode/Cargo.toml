@@ -16,6 +16,7 @@ kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
+num-traits = { workspace = true }
 re_mp4 = { workspace = true }
 smallvec = { workspace = true }
 symphonia = { workspace = true, optional = true }

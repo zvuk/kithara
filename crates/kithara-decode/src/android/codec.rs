@@ -26,7 +26,7 @@ use super::{
         self, KEY_CHANNEL_COUNT, KEY_CSD_0, KEY_MIME, KEY_PCM_ENCODING, KEY_SAMPLE_RATE, MIME_AAC,
         MIME_FLAC, PCM_ENCODING_16BIT, PCM_ENCODING_FLOAT,
     },
-    media_codec::{AndroidPcmEncoding, DequeueOutput, OwnedCodec},
+    media_codec::{AndroidPcmEncoding, DequeueOutput, OwnedCodec, QueueInput},
 };
 use crate::{
     android::config::AndroidConfig,
@@ -83,10 +83,40 @@ impl AndroidCodec {
     ) -> DecodeResult<Self> {
         // No `AudioDecoderOptions::gapless` analogue on `MediaCodec` —
         // priming/padding numbers come from the demuxer's MP4 udta
-        // probe (see `probe_track_info`). Open path is identical to
-        // `FrameCodec::open`; the config exists so the factory keeps a
-        // uniform call shape across apple/symphonia/android backends.
-        <Self as FrameCodec>::open(track)
+        // probe (see `probe_track_info`). The config exists so the
+        // factory keeps a uniform call shape across apple/symphonia/android.
+        Self::open(track)
+    }
+
+    /// Inherent constructor used by [`Self::open_with_config`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::UnsupportedCodec`] for codecs the
+    /// `MediaCodec` codec layer doesn't accept; any FFI failure
+    /// surfaces as [`DecodeError::Backend`] via
+    /// [`AndroidBackendError::into_decode_error`].
+    fn open(track: &TrackInfo) -> DecodeResult<Self> {
+        ensure_current_thread_attached().map_err(AndroidBackendError::into_decode_error)?;
+
+        let mime = match track.codec {
+            AudioCodec::AacLc => MIME_AAC,
+            AudioCodec::Flac => MIME_FLAC,
+            other => return Err(DecodeError::UnsupportedCodec(other)),
+        };
+
+        let format = build_format(mime, track).map_err(AndroidBackendError::into_decode_error)?;
+        let codec = OwnedCodec::create_with_format(mime, &format)
+            .map_err(AndroidBackendError::into_decode_error)?;
+        let (spec, pcm_encoding) =
+            read_output_format(&codec).map_err(AndroidBackendError::into_decode_error)?;
+
+        Ok(Self {
+            codec,
+            spec,
+            pcm_encoding,
+            track_info: DecoderTrackInfo::default(),
+        })
     }
 
     /// Probe the source for container-level gapless metadata before
@@ -147,7 +177,12 @@ impl FrameCodec for AndroidCodec {
                 dst[..copy_len].copy_from_slice(&frame_data[..copy_len]);
                 let pts_us = i64::try_from(pts.as_micros()).unwrap_or(i64::MAX);
                 self.codec
-                    .queue_input_buffer(buf.index, copy_len, pts_us, 0)
+                    .queue_input_buffer(QueueInput {
+                        index: buf.index,
+                        size: copy_len,
+                        presentation_time_us: pts_us,
+                        flags: 0,
+                    })
                     .map_err(AndroidBackendError::into_decode_error)?;
             }
             None => {
@@ -194,31 +229,10 @@ impl FrameCodec for AndroidCodec {
         }
     }
 
-    fn flush(&mut self) {
-        let _ = self.codec.flush();
-    }
-
-    fn open(track: &TrackInfo) -> DecodeResult<Self> {
-        ensure_current_thread_attached().map_err(AndroidBackendError::into_decode_error)?;
-
-        let mime = match track.codec {
-            AudioCodec::AacLc => MIME_AAC,
-            AudioCodec::Flac => MIME_FLAC,
-            other => return Err(DecodeError::UnsupportedCodec(other)),
-        };
-
-        let format = build_format(mime, track).map_err(AndroidBackendError::into_decode_error)?;
-        let codec = OwnedCodec::create_with_format(mime, &format)
-            .map_err(AndroidBackendError::into_decode_error)?;
-        let (spec, pcm_encoding) =
-            read_output_format(&codec).map_err(AndroidBackendError::into_decode_error)?;
-
-        Ok(Self {
-            codec,
-            spec,
-            pcm_encoding,
-            track_info: DecoderTrackInfo::default(),
-        })
+    fn flush(&mut self) -> DecodeResult<()> {
+        self.codec
+            .flush()
+            .map_err(AndroidBackendError::into_decode_error)
     }
 
     fn spec(&self) -> PcmSpec {

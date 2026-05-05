@@ -4154,6 +4154,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "ndk-context",
+ "num-traits",
  "re_mp4",
  "smallvec",
  "symphonia 0.6.0-alpha.2",
