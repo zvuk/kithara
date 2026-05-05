@@ -23,6 +23,7 @@ pub(crate) mod loop_allocation;
 pub(crate) mod manual_question_mark;
 pub(crate) mod multi_accumulator_loop;
 pub(crate) mod parallel_loops;
+pub(crate) mod pointwise_loop;
 pub(crate) mod retry_fallback;
 
 pub(crate) struct Context<'a> {
@@ -43,6 +44,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(accumulator_loops::AccumulatorLoops),
         Box::new(multi_accumulator_loop::MultiAccumulatorLoop),
         Box::new(parallel_loops::ParallelLoops),
+        Box::new(pointwise_loop::PointwiseLoop),
         Box::new(manual_question_mark::ManualQuestionMark),
         Box::new(loop_allocation::LoopAllocation),
         Box::new(box_concrete_type::BoxConcreteType),

@@ -45,6 +45,118 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) await_under_guard: AwaitUnderGuardConfig,
     #[serde(default)]
     pub(crate) retry_fallback: RetryFallbackConfig,
+    #[serde(default)]
+    pub(crate) pointwise_loop: PointwiseLoopConfig,
+    #[serde(default)]
+    pub(crate) fat_loop_body: FatLoopBodyConfig,
+    #[serde(default)]
+    pub(crate) loop_flag_accumulator: LoopFlagAccumulatorConfig,
+    #[serde(default)]
+    pub(crate) const_group_enum_shape: ConstGroupEnumShapeConfig,
+    #[serde(default)]
+    pub(crate) nested_if_let_pyramid: NestedIfLetPyramidConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PointwiseLoopConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for PointwiseLoopConfig {
+    fn default() -> Self {
+        Self { exempt_files: default_exempt_files() }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FatLoopBodyConfig {
+    #[serde(default = "default_for_stmt_threshold")]
+    pub(crate) for_stmt_threshold: usize,
+    #[serde(default = "default_while_stmt_threshold")]
+    pub(crate) while_stmt_threshold: usize,
+    #[serde(default = "default_loop_stmt_threshold")]
+    pub(crate) loop_stmt_threshold: usize,
+    #[serde(default = "default_nested_ctrl_threshold")]
+    pub(crate) nested_ctrl_threshold: usize,
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+fn default_for_stmt_threshold() -> usize { 6 }
+fn default_while_stmt_threshold() -> usize { 6 }
+fn default_loop_stmt_threshold() -> usize { 4 }
+fn default_nested_ctrl_threshold() -> usize { 1 }
+
+impl Default for FatLoopBodyConfig {
+    fn default() -> Self {
+        Self {
+            for_stmt_threshold: default_for_stmt_threshold(),
+            while_stmt_threshold: default_while_stmt_threshold(),
+            loop_stmt_threshold: default_loop_stmt_threshold(),
+            nested_ctrl_threshold: default_nested_ctrl_threshold(),
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LoopFlagAccumulatorConfig {
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for LoopFlagAccumulatorConfig {
+    fn default() -> Self {
+        Self { exempt_files: default_exempt_files() }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConstGroupEnumShapeConfig {
+    #[serde(default = "default_min_group_size")]
+    pub(crate) min_group_size: usize,
+    #[serde(default = "default_min_prefix_chars")]
+    pub(crate) min_prefix_chars: usize,
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+fn default_min_group_size() -> usize { 3 }
+fn default_min_prefix_chars() -> usize { 3 }
+
+impl Default for ConstGroupEnumShapeConfig {
+    fn default() -> Self {
+        Self {
+            min_group_size: default_min_group_size(),
+            min_prefix_chars: default_min_prefix_chars(),
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NestedIfLetPyramidConfig {
+    #[serde(default = "default_pyramid_min_depth")]
+    pub(crate) min_depth: usize,
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+fn default_pyramid_min_depth() -> usize { 2 }
+
+impl Default for NestedIfLetPyramidConfig {
+    fn default() -> Self {
+        Self {
+            min_depth: default_pyramid_min_depth(),
+            exempt_files: default_exempt_files(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
