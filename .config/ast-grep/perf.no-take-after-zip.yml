@@ -1,0 +1,32 @@
+id: perf.no-take-after-zip
+message: |
+  `.iter().zip(...).take(N)` runs a per-step counter the optimiser
+  cannot elide. Slice both operands to a known length first — the
+  resulting `.iter().zip(...)` has a static bound and the inner loop
+  becomes a candidate for bounds-check elision and autovectorisation.
+
+      // ❌
+      for (o, &m) in out.iter_mut().zip(mix.iter()).take(frames) {
+          *o += m;
+      }
+
+      // ✅
+      for (o, &m) in out[..frames].iter_mut().zip(&mix[..frames]) {
+          *o += m;
+      }
+
+  In hot audio/decode paths prefer a SIMD primitive directly when one
+  exists in `kithara-audio` (cf. `fast_interleave`).
+
+  Suppress with `// ast-grep-ignore: perf.no-take-after-zip` only when
+  one side genuinely doesn't have a `[..N]` slicing form (e.g. the
+  source iterator isn't a slice).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  any:
+    - pattern: $A.iter_mut().zip($$$B).take($_)
+    - pattern: $A.iter().zip($$$B).take($_)
+    - pattern: $A.zip($B).take($_)
