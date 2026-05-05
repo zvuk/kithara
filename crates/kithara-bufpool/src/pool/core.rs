@@ -10,6 +10,15 @@ use kithara_platform::{Mutex, thread::current_thread_id};
 use super::{reuse::Reuse, shard::PoolShard};
 use crate::growth::BudgetExhausted;
 
+/// Maximum total bytes a pool may track across all live buffers.
+///
+/// Newtype so the byte-budget cap is unmistakable at call sites
+/// (`with_byte_budget(.., .., ByteBudget(256 * MB))` instead of three
+/// adjacent `usize`s where order is easy to swap). Pass
+/// `ByteBudget(usize::MAX)` for "no cap".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ByteBudget(pub usize);
+
 /// Pool hit/miss statistics for observability.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PoolStats {
@@ -232,7 +241,7 @@ where
     /// ```
     #[must_use]
     pub fn new(max_buffers: usize, trim_capacity: usize) -> Self {
-        Self::with_byte_budget(max_buffers, trim_capacity, usize::MAX)
+        Self::with_byte_budget(max_buffers, trim_capacity, ByteBudget(usize::MAX))
     }
 
     /// Shared implementation for `Pool::get_with` and `SharedPool::get_with`:
@@ -305,18 +314,19 @@ where
     ///
     /// - `max_buffers`: Maximum total buffers across all shards.
     /// - `trim_capacity`: Shrink buffers to this capacity when returning.
-    /// - `max_bytes`: Maximum total bytes tracked. `usize::MAX` = unlimited.
+    /// - `budget`: Maximum total bytes tracked. Use
+    ///   [`ByteBudget::UNLIMITED`] for no cap.
     ///
     /// # Panics
     ///
     /// Panics if `SHARDS` is zero.
     #[must_use]
-    pub fn with_byte_budget(max_buffers: usize, trim_capacity: usize, max_bytes: usize) -> Self {
+    pub fn with_byte_budget(max_buffers: usize, trim_capacity: usize, budget: ByteBudget) -> Self {
         assert!(SHARDS > 0, "Pool must have at least 1 shard");
         let buffers_per_shard = max_buffers / SHARDS;
 
         Self {
-            max_bytes,
+            max_bytes: budget.0,
             allocated_bytes: AtomicUsize::new(0),
             shards: array::from_fn(|_| {
                 Mutex::new(PoolShard::new(buffers_per_shard, trim_capacity))

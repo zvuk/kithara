@@ -3,7 +3,7 @@
 use std::{hint::black_box, thread, time::Duration};
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use kithara_bufpool::{BytePool, PcmPool, Pool, internal};
+use kithara_bufpool::{ByteBudget, BytePool, PcmPool, Pool, internal};
 
 fn run_threaded_get_put(pool: BytePool, threads: usize, iters_per_thread: usize) {
     let handles: Vec<_> = (0..threads)
@@ -26,7 +26,7 @@ fn run_threaded_get_put(pool: BytePool, threads: usize, iters_per_thread: usize)
 }
 
 fn bench_get_put_single_thread(c: &mut Criterion) {
-    let pool = BytePool::with_byte_budget(1024, 0, 256 * 1024 * 1024);
+    let pool = BytePool::with_byte_budget(1024, 0, ByteBudget(256 * 1024 * 1024));
     let mut group = c.benchmark_group("bufpool_get_put");
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(6));
@@ -42,7 +42,7 @@ fn bench_get_put_single_thread(c: &mut Criterion) {
 }
 
 fn bench_get_put_multi_thread(c: &mut Criterion) {
-    let pool = BytePool::with_byte_budget(1024, 0, 256 * 1024 * 1024);
+    let pool = BytePool::with_byte_budget(1024, 0, ByteBudget(256 * 1024 * 1024));
     let mut group = c.benchmark_group("bufpool_get_put");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(8));
@@ -55,7 +55,7 @@ fn bench_get_put_multi_thread(c: &mut Criterion) {
 }
 
 fn bench_ensure_len(c: &mut Criterion) {
-    let byte_pool = BytePool::with_byte_budget(1024, 0, 256 * 1024 * 1024);
+    let byte_pool = BytePool::with_byte_budget(1024, 0, ByteBudget(256 * 1024 * 1024));
     let pcm_pool = PcmPool::new(128, 200_000);
     let mut group = c.benchmark_group("bufpool_ensure_len");
     group.sample_size(20);
@@ -85,7 +85,7 @@ fn bench_ensure_len(c: &mut Criterion) {
 }
 
 fn bench_cross_shard_steal(c: &mut Criterion) {
-    let pool = Pool::<32, Vec<u8>>::with_byte_budget(1024, 0, 256 * 1024 * 1024);
+    let pool = Pool::<32, Vec<u8>>::with_byte_budget(1024, 0, ByteBudget(256 * 1024 * 1024));
     let home = internal::shard_index(&pool);
     let donor = (home + 1) % 32;
 
@@ -112,7 +112,7 @@ fn bench_cross_shard_steal(c: &mut Criterion) {
 }
 
 fn bench_pre_warm_get_cycle(c: &mut Criterion) {
-    let pool = BytePool::with_byte_budget(1024, 0, 256 * 1024 * 1024);
+    let pool = BytePool::with_byte_budget(1024, 0, ByteBudget(256 * 1024 * 1024));
     pool.pre_warm(256, |b| b.resize(4 * 1024, 0));
 
     let mut group = c.benchmark_group("bufpool_prewarm");

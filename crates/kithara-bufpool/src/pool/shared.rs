@@ -3,7 +3,7 @@
 use std::{fmt, sync::Arc};
 
 use super::{
-    core::{Pool, PoolStats},
+    core::{ByteBudget, Pool, PoolStats},
     owned::PooledOwned,
     reuse::Reuse,
 };
@@ -64,11 +64,11 @@ where
     ///
     /// See [`Pool::with_byte_budget()`] for details.
     #[must_use]
-    pub fn with_byte_budget(max_buffers: usize, trim_capacity: usize, max_bytes: usize) -> Self {
+    pub fn with_byte_budget(max_buffers: usize, trim_capacity: usize, budget: ByteBudget) -> Self {
         Self(Arc::new(Pool::with_byte_budget(
             max_buffers,
             trim_capacity,
-            max_bytes,
+            budget,
         )))
     }
 }

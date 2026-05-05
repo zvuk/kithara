@@ -40,7 +40,9 @@ where
     /// assert_eq!(&vec[..], b"hello");
     /// ```
     pub fn into_inner(mut self) -> T {
-        self.value.take().expect("Pooled value already taken")
+        self.value
+            .take()
+            .expect("BUG: Pooled inner value taken twice (Option::None implies prior into_inner)")
     }
 
     pub(super) fn wrap(pool: &'a Pool<SHARDS, T>, value: T, shard_idx: usize) -> Self {
@@ -70,7 +72,9 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.value.as_ref().expect("Pooled value already taken")
+        self.value
+            .as_ref()
+            .expect("BUG: Pooled inner value taken twice (Option::None implies prior into_inner)")
     }
 }
 
@@ -79,6 +83,8 @@ where
     T: Reuse,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.value.as_mut().expect("Pooled value already taken")
+        self.value
+            .as_mut()
+            .expect("BUG: Pooled inner value taken twice (Option::None implies prior into_inner)")
     }
 }

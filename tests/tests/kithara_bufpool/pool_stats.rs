@@ -65,7 +65,7 @@ fn test_pre_warm_fills_pool() {
 
 #[kithara::test]
 fn test_pre_warm_respects_budget() {
-    let pool = SharedPool::<4, Vec<f32>>::with_byte_budget(128, 200_000, 10 * 1024);
+    let pool = SharedPool::<4, Vec<f32>>::with_byte_budget(128, 200_000, ByteBudget(10 * 1024));
     pool.pre_warm(10, |v| v.resize(4096, 0.0));
 
     let stats = pool.stats();

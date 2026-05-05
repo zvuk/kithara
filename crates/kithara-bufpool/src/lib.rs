@@ -36,6 +36,7 @@ pub mod internal;
 
 pub use global::{BytePool, PcmBuf, PcmPool};
 pub use growth::BudgetExhausted;
+pub use pool::ByteBudget;
 // Low-level pool internals (used by type aliases above; prefer BytePool/PcmPool/PcmBuf)
 #[doc(hidden)]
 pub use pool::{Pool, PoolStats, Pooled, PooledOwned, Reuse, SharedPool};

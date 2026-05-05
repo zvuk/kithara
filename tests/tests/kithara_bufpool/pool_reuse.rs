@@ -34,7 +34,8 @@ fn test_reuse_trim_when_oversize() {
 
 #[kithara::test]
 fn test_byte_pool_reuses_buffers() {
-    let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(usize::MAX, 0, 256 * 1024 * 1024);
+    let pool =
+        SharedPool::<4, Vec<u8>>::with_byte_budget(usize::MAX, 0, ByteBudget(256 * 1024 * 1024));
 
     {
         let mut buf = pool.get();
@@ -47,7 +48,8 @@ fn test_byte_pool_reuses_buffers() {
 
 #[kithara::test]
 fn test_byte_pool_budget_tracks_correctly() {
-    let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(usize::MAX, 0, 256 * 1024 * 1024);
+    let pool =
+        SharedPool::<4, Vec<u8>>::with_byte_budget(usize::MAX, 0, ByteBudget(256 * 1024 * 1024));
     let bufs: Vec<_> = (0..10)
         .map(|_| pool.get_with(|v| v.resize(1024, 0)))
         .collect();
@@ -133,7 +135,7 @@ fn test_ensure_len_f32_basic() {
 #[kithara::test]
 fn test_ensure_len_f32_budget_exceeded() {
     use kithara_bufpool::BudgetExhausted;
-    let pool = SharedPool::<4, Vec<f32>>::with_byte_budget(16, 4096, 1024);
+    let pool = SharedPool::<4, Vec<f32>>::with_byte_budget(16, 4096, ByteBudget(1024));
     let mut buf = pool.get();
     let result = buf.ensure_len(1000);
     assert_eq!(result, Err(BudgetExhausted));

@@ -32,7 +32,9 @@ where
     ///
     /// Panics if the value was already taken (should not happen in normal use).
     pub fn into_inner(mut self) -> T {
-        self.value.take().expect("PooledOwned value already taken")
+        self.value.take().expect(
+            "BUG: PooledOwned inner value taken twice (Option::None implies prior into_inner)",
+        )
     }
 
     pub(super) fn wrap(pool: Arc<Pool<SHARDS, T>>, value: T, shard_idx: usize) -> Self {
@@ -64,10 +66,9 @@ where
     ///
     /// Panics if the inner value has already been taken via [`into_inner()`](Self::into_inner).
     pub fn ensure_len(&mut self, min_len: usize) -> Result<(), BudgetExhausted> {
-        let buf = self
-            .value
-            .as_mut()
-            .expect("PooledOwned value already taken");
+        let buf = self.value.as_mut().expect(
+            "BUG: PooledOwned inner value taken twice (Option::None implies prior into_inner)",
+        );
         if min_len <= buf.len() {
             return Ok(());
         }
@@ -105,9 +106,9 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.value
-            .as_ref()
-            .expect("PooledOwned value already taken")
+        self.value.as_ref().expect(
+            "BUG: PooledOwned inner value taken twice (Option::None implies prior into_inner)",
+        )
     }
 }
 
@@ -116,9 +117,9 @@ where
     T: Reuse,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.value
-            .as_mut()
-            .expect("PooledOwned value already taken")
+        self.value.as_mut().expect(
+            "BUG: PooledOwned inner value taken twice (Option::None implies prior into_inner)",
+        )
     }
 }
 

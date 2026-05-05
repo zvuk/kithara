@@ -6,7 +6,7 @@ use kithara_test_utils::kithara;
 #[kithara::test]
 fn test_byte_budget_enforced() {
     let budget = 64 * 1024; // 64 KB
-    let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(64, 0, budget);
+    let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(64, 0, ByteBudget(budget));
 
     // Use ensure_len which respects byte budget (unlike get_with/resize)
     let mut successes = 0;
@@ -85,7 +85,7 @@ fn test_reuse_rate_after_warmup() {
 
 #[kithara::test]
 fn test_no_unbounded_growth() {
-    let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(64, 0, 1024 * 1024);
+    let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(64, 0, ByteBudget(1024 * 1024));
 
     // Bursty pattern: allocate 20 buffers, drop all, repeat 10 times
     for _ in 0..10 {
@@ -118,7 +118,8 @@ fn test_no_unbounded_growth() {
 
 #[kithara::test]
 fn test_pcm_pool_budget_stable() {
-    let pool = SharedPool::<8, Vec<f32>>::with_byte_budget(128, 200_000, 2 * 1024 * 1024);
+    let pool =
+        SharedPool::<8, Vec<f32>>::with_byte_budget(128, 200_000, ByteBudget(2 * 1024 * 1024));
 
     // Simulate PCM workflow: get buffer, ensure_len, use, drop
     for _ in 0..50 {

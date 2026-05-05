@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use crate::pool::{PooledOwned, SharedPool};
+use crate::pool::{ByteBudget, PooledOwned, SharedPool};
 
 /// Standard byte buffer pool type for the entire workspace.
 ///
@@ -30,7 +30,7 @@ pub type PcmBuf = PooledOwned<8, Vec<f32>>;
 impl Default for BytePool {
     fn default() -> Self {
         static GLOBAL: OnceLock<BytePool> = OnceLock::new();
-        const BUDGET: usize = 256 * 1024 * 1024;
+        const BUDGET: ByteBudget = ByteBudget(256 * 1024 * 1024);
         GLOBAL
             .get_or_init(|| Self::with_byte_budget(usize::MAX, 0, BUDGET))
             .clone()

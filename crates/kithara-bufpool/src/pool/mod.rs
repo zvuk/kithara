@@ -7,7 +7,7 @@ mod reuse;
 mod shard;
 mod shared;
 
-pub use core::{Pool, PoolStats};
+pub use core::{ByteBudget, Pool, PoolStats};
 
 pub use owned::PooledOwned;
 pub use pooled::Pooled;
