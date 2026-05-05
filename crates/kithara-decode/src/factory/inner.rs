@@ -264,18 +264,15 @@ fn create_apple(
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        use crate::apple::{AppleCodec, AppleConfig};
+        use crate::apple::AppleCodec;
         if AppleCodec::supports(codec) {
             tracing::debug!(
                 ?codec,
                 "fmp4_segment: dispatching to segment-aware Apple HW codec path"
             );
-            let apple_config = AppleConfig {
-                gapless: config.gapless,
-                ..Default::default()
-            };
+            let gapless = config.gapless;
             return build_fmp4_segment_decoder(source, layout, config, |track| {
-                AppleCodec::open_with_config(track, &apple_config)
+                AppleCodec::open_with_config(track, gapless)
             });
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
@@ -303,18 +300,15 @@ fn create_android(
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        use crate::android::{AndroidCodec, config::AndroidConfig};
+        use crate::android::AndroidCodec;
         if AndroidCodec::supports(codec) {
             tracing::debug!(
                 ?codec,
                 "fmp4_segment: dispatching to segment-aware Android HW codec path"
             );
-            let android_config = AndroidConfig {
-                gapless: config.gapless,
-                ..Default::default()
-            };
+            let gapless = config.gapless;
             return build_fmp4_segment_decoder(source, layout, config, |track| {
-                AndroidCodec::open_with_config(track, &android_config)
+                AndroidCodec::open_with_config(track, gapless)
             });
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);

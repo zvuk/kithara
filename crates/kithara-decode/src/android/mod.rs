@@ -7,7 +7,6 @@
 
 pub(crate) mod aformat;
 pub(crate) mod codec;
-pub(crate) mod config;
 pub(crate) mod error;
 pub(crate) mod ffi;
 mod jni;

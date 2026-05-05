@@ -10,4 +10,4 @@ pub(crate) mod consts;
 pub(crate) mod converter;
 pub(crate) mod ffi;
 
-pub(crate) use codec::{AppleCodec, AppleConfig};
+pub(crate) use codec::AppleCodec;

@@ -29,7 +29,6 @@ use super::{
     media_codec::{AndroidPcmEncoding, DequeueOutput, OwnedCodec, QueueInput},
 };
 use crate::{
-    android::config::AndroidConfig,
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
@@ -52,10 +51,10 @@ pub(crate) struct AndroidCodec {
     codec: OwnedCodec,
     spec: PcmSpec,
     /// Decoder-owned playback contract. Populated from container-level
-    /// gapless metadata (MP4 udta) when [`AndroidConfig::gapless`] is
-    /// set; left empty otherwise. `MediaCodec` itself does not surface
-    /// encoder priming, so the contract value comes solely from
-    /// container probing.
+    /// gapless metadata (MP4 udta) when `gapless` was requested at
+    /// [`AndroidCodec::probe_track_info`]; left empty otherwise.
+    /// `MediaCodec` itself does not surface encoder priming, so the
+    /// contract value comes solely from container probing.
     track_info: DecoderTrackInfo,
 }
 
@@ -67,24 +66,18 @@ impl AndroidCodec {
         matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
     }
 
-    /// Build an [`AndroidCodec`] with extra knobs from [`AndroidConfig`].
-    /// `MediaCodec` itself does not surface encoder priming, so the
-    /// gapless flag here is wired into the factory's container probe
-    /// (the factory calls [`Self::probe_track_info`] before opening
-    /// the codec).
+    /// Build an [`AndroidCodec`]. `gapless` is intentionally accepted for
+    /// API symmetry with [`super::super::apple::AppleCodec::open_with_config`]
+    /// and [`super::super::symphonia::SymphoniaCodec::open_with_config`],
+    /// but `MediaCodec` does not surface encoder priming — gapless
+    /// numbers come exclusively from the demuxer's MP4 udta probe in
+    /// [`Self::probe_track_info`].
     ///
     /// # Errors
     ///
     /// Returns [`DecodeError::Backend`] when `AMediaCodec_createDecoderByType`
     /// or `AMediaFormat` setup fails for the track's codec/sample-rate/channels.
-    pub(crate) fn open_with_config(
-        track: &TrackInfo,
-        _config: &AndroidConfig,
-    ) -> DecodeResult<Self> {
-        // No `AudioDecoderOptions::gapless` analogue on `MediaCodec` —
-        // priming/padding numbers come from the demuxer's MP4 udta
-        // probe (see `probe_track_info`). The config exists so the
-        // factory keeps a uniform call shape across apple/symphonia/android.
+    pub(crate) fn open_with_config(track: &TrackInfo, _gapless: bool) -> DecodeResult<Self> {
         Self::open(track)
     }
 
@@ -130,9 +123,9 @@ impl AndroidCodec {
     pub(crate) fn probe_track_info(
         source: &mut dyn DecoderInput,
         codec: AudioCodec,
-        config: &AndroidConfig,
+        gapless: bool,
     ) -> DecodeResult<DecoderTrackInfo> {
-        let gapless = if config.gapless && codec == AudioCodec::AacLc {
+        let gapless = if gapless && codec == AudioCodec::AacLc {
             let info = probe_mp4_gapless_dyn(source)?;
             if let Some(info) = info {
                 tracing::debug!(
