@@ -74,6 +74,32 @@ plus `Event::Player(..)`, `Event::Audio(..)`, `Event::Hls(..)`, and
   about to fade from a playing track to the newly-selected one
 - `CrossfadeDurationChanged { seconds }`
 
+## Auto-Advance Contract
+
+`Queue` is the sole auto-advance orchestrator: `Queue::new` calls
+`PlayerImpl::set_auto_advance_enabled(false)` to disable the player's
+built-in linear handler, then drives transitions from
+`PlayerEvent::PrefetchRequested` / `HandoverRequested`:
+
+- on `PrefetchRequested`: resolve the next index via
+  `NavigationState::peek_next` (honouring shuffle / repeat); if the
+  resolved entry is `TrackStatus::Loaded`, call `arm_next(idx)`. Tracks
+  that are still loading are picked up via the
+  `TrackStatusChanged { Loaded }` retry path.
+- on `HandoverRequested` (cf>0 only): call `commit_next(idx)`,
+  advance navigation, mark the just-promoted track `Consumed`, publish
+  `QueueEvent::CrossfadeStarted`.
+- on `ItemDidPlayToEnd`: the audio thread already advanced (cf=0 arena
+  handover) or the queue did (cf>0 commit). `sync_navigation_after_handover`
+  brings `NavigationState::current_index` in line with the player and
+  emits `QueueEvent::QueueEnded` if no further track is reachable.
+
+`set_repeat`, `set_shuffle`, `Queue::remove`, and `Queue::clear` call
+`PlayerImpl::unarm_next` so a stale arm cannot survive a navigation /
+queue mutation. The previous `Queue::tick`-based polling
+(`maybe_arm_crossfade`, `should_arm_crossfade`) is removed; `tick` now
+only ticks the player and drains events.
+
 ## Loading Lifecycle
 
 Each `append` allocates a monotonic [`TrackId`] and a queue entry with

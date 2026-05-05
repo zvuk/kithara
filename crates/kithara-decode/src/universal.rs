@@ -238,6 +238,10 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for UniversalDecoder<D, C> {
         TrackMetadata::default()
     }
 
+    fn track_info(&self) -> crate::DecoderTrackInfo {
+        self.codec.track_info()
+    }
+
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         let outcome = self.next_chunk_inner()?;
         self.emit_chunk_signal(&outcome);
@@ -543,6 +547,7 @@ mod hook_tests {
             channels: 2,
             extra_data: Vec::new(),
             duration: None,
+            gapless: None,
         }
     }
 

@@ -171,6 +171,7 @@ fn engine_instances_share_session_ducking() {
     assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Soft);
 
     EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
+    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
 }
 
 // engine_start_stop_roundtrip / engine_allocate_and_release_slot /

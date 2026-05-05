@@ -227,6 +227,7 @@ fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInf
         codec: init.codec,
         sample_rate: init.sample_rate,
         channels: init.channels,
+        gapless: init.gapless,
     }
 }
 

@@ -1,3 +1,12 @@
+#![expect(
+    clippy::needless_pass_by_value,
+    clippy::option_if_let_else,
+    clippy::type_complexity,
+    reason = "wholesale port from production/main PR #64; refactoring deferred — \
+              firewheel graph wiring sequencing matters and large rewrites here \
+              would diverge from upstream in ways that complicate future merges"
+)]
+
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
@@ -33,7 +42,7 @@ use ringbuf::{
 use ringbuf::{HeapProd, HeapRb, traits::Split};
 use tracing::warn;
 
-#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
+#[cfg(any(test, feature = "test-utils"))]
 use super::offline_backend::OfflineBackend;
 use super::{
     master_eq_node::MasterEqNode, player_node::PlayerNode, player_processor::PlayerCmd,
@@ -46,14 +55,6 @@ use crate::{
 
 pub(crate) type PlayerId = u64;
 
-/// Wiring returned by `allocate_slot`: slot id plus producer/state/eq handles.
-type AllocatedSlot = (
-    SlotId,
-    HeapProd<PlayerCmd>,
-    Arc<SharedPlayerState>,
-    SharedEq,
-);
-
 /// Function pointer that starts a firewheel audio stream with the given
 /// sample-rate hint on a context parametrised over backend `B`. Each
 /// backend (cpal, web-audio, offline) provides its own implementation.
@@ -61,25 +62,25 @@ type StartStreamFn<B> = fn(&mut FirewheelCtx<B>, u32) -> Result<(), String>;
 
 #[derive(Debug)]
 struct SlotNodes {
-    vol_pan_memo: Memo<VolumePanNode>,
-    player_node_id: NodeID,
-    vol_pan_node_id: NodeID,
     slot_id: SlotId,
+    player_node_id: NodeID,
+    vol_pan_memo: Memo<VolumePanNode>,
+    vol_pan_node_id: NodeID,
 }
 
 struct PlayerState {
+    eq_layout: Vec<EqBandConfig>,
     master_eq_memo: Option<Memo<MasterEqNode>>,
     master_eq_node_id: Option<NodeID>,
+    master_volume: f32,
     master_vol_pan_memo: Option<Memo<VolumePanNode>>,
     master_vol_pan_node_id: Option<NodeID>,
+    next_slot_id: u64,
     pcm_pool: PcmPool,
     player_id: PlayerId,
     shared_eq: SharedEq,
-    eq_layout: Vec<EqBandConfig>,
     slots: Vec<SlotNodes>,
     started: bool,
-    master_volume: f32,
-    next_slot_id: u64,
 }
 
 impl PlayerState {
@@ -87,14 +88,14 @@ impl PlayerState {
         let band_count = eq_layout.len();
         Self {
             eq_layout,
-            pcm_pool,
-            player_id,
             master_eq_memo: None,
             master_eq_node_id: None,
             master_volume: 1.0,
             master_vol_pan_memo: None,
             master_vol_pan_node_id: None,
             next_slot_id: 1,
+            pcm_pool,
+            player_id,
             shared_eq: SharedEq::new(band_count),
             slots: Vec::new(),
             started: false,
@@ -104,28 +105,27 @@ impl PlayerState {
 
 struct SessionState<B: AudioBackend> {
     ctx: Option<FirewheelCtx<B>>,
+    next_player_id: PlayerId,
+    players: Vec<PlayerState>,
+    sample_rate_hint: u32,
+    session_ducking: SessionDuckingMode,
     session_output_memo: Option<Memo<VolumePanNode>>,
     session_output_node_id: Option<NodeID>,
-    next_player_id: PlayerId,
-    session_ducking: SessionDuckingMode,
     /// Backend-specific stream starter baked in at engine-thread spawn
     /// time. Lets [`ensure_ctx`] start the stream without knowing `B`
     /// concretely.
     start_stream_fn: StartStreamFn<B>,
-    players: Vec<PlayerState>,
-    sample_rate_hint: u32,
 }
 
 impl<B: AudioBackend> SessionState<B> {
-    /// Capacity of the session command ring buffer.
-    const CMD_RINGBUF_CAPACITY: usize = 64;
-
     /// Default sample rate hint for the audio session.
     const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
+    /// Capacity of the session command ring buffer.
+    const CMD_RINGBUF_CAPACITY: usize = 64;
+
     fn new(start_stream_fn: StartStreamFn<B>) -> Self {
         Self {
-            start_stream_fn,
             ctx: None,
             next_player_id: 1,
             players: Vec::new(),
@@ -133,11 +133,12 @@ impl<B: AudioBackend> SessionState<B> {
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
+            start_stream_fn,
         }
     }
 }
 
-enum Cmd {
+pub(crate) enum Cmd {
     RegisterPlayer {
         eq_layout: Vec<EqBandConfig>,
         pcm_pool: PcmPool,
@@ -187,7 +188,7 @@ struct CmdMsg {
     reply_tx: mpsc::Sender<Reply>,
 }
 
-enum Reply {
+pub(crate) enum Reply {
     Ok,
     PlayerRegistered(PlayerId),
     SessionDucking(SessionDuckingMode),
@@ -199,6 +200,150 @@ enum Reply {
     ),
     SampleRate(u32),
     Err(String),
+}
+
+/// Object-safe view of the session: every operation `EngineImpl` invokes on
+/// the audio session goes through `exec`. Production (cpal/web-audio,
+/// async via `engine_thread`) and per-instance offline (synchronous,
+/// owned by a test harness) plug in interchangeably.
+///
+/// Typed methods are default-impl'd in terms of `exec`, so backends only
+/// implement the dispatch primitive.
+pub(crate) trait SessionDispatcher: Send + Sync + 'static {
+    /// Run a command synchronously. Returns the raw [`Reply`] — typed
+    /// methods unpack it.
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+
+    fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        let reply = self.exec(cmd)?;
+        if let Reply::Err(msg) = &reply {
+            return Err(PlayError::Internal(msg.clone()));
+        }
+        Ok(reply)
+    }
+
+    fn allocate_slot(
+        &self,
+        player_id: PlayerId,
+    ) -> Result<
+        (
+            SlotId,
+            HeapProd<PlayerCmd>,
+            Arc<SharedPlayerState>,
+            SharedEq,
+        ),
+        PlayError,
+    > {
+        match self.exec_ok(Cmd::AllocateSlot { player_id })? {
+            Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
+                Ok((slot_id, cmd_tx, shared_state, eq))
+            }
+            _ => Err(PlayError::Internal(
+                "unexpected reply for session allocate slot".into(),
+            )),
+        }
+    }
+
+    fn ducking(&self) -> Result<SessionDuckingMode, PlayError> {
+        match self.exec_ok(Cmd::SessionDucking)? {
+            Reply::SessionDucking(mode) => Ok(mode),
+            _ => Err(PlayError::Internal(
+                "unexpected reply for session ducking query".into(),
+            )),
+        }
+    }
+
+    fn query_sample_rate(&self, fallback: u32) -> u32 {
+        match self.exec(Cmd::QuerySampleRate) {
+            Ok(Reply::SampleRate(sr)) => sr,
+            _ => fallback,
+        }
+    }
+
+    fn register_player(
+        &self,
+        eq_layout: Vec<EqBandConfig>,
+        pcm_pool: PcmPool,
+    ) -> Result<PlayerId, PlayError> {
+        match self.exec_ok(Cmd::RegisterPlayer {
+            eq_layout,
+            pcm_pool,
+        })? {
+            Reply::PlayerRegistered(id) => Ok(id),
+            _ => Err(PlayError::Internal(
+                "unexpected reply for session player registration".into(),
+            )),
+        }
+    }
+
+    fn release_slot(&self, player_id: PlayerId, slot: SlotId) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::ReleaseSlot { player_id, slot })
+            .map(|_| ())
+    }
+
+    fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
+    }
+
+    fn set_player_eq_gain(
+        &self,
+        player_id: PlayerId,
+        band: usize,
+        gain_db: f32,
+    ) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::SetPlayerEqGain {
+            band,
+            gain_db,
+            player_id,
+        })
+        .map(|_| ())
+    }
+
+    fn set_player_master_volume(&self, player_id: PlayerId, volume: f32) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::SetPlayerMasterVolume { player_id, volume })
+            .map(|_| ())
+    }
+
+    fn set_player_slot_volume(
+        &self,
+        player_id: PlayerId,
+        slot: SlotId,
+        volume: f32,
+    ) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::SetPlayerSlotVolume {
+            player_id,
+            slot,
+            volume,
+        })
+        .map(|_| ())
+    }
+
+    fn start_player(
+        &self,
+        player_id: PlayerId,
+        sample_rate: u32,
+        master_volume: f32,
+    ) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::StartPlayer {
+            master_volume,
+            player_id,
+            sample_rate,
+        })
+        .map(|_| ())
+    }
+
+    fn stop_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::StopPlayer { player_id }).map(|_| ())
+    }
+
+    fn tick(&self) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::Tick).map(|_| ())
+    }
+
+    fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
+        self.exec_ok(Cmd::UnregisterPlayer { player_id })
+            .map(|_| ())
+    }
 }
 
 pub(crate) struct SessionClient {
@@ -219,14 +364,20 @@ impl SessionClient {
     /// Capacity of the player command ring buffer within a slot.
     const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
 
-    pub(crate) fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
-        match self.call_ok(Cmd::AllocateSlot { player_id })? {
-            Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
-                Ok((slot_id, cmd_tx, shared_state, eq))
+    #[cfg(not(target_arch = "wasm32"))]
+    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
+        let mut pending = msg;
+        loop {
+            match self.cmd_tx.lock_sync().try_push(pending) {
+                Ok(()) => {
+                    self.engine_thread.unpark();
+                    return Ok(());
+                }
+                Err(returned) => {
+                    pending = returned;
+                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
+                }
             }
-            _ => Err(PlayError::Internal(
-                "unexpected reply for session allocate slot".into(),
-            )),
         }
     }
 
@@ -275,135 +426,11 @@ impl SessionClient {
                 .map_err(|_| PlayError::Internal("session host gone (reply)".into()))
         }
     }
+}
 
-    fn call_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        let reply = self.call(cmd)?;
-        if let Reply::Err(msg) = &reply {
-            return Err(PlayError::Internal(msg.clone()));
-        }
-        Ok(reply)
-    }
-
-    pub(crate) fn ducking(&self) -> Result<SessionDuckingMode, PlayError> {
-        match self.call_ok(Cmd::SessionDucking)? {
-            Reply::SessionDucking(mode) => Ok(mode),
-            _ => Err(PlayError::Internal(
-                "unexpected reply for session ducking query".into(),
-            )),
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
-        let mut pending = msg;
-        loop {
-            match self.cmd_tx.lock_sync().try_push(pending) {
-                Ok(()) => {
-                    self.engine_thread.unpark();
-                    return Ok(());
-                }
-                Err(returned) => {
-                    pending = returned;
-                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
-                }
-            }
-        }
-    }
-
-    pub(crate) fn query_sample_rate(&self, fallback: u32) -> u32 {
-        match self.call(Cmd::QuerySampleRate) {
-            Ok(Reply::SampleRate(sr)) => sr,
-            _ => fallback,
-        }
-    }
-
-    pub(crate) fn register_player(
-        &self,
-        eq_layout: Vec<EqBandConfig>,
-        pcm_pool: PcmPool,
-    ) -> Result<PlayerId, PlayError> {
-        match self.call_ok(Cmd::RegisterPlayer {
-            eq_layout,
-            pcm_pool,
-        })? {
-            Reply::PlayerRegistered(id) => Ok(id),
-            _ => Err(PlayError::Internal(
-                "unexpected reply for session player registration".into(),
-            )),
-        }
-    }
-
-    pub(crate) fn release_slot(&self, player_id: PlayerId, slot: SlotId) -> Result<(), PlayError> {
-        self.call_ok(Cmd::ReleaseSlot { player_id, slot })
-            .map(|_| ())
-    }
-
-    pub(crate) fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.call_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
-    }
-
-    pub(crate) fn set_player_eq_gain(
-        &self,
-        player_id: PlayerId,
-        band: usize,
-        gain_db: f32,
-    ) -> Result<(), PlayError> {
-        self.call_ok(Cmd::SetPlayerEqGain {
-            band,
-            gain_db,
-            player_id,
-        })
-        .map(|_| ())
-    }
-
-    pub(crate) fn set_player_master_volume(
-        &self,
-        player_id: PlayerId,
-        volume: f32,
-    ) -> Result<(), PlayError> {
-        self.call_ok(Cmd::SetPlayerMasterVolume { player_id, volume })
-            .map(|_| ())
-    }
-
-    pub(crate) fn set_player_slot_volume(
-        &self,
-        player_id: PlayerId,
-        slot: SlotId,
-        volume: f32,
-    ) -> Result<(), PlayError> {
-        self.call_ok(Cmd::SetPlayerSlotVolume {
-            player_id,
-            slot,
-            volume,
-        })
-        .map(|_| ())
-    }
-
-    pub(crate) fn start_player(
-        &self,
-        player_id: PlayerId,
-        sample_rate: u32,
-        master_volume: f32,
-    ) -> Result<(), PlayError> {
-        self.call_ok(Cmd::StartPlayer {
-            master_volume,
-            player_id,
-            sample_rate,
-        })
-        .map(|_| ())
-    }
-
-    pub(crate) fn stop_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
-        self.call_ok(Cmd::StopPlayer { player_id }).map(|_| ())
-    }
-
-    pub(crate) fn tick(&self) -> Result<(), PlayError> {
-        self.call_ok(Cmd::Tick).map(|_| ())
-    }
-
-    pub(crate) fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
-        self.call_ok(Cmd::UnregisterPlayer { player_id })
-            .map(|_| ())
+impl SessionDispatcher for SessionClient {
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        self.call(cmd)
     }
 }
 
@@ -440,8 +467,8 @@ fn spawn_session_client<B: AudioBackend + Send + 'static>(
     });
     let engine_thread = handle.thread().clone();
     Arc::new(SessionClient {
-        engine_thread,
         cmd_tx: Mutex::new(cmd_tx),
+        engine_thread,
     })
 }
 
@@ -868,13 +895,6 @@ fn start_stream_offline(
 /// calls `ctx.active_backend_mut().render(OFFLINE_BLOCK_FRAMES)` to
 /// pull samples through the firewheel graph — without which the decoder
 /// and `PlayerNode` stay idle and integration tests see `position=0`.
-///
-/// Pacing is best-effort via `park_timeout` at roughly one block at
-/// 44.1kHz. The loop does not strictly cap rendering to wall clock, so
-/// audio position may advance slightly faster than realtime when the
-/// decoder has no network stalls (common for fully-buffered progressive
-/// files). Callers that need a tight upper bound should derive their
-/// expectations from the block cadence, not from `sleep(wall)`.
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
 fn engine_thread_offline(mut cmd_rx: HeapCons<CmdMsg>) {
     /// Offline render block size. Matches `offline_backend::OFFLINE_BLOCK_FRAMES`.
@@ -927,8 +947,8 @@ pub(crate) fn try_init_offline_session() -> Result<(), String> {
     });
     let engine_thread = handle.thread().clone();
     let client = Arc::new(SessionClient {
-        engine_thread,
         cmd_tx: Mutex::new(cmd_tx),
+        engine_thread,
     });
     session_holder::SESSION_CLIENT.set(client).map_err(|_| {
         "session client already initialized — call init_offline_backend() \
@@ -1097,33 +1117,14 @@ fn remove_player_graph<B: AudioBackend>(fw_ctx: &mut FirewheelCtx<B>, player: &m
     let player_id = player.player_id;
     let slots = player.slots.drain(..).collect::<Vec<_>>();
     for slot in slots {
-        remove_slot_nodes(fw_ctx, player_id, &slot);
+        if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
+            warn!(player_id, ?err, "failed to remove slot vol_pan node");
+        }
+        if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
+            warn!(player_id, ?err, "failed to remove slot player node");
+        }
     }
-    remove_player_master_nodes(fw_ctx, player);
-    clear_player_graph_state(player);
-}
 
-/// Remove a slot's vol/pan and player nodes, logging failures.
-fn remove_slot_nodes<B: AudioBackend>(
-    fw_ctx: &mut FirewheelCtx<B>,
-    player_id: PlayerId,
-    slot: &SlotNodes,
-) {
-    if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
-        warn!(player_id, ?err, "failed to remove slot vol_pan node");
-    }
-    if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
-        warn!(player_id, ?err, "failed to remove slot player node");
-    }
-}
-
-/// Take and remove the player's master vol-pan and master EQ nodes,
-/// logging failures.
-fn remove_player_master_nodes<B: AudioBackend>(
-    fw_ctx: &mut FirewheelCtx<B>,
-    player: &mut PlayerState,
-) {
-    let player_id = player.player_id;
     if let Some(master_id) = player.master_vol_pan_node_id.take()
         && let Err(err) = fw_ctx.remove_node(master_id)
     {
@@ -1134,6 +1135,7 @@ fn remove_player_master_nodes<B: AudioBackend>(
     {
         warn!(player_id, ?err, "failed to remove player master eq node");
     }
+    clear_player_graph_state(player);
 }
 
 fn clear_player_graph_state(player: &mut PlayerState) {
@@ -1238,27 +1240,30 @@ fn release_slot<B: AudioBackend>(
         return Err("player not running".into());
     }
 
-    let slot = take_player_slot(&mut state.players[idx], slot)?;
+    let Some(slot_idx) = state.players[idx]
+        .slots
+        .iter()
+        .position(|s| s.slot_id == slot)
+    else {
+        return Err(format!("slot not found: {slot:?}"));
+    };
+    let slot = state.players[idx].slots.remove(slot_idx);
 
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err("session context is not initialised".into());
     };
 
-    remove_slot_nodes(fw_ctx, player_id, &slot);
+    if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
+        warn!(player_id, ?err, "failed to remove slot vol_pan node");
+    }
+    if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
+        warn!(player_id, ?err, "failed to remove slot player node");
+    }
     if let Err(err) = fw_ctx.update() {
         warn!(player_id, "graph update after slot release failed: {err:?}");
     }
 
     Ok(())
-}
-
-/// Locate and remove a slot from the player's slot list by `SlotId`.
-/// Returns the removed `SlotNodes` so callers can drop its graph nodes.
-fn take_player_slot(player: &mut PlayerState, slot: SlotId) -> Result<SlotNodes, String> {
-    let Some(slot_idx) = player.slots.iter().position(|s| s.slot_id == slot) else {
-        return Err(format!("slot not found: {slot:?}"));
-    };
-    Ok(player.slots.remove(slot_idx))
 }
 
 fn set_player_master_volume<B: AudioBackend>(
@@ -1367,4 +1372,119 @@ fn set_session_ducking<B: AudioBackend>(state: &mut SessionState<B>, mode: Sessi
     memo.volume = Volume::Linear(ducking_gain(mode));
     let mut queue = fw_ctx.event_queue(session_id);
     memo.update_memo(&mut queue);
+}
+
+// Per-instance offline session (test-only, native).
+//
+// Owns a worker thread that holds `SessionState<OfflineBackend>`. Test
+// thread requests render or session-cmd dispatch via channel and waits
+// for the reply — the worker holds non-`Send` firewheel internals
+// (`Box<dyn DynAudioNode>` etc.) but the OfflineSession handle remains
+// `Send + Sync` because it only carries the command sender.
+//
+// The render contract is *synchronous*: `render(N)` blocks until the
+// worker has driven `ctx.update()` + `OfflineBackend::render(N)` and
+// returned the rendered stereo block. Tests step the audio chain at
+// arbitrary block sizes without realtime pacing.
+
+#[cfg(any(test, feature = "test-utils"))]
+enum OfflineMsg {
+    Cmd {
+        cmd: Cmd,
+        reply_tx: mpsc::Sender<Reply>,
+    },
+    Render {
+        frames: usize,
+        reply_tx: mpsc::Sender<Vec<f32>>,
+    },
+    Shutdown,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(crate) struct OfflineSession {
+    cmd_tx: Mutex<mpsc::Sender<OfflineMsg>>,
+    worker: Mutex<Option<kithara_platform::thread::JoinHandle<()>>>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl OfflineSession {
+    pub(crate) fn new() -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OfflineMsg>();
+        let handle = spawn_named("kithara-engine-offline-instance", move || {
+            offline_session_thread(cmd_rx);
+        });
+        Self {
+            cmd_tx: Mutex::new(cmd_tx),
+            worker: Mutex::new(Some(handle)),
+        }
+    }
+
+    /// Synchronously drive one render iteration on the offline worker.
+    /// Returns stereo-interleaved samples, or an empty `Vec` if the
+    /// firewheel context has not been initialised yet (no player
+    /// started).
+    pub(crate) fn render(&self, frames: usize) -> Vec<f32> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        if self
+            .cmd_tx
+            .lock_sync()
+            .send_sync(OfflineMsg::Render { frames, reply_tx })
+            .is_err()
+        {
+            return Vec::new();
+        }
+        reply_rx.recv_sync().unwrap_or_default()
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Drop for OfflineSession {
+    fn drop(&mut self) {
+        let _ = self.cmd_tx.lock_sync().send_sync(OfflineMsg::Shutdown);
+        if let Some(handle) = self.worker.lock_sync().take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl SessionDispatcher for OfflineSession {
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.cmd_tx
+            .lock_sync()
+            .send_sync(OfflineMsg::Cmd { cmd, reply_tx })
+            .map_err(|_| PlayError::Internal("offline session worker gone".into()))?;
+        reply_rx
+            .recv_sync()
+            .map_err(|_| PlayError::Internal("offline session worker gone (reply)".into()))
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn offline_session_thread(cmd_rx: mpsc::Receiver<OfflineMsg>) {
+    let mut state = SessionState::<OfflineBackend>::new(start_stream_offline);
+    while let Ok(msg) = cmd_rx.recv_sync() {
+        match msg {
+            OfflineMsg::Cmd { cmd, reply_tx } => {
+                let reply = run_cmd(&mut state, cmd);
+                let _ = reply_tx.send_sync(reply);
+            }
+            OfflineMsg::Render { frames, reply_tx } => {
+                let block = if let Some(ref mut ctx) = state.ctx {
+                    if let Err(err) = ctx.update() {
+                        warn!("offline session graph update failed: {err:?}");
+                    }
+                    match ctx.active_backend_mut() {
+                        Some(backend) => backend.render(frames),
+                        None => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                };
+                let _ = reply_tx.send_sync(block);
+            }
+            OfflineMsg::Shutdown => break,
+        }
+    }
 }

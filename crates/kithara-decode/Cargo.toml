@@ -17,6 +17,7 @@ kithara-platform = { workspace = true }
 derivative = { workspace = true }
 derive_setters = { workspace = true }
 re_mp4 = { workspace = true }
+smallvec = { workspace = true }
 symphonia = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

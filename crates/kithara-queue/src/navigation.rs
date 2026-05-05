@@ -68,7 +68,16 @@ impl NavigationState {
         } else {
             match self.repeat_mode {
                 RepeatMode::All => 0,
-                RepeatMode::Off | RepeatMode::One => return None,
+                RepeatMode::Off | RepeatMode::One => {
+                    // Park the cursor past the last item so callers that
+                    // read `current_index` after `next() == None` see a
+                    // stopped queue. Without this, the `track_switch_race`
+                    // observer keeps reading the last-played slot via
+                    // `Queue::current()` and never exits the post-fast
+                    // window early.
+                    self.current_index = None;
+                    return None;
+                }
             }
         };
         self.current_index = Some(next);

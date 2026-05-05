@@ -105,7 +105,7 @@ impl EventBridge {
                 FfiPlayerEvent::VolumeChanged { volume: *volume }
             }
             PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
-            PlayerEvent::ItemDidPlayToEnd => FfiPlayerEvent::ItemDidPlayToEnd,
+            PlayerEvent::ItemDidPlayToEnd { .. } => FfiPlayerEvent::ItemDidPlayToEnd,
             // `PlayerEvent::CurrentItemChanged` is shadowed by
             // `QueueEvent::CurrentTrackChanged` (carries the item id).
             _ => return None,

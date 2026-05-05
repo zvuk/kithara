@@ -144,6 +144,7 @@ item.eventPublisher
     }
     .store(in: &cancellables)
 
+// Explicit preload is optional. Insert can auto-load with player config.
 item.load()
 ```
 

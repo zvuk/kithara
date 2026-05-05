@@ -69,7 +69,7 @@ pub mod source {
     };
 
     use delegate::delegate;
-    use kithara_decode::{Decoder, PcmChunk};
+    use kithara_decode::{Decoder, GaplessMode, PcmChunk};
     use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
 
     pub use crate::pipeline::track_fsm::{TrackPhaseTag, TrackStep, WaitingReason};
@@ -172,6 +172,7 @@ pub mod source {
             initial_media_info,
             epoch,
             effects,
+            GaplessMode::default(),
         ))
     }
 

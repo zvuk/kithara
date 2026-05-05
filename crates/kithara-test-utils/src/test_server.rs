@@ -199,10 +199,7 @@ impl HlsFixtureBuilder {
     /// HLS-fMP4 from CDNs) where `sidx` lets the demuxer resolve
     /// `seek_track_by_time` in O(1).
     #[must_use]
-    pub fn include_sidx(mut self, include: bool) -> Self {
-        if let Some(req) = self.spec.packaged_audio.as_mut() {
-            req.include_sidx = include;
-        }
+    pub fn include_sidx(self, _include: bool) -> Self {
         self
     }
 
@@ -309,7 +306,10 @@ impl HlsFixtureBuilder {
             bit_rate: Some(128_000),
             source: PackagedAudioSource::PerVariantPcm { patterns },
             variant_overrides: Vec::new(),
-            include_sidx: false,
+            start_frame: None,
+            encoder_delay: None,
+            trailing_delay: None,
+            gapless_encoding: crate::fixture_protocol::GaplessEncoding::None,
         });
         self
     }
@@ -329,7 +329,10 @@ impl HlsFixtureBuilder {
             bit_rate: Some(512_000),
             source: PackagedAudioSource::PerVariantPcm { patterns },
             variant_overrides: Vec::new(),
-            include_sidx: false,
+            start_frame: None,
+            encoder_delay: None,
+            trailing_delay: None,
+            gapless_encoding: crate::fixture_protocol::GaplessEncoding::None,
         });
         self
     }
@@ -349,7 +352,10 @@ impl HlsFixtureBuilder {
             bit_rate: Some(128_000),
             source: PackagedAudioSource::Signal(signal),
             variant_overrides: Vec::new(),
-            include_sidx: false,
+            start_frame: None,
+            encoder_delay: None,
+            trailing_delay: None,
+            gapless_encoding: crate::fixture_protocol::GaplessEncoding::None,
         });
         self
     }
@@ -369,7 +375,10 @@ impl HlsFixtureBuilder {
             bit_rate: Some(512_000),
             source: PackagedAudioSource::Signal(signal),
             variant_overrides: Vec::new(),
-            include_sidx: false,
+            start_frame: None,
+            encoder_delay: None,
+            trailing_delay: None,
+            gapless_encoding: crate::fixture_protocol::GaplessEncoding::None,
         });
         self
     }

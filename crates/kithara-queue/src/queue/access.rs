@@ -8,9 +8,16 @@ use crate::{navigation::RepeatMode, track::TrackEntry};
 
 impl Queue {
     /// The currently playing track entry, if any.
+    ///
+    /// Sourced from the navigation cursor (not the player) so the queue
+    /// reports `None` after `advance_to_next` runs off the end of the
+    /// queue (`RepeatMode::Off` exhaustion). The player's own
+    /// `current_index` stays parked at the last-played slot — read it
+    /// via [`Self::current_index`] when the call site needs the
+    /// last-played index even after queue-end.
     #[must_use]
     pub fn current(&self) -> Option<TrackEntry> {
-        let idx = self.player.current_index();
+        let idx = self.lock_navigation().current_index()?;
         self.lock_tracks().get(idx).cloned()
     }
 

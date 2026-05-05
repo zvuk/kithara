@@ -39,7 +39,10 @@ use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    types::PcmSpec,
+    gapless::probe_mp4_gapless_dyn,
+    symphonia::config::SymphoniaConfig,
+    traits::DecoderInput,
+    types::{DecoderTrackInfo, PcmSpec},
 };
 
 const TRACK_ID: u32 = 0;
@@ -48,6 +51,10 @@ const TRACK_ID: u32 = 0;
 pub(crate) struct SymphoniaCodec {
     decoder: Box<dyn AudioDecoder>,
     spec: PcmSpec,
+    /// Decoder-owned playback contract. Populated from container-level
+    /// gapless metadata captured via [`Self::probe_track_info`] before
+    /// the codec is opened; left empty otherwise.
+    track_info: DecoderTrackInfo,
 }
 
 impl SymphoniaCodec {
@@ -79,7 +86,11 @@ impl SymphoniaCodec {
             channels,
             sample_rate,
         };
-        Ok(Self { decoder, spec })
+        Ok(Self {
+            decoder,
+            spec,
+            track_info: DecoderTrackInfo::default(),
+        })
     }
 
     /// Whether `SymphoniaCodec::open` can accept this codec via
@@ -90,6 +101,112 @@ impl SymphoniaCodec {
     #[must_use]
     pub(crate) fn supports(codec: AudioCodec) -> bool {
         !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
+    }
+
+    /// Build a [`SymphoniaCodec`] from `TrackInfo` with extra options
+    /// from [`SymphoniaConfig`]. Currently only [`SymphoniaConfig::gapless`]
+    /// matters: when set, `AudioDecoderOptions::gapless = true` so the
+    /// Symphonia codec emits priming-trimmed output internally for codecs
+    /// that report it (FLAC, Opus, Vorbis).
+    ///
+    /// `FrameCodec::open` keeps its no-config shape so existing
+    /// `UniversalDecoder<D, C>` callers don't break.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`FrameCodec::open`].
+    pub(crate) fn open_with_config(
+        track: &TrackInfo,
+        config: &SymphoniaConfig,
+    ) -> DecodeResult<Self> {
+        let (codec_id, profile) = map_codec(track.codec)?;
+        let mut params = AudioCodecParameters::new();
+        params
+            .for_codec(codec_id)
+            .with_sample_rate(track.sample_rate);
+        if let Some(profile) = profile {
+            params.with_profile(profile);
+        }
+        params.with_channels(Channels::Discrete(track.channels));
+        if !track.extra_data.is_empty() {
+            params.with_extra_data(track.extra_data.clone().into_boxed_slice());
+        }
+
+        let registry: &CodecRegistry = symphonia::default::get_codecs();
+        let mut opts = AudioDecoderOptions::default();
+        opts.gapless = config.gapless;
+        // Symphonia 0.6.0-alpha.1 does not honor `opts.gapless` for AAC;
+        // the decoder still emits the full 2112-frame native priming as
+        // the first samples of output. When the demuxer surfaced
+        // container-level gapless info (`track.gapless = Some(...)`),
+        // fold the codec priming into `leading_frames` so the downstream
+        // `GaplessTrimmer` strips both the decoder's native priming and
+        // the encoder-delay silence the container metadata announces.
+        let track_gapless = track.gapless.map(|info| {
+            let extra = crate::gapless::codec_priming_frames(track.codec);
+            crate::GaplessInfo {
+                leading_frames: info.leading_frames.saturating_add(extra),
+                trailing_frames: info.trailing_frames,
+            }
+        });
+        let decoder = registry
+            .make_audio_decoder(&params, &opts)
+            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+
+        let spec = PcmSpec {
+            channels: track.channels,
+            sample_rate: track.sample_rate,
+        };
+        // Carry container-level gapless info (when the demuxer surfaced
+        // `iTunSMPB` / `elst`) into `DecoderTrackInfo` so downstream
+        // gapless trim picks it up. Codecs whose priming Symphonia
+        // strips internally (Vorbis/Opus via `AudioDecoderOptions::gapless`)
+        // leave `track.gapless` as `None` and report nothing here.
+        Ok(Self {
+            decoder,
+            spec,
+            track_info: DecoderTrackInfo {
+                gapless: track_gapless,
+                ..DecoderTrackInfo::default()
+            },
+        })
+    }
+
+    /// Probe the source for container-level gapless metadata before
+    /// opening the codec. Currently only AAC inside MP4 udta carries
+    /// useful priming/padding numbers (`iTunSMPB`); other Symphonia
+    /// codecs return `DecoderTrackInfo::default()` because their priming
+    /// is handled internally via `AudioDecoderOptions::gapless`.
+    ///
+    /// # Errors
+    ///
+    /// Forwards [`DecodeError`] from the MP4 probe (malformed boxes,
+    /// I/O failures on the input source).
+    #[expect(dead_code, reason = "called by the factory in P7")]
+    pub(crate) fn probe_track_info(
+        source: &mut dyn DecoderInput,
+        codec: AudioCodec,
+        config: &SymphoniaConfig,
+    ) -> DecodeResult<DecoderTrackInfo> {
+        let gapless = if config.gapless && codec == AudioCodec::AacLc {
+            let info = probe_mp4_gapless_dyn(source)?;
+            if let Some(info) = info {
+                tracing::debug!(
+                    target: "kithara::gapless",
+                    codec = ?codec,
+                    leading_frames = info.leading_frames,
+                    trailing_frames = info.trailing_frames,
+                    "captured AAC gapless metadata for Symphonia"
+                );
+            }
+            info
+        } else {
+            None
+        };
+        Ok(DecoderTrackInfo {
+            gapless,
+            ..DecoderTrackInfo::default()
+        })
     }
 }
 
@@ -141,6 +258,10 @@ impl FrameCodec for SymphoniaCodec {
         self.decoder.reset();
     }
 
+    fn track_info(&self) -> DecoderTrackInfo {
+        self.track_info.clone()
+    }
+
     fn open(track: &TrackInfo) -> DecodeResult<Self> {
         let (codec_id, profile) = map_codec(track.codec)?;
         let mut params = AudioCodecParameters::new();
@@ -165,7 +286,11 @@ impl FrameCodec for SymphoniaCodec {
             channels: track.channels,
             sample_rate: track.sample_rate,
         };
-        Ok(Self { decoder, spec })
+        Ok(Self {
+            decoder,
+            spec,
+            track_info: DecoderTrackInfo::default(),
+        })
     }
 
     fn spec(&self) -> PcmSpec {

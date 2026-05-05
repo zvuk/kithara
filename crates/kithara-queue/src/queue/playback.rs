@@ -62,48 +62,75 @@ impl Queue {
     }
 
     fn process_player_event(&self, ev: &Event) {
+        match ev {
+            Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => {
+                self.handle_item_did_play_to_end(src);
+            }
+            Event::Player(PlayerEvent::CurrentItemChanged) => {
+                self.handle_current_item_changed();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_current_item_changed(&self) {
+        let idx = self.player.current_index();
+        let id = self.lock_tracks().get(idx).map(|e| e.id);
+        self.write_cached_position(None);
+        self.bus.publish(QueueEvent::CurrentTrackChanged { id });
+    }
+
+    /// Decide whether `ItemDidPlayToEnd` advances the queue or is
+    /// filtered as a stale crossfade fade-out signal.
+    ///
+    /// `src` identifies the underlying audio source of the track that
+    /// just hit EOF. The player only emits `TrackPlaybackStopped` from
+    /// its natural-EOF path (`handle_eof`), so a non-empty `src` is the
+    /// authoritative end-of-track signal: advance unconditionally
+    /// (subject to crossfade pre-arm consumption).
+    ///
+    /// The empty-`src` arm preserves backward compatibility for
+    /// pre-PR-#64 callers and acts as a defensive fallback when the
+    /// player has not yet wired the src through; it falls back to the
+    /// pos/dur tolerance heuristic to filter spurious events.
+    fn handle_item_did_play_to_end(&self, src: &std::sync::Arc<str>) {
+        let pos = self.player.position_seconds().unwrap_or(0.0);
+        let dur = self.player.duration_seconds().unwrap_or(0.0);
+        debug!(%src, pos, dur, "ItemDidPlayToEnd received");
+        if self.consume_armed_advance(pos, dur) {
+            return;
+        }
+        if src.is_empty() {
+            self.dispatch_real_or_spurious(pos, dur);
+        } else {
+            let _ = self.advance_to_next(Transition::Crossfade);
+        }
+    }
+
+    /// If an advance was already armed from `tick()`, consume it and
+    /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
+    /// the same track must not advance again.
+    fn consume_armed_advance(&self, pos: f64, dur: f64) -> bool {
+        if self.take_armed_for().is_some() {
+            debug!(pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Either treat the EOF as a real end-of-track and advance, or log
+    /// it as a spurious signal (decoder-failure pos stamp, crossfade
+    /// fade-out on previous track).
+    fn dispatch_real_or_spurious(&self, pos: f64, dur: f64) {
         /// Threshold for filtering spurious `PlayerEvent::ItemDidPlayToEnd`
         /// events emitted by crossfade fade-outs of non-current tracks.
         const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
 
-        match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd) => {
-                let pos = self.player.position_seconds().unwrap_or(0.0);
-                let dur = self.player.duration_seconds().unwrap_or(0.0);
-                // Crossfade fade-outs emit ItemDidPlayToEnd for the
-                // previous track right after the swap, so the engine
-                // reports `pos` near 0 — those are the spurious
-                // deliveries we filter. Any ItemDidPlayToEnd past the
-                // just-switched window is a real end (natural or from
-                // a fatal decode error after a failed seek) and must
-                // advance the queue, otherwise playback hangs.
-                // If we already armed the advance from tick() while the
-                // outgoing track was still playing, the engine's
-                // subsequent ItemDidPlayToEnd is the trailing signal
-                // for the same track — consume it without advancing
-                // again.
-                let armed = self.take_armed_for();
-                if armed.is_some() {
-                    debug!(pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)");
-                    return;
-                }
-                // Real end-of-track: position has reached duration
-                // within tolerance. Anything else is a stale / fake
-                // signal (e.g. decoder-failure pos stamp, crossfade
-                // fade-out on previous track).
-                if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
-                    let _ = self.advance_to_next(Transition::Crossfade);
-                } else {
-                    debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
-                }
-            }
-            Event::Player(PlayerEvent::CurrentItemChanged) => {
-                let idx = self.player.current_index();
-                let id = self.lock_tracks().get(idx).map(|e| e.id);
-                self.write_cached_position(None);
-                self.bus.publish(QueueEvent::CurrentTrackChanged { id });
-            }
-            _ => {}
+        if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
+            let _ = self.advance_to_next(Transition::Crossfade);
+        } else {
+            debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
         }
     }
 
@@ -167,6 +194,8 @@ impl Queue {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use kithara_events::TrackId;
     use kithara_test_utils::kithara;
 
@@ -182,7 +211,10 @@ mod tests {
         queue
             .player
             .bus()
-            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd));
+            .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
+                src: Arc::from(""),
+                item_id: None,
+            }));
 
         queue.tick().expect("tick");
 
@@ -203,7 +235,12 @@ mod tests {
         Some(TrackId(0)),
         true
     )]
-    #[case::crossfade_zero_triggers_at_tail(161.9, 162.0, 0.0, TrackId(1), None, true)]
+    // cf=0: production replaced the END_PROXIMITY_SECONDS pre-arm window
+    // with sample-accurate handover via the audio thread's
+    // `TrackPlaybackStopped` notification (PR #64). The pre-arm path
+    // returns `false` for cf=0 across all positions; the next-track
+    // promotion happens through the player processor instead.
+    #[case::crossfade_zero_at_tail_no_pre_arm(161.9, 162.0, 0.0, TrackId(1), None, false)]
     #[case::crossfade_zero_quiet_middle(161.0, 162.0, 0.0, TrackId(1), None, false)]
     #[case::zero_position_rejected(0.0, 162.0, 5.0, TrackId(1), None, false)]
     #[case::zero_duration_rejected(10.0, 0.0, 5.0, TrackId(1), None, false)]

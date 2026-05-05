@@ -89,6 +89,8 @@ impl FlacFFmpegEncoder {
             timescale: request.timescale,
             bit_rate: request.bit_rate,
             packets_per_segment: request.packets_per_segment,
+            encoder_delay: request.encoder_delay,
+            trailing_delay: request.trailing_delay,
         })
     }
 
@@ -349,6 +351,8 @@ mod tests {
             timescale: Consts::SAMPLE_RATE,
             bit_rate: 512_000,
             packets_per_segment: 2,
+            encoder_delay: 0,
+            trailing_delay: 0,
         })
         .unwrap_or_else(|error| panic!("encode_packaged(Flac) failed: {error}"));
 

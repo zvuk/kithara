@@ -11,10 +11,10 @@ pub(crate) enum TokenRoute {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TokenRequest {
-    pub hls_spec: Option<HlsSpec>,
+    pub route: TokenRoute,
     pub signal_kind: Option<String>,
     pub signal_spec_with_ext: Option<String>,
-    pub route: TokenRoute,
+    pub hls_spec: Option<HlsSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

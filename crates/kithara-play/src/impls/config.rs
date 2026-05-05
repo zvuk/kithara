@@ -204,6 +204,10 @@ pub struct ResourceConfig {
     /// standalone worker thread (backward-compatible default).
     #[setters(skip)]
     pub worker: Option<AudioWorkerHandle>,
+    /// How leading/trailing PCM is trimmed after decode. Forwarded to
+    /// the underlying [`AudioConfig::with_gapless_mode`] in
+    /// `into_file_config` / `into_hls_config`.
+    pub gapless_mode: kithara_decode::GaplessMode,
 }
 
 impl ResourceConfig {
@@ -276,6 +280,7 @@ impl ResourceConfig {
             #[cfg(any(feature = "file", feature = "hls"))]
             flush_hub: None,
             worker: None,
+            gapless_mode: kithara_decode::GaplessMode::default(),
         })
     }
 
@@ -351,6 +356,7 @@ impl ResourceConfig {
         if let Some(worker) = self.worker {
             config = config.with_worker(worker);
         }
+        config = config.with_gapless_mode(self.gapless_mode);
 
         config
     }
@@ -430,6 +436,7 @@ impl ResourceConfig {
         if let Some(worker) = self.worker {
             config = config.with_worker(worker);
         }
+        config = config.with_gapless_mode(self.gapless_mode);
 
         Ok(config)
     }

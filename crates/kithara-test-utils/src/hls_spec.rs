@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::{
     consts::Consts,
     fixture_protocol::{
-        DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
+        DataMode, DelayRule, EncryptionRequest, GaplessEncoding, InitMode, PackagedAudioRequest,
         PackagedAudioSource, PackagedAudioVariantOverride, PackagedSignal, PcmPattern,
     },
     hls_url::HlsSpec,
@@ -18,18 +18,18 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedHlsSpec {
+    pub(crate) variant_count: usize,
+    pub(crate) segments_per_variant: usize,
+    pub(crate) segment_size: usize,
+    pub(crate) segment_duration_secs: f64,
+    pub(crate) data_mode: ResolvedDataMode,
+    pub(crate) init_mode: ResolvedInitMode,
+    pub(crate) variant_bandwidths: Vec<u64>,
+    pub(crate) delay_rules: Vec<DelayRule>,
     pub(crate) encryption: Option<ResolvedEncryption>,
     pub(crate) head_reported_segment_size: Option<usize>,
     pub(crate) key_data: Option<Arc<Vec<u8>>>,
     pub(crate) packaged_audio: Option<ResolvedPackagedAudioSpec>,
-    pub(crate) data_mode: ResolvedDataMode,
-    pub(crate) init_mode: ResolvedInitMode,
-    pub(crate) delay_rules: Vec<DelayRule>,
-    pub(crate) variant_bandwidths: Vec<u64>,
-    pub(crate) segment_duration_secs: f64,
-    pub(crate) segment_size: usize,
-    pub(crate) segments_per_variant: usize,
-    pub(crate) variant_count: usize,
     cache_key: String,
 }
 
@@ -60,27 +60,30 @@ pub(crate) enum ResolvedInitMode {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedEncryption {
-    pub(crate) iv: Option<[u8; 16]>,
     pub(crate) key: [u8; 16],
+    pub(crate) iv: Option<[u8; 16]>,
     iv_hex: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackagedAudioSpec {
     pub(crate) container: ContainerFormat,
-    pub(crate) variants: Vec<ResolvedPackagedVariant>,
-    pub(crate) include_sidx: bool,
-    pub(crate) segment_duration_secs: f64,
-    pub(crate) channels: u16,
     pub(crate) sample_rate: u32,
+    pub(crate) channels: u16,
     pub(crate) timescale: u32,
+    pub(crate) encoder_delay: u32,
+    pub(crate) trailing_delay: u32,
+    pub(crate) gapless_encoding: GaplessEncoding,
     pub(crate) segments_per_variant: usize,
+    pub(crate) segment_duration_secs: f64,
+    pub(crate) variants: Vec<ResolvedPackagedVariant>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackagedVariant {
-    pub(crate) signal: ResolvedPackagedSignal,
     pub(crate) bit_rate: u64,
+    pub(crate) start_frame: u64,
+    pub(crate) signal: ResolvedPackagedSignal,
     /// Per-variant codec. Defaults to the spec-level
     /// [`PackagedAudioRequest::codec`]; overridden by
     /// `PackagedAudioVariantOverride.codec` so a single fixture can carry
@@ -194,18 +197,18 @@ where
 
     Ok(ResolvedHlsSpec {
         variant_count,
-        data_mode,
-        init_mode,
-        variant_bandwidths,
-        encryption,
-        key_data,
-        packaged_audio,
-        cache_key,
         segments_per_variant: spec.segments_per_variant,
         segment_size: spec.segment_size,
         segment_duration_secs: spec.segment_duration_secs,
+        data_mode,
+        init_mode,
+        variant_bandwidths,
         delay_rules: spec.delay_rules,
+        encryption,
         head_reported_segment_size: spec.head_reported_segment_size,
+        key_data,
+        packaged_audio,
+        cache_key,
     })
 }
 
@@ -383,6 +386,7 @@ fn resolve_packaged_audio(
     let mut variants = Vec::with_capacity(spec.variant_count);
     for variant in 0..spec.variant_count {
         let mut bit_rate = packaged.bit_rate.unwrap_or(128_000);
+        let mut codec = packaged.codec;
         let mut signal = match &packaged.source {
             PackagedAudioSource::Signal(_) => base_signal,
             PackagedAudioSource::PerVariantPcm { patterns } => ResolvedPackagedSignal::Pattern(
@@ -392,7 +396,6 @@ fn resolve_packaged_audio(
                     .unwrap_or(PcmPattern::Ascending),
             ),
         };
-        let mut codec = packaged.codec;
         if let Some(override_spec) = packaged
             .variant_overrides
             .iter()
@@ -403,28 +406,25 @@ fn resolve_packaged_audio(
         if !audio_codec_supports_fmp4_packaging(codec) {
             return Err(HlsSpecError::UnsupportedPackagedCodec(codec));
         }
-        if matches!(codec, AudioCodec::AacLc) && timescale != packaged.sample_rate {
-            return Err(HlsSpecError::InvalidField {
-                field: "packaged_audio.timescale",
-                message: "AAC-LC currently requires timescale == sample_rate",
-            });
-        }
         variants.push(ResolvedPackagedVariant {
-            signal,
             bit_rate,
+            start_frame: packaged.start_frame.map_or(0, |n| u64::from(n.get())),
+            signal,
             codec,
         });
     }
 
     Ok(ResolvedPackagedAudioSpec {
-        timescale,
-        variants,
         container: ContainerFormat::Fmp4,
         sample_rate: packaged.sample_rate,
         channels: packaged.channels,
+        timescale,
+        encoder_delay: packaged.encoder_delay.map(Into::into).unwrap_or_default(),
+        trailing_delay: packaged.trailing_delay.map(Into::into).unwrap_or_default(),
+        gapless_encoding: packaged.gapless_encoding,
         segments_per_variant: spec.segments_per_variant,
         segment_duration_secs: spec.segment_duration_secs,
-        include_sidx: packaged.include_sidx,
+        variants,
     })
 }
 
@@ -524,7 +524,7 @@ impl ResolvedEncryption {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, num::NonZeroU32};
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use kithara_stream::AudioCodec;
@@ -593,15 +593,45 @@ mod tests {
                 codec: AudioCodec::AacLc,
                 sample_rate: 44_100,
                 channels: 2,
+                start_frame: None,
                 timescale: None,
                 bit_rate: None,
+                encoder_delay: None,
+                trailing_delay: None,
                 source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 50_000.0 }),
+                gapless_encoding: Default::default(),
                 variant_overrides: Vec::new(),
-                include_sidx: false,
             }),
             ..HlsSpec::default()
         };
         let err = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap_err();
         assert!(err.to_string().contains("Nyquist"));
+    }
+
+    #[test]
+    fn resolves_packaged_audio_start_frame_on_sine() {
+        let spec = HlsSpec {
+            packaged_audio: Some(PackagedAudioRequest {
+                codec: AudioCodec::AacLc,
+                sample_rate: 44_100,
+                channels: 2,
+                start_frame: NonZeroU32::new(256),
+                timescale: None,
+                bit_rate: None,
+                encoder_delay: None,
+                trailing_delay: None,
+                source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 440.0 }),
+                gapless_encoding: Default::default(),
+                variant_overrides: Vec::new(),
+            }),
+            ..HlsSpec::default()
+        };
+        let resolved = parse_hls_spec_with(&encode(&spec), |_| unreachable!()).unwrap();
+        let packaged = resolved.packaged_audio.unwrap();
+        assert_eq!(packaged.variants[0].start_frame, 256);
+        assert!(matches!(
+            packaged.variants[0].signal,
+            ResolvedPackagedSignal::Sine { freq_hz: 440.0 }
+        ));
     }
 }

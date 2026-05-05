@@ -10,7 +10,7 @@ use std::{
 
 use derive_setters::Setters;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{DecoderBackend, PcmSpec};
+use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec};
 use kithara_events::EventBus;
 use kithara_stream::StreamType;
 use portable_atomic::AtomicF32;
@@ -75,6 +75,8 @@ pub struct AudioConfig<T: StreamType> {
     pub effects: Vec<Box<dyn AudioEffect>>,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
     pub pcm_buffer_chunks: usize,
+    /// How leading/trailing PCM is trimmed after the decode.
+    pub gapless_mode: GaplessMode,
 }
 
 impl<T: StreamType> AudioConfig<T> {
@@ -104,6 +106,7 @@ impl<T: StreamType> AudioConfig<T> {
             bus: None,
             effects: Vec::new(),
             worker: None,
+            gapless_mode: GaplessMode::default(),
         }
     }
 

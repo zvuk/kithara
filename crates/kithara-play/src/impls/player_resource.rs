@@ -11,7 +11,6 @@ use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use tracing::warn;
 
-use crate::error::PlayError;
 #[rustfmt::skip]
 use crate::impls::resource::Resource;
 
@@ -22,19 +21,35 @@ use crate::impls::resource::Resource;
 /// reads from these buffers, avoiding direct interaction with the
 /// potentially-blocking decoder on every callback.
 pub(crate) struct PlayerResource {
-    src: Arc<str>,
     resource: Resource,
     channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
     write_len: usize,
     write_pos: usize,
+    src: Arc<str>,
+    eof_seen: bool,
+}
+
+/// Result of a bounded audio-thread read from [`PlayerResource`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadOutcome {
+    /// The requested range was filled completely.
+    Full,
+    /// A strict prefix of the requested range was written.
+    ///
+    /// The payload is the number of written frames. This outcome is reserved
+    /// for natural EOF inside the requested block; the next read must return
+    /// [`ReadOutcome::Eof`].
+    Partial(usize),
+    /// The resource was already drained and nothing was written.
+    Eof,
 }
 
 impl PlayerResource {
-    /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
-    const BUFFER_DURATION_DIVISOR: usize = 5;
-
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
+
+    /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
+    const BUFFER_DURATION_DIVISOR: usize = 5;
 
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
@@ -46,40 +61,24 @@ impl PlayerResource {
         let buffer_len = (spec.sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
             * channels.max(Self::STEREO_CHANNELS);
 
-        let channel_buffers = [
+        let channel_buffers = std::array::from_fn(|_| {
             pool.get_with(|b: &mut Vec<f32>| {
                 let cap = b.capacity();
                 if cap < buffer_len {
                     b.reserve(buffer_len - cap);
                 }
                 b.resize(buffer_len, 0.0);
-            }),
-            pool.get_with(|b: &mut Vec<f32>| {
-                let cap = b.capacity();
-                if cap < buffer_len {
-                    b.reserve(buffer_len - cap);
-                }
-                b.resize(buffer_len, 0.0);
-            }),
-        ];
+            })
+        });
 
         Self {
             resource,
             channel_buffers,
-            src,
             write_len: 0,
             write_pos: 0,
+            src,
+            eof_seen: false,
         }
-    }
-
-    /// Total duration in seconds. Returns 0.0 if unknown.
-    pub(crate) fn duration(&self) -> f64 {
-        self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
-    }
-
-    /// Current playback position in seconds.
-    pub(crate) fn position(&self) -> f64 {
-        self.resource.position().as_secs_f64()
     }
 
     /// Read PCM frames into the output buffers for the given range.
@@ -88,48 +87,14 @@ impl PlayerResource {
     /// then copies the requested frames into `output`. Shifts any remaining
     /// data to the front of the scratch buffers.
     ///
-    /// # Errors
-    ///
-    /// Returns `PlayError::Eof` if the resource has reached end of file and
-    /// no buffered data remains.
-    pub(crate) fn read(
-        &mut self,
-        output: &mut [&mut [f32]],
-        range: Range<usize>,
-    ) -> Result<(), PlayError> {
+    /// When the underlying reader temporarily returns zero frames without EOF
+    /// (for example, while an async seek is still settling), this method
+    /// zero-fills the requested range and reports [`ReadOutcome::Full`].
+    /// That silence is not a terminal condition and must not trigger track
+    /// advancement.
+    pub(crate) fn read(&mut self, output: &mut [&mut [f32]], range: Range<usize>) -> ReadOutcome {
         let frames_to_read = range.end - range.start;
-        let mut natural_eof = false;
-        let mut decode_err: Option<kithara_audio::DecodeError> = None;
-
-        // Fill scratch buffers until we have enough data
-        while frames_to_read > self.write_len {
-            let avail = self.channel_buffers[0].len() - self.write_pos;
-            if avail == 0 {
-                break;
-            }
-
-            let channel_buffers = &mut self.channel_buffers;
-            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
-            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
-            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
-
-            match self.resource.read_planar(&mut planar) {
-                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => {
-                    self.write_len += count.get();
-                    self.write_pos += count.get();
-                }
-                Ok(kithara_audio::ReadOutcome::Pending { .. }) => break,
-                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
-                    natural_eof = true;
-                    break;
-                }
-                Err(e) => {
-                    decode_err = Some(e);
-                    break;
-                }
-            }
-        }
+        let mut eof_reached = self.fill_scratch(frames_to_read);
 
         // Copy from scratch buffers to output
         if self.write_len > 0 {
@@ -141,16 +106,6 @@ impl PlayerResource {
                     .copy_from_slice(&self.channel_buffers[0][..frames_to_write]);
                 output[1][..frames_to_write]
                     .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
-
-                // Zero-fill any unfilled portion of the requested range to avoid
-                // stale data leaking into the output when a partial read occurs
-                // (e.g. near EOF).
-                let range_len = range.len();
-                if frames_to_write < range_len {
-                    for ch in output.iter_mut() {
-                        ch[frames_to_write..range_len].fill(0.0);
-                    }
-                }
             }
 
             // Shift remaining data to front
@@ -164,16 +119,22 @@ impl PlayerResource {
             self.write_len -= frames_to_write;
             self.write_pos = tail_size;
 
-            Ok(())
-        } else if natural_eof {
-            Err(PlayError::Eof)
-        } else if let Some(err) = decode_err {
-            tracing::warn!(
-                src = %self.src,
-                error = %err,
-                "PlayerResource: transient decode error"
-            );
-            Err(PlayError::Internal(format!("decode error: {err}")))
+            if frames_to_write == frames_to_read {
+                eof_reached |= self.fill_scratch(frames_to_read);
+            }
+
+            if frames_to_write == frames_to_read {
+                ReadOutcome::Full
+            } else if eof_reached {
+                ReadOutcome::Partial(frames_to_write)
+            } else {
+                for ch in output.iter_mut() {
+                    ch[frames_to_write..frames_to_read].fill(0.0);
+                }
+                ReadOutcome::Full
+            }
+        } else if eof_reached {
+            ReadOutcome::Eof
         } else {
             // Reader returned 0 frames but is not at EOF (e.g. async seek
             // in progress). Zero-fill output so the audio thread outputs
@@ -183,8 +144,48 @@ impl PlayerResource {
             for ch in output.iter_mut() {
                 ch[..range_len].fill(0.0);
             }
-            Ok(())
+            ReadOutcome::Full
         }
+    }
+
+    fn fill_scratch(&mut self, target_frames: usize) -> bool {
+        let mut eof_reached = self.eof_seen;
+
+        while target_frames > self.write_len && !eof_reached {
+            let avail = self.channel_buffers[0].len() - self.write_pos;
+            if avail == 0 {
+                break;
+            }
+
+            let channel_buffers = &mut self.channel_buffers;
+            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
+            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
+            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
+            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
+
+            let n = match self.resource.read_planar(&mut planar) {
+                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
+                Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
+                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
+                    self.eof_seen = true;
+                    eof_reached = true;
+                    0
+                }
+                Err(err) => {
+                    warn!(src = %self.src, error = %err, "PlayerResource: decode error");
+                    self.eof_seen = true;
+                    eof_reached = true;
+                    0
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            self.write_len += n;
+            self.write_pos += n;
+        }
+
+        eof_reached
     }
 
     /// Seek to the given position in seconds.
@@ -196,11 +197,46 @@ impl PlayerResource {
             Ok(_) => {
                 self.write_len = 0;
                 self.write_pos = 0;
+                self.eof_seen = false;
             }
             Err(err) => {
                 warn!("failed to seek: {err}");
             }
         }
+    }
+
+    /// Current playback position in seconds.
+    ///
+    /// Reflects the underlying decoder's position, which can be ahead of
+    /// what the mixer has actually rendered (the audio thread sees PCM only
+    /// after it leaves [`PlayerResource`]'s scratch buffer). Trigger logic
+    /// uses [`crate::impls::player_track::PlayerTrack`]'s served-frame
+    /// counter instead; this accessor remains for diagnostics and tests.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "diagnostics and unit tests only")
+    )]
+    pub(crate) fn position(&self) -> f64 {
+        self.resource.position().as_secs_f64()
+    }
+
+    /// Total duration in seconds. Returns 0.0 if unknown.
+    pub(crate) fn duration(&self) -> f64 {
+        self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
+    }
+
+    /// Remaining buffered frames when the wrapped reader has reached EOF.
+    ///
+    /// `Some(0)` means the current read drained the last buffered frame exactly;
+    /// the next read will return [`ReadOutcome::Eof`].
+    pub(crate) fn frames_until_eof(&self) -> Option<usize> {
+        self.eof_seen.then_some(self.write_len)
+    }
+
+    /// Source identifier for this resource.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
+    pub(crate) fn src(&self) -> &Arc<str> {
+        &self.src
     }
 
     /// Set the target sample rate of the audio host.
@@ -217,24 +253,11 @@ impl PlayerResource {
     pub(crate) fn set_service_class(&self, class: ServiceClass) {
         self.resource.set_service_class(class);
     }
-
-    /// Source identifier for this resource.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
-    pub(crate) fn src(&self) -> &Arc<str> {
-        &self.src
-    }
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless,
-    reason = "test mock code; values are small and positive by construction"
-)]
 mod tests {
-    use kithara_audio::{DecodeError, PcmReader, ReadOutcome, SeekOutcome, mock::TestPcmReader};
+    use kithara_audio::{PcmReader, mock::TestPcmReader};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
@@ -252,15 +275,17 @@ mod tests {
     fn make_player_resource() -> PlayerResource {
         let reader = TestPcmReader::new(mock_spec(), 1.0);
         let resource = Resource::from_reader(reader);
-        // test fixture
-        // ast-grep-ignore: perf.no-global-pool-accessor
-        PlayerResource::new(resource, Arc::from("test.mp3"), &PcmPool::default())
+        PlayerResource::new(
+            resource,
+            Arc::from("test.mp3"),
+            &kithara_bufpool::PcmPool::default(),
+        )
     }
 
     struct PendingReader {
         bus: EventBus,
-        spec: PcmSpec,
         meta: TrackMetadata,
+        spec: PcmSpec,
     }
 
     impl PendingReader {
@@ -274,24 +299,11 @@ mod tests {
     }
 
     impl PcmReader for PendingReader {
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(1))
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
-        }
-
-        fn position(&self) -> Duration {
-            Duration::ZERO
-        }
-
-        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-            Ok(ReadOutcome::Pending {
+        fn read(
+            &mut self,
+            _buf: &mut [f32],
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            Ok(kithara_audio::ReadOutcome::Pending {
                 reason: kithara_audio::PendingReason::Buffering,
                 position: Duration::ZERO,
             })
@@ -300,15 +312,18 @@ mod tests {
         fn read_planar<'a>(
             &mut self,
             _output: &'a mut [&'a mut [f32]],
-        ) -> Result<ReadOutcome, DecodeError> {
-            Ok(ReadOutcome::Pending {
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            Ok(kithara_audio::ReadOutcome::Pending {
                 reason: kithara_audio::PendingReason::Buffering,
                 position: Duration::ZERO,
             })
         }
 
-        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-            Ok(SeekOutcome::Landed {
+        fn seek(
+            &mut self,
+            position: Duration,
+        ) -> Result<kithara_audio::SeekOutcome, kithara_audio::DecodeError> {
+            Ok(kithara_audio::SeekOutcome::Landed {
                 target: position,
                 landed_at: position,
             })
@@ -316,6 +331,22 @@ mod tests {
 
         fn spec(&self) -> PcmSpec {
             self.spec
+        }
+
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(1))
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
         }
     }
 
@@ -354,7 +385,7 @@ mod tests {
         let mut right = vec![0.0f32; 128];
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
         let result = pr.read(&mut output, 0..128);
-        assert!(result.is_ok());
+        assert!(matches!(result, ReadOutcome::Full));
         // Should have filled with 0.5 sample value
         for &s in &left[..128] {
             assert!((s - 0.5).abs() < f32::EPSILON);
@@ -384,16 +415,18 @@ mod tests {
     async fn resource_zero_read_without_eof_is_not_error() {
         let reader = PendingReader::new();
         let resource = Resource::from_reader(reader);
-        // test fixture
-        // ast-grep-ignore: perf.no-global-pool-accessor
-        let mut pr = PlayerResource::new(resource, Arc::from("pending"), &PcmPool::default());
+        let mut pr = PlayerResource::new(
+            resource,
+            Arc::from("pending"),
+            &kithara_bufpool::PcmPool::default(),
+        );
 
         let mut left = vec![0.0f32; 128];
         let mut right = vec![0.0f32; 128];
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
 
         let result = pr.read(&mut output, 0..128);
-        assert!(result.is_ok());
+        assert!(matches!(result, ReadOutcome::Full));
     }
 
     /// When the reader returns 0 frames and is NOT at EOF (e.g. async seek
@@ -404,9 +437,11 @@ mod tests {
     async fn resource_read_zeroes_output_when_no_data_available() {
         let reader = PendingReader::new();
         let resource = Resource::from_reader(reader);
-        // test fixture
-        // ast-grep-ignore: perf.no-global-pool-accessor
-        let mut pr = PlayerResource::new(resource, Arc::from("pending"), &PcmPool::default());
+        let mut pr = PlayerResource::new(
+            resource,
+            Arc::from("pending"),
+            &kithara_bufpool::PcmPool::default(),
+        );
 
         // Fill output buffers with a sentinel value that simulates stale
         // audio data left over from the previous process() cycle.
@@ -416,7 +451,10 @@ mod tests {
         {
             let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
             let result = pr.read(&mut output, 0..128);
-            assert!(result.is_ok(), "zero-read without EOF must not error");
+            assert!(
+                matches!(result, ReadOutcome::Full),
+                "zero-read without EOF must not error"
+            );
         }
 
         // Output MUST be silence — the stale sentinel must not survive.
@@ -430,24 +468,109 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn resource_eof_returns_error() {
+    async fn read_returns_full_when_buffer_has_data() {
+        let mut pr = make_player_resource();
+        let mut left = vec![0.0f32; 128];
+        let mut right = vec![0.0f32; 128];
+        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+
+        let result = pr.read(&mut output, 0..128);
+
+        assert!(matches!(result, ReadOutcome::Full));
+    }
+
+    #[kithara::test(tokio)]
+    async fn full_read_prefetches_buffered_eof() {
+        let reader = TestPcmReader::new(mock_spec(), 900.0 / 44100.0);
+        let resource = Resource::from_reader(reader);
+        let mut pr = PlayerResource::new(
+            resource,
+            Arc::from("short.mp3"),
+            &kithara_bufpool::PcmPool::default(),
+        );
+        let mut left = vec![0.0f32; 512];
+        let mut right = vec![0.0f32; 512];
+        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+
+        let result = pr.read(&mut output, 0..512);
+
+        assert!(matches!(result, ReadOutcome::Full));
+        let remaining = pr
+            .frames_until_eof()
+            .expect("EOF should be known after prefetch");
+        assert!(remaining > 0);
+        assert!(remaining < 512);
+    }
+
+    #[kithara::test(tokio)]
+    async fn read_returns_partial_when_eof_inside_buffer() {
         let reader = TestPcmReader::new(mock_spec(), 0.01);
         let resource = Resource::from_reader(reader);
-        // test fixture
-        // ast-grep-ignore: perf.no-global-pool-accessor
-        let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &PcmPool::default());
-
-        // Read until natural EOF surfaces as `PlayError::Eof`.
+        let mut pr = PlayerResource::new(
+            resource,
+            Arc::from("short.mp3"),
+            &kithara_bufpool::PcmPool::default(),
+        );
         let mut left = vec![0.0f32; 4096];
         let mut right = vec![0.0f32; 4096];
-        for _ in 0..1024 {
+
+        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+        let result = pr.read(&mut output, 0..4096);
+
+        let frames = match result {
+            ReadOutcome::Partial(frames) => frames,
+            other => panic!("expected Partial outcome, got {other:?}"),
+        };
+        assert!(frames > 0);
+        assert!(frames < 4096);
+
+        let mut output2: Vec<&mut [f32]> = vec![&mut left, &mut right];
+        let result2 = pr.read(&mut output2, 0..4096);
+        assert!(matches!(result2, ReadOutcome::Eof));
+    }
+
+    #[kithara::test(tokio)]
+    async fn read_returns_eof_when_already_drained() {
+        let reader = TestPcmReader::new(mock_spec(), 0.01);
+        let resource = Resource::from_reader(reader);
+        let mut pr = PlayerResource::new(
+            resource,
+            Arc::from("short.mp3"),
+            &kithara_bufpool::PcmPool::default(),
+        );
+        let mut left = vec![0.0f32; 4096];
+        let mut right = vec![0.0f32; 4096];
+
+        loop {
             let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
             match pr.read(&mut output, 0..4096) {
-                Ok(()) => continue,
-                Err(PlayError::Eof) => return,
-                Err(e) => panic!("unexpected error: {e}"),
+                ReadOutcome::Full | ReadOutcome::Partial(_) => {}
+                ReadOutcome::Eof => break,
             }
         }
-        panic!("reader never reached natural EOF within iteration budget");
+
+        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+        let result = pr.read(&mut output, 0..4096);
+        assert!(matches!(result, ReadOutcome::Eof));
+    }
+
+    #[kithara::test(tokio)]
+    async fn read_zeros_output_on_pending_reader_returns_full() {
+        let reader = PendingReader::new();
+        let resource = Resource::from_reader(reader);
+        let mut pr = PlayerResource::new(
+            resource,
+            Arc::from("pending"),
+            &kithara_bufpool::PcmPool::default(),
+        );
+        let mut left = vec![0.999f32; 128];
+        let mut right = vec![0.999f32; 128];
+
+        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+        let result = pr.read(&mut output, 0..128);
+
+        assert!(matches!(result, ReadOutcome::Full));
+        assert!(left.iter().all(|sample| *sample == 0.0));
+        assert!(right.iter().all(|sample| *sample == 0.0));
     }
 }

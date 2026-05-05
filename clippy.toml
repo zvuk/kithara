@@ -2,7 +2,11 @@ allow-unwrap-in-tests = true
 doc-valid-idents = ["YouTube", "GitHub", "OpenDAL"]
 
 # Complexity thresholds
-cognitive-complexity-threshold = 20
-too-many-lines-threshold = 120
+# Matches production/main; raised from 20 → 35 on the gapless port (player.rs
+# `play()` / `process_notifications()` / `apply_effective_volume()` carry the
+# production state-machine logic verbatim and cannot be split without changing
+# the merge surface).
+cognitive-complexity-threshold = 35
+too-many-lines-threshold = 150
 type-complexity-threshold = 200
 too-many-arguments-threshold = 7

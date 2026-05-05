@@ -29,10 +29,13 @@ use super::{
     media_codec::{AndroidPcmEncoding, DequeueOutput, OwnedCodec},
 };
 use crate::{
+    android::config::AndroidConfig,
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    types::PcmSpec,
+    gapless::probe_mp4_gapless_dyn,
+    traits::DecoderInput,
+    types::{DecoderTrackInfo, PcmSpec},
 };
 
 struct Consts;
@@ -48,6 +51,12 @@ pub(crate) struct AndroidCodec {
     pcm_encoding: AndroidPcmEncoding,
     codec: OwnedCodec,
     spec: PcmSpec,
+    /// Decoder-owned playback contract. Populated from container-level
+    /// gapless metadata (MP4 udta) when [`AndroidConfig::gapless`] is
+    /// set; left empty otherwise. `MediaCodec` itself does not surface
+    /// encoder priming, so the contract value comes solely from
+    /// container probing.
+    track_info: DecoderTrackInfo,
 }
 
 impl AndroidCodec {
@@ -56,6 +65,64 @@ impl AndroidCodec {
     /// Initial scope: AAC family + FLAC.
     pub(crate) fn supports(codec: AudioCodec) -> bool {
         matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
+    }
+
+    /// Build an [`AndroidCodec`] with extra knobs from [`AndroidConfig`].
+    /// `MediaCodec` itself does not surface encoder priming, so the
+    /// gapless flag here is wired into the factory's container probe
+    /// (P7 calls [`Self::probe_track_info`] before opening the codec).
+    /// `FrameCodec::open` keeps the no-config shape so existing
+    /// `UniversalDecoder<D, C>` callers don't break.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`FrameCodec::open`].
+    #[expect(dead_code, reason = "called by the factory in P7")]
+    pub(crate) fn open_with_config(
+        track: &TrackInfo,
+        _config: &AndroidConfig,
+    ) -> DecodeResult<Self> {
+        // No `AudioDecoderOptions::gapless` analogue on `MediaCodec` —
+        // priming/padding numbers come from the demuxer's MP4 udta
+        // probe (see `probe_track_info`). Open path is identical to
+        // `FrameCodec::open`; the config exists so the factory keeps a
+        // uniform call shape across apple/symphonia/android backends.
+        <Self as FrameCodec>::open(track)
+    }
+
+    /// Probe the source for container-level gapless metadata before
+    /// opening the codec. Currently only AAC inside MP4 udta carries
+    /// useful priming/padding numbers (`iTunSMPB`); other codecs
+    /// return `DecoderTrackInfo::default()`.
+    ///
+    /// # Errors
+    ///
+    /// Forwards [`DecodeError`] from the MP4 probe.
+    #[expect(dead_code, reason = "called by the factory in P7")]
+    pub(crate) fn probe_track_info(
+        source: &mut dyn DecoderInput,
+        codec: AudioCodec,
+        config: &AndroidConfig,
+    ) -> DecodeResult<DecoderTrackInfo> {
+        let gapless = if config.gapless && codec == AudioCodec::AacLc {
+            let info = probe_mp4_gapless_dyn(source)?;
+            if let Some(info) = info {
+                tracing::debug!(
+                    target: "kithara::gapless",
+                    codec = ?codec,
+                    leading_frames = info.leading_frames,
+                    trailing_frames = info.trailing_frames,
+                    "captured AAC gapless metadata for Android"
+                );
+            }
+            info
+        } else {
+            None
+        };
+        Ok(DecoderTrackInfo {
+            gapless,
+            ..DecoderTrackInfo::default()
+        })
     }
 }
 
@@ -152,11 +219,16 @@ impl FrameCodec for AndroidCodec {
             codec,
             spec,
             pcm_encoding,
+            track_info: DecoderTrackInfo::default(),
         })
     }
 
     fn spec(&self) -> PcmSpec {
         self.spec
+    }
+
+    fn track_info(&self) -> DecoderTrackInfo {
+        self.track_info.clone()
     }
 }
 

@@ -131,6 +131,7 @@ pub mod offline {
                 .try_push(PlayerCmd::LoadTrack {
                     resource: Arc::new(Mutex::new(pr)),
                     src: Arc::clone(&src),
+                    item_id: None,
                 })
                 .expect("send LoadTrack");
             self.cmd_tx
@@ -199,9 +200,9 @@ pub mod offline {
                     N::TrackError(_, _) => NotificationKind::TrackError,
                     N::TrackLoaded(_) => NotificationKind::TrackLoaded,
                     N::TrackUnloaded(_) => NotificationKind::TrackUnloaded,
-                    N::TrackAboutToEnd(_) => NotificationKind::TrackAboutToEnd,
+                    N::TrackHandoverRequested(_) => NotificationKind::TrackHandoverRequested,
                     N::TrackPlaybackStarted(_) => NotificationKind::TrackPlaybackStarted,
-                    N::TrackPlaybackStopped(_) => NotificationKind::TrackPlaybackStopped,
+                    N::TrackPlaybackStopped { .. } => NotificationKind::TrackPlaybackStopped,
                     N::TrackPlaybackPaused(_) => NotificationKind::TrackPlaybackPaused,
                     N::TrackRequested(_) => NotificationKind::TrackRequested,
                     N::TrackChanged { .. } => NotificationKind::TrackChanged,
@@ -225,7 +226,7 @@ pub mod offline {
         TrackError,
         TrackLoaded,
         TrackUnloaded,
-        TrackAboutToEnd,
+        TrackHandoverRequested,
         TrackPlaybackStarted,
         TrackPlaybackStopped,
         TrackPlaybackPaused,
@@ -246,6 +247,24 @@ pub mod offline {
     ) -> crate::Resource {
         crate::Resource::from_reader(reader)
     }
+
+    /// Create a [`Resource`](crate::Resource) from a [`PcmReader`] with
+    /// an explicit `src` tag — needed by harness tests that match
+    /// `ItemDidPlayToEnd { src, .. }` on the bus.
+    ///
+    /// [`PcmReader`]: kithara_audio::PcmReader
+    #[expect(clippy::impl_trait_in_params, reason = "test utility, ergonomic API")]
+    pub fn resource_from_reader_with_src(
+        reader: impl kithara_audio::PcmReader + 'static,
+        src: impl Into<Arc<str>>,
+    ) -> crate::Resource {
+        crate::Resource::from_reader_with_src(reader, src.into())
+    }
+
+    /// Re-export of the per-instance offline session handle returned by
+    /// [`EngineImpl::new_offline`](crate::EngineImpl::new_offline). Tests
+    /// rendering the firewheel graph synchronously consume this.
+    pub use crate::impls::engine::OfflineSessionHandle;
 }
 
 pub use crate::{

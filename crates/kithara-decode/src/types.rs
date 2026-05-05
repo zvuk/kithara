@@ -3,6 +3,21 @@ use std::{fmt, sync::Arc, time::Duration};
 use derivative::Derivative;
 use kithara_bufpool::{PcmBuf, PcmPool};
 
+use crate::gapless::GaplessInfo;
+
+/// Decoder-owned per-track playback contract.
+///
+/// `#[non_exhaustive]` because callers in this crate construct it by
+/// `..Default::default()` spread and additional fields (e.g. encoder
+/// delay metadata, container-level flags) are expected to land here in
+/// follow-up port commits.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DecoderTrackInfo {
+    /// Gapless trim information applied by the engine pipeline.
+    pub gapless: Option<GaplessInfo>,
+}
+
 /// Audio track metadata extracted from Symphonia tags.
 ///
 /// Intentionally without `#[non_exhaustive]` — this is a stable POD of
@@ -166,6 +181,16 @@ impl PcmChunk {
     #[must_use]
     pub fn spec(&self) -> PcmSpec {
         self.meta.spec
+    }
+
+    /// Borrow the raw interleaved sample buffer.
+    ///
+    /// Sugar accessor for `&chunk.pcm[..]`; the underlying field stays
+    /// `pub` for the legacy direct-access call sites that currently rely
+    /// on `Deref<Target = [f32]>` semantics of `PcmBuf`.
+    #[must_use]
+    pub fn samples(&self) -> &[f32] {
+        &self.pcm
     }
 }
 

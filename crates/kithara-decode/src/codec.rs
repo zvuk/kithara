@@ -56,4 +56,20 @@ pub(crate) trait FrameCodec: Send + 'static {
 
     /// PCM output specification.
     fn spec(&self) -> PcmSpec;
+
+    /// Codec-owned playback contract — currently the captured
+    /// [`crate::GaplessInfo`] (encoder priming + trailing padding in
+    /// PCM frames). Default returns the empty contract; per-platform
+    /// implementations override when their codec exposes
+    /// priming numbers (Apple `kAudioConverterPrimeInfo`, Symphonia
+    /// `AudioDecoderOptions::gapless`, Android via the demuxer's
+    /// container probe).
+    ///
+    /// `UniversalDecoder<D, C>` forwards this through
+    /// [`crate::Decoder::track_info`] so the audio pipeline can build
+    /// a [`crate::GaplessTrimmer`] without knowing the concrete codec
+    /// type.
+    fn track_info(&self) -> crate::DecoderTrackInfo {
+        crate::DecoderTrackInfo::default()
+    }
 }

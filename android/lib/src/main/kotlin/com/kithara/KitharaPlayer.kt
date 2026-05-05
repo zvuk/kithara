@@ -2,12 +2,14 @@ package com.kithara
 
 import com.kithara.ffi.AudioPlayer as FfiAudioPlayer
 import com.kithara.ffi.FfiException
+import com.kithara.ffi.FfiGaplessMode
 import com.kithara.ffi.FfiKeyOptions
 import com.kithara.ffi.FfiKeyProcessor
 import com.kithara.ffi.FfiKeyRule
 import com.kithara.ffi.FfiPlayerConfig
 import com.kithara.ffi.FfiPlayerEvent
 import com.kithara.ffi.FfiPlayerStatus
+import com.kithara.ffi.FfiSilenceTrimParams
 import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
@@ -30,7 +32,6 @@ import kotlinx.coroutines.flow.update
  * ```kotlin
  * val player = KitharaPlayer()
  * val item = KitharaPlayerItem("https://example.com/audio.mp3")
- * item.load()
  * player.insert(item)
  * player.play()
  * ```
@@ -52,6 +53,7 @@ class KitharaPlayer(config: Config = Config()) {
     /** Configuration for [KitharaPlayer] creation. */
     data class Config(
         val eqBandCount: Int = 10,
+        val gaplessMode: GaplessMode = GaplessMode.MediaOnly,
         val keyRules: List<KeyRule> = emptyList(),
         val cacheDir: String? = null,
     )
@@ -130,6 +132,18 @@ class KitharaPlayer(config: Config = Config()) {
         }
 
     /**
+     * Crossfade duration in seconds applied on item transitions.
+     *
+     * Set to `0f` to disable crossfade. Negative values are clamped to `0f`
+     * by the underlying engine.
+     */
+    var crossfadeDuration: Float
+        get() = inner.crossfadeDuration()
+        set(value) {
+            inner.setCrossfadeDuration(value)
+        }
+
+    /**
      * Starts or resumes playback.
      */
     fun play() {
@@ -173,6 +187,7 @@ class KitharaPlayer(config: Config = Config()) {
             throw KitharaError.fromFfi(error)
         }
     }
+
 
     /**
      * Removes an item from the queue.
@@ -268,8 +283,12 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.CurrentItemChanged ->
                 eventsFlow.tryEmit(KitharaPlayerEvent.CurrentItemChanged(event.itemId))
 
-            is FfiPlayerEvent.ItemDidPlayToEnd ->
-                eventsFlow.tryEmit(KitharaPlayerEvent.PlayedToEnd)
+            is FfiPlayerEvent.QueueItemRemoved -> {
+                updateState { current ->
+                    current.copy(items = current.items.filterNot { queued -> queued.id == event.itemId })
+                }
+                eventsFlow.tryEmit(KitharaPlayerEvent.QueueItemRemoved(event.itemId))
+            }
 
             is FfiPlayerEvent.TrackStatusChanged ->
                 eventsFlow.tryEmit(
@@ -313,6 +332,20 @@ private fun FfiPlayerStatus.toPlayerStatus(): PlayerStatus = when (this) {
     FfiPlayerStatus.UNKNOWN -> PlayerStatus.Unknown
 }
 
+private fun GaplessMode.toFfi(): FfiGaplessMode = when (this) {
+    GaplessMode.Disabled -> FfiGaplessMode.Disabled
+    GaplessMode.MediaOnly -> FfiGaplessMode.MediaOnly
+    GaplessMode.CodecPriming -> FfiGaplessMode.CodecPriming
+    is GaplessMode.SilenceTrim -> FfiGaplessMode.SilenceTrim(params.toFfi())
+}
+
+private fun SilenceTrimParams.toFfi(): FfiSilenceTrimParams = FfiSilenceTrimParams(
+    thresholdDb = thresholdDb,
+    minTrimFrames = minTrimFrames,
+    scanWindowFrames = scanWindowFrames,
+    trimTrailing = trimTrailing,
+)
+
 private fun FfiTrackStatus.toTrackStatus(): TrackStatus = when (this) {
     is FfiTrackStatus.Pending -> TrackStatus.Pending
     is FfiTrackStatus.Loading -> TrackStatus.Loading
@@ -350,6 +383,7 @@ private fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
     }
     return FfiPlayerConfig(
         eqBandCount = eqBandCount.toUInt(),
+        gaplessMode = gaplessMode.toFfi(),
         keyOptions = FfiKeyOptions(rules = ffiRules),
         store = FfiStoreOptions(cacheDir = cacheDir),
     )

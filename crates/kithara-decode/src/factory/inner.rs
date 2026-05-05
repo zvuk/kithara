@@ -115,6 +115,19 @@ pub struct DecoderConfig {
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
     /// Epoch counter for decoder recreation tracking.
     pub epoch: u64,
+    /// Enable gapless trim wiring through the per-backend codec.
+    ///
+    /// `true` (default) flips the matching `*Config::gapless` for the
+    /// selected backend (Apple / Symphonia / Android) so the codec
+    /// emits priming and padding-trimmed PCM for codecs whose encoder
+    /// reports those numbers (FLAC, Opus, Vorbis via Symphonia; AAC
+    /// via Apple `kAudioConverterPrimeInfo`). Container-level priming
+    /// (MP4 `iTunSMPB` for AAC) is captured separately via the
+    /// `*Codec::probe_track_info` helpers — wired in a follow-up
+    /// alongside the [`crate::DecoderTrackInfo`] propagation through
+    /// the `Decoder` trait.
+    #[derivative(Default(value = "true"))]
+    pub gapless: bool,
 }
 
 /// Factory for creating decoders with a single, strict backend selection.
@@ -299,7 +312,9 @@ fn create_fmp4_segment_apple(
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        apple::AppleCodec, codec::FrameCodec, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer,
+        apple::{AppleCodec, AppleConfig},
+        demuxer::Demuxer,
+        fmp4::Fmp4SegmentDemuxer,
         universal::UniversalDecoder,
     };
 
@@ -308,7 +323,11 @@ fn create_fmp4_segment_apple(
         "fmp4_segment: dispatching to segment-aware Apple HW codec path"
     );
     let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
-    let codec = AppleCodec::open(demuxer.track_info())?;
+    let apple_config = AppleConfig {
+        gapless: config.gapless,
+        ..Default::default()
+    };
+    let codec = AppleCodec::open_with_config(demuxer.track_info(), &apple_config)?;
     let pool = config
         .pcm_pool
         .clone()
@@ -358,7 +377,10 @@ fn create_fmp4_segment_android(
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        android::AndroidCodec, codec::FrameCodec, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer,
+        android::{AndroidCodec, config::AndroidConfig},
+        codec::FrameCodec,
+        demuxer::Demuxer,
+        fmp4::Fmp4SegmentDemuxer,
         universal::UniversalDecoder,
     };
 
@@ -367,7 +389,11 @@ fn create_fmp4_segment_android(
         "fmp4_segment: dispatching to segment-aware Android HW codec path"
     );
     let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
-    let codec = AndroidCodec::open(demuxer.track_info())?;
+    let android_config = AndroidConfig {
+        gapless: config.gapless,
+        ..Default::default()
+    };
+    let codec = AndroidCodec::open_with_config(demuxer.track_info(), &android_config)?;
     let pool = config
         .pcm_pool
         .clone()
@@ -409,9 +435,8 @@ fn create_file_symphonia_universal(
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        codec::FrameCodec,
         demuxer::Demuxer,
-        symphonia::{SymphoniaCodec, SymphoniaDemuxer},
+        symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
         universal::UniversalDecoder,
     };
 
@@ -426,12 +451,16 @@ fn create_file_symphonia_universal(
         container,
         config.byte_len_handle.clone(),
     )?;
+    let symphonia_config = SymphoniaConfig {
+        gapless: config.gapless,
+        ..Default::default()
+    };
     // PCM / ADPCM tracks need the concrete bit-depth & endianness that
     // `TrackInfo::codec` does not carry — feed the registry the demuxer's
     // native `AudioCodecParameters` directly. Other codecs go through the
     // generic [`SymphoniaCodec::open`] path keyed off [`TrackInfo`].
     let codec_impl = if SymphoniaCodec::supports(codec) {
-        SymphoniaCodec::open(demuxer.track_info())?
+        SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
     } else {
         SymphoniaCodec::open_native(demuxer.native_params())?
     };
@@ -476,7 +505,9 @@ fn create_fmp4_segment_symphonia(
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::{
-        codec::FrameCodec, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer, symphonia::SymphoniaCodec,
+        demuxer::Demuxer,
+        fmp4::Fmp4SegmentDemuxer,
+        symphonia::{SymphoniaCodec, SymphoniaConfig},
         universal::UniversalDecoder,
     };
 
@@ -487,7 +518,11 @@ fn create_fmp4_segment_symphonia(
     match codec {
         AudioCodec::AacLc | AudioCodec::Flac => {
             let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
-            let codec = SymphoniaCodec::open(demuxer.track_info())?;
+            let symphonia_config = SymphoniaConfig {
+                gapless: config.gapless,
+                ..Default::default()
+            };
+            let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?;
             let pool = config
                 .pcm_pool
                 .clone()

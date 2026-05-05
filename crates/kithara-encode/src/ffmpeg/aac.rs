@@ -76,6 +76,8 @@ impl AacFFmpegEncoder {
             bit_rate: request.bit_rate,
             codec_config: Vec::new(),
             packets_per_segment: request.packets_per_segment,
+            encoder_delay: request.encoder_delay,
+            trailing_delay: request.trailing_delay,
             access_units: encoder.into_units(),
         })
     }
@@ -232,6 +234,8 @@ mod tests {
             timescale: SAMPLE_RATE,
             bit_rate: 128_000,
             packets_per_segment: 2,
+            encoder_delay: 0,
+            trailing_delay: 0,
         })
         .unwrap_or_else(|error| panic!("encode_packaged(AacLc) failed: {error}"));
 

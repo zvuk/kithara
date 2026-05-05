@@ -29,7 +29,18 @@ impl Queue {
         loop {
             let Some(idx) = self.lock_navigation_mut().next(len) else {
                 self.bus.publish(QueueEvent::QueueEnded);
-                self.player.finish_queue();
+                // Don't drive `Player::pause()` here: it would issue
+                // `SetPaused(true)` and stop the audio thread mid-render,
+                // cutting off tail samples that the seek-near-EOF stress
+                // path relies on to advance position to the natural end.
+                // `cleanup_finished_tracks` flips `state.playing` to
+                // `false` once the arena drains, so `is_playing()` still
+                // reaches `false` for the queue_pauses_player_when_last_track_ends
+                // contract. `navigation::next` parks `current_index` to
+                // `None` on `RepeatMode::Off` exhaustion so
+                // `Queue::current()` reports a stopped queue without
+                // touching `player.current_index` (which auto_advance
+                // tests assert sticks at the last-played slot).
                 return None;
             };
             let Some((id, status)) = self
@@ -70,6 +81,23 @@ impl Queue {
         };
         if let Some(stale_id) = stale {
             self.set_status(stale_id, TrackStatus::Cancelled);
+            self.evict_player_item(stale_id);
+        }
+    }
+
+    /// Drop a cancelled track's resource from the player so the
+    /// near-EOF `arm_next` prefetch cannot plant it for handover. The
+    /// `spawn_apply_after_load` completion path already skips
+    /// `replace_item` on a cancelled status, but a fast loader can
+    /// finish *before* the override runs and leave the resource in
+    /// `items[index]`. This evict closes that race.
+    fn evict_player_item(&self, id: TrackId) {
+        let index = {
+            let guard = self.lock_tracks();
+            guard.iter().position(|e| e.id == id)
+        };
+        if let Some(index) = index {
+            self.player.clear_item(index);
         }
     }
 
@@ -91,6 +119,7 @@ impl Queue {
         drop(p);
         if let Some(prev_id) = prev_id {
             self.set_status(prev_id, TrackStatus::Cancelled);
+            self.evict_player_item(prev_id);
         }
     }
 
@@ -168,6 +197,34 @@ impl Queue {
                 Ok(())
             }
             TrackStatus::Cancelled | TrackStatus::Consumed | TrackStatus::Failed(_) => {
+                // Test path: if a respawn resource was pre-supplied via
+                // `supply_test_resource_for_respawn`, plant it directly
+                // and select synchronously — bypasses the real loader.
+                #[cfg(any(test, feature = "test-utils"))]
+                {
+                    let cached = self
+                        .test_resources
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .remove(&id);
+                    if let Some(resource) = cached {
+                        self.player.replace_item(index, resource);
+                        self.set_status(id, TrackStatus::Loaded);
+                        let was_playing = self.player.is_playing();
+                        let crossfade =
+                            transition.crossfade_seconds(self.player.crossfade_duration());
+                        self.player
+                            .select_item_with_crossfade(index, true, crossfade)?;
+                        self.lock_navigation_mut().select(index);
+                        if was_playing && crossfade > 0.0 {
+                            self.bus.publish(QueueEvent::CrossfadeStarted {
+                                duration_seconds: crossfade,
+                            });
+                        }
+                        self.set_status(id, TrackStatus::Consumed);
+                        return Ok(());
+                    }
+                }
                 let source = self
                     .sources
                     .lock()

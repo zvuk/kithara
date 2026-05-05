@@ -254,10 +254,10 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
                             }
                         }
                     }
+                    is KitharaPlayerEvent.QueueItemRemoved -> Unit
                     is KitharaPlayerEvent.QueueEnded -> {
                         _uiState.update { it.copy(isPlaying = false, errorMessage = "Playlist ended") }
                     }
-                    is KitharaPlayerEvent.PlayedToEnd -> Unit
                 }
             }
         }

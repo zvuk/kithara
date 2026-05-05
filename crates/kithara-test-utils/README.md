@@ -23,7 +23,7 @@ The **unified test server** is a local HTTP service used by integration tests. I
 |-------------|---------|
 | `/assets/...` | Static files from the repo (regression assets). |
 | `/stream/...` | Synthetic HLS: master/media playlists, init segments, media segments, keys. The URL carries a **token** that selects the fixture spec. |
-| `/signal/...` | Procedural audio (saw, sine, silence, …) as `wav` or encoded formats (`mp3`, `flac`, `aac`, `m4a` on native). Also token-backed. |
+| `/signal/...` | Procedural audio (saw, sine, sweep, silence, …) as `wav` or encoded formats (`mp3`, `flac`, `aac`, `m4a` on native). Also token-backed. |
 | `POST /token` | Registers a JSON spec and returns a UUID used inside `/stream` and `/signal` URLs. You rarely call this directly. |
 | `GET /health` | Simple readiness probe for runners. |
 
@@ -50,7 +50,7 @@ let master = hls.master_url();
 // Use `master` with the player under test; use `hls.media_url(i)`, `hls.segment_url(v, s)`, etc.
 ```
 
-For procedural audio, use `helper.sawtooth(&spec).await`, `helper.sine(&spec, freq_hz).await`, and similar methods on `TestServerHelper`. For static assets, use `helper.asset("relative/path")`.
+For procedural audio, use `helper.sawtooth(&spec).await`, `helper.sine(&spec, freq_hz).await`, `helper.sweep(&spec, start_hz, end_hz, mode).await`, and similar methods on `TestServerHelper`. For static assets, use `helper.asset("relative/path")`.
 
 ### Standalone process (WASM / debugging)
 

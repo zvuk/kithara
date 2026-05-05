@@ -152,6 +152,7 @@ impl SymphoniaDemuxer {
         let config = SymphoniaConfig {
             byte_len_handle,
             hint,
+            ..Default::default()
         };
         let format_opts = FormatOptions::default();
         let bootstrap: ReaderBootstrap = if let Some(container) = container {
@@ -268,6 +269,11 @@ fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> Decod
         extra_data,
         channels,
         sample_rate,
+        // Symphonia's own track API does not surface container-level
+        // gapless info. The MP4 udta probe runs at factory level
+        // through `SymphoniaCodec::probe_track_info`; codec-internal
+        // `AudioDecoderOptions::gapless` covers Vorbis/Opus.
+        gapless: None,
     })
 }
 
