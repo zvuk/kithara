@@ -1,25 +1,14 @@
 //! Shared async HTTP test server helpers.
 
-use std::{io, sync::OnceLock, time::Duration};
+use std::{io, time::Duration};
 
 use axum::Router;
 use tokio::{
     net::TcpListener,
-    sync::{Mutex as TokioMutex, oneshot, watch},
+    sync::{oneshot, watch},
     time::sleep as tokio_sleep,
 };
 use url::Url;
-
-/// Process-global serialization gate for test HTTP listener bind.
-/// Under `just test` workspace runs, ~1800 tests in parallel each
-/// call `TcpListener::bind("127.0.0.1:0")`; the OS-provided ephemeral
-/// port pool can briefly saturate, exhausting the retry budget and
-/// panicking. Serializing the actual bind call eliminates that
-/// cross-test race without slowing the OS-level allocation itself.
-fn bind_lock() -> &'static TokioMutex<()> {
-    static LOCK: OnceLock<TokioMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| TokioMutex::new(()))
-}
 
 /// Lightweight HTTP test server wrapper.
 pub struct TestHttpServer {
@@ -47,30 +36,27 @@ impl TestHttpServer {
         const BIND_RETRIES: usize = 25;
         const BIND_RETRY_DELAY_MS: u64 = 40;
 
-        let listener = {
-            let _guard = bind_lock().lock().await;
-            let mut attempts = 0usize;
-            loop {
-                match TcpListener::bind(addr).await {
-                    Ok(listener) => break listener,
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            io::ErrorKind::PermissionDenied
-                                | io::ErrorKind::AddrInUse
-                                | io::ErrorKind::AddrNotAvailable
-                        ) =>
-                    {
-                        attempts = attempts.saturating_add(1);
-                        if attempts >= BIND_RETRIES {
-                            panic!("bind test HTTP listener after retries: {error}");
-                        }
+        let mut attempts = 0usize;
+        let listener = loop {
+            match TcpListener::bind(addr).await {
+                Ok(listener) => break listener,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::PermissionDenied
+                            | io::ErrorKind::AddrInUse
+                            | io::ErrorKind::AddrNotAvailable
+                    ) =>
+                {
+                    attempts = attempts.saturating_add(1);
+                    if attempts >= BIND_RETRIES {
+                        panic!("bind test HTTP listener after retries: {error}");
                     }
-                    Err(error) => panic!("bind test HTTP listener: {error}"),
                 }
-
-                tokio_sleep(Duration::from_millis(BIND_RETRY_DELAY_MS)).await;
+                Err(error) => panic!("bind test HTTP listener: {error}"),
             }
+
+            tokio_sleep(Duration::from_millis(BIND_RETRY_DELAY_MS)).await;
         };
         let addr = listener
             .local_addr()
