@@ -22,13 +22,6 @@ files:
   - crates/kithara-decode/src/**/*.rs
   - crates/kithara-stream/src/**/*.rs
   - crates/kithara-hls/src/**/*.rs
-ignores:
-  - "**/tests/**"
-  - "**/test_*.rs"
-  - "**/*_test.rs"
-  - "**/*_tests.rs"
-  - "**/mock*.rs"
-  - "**/tests.rs"
 rule:
   any:
     - pattern: "vec![0.0f32; $N]"

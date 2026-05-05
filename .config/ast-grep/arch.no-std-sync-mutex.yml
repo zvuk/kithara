@@ -23,12 +23,6 @@ language: Rust
 files:
   - crates/**/*.rs
 ignores:
-  - "**/tests/**"
-  - "**/test_*.rs"
-  - "**/*_test.rs"
-  - "**/*_tests.rs"
-  - "**/mock*.rs"
-  - "**/tests.rs"
   - "crates/kithara-platform/**"
 rule:
   any:

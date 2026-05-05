@@ -19,13 +19,6 @@ severity: warning
 language: Rust
 files:
   - crates/**/*.rs
-ignores:
-  - "**/tests/**"
-  - "**/test_*.rs"
-  - "**/*_test.rs"
-  - "**/*_tests.rs"
-  - "**/mock*.rs"
-  - "**/tests.rs"
 rule:
   any:
     - pattern: $X.map(|$Y| $Y.clone())

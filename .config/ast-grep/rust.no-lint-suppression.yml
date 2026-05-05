@@ -37,9 +37,6 @@ files:
   - crates/**/*.rs
   - tests/**/*.rs
   - xtask/**/*.rs
-ignores:
-  - tests/**
-  - xtask/**
 rule:
   any:
     - pattern: "#[allow($$$ARGS)]"

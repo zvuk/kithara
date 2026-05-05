@@ -5,8 +5,6 @@ language: Rust
 files:
   - crates/**/*.rs
   - tests/**/*.rs
-ignores:
-  - tests/tests/kithara_decode/timeline_tests.rs
 rule:
   all:
     - kind: scoped_identifier
