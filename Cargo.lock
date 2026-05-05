@@ -10672,6 +10672,7 @@ dependencies = [
  "glob",
  "kithara-workspace-hack",
  "proc-macro2",
+ "quote",
  "regex",
  "serde",
  "serde_json",
