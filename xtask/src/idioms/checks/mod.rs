@@ -26,6 +26,7 @@ pub(crate) mod loop_flag_accumulator;
 pub(crate) mod manual_question_mark;
 pub(crate) mod multi_accumulator_loop;
 pub(crate) mod nested_if_let_pyramid;
+pub(crate) mod no_passthrough_builder;
 pub(crate) mod parallel_loops;
 pub(crate) mod pointwise_loop;
 pub(crate) mod retry_fallback;
@@ -60,5 +61,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(loop_flag_accumulator::LoopFlagAccumulator),
         Box::new(const_group_enum_shape::ConstGroupEnumShape),
         Box::new(nested_if_let_pyramid::NestedIfLetPyramid),
+        Box::new(no_passthrough_builder::NoPassthroughBuilder),
     ]
 }

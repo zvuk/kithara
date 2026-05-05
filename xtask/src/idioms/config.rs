@@ -55,6 +55,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) const_group_enum_shape: ConstGroupEnumShapeConfig,
     #[serde(default)]
     pub(crate) nested_if_let_pyramid: NestedIfLetPyramidConfig,
+    #[serde(default)]
+    pub(crate) no_passthrough_builder: NoPassthroughBuilderConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -339,6 +341,32 @@ fn default_accumulator_patterns() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NoPassthroughBuilderConfig {
+    /// Minimum number of input fields routed straight through to the
+    /// target builder before the function is flagged. Below this
+    /// threshold a 2-3 field carrier is considered too small to be
+    /// worth removing.
+    #[serde(default = "default_min_passthrough_fields")]
+    pub(crate) min_passthrough_fields: usize,
+    #[serde(default = "default_exempt_files")]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for NoPassthroughBuilderConfig {
+    fn default() -> Self {
+        Self {
+            min_passthrough_fields: default_min_passthrough_fields(),
+            exempt_files: default_exempt_files(),
+        }
+    }
+}
+
+fn default_min_passthrough_fields() -> usize {
+    4
 }
 
 fn default_true() -> bool {
