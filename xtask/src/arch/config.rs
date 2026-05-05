@@ -110,6 +110,40 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) single_impl_size: SingleImplSizeThreshold,
     #[serde(default)]
     pub(crate) redundant_reexport: RedundantReexportThreshold,
+    #[serde(default)]
+    pub(crate) multi_constructor: MultiConstructorThreshold,
+    #[serde(default)]
+    pub(crate) field_passthrough: FieldPassthroughThreshold,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MultiConstructorThreshold {
+    /// Names that are always considered the canonical constructor.
+    #[serde(default = "default_canonical_ctor_names")]
+    pub(crate) canonical_names: Vec<String>,
+    #[serde(default)]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+fn default_canonical_ctor_names() -> Vec<String> {
+    ["new", "default"].iter().map(|s| (*s).to_string()).collect()
+}
+
+impl Default for MultiConstructorThreshold {
+    fn default() -> Self {
+        Self {
+            canonical_names: default_canonical_ctor_names(),
+            exempt_files: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FieldPassthroughThreshold {
+    #[serde(default)]
+    pub(crate) exempt_files: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
