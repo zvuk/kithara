@@ -1,0 +1,57 @@
+id: idioms.match-self-conversion
+message: |
+  `fn name(self) -> Other { match self { ... } }` is a manual conversion.
+  Replace with `impl From<Self> for Other` so callers can use `.into()` /
+  the type system can chain.
+
+      // ❌
+      impl Codec {
+          pub fn container(self) -> ContainerFormat {
+              match self { Self::Mp3 => ContainerFormat::MpegAudio, /* ... */ }
+          }
+      }
+
+      // ✅
+      impl From<Codec> for ContainerFormat {
+          fn from(c: Codec) -> Self {
+              match c { Codec::Mp3 => Self::MpegAudio, /* ... */ }
+          }
+      }
+
+  Suppress with `// ast-grep-ignore: idioms.match-self-conversion` only when
+  the method legitimately can't be a `From` (e.g. result depends on more
+  state than `self`).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+rule:
+  any:
+    - pattern: |
+        fn $NAME(self) -> $RET {
+            match self { $$$ARMS }
+        }
+    - pattern: |
+        fn $NAME(&self) -> $RET {
+            match self { $$$ARMS }
+        }
+    - pattern: |
+        pub fn $NAME(self) -> $RET {
+            match self { $$$ARMS }
+        }
+    - pattern: |
+        pub fn $NAME(&self) -> $RET {
+            match self { $$$ARMS }
+        }
+    - pattern: |
+        pub(crate) fn $NAME(self) -> $RET {
+            match self { $$$ARMS }
+        }
+    - pattern: |
+        pub(crate) fn $NAME(&self) -> $RET {
+            match self { $$$ARMS }
+        }
+constraints:
+  RET:
+    not:
+      regex: "Self"
