@@ -152,42 +152,6 @@ impl DecoderFactory {
         Self::dispatch_backend(source, hint, config)
     }
 
-    /// Recreate a decoder on HLS variant switch / format change.
-    ///
-    /// Thin wrapper over `create_from_media_info`: the caller (audio
-    /// pipeline) is responsible for handing in a `base_offset` that
-    /// aligns with the container's init region, so the metadata-driven
-    /// path is the only correct answer. Failures are propagated
-    /// verbatim — no native-probe fallback, since probing mid-segment
-    /// bytes at a mismatched offset would silently pick an unrelated
-    /// codec (e.g. match MP3 frame sync in raw AAC-in-fMP4 bytes) and
-    /// drift `session.media_info` out of sync with the decoder it
-    /// actually got.
-    ///
-    /// # Errors
-    ///
-    /// Returns the decoder-creation error verbatim when the metadata-
-    /// driven path cannot build a decoder (unsupported codec, mismatch
-    /// between the declared container and the bytes at `base_offset`,
-    /// etc.).
-    pub fn create_for_recreate<R, F>(
-        make_source: F,
-        media_info: &MediaInfo,
-        config: &DecoderConfig,
-    ) -> DecodeResult<Box<dyn Decoder>>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-        F: Fn() -> R,
-    {
-        Self::create_from_media_info(make_source(), media_info, config).inspect_err(|error| {
-            tracing::warn!(
-                ?error,
-                ?media_info,
-                "create_from_media_info failed during recreate"
-            );
-        })
-    }
-
     /// Create decoder from `MediaInfo` (kithara-audio entry point).
     ///
     /// Extracts codec from `MediaInfo` and creates the appropriate decoder.

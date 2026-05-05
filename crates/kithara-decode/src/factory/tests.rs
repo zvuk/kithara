@@ -102,16 +102,16 @@ fn test_create_with_probe_with_mp3_hint_succeeds() {
 /// decoder path per call, no fallback.
 #[cfg(feature = "symphonia")]
 #[kithara::test]
-fn create_for_recreate_surfaces_error_without_native_probe_fallback() {
+fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
     use kithara_stream::MediaInfo;
 
     let media_info = MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4));
-    let make_source = || Cursor::new(TEST_MP3_BYTES.to_vec());
+    let source = Cursor::new(TEST_MP3_BYTES.to_vec());
     let result =
-        DecoderFactory::create_for_recreate(make_source, &media_info, &DecoderConfig::default());
+        DecoderFactory::create_from_media_info(source, &media_info, &DecoderConfig::default());
     assert!(
         result.is_err(),
-        "create_for_recreate must propagate the typed error from the \
+        "create_from_media_info must propagate the typed error from the \
          metadata-driven path — no native-probe fallback to mask a \
          codec/container mismatch"
     );
