@@ -133,24 +133,16 @@ impl SymphoniaCodec {
         let registry: &CodecRegistry = symphonia::default::get_codecs();
         let mut opts = AudioDecoderOptions::default();
         opts.gapless = config.gapless;
-        // Gapless source-of-truth precedence:
-        //   1. Container/encoder-probed `track.gapless` (factory's
-        //      `probe_codec_gapless` from MP4 `udta`/`elst` for AAC,
-        //      Xing/Info+LAME for MP3) — used verbatim, no extra fold.
-        //      The probed leading already includes the encoder priming.
-        //   2. Conservative codec default `codec_priming_frames(codec)` —
-        //      fallback when no container metadata was probed (raw
-        //      streams, stripped tags). MP3 falls back to LAME default
-        //      (1105), Opus to RFC 7845 (312), others to 0.
-        // Adding (1) on top of (2) double-counts the priming and trims
-        // 1+ second of real audio at track start.
-        let track_gapless = track.gapless.or_else(|| {
-            let extra = crate::gapless::codec_priming_frames(track.codec);
-            (extra > 0).then_some(crate::GaplessInfo {
-                leading_frames: extra,
-                trailing_frames: 0,
-            })
-        });
+        // Container/encoder-probed `track.gapless` (set by the factory's
+        // `probe_codec_gapless` from MP4 `udta`/`elst` for AAC,
+        // Xing/Info+LAME for MP3) is used verbatim — the probed leading
+        // already contains the encoder priming, so no extra fold here.
+        // When no container metadata was probed, the `pipeline::gapless`
+        // stage applies `GaplessMode::CodecPriming` independently using
+        // `codec_priming_frames(codec)` as a fallback; the codec layer
+        // itself reports `None` to keep the two paths from
+        // double-trimming.
+        let track_gapless = track.gapless;
         let decoder = registry
             .make_audio_decoder(&params, &opts)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
