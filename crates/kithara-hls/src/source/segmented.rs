@@ -199,6 +199,7 @@ mod tests {
             codec: Some(kithara_stream::AudioCodec::AacLc),
             container: Some(kithara_stream::ContainerFormat::Fmp4),
             init_url: Some(Url::parse("https://h.example/init.mp4").expect("valid init")),
+            init_byte_range_len: None,
             segments: segments_state,
             size_map: None,
         };

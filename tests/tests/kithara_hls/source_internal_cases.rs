@@ -219,6 +219,7 @@ fn make_variant_state_with_codec(
         codec,
         container: None,
         init_url: None,
+        init_byte_range_len: None,
         segments,
         size_map: None,
     }

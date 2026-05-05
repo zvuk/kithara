@@ -1080,6 +1080,7 @@ mod tests {
             codec: None,
             container: None,
             init_url: None,
+            init_byte_range_len: None,
             segments: (0..Consts::NUM_SEGMENTS)
                 .map(|index| SegmentState {
                     index,

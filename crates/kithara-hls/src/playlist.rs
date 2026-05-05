@@ -55,6 +55,12 @@ pub struct VariantState {
     pub container: Option<ContainerFormat>,
     /// Absolute URL of the init segment (fMP4 only).
     pub init_url: Option<Url>,
+    /// Init segment byte length declared via `#EXT-X-MAP:BYTERANGE=...`.
+    /// `Some(n)` lets `init_segment_range_for_variant` answer before any
+    /// segment download completes, eliminating the
+    /// "init segment range not announced" race for playlists that
+    /// declare it. `None` falls back to the committed segment data.
+    pub init_byte_range_len: Option<u64>,
     /// Size map (populated after HEAD requests or first download).
     pub size_map: Option<VariantSizeMap>,
     /// Absolute URL of the variant's media playlist.
@@ -107,6 +113,10 @@ impl PlaylistState {
                     .init_segment
                     .as_ref()
                     .and_then(|init| media_url.join(&init.uri).ok());
+                let init_byte_range_len = playlist
+                    .init_segment
+                    .as_ref()
+                    .and_then(|init| init.byte_range_len);
 
                 // Build segment states
                 let segments: Vec<SegmentState> = playlist
@@ -130,6 +140,7 @@ impl PlaylistState {
                     codec,
                     container,
                     init_url,
+                    init_byte_range_len,
                     segments,
                     id: variant.id.0,
                     uri: media_url.clone(),
@@ -463,6 +474,7 @@ mod tests {
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Fmp4),
             init_url: Some(base_url().join("init.mp4").expect("valid init URL")),
+            init_byte_range_len: None,
             size_map: None,
         }
     }

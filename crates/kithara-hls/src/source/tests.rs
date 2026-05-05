@@ -130,6 +130,7 @@ fn make_variant_state_with_segments(id: usize, segments: usize) -> VariantState 
         codec: None,
         container: None,
         init_url: None,
+        init_byte_range_len: None,
         segments: (0..segments)
             .map(|index| SegmentState {
                 index,
