@@ -66,7 +66,9 @@ pub(crate) struct PointwiseLoopConfig {
 
 impl Default for PointwiseLoopConfig {
     fn default() -> Self {
-        Self { exempt_files: default_exempt_files() }
+        Self {
+            exempt_files: default_exempt_files(),
+        }
     }
 }
 
@@ -85,10 +87,18 @@ pub(crate) struct FatLoopBodyConfig {
     pub(crate) exempt_files: Vec<String>,
 }
 
-fn default_for_stmt_threshold() -> usize { 6 }
-fn default_while_stmt_threshold() -> usize { 6 }
-fn default_loop_stmt_threshold() -> usize { 4 }
-fn default_nested_ctrl_threshold() -> usize { 1 }
+fn default_for_stmt_threshold() -> usize {
+    6
+}
+fn default_while_stmt_threshold() -> usize {
+    6
+}
+fn default_loop_stmt_threshold() -> usize {
+    4
+}
+fn default_nested_ctrl_threshold() -> usize {
+    1
+}
 
 impl Default for FatLoopBodyConfig {
     fn default() -> Self {
@@ -111,7 +121,9 @@ pub(crate) struct LoopFlagAccumulatorConfig {
 
 impl Default for LoopFlagAccumulatorConfig {
     fn default() -> Self {
-        Self { exempt_files: default_exempt_files() }
+        Self {
+            exempt_files: default_exempt_files(),
+        }
     }
 }
 
@@ -126,8 +138,12 @@ pub(crate) struct ConstGroupEnumShapeConfig {
     pub(crate) exempt_files: Vec<String>,
 }
 
-fn default_min_group_size() -> usize { 3 }
-fn default_min_prefix_chars() -> usize { 3 }
+fn default_min_group_size() -> usize {
+    3
+}
+fn default_min_prefix_chars() -> usize {
+    3
+}
 
 impl Default for ConstGroupEnumShapeConfig {
     fn default() -> Self {
@@ -148,7 +164,9 @@ pub(crate) struct NestedIfLetPyramidConfig {
     pub(crate) exempt_files: Vec<String>,
 }
 
-fn default_pyramid_min_depth() -> usize { 2 }
+fn default_pyramid_min_depth() -> usize {
+    2
+}
 
 impl Default for NestedIfLetPyramidConfig {
     fn default() -> Self {

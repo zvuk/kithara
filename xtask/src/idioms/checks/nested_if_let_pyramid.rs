@@ -9,13 +9,13 @@ use syn::{Block, Expr, ExprIf, Pat, PatIdent, PatTupleStruct, Stmt, visit::Visit
 
 use super::{Check, Context};
 use crate::{
-    idioms::config::NestedIfLetPyramidConfig,
     common::{
         parse::parse_file,
         suppress::Suppressions,
         violation::Violation,
         walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
     },
+    idioms::config::NestedIfLetPyramidConfig,
 };
 
 pub(crate) const ID: &str = "nested_if_let_pyramid";
@@ -36,7 +36,9 @@ impl Check for NestedIfLetPyramid {
             if matches_any(&exempt, rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else { continue };
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
             let src = std::fs::read_to_string(&path)?;
             let suppress = Suppressions::parse(&src);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -67,28 +69,28 @@ fn analyze_file(
                 syn::visit::visit_expr_if(self, e);
                 return;
             }
-            if let Some(depth) = pyramid_depth(e) {
-                if depth >= self.cfg.min_depth {
-                    let line = e.if_token.span.start().line;
-                    if !self.sup.is_suppressed(line, ID) {
-                        let key = format!("{}:{}:depth_{}", self.rel, line, depth);
-                        self.out.push(Violation::warn(
-                            ID,
-                            key,
-                            format!(
-                                "nested `if let Some/Ok` pyramid (depth {depth}) — each level \
-                                 pushes work further right. Replace with `let Some(x) = expr \
-                                 else {{ return; }};` (when fn returns `()`), `let x = expr?;` \
-                                 (when fn returns `Result`/`Option`), or extract an inner \
-                                 helper `fn step(unwrapped: T, ...)`."
-                            ),
-                        ));
-                    }
-                    self.in_pyramid = true;
-                    syn::visit::visit_expr_if(self, e);
-                    self.in_pyramid = false;
-                    return;
+            if let Some(depth) = pyramid_depth(e)
+                && depth >= self.cfg.min_depth
+            {
+                let line = e.if_token.span.start().line;
+                if !self.sup.is_suppressed(line, ID) {
+                    let key = format!("{}:{}:depth_{}", self.rel, line, depth);
+                    self.out.push(Violation::warn(
+                        ID,
+                        key,
+                        format!(
+                            "nested `if let Some/Ok` pyramid (depth {depth}) — each level \
+                             pushes work further right. Replace with `let Some(x) = expr \
+                             else {{ return; }};` (when fn returns `()`), `let x = expr?;` \
+                             (when fn returns `Result`/`Option`), or extract an inner \
+                             helper `fn step(unwrapped: T, ...)`."
+                        ),
+                    ));
                 }
+                self.in_pyramid = true;
+                syn::visit::visit_expr_if(self, e);
+                self.in_pyramid = false;
+                return;
             }
             syn::visit::visit_expr_if(self, e);
         }

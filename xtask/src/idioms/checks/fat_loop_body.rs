@@ -11,13 +11,13 @@ use syn::{Block, Expr, ExprForLoop, ExprLoop, ExprWhile, Stmt, visit::Visit};
 
 use super::{Check, Context};
 use crate::{
-    idioms::config::FatLoopBodyConfig,
     common::{
         parse::parse_file,
         suppress::Suppressions,
         violation::Violation,
         walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
     },
+    idioms::config::FatLoopBodyConfig,
 };
 
 pub(crate) const ID: &str = "fat_loop_body";
@@ -38,7 +38,9 @@ impl Check for FatLoopBody {
             if matches_any(&exempt, rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else { continue };
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
             let src = std::fs::read_to_string(&path)?;
             let suppress = Suppressions::parse(&src);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -80,7 +82,6 @@ fn analyze_file(
         fn check(&mut self, body: &Block, line: usize, kind: &str) {
             let stmt_count = body.stmts.len();
             let threshold = match kind {
-                "for" => self.cfg.for_stmt_threshold,
                 "while" => self.cfg.while_stmt_threshold,
                 "loop" => self.cfg.loop_stmt_threshold,
                 _ => self.cfg.for_stmt_threshold,
@@ -109,12 +110,7 @@ fn analyze_file(
             ));
         }
     }
-    let mut v = V {
-        rel,
-        cfg,
-        sup,
-        out,
-    };
+    let mut v = V { rel, cfg, sup, out };
     v.visit_file(file);
 }
 

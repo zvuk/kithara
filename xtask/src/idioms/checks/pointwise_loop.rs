@@ -34,7 +34,9 @@ impl Check for PointwiseLoop {
             if matches_any(&exempt, rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else { continue };
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
             let src = std::fs::read_to_string(&path)?;
             let suppress = Suppressions::parse(&src);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -109,9 +111,8 @@ fn is_pointwise_body(block: &Block) -> bool {
         return false;
     }
     let stmt = &block.stmts[0];
-    let expr = match stmt {
-        Stmt::Expr(e, _) => e,
-        _ => return false,
+    let Stmt::Expr(expr, _) = stmt else {
+        return false;
     };
     match expr {
         Expr::Assign(a) => is_deref_or_index(&a.left),
@@ -120,7 +121,8 @@ fn is_pointwise_body(block: &Block) -> bool {
 }
 
 fn is_deref_or_index(e: &Expr) -> bool {
-    matches!(e, Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_))) || matches!(e, Expr::Index(_))
+    matches!(e, Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)))
+        || matches!(e, Expr::Index(_))
 }
 
 fn is_assign_op(expr: &Expr) -> bool {

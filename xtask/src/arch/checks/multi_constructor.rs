@@ -39,7 +39,9 @@ impl Check for MultiConstructor {
             if matches_any(&exempt, rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else { continue };
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
             let src = std::fs::read_to_string(&path)?;
             let suppress = Suppressions::parse(&src);
             let rel_str = rel.to_string_lossy().replace('\\', "/");

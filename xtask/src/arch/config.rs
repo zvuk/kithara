@@ -127,7 +127,10 @@ pub(crate) struct MultiConstructorThreshold {
 }
 
 fn default_canonical_ctor_names() -> Vec<String> {
-    ["new", "default"].iter().map(|s| (*s).to_string()).collect()
+    ["new", "default"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 impl Default for MultiConstructorThreshold {

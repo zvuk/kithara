@@ -232,22 +232,23 @@ fn is_terminator_expr(cfg: &GuardCascadeConfig, e: &Expr) -> bool {
 mod tests {
     use super::*;
 
+    // Walk the parsed file the same way the production visitor does so
+    // that nested blocks are evaluated, not just the top-level.
+    struct V<'a> {
+        cfg: &'a GuardCascadeConfig,
+        out: &'a mut Vec<Violation>,
+    }
+    impl<'ast> Visit<'ast> for V<'_> {
+        fn visit_block(&mut self, b: &'ast Block) {
+            scan_block(self.cfg, "fixture.rs", b, self.out);
+            visit::visit_block(self, b);
+        }
+    }
+
     fn count_violations(body: &str) -> usize {
         let cfg = GuardCascadeConfig::default();
         let block: Block = syn::parse_str(body).expect("valid Rust block");
         let mut out = Vec::new();
-        // Walk the parsed file the same way the production visitor does so
-        // that nested blocks are evaluated, not just the top-level.
-        struct V<'a> {
-            cfg: &'a GuardCascadeConfig,
-            out: &'a mut Vec<Violation>,
-        }
-        impl<'ast> Visit<'ast> for V<'_> {
-            fn visit_block(&mut self, b: &'ast Block) {
-                scan_block(self.cfg, "fixture.rs", b, self.out);
-                visit::visit_block(self, b);
-            }
-        }
         let mut v = V {
             cfg: &cfg,
             out: &mut out,

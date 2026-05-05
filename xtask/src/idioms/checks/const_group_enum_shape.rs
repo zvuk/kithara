@@ -11,13 +11,13 @@ use syn::{
 
 use super::{Check, Context};
 use crate::{
-    idioms::config::ConstGroupEnumShapeConfig,
     common::{
         parse::parse_file,
         suppress::Suppressions,
         violation::Violation,
         walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
     },
+    idioms::config::ConstGroupEnumShapeConfig,
 };
 
 pub(crate) const ID: &str = "const_group_enum_shape";
@@ -53,7 +53,9 @@ impl Check for ConstGroupEnumShape {
             if matches_any(&exempt, rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else { continue };
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
             let src = std::fs::read_to_string(&path)?;
             let suppress = Suppressions::parse(&src);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -123,7 +125,17 @@ fn primitive_int_type(ty: &Type) -> Option<String> {
     let name = seg.ident.to_string();
     matches!(
         name.as_str(),
-        "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+        "u8" | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
     )
     .then_some(name)
 }
@@ -268,7 +280,7 @@ fn hint_for(prefix: &str, ty: &str, group: &[ConstEntry], shape: Shape) -> Strin
                 .map(|e| format!(
                     "const {} = 0x{:x};",
                     e.name.trim_start_matches(prefix),
-                    e.value as u128
+                    e.value.cast_unsigned()
                 ))
                 .collect::<Vec<_>>()
                 .join(" "),
@@ -283,7 +295,7 @@ fn hint_for(prefix: &str, ty: &str, group: &[ConstEntry], shape: Shape) -> Strin
                 .map(|e| format!(
                     "{} = 0x{:x}",
                     e.name.trim_start_matches(prefix),
-                    e.value as u128
+                    e.value.cast_unsigned()
                 ))
                 .collect::<Vec<_>>()
                 .join(", "),
@@ -301,7 +313,9 @@ mod tests {
         let file: syn::File = syn::parse_str(src).expect("valid Rust source");
         let mut out = Vec::new();
         analyze_file("fixture.rs", &file.items, &cfg, &suppress, &mut out);
-        out.iter().map(|v| classify_from_message(&v.message)).collect()
+        out.iter()
+            .map(|v| classify_from_message(&v.message))
+            .collect()
     }
 
     fn classify_from_message(msg: &str) -> &'static str {

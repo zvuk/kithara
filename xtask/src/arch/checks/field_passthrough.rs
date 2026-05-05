@@ -33,9 +33,7 @@ use crate::common::{
 
 pub(crate) const ID: &str = "field_passthrough";
 const MAX_DEPTH: usize = 8;
-const TRANSPARENT_WRAPPERS: &[&str] = &[
-    "Arc", "Rc", "Box", "RefCell", "Cell", "Mutex", "RwLock",
-];
+const TRANSPARENT_WRAPPERS: &[&str] = &["Arc", "Rc", "Box", "RefCell", "Cell", "Mutex", "RwLock"];
 
 pub(crate) struct FieldPassthrough;
 
@@ -75,7 +73,9 @@ impl Check for FieldPassthrough {
             if matches_any(&exempt, rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else { continue };
+            let Ok(file) = parse_file(&path) else {
+                continue;
+            };
             let src = std::fs::read_to_string(&path)?;
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             suppressions.insert(rel_str.clone(), Suppressions::parse(&src));
@@ -154,10 +154,7 @@ fn peel_wrappers(ty: &Type) -> Type {
                 GenericArgument::Type(t) => Some(t),
                 _ => None,
             });
-            match inner {
-                Some(t) => peel_wrappers(t),
-                None => ty.clone(),
-            }
+            inner.map_or_else(|| ty.clone(), peel_wrappers)
         }
         _ => ty.clone(),
     }
@@ -221,8 +218,7 @@ fn emit_violations(
     suppressions: &HashMap<String, Suppressions>,
     out: &mut Vec<Violation>,
 ) {
-    let by_name: BTreeMap<&str, &StructDecl> =
-        all.iter().map(|d| (d.name.as_str(), d)).collect();
+    let by_name: BTreeMap<&str, &StructDecl> = all.iter().map(|d| (d.name.as_str(), d)).collect();
     let empty = Suppressions::default();
     for outer in all {
         for outer_field in &outer.fields {
