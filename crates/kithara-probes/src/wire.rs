@@ -4,6 +4,7 @@
 //! items (functions, structs, traits, impls) in `lib.rs` / `mod.rs`.
 
 use std::{
+    collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     time::Duration,
 };
@@ -86,14 +87,16 @@ impl IntoProbeArg for bool {
 
 impl IntoProbeArg for Duration {
     fn into_probe_arg(self) -> u64 {
-        let micros = self.as_micros();
-        u64::try_from(micros).unwrap_or(u64::MAX)
+        // Saturating cast: durations beyond ~585 000 years clamp to the
+        // wire ceiling. Documented in lib.rs Wire format section.
+        const SATURATE: u64 = u64::MAX;
+        u64::try_from(self.as_micros()).unwrap_or(SATURATE)
     }
 }
 
 impl IntoProbeArg for &Url {
     fn into_probe_arg(self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = DefaultHasher::new();
         self.as_str().hash(&mut hasher);
         hasher.finish()
     }
@@ -105,23 +108,35 @@ impl IntoProbeArg for RequestId {
     }
 }
 
+fn request_priority_wire(p: RequestPriority) -> u64 {
+    match p {
+        RequestPriority::High => 0,
+        RequestPriority::Low => 1,
+    }
+}
+
 impl IntoProbeArg for RequestPriority {
     fn into_probe_arg(self) -> u64 {
-        match self {
-            Self::High => 0,
-            Self::Low => 1,
-        }
+        request_priority_wire(self)
+    }
+}
+
+fn cancel_reason_wire(r: CancelReason) -> u64 {
+    const EPOCH_CANCEL: u64 = 0;
+    const PEER_CANCEL: u64 = 1;
+    const DOWNLOADER_SHUTDOWN: u64 = 2;
+    const BEFORE_START: u64 = 3;
+    match r {
+        CancelReason::EpochCancel => EPOCH_CANCEL,
+        CancelReason::PeerCancel => PEER_CANCEL,
+        CancelReason::DownloaderShutdown => DOWNLOADER_SHUTDOWN,
+        CancelReason::BeforeStart => BEFORE_START,
     }
 }
 
 impl IntoProbeArg for CancelReason {
     fn into_probe_arg(self) -> u64 {
-        match self {
-            Self::EpochCancel => 0,
-            Self::PeerCancel => 1,
-            Self::DownloaderShutdown => 2,
-            Self::BeforeStart => 3,
-        }
+        cancel_reason_wire(self)
     }
 }
 

@@ -28,5 +28,4 @@
 pub mod kithara;
 mod wire;
 
-pub use kithara_probe_macros::{Probe, probe};
 pub use wire::{IntoProbeArg, Probe, register_probes};
