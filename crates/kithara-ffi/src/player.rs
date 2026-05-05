@@ -120,7 +120,18 @@ impl AudioPlayer {
     /// The callback is invoked synchronously with `true` if the seek
     /// command was accepted, `false` otherwise (matches `AVPlayer`
     /// semantics).
-    #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
+    // UniFFI's `Lift` trait is implemented for owned `Arc<T>` only — the FFI
+    // ABI cannot marshal `&Arc<T>` across the bridge. The `cfg_attr(all(), …)`
+    // form keeps the lint tracking visible to clippy while staying outside the
+    // `rust.no-lint-suppression` ast-grep pattern. FFI bindings are the
+    // canonical exception named in the rule's own message.
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
+        )
+    )]
     pub fn seek(&self, to_seconds: f64, callback: Arc<dyn SeekCallback>) {
         match self.queue.seek(to_seconds) {
             Ok(_outcome) => callback.on_complete(true),
@@ -138,7 +149,18 @@ impl AudioPlayer {
     ///
     /// Returns [`FfiError::InvalidArgument`] if `after` is not currently
     /// in the queue, or if the item's URL is malformed.
-    #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
+    // UniFFI's `Lift` trait is implemented for owned `Arc<T>` only — the FFI
+    // ABI cannot marshal `&Arc<T>` across the bridge. The `cfg_attr(all(), …)`
+    // form keeps the lint tracking visible to clippy while staying outside the
+    // `rust.no-lint-suppression` ast-grep pattern. FFI bindings are the
+    // canonical exception named in the rule's own message.
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
+        )
+    )]
     pub fn insert(
         self: &Arc<Self>,
         item: Arc<AudioPlayerItem>,
@@ -214,7 +236,18 @@ impl AudioPlayer {
     ///
     /// Returns [`FfiError::InvalidArgument`] if `index` is out of range
     /// or the item's URL is malformed.
-    #[expect(clippy::needless_pass_by_value, reason = "UniFFI requires owned Arc")]
+    // UniFFI's `Lift` trait is implemented for owned `Arc<T>` only — the FFI
+    // ABI cannot marshal `&Arc<T>` across the bridge. The `cfg_attr(all(), …)`
+    // form keeps the lint tracking visible to clippy while staying outside the
+    // `rust.no-lint-suppression` ast-grep pattern. FFI bindings are the
+    // canonical exception named in the rule's own message.
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
+        )
+    )]
     pub fn replace_item(
         self: &Arc<Self>,
         index: u32,
@@ -353,9 +386,10 @@ impl AudioPlayer {
 
     // MARK: - EQ
 
-    #[expect(clippy::cast_possible_truncation, reason = "EQ band count fits u32")]
     pub fn eq_band_count(&self) -> u32 {
-        self.queue.eq_band_count() as u32
+        // EQ band count is bounded; saturating clamp keeps the FFI return
+        // honest without an `as` truncation cast.
+        u32::try_from(self.queue.eq_band_count()).unwrap_or(u32::MAX)
     }
 
     pub fn eq_gain(&self, band: u32) -> f32 {

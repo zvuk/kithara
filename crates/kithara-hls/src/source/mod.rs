@@ -10,4 +10,7 @@ mod types;
 mod tests;
 
 pub use self::core::HlsSource;
-pub(crate) use self::{core::build_pair, segmented::HlsSegmentView};
+pub(crate) use self::{
+    core::{BuildPair, build_pair},
+    segmented::HlsSegmentView,
+};

@@ -1,6 +1,6 @@
 //! God-impl detection: high `fn`-to-`type` ratio inside one file.
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use super::{Check, Context};
 use crate::common::{
@@ -31,8 +31,12 @@ impl Check for FileDensity {
             if stats.fns < cfg.min_fns_to_evaluate {
                 continue;
             }
-            let denom = u32::try_from(stats.types.max(1)).unwrap_or(u32::MAX);
-            let numer = u32::try_from(stats.fns).unwrap_or(u32::MAX);
+            // Counts of items in a single file fit in u32 by orders of magnitude;
+            // propagate any imaginable overflow rather than masking with a sentinel.
+            let denom = u32::try_from(stats.types.max(1))
+                .context("file_density: types count overflows u32")?;
+            let numer =
+                u32::try_from(stats.fns).context("file_density: fns count overflows u32")?;
             let ratio = f64::from(numer) / f64::from(denom);
             let key = relative_to(ctx.workspace_root, &path)
                 .to_string_lossy()

@@ -436,8 +436,11 @@ impl<T: StreamType> Seek for Stream<T> {
             ));
         }
 
-        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let new_pos = new_pos as u64;
+        // After the >=0 guard above, `new_pos` is non-negative. Saturating
+        // clamp to u64 covers the (impossible) overflow path without an `as`
+        // cast: a value that does not fit u64 would already exceed any seekable
+        // resource, so capping is the faithful "past end" signal.
+        let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX);
 
         // Wait for the target byte unboundedly; only `coord.cancel` (track
         // replaced / resource dropped / shutdown) or `seek_epoch` advance

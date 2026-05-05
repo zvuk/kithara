@@ -169,12 +169,13 @@ fn try_init_bitrate(
 
     for (i, seg) in playlist.segments.iter().take(num_segments).enumerate() {
         let duration_secs = seg.duration.as_secs_f64();
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "bitrate × duration is always non-negative and fits u64"
-        )]
-        let media_len = (f64::from(avg_bitrate) / BITS_PER_BYTE * duration_secs) as u64;
+        // bitrate × duration / 8 is always non-negative for valid input;
+        // saturating-clamp via `to_u64()` covers the (impossible) overflow
+        // path without an `as` cast.
+        let media_len = num_traits::cast::ToPrimitive::to_u64(
+            &(f64::from(avg_bitrate) / BITS_PER_BYTE * duration_secs),
+        )
+        .unwrap_or(u64::MAX);
         let total_seg = if i == 0 {
             init_len + media_len
         } else {

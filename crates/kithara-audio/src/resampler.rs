@@ -251,12 +251,8 @@ impl ResamplerProcessor {
         let channels = params.channels;
         let host_sr = params.host_sample_rate.load(Ordering::Relaxed);
         let target_rate = if host_sr == 0 { source_rate } else { host_sr };
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "channel count is always small"
-        )]
         let output_spec = PcmSpec {
-            channels: channels as u16,
+            channels: u16::try_from(channels).unwrap_or(u16::MAX),
             sample_rate: target_rate,
         };
 
@@ -337,13 +333,13 @@ impl ResamplerProcessor {
             buf.clear();
         }
 
-        #[expect(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "audio buffer size calculation: always positive and within usize range"
-        )]
-        let actual_output_frames = ((buffered as f64) * self.current_ratio).ceil() as usize;
+        // f64 frame count → usize: saturating clamp via num-traits keeps the
+        // intent explicit (output buffer is sized for at most `usize::MAX`
+        // frames; anything past that is the same "use the full buffer" signal).
+        let frames_f64 =
+            (num_traits::cast::AsPrimitive::<f64>::as_(buffered) * self.current_ratio).ceil();
+        let actual_output_frames =
+            num_traits::cast::ToPrimitive::to_usize(&frames_f64).unwrap_or(usize::MAX);
         let frames_to_use = actual_output_frames.min(out_len);
 
         if frames_to_use == 0 {
@@ -366,14 +362,11 @@ impl ResamplerProcessor {
         // input chunk once.
         let mut meta = self.last_input_meta.unwrap_or_default();
         meta.spec = self.output_spec;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "frame counts fit in u32 for realistic chunks"
-        )]
-        let out_frames = interleaved
+        let frame_count = interleaved
             .len()
             .checked_div(self.channels.max(1))
-            .unwrap_or(0) as u32;
+            .unwrap_or(0);
+        let out_frames = u32::try_from(frame_count).unwrap_or(u32::MAX);
         meta.frames = out_frames;
         Some(PcmChunk::new(meta, interleaved))
     }
@@ -495,14 +488,11 @@ impl ResamplerProcessor {
         // input chunk once.
         let mut meta = self.last_input_meta.unwrap_or_default();
         meta.spec = self.output_spec;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "frame counts fit in u32 for realistic chunks"
-        )]
-        let out_frames = interleaved
+        let frame_count = interleaved
             .len()
             .checked_div(self.channels.max(1))
-            .unwrap_or(0) as u32;
+            .unwrap_or(0);
+        let out_frames = u32::try_from(frame_count).unwrap_or(u32::MAX);
         meta.frames = out_frames;
         Some(PcmChunk::new(meta, interleaved))
     }
@@ -812,11 +802,7 @@ impl ResamplerProcessor {
         self.temp_output_bufs = smallvec_new_vecs(chunk_channels);
         self.temp_output_all = smallvec_new_vecs(chunk_channels);
         self.temp_deinterleave = smallvec_new_vecs(chunk_channels);
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "channel count is always small"
-        )]
-        let channels_u16 = chunk_channels as u16;
+        let channels_u16 = u16::try_from(chunk_channels).unwrap_or(u16::MAX);
         self.output_spec.channels = channels_u16;
         self.resampler = None;
     }

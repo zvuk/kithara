@@ -165,8 +165,10 @@ pub trait ResourceExt: Send + Sync + 'static {
             buf.clear();
             return Ok(0);
         }
-        #[expect(clippy::cast_possible_truncation)] // resource length fits in memory
-        buf.resize(len as usize, 0);
+        // Resource length fits in memory by construction; saturating clamp on
+        // the (impossible in practice) overflow path keeps the conversion honest.
+        let len_usize = usize::try_from(len).unwrap_or(usize::MAX);
+        buf.resize(len_usize, 0);
         let n = self.read_at(0, buf)?;
         buf.truncate(n);
         Ok(n)

@@ -31,12 +31,12 @@ pub(crate) enum SeekLocation {
 
 impl SeekLocation {
     /// Canonical constructor from a resolved seek anchor.
+    ///
+    /// `variant_index` is Optional; on the (impossible in practice) overflow
+    /// path we degrade to `None` rather than truncate, since `None` already
+    /// means "variant is unknown" downstream.
     pub(crate) fn from_anchor(anchor: SourceSeekAnchor) -> Self {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "variant_index fits in u32 for all real sources"
-        )]
-        let variant = anchor.variant_index.map(|v| v as u32);
+        let variant = anchor.variant_index.and_then(|v| u32::try_from(v).ok());
         Self::Byte {
             variant,
             offset: anchor.byte_offset,

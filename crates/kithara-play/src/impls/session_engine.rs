@@ -869,8 +869,7 @@ fn start_stream_offline(
 
     let config = super::offline_backend::OfflineConfig {
         sample_rate,
-        #[expect(clippy::cast_possible_truncation, reason = "block frames fits in u32")]
-        block_frames: OFFLINE_BLOCK_FRAMES as u32,
+        block_frames: u32::try_from(OFFLINE_BLOCK_FRAMES).unwrap_or(u32::MAX),
     };
     ctx.start_stream(config).map_err(|err| err.to_string())
 }

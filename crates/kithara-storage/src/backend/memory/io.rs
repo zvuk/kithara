@@ -31,18 +31,19 @@ impl DriverIo for MemDriver {
             return Ok(0);
         }
 
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "clamped to len which fits in memory"
-        )]
-        let available = (state.len - offset) as usize;
+        let available = usize::try_from(state.len - offset).map_err(|err| {
+            StorageError::Failed(format!(
+                "memory read: available {} does not fit usize: {err}",
+                state.len - offset
+            ))
+        })?;
         let to_read = buf.len().min(available);
 
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "offset < len which fits in memory"
-        )]
-        let start = offset as usize;
+        let start = usize::try_from(offset).map_err(|err| {
+            StorageError::Failed(format!(
+                "memory read: offset {offset} does not fit usize: {err}"
+            ))
+        })?;
         buf[..to_read].copy_from_slice(&state.buf[start..start + to_read]);
         drop(state);
 
@@ -67,11 +68,9 @@ impl DriverIo for MemDriver {
         let mut state = self.state.lock_sync();
         let end = offset + data.len() as u64;
 
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "bounded by byte budget (256 MB)"
-        )]
-        let end_usize = end as usize;
+        let end_usize = usize::try_from(end).map_err(|err| {
+            StorageError::Failed(format!("memory write: end {end} does not fit usize: {err}"))
+        })?;
 
         // Grow buffer if write extends beyond current allocation.
         if end_usize > state.buf.len() {
@@ -81,11 +80,11 @@ impl DriverIo for MemDriver {
                 .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
         }
 
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "offset < end which fits in memory"
-        )]
-        let start = offset as usize;
+        let start = usize::try_from(offset).map_err(|err| {
+            StorageError::Failed(format!(
+                "memory write: offset {offset} does not fit usize: {err}"
+            ))
+        })?;
         state.buf[start..end_usize].copy_from_slice(data);
 
         if end > state.len {

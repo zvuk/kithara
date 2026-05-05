@@ -1,5 +1,10 @@
-// unimock macro generates code triggering ignored_unit_patterns
-#![allow(clippy::ignored_unit_patterns)]
+// `unimock` (only enabled in `test`/`test-utils` builds) generates `let () = ...`
+// match arms that trip `clippy::ignored_unit_patterns`. The lint is only
+// silenced under those feature gates so production builds remain strict.
+#![cfg_attr(
+    any(test, feature = "test-utils"),
+    allow(clippy::ignored_unit_patterns)
+)]
 
 //! Audio pipeline traits.
 

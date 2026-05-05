@@ -43,6 +43,22 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
+  # Mock implementations are test-fixture surfaces by design: counts/values
+  # in mock readers/peers are bounded by construction, and casts there model
+  # "fake but believable" data, not real numerical contracts. Keeping mocks
+  # in the ratchet would force every fixture to grow Result-typed numerics
+  # without buying any production safety. Per-file location holds the
+  # `#![allow(...)]` with a `reason` attribute.
+  - "**/src/mock.rs"
+  - "**/src/mock/**"
+  # `kithara-test-utils` and `kithara-test-macros` are workspace test
+  # infrastructure: every consumer of these crates is itself a test target.
+  # Lint suppressions inside fixture builders, mock peers, hls/wav helpers,
+  # and proc-macro expansion are documented and reasoned (`reason = "..."`)
+  # at each site. Production code never depends on them at runtime, so the
+  # discipline lives at the boundary, not inside.
+  - "**/kithara-test-utils/**"
+  - "**/kithara-test-macros/**"
   # FFI binding modules — `#![allow(unsafe_code)]` is a structural
   # requirement (raw `extern` blocks, JNI/CoreAudio handles). The
   # `#[deny(unsafe_code)]` ratchet at crate root keeps non-FFI code
@@ -54,8 +70,24 @@ ignores:
   # inline; carve-out scoped to the entry point only.
   - "**/kithara-decode/src/lib.rs"
 rule:
-  any:
-    - pattern: "#[allow($$$ARGS)]"
-    - pattern: "#[expect($$$ARGS)]"
-    - pattern: "#![allow($$$ARGS)]"
-    - pattern: "#![expect($$$ARGS)]"
+  all:
+    - any:
+        - pattern: "#[allow($$$ARGS)]"
+        - pattern: "#[expect($$$ARGS)]"
+        - pattern: "#![allow($$$ARGS)]"
+        - pattern: "#![expect($$$ARGS)]"
+    # Skip suppressions inside an inline `#[cfg(test)] mod ...` block. Test
+    # code may use `#[allow]` for fixture-specific concerns (`unused_variables`
+    # in setup helpers, deliberately wide types in mocks) without polluting
+    # production lint discipline. External test files are already covered by
+    # the path-based `ignores` above; this clause covers `mod tests` blocks
+    # nested inside production source files. Pattern mirrors `rust.no-thin-sync-wrapper`.
+    - not:
+        inside:
+          all:
+            - kind: mod_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)'
+                stopBy: end
+          stopBy: end

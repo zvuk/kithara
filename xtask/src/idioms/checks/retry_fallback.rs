@@ -24,7 +24,8 @@
 
 use anyhow::Result;
 use syn::{
-    Field, ImplItemFn, ItemConst, ItemFn, ItemStatic, ItemStruct, Local, Pat, PatIdent,
+    Attribute, Field, ImplItemFn, ItemConst, ItemFn, ItemMod, ItemStatic, ItemStruct, Local, Pat,
+    PatIdent,
     visit::{self, Visit},
 };
 
@@ -123,6 +124,7 @@ impl Check for RetryFallback {
                 rel: &rel,
                 suppress: &suppress,
                 out: &mut violations,
+                inside_test_mod: false,
             };
             v.visit_file(&file);
         }
@@ -134,11 +136,32 @@ struct IdentVisitor<'a> {
     rel: &'a str,
     suppress: &'a Suppressions,
     out: &'a mut Vec<Violation>,
+    /// `true` while traversing inside a `#[cfg(test)]` module — test code
+    /// can legitimately use names like `flags_max_retries_const` that
+    /// describe the rule's own behaviour without smelling like a retry.
+    inside_test_mod: bool,
+}
+
+/// Returns `true` if any of the given attributes is `#[cfg(test)]`.
+fn is_cfg_test(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        if !a.path().is_ident("cfg") {
+            return false;
+        }
+        let mut is_test = false;
+        let _ = a.parse_nested_meta(|m| {
+            if m.path.is_ident("test") {
+                is_test = true;
+            }
+            Ok(())
+        });
+        is_test
+    })
 }
 
 impl<'a> IdentVisitor<'a> {
     fn flag(&mut self, line: usize, name: &str, kind: &str) {
-        if self.suppress.is_suppressed(line, ID) {
+        if self.inside_test_mod || self.suppress.is_suppressed(line, ID) {
             return;
         }
         let key = format!("{}:{line}:{name}", self.rel);
@@ -170,6 +193,15 @@ fn name_is_forbidden(name: &str) -> bool {
 }
 
 impl<'ast> Visit<'ast> for IdentVisitor<'_> {
+    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
+        let was_inside = self.inside_test_mod;
+        if is_cfg_test(&node.attrs) {
+            self.inside_test_mod = true;
+        }
+        visit::visit_item_mod(self, node);
+        self.inside_test_mod = was_inside;
+    }
+
     fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
         let name = node.ident.to_string();
         if name_is_forbidden(&name) {
@@ -243,6 +275,7 @@ mod tests {
             rel: "test.rs",
             suppress: &suppress,
             out: &mut out,
+            inside_test_mod: false,
         };
         v.visit_file(&file);
         out.len()

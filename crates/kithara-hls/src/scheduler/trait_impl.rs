@@ -16,24 +16,33 @@ impl Drop for HlsScheduler {
     }
 }
 
+/// All metadata needed to commit a completed segment fetch into the
+/// scheduler: identity (variant + segment + epoch), the media body
+/// (`SegmentMeta`), and any matching init segment plus duration.
+pub(crate) struct CommitFetch<'a> {
+    pub(crate) variant: VariantIndex,
+    pub(crate) seg_idx: usize,
+    pub(crate) seek_epoch: kithara_events::SeekEpoch,
+    pub(crate) media: &'a crate::loading::SegmentMeta,
+    pub(crate) init_len: u64,
+    pub(crate) init_url: Option<url::Url>,
+    pub(crate) duration: std::time::Duration,
+}
+
 impl HlsScheduler {
     /// Commit a completed fetch with individual arguments.
     ///
     /// Used by `HlsPeer::on_complete` — the Downloader-driven path.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "segment commit requires all metadata"
-    )]
-    pub(crate) fn commit_fetch_inline(
-        &mut self,
-        variant: VariantIndex,
-        seg_idx: usize,
-        seek_epoch: kithara_events::SeekEpoch,
-        media: &crate::loading::SegmentMeta,
-        init_len: u64,
-        init_url: Option<url::Url>,
-        duration: std::time::Duration,
-    ) {
+    pub(crate) fn commit_fetch_inline(&mut self, ctx: CommitFetch<'_>) {
+        let CommitFetch {
+            variant,
+            seg_idx,
+            seek_epoch,
+            media,
+            init_len,
+            init_url,
+            duration,
+        } = ctx;
         if self.reject_stale_fetch(variant, seg_idx, seek_epoch) {
             return;
         }

@@ -221,6 +221,47 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     gapless: GaplessStage,
 }
 
+/// Context for `recover_from_decoder_seek_error`: the failure mode, the
+/// fallback offset to recreate at, and the diagnostic strings used in
+/// `warn!` / `fail_seek` paths. Lifted out of the function signature so
+/// callers don't need to spell out eight positional arguments.
+#[derive(Clone, Copy)]
+struct SeekRecoveryContext {
+    position: Duration,
+    epoch: u64,
+    fallback_offset: u64,
+    seek_mode: SeekMode,
+    warn_msg: &'static str,
+    fail_ctx: &'static str,
+}
+
+/// All the per-event fields attached to an `AudioEvent::SeekLifecycle`,
+/// grouped so callers do not need to spell out seven optional arguments
+/// at every emit site.
+#[derive(Clone, Copy)]
+struct SeekLifecycleFields {
+    seek_epoch: u64,
+    task_id: u64,
+    variant: Option<usize>,
+    segment_index: Option<u32>,
+    byte_range_start: Option<u64>,
+    byte_range_end: Option<u64>,
+}
+
+/// Context for finishing a seek lifecycle: the post-seek state (epoch,
+/// position, byte ranges, anchor) that emits a `SeekApplied` event and
+/// transitions the FSM into `AwaitingResume`.
+#[derive(Clone, Copy)]
+struct SeekAppliedContext {
+    epoch: u64,
+    position: Duration,
+    variant: Option<usize>,
+    segment_index: Option<u32>,
+    byte_range_start: Option<u64>,
+    byte_range_end: Option<u64>,
+    anchor_offset: Option<u64>,
+}
+
 impl<T: StreamType> StreamAudioSource<T> {
     /// Default read-ahead size in bytes when segment range is unknown.
     const DEFAULT_READ_AHEAD_BYTES: u64 = 32 * 1024;
@@ -438,8 +479,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             return false;
         };
 
-        #[expect(clippy::cast_possible_truncation, reason = "variant index fits in u32")]
-        let target_variant_u32 = target_variant.map(|v| v as u32);
+        // Variants beyond u32::MAX are physically impossible in any real source;
+        // degrade to None on the impossible overflow path rather than truncate.
+        let target_variant_u32 = target_variant.and_then(|v| u32::try_from(v).ok());
         let target_info = stream_info.or_else(|| {
             self.session.media_info.clone().map(|mut info| {
                 info.variant_index = target_variant_u32;
@@ -522,26 +564,27 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.recreate_decoder(new_info, target_offset)
     }
 
-    #[expect(clippy::too_many_arguments, reason = "seek lifecycle context")]
-    fn apply_seek_applied(
-        &mut self,
-        epoch: u64,
-        position: Duration,
-        variant: Option<usize>,
-        segment_index: Option<u32>,
-        byte_range_start: Option<u64>,
-        byte_range_end: Option<u64>,
-        anchor_offset: Option<u64>,
-    ) {
-        reset_effects(&mut self.effects);
-        self.emit_seek_lifecycle(
-            SeekLifecycleStage::SeekApplied,
+    fn apply_seek_applied(&mut self, ctx: &SeekAppliedContext) {
+        let &SeekAppliedContext {
             epoch,
-            epoch,
+            position,
             variant,
             segment_index,
             byte_range_start,
             byte_range_end,
+            anchor_offset,
+        } = ctx;
+        reset_effects(&mut self.effects);
+        self.emit_seek_lifecycle(
+            SeekLifecycleStage::SeekApplied,
+            SeekLifecycleFields {
+                seek_epoch: epoch,
+                task_id: epoch,
+                variant,
+                segment_index,
+                byte_range_start,
+                byte_range_end,
+            },
         );
         self.update_state(TrackState::AwaitingResume(ResumeState {
             anchor_offset,
@@ -595,28 +638,30 @@ impl<T: StreamType> StreamAudioSource<T> {
             return self.recover_from_decoder_seek_error(
                 request,
                 err,
-                position,
-                epoch,
-                self.session.base_offset,
-                SeekMode::Direct {
-                    target_byte: self.estimate_target_byte(position),
+                SeekRecoveryContext {
+                    position,
+                    epoch,
+                    fallback_offset: self.session.base_offset,
+                    seek_mode: SeekMode::Direct {
+                        target_byte: self.estimate_target_byte(position),
+                    },
+                    warn_msg: "seek: decoder.seek failed, recreating decoder and retrying",
+                    fail_ctx: "seek: decoder.seek failed",
                 },
-                "seek: decoder.seek failed, recreating decoder and retrying",
-                "seek: decoder.seek failed",
             );
         }
         self.shared_stream.commit_seek_landing(None);
 
         let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
-        self.apply_seek_applied(
+        self.apply_seek_applied(&SeekAppliedContext {
             epoch,
             position,
             variant,
             segment_index,
             byte_range_start,
             byte_range_end,
-            None, // Direct seek — no anchor offset
-        );
+            anchor_offset: None, // Direct seek — no anchor offset
+        });
         true
     }
 
@@ -692,12 +737,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         // PcmMeta.frames must mirror the trimmed PCM length — the
         // consumer-side reader (audio.rs) uses `chunk.meta.frames` to
         // bound slice indexing into `chunk.pcm`. A stale higher value
-        // makes the reader copy past the end and panic.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "drop_frames < chunk_frames (u32) by guard above"
-        )]
-        let dropped_u32 = drop_frames as u32;
+        // makes the reader copy past the end and panic. Saturating
+        // narrowing: `drop_frames < chunk_frames` (a u32) by the guard
+        // above, but we still narrow safely rather than truncate.
+        let dropped_u32 = u32::try_from(drop_frames).unwrap_or(u32::MAX);
         chunk.meta.frames = chunk.meta.frames.saturating_sub(dropped_u32);
         if let Some(state) = self.resume_state_mut() {
             state.skip = None;
@@ -723,12 +766,14 @@ impl<T: StreamType> StreamAudioSource<T> {
             return self.recover_from_decoder_seek_error(
                 request,
                 err,
-                position,
-                epoch,
-                anchor.byte_offset,
-                SeekMode::Anchor(anchor),
-                "seek anchor path: decoder seek failed, recreating decoder",
-                "seek anchor path: exact decoder seek failed",
+                SeekRecoveryContext {
+                    position,
+                    epoch,
+                    fallback_offset: anchor.byte_offset,
+                    seek_mode: SeekMode::Anchor(anchor),
+                    warn_msg: "seek anchor path: decoder seek failed, recreating decoder",
+                    fail_ctx: "seek anchor path: exact decoder seek failed",
+                },
             );
         }
         trace!(
@@ -740,15 +785,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.shared_stream.commit_seek_landing(Some(anchor));
 
         let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
-        self.apply_seek_applied(
+        self.apply_seek_applied(&SeekAppliedContext {
             epoch,
             position,
             variant,
             segment_index,
             byte_range_start,
             byte_range_end,
-            Some(anchor.byte_offset),
-        );
+            anchor_offset: Some(anchor.byte_offset),
+        });
         true
     }
 
@@ -775,9 +820,13 @@ impl<T: StreamType> StreamAudioSource<T> {
                 // from the *single source* the decoder agrees on
                 // (sample rate × duration). This is the only place
                 // we accept the inverse mapping because `PastEof`
-                // does not carry a frame index.
-                #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let end_frame = (duration.as_secs_f64() * f64::from(sample_rate)) as u64;
+                // does not carry a frame index. Saturating clamp
+                // covers the non-finite / overflow paths without an
+                // `as u64` truncation cast.
+                let end_frame = num_traits::cast::ToPrimitive::to_u64(
+                    &(duration.as_secs_f64() * f64::from(sample_rate)),
+                )
+                .unwrap_or(u64::MAX);
                 (end_frame, duration, None)
             }
         };
@@ -869,15 +918,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         let nanos = (frames as u128)
             .saturating_mul(Self::NANOS_PER_SEC)
             .saturating_div(u128::from(spec.sample_rate));
-        assert!(
-            nanos <= u128::from(u64::MAX),
-            "duration_for_frames: nanos={nanos} exceeds u64::MAX (frames={frames}, sr={})",
-            spec.sample_rate
-        );
-        #[expect(clippy::cast_possible_truncation, reason = "asserted to fit u64 above")]
-        {
-            Duration::from_nanos(nanos as u64)
-        }
+        // Saturating-clamp to u64 nanos: at u64::MAX nanos (~584 years) the
+        // resulting Duration already exceeds anything a real track can express,
+        // so reporting the cap is a faithful non-truncating signal.
+        let nanos_u64 = num_traits::cast::ToPrimitive::to_u64(&nanos).unwrap_or(u64::MAX);
+        Duration::from_nanos(nanos_u64)
     }
 
     /// Emit an audio event if the callback is set.
@@ -887,20 +932,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mirrors AudioEvent::SeekLifecycle fields"
-    )]
-    fn emit_seek_lifecycle(
-        &self,
-        stage: SeekLifecycleStage,
-        seek_epoch: u64,
-        task_id: u64,
-        variant: Option<usize>,
-        segment_index: Option<u32>,
-        byte_range_start: Option<u64>,
-        byte_range_end: Option<u64>,
-    ) {
+    fn emit_seek_lifecycle(&self, stage: SeekLifecycleStage, fields: SeekLifecycleFields) {
+        let SeekLifecycleFields {
+            seek_epoch,
+            task_id,
+            variant,
+            segment_index,
+            byte_range_start,
+            byte_range_end,
+        } = fields;
         self.emit_event(AudioEvent::SeekLifecycle {
             stage,
             seek_epoch,
@@ -1057,18 +1097,20 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Calls `fail_seek` for class (2), missing `MediaInfo`, or when an
     /// init-bearing container has no available init range. Always
     /// returns `false` so callers can `return` directly.
-    #[expect(clippy::too_many_arguments, reason = "seek recovery context")]
     fn recover_from_decoder_seek_error(
         &mut self,
         request: SeekRequest,
         err: DecodeError,
-        position: Duration,
-        epoch: u64,
-        fallback_offset: u64,
-        seek_mode: SeekMode,
-        warn_msg: &'static str,
-        fail_ctx: &'static str,
+        ctx: SeekRecoveryContext,
     ) -> bool {
+        let SeekRecoveryContext {
+            position,
+            epoch,
+            fallback_offset,
+            seek_mode,
+            warn_msg,
+            fail_ctx,
+        } = ctx;
         warn!(?err, epoch, ?position, "{warn_msg}");
 
         if matches!(err, DecodeError::SeekOutOfRange(_)) {
@@ -1519,12 +1561,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             && position >= duration
         {
             let sample_rate = self.session.decoder.spec().sample_rate;
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "duration*sample_rate fits in u64 for any realistic track"
-            )]
-            let end_frame = (duration.as_secs_f64() * f64::from(sample_rate)) as u64;
+            // Saturating clamp via `to_u64()`: at u64::MAX frames we already
+            // exceed any realistic track length, and the value flows into a
+            // timeline commit where capping is the faithful "past end" signal.
+            let end_frame = num_traits::cast::ToPrimitive::to_u64(
+                &(duration.as_secs_f64() * f64::from(sample_rate)),
+            )
+            .unwrap_or(u64::MAX);
             let end_position_ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
             self.timeline
                 .commit_seek_landed(&kithara_stream::ChunkPosition {
@@ -1546,12 +1589,14 @@ impl<T: StreamType> StreamAudioSource<T> {
             let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
             self.emit_seek_lifecycle(
                 SeekLifecycleStage::SeekRequest,
-                epoch,
-                epoch,
-                variant,
-                segment_index,
-                byte_range_start,
-                byte_range_end,
+                SeekLifecycleFields {
+                    seek_epoch: epoch,
+                    task_id: epoch,
+                    variant,
+                    segment_index,
+                    byte_range_start,
+                    byte_range_end,
+                },
             );
         }
 
@@ -1614,12 +1659,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                     let segment_range = self.shared_stream.current_segment_range();
                     self.emit_seek_lifecycle(
                         SeekLifecycleStage::DecodeStarted,
-                        current_epoch,
-                        current_epoch,
-                        chunk.meta.variant_index,
-                        chunk.meta.segment_index,
-                        segment_range.as_ref().map(|range| range.start),
-                        segment_range.as_ref().map(|range| range.end),
+                        SeekLifecycleFields {
+                            seek_epoch: current_epoch,
+                            task_id: current_epoch,
+                            variant: chunk.meta.variant_index,
+                            segment_index: chunk.meta.segment_index,
+                            byte_range_start: segment_range.as_ref().map(|range| range.start),
+                            byte_range_end: segment_range.as_ref().map(|range| range.end),
+                        },
                     );
                     // FSM: AwaitingResume → Decoding (first valid chunk)
                     self.update_state(TrackState::Decoding);
@@ -1800,15 +1847,15 @@ impl<T: StreamType> StreamAudioSource<T> {
                 self.shared_stream.commit_seek_landing(None);
                 let (variant, segment_index, byte_range_start, byte_range_end) =
                     self.seek_context();
-                self.apply_seek_applied(
-                    request.seek.epoch,
-                    request.seek.target,
+                self.apply_seek_applied(&SeekAppliedContext {
+                    epoch: request.seek.epoch,
+                    position: request.seek.target,
                     variant,
                     segment_index,
                     byte_range_start,
                     byte_range_end,
-                    None, // Recreate path — no anchor offset available
-                );
+                    anchor_offset: None, // Recreate path — no anchor offset available
+                });
                 self.epoch.store(request.seek.epoch, Ordering::Release);
                 self.timeline.clear_seek_pending(request.seek.epoch);
                 TrackStep::StateChanged

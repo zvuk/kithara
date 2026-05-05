@@ -13,8 +13,16 @@ use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, 
 
 use crate::{AssetResourceState, AssetsResult, ResourceKey, base::Assets};
 
-/// Chunk size for streaming processing (64KB, multiple of AES block size 16).
-const PROCESS_CHUNK_SIZE: usize = 64 * 1024;
+/// Constants for streaming processing (64KB, multiple of AES block size 16).
+struct Consts;
+
+impl Consts {
+    /// Chunk size for streaming processing (64KB, multiple of AES block size 16).
+    const CHUNK_SIZE: usize = 64 * 1024;
+    /// `CHUNK_SIZE` mirrored as u64 so chunked file-offset arithmetic can
+    /// stay in the wider type and only narrow once the value is known to fit.
+    const CHUNK_SIZE_U64: u64 = 64 * 1024;
+}
 
 /// Chunk-based transform function for streaming processing.
 ///
@@ -222,21 +230,23 @@ where
         // (e.g., AES-CBC IV chaining: each chunk updates IV to last ciphertext block).
         let mut ctx = ctx.clone();
 
-        let mut input_buf = self.pool.get_with(|b| b.resize(PROCESS_CHUNK_SIZE, 0));
-        let mut output_buf = self.pool.get_with(|b| b.resize(PROCESS_CHUNK_SIZE, 0));
+        let mut input_buf = self.pool.get_with(|b| b.resize(Consts::CHUNK_SIZE, 0));
+        let mut output_buf = self.pool.get_with(|b| b.resize(Consts::CHUNK_SIZE, 0));
 
-        let chunk_size = PROCESS_CHUNK_SIZE;
         let mut read_offset = 0u64;
         let mut write_offset = 0u64;
 
         while read_offset < final_len {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "remaining is bounded by chunk_size (64KB) via min() on next line"
-            )]
-            let remaining = (final_len - read_offset) as usize;
-            let to_read = remaining.min(chunk_size);
-            let is_last = read_offset + to_read as u64 >= final_len;
+            // remaining_u64 is bounded by `Consts::CHUNK_SIZE_U64` (64 KiB)
+            // after the min, which always fits in usize on supported targets — so
+            // the narrow conversion is safe by construction.
+            let remaining_u64 = (final_len - read_offset).min(Consts::CHUNK_SIZE_U64);
+            let to_read = usize::try_from(remaining_u64).map_err(|err| {
+                StorageError::Failed(format!(
+                    "process_and_write: chunk size {remaining_u64} does not fit usize: {err}"
+                ))
+            })?;
+            let is_last = read_offset + remaining_u64 >= final_len;
 
             let n = self.inner.read_at(read_offset, &mut input_buf[..to_read])?;
             if n == 0 {
@@ -249,7 +259,11 @@ where
             self.inner.write_at(write_offset, &output_buf[..written])?;
 
             read_offset += n as u64;
-            write_offset += written as u64;
+            write_offset += u64::try_from(written).map_err(|err| {
+                StorageError::Failed(format!(
+                    "process_and_write: written {written} does not fit u64: {err}"
+                ))
+            })?;
         }
 
         Ok(write_offset)
@@ -451,7 +465,7 @@ mod tests {
     use crate::AssetStoreBuilder;
 
     fn test_pool() -> BytePool {
-        BytePool::new(4, PROCESS_CHUNK_SIZE)
+        BytePool::new(4, Consts::CHUNK_SIZE)
     }
 
     /// Simple mock resource for testing.

@@ -238,12 +238,8 @@ impl PlayerTrack {
                 self.observed_duration = duration;
                 if let Some(remaining_frames) = frames_until_eof {
                     let sample_rate = self.sample_rate.max(1);
-                    #[expect(
-                        clippy::cast_precision_loss,
-                        reason = "buffered frame count precision is sufficient for duration snapshots"
-                    )]
-                    let observed_eof =
-                        self.position() + remaining_frames as f64 / f64::from(sample_rate);
+                    let remaining_f64: f64 = num_traits::cast::AsPrimitive::as_(remaining_frames);
+                    let observed_eof = self.position() + remaining_f64 / f64::from(sample_rate);
                     if self.observed_duration <= 0.0 || observed_eof < self.observed_duration {
                         self.observed_duration = observed_eof;
                     }
@@ -364,11 +360,10 @@ impl PlayerTrack {
         block_frames: usize,
         frames_until_eof: Option<usize>,
     ) {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "block duration precision is sufficient for near-end threshold checks"
-        )]
-        let block_seconds = block_frames as f32 / self.sample_rate as f32;
+        use num_traits::cast::AsPrimitive;
+        let block_frames_f32: f32 = block_frames.as_();
+        let sr_f32: f32 = self.sample_rate.as_();
+        let block_seconds = block_frames_f32 / sr_f32;
         let fade_threshold = self.fade_duration + block_seconds;
         let prefetch_threshold = self.prefetch_duration.max(self.fade_duration) + block_seconds;
         // Both triggers are emitted independently. `PrefetchRequested` is a
@@ -379,11 +374,8 @@ impl PlayerTrack {
         // inside `emit_*` via `notified_*` flags.
 
         if let Some(frames_until_eof) = frames_until_eof {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "buffered frame count precision is sufficient for near-end threshold checks"
-            )]
-            let remaining = frames_until_eof as f32 / self.sample_rate as f32;
+            let frames_f32: f32 = frames_until_eof.as_();
+            let remaining = frames_f32 / sr_f32;
             if remaining <= prefetch_threshold {
                 self.emit_track_requested(notification_tx);
             }
@@ -398,16 +390,8 @@ impl PlayerTrack {
             return;
         }
 
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
-        )]
-        let pos = self.position() as f32;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
-        )]
-        let dur = duration as f32;
+        let pos: f32 = self.position().as_();
+        let dur: f32 = duration.as_();
 
         if pos + prefetch_threshold >= dur {
             self.emit_track_requested(notification_tx);
@@ -556,12 +540,12 @@ impl PlayerTrack {
             resource.seek(seconds);
         }
         let sample_rate = self.sample_rate.max(1);
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "negative seek targets are clamped to zero by Resource::seek"
-        )]
-        let frames = (seconds.max(0.0) * f64::from(sample_rate)) as u64;
+        // Saturating clamp: negative inputs already pinned to 0 above; the
+        // overflow path (target so far in the future the result exceeds u64)
+        // hits `u64::MAX` and the timeline reports terminal-end semantics.
+        let frames =
+            num_traits::cast::ToPrimitive::to_u64(&(seconds.max(0.0) * f64::from(sample_rate)))
+                .unwrap_or(u64::MAX);
         self.served_frames = frames;
         self.notified_track_requested = false;
         self.notified_prefetch_requested = false;
@@ -574,13 +558,8 @@ impl PlayerTrack {
     /// instead of the decoder's pre-buffered position.
     pub(crate) fn position(&self) -> f64 {
         let sample_rate = self.sample_rate.max(1);
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "served-frame count precision is sufficient for position snapshots"
-        )]
-        {
-            self.served_frames as f64 / f64::from(sample_rate)
-        }
+        let served_f64: f64 = num_traits::cast::AsPrimitive::as_(self.served_frames);
+        served_f64 / f64::from(sample_rate)
     }
 
     /// Current visible (post-gapless-trim) duration in seconds.

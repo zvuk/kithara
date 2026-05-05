@@ -237,10 +237,10 @@ pub mod offline {
     /// Test-only wrapper around the `pub(crate)` constructor.
     ///
     /// [`PcmReader`]: kithara_audio::PcmReader
-    #[expect(clippy::impl_trait_in_params, reason = "test utility, ergonomic API")]
-    pub fn resource_from_reader(
-        reader: impl kithara_audio::PcmReader + 'static,
-    ) -> crate::Resource {
+    pub fn resource_from_reader<R>(reader: R) -> crate::Resource
+    where
+        R: kithara_audio::PcmReader + 'static,
+    {
         crate::Resource::from_reader(reader)
     }
 
@@ -249,11 +249,11 @@ pub mod offline {
     /// `ItemDidPlayToEnd { src, .. }` on the bus.
     ///
     /// [`PcmReader`]: kithara_audio::PcmReader
-    #[expect(clippy::impl_trait_in_params, reason = "test utility, ergonomic API")]
-    pub fn resource_from_reader_with_src(
-        reader: impl kithara_audio::PcmReader + 'static,
-        src: impl Into<Arc<str>>,
-    ) -> crate::Resource {
+    pub fn resource_from_reader_with_src<R, S>(reader: R, src: S) -> crate::Resource
+    where
+        R: kithara_audio::PcmReader + 'static,
+        S: Into<Arc<str>>,
+    {
         crate::Resource::from_reader_with_src(reader, src.into())
     }
 

@@ -105,19 +105,19 @@ pub fn make_test_segment_loader(
 }
 
 /// Commit dummy resource from a `SegmentData` reference.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "test helper — segment lengths fit in usize"
-)]
-#[expect(clippy::missing_panics_doc, reason = "test-only helper")]
+///
+/// # Panics
+/// Panics if any of the resource-store operations (open / write / commit)
+/// fail; this helper is intended for tests where panics surface as test
+/// failures with the underlying storage error message.
 pub fn commit_dummy_resource_from_data(source: &HlsSource, data: &SegmentData) {
     let backend = &source.backend;
     let media_key = ResourceKey::from_url(&data.media_url);
     let res = backend
         .acquire_resource(&media_key)
         .expect("open media resource");
-    res.write_at(0, &vec![0u8; data.media_len as usize])
-        .expect("write media");
+    let media_len = usize::try_from(data.media_len).unwrap_or(usize::MAX);
+    res.write_at(0, &vec![0u8; media_len]).expect("write media");
     res.commit(None).expect("commit media");
 
     if let Some(ref init_url) = data.init_url {
@@ -125,8 +125,9 @@ pub fn commit_dummy_resource_from_data(source: &HlsSource, data: &SegmentData) {
         let init_res = backend
             .acquire_resource(&init_key)
             .expect("open init resource");
+        let init_len = usize::try_from(data.init_len).unwrap_or(usize::MAX);
         init_res
-            .write_at(0, &vec![0u8; data.init_len as usize])
+            .write_at(0, &vec![0u8; init_len])
             .expect("write init");
         init_res.commit(None).expect("commit init");
     }
@@ -166,19 +167,17 @@ pub fn build_source(
         })
         .collect();
     hls_peer.set_abr_variants(abr_variants);
-    let handle = downloader.register(Arc::clone(&hls_peer) as Arc<dyn kithara_stream::dl::Peer>);
-    let (_downloader, source) = build_pair(
+    let _handle = downloader.register(Arc::clone(&hls_peer) as Arc<dyn kithara_stream::dl::Peer>);
+    let (_downloader, source) = build_pair(crate::source::BuildPair {
         backend,
-        handle,
-        variants,
         config,
-        Arc::clone(hls_peer.abr()),
-        hls_peer.reader_segment_cursor(),
-        hls_peer.committed_segment_cursor(),
+        abr: Arc::clone(hls_peer.abr()),
+        reader_segment: hls_peer.reader_segment_cursor(),
+        committed_segment: hls_peer.committed_segment_cursor(),
         playlist_state,
         bus,
         timeline,
-    );
+    });
     source
 }
 

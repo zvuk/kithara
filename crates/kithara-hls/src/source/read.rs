@@ -155,11 +155,10 @@ impl HlsSource {
             };
             resource.wait_range(local_offset..read_end)?;
 
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "init segment fits in memory"
-            )]
-            let available = (seg.init_len - local_offset) as usize;
+            // Init segment fits in memory by construction; saturating-clamp on
+            // the (impossible in practice) overflow path keeps the conversion
+            // honest without an `as` cast.
+            let available = usize::try_from(seg.init_len - local_offset).unwrap_or(usize::MAX);
             let to_read = buf.len().min(available);
             let bytes_from_init = resource.read_at(local_offset, &mut buf[..to_read])?;
 

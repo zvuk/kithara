@@ -41,6 +41,25 @@ use crate::{
     },
 };
 
+/// Saturating-clamp `u128` milliseconds into `u64`. Caller has explicitly
+/// chosen "report capped value" semantics for telemetry events that can't
+/// surface a wider integer to subscribers; production durations are well
+/// under `u64::MAX` ms (~584 million years).
+fn clamp_u128_to_u64_millis(ms: u128) -> u64 {
+    num_traits::cast::ToPrimitive::to_u64(&ms).unwrap_or(u64::MAX)
+}
+
+/// Multiply `frames * channels` and convert to `usize` for buffer indexing.
+/// Errors if the product does not fit in `usize` on the host (32-bit targets).
+fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
+    let samples = frames.saturating_mul(channels);
+    usize::try_from(samples).map_err(|err| {
+        DecodeError::Io(IoError::other(format!(
+            "frames*channels overflow: {samples} does not fit usize: {err}"
+        )))
+    })
+}
+
 enum FetchOutcome {
     Continue,
     Return(Option<PcmChunk>),
@@ -191,22 +210,11 @@ impl<S> Audio<S> {
     }
 
     fn emit_playback_progress(&self) {
-        let position_ms_u128 = self.position().as_millis();
-        assert!(
-            position_ms_u128 <= u128::from(u64::MAX),
-            "position_ms={position_ms_u128} exceeds u64::MAX"
-        );
-        #[expect(clippy::cast_possible_truncation, reason = "asserted to fit u64 above")]
-        let position_ms = position_ms_u128 as u64;
-        let total_ms = self.timeline.total_duration().map(|duration| {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "millis fits in u64 for practical durations"
-            )]
-            {
-                duration.as_millis() as u64
-            }
-        });
+        let position_ms = clamp_u128_to_u64_millis(self.position().as_millis());
+        let total_ms = self
+            .timeline
+            .total_duration()
+            .map(|duration| clamp_u128_to_u64_millis(duration.as_millis()));
 
         self.emit_audio_event(AudioEvent::PlaybackProgress {
             position_ms,
@@ -411,16 +419,8 @@ impl<S> Audio<S> {
                 }
 
                 hang_reset!();
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "frame counts fit in usize on supported targets (64-bit)"
-                )]
-                let start_sample = (consumed_frames_in_chunk as usize) * (channels as usize);
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "frame counts fit in usize on supported targets (64-bit)"
-                )]
-                let take_samples = (take_frames as usize) * (channels as usize);
+                let start_sample = frames_to_samples(consumed_frames_in_chunk, channels)?;
+                let take_samples = frames_to_samples(take_frames, channels)?;
                 buf[written..written + take_samples]
                     .copy_from_slice(&chunk.pcm[start_sample..start_sample + take_samples]);
                 last_output_meta = Some(chunk.meta);

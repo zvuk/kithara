@@ -134,7 +134,10 @@ patterns = [
 # >=deny: hard fail.
 warn = 7
 deny = 12
-ignore_globs = ["**/tests/**", "**/benches/**"]
+# `xtask/**` is exempt: each lint check is intentionally one file named after the
+# check id (mirrors how upstream clippy organises its lints), so the directory
+# is genuinely flat by design rather than a god-module that needs splitting.
+ignore_globs = ["**/tests/**", "**/benches/**", "xtask/**"]
 
 [max_nesting]
 # Allowed depth of subdirectories under `crates/<crate>/src/`.

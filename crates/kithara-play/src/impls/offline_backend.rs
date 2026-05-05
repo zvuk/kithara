@@ -80,8 +80,7 @@ impl AudioBackend for OfflineBackend {
             prev_sample_rate: sr,
             max_block_frames: block,
             num_stream_in_channels: 0,
-            #[expect(clippy::cast_possible_truncation)]
-            num_stream_out_channels: Self::STEREO_CHANNELS as u32,
+            num_stream_out_channels: u32::try_from(Self::STEREO_CHANNELS).unwrap_or(u32::MAX),
             input_to_output_latency_seconds: 0.0,
             declick_frames: declick,
             output_device_id: String::from("offline"),
@@ -116,13 +115,10 @@ impl OfflineBackend {
                 num_in_channels: 0,
                 num_out_channels: channels,
                 process_timestamp: kithara_platform::time::Instant::now(),
-                #[expect(
-                    clippy::cast_precision_loss,
-                    reason = "frame counter precision loss acceptable for test timing"
-                )]
-                duration_since_stream_start: Duration::from_secs_f64(
-                    self.frames_rendered as f64 / f64::from(self.sample_rate),
-                ),
+                duration_since_stream_start: {
+                    let frames_f64: f64 = num_traits::cast::AsPrimitive::as_(self.frames_rendered);
+                    Duration::from_secs_f64(frames_f64 / f64::from(self.sample_rate))
+                },
                 input_stream_status: StreamStatus::empty(),
                 output_stream_status: StreamStatus::empty(),
                 dropped_frames: 0,

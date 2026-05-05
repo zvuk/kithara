@@ -121,12 +121,8 @@ impl HlsScheduler {
             }
         }
 
-        #[expect(
-            clippy::option_if_let_else,
-            reason = "nested conditionals are clearer with if-let"
-        )]
         let init_len = if playlist_state.total_variant_size(variant).is_some() {
-            if let Some(ref url) = init_url {
+            init_url.as_ref().map_or(0, |url| {
                 let key = ResourceKey::from_url(url);
                 open_status(&key)
                     .and_then(|status| match status {
@@ -134,9 +130,7 @@ impl HlsScheduler {
                         _ => None,
                     })
                     .unwrap_or(0)
-            } else {
-                0
-            }
+            })
         } else {
             0
         };

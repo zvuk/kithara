@@ -271,7 +271,10 @@ impl Player {
 }
 
 /// Returns a `Promise` that resolves after worker spawn.
-#[allow(unreachable_pub)]
+// `#[wasm_bindgen]` exports this fn to the JS module loader; the `pub` is
+// only reachable through the wasm-bindgen surface, so the unreachable_pub
+// silencer is scoped to the wasm target where the export exists.
+#[cfg_attr(target_family = "wasm", allow(unreachable_pub))]
 #[wasm_bindgen]
 pub fn player_new() -> Promise {
     if let Err(err) = player().ensure_worker_started() {

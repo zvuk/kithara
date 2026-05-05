@@ -36,13 +36,12 @@ impl StreamContext for HlsStreamContext {
         self.timeline.byte_position()
     }
 
-    #[expect(clippy::cast_possible_truncation, reason = "segment index fits in u32")]
     fn segment_index(&self) -> Option<u32> {
         let offset = self.timeline.segment_position();
         let segments = self.segments.lock_sync();
         segments
             .find_at_offset(offset)
-            .map(|seg_ref| seg_ref.segment_index as u32)
+            .and_then(|seg_ref| u32::try_from(seg_ref.segment_index).ok())
     }
 
     fn variant_index(&self) -> Option<usize> {

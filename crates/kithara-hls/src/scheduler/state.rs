@@ -297,21 +297,16 @@ impl HlsScheduler {
         previous != variant && is_cross_codec_switch(&self.playlist_state, previous, variant)
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "layout scan must hold the StreamIndex lock while item_range walks the current map"
-    )]
     pub(super) fn switched_layout_anchor(&self) -> Option<(VariantIndex, u64)> {
         let variant = self.abr.current_variant_index();
-        let anchor = {
-            let segments = self.segments.lock_sync();
-            let vs = segments.variant_segments(variant)?;
-            vs.iter().find_map(|(segment_index, _data)| {
-                segments
-                    .item_range((variant, segment_index))
-                    .map(|range| (segment_index, range.start))
-            })
-        };
+        let segments = self.segments.lock_sync();
+        let vs = segments.variant_segments(variant)?;
+        let anchor = vs.iter().find_map(|(segment_index, _data)| {
+            segments
+                .item_range((variant, segment_index))
+                .map(|range| (segment_index, range.start))
+        });
+        drop(segments);
         let (segment_index, byte_offset) = anchor?;
         ((segment_index > 0) || (byte_offset > 0)).then_some((variant, byte_offset))
     }

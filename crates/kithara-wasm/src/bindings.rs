@@ -7,7 +7,10 @@ use wasm_bindgen::prelude::wasm_bindgen;
 // thread already installed the global subscriber and panic hook, and
 // allocating here would race with the main thread's dlmalloc spin lock,
 // corrupting the shared WASM heap.
-#[allow(unreachable_pub)]
+// `#[wasm_bindgen(start)]` exports this fn to the JS module loader; the
+// `pub` is only reachable via wasm-bindgen, so the unreachable_pub silencer
+// is scoped to the wasm target where the export exists.
+#[cfg_attr(target_family = "wasm", allow(unreachable_pub))]
 #[wasm_bindgen(start)]
 pub fn setup() {
     // Always install panic hook — even on Workers — so panics are visible.

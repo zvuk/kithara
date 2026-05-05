@@ -35,13 +35,7 @@ impl Violation {
         key: impl Into<String>,
         message: impl Into<String>,
     ) -> Self {
-        Self {
-            check,
-            severity: Severity::Deny,
-            key: key.into(),
-            message: message.into(),
-            explanation: None,
-        }
+        build(Severity::Deny, check, key, message)
     }
 
     pub(crate) fn warn(
@@ -49,13 +43,7 @@ impl Violation {
         key: impl Into<String>,
         message: impl Into<String>,
     ) -> Self {
-        Self {
-            check,
-            severity: Severity::Warn,
-            key: key.into(),
-            message: message.into(),
-            explanation: None,
-        }
+        build(Severity::Warn, check, key, message)
     }
 
     /// Attach the long-form Summary / Why / Bad / Good / Suppress block
@@ -65,6 +53,25 @@ impl Violation {
     pub(crate) fn with_explanation(mut self, explanation: &'static str) -> Self {
         self.explanation = Some(explanation);
         self
+    }
+}
+
+/// Common builder used by both `Violation::deny` and `Violation::warn` to keep
+/// their bodies DRY without exposing a third public-facing constructor on
+/// `impl Violation` (the `multi_constructor` arch lint allows only one
+/// canonical `new`/`default`).
+fn build(
+    severity: Severity,
+    check: &'static str,
+    key: impl Into<String>,
+    message: impl Into<String>,
+) -> Violation {
+    Violation {
+        check,
+        severity,
+        key: key.into(),
+        message: message.into(),
+        explanation: None,
     }
 }
 

@@ -190,13 +190,11 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
         .into()
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "clamped positive f32 -> u32"
-)]
 fn format_time(seconds: f32) -> String {
-    let total = seconds.max(0.0).floor() as u32;
+    // Saturating-clamp the floored, non-negative seconds value to u32; values
+    // past u32::MAX (~136 years) already exceed any practical UI display.
+    let total =
+        num_traits::cast::ToPrimitive::to_u32(&seconds.max(0.0).floor()).unwrap_or(u32::MAX);
     let minutes = total / Consts::SECONDS_PER_MINUTE;
     let remaining = total % Consts::SECONDS_PER_MINUTE;
     format!("{minutes:02}:{remaining:02}")
@@ -384,13 +382,11 @@ fn view_playrate(state: &Kithara) -> Element<'_, Message> {
 
     let buttons = RATES.iter().map(|&rate| {
         let is_selected = (state.selected_rate - rate).abs() < f32::EPSILON;
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "rate 0.5–2.0"
-        )]
         let label = if rate == rate.floor() {
-            format!("{}x", rate as u8)
+            // Playback rate is bounded to 0.5–2.0; saturating-clamp keeps the
+            // formatter honest if a rate ever drifts outside that band.
+            let rate_u8 = num_traits::cast::ToPrimitive::to_u8(&rate).unwrap_or(u8::MAX);
+            format!("{rate_u8}x")
         } else {
             format!("{rate:.2}x")
         };

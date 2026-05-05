@@ -21,15 +21,15 @@ pub struct FfiCipher {
 #[cfg_attr(feature = "backend-uniffi", uniffi::export)]
 impl FfiCipher {
     /// Create a new cipher from a key string.
+    ///
+    /// Takes `&str` rather than `String` — modern `UniFFI` (≥0.28) marshals
+    /// `&str` across the FFI boundary by cloning on the bridge side, which
+    /// keeps Rust callers free of unnecessary allocations.
     #[must_use]
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "UniFFI requires owned String"
-    )]
-    pub fn new(key: String) -> Arc<Self> {
+    pub fn new(key: &str) -> Arc<Self> {
         Arc::new(Self {
-            inner: Mutex::new(RustCipher::new(&key)),
+            inner: Mutex::new(RustCipher::new(key)),
         })
     }
 

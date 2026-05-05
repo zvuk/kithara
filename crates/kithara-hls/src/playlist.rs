@@ -160,10 +160,6 @@ impl PlaylistState {
     ///
     /// Updates the segment's size and recalculates all subsequent offsets.
     /// This handles the case where decrypted size differs from encrypted size.
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "write guard borrows size_map mutably"
-    )]
     pub fn reconcile_segment_size(
         &self,
         variant: VariantIndex,
@@ -174,7 +170,7 @@ impl PlaylistState {
             return;
         };
         let mut state = lock.lock_sync_write();
-        let Some(ref mut size_map) = state.size_map else {
+        let Some(size_map) = state.size_map.as_mut() else {
             return;
         };
         if segment_index >= size_map.segment_sizes.len() {
@@ -193,6 +189,7 @@ impl PlaylistState {
         // Recalculate total.
         let last_idx = size_map.segment_sizes.len() - 1;
         size_map.total = size_map.offsets[last_idx] + size_map.segment_sizes[last_idx];
+        drop(state);
     }
 
     /// Clone of `segment_sizes` from the `size_map` (for `StreamIndex` sync).
@@ -282,10 +279,6 @@ pub(crate) trait PlaylistAccess: Send + Sync {
 }
 
 impl PlaylistAccess for PlaylistState {
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "segment list borrows read guard"
-    )]
     fn find_seek_point_for_time(
         &self,
         variant: VariantIndex,
@@ -297,44 +290,47 @@ impl PlaylistAccess for PlaylistState {
             return None;
         }
 
-        let mut elapsed = Duration::ZERO;
-        for segment in &state.segments {
-            let segment_start = elapsed;
-            let segment_end = segment_start.saturating_add(segment.duration);
-            if target < segment_end {
-                return Some((segment.index, segment_start, segment_end));
+        let result = {
+            let mut elapsed = Duration::ZERO;
+            let mut found = None;
+            for segment in &state.segments {
+                let segment_start = elapsed;
+                let segment_end = segment_start.saturating_add(segment.duration);
+                if target < segment_end {
+                    found = Some((segment.index, segment_start, segment_end));
+                    break;
+                }
+                elapsed = segment_end;
             }
-            elapsed = segment_end;
-        }
-
-        let tail = state.segments.last()?;
-        let tail_start = elapsed.saturating_sub(tail.duration);
-        Some((tail.index, tail_start, elapsed))
+            found.or_else(|| {
+                state.segments.last().map(|tail| {
+                    let tail_start = elapsed.saturating_sub(tail.duration);
+                    (tail.index, tail_start, elapsed)
+                })
+            })
+        };
+        drop(state);
+        result
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "size_map borrows the read guard"
-    )]
     fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<SegmentIndex> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
-        let size_map = state.size_map.as_ref()?;
-
-        if size_map.offsets.is_empty() || offset >= size_map.total {
-            return None;
-        }
-
-        // Binary search: find the last offset <= `offset`.
-        // offsets is sorted (cumulative), so we search for the rightmost index
-        // where offsets[i] <= offset.
-        let pos = size_map.offsets.partition_point(|&o| o <= offset);
-
-        // partition_point returns the index of the first element > offset.
-        // The segment containing `offset` is at pos - 1.
-        // With 0-based model (offsets[0] = 0), pos == 0 can't happen for valid
-        // offsets, but guard against it anyway.
-        if pos == 0 { None } else { Some(pos - 1) }
+        let result = state.size_map.as_ref().and_then(|size_map| {
+            if size_map.offsets.is_empty() || offset >= size_map.total {
+                return None;
+            }
+            // Binary search: find the last offset <= `offset`. offsets is
+            // cumulative-sorted, so we search for the rightmost index where
+            // offsets[i] <= offset. partition_point returns the index of the
+            // first element > offset; the segment containing `offset` is at
+            // pos - 1. With a 0-based model (offsets[0] = 0), pos == 0 cannot
+            // happen for valid offsets, but we guard against it anyway.
+            let pos = size_map.offsets.partition_point(|&o| o <= offset);
+            if pos == 0 { None } else { Some(pos - 1) }
+        });
+        drop(state);
+        result
     }
 
     fn has_size_map(&self, variant: VariantIndex) -> bool {
@@ -351,21 +347,12 @@ impl PlaylistAccess for PlaylistState {
         state.init_url.clone()
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "size_map borrows the read guard"
-    )]
     fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
-        let size_map = state.size_map.as_ref()?;
-        size_map.offsets.get(index).copied()
+        state.size_map.as_ref()?.offsets.get(index).copied()
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "segment list borrows read guard"
-    )]
     fn segment_decode_range(
         &self,
         variant: VariantIndex,
@@ -376,26 +363,29 @@ impl PlaylistAccess for PlaylistState {
         if index >= state.segments.len() {
             return None;
         }
-        let mut elapsed = Duration::ZERO;
-        for (i, segment) in state.segments.iter().enumerate() {
-            let end = elapsed.saturating_add(segment.duration);
-            if i == index {
-                return Some((elapsed, end));
-            }
-            elapsed = end;
-        }
-        None
+        let result = state
+            .segments
+            .iter()
+            .scan(Duration::ZERO, |elapsed, segment| {
+                let start = *elapsed;
+                let end = start.saturating_add(segment.duration);
+                *elapsed = end;
+                Some((start, end))
+            })
+            .nth(index);
+        drop(state);
+        result
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "size_map borrows the read guard"
-    )]
     fn segment_size(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
-        let size_map = state.size_map.as_ref()?;
-        size_map.segment_sizes.get(index).copied()
+        let result = state
+            .size_map
+            .as_ref()
+            .and_then(|size_map| size_map.segment_sizes.get(index).copied());
+        drop(state);
+        result
     }
 
     fn segment_url(&self, variant: VariantIndex, index: SegmentIndex) -> Option<Url> {

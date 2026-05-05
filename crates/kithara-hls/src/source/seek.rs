@@ -211,8 +211,9 @@ impl HlsSource {
                 ))
             })?;
 
-        #[expect(clippy::cast_possible_truncation, reason = "segment index fits in u32")]
-        let segment_index = segment_index as u32;
+        // Saturating clamp: a segment count beyond u32::MAX exceeds any
+        // realistic playlist; capping is the truthful "past end" signal.
+        let segment_index = u32::try_from(segment_index).unwrap_or(u32::MAX);
         Ok(SourceSeekAnchor::new(byte_offset, segment_start)
             .with_segment_end(segment_end)
             .with_segment_index(segment_index)

@@ -31,6 +31,7 @@ derivative = { workspace = true }
 derive_setters = { workspace = true }
 iced = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
 ratatui = { workspace = true, optional = true }

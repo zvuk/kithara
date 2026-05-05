@@ -4,10 +4,11 @@
 // that module remains unsafe-free.
 #![deny(unsafe_code)]
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns))]
-#![allow(
-    unreachable_pub,
-    reason = "many helpers are `pub` so the `internal` feature can re-export them without widening the stable API surface"
-)]
+// Without the `internal` feature many helpers are `pub` solely so the feature
+// can re-export them without widening the stable API surface. clippy then sees
+// them as `unreachable_pub`. With the feature on the items are genuinely
+// reachable and the lint does not fire — no allow is needed in that case.
+#![cfg_attr(not(feature = "internal"), allow(unreachable_pub))]
 
 //! HLS (HTTP Live Streaming) VOD implementation.
 //!

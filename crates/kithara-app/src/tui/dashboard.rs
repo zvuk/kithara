@@ -11,6 +11,14 @@ use ratatui::{
 
 use crate::theme::tui::TuiPalette;
 
+/// Saturating-clamp a `usize` count into `u16` for terminal-cell measurements.
+/// Terminal dimensions are bounded by ratatui's `u16` API; counts that exceed
+/// `u16::MAX` would already exceed any displayable area, so reporting the cap
+/// is the correct rendering semantic.
+fn count_to_u16(count: usize) -> u16 {
+    u16::try_from(count).unwrap_or(u16::MAX)
+}
+
 /// TUI dashboard widget for the Kithara player.
 ///
 /// Renders playlist, progress bar, volume, and status information
@@ -71,9 +79,8 @@ impl Dashboard {
     }
 
     #[must_use]
-    #[expect(clippy::cast_possible_truncation)]
     pub fn height(&self) -> u16 {
-        self.tracks.len() as u16 + 1
+        count_to_u16(self.tracks.len()).saturating_add(1)
     }
 
     fn progress_bar(&self, width: usize) -> String {
@@ -105,8 +112,7 @@ impl Dashboard {
         let area = frame.area();
         frame.render_widget(Clear, area);
 
-        #[expect(clippy::cast_possible_truncation)]
-        let playlist_lines = self.tracks.len() as u16;
+        let playlist_lines = count_to_u16(self.tracks.len());
         let chunks = Layout::vertical([Constraint::Length(playlist_lines), Constraint::Length(1)])
             .split(area);
 
@@ -193,8 +199,12 @@ impl Dashboard {
             } else {
                 Style::default().fg(c.muted).bg(c.bg)
             };
-            #[expect(clippy::cast_possible_truncation)]
-            let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
+            let row = Rect::new(
+                area.x,
+                area.y.saturating_add(count_to_u16(i)),
+                area.width,
+                1,
+            );
             let padded = fit_cell(&text, usize::from(row.width));
             frame.render_widget(Paragraph::new(Line::raw(padded)).style(style), row);
         }

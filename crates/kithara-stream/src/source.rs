@@ -1,6 +1,11 @@
 #![forbid(unsafe_code)]
-// unimock macro generates code triggering ignored_unit_patterns
-#![allow(clippy::ignored_unit_patterns)]
+// `unimock` (only enabled in test/test-utils builds) generates `let () = ...`
+// match arms that trip `clippy::ignored_unit_patterns`. The lint is silenced
+// only under those feature gates so production builds remain strict.
+#![cfg_attr(
+    any(test, feature = "test-utils"),
+    allow(clippy::ignored_unit_patterns)
+)]
 
 //! Source trait for sync random-access data.
 //!
@@ -172,8 +177,14 @@ impl SourceSeekAnchor {
     any(test, feature = "test-utils"),
     unimock(api = SourceMock)
 )]
-#[expect(clippy::len_without_is_empty)]
 pub trait Source: Send + Sync + 'static {
+    /// Whether the source currently reports zero bytes. Default mirrors
+    /// `self.len()` returning `0` (or being unknown — both are treated as
+    /// "no readable bytes yet" for the conventional `len`/`is_empty` pair).
+    fn is_empty(&self) -> bool {
+        self.len().is_none_or(|n| n == 0)
+    }
+
     /// Current ABR handle for runtime mode/bandwidth control.
     ///
     /// Adaptive sources (HLS) return the peer's `AbrHandle` so callers —
@@ -386,11 +397,14 @@ pub trait Source: Send + Sync + 'static {
 /// `len`. Has no I/O surface: the byte cursor is the decoder's
 /// `Read + Seek` handle, queried independently. Sources that aren't
 /// segment-aware return `None` from [`Source::as_segment_layout`].
-#[expect(
-    clippy::len_without_is_empty,
-    reason = "len() returns Option<u64> for total bytes — emptiness has no meaningful definition for a segmented source"
-)]
 pub trait SegmentLayout: Send + Sync + 'static {
+    /// Whether the layout currently reports zero bytes. `len()` is `Option`
+    /// because some segmented sources do not know their total upfront, so
+    /// emptiness defaults to "len is `None` or `Some(0)`".
+    fn is_empty(&self) -> bool {
+        self.len().is_none_or(|n| n == 0)
+    }
+
     /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
     /// current layout variant. Returns `None` until the init segment is
     /// announced.

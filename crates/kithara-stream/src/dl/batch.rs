@@ -209,8 +209,8 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
             request_id,
         )
         .await;
-        deliver(
-            internal.response,
+        deliver(DeliveryContext {
+            target: internal.response,
             result,
             writer,
             on_complete_cb,
@@ -219,10 +219,10 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
             started,
             request_id,
             bus,
-            &peer_cancel,
-            epoch_cancel.as_ref(),
-            &downloader_cancel,
-        )
+            peer_cancel: &peer_cancel,
+            epoch_cancel: epoch_cancel.as_ref(),
+            downloader_cancel: &downloader_cancel,
+        })
         .await;
         inflight.fetch_sub(1, Ordering::Relaxed);
         fetch_waker.wake();
@@ -348,23 +348,42 @@ fn classify_cancel(
     }
 }
 
-/// Route a fetch result to its target and publish the matching
-/// `DownloaderEvent` on `bus` (if any).
-#[expect(clippy::too_many_arguments, reason = "delivery needs full context")]
-async fn deliver(
+/// All the per-fetch context `deliver` needs: identity (request id, peer id,
+/// abr controller), wall-clock anchor (`started`), the body sinks (writer +
+/// completion callback), the `bus` for telemetry, and the three nested cancel
+/// tokens (peer, epoch, downloader) used to classify cancellation reasons.
+struct DeliveryContext<'a> {
     target: ResponseTarget,
     result: Result<FetchResponse, NetError>,
-    mut writer: Option<super::cmd::WriterFn>,
+    writer: Option<super::cmd::WriterFn>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,
     abr: Arc<AbrController>,
     peer_id: AbrPeerId,
     started: Instant,
     request_id: RequestId,
     bus: Option<EventBus>,
-    peer_cancel: &CancellationToken,
-    epoch_cancel: Option<&CancellationToken>,
-    downloader_cancel: &CancellationToken,
-) {
+    peer_cancel: &'a CancellationToken,
+    epoch_cancel: Option<&'a CancellationToken>,
+    downloader_cancel: &'a CancellationToken,
+}
+
+/// Route a fetch result to its target and publish the matching
+/// `DownloaderEvent` on `bus` (if any).
+async fn deliver(ctx: DeliveryContext<'_>) {
+    let DeliveryContext {
+        target,
+        result,
+        mut writer,
+        on_complete_cb,
+        abr,
+        peer_id,
+        started,
+        request_id,
+        bus,
+        peer_cancel,
+        epoch_cancel,
+        downloader_cancel,
+    } = ctx;
     match target {
         ResponseTarget::Channel(tx) => {
             let _ = tx.send(result);

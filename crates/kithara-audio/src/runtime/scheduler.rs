@@ -291,64 +291,104 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
     }
 }
 
-#[expect(clippy::cognitive_complexity)]
+/// Outcome of processing a single scheduler command.
+enum DrainStep {
+    /// Command applied; keep draining the queue.
+    Continue,
+    /// Queue is empty for now; bail out and resume the audio loop.
+    Empty,
+    /// Scheduler shutdown was requested (or all handles dropped); exit thread.
+    Shutdown,
+}
+
 fn drain_commands<N: Node>(
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
     slots: &mut Vec<Slot<N>>,
     needs_reorder: &mut bool,
 ) -> bool {
     loop {
-        match cmd_rx.try_recv() {
-            Ok(SchedulerCmd::Register(id, node)) => {
-                debug!(slot_id = id, "scheduler: registering node");
-                let service_class = node.service_class();
-                slots.push(Slot {
-                    id,
-                    node,
-                    service_class,
-                    terminal: false,
-                });
-                *needs_reorder = true;
-            }
-            Ok(SchedulerCmd::Unregister(id)) => {
-                debug!(slot_id = id, "scheduler: unregistering node");
-                if let Some(slot) = slots.iter_mut().find(|s| s.id == id) {
-                    slot.node.on_cancel();
-                }
-                let before = slots.len();
-                slots.retain(|s| s.id != id);
-                if slots.len() < before {
-                    *needs_reorder = true;
-                }
-            }
-            Ok(SchedulerCmd::SetServiceClass(id, class)) => {
-                if let Some(slot) = slots.iter_mut().find(|s| s.id == id)
-                    && slot.service_class != class
-                {
-                    slot.service_class = class;
-                    *needs_reorder = true;
-                }
-            }
-            Ok(SchedulerCmd::Shutdown) => {
-                trace!("scheduler shutdown");
-                for slot in slots.iter_mut() {
-                    slot.node.on_cancel();
-                }
-                return true;
-            }
-            Err(err) => {
-                if matches!(err, TryRecvError::Disconnected) {
-                    trace!("scheduler: all handles dropped");
-                    for slot in slots.iter_mut() {
-                        slot.node.on_cancel();
-                    }
-                    return true;
-                }
-                break;
-            }
+        match handle_drain_step(cmd_rx, slots, needs_reorder) {
+            DrainStep::Continue => {}
+            DrainStep::Empty => return false,
+            DrainStep::Shutdown => return true,
         }
     }
-    false
+}
+
+fn handle_drain_step<N: Node>(
+    cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
+    slots: &mut Vec<Slot<N>>,
+    needs_reorder: &mut bool,
+) -> DrainStep {
+    match cmd_rx.try_recv() {
+        Ok(SchedulerCmd::Register(id, node)) => {
+            register_slot(slots, needs_reorder, id, node);
+            DrainStep::Continue
+        }
+        Ok(SchedulerCmd::Unregister(id)) => {
+            unregister_slot(slots, needs_reorder, id);
+            DrainStep::Continue
+        }
+        Ok(SchedulerCmd::SetServiceClass(id, class)) => {
+            set_service_class(slots, needs_reorder, id, class);
+            DrainStep::Continue
+        }
+        Ok(SchedulerCmd::Shutdown) => {
+            trace!("scheduler shutdown");
+            cancel_all(slots);
+            DrainStep::Shutdown
+        }
+        Err(TryRecvError::Disconnected) => {
+            trace!("scheduler: all handles dropped");
+            cancel_all(slots);
+            DrainStep::Shutdown
+        }
+        Err(TryRecvError::Empty) => DrainStep::Empty,
+    }
+}
+
+fn register_slot<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool, id: SlotId, node: N) {
+    debug!(slot_id = id, "scheduler: registering node");
+    let service_class = node.service_class();
+    slots.push(Slot {
+        id,
+        node,
+        service_class,
+        terminal: false,
+    });
+    *needs_reorder = true;
+}
+
+fn unregister_slot<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool, id: SlotId) {
+    debug!(slot_id = id, "scheduler: unregistering node");
+    if let Some(slot) = slots.iter_mut().find(|s| s.id == id) {
+        slot.node.on_cancel();
+    }
+    let before = slots.len();
+    slots.retain(|s| s.id != id);
+    if slots.len() < before {
+        *needs_reorder = true;
+    }
+}
+
+fn set_service_class<N: Node>(
+    slots: &mut [Slot<N>],
+    needs_reorder: &mut bool,
+    id: SlotId,
+    class: ServiceClass,
+) {
+    if let Some(slot) = slots.iter_mut().find(|s| s.id == id)
+        && slot.service_class != class
+    {
+        slot.service_class = class;
+        *needs_reorder = true;
+    }
+}
+
+fn cancel_all<N: Node>(slots: &mut [Slot<N>]) {
+    for slot in slots.iter_mut() {
+        slot.node.on_cancel();
+    }
 }
 
 /// Process CPU time in milliseconds (user + system).

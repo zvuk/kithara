@@ -163,18 +163,16 @@ impl StreamType for Hls {
         let _ = initial_variant;
         let _ = variant_info_from_master;
 
-        let (hls_downloader, mut source) = build_pair(
+        let (hls_downloader, mut source) = build_pair(crate::source::BuildPair {
             backend,
-            peer_handle.clone(),
-            &master.variants,
-            &config,
-            Arc::clone(hls_peer.abr()),
-            hls_peer.reader_segment_cursor(),
-            hls_peer.committed_segment_cursor(),
-            Arc::clone(&playlist_state),
+            config: &config,
+            abr: Arc::clone(hls_peer.abr()),
+            reader_segment: hls_peer.reader_segment_cursor(),
+            committed_segment: hls_peer.committed_segment_cursor(),
+            playlist_state: Arc::clone(&playlist_state),
             bus,
             timeline,
-        );
+        });
         *invalidation_target
             .lock()
             .expect("HLS invalidation target lock poisoned") =

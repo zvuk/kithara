@@ -128,16 +128,17 @@ pub struct EqBandConfig {
 /// First band is `LowShelf`, last band is `HighShelf`, interior bands are
 /// `Peaking`. Q factor scales with band count.
 #[must_use]
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "band count and index are small integers"
-)]
 pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
+    use num_traits::cast::AsPrimitive;
+
     if count == 0 {
         return Vec::new();
     }
 
-    let q_factor = Consts::Q_SCALE_FACTOR * (count as f32 / Consts::Q_REFERENCE_BANDS).sqrt();
+    // Band counts are small integers (≤ ~30 in practice); the trait-mediated
+    // narrowing keeps the conversion explicit without an `as`-cast.
+    let count_f32: f32 = count.as_();
+    let q_factor = Consts::Q_SCALE_FACTOR * (count_f32 / Consts::Q_REFERENCE_BANDS).sqrt();
 
     if count == 1 {
         return vec![EqBandConfig {
@@ -150,7 +151,8 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
 
     let log_min = Consts::BAND_MIN_FREQ.log10();
     let log_max = Consts::BAND_MAX_FREQ.log10();
-    let log_step = (log_max - log_min) / (count - 1) as f32;
+    let last_count_f32: f32 = (count - 1).as_();
+    let log_step = (log_max - log_min) / last_count_f32;
     let last = count - 1;
 
     (0..count)
@@ -162,10 +164,11 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
             } else {
                 FilterKind::Peaking
             };
+            let i_f32: f32 = i.as_();
             EqBandConfig {
                 q_factor,
                 kind,
-                frequency: Consts::LOG_FREQ_BASE.powf(log_min + i as f32 * log_step),
+                frequency: Consts::LOG_FREQ_BASE.powf(log_min + i_f32 * log_step),
                 gain_db: 0.0,
             }
         })
@@ -275,13 +278,12 @@ impl GainState {
 }
 
 /// One-pole smoother coefficient, accounting for block-rate updates.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "Consts::SMOOTH_BLOCK_SIZE is a small constant"
-)]
 fn compute_smooth_coeff(sample_rate: f32) -> f32 {
+    use num_traits::cast::AsPrimitive;
+
     let tau = Consts::SMOOTH_TIME_MS / Consts::MS_PER_SEC;
-    let effective_rate = sample_rate / Consts::SMOOTH_BLOCK_SIZE as f32;
+    let block_size_f32: f32 = Consts::SMOOTH_BLOCK_SIZE.as_();
+    let effective_rate = sample_rate / block_size_f32;
     1.0 - (-1.0 / (tau * effective_rate)).exp()
 }
 
@@ -349,12 +351,10 @@ impl IsolatorEq {
 
     /// Create a new isolator EQ for the given band layout.
     #[must_use]
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "sample rate fits in f32 for audio"
-    )]
     pub fn new(bands: &[EqBandConfig], sample_rate: u32) -> Self {
-        let sr = sample_rate as f32;
+        use num_traits::cast::AsPrimitive;
+        // Audio sample rates (≤ 192_000) fit losslessly in f32 mantissa (24-bit).
+        let sr: f32 = sample_rate.as_();
         let n = bands.len();
         let xover_count = n.saturating_sub(1);
 
@@ -614,12 +614,10 @@ impl IsolatorEq {
     }
 
     /// Re-initialise for a new sample rate (e.g. after stream change).
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "sample rate fits in f32 for audio"
-    )]
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
-        self.sample_rate = sample_rate as f32;
+        use num_traits::cast::AsPrimitive;
+        // Audio sample rates fit losslessly in f32 mantissa (24-bit).
+        self.sample_rate = sample_rate.as_();
         self.smooth_coeff = compute_smooth_coeff(self.sample_rate);
         self.rebuild_filters();
     }

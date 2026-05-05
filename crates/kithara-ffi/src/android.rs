@@ -24,7 +24,14 @@ mod android_context {
     pub(super) static GLOBAL: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 }
 
-#[expect(unreachable_pub, reason = "JNI entrypoint must remain exported")]
+// JNI entrypoint must remain exported (`#[no_mangle] pub extern "system"`),
+// so under the android target this `pub` is reachable only via the JVM
+// loader — not via Rust's module graph. The lint silencer is gated to the
+// android target where the exporting actually exists.
+#[cfg_attr(
+    target_os = "android",
+    expect(unreachable_pub, reason = "JNI entrypoint must remain exported")
+)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
     mut env: JNIEnv<'_>,

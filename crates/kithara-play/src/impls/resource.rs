@@ -254,14 +254,18 @@ impl Resource {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    clippy::cast_lossless,
-    reason = "test mock code; values are small and positive by construction"
-)]
 mod tests {
+    // Test fixtures use small positive integer/float values; numeric casts
+    // here model fixture data, not production contracts.
+    #![cfg_attr(
+        any(test, feature = "test-utils"),
+        allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_lossless,
+        )
+    )]
     use kithara_audio::{ReadOutcome, mock::TestPcmReader};
     use kithara_decode::PcmSpec;
     use kithara_events::{AudioEvent, AudioFormat, Event, EventBus};

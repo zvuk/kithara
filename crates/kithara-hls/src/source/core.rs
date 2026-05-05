@@ -365,19 +365,31 @@ impl HlsSource {
 /// handed to [`HlsPeer::new`]. Passing it in — instead of minting a new
 /// one inside — guarantees the peer's `priority()` reads the same
 /// `PLAYING` flag the audio FSM writes through the coord.
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-pub(crate) fn build_pair(
-    backend: AssetStore<DecryptContext>,
-    _track: kithara_stream::dl::PeerHandle,
-    _variants: &[crate::parsing::VariantStream],
-    config: &crate::config::HlsConfig,
-    abr: Arc<AbrState>,
-    reader_segment: Arc<AtomicUsize>,
-    committed_segment: Arc<AtomicUsize>,
-    playlist_state: Arc<PlaylistState>,
-    bus: EventBus,
-    timeline: Timeline,
-) -> (HlsScheduler, HlsSource) {
+/// All inputs the HLS scheduler/source pair needs at construction time.
+/// Lifted out of the function signature so callers don't list eight
+/// positional arguments.
+pub(crate) struct BuildPair<'a> {
+    pub(crate) backend: AssetStore<DecryptContext>,
+    pub(crate) config: &'a crate::config::HlsConfig,
+    pub(crate) abr: Arc<AbrState>,
+    pub(crate) reader_segment: Arc<AtomicUsize>,
+    pub(crate) committed_segment: Arc<AtomicUsize>,
+    pub(crate) playlist_state: Arc<PlaylistState>,
+    pub(crate) bus: EventBus,
+    pub(crate) timeline: Timeline,
+}
+
+pub(crate) fn build_pair(args: BuildPair<'_>) -> (HlsScheduler, HlsSource) {
+    let BuildPair {
+        backend,
+        config,
+        abr,
+        reader_segment,
+        committed_segment,
+        playlist_state,
+        bus,
+        timeline,
+    } = args;
     let cancel = config.cancel.clone().unwrap_or_default();
     timeline.set_total_duration(playlist_state.track_duration());
     let coord = Arc::new(HlsCoord::new(cancel, timeline, Arc::clone(&abr)));

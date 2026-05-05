@@ -32,8 +32,14 @@ use crate::common::{
 };
 
 pub(crate) const ID: &str = "field_passthrough";
-const MAX_DEPTH: usize = 8;
-const TRANSPARENT_WRAPPERS: &[&str] = &["Arc", "Rc", "Box", "RefCell", "Cell", "Mutex", "RwLock"];
+
+struct Consts;
+
+impl Consts {
+    const MAX_DEPTH: usize = 8;
+    const TRANSPARENT_WRAPPERS: &'static [&'static str] =
+        &["Arc", "Rc", "Box", "RefCell", "Cell", "Mutex", "RwLock"];
+}
 
 pub(crate) struct FieldPassthrough;
 
@@ -144,7 +150,7 @@ fn peel_wrappers(ty: &Type) -> Type {
             let Some(seg) = tp.path.segments.last() else {
                 return ty.clone();
             };
-            if !TRANSPARENT_WRAPPERS.contains(&seg.ident.to_string().as_str()) {
+            if !Consts::TRANSPARENT_WRAPPERS.contains(&seg.ident.to_string().as_str()) {
                 return ty.clone();
             }
             let PathArguments::AngleBracketed(args) = &seg.arguments else {
@@ -196,7 +202,7 @@ fn reachable_sigs<'a>(
     visited: &mut HashSet<String>,
     depth: usize,
 ) {
-    if depth >= MAX_DEPTH {
+    if depth >= Consts::MAX_DEPTH {
         return;
     }
     if !visited.insert(start.to_string()) {

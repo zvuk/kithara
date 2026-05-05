@@ -29,9 +29,9 @@ impl<D: DriverIo> Resource<D> {
             return Ok(0);
         }
 
-        // Clamp buf to effective_len.
-        #[expect(clippy::cast_possible_truncation)] // byte offset within allocated resource
-        let available = (effective_len - offset) as usize;
+        // Clamp buf to effective_len. Resource bytes fit in memory; saturating
+        // clamp on the (impossible) overflow path keeps the conversion honest.
+        let available = usize::try_from(effective_len - offset).unwrap_or(usize::MAX);
         let to_read = buf.len().min(available);
 
         self.inner

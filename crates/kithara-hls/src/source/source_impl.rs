@@ -215,8 +215,10 @@ impl Source for HlsSource {
         };
         let codec = self.playlist_state.variant_codec(variant);
         let container = self.playlist_state.variant_container(variant);
-        #[expect(clippy::cast_possible_truncation, reason = "variant index fits in u32")]
-        Some(MediaInfo::new(codec, container).with_variant_index(variant as u32))
+        // Saturating clamp: a variant index beyond u32::MAX cannot exist for
+        // any real master playlist; capping is the truthful "past end" signal.
+        let variant_u32 = u32::try_from(variant).unwrap_or(u32::MAX);
+        Some(MediaInfo::new(codec, container).with_variant_index(variant_u32))
     }
 
     fn notify_waiting(&self) {

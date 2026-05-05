@@ -198,19 +198,17 @@ impl EngineImpl {
         self.runtime.as_ref()
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "guard must live through find + try_push for atomicity"
-    )]
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
         let mut slot_registry = self.slot_registry.lock_sync();
-        let Some(handle) = slot_registry.get_mut(&slot) else {
-            return Err(PlayError::Internal("slot handle not found".into()));
+        let result = match slot_registry.get_mut(&slot) {
+            Some(handle) => handle
+                .cmd_tx
+                .try_push(cmd)
+                .map_err(|_| PlayError::Internal("slot channel full".into())),
+            None => Err(PlayError::Internal("slot handle not found".into())),
         };
-        handle
-            .cmd_tx
-            .try_push(cmd)
-            .map_err(|_| PlayError::Internal("slot channel full".into()))
+        drop(slot_registry);
+        result
     }
 
     /// Process-wide session ducking mode.

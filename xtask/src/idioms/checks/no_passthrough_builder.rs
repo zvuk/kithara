@@ -170,9 +170,8 @@ fn check_fn(
     let Some((param_name, struct_ident)) = single_struct_param(&f.sig.inputs, structs) else {
         return;
     };
-    let usage = match analyse_body(&f.block.stmts, &param_name) {
-        Some(u) => u,
-        None => return,
+    let Some(usage) = analyse_body(&f.block.stmts, &param_name) else {
+        return;
     };
     if usage.fields.len() < cfg.min_passthrough_fields {
         return;
@@ -191,7 +190,7 @@ fn check_fn(
     out.push(Violation::warn(ID, key, msg));
 }
 
-/// Returns (param_ident, type_ident) when the function takes a single
+/// Returns (`param_ident`, `type_ident`) when the function takes a single
 /// named-field struct parameter (by value or by reference), and that
 /// struct is declared in the same file.
 fn single_struct_param(
@@ -454,17 +453,18 @@ fn expr_param_field(expr: &Expr, param: &str) -> Option<String> {
             _ => None,
         },
         Expr::Call(call) => {
-            // `Some(param.X)` / `Arc::clone(&param.X)` shapes.
-            if call.args.len() == 1 {
-                let arg = call.args.first().unwrap();
-                if let Some(f) = expr_param_field(arg, param) {
-                    return Some(f);
-                }
-                if let Expr::Reference(r) = arg
-                    && let Some(f) = expr_param_field(&r.expr, param)
-                {
-                    return Some(f);
-                }
+            // `Some(param.X)` / `Arc::clone(&param.X)` shapes — single-arg only.
+            if call.args.len() != 1 {
+                return None;
+            }
+            let arg = call.args.first()?;
+            if let Some(f) = expr_param_field(arg, param) {
+                return Some(f);
+            }
+            if let Expr::Reference(r) = arg
+                && let Some(f) = expr_param_field(&r.expr, param)
+            {
+                return Some(f);
             }
             None
         }
@@ -504,7 +504,6 @@ fn expr_touches_param_anywhere(expr: &Expr, param: &str) -> bool {
     v.hit
 }
 
-#[allow(dead_code)]
 fn stmt_touches_param_anywhere(stmt: &Stmt, param: &str) -> bool {
     match stmt {
         Stmt::Macro(m) => m
@@ -528,7 +527,7 @@ fn some_pat_ident(p: &Pat) -> Option<String> {
     if last.ident != "Some" || ts.elems.len() != 1 {
         return None;
     }
-    pat_ident(ts.elems.first().unwrap())
+    pat_ident(ts.elems.first()?)
 }
 
 fn block_is_single_setter_using(b: &syn::Block, bound: &str) -> bool {

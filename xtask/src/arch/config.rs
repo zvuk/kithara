@@ -355,19 +355,26 @@ pub(crate) struct NoLibStaticsThreshold {
 impl Default for NoLibStaticsThreshold {
     fn default() -> Self {
         Self {
-            exempt_crates: vec![
-                "kithara-app".to_string(),
-                "kithara-ffi".to_string(),
-                "kithara-wasm".to_string(),
-                "xtask".to_string(),
-                "kithara-test-utils".to_string(),
-                "kithara-test-macros".to_string(),
-                "kithara-hang-detector-macros".to_string(),
-                "kithara-wasm-macros".to_string(),
-                "kithara-probe-macros".to_string(),
-            ],
+            exempt_crates: default_no_lib_statics_exempt_crates(),
         }
     }
+}
+
+fn default_no_lib_statics_exempt_crates() -> Vec<String> {
+    [
+        "kithara-app",
+        "kithara-ffi",
+        "kithara-wasm",
+        "xtask",
+        "kithara-test-utils",
+        "kithara-test-macros",
+        "kithara-hang-detector-macros",
+        "kithara-wasm-macros",
+        "kithara-probe-macros",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -515,16 +522,18 @@ impl Default for SingleWordFilenamesThreshold {
     fn default() -> Self {
         Self {
             max_words: 1,
-            exempt_filenames: vec![
-                "mod.rs".into(),
-                "lib.rs".into(),
-                "main.rs".into(),
-                "build.rs".into(),
-            ],
+            exempt_filenames: default_single_word_exempt_filenames(),
             exempt_globs: Vec::new(),
             severity: AccessorSeverity::Warn,
         }
     }
+}
+
+fn default_single_word_exempt_filenames() -> Vec<String> {
+    ["mod.rs", "lib.rs", "main.rs", "build.rs"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]

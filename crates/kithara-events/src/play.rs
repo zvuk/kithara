@@ -88,12 +88,13 @@ impl MediaTime {
     }
 
     #[must_use]
-    #[expect(clippy::cast_possible_truncation)]
     pub fn with_seconds(seconds: f64, timescale: i32) -> Self {
-        Self {
-            value: (seconds * f64::from(timescale)) as i64,
-            timescale,
-        }
+        // Saturating-clamp the f64 product to i64; values past ±i64::MAX
+        // ticks already exceed any realistic media duration, so capping is
+        // the truthful "out of range" signal.
+        let value = num_traits::cast::ToPrimitive::to_i64(&(seconds * f64::from(timescale)))
+            .unwrap_or(i64::MAX);
+        Self { value, timescale }
     }
 
     const DURATION_TIMESCALE: i32 = 600;
@@ -114,12 +115,12 @@ impl MediaTime {
     }
 
     #[must_use]
-    #[expect(clippy::cast_precision_loss)]
     pub fn seconds(&self) -> f64 {
         if self.timescale == 0 {
             return 0.0;
         }
-        self.value as f64 / f64::from(self.timescale)
+        let value_f64: f64 = num_traits::cast::AsPrimitive::as_(self.value);
+        value_f64 / f64::from(self.timescale)
     }
 
     #[must_use]
