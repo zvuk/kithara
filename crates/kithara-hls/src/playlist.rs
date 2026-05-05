@@ -167,20 +167,6 @@ impl PlaylistState {
         self.variants.len()
     }
 
-    /// Init segment byte length declared via `#EXT-X-MAP:BYTERANGE=...`
-    /// in the variant's media playlist. `None` if not declared.
-    ///
-    /// Lets the demuxer's init-range query answer immediately without
-    /// waiting for the first segment commit, eliminating the
-    /// "init segment range not announced" race for fMP4 variants whose
-    /// playlist declared the MAP byterange.
-    #[must_use]
-    pub fn init_byte_range_len(&self, variant: VariantIndex) -> Option<u64> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
-        state.init_byte_range_len
-    }
-
     /// Reconcile a segment's actual size after DRM decryption.
     ///
     /// Updates the segment's size and recalculates all subsequent offsets.

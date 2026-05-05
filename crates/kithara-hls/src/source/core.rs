@@ -179,16 +179,6 @@ impl HlsSource {
         &self,
         variant: VariantIndex,
     ) -> Option<Range<u64>> {
-        // Fast path: playlist declared BYTERANGE on EXT-X-MAP, so the
-        // init range is known without waiting for the first segment
-        // download. Eliminates the race where Fmp4SegmentDemuxer::open
-        // is called before any segment with init_len has committed.
-        if let Some(init_len) = self.playlist_state.init_byte_range_len(variant)
-            && init_len > 0
-        {
-            return Some(0..init_len);
-        }
-
         let segments = self.segments.lock_sync();
         let vs = segments.variant_segments(variant)?;
         // Find first committed segment with init data
