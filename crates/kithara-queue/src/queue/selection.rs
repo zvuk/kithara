@@ -33,10 +33,14 @@ impl Queue {
                 // `SetPaused(true)` and stop the audio thread mid-render,
                 // cutting off tail samples that the seek-near-EOF stress
                 // path relies on to advance position to the natural end.
-                // Instead let the processor flip `state.playing` to false
-                // from `cleanup_finished_tracks` once the last track has
-                // fully drained — `is_playing()` reaches `false` either
-                // way, but the tail is rendered out first.
+                // `cleanup_finished_tracks` flips `state.playing` to
+                // `false` once the arena drains, so `is_playing()` still
+                // reaches `false` for the queue_pauses_player_when_last_track_ends
+                // contract. `navigation::next` parks `current_index` to
+                // `None` on `RepeatMode::Off` exhaustion so
+                // `Queue::current()` reports a stopped queue without
+                // touching `player.current_index` (which auto_advance
+                // tests assert sticks at the last-played slot).
                 return None;
             };
             let Some((id, status)) = self
