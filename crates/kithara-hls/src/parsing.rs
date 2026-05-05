@@ -101,12 +101,6 @@ pub struct InitSegment {
     pub key: Option<SegmentKey>,
     /// URL of the initialization segment (absolute or relative to playlist URI).
     pub uri: String,
-    /// Byte length declared via `#EXT-X-MAP:BYTERANGE=<n>@<offset>`,
-    /// available before the init segment is downloaded. `None` when
-    /// the playlist did not declare BYTERANGE on the MAP tag — the
-    /// downstream init range resolver then waits for the first segment
-    /// commit.
-    pub byte_range_len: Option<u64>,
 }
 
 /// Parsed media playlist.
@@ -308,7 +302,6 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
             InitSegment {
                 uri: m.uri().to_string(),
                 key: map_key,
-                byte_range_len: m.range().map(|r| r.len() as u64),
             }
         })
     });
@@ -495,40 +488,6 @@ audio_flac.m3u8"
 
         let init = media.init_segment.unwrap();
         assert_eq!(init.uri, "init.mp4");
-    }
-
-    #[kithara::test]
-    fn parse_init_segment_byterange_populates_byte_range_len() {
-        let body = br#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXT-X-MAP:URI="init.mp4",BYTERANGE="1024@0"
-#EXTINF:4.0,
-seg/0.m4s
-#EXT-X-ENDLIST"#;
-        let media = parse_media_playlist(body).expect("parse playlist");
-        let init = media.init_segment.expect("init segment present");
-        assert_eq!(init.uri, "init.mp4");
-        assert_eq!(init.byte_range_len, Some(1024));
-    }
-
-    #[kithara::test]
-    fn parse_init_segment_without_byterange_yields_none() {
-        let body = br#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXT-X-MAP:URI="init.mp4"
-#EXTINF:4.0,
-seg/0.m4s
-#EXT-X-ENDLIST"#;
-        let media = parse_media_playlist(body).expect("parse playlist");
-        let init = media.init_segment.expect("init segment present");
-        assert_eq!(init.uri, "init.mp4");
-        assert_eq!(init.byte_range_len, None);
     }
 
     #[kithara::test(wasm)]
