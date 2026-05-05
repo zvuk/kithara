@@ -17,6 +17,7 @@ pub(crate) mod arc_mutex_collection;
 pub(crate) mod await_under_guard;
 pub(crate) mod box_concrete_type;
 pub(crate) mod branch_chains;
+pub(crate) mod fat_loop_body;
 pub(crate) mod function_branch_density;
 pub(crate) mod guard_cascade;
 pub(crate) mod loop_allocation;
@@ -52,5 +53,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(await_under_guard::AwaitUnderGuard),
         Box::new(function_branch_density::FunctionBranchDensity),
         Box::new(retry_fallback::RetryFallback),
+        Box::new(fat_loop_body::FatLoopBody),
     ]
 }
