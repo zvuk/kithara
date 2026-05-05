@@ -260,8 +260,8 @@ release-desktop:
     # Linux x86_64
     - cargo build -p kithara-app --release --features tui
     - cp target/release/kithara kithara-linux-x86_64
-    # Linux arm64
-    - cargo build -p kithara-app --release --features tui --target aarch64-unknown-linux-gnu
+    # Linux arm64 (zig cc как линкер; glibc 2.17 для совместимости с RHEL 7+/Debian 9+)
+    - cargo zigbuild -p kithara-app --release --features tui --target aarch64-unknown-linux-gnu.2.17
     - cp target/aarch64-unknown-linux-gnu/release/kithara kithara-linux-aarch64
     # Windows x86_64
     - cargo xwin build -p kithara-app --release --features tui --target x86_64-pc-windows-msvc
