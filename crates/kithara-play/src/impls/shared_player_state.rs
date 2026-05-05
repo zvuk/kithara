@@ -109,7 +109,10 @@ mod tests {
 
         let received = state.notification_rx.lock_sync().try_pop();
         assert!(received.is_some());
-        assert!(matches!(received.unwrap(), PlayerNotification::Loaded { .. }));
+        assert!(matches!(
+            received.unwrap(),
+            PlayerNotification::Loaded { .. }
+        ));
     }
 
     #[kithara::test]

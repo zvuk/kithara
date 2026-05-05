@@ -763,6 +763,7 @@ mod tests {
             init_segment: Some(InitSegment {
                 uri: "init.mp4".to_string(),
                 key: None,
+                byte_range_len: None,
             }),
             media_sequence: 0,
             end_list: true,
