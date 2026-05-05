@@ -72,18 +72,6 @@ enum MaterializedHlsBody {
     },
 }
 
-impl MaterializedHlsBody {
-    /// Plaintext byte length of the variant's init segment, computed
-    /// from the materialised body. Used to declare BYTERANGE on
-    /// `EXT-X-MAP` so the demuxer learns the init range up-front.
-    fn init_plaintext_len(&self, variant: usize) -> Option<usize> {
-        match self {
-            Self::Legacy { init_segments, .. } => init_segments.get(variant).map(|b| b.len()),
-            Self::Packaged { variants } => variants.get(variant).map(|v| v.init_segment.len()),
-        }
-    }
-}
-
 struct DelayPaddedPcm<'a> {
     inner: &'a dyn PcmSource,
     encoder_delay_frames: usize,
@@ -638,23 +626,7 @@ fn build_media_playlist(
     if spec.init_mode.is_present_for(variant)
         || matches!(body, MaterializedHlsBody::Packaged { .. })
     {
-        // BYTERANGE on EXT-X-MAP describes bytes within the served URI
-        // (encrypted-on-wire when encryption is enabled). Match what the
-        // downloader actually fetches so committed init_len agrees with
-        // the playlist-declared range.
-        let init_plaintext = body.init_plaintext_len(variant).unwrap_or(0);
-        let init_len = if spec.encryption.is_some() && init_plaintext > 0 {
-            init_plaintext + (16 - init_plaintext % 16)
-        } else {
-            init_plaintext
-        };
-        if init_len > 0 {
-            playlist.push_str(&format!(
-                "#EXT-X-MAP:URI=\"init/v{variant}.mp4\",BYTERANGE=\"{init_len}@0\"\n"
-            ));
-        } else {
-            playlist.push_str(&format!("#EXT-X-MAP:URI=\"init/v{variant}.mp4\"\n"));
-        }
+        playlist.push_str(&format!("#EXT-X-MAP:URI=\"init/v{variant}.mp4\"\n"));
     }
     if let Some(enc) = &spec.encryption {
         playlist.push_str("#EXT-X-KEY:METHOD=AES-128,URI=\"../key.bin\"");
