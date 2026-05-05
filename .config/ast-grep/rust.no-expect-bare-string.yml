@@ -17,6 +17,11 @@ language: Rust
 files:
   - crates/**/src/**/*.rs
 ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
   - "crates/kithara-test-utils/**"
   - "crates/kithara-test-macros/**"
   - "crates/kithara-hang-detector-macros/**"

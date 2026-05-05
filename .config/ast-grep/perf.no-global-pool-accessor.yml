@@ -25,6 +25,13 @@ files:
   - crates/kithara-assets/src/**/*.rs
   - crates/kithara-play/src/**/*.rs
   - crates/kithara-queue/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/mock*.rs"
+  - "**/tests.rs"
 rule:
   any:
     - pattern: "BytePool::default()"
