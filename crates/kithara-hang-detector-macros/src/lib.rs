@@ -37,7 +37,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Expr, ItemFn, LitStr, Token, Type,
+    Error, Expr, Ident, ItemFn, LitStr, Token, Type,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
@@ -49,51 +49,43 @@ struct WatchdogArgs {
     timeout: Option<Expr>,
 }
 
+fn unknown_attr_err(ident: &Ident) -> Error {
+    Error::new(
+        ident.span(),
+        format!("unknown attribute `{ident}`, expected `name`, `timeout`, `ctx`, or `dump_dir`"),
+    )
+}
+
+fn parse_field(ident: &Ident, input: ParseStream<'_>, out: &mut WatchdogArgs) -> syn::Result<()> {
+    match ident.to_string().as_str() {
+        "name" => out.name = Some(input.parse::<LitStr>()?),
+        "timeout" => out.timeout = Some(input.parse::<Expr>()?),
+        "ctx" => out.ctx = Some(input.parse::<Type>()?),
+        "dump_dir" => out.dump_dir = Some(input.parse::<Expr>()?),
+        _ => return Err(unknown_attr_err(ident)),
+    }
+    Ok(())
+}
+
 impl Parse for WatchdogArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut name = None;
-        let mut timeout = None;
-        let mut ctx = None;
-        let mut dump_dir = None;
+        let mut out = Self {
+            ctx: None,
+            dump_dir: None,
+            name: None,
+            timeout: None,
+        };
 
         while !input.is_empty() {
-            let ident: syn::Ident = input.parse()?;
+            let ident: Ident = input.parse()?;
             input.parse::<Token![=]>()?;
-
-            match ident.to_string().as_str() {
-                "name" => {
-                    name = Some(input.parse::<LitStr>()?);
-                }
-                "timeout" => {
-                    timeout = Some(input.parse::<Expr>()?);
-                }
-                "ctx" => {
-                    ctx = Some(input.parse::<Type>()?);
-                }
-                "dump_dir" => {
-                    dump_dir = Some(input.parse::<Expr>()?);
-                }
-                other => {
-                    return Err(syn::Error::new(
-                        ident.span(),
-                        format!(
-                            "unknown attribute `{other}`, expected `name`, `timeout`, `ctx`, or `dump_dir`"
-                        ),
-                    ));
-                }
-            }
-
+            parse_field(&ident, input, &mut out)?;
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
             }
         }
 
-        Ok(Self {
-            ctx,
-            dump_dir,
-            name,
-            timeout,
-        })
+        Ok(out)
     }
 }
 
