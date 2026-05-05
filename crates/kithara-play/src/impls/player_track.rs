@@ -470,7 +470,9 @@ impl PlayerTrack {
             return;
         }
         let notification = match self.state {
-            TrackState::Preloading => PlayerNotification::Loaded,
+            TrackState::Preloading => PlayerNotification::Loaded {
+                src: Arc::clone(&self.src),
+            },
             TrackState::FadingIn => PlayerNotification::FadingIn,
             TrackState::FadingOut => PlayerNotification::FadingOut,
             TrackState::Playing => PlayerNotification::PlaybackStarted,

@@ -197,13 +197,13 @@ pub mod offline {
             while let Some(n) = rx.try_pop() {
                 use crate::impls::player_notification::PlayerNotification as N;
                 out.push(match n {
-                    N::Loaded => NotificationKind::Loaded,
-                    N::Unloaded => NotificationKind::Unloaded,
+                    N::Loaded { .. } => NotificationKind::Loaded,
+                    N::Unloaded { .. } => NotificationKind::Unloaded,
                     N::HandoverRequested => NotificationKind::HandoverRequested,
                     N::PlaybackStarted => NotificationKind::PlaybackStarted,
                     N::PlaybackStopped { .. } => NotificationKind::PlaybackStopped,
                     N::Requested => NotificationKind::Requested,
-                    N::Changed => NotificationKind::Changed,
+                    N::Changed { .. } => NotificationKind::Changed,
                     N::FadingIn => NotificationKind::FadingIn,
                     N::FadingOut => NotificationKind::FadingOut,
                 });

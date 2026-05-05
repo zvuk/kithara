@@ -1796,7 +1796,7 @@ mod tests {
         assert!(
             notifications
                 .iter()
-                .any(|n| { n.contains("TrackLoaded") && n.contains(src.as_ref()) }),
+                .any(|n| { n.contains("Loaded") && n.contains(src.as_ref()) }),
             "TrackLoaded must reach the audio thread; got {notifications:?}"
         );
     }
@@ -1858,7 +1858,7 @@ mod tests {
         assert!(
             notifications
                 .iter()
-                .any(|n| { n.contains("TrackUnloaded") && n.contains(first.as_ref()) }),
+                .any(|n| { n.contains("Unloaded") && n.contains(first.as_ref()) }),
             "previous arm must be unloaded; got {notifications:?}"
         );
     }
@@ -1953,7 +1953,7 @@ mod tests {
         assert!(
             notifications
                 .iter()
-                .any(|n| { n.contains("TrackUnloaded") && n.contains(src.as_ref()) }),
+                .any(|n| { n.contains("Unloaded") && n.contains(src.as_ref()) }),
             "unarm must send UnloadTrack; got {notifications:?}"
         );
     }
@@ -2004,7 +2004,7 @@ mod tests {
         assert_eq!(player.armed_next(), None, "select_item must unarm");
         assert!(
             notifications.iter().any(|notification| {
-                notification.contains("TrackUnloaded") && notification.contains(src.as_ref())
+                notification.contains("Unloaded") && notification.contains(src.as_ref())
             }),
             "expected TrackUnloaded for preloaded src; notifications={notifications:?}"
         );
@@ -2040,13 +2040,13 @@ mod tests {
         assert!(
             notifications
                 .iter()
-                .any(|n| { n.contains("TrackChanged") && n.contains(armed_src.as_ref()) }),
+                .any(|n| { n.contains("Changed") && n.contains(armed_src.as_ref()) }),
             "armed src must become the leading track; notifications={notifications:?}"
         );
         assert!(
             !notifications
                 .iter()
-                .any(|n| { n.contains("TrackUnloaded") && n.contains(armed_src.as_ref()) }),
+                .any(|n| { n.contains("Unloaded") && n.contains(armed_src.as_ref()) }),
             "armed src must NOT be unloaded; notifications={notifications:?}"
         );
     }

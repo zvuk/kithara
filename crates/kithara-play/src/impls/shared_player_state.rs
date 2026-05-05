@@ -71,6 +71,8 @@ impl SharedPlayerState {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use kithara_test_utils::kithara;
     use ringbuf::traits::{Consumer, Producer};
 
@@ -100,12 +102,14 @@ mod tests {
         let sent = state
             .notification_tx
             .lock_sync()
-            .try_push(PlayerNotification::Loaded);
+            .try_push(PlayerNotification::Loaded {
+                src: Arc::from("a.mp3"),
+            });
         assert!(sent.is_ok());
 
         let received = state.notification_rx.lock_sync().try_pop();
         assert!(received.is_some());
-        assert!(matches!(received.unwrap(), PlayerNotification::Loaded));
+        assert!(matches!(received.unwrap(), PlayerNotification::Loaded { .. }));
     }
 
     #[kithara::test]

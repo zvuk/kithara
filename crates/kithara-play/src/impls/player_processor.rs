@@ -173,7 +173,9 @@ impl PlayerNodeProcessor {
             self.shared_state
                 .notification_tx
                 .lock_sync()
-                .try_push(PlayerNotification::Unloaded)
+                .try_push(PlayerNotification::Unloaded {
+                    src: Arc::clone(src),
+                })
                 .ok();
         }
 
@@ -197,7 +199,9 @@ impl PlayerNodeProcessor {
         self.shared_state
             .notification_tx
             .lock_sync()
-            .try_push(PlayerNotification::Loaded)
+            .try_push(PlayerNotification::Loaded {
+                src: Arc::clone(src),
+            })
             .ok();
     }
 
@@ -207,7 +211,9 @@ impl PlayerNodeProcessor {
             self.shared_state
                 .notification_tx
                 .lock_sync()
-                .try_push(PlayerNotification::Unloaded)
+                .try_push(PlayerNotification::Unloaded {
+                    src: Arc::clone(src),
+                })
                 .ok();
         }
     }
@@ -268,11 +274,13 @@ impl PlayerNodeProcessor {
         });
 
         // Notify about track change
-        if old_track.is_some() && new_track.is_some() {
+        if old_track.is_some()
+            && let Some(new_src) = new_track
+        {
             self.shared_state
                 .notification_tx
                 .lock_sync()
-                .try_push(PlayerNotification::Changed)
+                .try_push(PlayerNotification::Changed { src: new_src })
                 .ok();
         }
     }
@@ -309,7 +317,7 @@ impl PlayerNodeProcessor {
                     self.shared_state
                         .notification_tx
                         .lock_sync()
-                        .try_push(PlayerNotification::Unloaded)
+                        .try_push(PlayerNotification::Unloaded { src: key })
                         .ok();
                 }
             } else {
@@ -365,22 +373,29 @@ impl PlayerNodeProcessor {
     /// queue layer — the queue's `QueueEnded` path can leave the arena
     /// running so the tail samples drain instead of cutting them off.
     fn cleanup_finished_tracks(&mut self) {
-        let mut finished_indices: [Option<Index>; Self::MAX_TRACKS] = [None; Self::MAX_TRACKS];
+        let mut finished: [Option<(Arc<str>, Index)>; Self::MAX_TRACKS] =
+            [const { None }; Self::MAX_TRACKS];
         let mut count = 0;
 
-        for (idx, track) in self.tracks.iter() {
-            if track.state() == TrackState::Finished && count < Self::MAX_TRACKS {
-                finished_indices[count] = Some(idx);
+        for (key, idx) in self.tracks.iter_keys() {
+            if let Some(track) = self.tracks.get_by_index(*idx)
+                && track.state() == TrackState::Finished
+                && count < Self::MAX_TRACKS
+            {
+                finished[count] = Some((Arc::clone(key), *idx));
                 count += 1;
             }
         }
 
-        for idx in finished_indices[..count].iter().flatten() {
+        for entry in finished[..count].iter().flatten() {
+            let (key, idx) = entry;
             if self.tracks.remove_by_index(*idx).is_some() {
                 self.shared_state
                     .notification_tx
                     .lock_sync()
-                    .try_push(PlayerNotification::Unloaded)
+                    .try_push(PlayerNotification::Unloaded {
+                        src: Arc::clone(key),
+                    })
                     .ok();
             }
         }
@@ -911,8 +926,8 @@ mod tests {
                 processor.shared_state.notification_rx.lock_sync().try_pop()
             {
                 match notification {
-                    PlayerNotification::Loaded => loaded += 1,
-                    PlayerNotification::Unloaded => unloaded = true,
+                    PlayerNotification::Loaded { .. } => loaded += 1,
+                    PlayerNotification::Unloaded { .. } => unloaded = true,
                     _ => {}
                 }
             }

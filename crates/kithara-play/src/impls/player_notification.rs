@@ -16,9 +16,9 @@ pub(crate) enum TrackPlaybackStopReason {
 #[derive(Debug, Clone)]
 pub(crate) enum PlayerNotification {
     /// A track was successfully loaded into the processor arena.
-    Loaded,
+    Loaded { src: Arc<str> },
     /// A track was removed from the processor arena.
-    Unloaded,
+    Unloaded { src: Arc<str> },
     /// A track started audible playback (fade-in completed or `play()`).
     PlaybackStarted,
     /// A track stopped playback. `src` and `item_id` are read by the
@@ -39,7 +39,7 @@ pub(crate) enum PlayerNotification {
     /// playback-stopped path instead.
     HandoverRequested,
     /// A track change occurred: old track fading out, new track fading in.
-    Changed,
+    Changed { src: Arc<str> },
     /// A track started fading in.
     FadingIn,
     /// A track started fading out.
@@ -55,7 +55,7 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    #[case(PlayerNotification::Loaded, "Loaded")]
+    #[case(PlayerNotification::Loaded { src: Arc::from("a.mp3") }, "Loaded")]
     #[case(PlayerNotification::Requested, "Requested")]
     #[case(PlayerNotification::HandoverRequested, "HandoverRequested")]
     #[case(
