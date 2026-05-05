@@ -148,22 +148,21 @@ pub trait DecoderInput: Read + Seek + Send + Sync {
                 Ok(NonZeroUsize::new(n).map_or(InputReadOutcome::Eof, InputReadOutcome::Bytes))
             }
             Err(e) => {
-                if let Some(reason) = e
+                let pending = e
                     .get_ref()
                     .and_then(|src| src.downcast_ref::<PendingReason>())
-                {
-                    return Ok(InputReadOutcome::Pending(*reason));
-                }
-                if e.get_ref()
+                    .copied();
+                let variant = e
+                    .get_ref()
                     .and_then(|src| src.downcast_ref::<VariantChangeError>())
-                    .is_some()
-                {
-                    return Ok(InputReadOutcome::Pending(PendingReason::VariantChange));
+                    .is_some();
+                let interrupted = e.kind() == ErrorKind::Interrupted;
+                match (pending, variant, interrupted) {
+                    (Some(reason), _, _) => Ok(InputReadOutcome::Pending(reason)),
+                    (None, true, _) => Ok(InputReadOutcome::Pending(PendingReason::VariantChange)),
+                    (None, false, true) => Ok(InputReadOutcome::Pending(PendingReason::NotReady)),
+                    (None, false, false) => Err(StreamReadError::Source(e)),
                 }
-                if e.kind() == ErrorKind::Interrupted {
-                    return Ok(InputReadOutcome::Pending(PendingReason::NotReady));
-                }
-                Err(StreamReadError::Source(e))
             }
         }
     }

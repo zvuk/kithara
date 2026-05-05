@@ -87,21 +87,19 @@ where
     I: Fn(&io::Error) -> bool,
     L: Fn(&(dyn StdError + 'static)) -> bool,
 {
-    if let Some(io_err) = err.downcast_ref::<io::Error>() {
-        return check_io(io_err);
-    }
-
+    let io_hit = err.downcast_ref::<io::Error>().map(check_io);
     #[cfg(feature = "symphonia")]
-    if let Some(hit) = crate::symphonia::echain::inspect(err, check_io, check_leaf) {
-        return hit;
+    let symphonia_hit = crate::symphonia::echain::inspect(err, check_io, check_leaf);
+    #[cfg(not(feature = "symphonia"))]
+    let symphonia_hit: Option<bool> = None;
+    let leaf_hit = check_leaf(err);
+    match (io_hit, symphonia_hit, leaf_hit) {
+        (Some(hit), _, _) | (None, Some(hit), _) => hit,
+        (None, None, true) => true,
+        (None, None, false) => err
+            .source()
+            .is_some_and(|source| walk_error_chain(source, check_io, check_leaf)),
     }
-
-    if check_leaf(err) {
-        return true;
-    }
-
-    err.source()
-        .is_some_and(|source| walk_error_chain(source, check_io, check_leaf))
 }
 
 fn error_chain_is_interrupted(err: &(dyn StdError + 'static)) -> bool {
