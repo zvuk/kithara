@@ -1,19 +1,14 @@
 // WASM HLS player library entry point.
+//
+// `kithara-wasm` is the browser/wasm platform shim (parallel to
+// `kithara-platform` for native targets). All wasm-only code lives under
+// the single cfg-gated `mod wasm;` below — see crate README for details.
 
 #[cfg(feature = "internal")]
 pub mod internal;
 
 #[cfg(target_arch = "wasm32")]
-mod bindings;
+mod wasm;
 
 #[cfg(target_arch = "wasm32")]
-mod commands;
-#[cfg(target_arch = "wasm32")]
-mod js;
-#[cfg(target_arch = "wasm32")]
-mod player;
-#[cfg(target_arch = "wasm32")]
-mod worker;
-
-#[cfg(target_arch = "wasm32")]
-pub use bindings::build_info;
+pub use wasm::bindings::build_info;

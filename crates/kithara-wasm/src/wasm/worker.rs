@@ -8,7 +8,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 use kithara_platform::{sync::mpsc, tokio, tokio::task::spawn as task_spawn};
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDuckingMode};
 
-use crate::commands::WorkerCmd;
+use crate::wasm::commands::WorkerCmd;
 
 macro_rules! clog {
     ($($arg:tt)*) => {
@@ -57,7 +57,7 @@ async fn dispatch_cmd(cmd: WorkerCmd, player: &Arc<PlayerImpl>) {
     match cmd {
         WorkerCmd::SelectTrack { url, request_id } => {
             let result = handle_select_track(player, &url).await;
-            crate::js::send_reply(request_id, result);
+            crate::wasm::js::send_reply(request_id, result);
         }
         WorkerCmd::Play => {
             player.play();

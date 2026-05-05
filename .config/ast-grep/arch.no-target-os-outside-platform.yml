@@ -22,6 +22,15 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
+  # `kithara-wasm` IS the browser/wasm platform shim (parallel to
+  # `kithara-platform` for native targets). The rule's own message
+  # explicitly authorises browser-only logic to live here. The shim
+  # entry points need a single cfg gate on `mod wasm;` and on the
+  # internal re-export module — that's the structural boundary, not a
+  # per-call-site target leak. Documented in
+  # `crates/kithara-wasm/README.md` (Architecture / Platform shim).
+  - "crates/kithara-wasm/src/lib.rs"
+  - "crates/kithara-wasm/src/internal.rs"
 rule:
   any:
     - pattern: "#[cfg(target_os = $_)]"

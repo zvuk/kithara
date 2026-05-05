@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use js_sys::{Array, Object, Promise, Reflect};
 use num_traits::ToPrimitive;
 use wasm_bindgen::prelude::*;
-use web_sys::{BroadcastChannel, MessageEvent};
+use web_sys::{BroadcastChannel, MessageEvent, console};
 
 fn set_str(obj: &Object, key: &str, val: &str) {
     let _ = Reflect::set(obj, &JsValue::from_str(key), &JsValue::from_str(val));
@@ -116,7 +116,12 @@ pub(crate) fn init_event_reader() {
     let queue = Array::new();
     let _ = Reflect::set(&global, &JsValue::from_str("__kithara_event_queue"), &queue);
 
-    let bc = BroadcastChannel::new("kithara-events").expect("BroadcastChannel not supported");
+    let Ok(bc) = BroadcastChannel::new("kithara-events") else {
+        console::warn_1(&JsValue::from_str(
+            "kithara: BroadcastChannel unavailable; event reader disabled",
+        ));
+        return;
+    };
     let q = queue.clone();
     let closure = Closure::wrap(Box::new(move |ev: MessageEvent| {
         q.push(&ev.data());

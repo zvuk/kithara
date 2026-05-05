@@ -38,6 +38,18 @@ await player.select_track(index); // starts playback with crossfade
 
 ## Architecture
 
+`kithara-wasm` is the **browser/wasm platform shim** (mirrors `kithara-platform`
+for native targets). All wasm32-only sources live under
+`src/wasm/{bindings,commands,js,player,worker}.rs` behind a single
+`#[cfg(target_arch = "wasm32")] mod wasm;` gate in `lib.rs`. The internal
+re-export module in `src/internal.rs` follows the same single-gate shape.
+
+The `arch.no-target-os-outside-platform` ast-grep rule is configured to skip
+these two shim entry points (`src/lib.rs`, `src/internal.rs`) because they
+are exactly the kind of "thin platform shim with a `mod` cfg gate" the rule
+itself authorises. All deeper modules under `src/wasm/` are unconditional
+(they only ever compile on wasm32) and need no further gates.
+
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart LR
