@@ -70,13 +70,6 @@ pub(crate) enum TrackTransition {
 
 /// Result of a single track render attempt.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "position/duration fields are inspected only by tests"
-    )
-)]
 pub(crate) enum TrackReadOutcome {
     /// The full requested block was written into the mix buffer.
     Full {
@@ -642,11 +635,6 @@ impl PlayerTrack {
         self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
         self.fade_duration = fade_duration;
         self.sample_rate = sample_rate.get();
-    }
-
-    /// Update the fade curve used for future fade operations.
-    pub(crate) fn set_fade_curve(&mut self, curve: FadeCurve) {
-        self.fade_curve = curve;
     }
 
     /// Update the prefetch lead time used for the preload trigger.

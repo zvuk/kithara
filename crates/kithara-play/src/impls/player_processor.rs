@@ -35,15 +35,10 @@ use super::{
     player_track::{PlayerTrack, TrackReadOutcome, TrackState, TrackTransition},
     shared_player_state::SharedPlayerState,
 };
-use crate::traits::dj::crossfade::CrossfadeCurve;
 
 /// Commands sent from the main thread to the processor.
 #[derive(Derivative)]
 #[derivative(Debug)]
-#[expect(
-    dead_code,
-    reason = "some variants used when seek/unload/crossfade are wired"
-)]
 pub(crate) enum PlayerCmd {
     /// Load a track into the processor arena.
     LoadTrack {
@@ -64,8 +59,6 @@ pub(crate) enum PlayerCmd {
     SetFadeDuration(f32),
     /// Update the prefetch lead time.
     SetPrefetchDuration(f32),
-    /// Update the crossfade curve.
-    SetCrossfadeCurve(CrossfadeCurve),
     /// Update the playback rate for all active tracks.
     SetPlaybackRate(f32),
 }
@@ -157,13 +150,6 @@ impl PlayerNodeProcessor {
                 }
                 PlayerCmd::SetPrefetchDuration(duration) => {
                     self.apply_prefetch_duration(duration);
-                }
-                PlayerCmd::SetCrossfadeCurve(curve) => {
-                    self.crossfade.curve = curve;
-                    let fade_curve = self.crossfade.fade_curve();
-                    for (_, track) in self.tracks.iter_mut() {
-                        track.set_fade_curve(fade_curve);
-                    }
                 }
                 PlayerCmd::SetPlaybackRate(rate) => {
                     for (_, track) in self.tracks.iter() {
@@ -421,8 +407,29 @@ impl PlayerNodeProcessor {
         }
     }
 
-    /// Update position and duration from the leading track.
-    fn update_position_duration(&self) {
+    /// Update `shared_state.position` / `shared_state.duration` from the
+    /// leading track's last [`TrackReadOutcome`].
+    ///
+    /// `render_audio` captures the snapshot directly out of the outcome
+    /// returned by `PlayerTrack::read` — the same call that just held the
+    /// resource lock to mix audio. Routing the snapshot through the
+    /// outcome avoids a second `PlayerResource::try_lock` race here, where
+    /// a busy decoder writer can leave us with a stale or skipped read.
+    /// Falls back to `track.position()` / `track.duration()` only when no
+    /// leading track produced an outcome this cycle (cold start before
+    /// the first render block, or every active track was a non-leading
+    /// fade-in).
+    fn update_position_duration(&self, leading_outcome: Option<(f64, f64)>) {
+        if let Some((position, duration)) = leading_outcome {
+            self.shared_state
+                .position
+                .store(position, Ordering::Relaxed);
+            self.shared_state
+                .duration
+                .store(duration, Ordering::Relaxed);
+            return;
+        }
+
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
                 self.shared_state
@@ -436,12 +443,46 @@ impl PlayerNodeProcessor {
         }
     }
 
+    /// Captured position/duration snapshot from the leading track's read
+    /// outcome, in the same units as `shared_state.position` /
+    /// `shared_state.duration`.
+    fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f64)> {
+        match *outcome {
+            TrackReadOutcome::Full {
+                position, duration, ..
+            } => Some((position, duration)),
+            TrackReadOutcome::Partial { duration, .. } => {
+                // Partial means the read crossed natural EOF: position
+                // sits at the visible end of the track, which is exactly
+                // the trimmed `duration` snapshot the resource just
+                // reported. Reuse that value rather than re-locking.
+                Some((duration, duration))
+            }
+            TrackReadOutcome::Eof => None,
+        }
+    }
+
     /// Render audio for all active tracks into the output buffers.
-    fn render_audio(&mut self, buffers: &mut ProcBuffers, frames: usize, is_playing: bool) -> bool {
+    ///
+    /// Returns `(playback_started, leading_outcome_pos_dur)`:
+    /// * `playback_started` — whether at least one track produced audio
+    ///   this block (drives the firewheel `OutputsModified` /
+    ///   `ClearAllOutputs` decision in [`Self::process`]).
+    /// * `leading_outcome_pos_dur` — the leading track's
+    ///   position/duration snapshot lifted out of [`TrackReadOutcome`]
+    ///   so [`Self::update_position_duration`] can publish it to
+    ///   `shared_state` without re-locking the resource.
+    fn render_audio(
+        &mut self,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+        is_playing: bool,
+    ) -> (bool, Option<(f64, f64)>) {
         let mut playback_started = false;
+        let mut leading_outcome_pos_dur: Option<(f64, f64)> = None;
 
         if buffers.outputs.len() < Self::MIN_STEREO {
-            return false;
+            return (false, None);
         }
 
         // Clear main output buffers
@@ -509,6 +550,10 @@ impl PlayerNodeProcessor {
             };
 
             if *was_leading {
+                if let Some(snapshot) = Self::outcome_position_duration(&read_outcome) {
+                    leading_outcome_pos_dur = Some(snapshot);
+                }
+
                 let mut handover_offset = Self::initial_handover_offset(&read_outcome);
 
                 for (next_idx, (_, next_src, next_is_leading)) in active_tracks.iter().enumerate() {
@@ -534,6 +579,10 @@ impl PlayerNodeProcessor {
                     };
                     read_outcome = outcome;
                     skip_tracks[next_idx] = true;
+
+                    if let Some(snapshot) = Self::outcome_position_duration(&read_outcome) {
+                        leading_outcome_pos_dur = Some(snapshot);
+                    }
 
                     handover_offset = Self::next_handover_offset(&read_outcome, offset);
                 }
@@ -572,7 +621,7 @@ impl PlayerNodeProcessor {
             }
         }
 
-        playback_started
+        (playback_started, leading_outcome_pos_dur)
     }
 }
 
@@ -619,10 +668,11 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         let is_playing = self.shared_state.playing.load(Ordering::SeqCst);
 
         // 4. Render audio
-        let playback_started = self.render_audio(&mut buffers, info.frames, is_playing);
+        let (playback_started, leading_outcome_pos_dur) =
+            self.render_audio(&mut buffers, info.frames, is_playing);
 
-        // 5. Update position/duration
-        self.update_position_duration();
+        // 5. Update position/duration from the leading track's outcome.
+        self.update_position_duration(leading_outcome_pos_dur);
 
         if playback_started {
             ProcessStatus::OutputsModified
@@ -1026,7 +1076,7 @@ mod tests {
             outputs: &mut outputs,
         };
 
-        let rendered = processor.render_audio(&mut buffers, frames, true);
+        let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
 
         assert!(rendered);
         assert!(
@@ -1077,7 +1127,7 @@ mod tests {
             outputs: &mut outputs,
         };
 
-        let rendered = processor.render_audio(&mut buffers, frames, true);
+        let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
 
         assert!(rendered);
         assert!(
@@ -1153,7 +1203,7 @@ mod tests {
             outputs: &mut outputs,
         };
 
-        let rendered = processor.render_audio(&mut buffers, frames, true);
+        let (rendered, _) = processor.render_audio(&mut buffers, frames, true);
 
         assert!(rendered);
         assert_eq!(
