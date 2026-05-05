@@ -243,6 +243,20 @@ impl Demuxer for SymphoniaDemuxer {
     }
 }
 
+impl SymphoniaDemuxer {
+    /// Override the `track.gapless` slot built by `from_reader` with a
+    /// container-level probe result.
+    ///
+    /// `build_track_info` cannot probe the source itself — by the time it
+    /// runs, the format reader has already consumed the relevant bytes.
+    /// The factory layer probes the underlying source separately
+    /// (e.g. `probe_mp4_gapless` for AAC fMP4) and pipes the result
+    /// through this setter so the codec sees the captured trim counts.
+    pub(crate) fn set_gapless(&mut self, gapless: Option<crate::GaplessInfo>) {
+        self.track_info.gapless = gapless;
+    }
+}
+
 fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> DecodeResult<TrackInfo> {
     const DEFAULT_CHANNEL_COUNT: u16 = 2;
 

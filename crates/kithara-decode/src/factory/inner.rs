@@ -429,13 +429,16 @@ fn create_symphonia(
 
 #[cfg(feature = "symphonia")]
 fn create_file_symphonia_universal(
-    source: BoxedSource,
+    mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
+    use std::io::SeekFrom;
+
     use crate::{
         demuxer::Demuxer,
+        gapless::probe_mp4_gapless_dyn,
         symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
         universal::UniversalDecoder,
     };
@@ -445,12 +448,30 @@ fn create_file_symphonia_universal(
         ?container,
         "file-symphonia: dispatching to UniversalDecoder<SymphoniaDemuxer, SymphoniaCodec>"
     );
-    let (demuxer, _byte_len) = SymphoniaDemuxer::open_file(
+
+    // Probe AAC fMP4 sources for container-level gapless metadata (`elst`
+    // / `iTunSMPB`) before the format reader consumes the bytes. Symphonia
+    // 0.6.0-alpha.1 keeps this info inside the AAC reader and never
+    // surfaces it through `track.codec_params`, so the factory carries
+    // the trim counts across the demuxer boundary itself.
+    let probed_gapless = if config.gapless && codec == AudioCodec::AacLc {
+        let _ = source.seek(SeekFrom::Start(0));
+        let probed = probe_mp4_gapless_dyn(&mut *source).ok().flatten();
+        let _ = source.seek(SeekFrom::Start(0));
+        probed
+    } else {
+        None
+    };
+
+    let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
         source,
         config.hint.clone(),
         container,
         config.byte_len_handle.clone(),
     )?;
+    if probed_gapless.is_some() {
+        demuxer.set_gapless(probed_gapless);
+    }
     let symphonia_config = SymphoniaConfig {
         gapless: config.gapless,
         ..Default::default()
