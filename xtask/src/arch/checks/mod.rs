@@ -15,6 +15,7 @@ pub(crate) mod arc_clone_hotspots;
 pub(crate) mod canonical_types;
 pub(crate) mod direction;
 pub(crate) mod duplicate_error_enums;
+pub(crate) mod field_passthrough;
 pub(crate) mod file_density;
 pub(crate) mod file_size;
 pub(crate) mod flat_directory;
@@ -67,6 +68,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(pub_struct_open_fields::PubStructOpenFields),
         Box::new(trait_impl_count::TraitImplCount),
         Box::new(duplicate_error_enums::DuplicateErrorEnums),
+        Box::new(field_passthrough::FieldPassthrough),
         Box::new(stray_rs_files::StrayRsFiles),
         Box::new(file_size::FileSize),
         Box::new(flat_directory::FlatDirectory),
