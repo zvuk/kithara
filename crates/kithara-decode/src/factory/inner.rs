@@ -99,6 +99,7 @@ pub struct DecoderConfig {
     /// [`SharedHooks`] sink (mock sources, tests, telemetry).
     ///
     /// [`ComposedDecoder`]: crate::composed::ComposedDecoder
+    #[setters(skip)]
     pub hooks: Option<SharedHooks>,
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
@@ -108,6 +109,7 @@ pub struct DecoderConfig {
     /// segment-by-segment demuxer (`Fmp4SegmentDemuxer`) instead of the
     /// whole-stream container parser, side-stepping prefix walks during
     /// forward seek.
+    #[setters(skip)]
     pub segment_layout: Option<Arc<dyn SegmentLayout>>,
     /// Stream context for segment/variant metadata.
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
@@ -126,6 +128,27 @@ pub struct DecoderConfig {
     /// the `Decoder` trait.
     #[derivative(Default(value = "true"))]
     pub gapless: bool,
+}
+
+impl DecoderConfig {
+    /// Set [`Self::segment_layout`] from an `Option`. Distinct from
+    /// the derived `with_*` setters because `derive_setters` with
+    /// `strip_option` would force callers to unwrap the `Option`
+    /// themselves. Stream sources surface segment layout as
+    /// `Option<...>` already, so this signature avoids the dance.
+    #[must_use]
+    pub fn with_segment_layout(mut self, layout: Option<Arc<dyn SegmentLayout>>) -> Self {
+        self.segment_layout = layout;
+        self
+    }
+
+    /// Set [`Self::hooks`] from an `Option`. Same `Option` rationale as
+    /// [`Self::with_segment_layout`].
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: Option<SharedHooks>) -> Self {
+        self.hooks = hooks;
+        self
+    }
 }
 
 /// Factory for creating decoders with a single, strict backend selection.

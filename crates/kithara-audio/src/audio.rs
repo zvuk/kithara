@@ -935,17 +935,15 @@ where
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
             factory_byte_len.store(byte_len, Ordering::Release);
-            let config = build_decoder_config(DecoderConfigInputs {
-                backend: decoder_backend,
-                byte_len_handle: Arc::clone(&factory_byte_len),
-                pcm_pool: factory_pool.clone(),
-                byte_pool: factory_byte_pool.clone(),
-                stream_ctx: Arc::clone(&factory_stream_ctx),
-                epoch: Some(factory_epoch.load(Ordering::Acquire)),
-                hint: None,
-                segment_layout: stream.as_segment_layout(),
-                hooks: stream.take_reader_hooks(),
-            });
+            let config = kithara_decode::DecoderConfig::default()
+                .with_backend(decoder_backend)
+                .with_byte_len_handle(Arc::clone(&factory_byte_len))
+                .with_pcm_pool(factory_pool.clone())
+                .with_byte_pool(factory_byte_pool.clone())
+                .with_stream_ctx(Arc::clone(&factory_stream_ctx))
+                .with_epoch(factory_epoch.load(Ordering::Acquire))
+                .with_segment_layout(stream.as_segment_layout())
+                .with_hooks(stream.take_reader_hooks());
             let source = OffsetReader::new(stream.clone(), base_offset);
             match DecoderFactory::create_from_media_info(source, info, &config) {
                 Ok(d) => {
@@ -978,17 +976,17 @@ where
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
-        let decoder_config = build_decoder_config(DecoderConfigInputs {
-            backend: decoder_backend,
-            byte_len_handle,
-            pcm_pool,
-            byte_pool,
-            stream_ctx,
-            epoch: None,
-            hint: hint.clone(),
-            segment_layout: shared_stream.as_segment_layout(),
-            hooks: shared_stream.take_reader_hooks(),
-        });
+        let mut decoder_config = kithara_decode::DecoderConfig::default()
+            .with_backend(decoder_backend)
+            .with_byte_len_handle(byte_len_handle)
+            .with_pcm_pool(pcm_pool)
+            .with_byte_pool(byte_pool)
+            .with_stream_ctx(stream_ctx)
+            .with_segment_layout(shared_stream.as_segment_layout())
+            .with_hooks(shared_stream.take_reader_hooks());
+        if let Some(h) = hint.clone() {
+            decoder_config = decoder_config.with_hint(h);
+        }
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;
         let decoder = spawn_blocking(move || {
@@ -1093,45 +1091,6 @@ where
 /// seeding, and `detect_format_change` would later treat the stream's
 /// declarative container (e.g. Fmp4 inferred from EXT-X-MAP URL
 /// extension) as authoritative.
-/// Inputs for [`build_decoder_config`].
-struct DecoderConfigInputs {
-    backend: kithara_decode::DecoderBackend,
-    byte_len_handle: Arc<AtomicU64>,
-    pcm_pool: PcmPool,
-    byte_pool: kithara_bufpool::BytePool,
-    stream_ctx: Arc<dyn StreamContext>,
-    epoch: Option<u64>,
-    hint: Option<String>,
-    segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
-    hooks: Option<kithara_stream::SharedHooks>,
-}
-
-/// Build a [`kithara_decode::DecoderConfig`] from raw factory inputs.
-///
-/// Centralises the field-by-field assignment so [`Audio::create_initial_decoder`]
-/// and [`Audio::create_decoder_factory`] share a single construction path.
-/// `segment_layout` and `hooks` are still set via direct field assignment
-/// because `derive_setters` with `strip_option` would unwrap the
-/// `Option`s, and these inputs come from the stream as `Option<...>`
-/// already.
-fn build_decoder_config(inputs: DecoderConfigInputs) -> kithara_decode::DecoderConfig {
-    let mut cfg = kithara_decode::DecoderConfig::default()
-        .with_backend(inputs.backend)
-        .with_byte_len_handle(inputs.byte_len_handle)
-        .with_pcm_pool(inputs.pcm_pool)
-        .with_byte_pool(inputs.byte_pool)
-        .with_stream_ctx(inputs.stream_ctx);
-    if let Some(epoch) = inputs.epoch {
-        cfg = cfg.with_epoch(epoch);
-    }
-    if let Some(hint) = inputs.hint {
-        cfg = cfg.with_hint(hint);
-    }
-    cfg.segment_layout = inputs.segment_layout;
-    cfg.hooks = inputs.hooks;
-    cfg
-}
-
 fn merge_user_and_stream_media_info(
     user: Option<MediaInfo>,
     stream: Option<MediaInfo>,
