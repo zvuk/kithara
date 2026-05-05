@@ -27,7 +27,7 @@ mod expand;
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use syn::{DeriveInput, ItemFn, parse_macro_input};
+use syn::{DeriveInput, Error, ItemFn, parse_macro_input};
 
 #[proc_macro_attribute]
 pub fn probe(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -38,7 +38,7 @@ pub fn probe(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let input = parse_macro_input!(item as ItemFn);
     expand::expand(&input, filter)
-        .unwrap_or_else(syn::Error::into_compile_error)
+        .unwrap_or_else(Error::into_compile_error)
         .into()
 }
 
@@ -59,6 +59,6 @@ pub fn probe(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn derive_probe(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     expand::expand_derive(&input)
-        .unwrap_or_else(syn::Error::into_compile_error)
+        .unwrap_or_else(Error::into_compile_error)
         .into()
 }

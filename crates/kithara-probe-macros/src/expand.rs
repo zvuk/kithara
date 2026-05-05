@@ -6,8 +6,8 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    Data, DataStruct, DeriveInput, Field, Fields, FnArg, Ident, ItemFn, LitStr, Pat, PatIdent,
-    Token, parse::Parser, punctuated::Punctuated,
+    Data, DataStruct, DeriveInput, Error, Field, Fields, FnArg, Ident, ItemFn, LitStr, Pat,
+    PatIdent, Token, parse::Parser, punctuated::Punctuated,
 };
 
 pub(crate) fn parse_filter(attr: TokenStream2) -> syn::Result<Option<Vec<Ident>>> {
@@ -26,7 +26,7 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
 
     let crate_name = std::env::var("CARGO_PKG_NAME")
         .map_err(|_| {
-            syn::Error::new_spanned(
+            Error::new_spanned(
                 &input.sig.ident,
                 "#[kithara::probe] requires CARGO_PKG_NAME env var (set automatically by cargo)",
             )
@@ -45,7 +45,7 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
             FnArg::Typed(typed) => match typed.pat.as_ref() {
                 Pat::Ident(PatIdent { ident, .. }) => all_args.push(ident.clone()),
                 other => {
-                    return Err(syn::Error::new_spanned(
+                    return Err(Error::new_spanned(
                         other,
                         "#[kithara::probe] requires plain named arguments (no patterns)",
                     ));
@@ -57,15 +57,16 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
     let arg_idents: Vec<Ident> = match filter {
         None => all_args,
         Some(names) => {
-            for name in &names {
-                if !all_args.iter().any(|a| a == name) {
-                    return Err(syn::Error::new_spanned(
-                        name,
-                        format!(
-                            "#[kithara::probe(...)] arg `{name}` does not match any function parameter"
-                        ),
-                    ));
-                }
+            if let Some(missing) = names
+                .iter()
+                .find(|name| !all_args.iter().any(|a| a == *name))
+            {
+                return Err(Error::new_spanned(
+                    missing,
+                    format!(
+                        "#[kithara::probe(...)] arg `{missing}` does not match any function parameter"
+                    ),
+                ));
             }
             names
         }
@@ -182,8 +183,10 @@ fn parse_field_opts(field: &Field) -> syn::Result<FieldOpts> {
 }
 
 fn camel_to_snake(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 4);
-    for (i, ch) in s.chars().enumerate() {
+    // Reserve a few extra bytes for the underscores we may insert.
+    const EXTRA_CAPACITY: usize = 4;
+    let mut out = String::with_capacity(s.len() + EXTRA_CAPACITY);
+    s.chars().enumerate().for_each(|(i, ch)| {
         if ch.is_ascii_uppercase() {
             if i > 0 {
                 out.push('_');
@@ -192,7 +195,7 @@ fn camel_to_snake(s: &str) -> String {
         } else {
             out.push(ch);
         }
-    }
+    });
     out
 }
 
@@ -202,7 +205,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     let crate_name = std::env::var("CARGO_PKG_NAME")
         .map_err(|_| {
-            syn::Error::new_spanned(
+            Error::new_spanned(
                 struct_name,
                 "#[derive(Probe)] requires CARGO_PKG_NAME env var (set automatically by cargo)",
             )
@@ -218,13 +221,13 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
             ..
         }) => &named.named,
         Data::Struct(_) => {
-            return Err(syn::Error::new_spanned(
+            return Err(Error::new_spanned(
                 struct_name,
                 "#[derive(Probe)] requires a struct with named fields",
             ));
         }
         _ => {
-            return Err(syn::Error::new_spanned(
+            return Err(Error::new_spanned(
                 struct_name,
                 "#[derive(Probe)] is only supported on structs",
             ));
@@ -241,7 +244,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let ident = field
             .ident
             .clone()
-            .ok_or_else(|| syn::Error::new_spanned(field, "expected named field"))?;
+            .ok_or_else(|| Error::new_spanned(field, "expected named field"))?;
         let wire = opts.rename.unwrap_or_else(|| ident.to_string());
         field_idents.push(ident);
         wire_names.push(wire);
