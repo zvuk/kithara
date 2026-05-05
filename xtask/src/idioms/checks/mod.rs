@@ -17,6 +17,7 @@ pub(crate) mod arc_mutex_collection;
 pub(crate) mod await_under_guard;
 pub(crate) mod box_concrete_type;
 pub(crate) mod branch_chains;
+pub(crate) mod const_group_enum_shape;
 pub(crate) mod fat_loop_body;
 pub(crate) mod function_branch_density;
 pub(crate) mod guard_cascade;
@@ -56,5 +57,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(retry_fallback::RetryFallback),
         Box::new(fat_loop_body::FatLoopBody),
         Box::new(loop_flag_accumulator::LoopFlagAccumulator),
+        Box::new(const_group_enum_shape::ConstGroupEnumShape),
     ]
 }
