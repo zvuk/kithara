@@ -173,10 +173,10 @@ async fn t1_phase_continuity_wave(
             next.meta.frame_offset,
             expected,
             "T1 [{variant_from}->{variant_to} {backend:?}] A10: frame_offset not \
-             contiguous: prev={pf} (+{pn} frames) ⇒ expected next.frame_offset={expected}, \
+             contiguous: prev={pf} (+{pframes} frames) ⇒ expected next.frame_offset={expected}, \
              actual={af}. Drift = {drift} frames.",
             pf = prev.meta.frame_offset,
-            pn = prev.meta.frames,
+            pframes = prev.meta.frames,
             af = next.meta.frame_offset,
             drift = next.meta.frame_offset as i64 - expected as i64,
         );
@@ -189,8 +189,8 @@ async fn t1_phase_continuity_wave(
             Some(variant_from),
             "T1 [{variant_from}->{variant_to} {backend:?}] A9: chunk #{idx} fell back \
              to variant_from after the first variant_to chunk at #{first_to}. \
-             frame_offset={fo}, variants[0..idx]={trace:?}",
-            fo = chunk.meta.frame_offset,
+             frame_offset={off}, variants[0..idx]={trace:?}",
+            off = chunk.meta.frame_offset,
             trace = chunks
                 .iter()
                 .take(idx + 1)
@@ -225,16 +225,16 @@ async fn t1_phase_continuity_wave(
         panic!(
             "T1 [{variant_from}->{variant_to} {backend:?}] A1: pre-switch chunk \
              magnitude below silence floor — fixture or decoder produced \
-             near-zero samples right before the seam. frame_offset={fo}",
-            fo = pre_chunk.meta.frame_offset,
+             near-zero samples right before the seam. frame_offset={off}",
+            off = pre_chunk.meta.frame_offset,
         )
     });
     let post_measured = post_measured.unwrap_or_else(|| {
         panic!(
             "T1 [{variant_from}->{variant_to} {backend:?}] A1: first post-switch \
              chunk magnitude below silence floor — decoder dropped audio across the \
-             seam. frame_offset={fo}, variant={v:?}",
-            fo = post_chunk.meta.frame_offset,
+             seam. frame_offset={off}, variant={v:?}",
+            off = post_chunk.meta.frame_offset,
             v = post_chunk.meta.variant_index,
         )
     });

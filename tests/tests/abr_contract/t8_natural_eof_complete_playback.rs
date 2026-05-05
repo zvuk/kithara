@@ -110,9 +110,9 @@ async fn t8_natural_eof_complete_playback(
                     Some(variant),
                     "T8: chunk emitted on unexpected variant — fixture or decoder \
                      leaked a foreign variant on the no-switch path \
-                     (expected {variant}, got {actual:?}, frame_offset={fo})",
+                     (expected {variant}, got {actual:?}, frame_offset={off})",
                     actual = chunk.meta.variant_index,
-                    fo = chunk.meta.frame_offset,
+                    off = chunk.meta.frame_offset,
                 );
                 total_frames += u64::from(chunk.meta.frames);
             }
