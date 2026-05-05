@@ -133,19 +133,23 @@ impl SymphoniaCodec {
         let registry: &CodecRegistry = symphonia::default::get_codecs();
         let mut opts = AudioDecoderOptions::default();
         opts.gapless = config.gapless;
-        // Symphonia 0.6.0-alpha.1 does not honor `opts.gapless` for AAC;
-        // the decoder still emits the full 2112-frame native priming as
-        // the first samples of output. When the demuxer surfaced
-        // container-level gapless info (`track.gapless = Some(...)`),
-        // fold the codec priming into `leading_frames` so the downstream
-        // `GaplessTrimmer` strips both the decoder's native priming and
-        // the encoder-delay silence the container metadata announces.
-        let track_gapless = track.gapless.map(|info| {
+        // Gapless source-of-truth precedence:
+        //   1. Container/encoder-probed `track.gapless` (factory's
+        //      `probe_codec_gapless` from MP4 `udta`/`elst` for AAC,
+        //      Xing/Info+LAME for MP3) — used verbatim, no extra fold.
+        //      The probed leading already includes the encoder priming.
+        //   2. Conservative codec default `codec_priming_frames(codec)` —
+        //      fallback when no container metadata was probed (raw
+        //      streams, stripped tags). MP3 falls back to LAME default
+        //      (1105), Opus to RFC 7845 (312), others to 0.
+        // Adding (1) on top of (2) double-counts the priming and trims
+        // 1+ second of real audio at track start.
+        let track_gapless = track.gapless.or_else(|| {
             let extra = crate::gapless::codec_priming_frames(track.codec);
-            crate::GaplessInfo {
-                leading_frames: info.leading_frames.saturating_add(extra),
-                trailing_frames: info.trailing_frames,
-            }
+            (extra > 0).then_some(crate::GaplessInfo {
+                leading_frames: extra,
+                trailing_frames: 0,
+            })
         });
         let decoder = registry
             .make_audio_decoder(&params, &opts)
