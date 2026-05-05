@@ -31,7 +31,6 @@ ignores:
   - "**/tests.rs"
   - "crates/kithara-platform/**"
   - "crates/kithara-test-utils/**"
-  - "crates/kithara-app/**"
   - "crates/kithara-ffi/**"
 rule:
   any:

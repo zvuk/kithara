@@ -26,7 +26,6 @@ ignores:
   - "**/*_tests.rs"
   - "**/tests.rs"
   - "**/main.rs"
-  - "crates/kithara-app/**"
   - "crates/kithara-ffi/**"
   - "crates/kithara-wasm/**"
   - "crates/kithara-test-utils/**"
