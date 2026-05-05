@@ -1,0 +1,48 @@
+id: rust.no-discard-result
+message: |
+  `let _ = expr` discards a value. When the discarded value is a
+  `Result` or `Option`, this also discards the error/None signal. At
+  minimum log it; usually you want to handle it.
+
+      // ❌
+      let _ = reply_tx.send_sync(reply);
+      let _ = backend.render(OFFLINE_BLOCK_FRAMES);
+
+      // ✅ — trace explicitly
+      if let Err(err) = reply_tx.send_sync(reply) {
+          tracing::trace!(?err, "reply receiver dropped");
+      }
+
+      // ✅ — turn into ?-propagation if the function returns Result
+      let bytes = file.read(&mut buf)?;
+
+      // ✅ — `.ok()` if the value is genuinely uninteresting (rare)
+      reply_tx.send_sync(reply).ok();
+
+  Suppress with `// ast-grep-ignore: rust.no-discard-result` only when
+  the called fn is genuinely infallible-ish (e.g. dropping a sender to
+  intentionally signal shutdown).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+rule:
+  any:
+    - pattern: let _ = $E.send($$$);
+    - pattern: let _ = $E.send_sync($$$);
+    - pattern: let _ = $E.try_send($$$);
+    - pattern: let _ = $E.send_async($$$);
+    - pattern: let _ = $E.recv($$$);
+    - pattern: let _ = $E.try_recv($$$);
+    - pattern: let _ = $E.write($$$);
+    - pattern: let _ = $E.write_all($$$);
+    - pattern: let _ = $E.read($$$);
+    - pattern: let _ = $E.read_to_end($$$);
+    - pattern: let _ = $E.flush($$$);
+    - pattern: let _ = $E.render($$$);
+    - pattern: let _ = $E.update($$$);
+    - pattern: let _ = $E.join($$$);
+    - pattern: let _ = $E.lock($$$);
+    - pattern: let _ = $E.try_lock($$$);
+    - pattern: let _ = $E.parse($$$);
