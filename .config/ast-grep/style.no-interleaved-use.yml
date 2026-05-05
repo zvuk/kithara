@@ -28,6 +28,12 @@ language: Rust
 files:
   - crates/**/*.rs
   - tests/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   all:
     - kind: use_declaration

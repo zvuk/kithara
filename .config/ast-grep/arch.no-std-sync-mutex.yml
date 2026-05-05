@@ -27,9 +27,7 @@ ignores:
   - "**/test_*.rs"
   - "**/*_test.rs"
   - "**/*_tests.rs"
-  - "**/mock*.rs"
   - "**/tests.rs"
-  - "crates/kithara-platform/**"
 rule:
   any:
     - pattern: std::sync::Mutex

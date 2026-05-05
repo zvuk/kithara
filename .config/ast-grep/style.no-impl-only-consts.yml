@@ -2,6 +2,12 @@ id: style.no-impl-only-consts
 message: "Do not create an inherent `impl` block that only contains constants. Constants should be in the same `impl` block as the methods that use them. `struct Consts` is allowed only for grouping >2 constants."
 severity: error
 language: Rust
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   all:
     - kind: impl_item

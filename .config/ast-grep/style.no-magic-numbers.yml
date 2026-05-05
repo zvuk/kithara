@@ -5,8 +5,11 @@ language: Rust
 files:
   - crates/**/src/**/*.rs
 ignores:
-  - crates/kithara-test-macros/**
-  - crates/kithara-test-utils/**
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   any:
     - all:

@@ -31,6 +31,12 @@ files:
   - crates/**/*.rs
   - tests/**/*.rs
   - xtask/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   any:
     - pattern: $E.unwrap_or($T::MAX)

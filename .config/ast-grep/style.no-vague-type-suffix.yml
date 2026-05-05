@@ -20,11 +20,10 @@ files:
   - crates/**/src/**/*.rs
 ignores:
   - "**/tests/**"
-  - "crates/kithara-test-utils/**"
-  - "crates/kithara-test-macros/**"
-  - "crates/kithara-hang-detector-macros/**"
-  - "crates/kithara-wasm-macros/**"
-  - "crates/kithara-probe-macros/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   any:
     - all:

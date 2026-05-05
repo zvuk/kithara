@@ -18,6 +18,12 @@ language: Rust
 files:
   - tests/**/*.rs
   - crates/*/tests/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   any:
     - pattern: use $C::internal::$$$;

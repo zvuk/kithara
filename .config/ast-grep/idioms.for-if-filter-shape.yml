@@ -20,6 +20,12 @@ severity: warning
 language: Rust
 files:
   - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   pattern: |
     for $X in $IT {

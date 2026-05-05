@@ -11,6 +11,12 @@ message: |
   consulting it when grouping FFI constants.
 severity: error
 language: Rust
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   all:
     - any:

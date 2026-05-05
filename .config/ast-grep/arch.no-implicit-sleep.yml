@@ -24,14 +24,6 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
-  - "**/main.rs"
-  - "crates/kithara-ffi/**"
-  - "crates/kithara-wasm/**"
-  - "crates/kithara-test-utils/**"
-  - "crates/kithara-test-macros/**"
-  - "crates/kithara-hang-detector-macros/**"
-  - "crates/kithara-wasm-macros/**"
-  - "crates/kithara-probe-macros/**"
 rule:
   any:
     - pattern: std::thread::sleep($_)

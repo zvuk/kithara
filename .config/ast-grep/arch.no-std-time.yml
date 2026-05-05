@@ -27,11 +27,7 @@ ignores:
   - "**/test_*.rs"
   - "**/*_test.rs"
   - "**/*_tests.rs"
-  - "**/mock*.rs"
   - "**/tests.rs"
-  - "crates/kithara-platform/**"
-  - "crates/kithara-test-utils/**"
-  - "crates/kithara-ffi/**"
 rule:
   any:
     - pattern: std::time::Instant

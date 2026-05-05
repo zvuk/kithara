@@ -18,9 +18,6 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
-  - "**/examples/**"
-  - "crates/kithara-test-utils/**"
-  - "crates/kithara-test-macros/**"
 rule:
   any:
     - pattern: dbg!($$$)

@@ -17,8 +17,11 @@ language: Rust
 files:
   - crates/**/*.rs
 ignores:
-  - "crates/kithara-platform/**"
-  - "crates/kithara-wasm/**"
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   any:
     - pattern: "#[cfg(target_os = $_)]"

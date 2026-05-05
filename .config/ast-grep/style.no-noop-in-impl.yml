@@ -2,6 +2,12 @@ id: style.no-noop-in-impl
 message: "No-op function found in inherent impl block. Default implementations are for traits only."
 severity: error
 language: Rust
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   all:
     - pattern: "fn $NAME($$$ARGS) {}"

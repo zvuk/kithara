@@ -5,7 +5,11 @@ language: Rust
 files:
   - crates/**/src/**/*.rs
 ignores:
-  - crates/kithara-test-macros/**
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   any:
     # Plain single-call wrapper at module level.

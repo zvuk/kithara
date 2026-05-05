@@ -6,8 +6,11 @@ files:
   - crates/**/*.rs
   - tests/**/*.rs
 ignores:
-  - crates/kithara-test-macros/**
-  - crates/kithara-hang-detector-macros/**
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   all:
     - kind: scoped_identifier

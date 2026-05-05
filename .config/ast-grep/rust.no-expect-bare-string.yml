@@ -22,11 +22,6 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
-  - "crates/kithara-test-utils/**"
-  - "crates/kithara-test-macros/**"
-  - "crates/kithara-hang-detector-macros/**"
-  - "crates/kithara-wasm-macros/**"
-  - "crates/kithara-probe-macros/**"
 rule:
   all:
     - pattern: $RECV.expect($MSG)
