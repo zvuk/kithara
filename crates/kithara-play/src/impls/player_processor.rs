@@ -127,7 +127,7 @@ impl PlayerNodeProcessor {
                     item_id,
                     src,
                 } => {
-                    self.load_track(resource, item_id, src);
+                    self.load_track(resource, item_id, &src);
                 }
                 PlayerCmd::UnloadTrack { src } => {
                     self.unload_track(&src);
@@ -167,13 +167,13 @@ impl PlayerNodeProcessor {
         &mut self,
         resource: Arc<Mutex<PlayerResource>>,
         item_id: Option<Arc<str>>,
-        src: Arc<str>,
+        src: &Arc<str>,
     ) {
-        if self.tracks.remove(&src).is_some() {
+        if self.tracks.remove(src).is_some() {
             self.shared_state
                 .notification_tx
                 .lock_sync()
-                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(&src)))
+                .try_push(PlayerNotification::Unloaded)
                 .ok();
         }
 
@@ -186,18 +186,18 @@ impl PlayerNodeProcessor {
         let track = PlayerTrack::new(
             resource,
             item_id,
-            Arc::clone(&src),
+            Arc::clone(src),
             self.crossfade.duration,
             self.prefetch_duration,
             self.sample_rate,
             self.crossfade.fade_curve(),
         );
-        self.tracks.insert(Arc::clone(&src), track);
+        self.tracks.insert(Arc::clone(src), track);
 
         self.shared_state
             .notification_tx
             .lock_sync()
-            .try_push(PlayerNotification::TrackLoaded(src))
+            .try_push(PlayerNotification::Loaded)
             .ok();
     }
 
@@ -207,7 +207,7 @@ impl PlayerNodeProcessor {
             self.shared_state
                 .notification_tx
                 .lock_sync()
-                .try_push(PlayerNotification::TrackUnloaded(Arc::clone(src)))
+                .try_push(PlayerNotification::Unloaded)
                 .ok();
         }
     }
@@ -268,11 +268,11 @@ impl PlayerNodeProcessor {
         });
 
         // Notify about track change
-        if let (Some(old), Some(new)) = (old_track, new_track) {
+        if old_track.is_some() && new_track.is_some() {
             self.shared_state
                 .notification_tx
                 .lock_sync()
-                .try_push(PlayerNotification::TrackChanged { old, new })
+                .try_push(PlayerNotification::Changed)
                 .ok();
         }
     }
@@ -309,7 +309,7 @@ impl PlayerNodeProcessor {
                     self.shared_state
                         .notification_tx
                         .lock_sync()
-                        .try_push(PlayerNotification::TrackUnloaded(key))
+                        .try_push(PlayerNotification::Unloaded)
                         .ok();
                 }
             } else {
@@ -376,12 +376,11 @@ impl PlayerNodeProcessor {
         }
 
         for idx in finished_indices[..count].iter().flatten() {
-            if let Some(track) = self.tracks.remove_by_index(*idx) {
-                let src = Arc::clone(track.src());
+            if self.tracks.remove_by_index(*idx).is_some() {
                 self.shared_state
                     .notification_tx
                     .lock_sync()
-                    .try_push(PlayerNotification::TrackUnloaded(src))
+                    .try_push(PlayerNotification::Unloaded)
                     .ok();
             }
         }
@@ -629,18 +628,15 @@ impl PlayerNodeProcessor {
 fn eviction_priority(state: TrackState) -> u8 {
     /// Eviction priority: preloading tracks are evicted before active ones.
     const EVICT_PRELOADING: u8 = 2;
-    /// Eviction priority: paused tracks are evicted after preloading.
-    const EVICT_PAUSED: u8 = 3;
     /// Eviction priority: fading-in tracks are kept longer.
-    const EVICT_FADING_IN: u8 = 4;
+    const EVICT_FADING_IN: u8 = 3;
     /// Eviction priority: playing tracks are evicted last.
-    const EVICT_PLAYING: u8 = 5;
+    const EVICT_PLAYING: u8 = 4;
 
     match state {
         TrackState::Finished => 0,
         TrackState::FadingOut => 1,
         TrackState::Preloading => EVICT_PRELOADING,
-        TrackState::Paused => EVICT_PAUSED,
         TrackState::FadingIn => EVICT_FADING_IN,
         TrackState::Playing => EVICT_PLAYING,
     }
@@ -704,7 +700,7 @@ mod tests {
         atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
 
-    use kithara_audio::{DecodeResult, PcmReader, mock::TestPcmReader};
+    use kithara_audio::{PcmReader, mock::TestPcmReader};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::{Mutex as PlatformMutex, time::Duration};
@@ -915,8 +911,8 @@ mod tests {
                 processor.shared_state.notification_rx.lock_sync().try_pop()
             {
                 match notification {
-                    PlayerNotification::TrackLoaded(_) => loaded += 1,
-                    PlayerNotification::TrackUnloaded(_) => unloaded = true,
+                    PlayerNotification::Loaded => loaded += 1,
+                    PlayerNotification::Unloaded => unloaded = true,
                     _ => {}
                 }
             }

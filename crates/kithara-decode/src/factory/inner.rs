@@ -15,9 +15,7 @@ use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, SegmentLayout, SharedHooks, StreamContext,
 };
 
-use super::probe::{
-    CodecSelector, ProbeHint, container_from_extension, probe_codec, resolve_codec_container,
-};
+use super::probe::{ProbeHint, container_from_extension, probe_codec, resolve_codec_container};
 use crate::{
     Decoder,
     error::{DecodeError, DecodeResult},
@@ -144,14 +142,14 @@ impl DecoderFactory {
     /// Create a decoder with the single selected backend.
     pub(crate) fn create<R>(
         source: R,
-        selector: &CodecSelector,
+        hint: &ProbeHint,
         config: &DecoderConfig,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
         let source: BoxedSource = Box::new(source);
-        Self::dispatch_backend(source, selector, config)
+        Self::dispatch_backend(source, hint, config)
     }
 
     /// Recreate a decoder on HLS variant switch / format change.
@@ -215,7 +213,7 @@ impl DecoderFactory {
             mime: None,
         };
 
-        Self::create(source, &CodecSelector::Probe(hint), config)
+        Self::create(source, &hint, config)
     }
 
     /// Create decoder from a file-extension hint.
@@ -244,15 +242,15 @@ impl DecoderFactory {
         };
 
         probe_codec(&probe_hint)?;
-        Self::create(source, &CodecSelector::Probe(probe_hint), &config)
+        Self::create(source, &probe_hint, &config)
     }
 
     pub(super) fn dispatch_backend(
         source: BoxedSource,
-        selector: &CodecSelector,
+        hint: &ProbeHint,
         config: &DecoderConfig,
     ) -> DecodeResult<Box<dyn Decoder>> {
-        let (codec, container) = resolve_codec_container(selector)?;
+        let (codec, container) = resolve_codec_container(hint)?;
 
         tracing::debug!(
             ?codec,

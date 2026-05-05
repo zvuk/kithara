@@ -197,17 +197,15 @@ pub mod offline {
             while let Some(n) = rx.try_pop() {
                 use crate::impls::player_notification::PlayerNotification as N;
                 out.push(match n {
-                    N::TrackError(_, _) => NotificationKind::TrackError,
-                    N::TrackLoaded(_) => NotificationKind::TrackLoaded,
-                    N::TrackUnloaded(_) => NotificationKind::TrackUnloaded,
-                    N::TrackHandoverRequested(_) => NotificationKind::TrackHandoverRequested,
-                    N::TrackPlaybackStarted(_) => NotificationKind::TrackPlaybackStarted,
-                    N::TrackPlaybackStopped { .. } => NotificationKind::TrackPlaybackStopped,
-                    N::TrackPlaybackPaused(_) => NotificationKind::TrackPlaybackPaused,
-                    N::TrackRequested(_) => NotificationKind::TrackRequested,
-                    N::TrackChanged { .. } => NotificationKind::TrackChanged,
-                    N::TrackFadingIn(_) => NotificationKind::TrackFadingIn,
-                    N::TrackFadingOut(_) => NotificationKind::TrackFadingOut,
+                    N::Loaded => NotificationKind::Loaded,
+                    N::Unloaded => NotificationKind::Unloaded,
+                    N::HandoverRequested => NotificationKind::HandoverRequested,
+                    N::PlaybackStarted => NotificationKind::PlaybackStarted,
+                    N::PlaybackStopped { .. } => NotificationKind::PlaybackStopped,
+                    N::Requested => NotificationKind::Requested,
+                    N::Changed => NotificationKind::Changed,
+                    N::FadingIn => NotificationKind::FadingIn,
+                    N::FadingOut => NotificationKind::FadingOut,
                 });
             }
             out
@@ -217,23 +215,21 @@ pub mod offline {
     /// Tag for [`PlayerNotification`] variants.
     ///
     /// Mirrors the variants of the internal `PlayerNotification` enum so
-    /// tests can match on terminal-state classes (`TrackError`,
-    /// `TrackPlaybackStopped`) without importing the `pub(crate)` type.
+    /// tests can match on terminal-state classes (`PlaybackStopped`)
+    /// without importing the `pub(crate)` type.
     ///
     /// [`PlayerNotification`]: crate::impls::player_notification::PlayerNotification
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum NotificationKind {
-        TrackError,
-        TrackLoaded,
-        TrackUnloaded,
-        TrackHandoverRequested,
-        TrackPlaybackStarted,
-        TrackPlaybackStopped,
-        TrackPlaybackPaused,
-        TrackRequested,
-        TrackChanged,
-        TrackFadingIn,
-        TrackFadingOut,
+        Loaded,
+        Unloaded,
+        HandoverRequested,
+        PlaybackStarted,
+        PlaybackStopped,
+        Requested,
+        Changed,
+        FadingIn,
+        FadingOut,
     }
 
     /// Create a [`Resource`](crate::Resource) from any [`PcmReader`].

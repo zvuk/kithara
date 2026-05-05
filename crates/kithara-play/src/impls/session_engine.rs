@@ -200,6 +200,13 @@ pub(crate) enum Reply {
 ///
 /// Typed methods are default-impl'd in terms of `exec`, so backends only
 /// implement the dispatch primitive.
+pub(crate) type AllocatedSlot = (
+    SlotId,
+    HeapProd<PlayerCmd>,
+    Arc<SharedPlayerState>,
+    SharedEq,
+);
+
 pub(crate) trait SessionDispatcher: Send + Sync + 'static {
     /// Run a command synchronously. Returns the raw [`Reply`] — typed
     /// methods unpack it.
@@ -213,18 +220,7 @@ pub(crate) trait SessionDispatcher: Send + Sync + 'static {
         Ok(reply)
     }
 
-    fn allocate_slot(
-        &self,
-        player_id: PlayerId,
-    ) -> Result<
-        (
-            SlotId,
-            HeapProd<PlayerCmd>,
-            Arc<SharedPlayerState>,
-            SharedEq,
-        ),
-        PlayError,
-    > {
+    fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
         match self.exec_ok(Cmd::AllocateSlot { player_id })? {
             Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
                 Ok((slot_id, cmd_tx, shared_state, eq))
@@ -1402,7 +1398,7 @@ impl OfflineSession {
     pub(crate) fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<OfflineMsg>();
         let handle = spawn_named("kithara-engine-offline-instance", move || {
-            offline_session_thread(cmd_rx);
+            offline_session_thread(&cmd_rx);
         });
         Self {
             cmd_tx: Mutex::new(cmd_tx),
@@ -1453,7 +1449,7 @@ impl SessionDispatcher for OfflineSession {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-fn offline_session_thread(cmd_rx: mpsc::Receiver<OfflineMsg>) {
+fn offline_session_thread(cmd_rx: &mpsc::Receiver<OfflineMsg>) {
     let mut state = SessionState::<OfflineBackend>::new(start_stream_offline);
     while let Ok(msg) = cmd_rx.recv_sync() {
         match msg {
@@ -1462,17 +1458,13 @@ fn offline_session_thread(cmd_rx: mpsc::Receiver<OfflineMsg>) {
                 let _ = reply_tx.send_sync(reply);
             }
             OfflineMsg::Render { frames, reply_tx } => {
-                let block = if let Some(ref mut ctx) = state.ctx {
+                let block = state.ctx.as_mut().map_or_else(Vec::new, |ctx| {
                     if let Err(err) = ctx.update() {
                         warn!("offline session graph update failed: {err:?}");
                     }
-                    match ctx.active_backend_mut() {
-                        Some(backend) => backend.render(frames),
-                        None => Vec::new(),
-                    }
-                } else {
-                    Vec::new()
-                };
+                    ctx.active_backend_mut()
+                        .map_or_else(Vec::new, |backend| backend.render(frames))
+                });
                 let _ = reply_tx.send_sync(block);
             }
             OfflineMsg::Shutdown => break,

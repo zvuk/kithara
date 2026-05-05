@@ -205,17 +205,6 @@ impl PlayerResource {
         }
     }
 
-    /// Current playback position in seconds.
-    ///
-    /// Reflects the underlying decoder's position, which can be ahead of
-    /// what the mixer has actually rendered (the audio thread sees PCM only
-    /// after it leaves [`PlayerResource`]'s scratch buffer). Trigger logic
-    /// uses [`crate::impls::player_track::PlayerTrack`]'s served-frame
-    /// counter instead; this accessor remains for diagnostics and tests.
-    pub(crate) fn position(&self) -> f64 {
-        self.resource.position().as_secs_f64()
-    }
-
     /// Total duration in seconds. Returns 0.0 if unknown.
     pub(crate) fn duration(&self) -> f64 {
         self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
@@ -227,11 +216,6 @@ impl PlayerResource {
     /// the next read will return [`ReadOutcome::Eof`].
     pub(crate) fn frames_until_eof(&self) -> Option<usize> {
         self.eof_seen.then_some(self.write_len)
-    }
-
-    /// Source identifier for this resource.
-    pub(crate) fn src(&self) -> &Arc<str> {
-        &self.src
     }
 
     /// Set the target sample rate of the audio host.
@@ -355,19 +339,13 @@ mod tests {
         assert_eq!(pr.write_pos, 0);
     }
 
-    fn assert_position_and_duration(pr: &PlayerResource) {
-        assert_eq!(pr.position(), 0.0);
+    fn assert_duration(pr: &PlayerResource) {
         assert!((pr.duration() - 1.0).abs() < 0.01);
-    }
-
-    fn assert_src(pr: &PlayerResource) {
-        assert_eq!(&**pr.src(), "test.mp3");
     }
 
     #[kithara::test(tokio)]
     #[case(assert_buffers_initialized)]
-    #[case(assert_position_and_duration)]
-    #[case(assert_src)]
+    #[case(assert_duration)]
     async fn resource_accessors(#[case] assert_fn: AccessorAssertion) {
         let pr = make_player_resource();
         assert_fn(&pr);

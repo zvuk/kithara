@@ -72,16 +72,6 @@ impl PlayerNode {
         }
     }
 
-    /// Get a reference to the command receiver.
-    pub(crate) fn cmd_rx(&self) -> &Arc<Mutex<Option<HeapCons<PlayerCmd>>>> {
-        &self.cmd_rx
-    }
-
-    /// Get a reference to the shared player state.
-    pub(crate) fn shared_state(&self) -> &Arc<SharedPlayerState> {
-        &self.shared_state
-    }
-
     /// Create a player node wired to the given command channel and shared state.
     pub(crate) fn with_channel(
         cmd_rx: HeapCons<PlayerCmd>,
@@ -176,7 +166,6 @@ mod tests {
     #[kithara::test]
     fn player_node_shared_state_accessible() {
         let node = PlayerNode::new();
-        let state = node.shared_state();
-        assert!(!state.playing.load(Ordering::Relaxed));
+        assert!(!node.shared_state.playing.load(Ordering::Relaxed));
     }
 }

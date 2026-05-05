@@ -143,12 +143,9 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     // either failed (TrackError) or hit natural EOF (TrackPlaybackStopped).
     // Both are valid outcomes for an unsatisfiable seek; the bug is the
     // *third* outcome — silent recreate-loop with no notification at all.
-    let terminal = kinds.iter().any(|k| {
-        matches!(
-            k,
-            NotificationKind::TrackError | NotificationKind::TrackPlaybackStopped
-        )
-    });
+    let terminal = kinds
+        .iter()
+        .any(|k| matches!(k, NotificationKind::PlaybackStopped));
     assert!(
         terminal,
         "recreate-loop signature: no terminal notification within \

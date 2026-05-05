@@ -4,17 +4,6 @@ use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::error::{DecodeError, DecodeResult};
 
-/// Selector for choosing how to detect/specify the codec.
-#[derive(Debug, Clone)]
-pub(crate) enum CodecSelector {
-    /// Known codec - no probing needed.
-    Exact(AudioCodec),
-    /// Probe with hints.
-    Probe(ProbeHint),
-    /// Full auto-probe.
-    Auto,
-}
-
 /// Hints for codec probing.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ProbeHint {
@@ -28,15 +17,11 @@ pub(crate) struct ProbeHint {
     pub mime: Option<String>,
 }
 
-/// Resolve `(codec, container)` from a selector, returning an error for `Auto`.
+/// Resolve `(codec, container)` from a probe hint.
 pub(super) fn resolve_codec_container(
-    selector: &CodecSelector,
+    hint: &ProbeHint,
 ) -> DecodeResult<(AudioCodec, Option<ContainerFormat>)> {
-    match *selector {
-        CodecSelector::Exact(c) => Ok((c, None)),
-        CodecSelector::Probe(ref hint) => Ok((probe_codec(hint)?, hint.container)),
-        CodecSelector::Auto => Err(DecodeError::ProbeFailed),
-    }
+    Ok((probe_codec(hint)?, hint.container))
 }
 
 /// Probe codec from hints.
@@ -140,28 +125,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    #[kithara::test]
-    fn test_codec_selector_exact() {
-        let selector = CodecSelector::Exact(AudioCodec::AacLc);
-        assert!(matches!(selector, CodecSelector::Exact(AudioCodec::AacLc)));
-    }
-
-    #[kithara::test]
-    fn test_codec_selector_probe() {
-        let hint = ProbeHint {
-            codec: Some(AudioCodec::Mp3),
-            ..Default::default()
-        };
-        let selector = CodecSelector::Probe(hint);
-        assert!(matches!(selector, CodecSelector::Probe(_)));
-    }
-
-    #[kithara::test]
-    fn test_codec_selector_auto() {
-        let selector = CodecSelector::Auto;
-        assert!(matches!(selector, CodecSelector::Auto));
-    }
 
     #[kithara::test]
     fn test_probe_hint_default() {

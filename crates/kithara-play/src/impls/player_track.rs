@@ -31,8 +31,6 @@ pub(crate) enum TrackState {
     /// Track is loaded but not yet playing.
     #[default]
     Preloading,
-    /// Track is paused (explicit pause by user).
-    Paused,
     /// Track is actively playing at full volume.
     Playing,
     /// Track is fading in (volume ramping up).
@@ -341,7 +339,7 @@ impl PlayerTrack {
         self.set_state(TrackState::Finished);
         notification_tx
             .lock_sync()
-            .try_push(PlayerNotification::TrackPlaybackStopped {
+            .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(&self.src),
                 item_id: self.item_id.clone(),
                 reason: TrackPlaybackStopReason::Eof,
@@ -427,7 +425,7 @@ impl PlayerTrack {
 
         if notification_tx
             .lock_sync()
-            .try_push(PlayerNotification::TrackRequested(Arc::clone(&self.src)))
+            .try_push(PlayerNotification::Requested)
             .is_ok()
         {
             self.notified_prefetch_requested = true;
@@ -442,9 +440,7 @@ impl PlayerTrack {
 
         if notification_tx
             .lock_sync()
-            .try_push(PlayerNotification::TrackHandoverRequested(Arc::clone(
-                &self.src,
-            )))
+            .try_push(PlayerNotification::HandoverRequested)
             .is_ok()
         {
             self.notified_track_requested = true;
@@ -474,12 +470,11 @@ impl PlayerTrack {
             return;
         }
         let notification = match self.state {
-            TrackState::Preloading => PlayerNotification::TrackLoaded(Arc::clone(&self.src)),
-            TrackState::FadingIn => PlayerNotification::TrackFadingIn(Arc::clone(&self.src)),
-            TrackState::FadingOut => PlayerNotification::TrackFadingOut(Arc::clone(&self.src)),
-            TrackState::Playing => PlayerNotification::TrackPlaybackStarted(Arc::clone(&self.src)),
-            TrackState::Paused => PlayerNotification::TrackPlaybackPaused(Arc::clone(&self.src)),
-            TrackState::Finished => PlayerNotification::TrackPlaybackStopped {
+            TrackState::Preloading => PlayerNotification::Loaded,
+            TrackState::FadingIn => PlayerNotification::FadingIn,
+            TrackState::FadingOut => PlayerNotification::FadingOut,
+            TrackState::Playing => PlayerNotification::PlaybackStarted,
+            TrackState::Finished => PlayerNotification::PlaybackStopped {
                 src: Arc::clone(&self.src),
                 item_id: self.item_id.clone(),
                 reason: TrackPlaybackStopReason::Stop,
@@ -515,7 +510,7 @@ impl PlayerTrack {
                 ServiceClass::Audible
             }
             TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
+            TrackState::Finished => ServiceClass::Idle,
         };
         if let Ok(resource) = self.resource.try_lock() {
             resource.set_service_class(class);
@@ -642,7 +637,7 @@ impl PlayerTrack {
 #[cfg(test)]
 mod tests {
     use kithara_audio::{PcmReader, mock::TestPcmReader};
-    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+    use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
@@ -823,7 +818,7 @@ mod tests {
         let mut eof_stop_count = 0;
 
         while let Some(notification) = rx.try_pop() {
-            if let PlayerNotification::TrackPlaybackStopped {
+            if let PlayerNotification::PlaybackStopped {
                 item_id,
                 reason: TrackPlaybackStopReason::Eof,
                 ..
@@ -871,7 +866,6 @@ mod tests {
         assert!(TrackState::FadingIn.is_playing());
         assert!(TrackState::FadingOut.is_playing());
         assert!(!TrackState::Preloading.is_playing());
-        assert!(!TrackState::Paused.is_playing());
         assert!(!TrackState::Finished.is_playing());
     }
 
@@ -881,7 +875,6 @@ mod tests {
         assert!(TrackState::FadingIn.is_leading());
         assert!(!TrackState::FadingOut.is_leading());
         assert!(!TrackState::Preloading.is_leading());
-        assert!(!TrackState::Paused.is_leading());
         assert!(!TrackState::Finished.is_leading());
     }
 
@@ -929,7 +922,7 @@ mod tests {
             let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
 
             while let Some(notification) = rx.try_pop() {
-                if let PlayerNotification::TrackPlaybackStopped {
+                if let PlayerNotification::PlaybackStopped {
                     item_id,
                     reason: TrackPlaybackStopReason::Eof,
                     ..
@@ -1046,12 +1039,10 @@ mod tests {
             let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
             for notification in collect_notifications(&mut rx) {
                 match notification {
-                    PlayerNotification::TrackHandoverRequested(src)
-                        if src.as_ref() == "test.mp3" =>
-                    {
+                    PlayerNotification::HandoverRequested => {
                         handover_count += 1;
                     }
-                    PlayerNotification::TrackPlaybackStopped {
+                    PlayerNotification::PlaybackStopped {
                         src,
                         reason: TrackPlaybackStopReason::Eof,
                         ..
@@ -1076,10 +1067,9 @@ mod tests {
         let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
         let notifications = collect_notifications(&mut rx);
         assert!(
-            notifications.iter().all(|notification| !matches!(
-                notification,
-                PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3"
-            )),
+            notifications
+                .iter()
+                .all(|notification| !matches!(notification, PlayerNotification::HandoverRequested)),
             "TrackHandoverRequested must not be emitted twice in one playback cycle"
         );
     }
@@ -1116,10 +1106,7 @@ mod tests {
         let notifications = collect_notifications(&mut rx);
         assert!(
             notifications.iter().any(|notification| {
-                matches!(
-                    notification,
-                    PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "misreported.mp3"
-                )
+                matches!(notification, PlayerNotification::HandoverRequested)
             }),
             "handover must be emitted before the EOF block when the resource has already observed EOF"
         );
@@ -1127,7 +1114,7 @@ mod tests {
             !notifications.iter().any(|notification| {
                 matches!(
                     notification,
-                    PlayerNotification::TrackPlaybackStopped {
+                    PlayerNotification::PlaybackStopped {
                         reason: TrackPlaybackStopReason::Eof,
                         ..
                     }
@@ -1159,16 +1146,14 @@ mod tests {
         let notifications = collect_notifications(&mut rx);
         let handover_count = notifications
             .iter()
-            .filter(|notification| {
-                matches!(notification, PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3")
-            })
+            .filter(|notification| matches!(notification, PlayerNotification::HandoverRequested))
             .count();
         let eof_stop_count = notifications
             .iter()
             .filter(|notification| {
                 matches!(
                     notification,
-                    PlayerNotification::TrackPlaybackStopped {
+                    PlayerNotification::PlaybackStopped {
                         src,
                         item_id,
                         reason: TrackPlaybackStopReason::Eof,
@@ -1207,12 +1192,10 @@ mod tests {
 
             for notification in collect_notifications(&mut rx) {
                 match notification {
-                    PlayerNotification::TrackHandoverRequested(src)
-                        if src.as_ref() == "test.mp3" =>
-                    {
+                    PlayerNotification::HandoverRequested => {
                         handover_count += 1;
                     }
-                    PlayerNotification::TrackPlaybackStopped {
+                    PlayerNotification::PlaybackStopped {
                         src,
                         item_id,
                         reason: TrackPlaybackStopReason::Eof,
@@ -1257,18 +1240,12 @@ mod tests {
         let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
 
         let notifications = collect_notifications(&mut rx);
-        let saw_prefetch = notifications.iter().any(|notification| {
-            matches!(
-                notification,
-                PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3"
-            )
-        });
-        let saw_handover = notifications.iter().any(|notification| {
-            matches!(
-                notification,
-                PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3"
-            )
-        });
+        let saw_prefetch = notifications
+            .iter()
+            .any(|notification| matches!(notification, PlayerNotification::Requested));
+        let saw_handover = notifications
+            .iter()
+            .any(|notification| matches!(notification, PlayerNotification::HandoverRequested));
         assert!(
             saw_prefetch,
             "TrackRequested (preload) must fire inside the prefetch lead window"
@@ -1299,14 +1276,16 @@ mod tests {
 
         let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
         let after_prefetch = collect_notifications(&mut rx);
-        assert!(after_prefetch.iter().any(|notification| matches!(
-            notification,
-            PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3"
-        )));
-        assert!(after_prefetch.iter().all(|notification| !matches!(
-            notification,
-            PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3"
-        )));
+        assert!(
+            after_prefetch
+                .iter()
+                .any(|notification| matches!(notification, PlayerNotification::Requested))
+        );
+        assert!(
+            after_prefetch
+                .iter()
+                .all(|notification| !matches!(notification, PlayerNotification::HandoverRequested))
+        );
 
         // Move close to EOF so the crossfade-aligned trigger fires too.
         track.seek(9.79);
@@ -1315,10 +1294,7 @@ mod tests {
         for _ in 0..4 {
             let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
             for notification in collect_notifications(&mut rx) {
-                if matches!(
-                    notification,
-                    PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3"
-                ) {
+                if matches!(notification, PlayerNotification::HandoverRequested) {
                     saw_handover = true;
                 }
             }
@@ -1351,10 +1327,11 @@ mod tests {
         let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
 
         let notifications = collect_notifications(&mut rx);
-        assert!(notifications.iter().any(|notification| matches!(
-            notification,
-            PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3"
-        )));
+        assert!(
+            notifications
+                .iter()
+                .any(|notification| matches!(notification, PlayerNotification::Requested))
+        );
     }
 
     #[kithara::test(tokio)]
@@ -1384,7 +1361,7 @@ mod tests {
         let mid = collect_notifications(&mut rx);
         assert!(mid.iter().all(|notification| !matches!(
             notification,
-            PlayerNotification::TrackRequested(_) | PlayerNotification::TrackHandoverRequested(_)
+            PlayerNotification::Requested | PlayerNotification::HandoverRequested
         )));
 
         // Inside the fade window: both triggers must fire (each at most
@@ -1396,12 +1373,10 @@ mod tests {
             let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
             for notification in collect_notifications(&mut rx) {
                 match notification {
-                    PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3" => {
+                    PlayerNotification::Requested => {
                         prefetch_count += 1;
                     }
-                    PlayerNotification::TrackHandoverRequested(src)
-                        if src.as_ref() == "test.mp3" =>
-                    {
+                    PlayerNotification::HandoverRequested => {
                         handover_count += 1;
                     }
                     _ => {}
@@ -1439,7 +1414,6 @@ mod tests {
     #[case(TrackState::FadingIn, ServiceClass::Audible)]
     #[case(TrackState::FadingOut, ServiceClass::Audible)]
     #[case(TrackState::Preloading, ServiceClass::Warm)]
-    #[case(TrackState::Paused, ServiceClass::Idle)]
     #[case(TrackState::Finished, ServiceClass::Idle)]
     fn track_state_maps_to_service_class(
         #[case] state: TrackState,
@@ -1450,7 +1424,7 @@ mod tests {
                 ServiceClass::Audible
             }
             TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
+            TrackState::Finished => ServiceClass::Idle,
         };
         assert_eq!(class, expected);
     }

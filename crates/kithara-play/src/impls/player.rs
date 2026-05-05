@@ -670,13 +670,13 @@ impl PlayerImpl {
 
     fn dispatch_notification(&self, notification: PlayerNotification) {
         match notification.clone() {
-            PlayerNotification::TrackRequested(_) => {
+            PlayerNotification::Requested => {
                 self.handle_track_requested();
             }
-            PlayerNotification::TrackHandoverRequested(_) => {
+            PlayerNotification::HandoverRequested => {
                 self.handle_handover_requested();
             }
-            PlayerNotification::TrackPlaybackStopped {
+            PlayerNotification::PlaybackStopped {
                 reason: TrackPlaybackStopReason::Eof,
                 ..
             } => {
@@ -1124,7 +1124,7 @@ impl PlayerImpl {
 
 fn player_event_from_notification(notification: PlayerNotification) -> Option<PlayerEvent> {
     match notification {
-        PlayerNotification::TrackPlaybackStopped {
+        PlayerNotification::PlaybackStopped {
             reason: TrackPlaybackStopReason::Eof,
             src,
             item_id,
@@ -1534,7 +1534,7 @@ mod tests {
 
     #[kithara::test]
     fn eof_playback_stopped_notification_maps_to_item_end_event() {
-        let event = player_event_from_notification(PlayerNotification::TrackPlaybackStopped {
+        let event = player_event_from_notification(PlayerNotification::PlaybackStopped {
             src: Arc::from("track.mp3"),
             item_id: Some(Arc::from("item-1")),
             reason: TrackPlaybackStopReason::Eof,
@@ -1544,7 +1544,7 @@ mod tests {
 
     #[kithara::test]
     fn playback_stopped_notification_does_not_map_to_item_end_event() {
-        let event = player_event_from_notification(PlayerNotification::TrackPlaybackStopped {
+        let event = player_event_from_notification(PlayerNotification::PlaybackStopped {
             src: Arc::from("track.mp3"),
             item_id: Some(Arc::from("item-1")),
             reason: TrackPlaybackStopReason::Stop,

@@ -39,9 +39,7 @@ use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    gapless::probe_mp4_gapless_dyn,
     symphonia::config::SymphoniaConfig,
-    traits::DecoderInput,
     types::{DecoderTrackInfo, PcmSpec},
 };
 
@@ -52,8 +50,8 @@ pub(crate) struct SymphoniaCodec {
     decoder: Box<dyn AudioDecoder>,
     spec: PcmSpec,
     /// Decoder-owned playback contract. Populated from container-level
-    /// gapless metadata captured via [`Self::probe_track_info`] before
-    /// the codec is opened; left empty otherwise.
+    /// gapless metadata captured by the demuxer before the codec is
+    /// opened; left empty otherwise.
     track_info: DecoderTrackInfo,
 }
 
@@ -169,42 +167,6 @@ impl SymphoniaCodec {
                 gapless: track_gapless,
                 ..DecoderTrackInfo::default()
             },
-        })
-    }
-
-    /// Probe the source for container-level gapless metadata before
-    /// opening the codec. Currently only AAC inside MP4 udta carries
-    /// useful priming/padding numbers (`iTunSMPB`); other Symphonia
-    /// codecs return `DecoderTrackInfo::default()` because their priming
-    /// is handled internally via `AudioDecoderOptions::gapless`.
-    ///
-    /// # Errors
-    ///
-    /// Forwards [`DecodeError`] from the MP4 probe (malformed boxes,
-    /// I/O failures on the input source).
-    pub(crate) fn probe_track_info(
-        source: &mut dyn DecoderInput,
-        codec: AudioCodec,
-        config: &SymphoniaConfig,
-    ) -> DecodeResult<DecoderTrackInfo> {
-        let gapless = if config.gapless && codec == AudioCodec::AacLc {
-            let info = probe_mp4_gapless_dyn(source)?;
-            if let Some(info) = info {
-                tracing::debug!(
-                    target: "kithara::gapless",
-                    codec = ?codec,
-                    leading_frames = info.leading_frames,
-                    trailing_frames = info.trailing_frames,
-                    "captured AAC gapless metadata for Symphonia"
-                );
-            }
-            info
-        } else {
-            None
-        };
-        Ok(DecoderTrackInfo {
-            gapless,
-            ..DecoderTrackInfo::default()
         })
     }
 }

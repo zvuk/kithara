@@ -56,7 +56,7 @@ pub(crate) fn classify_layout_transition(
 
 pub(crate) fn should_request_init(is_variant_switch: bool, segment: SegmentId) -> bool {
     match segment {
-        SegmentId::Init | SegmentId::Media(0) => true,
+        SegmentId::Media(0) => true,
         SegmentId::Media(_) => is_variant_switch,
     }
 }

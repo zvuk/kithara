@@ -26,7 +26,6 @@ mod factory;
 mod fmp4;
 mod gapless;
 mod mp4;
-mod pcm;
 mod pcm_time;
 #[cfg(feature = "symphonia")]
 mod symphonia;

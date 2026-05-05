@@ -459,10 +459,6 @@ impl AudioPlayer {
 
         Ok(TrackSource::Config(Box::new(config)))
     }
-
-    pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
-        self.observer.lock_sync().clone()
-    }
 }
 
 #[cfg(test)]

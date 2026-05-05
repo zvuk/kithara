@@ -7,7 +7,7 @@ use kithara_test_utils::{create_test_wav, kithara};
 
 use super::{
     inner::{DecoderBackend, DecoderConfig, DecoderFactory},
-    probe::{CodecSelector, ProbeHint, container_from_extension, probe_codec},
+    probe::{ProbeHint, container_from_extension, probe_codec},
 };
 use crate::error::DecodeError;
 
@@ -38,13 +38,6 @@ fn test_decoder_config_custom() {
     assert_eq!(config.hint, Some("mp3".to_string()));
 }
 
-#[kithara::test]
-fn test_auto_selector_fails() {
-    let empty = Cursor::new(Vec::new());
-    let result = DecoderFactory::create(empty, &CodecSelector::Auto, &DecoderConfig::default());
-    assert!(matches!(result, Err(DecodeError::ProbeFailed)));
-}
-
 /// `DecoderBackend::Symphonia` propagates a typed error verbatim when
 /// the source produces no decoder — no fallback chain to mask probe /
 /// codec-unsupported failures. Replaces the old
@@ -68,7 +61,7 @@ fn test_symphonia_propagates_probe_error_without_fallback() {
         ..Default::default()
     };
     let empty = Cursor::new(Vec::new());
-    let result = DecoderFactory::create(empty, &CodecSelector::Probe(hint), &config);
+    let result = DecoderFactory::create(empty, &hint, &config);
     assert!(
         result.is_err(),
         "Symphonia must surface a typed error without falling back to a different backend"

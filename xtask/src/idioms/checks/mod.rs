@@ -8,7 +8,6 @@
 use std::path::Path;
 
 use anyhow::Result;
-use cargo_metadata::Metadata;
 
 use super::config::IdiomsConfig;
 use crate::common::{scope::Scope, violation::Violation};
@@ -28,7 +27,6 @@ pub(crate) mod retry_fallback;
 
 pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
-    pub(crate) metadata: &'a Metadata,
     pub(crate) config: &'a IdiomsConfig,
     pub(crate) scope: &'a Scope,
 }

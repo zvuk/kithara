@@ -45,10 +45,6 @@ pub(crate) fn red(s: &str) -> String {
     wrap("31", s)
 }
 
-pub(crate) fn yellow(s: &str) -> String {
-    wrap("33", s)
-}
-
 pub(crate) fn cyan(s: &str) -> String {
     wrap("36", s)
 }

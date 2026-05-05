@@ -515,6 +515,15 @@ pub struct LeaseGuard {
     inner: Option<Arc<LeaseGuardInner>>,
 }
 
+impl LeaseGuard {
+    /// `true` while at least one clone of this guard still pins the lease.
+    /// `false` for no-op guards constructed when the lease is bypassed.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.inner.is_some()
+    }
+}
+
 struct LeaseGuardInner {
     on_drop: Box<dyn Fn() + Send + Sync>,
 }

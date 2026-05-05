@@ -72,7 +72,6 @@ pub(crate) fn run(args: &StyleArgs) -> Result<()> {
 
     let ctx = Context {
         workspace_root: &workspace_root,
-        metadata: &metadata,
         config: &config,
         scope: &scope,
     };

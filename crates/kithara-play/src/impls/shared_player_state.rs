@@ -5,10 +5,7 @@
 //! All fields use atomic operations or lock-free channels for safe
 //! concurrent access.
 
-use std::{
-    num::NonZeroU32,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use kithara_platform::Mutex;
 use portable_atomic::{AtomicF64, AtomicU32};
@@ -70,17 +67,10 @@ impl SharedPlayerState {
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
     }
-
-    /// Get the current sample rate, if set.
-    pub(crate) fn sample_rate(&self) -> Option<NonZeroU32> {
-        NonZeroU32::new(self.sample_rate.load(Ordering::Relaxed))
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use kithara_test_utils::kithara;
     use ringbuf::traits::{Consumer, Producer};
 
@@ -105,30 +95,17 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case(0, None)]
-    #[case(44_100, Some(44_100))]
-    #[case(48_000, Some(48_000))]
-    fn shared_state_sample_rate_view(#[case] raw_sample_rate: u32, #[case] expected: Option<u32>) {
-        let state = SharedPlayerState::new();
-        state.sample_rate.store(raw_sample_rate, Ordering::Relaxed);
-        assert_eq!(state.sample_rate().map(NonZeroU32::get), expected);
-    }
-
-    #[kithara::test]
     fn shared_state_notification_channel_works() {
         let state = SharedPlayerState::new();
         let sent = state
             .notification_tx
             .lock_sync()
-            .try_push(PlayerNotification::TrackLoaded(Arc::from("test.mp3")));
+            .try_push(PlayerNotification::Loaded);
         assert!(sent.is_ok());
 
         let received = state.notification_rx.lock_sync().try_pop();
         assert!(received.is_some());
-        assert!(matches!(
-            received.unwrap(),
-            PlayerNotification::TrackLoaded(src) if &*src == "test.mp3"
-        ));
+        assert!(matches!(received.unwrap(), PlayerNotification::Loaded));
     }
 
     #[kithara::test]
