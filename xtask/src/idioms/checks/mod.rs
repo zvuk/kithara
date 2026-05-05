@@ -21,6 +21,7 @@ pub(crate) mod fat_loop_body;
 pub(crate) mod function_branch_density;
 pub(crate) mod guard_cascade;
 pub(crate) mod loop_allocation;
+pub(crate) mod loop_flag_accumulator;
 pub(crate) mod manual_question_mark;
 pub(crate) mod multi_accumulator_loop;
 pub(crate) mod parallel_loops;
@@ -54,5 +55,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(function_branch_density::FunctionBranchDensity),
         Box::new(retry_fallback::RetryFallback),
         Box::new(fat_loop_body::FatLoopBody),
+        Box::new(loop_flag_accumulator::LoopFlagAccumulator),
     ]
 }
