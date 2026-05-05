@@ -70,13 +70,13 @@ impl AndroidCodec {
     /// Build an [`AndroidCodec`] with extra knobs from [`AndroidConfig`].
     /// `MediaCodec` itself does not surface encoder priming, so the
     /// gapless flag here is wired into the factory's container probe
-    /// (P7 calls [`Self::probe_track_info`] before opening the codec).
-    /// `FrameCodec::open` keeps the no-config shape so existing
-    /// `UniversalDecoder<D, C>` callers don't break.
+    /// (the factory calls [`Self::probe_track_info`] before opening
+    /// the codec).
     ///
     /// # Errors
     ///
-    /// Same as [`FrameCodec::open`].
+    /// Returns [`DecodeError::Backend`] when `AMediaCodec_createDecoderByType`
+    /// or `AMediaFormat` setup fails for the track's codec/sample-rate/channels.
     pub(crate) fn open_with_config(
         track: &TrackInfo,
         _config: &AndroidConfig,
@@ -187,7 +187,7 @@ impl FrameCodec for AndroidCodec {
             }
             None => {
                 // Codec backpressure — caller will retry the frame on the
-                // next pump. UniversalDecoder loops on zero-frame returns.
+                // next pump. ComposedDecoder loops on zero-frame returns.
                 out.clear();
                 return Ok(0);
             }

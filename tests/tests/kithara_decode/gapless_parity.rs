@@ -2,7 +2,7 @@ use std::{io::Cursor, num::NonZeroU32};
 
 use kithara::{
     decode::{
-        DecodeResult, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer, InnerDecoder,
+        DecodeResult, Decoder, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer,
     },
     platform::time::Duration,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -161,7 +161,7 @@ async fn generated_aac_elst_fixture(
 fn create_decoder_from_media_info(
     fixture: &GaplessFixture,
     config: DecoderConfig,
-) -> DecodeResult<Box<dyn InnerDecoder>> {
+) -> DecodeResult<Box<dyn Decoder>> {
     DecoderFactory::create_from_media_info(
         Cursor::new(fixture.bytes.clone()),
         &fixture.media_info,
@@ -173,11 +173,11 @@ fn create_decoder_with_probe(
     bytes: Vec<u8>,
     hint: &'static str,
     config: DecoderConfig,
-) -> DecodeResult<Box<dyn InnerDecoder>> {
+) -> DecodeResult<Box<dyn Decoder>> {
     DecoderFactory::create_with_probe(Cursor::new(bytes), Some(hint), &config)
 }
 
-fn decode_visible_frames(mut decoder: Box<dyn InnerDecoder>) -> DecodeResult<DecodedFrames> {
+fn decode_visible_frames(mut decoder: Box<dyn Decoder>) -> DecodeResult<DecodedFrames> {
     use kithara::decode::DecoderChunkOutcome;
     let mut trimmer = decoder
         .track_info()

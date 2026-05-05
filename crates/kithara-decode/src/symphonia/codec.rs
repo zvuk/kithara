@@ -107,12 +107,11 @@ impl SymphoniaCodec {
     /// Symphonia codec emits priming-trimmed output internally for codecs
     /// that report it (FLAC, Opus, Vorbis).
     ///
-    /// `FrameCodec::open` keeps its no-config shape so existing
-    /// `UniversalDecoder<D, C>` callers don't break.
-    ///
     /// # Errors
     ///
-    /// Same as [`FrameCodec::open`].
+    /// Returns [`DecodeError::UnsupportedCodec`] when Symphonia has no
+    /// registered decoder for the track's codec id, and `DecodeError::Backend`
+    /// when codec instantiation fails.
     pub(crate) fn open_with_config(
         track: &TrackInfo,
         config: &SymphoniaConfig,

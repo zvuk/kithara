@@ -1,9 +1,7 @@
-//! `UniversalDecoder<D, C>` — single `Decoder` impl that pairs a
-//! [`Demuxer`] with a [`FrameCodec`].
-//!
-//! Replaces the per-backend `Fmp4SegmentDecoder` / `AppleDecoder` /
-//! `SymphoniaDecoder` / `AndroidDecoder` god-types once Phase 5 wires
-//! the factory to it.
+//! `ComposedDecoder<D, C>` — single `Decoder` impl that pairs a
+//! [`Demuxer`] with a [`FrameCodec`]. Used by every backend (Apple
+//! `AudioToolbox`, Android `MediaCodec`, Symphonia, fMP4 segments)
+//! through composition rather than per-backend decoder types.
 
 use std::{
     sync::{
@@ -27,7 +25,7 @@ use crate::{
 /// Generic decoder built by composition: a [`Demuxer`] feeds raw frames
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
 /// dispatch path — no per-backend duplication.
-pub(crate) struct UniversalDecoder<D: Demuxer, C: FrameCodec> {
+pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     codec: C,
     demuxer: D,
     byte_len_handle: Option<Arc<AtomicU64>>,
@@ -61,7 +59,7 @@ pub(crate) struct UniversalDecoder<D: Demuxer, C: FrameCodec> {
     frame_offset: u64,
 }
 
-impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
+impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
     /// Build a decoder from a `(demuxer, codec)` pair.
     pub(crate) fn new(
         demuxer: D,
@@ -229,7 +227,7 @@ impl<D: Demuxer, C: FrameCodec> UniversalDecoder<D, C> {
     }
 }
 
-impl<D: Demuxer + 'static, C: FrameCodec> Decoder for UniversalDecoder<D, C> {
+impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
     fn duration(&self) -> Option<Duration> {
         self.duration
     }
@@ -274,7 +272,7 @@ fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
 
 #[cfg(all(test, feature = "symphonia"))]
 mod smoke_tests {
-    //! White-box smoke tests for `UniversalDecoder<SymphoniaDemuxer, SymphoniaCodec>`
+    //! White-box smoke tests for `ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>`
     //! on a real MP3 fixture. Validates that the unified composition path emits
     //! non-empty `PcmChunk` values and round-trips a seek to start. Migrated from
     //! `tests/universal_smoke.rs` after the public types were demoted to
@@ -333,7 +331,7 @@ mod smoke_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("MP3 codec should open");
-        let mut decoder = UniversalDecoder::new(
+        let mut decoder = ComposedDecoder::new(
             demuxer,
             codec,
             // test fixture
@@ -359,7 +357,7 @@ mod smoke_tests {
                 DecoderChunkOutcome::Eof => panic!("MP3 fixture must not EOF in 16 packets"),
             }
         }
-        assert!(got_chunk, "UniversalDecoder must emit at least one chunk");
+        assert!(got_chunk, "ComposedDecoder must emit at least one chunk");
     }
 
     #[kithara::test]
@@ -368,7 +366,7 @@ mod smoke_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("MP3 codec should open");
-        let mut decoder = UniversalDecoder::new(
+        let mut decoder = ComposedDecoder::new(
             demuxer,
             codec,
             // test fixture
@@ -459,7 +457,7 @@ mod test_stub_codec {
 
 #[cfg(test)]
 mod hook_tests {
-    //! Hook-emission tests for `UniversalDecoder`. Validate that the folded-in
+    //! Hook-emission tests for `ComposedDecoder`. Validate that the folded-in
     //! `Option<SharedHooks>` field forwards `next_chunk` / `seek` outcomes to
     //! the registered observer. Migrated from the former `HookedDecoder`
     //! decorator, which has been deleted in favour of native hook support.
@@ -522,7 +520,7 @@ mod hook_tests {
     }
 
     /// Stub demuxer + codec pair driven by canned outcomes. Exists only so
-    /// hook tests can construct a `UniversalDecoder` without needing a real
+    /// hook tests can construct a `ComposedDecoder` without needing a real
     /// container/codec.
     struct StubDemuxer {
         track: TrackInfo,
@@ -582,7 +580,7 @@ mod hook_tests {
     fn build(
         demuxer: StubDemuxer,
         log: Arc<Mutex<CallLog>>,
-    ) -> UniversalDecoder<StubDemuxer, ConstFrameCodec> {
+    ) -> ComposedDecoder<StubDemuxer, ConstFrameCodec> {
         let codec = ConstFrameCodec::new(
             PcmSpec {
                 channels: 2,
@@ -591,7 +589,7 @@ mod hook_tests {
             1,
         );
         let hooks: SharedHooks = Arc::new(Mutex::new(LoggingHooks { log }));
-        UniversalDecoder::new(
+        ComposedDecoder::new(
             demuxer,
             codec,
             // test fixture

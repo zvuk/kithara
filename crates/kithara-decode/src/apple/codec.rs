@@ -96,12 +96,11 @@ impl AppleCodec {
     /// property only after consuming the first input packet; FLAC
     /// reports it at init).
     ///
-    /// `FrameCodec::open` keeps its no-config shape so existing
-    /// `UniversalDecoder<D, C>` callers don't break.
     ///
     /// # Errors
     ///
-    /// Same as [`FrameCodec::open`].
+    /// Returns [`DecodeError::Backend`] when `CoreAudio`'s `AudioConverterNew`
+    /// rejects the input/output ASBD pair.
     pub(crate) fn open_with_config(track: &TrackInfo, config: &AppleConfig) -> DecodeResult<Self> {
         let mut codec = Self::open(track)?;
         if config.gapless {

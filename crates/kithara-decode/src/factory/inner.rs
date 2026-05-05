@@ -93,12 +93,12 @@ pub struct DecoderConfig {
     ///
     /// Used when the container format is not specified, as a hint for auto-detection.
     pub hint: Option<String>,
-    /// Reader-side observer hooks. Forwarded into [`UniversalDecoder`]
+    /// Reader-side observer hooks. Forwarded into [`ComposedDecoder`]
     /// directly; emitting them is opt-in and zero-overhead when `None`.
     /// `Some(_)` wires the chunk/seek signals into the supplied
     /// [`SharedHooks`] sink (mock sources, tests, telemetry).
     ///
-    /// [`UniversalDecoder`]: crate::universal::UniversalDecoder
+    /// [`ComposedDecoder`]: crate::composed::ComposedDecoder
     pub hooks: Option<SharedHooks>,
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
@@ -365,11 +365,11 @@ fn create_file_symphonia_universal(
 
     use crate::{
         GaplessInfo,
+        composed::ComposedDecoder,
         demuxer::Demuxer,
         gapless::{LAME_DECODER_DELAY, probe_mp4_gapless_dyn, read_lame_trim},
         symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
         traits::DecoderInput,
-        universal::UniversalDecoder,
     };
 
     /// LAME header probe window: read up to ~16 `KiB` to cover `ID3v2`
@@ -403,7 +403,7 @@ fn create_file_symphonia_universal(
     tracing::debug!(
         ?codec,
         ?container,
-        "file-symphonia: dispatching to UniversalDecoder<SymphoniaDemuxer, SymphoniaCodec>"
+        "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>"
     );
 
     // Probe codec-native gapless metadata before the format reader
@@ -448,7 +448,7 @@ fn create_file_symphonia_universal(
         // fallback safety net — caller injects pcm_pool via DecoderConfig
         // ast-grep-ignore: perf.no-global-pool-accessor
         .unwrap_or_else(|| PcmPool::default().clone());
-    let decoder = UniversalDecoder::new(
+    let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         pool,
@@ -503,7 +503,7 @@ fn create_fmp4_segment_symphonia(
 }
 
 /// Generic builder for the segment-aware fMP4 path. Owns the
-/// [`Fmp4SegmentDemuxer`] open + pool-resolution + [`UniversalDecoder`]
+/// [`Fmp4SegmentDemuxer`] open + pool-resolution + [`ComposedDecoder`]
 /// boilerplate so apple/android/symphonia call-sites collapse into a
 /// single closure that opens the codec from `TrackInfo`.
 #[cfg(feature = "symphonia")]
@@ -517,7 +517,7 @@ where
     C: crate::codec::FrameCodec + 'static,
     F: FnOnce(&crate::demuxer::TrackInfo) -> DecodeResult<C>,
 {
-    use crate::{demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer, universal::UniversalDecoder};
+    use crate::{composed::ComposedDecoder, demuxer::Demuxer, fmp4::Fmp4SegmentDemuxer};
 
     let demuxer = Fmp4SegmentDemuxer::open(source, layout)?;
     let codec = open_codec(demuxer.track_info())?;
@@ -527,7 +527,7 @@ where
         // fallback safety net — caller injects pcm_pool via DecoderConfig
         // ast-grep-ignore: perf.no-global-pool-accessor
         .unwrap_or_else(|| PcmPool::default().clone());
-    let decoder = UniversalDecoder::new(
+    let decoder = ComposedDecoder::new(
         demuxer,
         codec,
         pool,

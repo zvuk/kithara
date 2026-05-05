@@ -2,7 +2,7 @@
 //!
 //! `SymphoniaCodec` (`FrameCodec` impl over `Box<dyn AudioDecoder>`) and
 //! `SymphoniaDemuxer` (`Demuxer` impl over `Box<dyn FormatReader>`) are the
-//! pieces that pair with `UniversalDecoder` for software-decoded audio
+//! pieces that pair with `ComposedDecoder` for software-decoded audio
 //! formats (MP3, native FLAC, OGG/Opus/Vorbis, WAV/AIFF, MKV, ADTS,
 //! file-fmp4). Bootstrap helpers — `adapter::ReadSeekAdapter` (`Read+Seek ->
 //! MediaSource` bridge), `probe::{new_direct, probe_with_seek}`, and

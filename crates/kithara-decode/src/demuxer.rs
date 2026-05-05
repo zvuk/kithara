@@ -5,7 +5,7 @@
 //! that is the [`FrameCodec`] half. Splitting the two lets us pair any
 //! container parser (HLS-fmp4, file-mp4, ADTS, OGG, …) with any codec
 //! backend (Symphonia software, Apple/Android hardware, …) through
-//! `UniversalDecoder<D, C>`.
+//! `ComposedDecoder<D, C>`.
 //!
 //! Implementations live in their platform-specific modules:
 //! - [`crate::symphonia::SymphoniaDemuxer`] for MP3 / WAV / OGG / native FLAC / file-fmp4.

@@ -1,5 +1,5 @@
 //! Tests for the Symphonia bootstrap path. Now drives
-//! [`UniversalDecoder<SymphoniaDemuxer, SymphoniaCodec>`] through
+//! [`ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>`] through
 //! [`crate::factory::DecoderFactory::create_with_probe`] / `_from_media_info`,
 //! since the legacy whole-stream `SymphoniaDecoder` was deleted.
 

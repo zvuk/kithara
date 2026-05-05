@@ -5,7 +5,7 @@
 //! per `moof` fragment. Used by [`super::source::FileSource`] to expose
 //! `Source::init_segment_range / segment_at_time / segment_after_byte /
 //! segment_count`, which in turn lets the decoder factory route
-//! file-fmp4 through `UniversalDecoder<Fmp4SegmentDemuxer,
+//! file-fmp4 through `ComposedDecoder<Fmp4SegmentDemuxer,
 //! SymphoniaCodec>` instead of Symphonia's whole-stream `IsoMp4Reader`.
 //!
 //! Scope: only fragmented mp4 (with a non-empty `moof` chain). Classic

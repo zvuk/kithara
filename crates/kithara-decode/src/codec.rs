@@ -6,7 +6,7 @@ use kithara_platform::time::Duration;
 use crate::{error::DecodeResult, types::PcmSpec};
 
 /// Frame-level codec contract paired with a [`crate::demuxer::Demuxer`] in
-/// `UniversalDecoder<D, C>`.
+/// `ComposedDecoder<D, C>`.
 ///
 /// Implementations consume one demuxed frame at a time and write
 /// interleaved f32 PCM into the caller-provided pool buffer (`out`).
@@ -60,7 +60,7 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// `AudioDecoderOptions::gapless`, Android via the demuxer's
     /// container probe).
     ///
-    /// `UniversalDecoder<D, C>` forwards this through
+    /// `ComposedDecoder<D, C>` forwards this through
     /// [`crate::Decoder::track_info`] so the audio pipeline can build
     /// a [`crate::GaplessTrimmer`] without knowing the concrete codec
     /// type.

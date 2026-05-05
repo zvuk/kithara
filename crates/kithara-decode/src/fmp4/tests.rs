@@ -15,11 +15,11 @@ use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use crate::{
+    composed::ComposedDecoder,
     demuxer::Demuxer,
     fmp4::Fmp4SegmentDemuxer,
     symphonia::{SymphoniaCodec, SymphoniaConfig},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
-    universal::UniversalDecoder,
 };
 
 /// Fixed-layout in-memory test source built from init+segment fixtures.
@@ -137,7 +137,7 @@ fn build_test_layout(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
 }
 
 type DecoderHarness = (
-    UniversalDecoder<Fmp4SegmentDemuxer, SymphoniaCodec>,
+    ComposedDecoder<Fmp4SegmentDemuxer, SymphoniaCodec>,
     Arc<Mutex<Vec<Range<u64>>>>,
     Arc<AtomicBool>,
 );
@@ -154,7 +154,7 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
     let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("open codec");
-    let decoder = UniversalDecoder::new(
+    let decoder = ComposedDecoder::new(
         demuxer,
         codec,
         PcmPool::default().clone(),

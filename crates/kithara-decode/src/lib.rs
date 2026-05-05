@@ -24,6 +24,7 @@
 //! ```
 
 mod codec;
+mod composed;
 mod demuxer;
 mod error;
 mod factory;
@@ -35,7 +36,6 @@ mod pcm_time;
 mod symphonia;
 mod traits;
 mod types;
-mod universal;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
@@ -49,18 +49,11 @@ mod apple;
 pub use error::{DecodeError, DecodeResult, ErrorClass};
 // Factory for runtime selection
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
-// Gapless API — wholesale port from PR #64. Per-platform codec wiring
-// in P4–P6, factory wiring in P7, audio-pipeline wiring in P9.
 pub use gapless::{
     GaplessInfo, GaplessMode, GaplessOutput, GaplessTrimmer, SilenceTrimParams,
     codec_priming_frames, probe_mp4_gapless,
 };
 pub use pcm_time::{duration_for_frames, frames_for_duration};
-/// Compatibility re-export for the legacy `InnerDecoder` name. Renamed to
-/// [`Decoder`] in the 2026-04-29 trait cleanup; the re-export keeps callers
-/// (notably PR #64 ports) compiling without an extra rename pass.
-pub use traits::Decoder as InnerDecoder;
-// Public traits
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };
