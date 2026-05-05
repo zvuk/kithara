@@ -342,12 +342,7 @@ pub(super) mod counters {
     /// One `emit_fetch_cmd` USDT event lifted into typed form.
     #[derive(Clone, Debug)]
     pub(crate) struct FetchEmit {
-        #[expect(
-            dead_code,
-            reason = "kept for future timing assertions and diagnostics"
-        )]
         pub(crate) at: Instant,
-        #[expect(dead_code, reason = "kept for future seek-window correlation tests")]
         pub(crate) seek_epoch: u64,
         pub(crate) variant: usize,
         pub(crate) segment_index: usize,

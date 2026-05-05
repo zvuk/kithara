@@ -26,7 +26,6 @@ pub(crate) mod multi_accumulator_loop;
 pub(crate) mod parallel_loops;
 pub(crate) mod retry_fallback;
 
-#[expect(dead_code, reason = "fields consumed by upcoming idiom checks")]
 pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
     pub(crate) metadata: &'a Metadata,

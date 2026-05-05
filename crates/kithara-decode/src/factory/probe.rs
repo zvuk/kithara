@@ -6,7 +6,6 @@ use crate::error::{DecodeError, DecodeResult};
 
 /// Selector for choosing how to detect/specify the codec.
 #[derive(Debug, Clone)]
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) enum CodecSelector {
     /// Known codec - no probing needed.
     Exact(AudioCodec),

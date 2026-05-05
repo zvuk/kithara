@@ -512,7 +512,6 @@ where
 /// Non-generic: drop logic is captured as a closure for type erasure.
 #[derive(Clone)]
 pub struct LeaseGuard {
-    #[expect(dead_code)]
     inner: Option<Arc<LeaseGuardInner>>,
 }
 

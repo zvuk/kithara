@@ -77,7 +77,6 @@ impl AndroidCodec {
     /// # Errors
     ///
     /// Same as [`FrameCodec::open`].
-    #[expect(dead_code, reason = "called by the factory in P7")]
     pub(crate) fn open_with_config(
         track: &TrackInfo,
         _config: &AndroidConfig,
@@ -98,7 +97,6 @@ impl AndroidCodec {
     /// # Errors
     ///
     /// Forwards [`DecodeError`] from the MP4 probe.
-    #[expect(dead_code, reason = "called by the factory in P7")]
     pub(crate) fn probe_track_info(
         source: &mut dyn DecoderInput,
         codec: AudioCodec,

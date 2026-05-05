@@ -45,7 +45,6 @@ pub(crate) fn red(s: &str) -> String {
     wrap("31", s)
 }
 
-#[expect(dead_code, reason = "kept for future severity tags")]
 pub(crate) fn yellow(s: &str) -> String {
     wrap("33", s)
 }

@@ -18,7 +18,6 @@ pub(crate) mod struct_field_order;
 pub(crate) mod struct_init_order;
 pub(crate) mod trait_item_order;
 
-#[expect(dead_code, reason = "metadata field reserved for future style checks")]
 pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
     pub(crate) metadata: &'a Metadata,

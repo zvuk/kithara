@@ -18,11 +18,6 @@ pub(crate) enum TrackPlaybackStopReason {
     Stop,
 }
 
-#[expect(dead_code, reason = "fields read when player polls notification_rx")]
-#[expect(
-    clippy::enum_variant_names,
-    reason = "Track prefix is intentional domain naming"
-)]
 #[derive(Debug, Clone)]
 pub(crate) enum PlayerNotification {
     /// A track encountered an unrecoverable error during playback.

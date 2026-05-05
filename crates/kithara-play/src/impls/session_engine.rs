@@ -1,12 +1,3 @@
-#![expect(
-    clippy::needless_pass_by_value,
-    clippy::option_if_let_else,
-    clippy::type_complexity,
-    reason = "wholesale port from production/main PR #64; refactoring deferred — \
-              firewheel graph wiring sequencing matters and large rewrites here \
-              would diverge from upstream in ways that complicate future merges"
-)]
-
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]

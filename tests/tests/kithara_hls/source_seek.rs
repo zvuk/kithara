@@ -20,7 +20,6 @@ use tracing::info;
 // Test Data Helpers
 
 /// Segment size in bytes (test fixture pads to 200KB).
-#[expect(dead_code, reason = "documents segment size for test reference")]
 const SEGMENT_SIZE: u64 = 200_000;
 
 // Stream<Hls> Seek + Read Tests

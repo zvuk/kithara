@@ -7,7 +7,6 @@
 
 // Shared test fixture: items below are used by some test binaries but not all.
 // `cargo build --all-targets` flags them as dead per-binary.
-#![allow(dead_code)]
 
 use kithara::{
     audio::{Audio, ReadOutcome},

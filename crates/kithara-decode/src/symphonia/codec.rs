@@ -182,7 +182,6 @@ impl SymphoniaCodec {
     ///
     /// Forwards [`DecodeError`] from the MP4 probe (malformed boxes,
     /// I/O failures on the input source).
-    #[expect(dead_code, reason = "called by the factory in P7")]
     pub(crate) fn probe_track_info(
         source: &mut dyn DecoderInput,
         codec: AudioCodec,

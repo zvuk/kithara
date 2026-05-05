@@ -18,7 +18,6 @@ fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     buf[..n].to_vec()
 }
 
-#[expect(dead_code, reason = "utility reserved for future tests")]
 fn mp3_bytes() -> Vec<u8> {
     // Deterministic "mp3-like" payload (we don't parse mp3 here; just bytes).
     // Big enough to exercise read/write paths.

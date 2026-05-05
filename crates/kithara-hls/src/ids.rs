@@ -11,7 +11,6 @@ pub(crate) type SegmentIndex = usize;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SegmentId {
     /// Variant initialization segment (moov / codec configuration).
-    #[expect(dead_code, reason = "reserved for standalone init-only fetch plans")]
     Init,
     /// Media segment at the given index.
     Media(SegmentIndex),

@@ -469,10 +469,6 @@ pub(crate) fn collect_self_field_writes(
 /// in it. Used by checks that match impls against structs in the same module
 /// to avoid cross-module name aliasing.
 #[derive(Debug)]
-#[expect(
-    dead_code,
-    reason = "consts/fns consumed by upcoming style::const_locality"
-)]
 pub(crate) struct Scope<'a> {
     /// Module path components, e.g. `["foo", "bar"]`. Empty for file root.
     pub(crate) path: Vec<String>,

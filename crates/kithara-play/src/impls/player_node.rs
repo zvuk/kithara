@@ -73,13 +73,11 @@ impl PlayerNode {
     }
 
     /// Get a reference to the command receiver.
-    #[expect(dead_code, reason = "accessor for future use")]
     pub(crate) fn cmd_rx(&self) -> &Arc<Mutex<Option<HeapCons<PlayerCmd>>>> {
         &self.cmd_rx
     }
 
     /// Get a reference to the shared player state.
-    #[cfg_attr(not(test), expect(dead_code, reason = "accessor for future use"))]
     pub(crate) fn shared_state(&self) -> &Arc<SharedPlayerState> {
         &self.shared_state
     }

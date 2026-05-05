@@ -212,10 +212,6 @@ impl PlayerResource {
     /// after it leaves [`PlayerResource`]'s scratch buffer). Trigger logic
     /// uses [`crate::impls::player_track::PlayerTrack`]'s served-frame
     /// counter instead; this accessor remains for diagnostics and tests.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "diagnostics and unit tests only")
-    )]
     pub(crate) fn position(&self) -> f64 {
         self.resource.position().as_secs_f64()
     }
@@ -234,7 +230,6 @@ impl PlayerResource {
     }
 
     /// Source identifier for this resource.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
     pub(crate) fn src(&self) -> &Arc<str> {
         &self.src
     }

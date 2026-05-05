@@ -72,7 +72,6 @@ impl SharedPlayerState {
     }
 
     /// Get the current sample rate, if set.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
     pub(crate) fn sample_rate(&self) -> Option<NonZeroU32> {
         NonZeroU32::new(self.sample_rate.load(Ordering::Relaxed))
     }

@@ -49,7 +49,6 @@ impl Consts {
     const HLS_READ_TARGET_BYTES: usize = 196_608;
     const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
 
-    #[allow(dead_code, reason = "exposed for future bench cases")]
     const fn hls_total_bytes() -> usize {
         Self::HLS_SEGMENT_COUNT * Self::HLS_SEGMENT_SIZE
     }

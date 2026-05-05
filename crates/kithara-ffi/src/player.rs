@@ -460,7 +460,6 @@ impl AudioPlayer {
         Ok(TrackSource::Config(Box::new(config)))
     }
 
-    #[expect(dead_code, reason = "reserved for future event bridge extensions")]
     pub(crate) fn observer(&self) -> Option<Arc<dyn PlayerObserver>> {
         self.observer.lock_sync().clone()
     }

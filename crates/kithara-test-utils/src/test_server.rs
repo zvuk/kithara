@@ -218,10 +218,6 @@ impl HlsFixtureBuilder {
         self
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by test-only helper paths")
-    )]
     pub(crate) fn into_inline_spec(self) -> HlsSpec {
         self.into_spec_inner::<fn(&[u8]) -> String>(None)
     }
