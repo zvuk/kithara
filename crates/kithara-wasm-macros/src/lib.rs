@@ -74,7 +74,7 @@ fn impl_accessor_name(input: &ItemImpl) -> Ident {
             .path
             .segments
             .last()
-            .expect("empty impl path")
+            .expect("BUG: syn::TypePath::path has at least one segment")
             .ident
             .clone(),
         _ => panic!("wasm_export: expected a named type in impl block"),
@@ -87,14 +87,21 @@ fn build_free_fn(accessor_name: &Ident, method: &ImplItemFn) -> TokenStream2 {
     let free_fn_name = format_ident!("{}_{}", accessor_name, method_name);
     let is_async = method.sig.asyncness.is_some();
 
+    let typed_args = method
+        .sig
+        .inputs
+        .iter()
+        .skip(1)
+        .filter_map(|arg| match arg {
+            FnArg::Typed(pat_type) => Some(pat_type),
+            FnArg::Receiver(_) => None,
+        });
     let mut param_defs = Vec::new();
     let mut param_names = Vec::new();
-    for arg in method.sig.inputs.iter().skip(1) {
-        if let FnArg::Typed(pat_type) = arg {
-            param_defs.push(quote! { #pat_type });
-            if let Pat::Ident(pat_ident) = pat_type.pat.as_ref() {
-                param_names.push(pat_ident.ident.clone());
-            }
+    for pat_type in typed_args {
+        param_defs.push(quote! { #pat_type });
+        if let Pat::Ident(pat_ident) = pat_type.pat.as_ref() {
+            param_names.push(pat_ident.ident.clone());
         }
     }
 
