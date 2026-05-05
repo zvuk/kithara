@@ -1,10 +1,5 @@
 //! Xing/Info/LAME tag extraction for MPEG audio gapless metadata.
 
-#![expect(
-    dead_code,
-    reason = "consumed in the symphonia codec MP3 path follow-up; wholesale port from PR #64"
-)]
-
 const MPEG_HEADER_LEN: usize = 4;
 const SYNC_MASK: u32 = 0xFFE0_0000;
 const SYNC_VALUE: u32 = 0xFFE0_0000;

@@ -12,6 +12,17 @@ use crate::{
     },
 };
 
+/// Native priming the codec's encoder emits at the start of every track,
+/// folded into the container's `encoder_delay`/`iTunSMPB` count by the
+/// fmp4 mux so a downstream `probe_mp4_gapless` reports the same trim
+/// total `FFmpeg` would have written.
+fn codec_native_priming_frames(codec: AudioCodec) -> u64 {
+    match codec {
+        AudioCodec::AacLc => 1024,
+        _ => 0,
+    }
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum PackagedMuxError {
     #[error("codec `{0:?}` does not have an fMP4 descriptor")]
@@ -189,21 +200,23 @@ fn trak_box(
 }
 
 fn edts_box(track: &EncodedTrack, total_duration: u64) -> Option<Vec<u8>> {
-    let encoder_delay = u64::from(track.encoder_delay);
+    let codec = track.media_info.codec?;
+    let native_priming = codec_native_priming_frames(codec);
+    let leading = u64::from(track.encoder_delay).saturating_add(native_priming);
     let trailing_delay = u64::from(track.trailing_delay);
-    if encoder_delay == 0 && trailing_delay == 0 {
+    if leading == 0 && trailing_delay == 0 {
         return None;
     }
 
     let valid_duration = total_duration
-        .checked_sub(encoder_delay)?
+        .checked_sub(leading)?
         .checked_sub(trailing_delay)?;
     if valid_duration == 0 {
         return None;
     }
 
     Some(mp4_box(*b"edts", |buf| {
-        buf.push_bytes(&elst_box(valid_duration, encoder_delay));
+        buf.push_bytes(&elst_box(valid_duration, leading));
     }))
 }
 
@@ -235,7 +248,11 @@ fn elst_box(segment_duration: u64, media_time: u64) -> Vec<u8> {
 /// `<version> <leading> <trailing> <total> ...`. We pad the tail with
 /// zero tokens so the string size matches what real-world tooling produces.
 fn udta_itunsmpb_box(track: &EncodedTrack, total_duration: u64) -> Vec<u8> {
-    let leading = u64::from(track.encoder_delay);
+    let native_priming = track
+        .media_info
+        .codec
+        .map_or(0, codec_native_priming_frames);
+    let leading = u64::from(track.encoder_delay).saturating_add(native_priming);
     let trailing = u64::from(track.trailing_delay);
     let total_audible = total_duration
         .saturating_sub(leading)

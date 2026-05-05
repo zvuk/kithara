@@ -10,8 +10,16 @@ use kithara_stream::AudioCodec;
 /// trimmer applies, but over-trim eats real content.
 ///
 /// Spec references:
-/// - AAC: ISO/IEC 14496-3 — fixed AAC LC priming = 2112 frames.
-/// - HE-AAC: AAC LC priming + 1024-frame SBR delay = 3072 frames.
+/// - AAC: container metadata produced by mainstream encoders (`FFmpeg`'s
+///   `aacenc`, Apple's `AudioConverter`) already folds the AAC encoder's
+///   native priming (one 1024-frame silent block) into the declared
+///   `encoder_delay`. The trim path therefore adds nothing on top of
+///   what the container reports, otherwise it double-counts the
+///   priming. The `kithara-test-utils` fmp4 mux mirrors this fold so
+///   probes round-trip through the same arithmetic.
+/// - HE-AAC: same encoder convention; the SBR delay is captured inside
+///   the container's `encoder_delay` count, so the trim path adds 0
+///   here as well.
 /// - MP3 LAME default: 528 + 576 + 1 = 1105 frames (Fraunhofer differs:
 ///   ~1681). 1105 covers LAME — by far the most common encoder; the
 ///   leftover ~12 ms tail of priming for Fraunhofer is masked by
@@ -23,11 +31,17 @@ use kithara_stream::AudioCodec;
 #[must_use]
 pub fn codec_priming_frames(codec: AudioCodec) -> u64 {
     match codec {
-        AudioCodec::AacLc => 2112,
-        AudioCodec::AacHe | AudioCodec::AacHeV2 => 3072,
-        AudioCodec::Mp3 => 1105,
         AudioCodec::Opus => 312,
-        AudioCodec::Vorbis
+        // AAC LC / HE / HEv2 — encoder-fold convention covers native
+        // priming. MP3 LAME header (enc_delay + LAME_DECODER_DELAY)
+        // covers MP3's native priming end-to-end. Lossless codecs
+        // (FLAC/ALAC/PCM/ADPCM) and Vorbis (without ogg `pre_skip`)
+        // carry no encoder priming.
+        AudioCodec::Mp3
+        | AudioCodec::AacLc
+        | AudioCodec::AacHe
+        | AudioCodec::AacHeV2
+        | AudioCodec::Vorbis
         | AudioCodec::Flac
         | AudioCodec::Alac
         | AudioCodec::Pcm
@@ -42,14 +56,13 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn aac_lc_priming_is_2112() {
-        assert_eq!(codec_priming_frames(AudioCodec::AacLc), 2112);
-    }
-
-    #[kithara::test]
-    fn he_aac_adds_sbr_delay() {
-        assert_eq!(codec_priming_frames(AudioCodec::AacHe), 3072);
-        assert_eq!(codec_priming_frames(AudioCodec::AacHeV2), 3072);
+    fn aac_priming_is_already_in_container_encoder_delay() {
+        // Mainstream AAC encoders fold the native 1024-frame priming
+        // into the container's declared `encoder_delay`; adding it
+        // again here would double-count the trim.
+        assert_eq!(codec_priming_frames(AudioCodec::AacLc), 0);
+        assert_eq!(codec_priming_frames(AudioCodec::AacHe), 0);
+        assert_eq!(codec_priming_frames(AudioCodec::AacHeV2), 0);
     }
 
     #[kithara::test]

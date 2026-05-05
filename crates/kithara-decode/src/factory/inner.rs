@@ -429,28 +429,79 @@ fn create_symphonia(
 
 #[cfg(feature = "symphonia")]
 fn create_file_symphonia_universal(
-    source: BoxedSource,
+    mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
+    use std::io::SeekFrom;
+
     use crate::{
+        GaplessInfo,
         demuxer::Demuxer,
+        gapless::{LAME_DECODER_DELAY, probe_mp4_gapless_dyn, read_lame_trim},
         symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
+        traits::DecoderInput,
         universal::UniversalDecoder,
     };
+
+    /// LAME header probe window: read up to ~16 `KiB` to cover `ID3v2`
+    /// tags and a couple of MP3 frames before the Xing/Info+LAME slot.
+    const LAME_PROBE_WINDOW_BYTES: usize = 16 * 1024;
+
+    fn probe_codec_gapless(
+        codec: AudioCodec,
+        source: &mut dyn DecoderInput,
+    ) -> Option<GaplessInfo> {
+        match codec {
+            AudioCodec::AacLc => probe_mp4_gapless_dyn(source).ok().flatten(),
+            AudioCodec::Mp3 => {
+                let mut buffer = Vec::with_capacity(LAME_PROBE_WINDOW_BYTES);
+                source
+                    .take(LAME_PROBE_WINDOW_BYTES as u64)
+                    .read_to_end(&mut buffer)
+                    .ok()?;
+                let trim = read_lame_trim(&buffer)?;
+                Some(GaplessInfo {
+                    leading_frames: u64::from(trim.enc_delay)
+                        .saturating_add(u64::from(LAME_DECODER_DELAY)),
+                    trailing_frames: u64::from(trim.enc_padding)
+                        .saturating_sub(u64::from(LAME_DECODER_DELAY)),
+                })
+            }
+            _ => None,
+        }
+    }
 
     tracing::debug!(
         ?codec,
         ?container,
         "file-symphonia: dispatching to UniversalDecoder<SymphoniaDemuxer, SymphoniaCodec>"
     );
-    let (demuxer, _byte_len) = SymphoniaDemuxer::open_file(
+
+    // Probe codec-native gapless metadata before the format reader
+    // consumes the bytes. Symphonia 0.6.0-alpha.1 keeps `elst`/`iTunSMPB`
+    // (AAC) and the LAME tag (MP3) inside the codec readers and never
+    // surfaces them through `track.codec_params`, so the factory carries
+    // the trim counts across the demuxer boundary itself.
+    let probed_gapless = if config.gapless {
+        let _ = source.seek(SeekFrom::Start(0));
+        let info = probe_codec_gapless(codec, &mut *source);
+        let _ = source.seek(SeekFrom::Start(0));
+        info
+    } else {
+        None
+    };
+
+    let (mut demuxer, _byte_len) = SymphoniaDemuxer::open_file(
         source,
         config.hint.clone(),
         container,
         config.byte_len_handle.clone(),
     )?;
+    if probed_gapless.is_some() {
+        demuxer.set_gapless(probed_gapless);
+    }
     let symphonia_config = SymphoniaConfig {
         gapless: config.gapless,
         ..Default::default()
