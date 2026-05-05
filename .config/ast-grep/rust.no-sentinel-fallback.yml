@@ -1,0 +1,50 @@
+id: rust.no-sentinel-fallback
+message: |
+  `.unwrap_or($T::MAX|MIN|INFINITY|NEG_INFINITY|NAN)` (and the
+  `unwrap_or_else` variants) hides a missing value behind an extreme
+  sentinel. This is worse than `.expect(...)`: `expect` panics loudly
+  at the failure site; a sentinel keeps running with an out-of-band
+  value that overflows, distorts comparisons, or poisons downstream
+  arithmetic.
+
+  Pick one of:
+    • propagate with `?` (`.ok_or(MyError::Missing)?`),
+    • return early with a typed error,
+    • fall back to a value whose semantics make sense in context
+      (`0`, `Duration::ZERO`, an empty buffer).
+
+      // ❌
+      let timeout = config.timeout_ms().unwrap_or(u64::MAX);
+      let head = stream.position().unwrap_or(usize::MAX);
+      let amp = sample.peak().unwrap_or(f64::INFINITY);
+
+      // ✅
+      let timeout = config.timeout_ms().ok_or(ConfigError::MissingTimeout)?;
+      let head = stream.position().unwrap_or(0);
+      let amp = sample.peak()?;
+
+  Suppress with `// ast-grep-ignore: rust.no-sentinel-fallback` only when
+  the sentinel is provably never reached (document why on the same line).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+  - xtask/**/*.rs
+rule:
+  any:
+    - pattern: $E.unwrap_or($T::MAX)
+    - pattern: $E.unwrap_or($T::MIN)
+    - pattern: $E.unwrap_or($T::INFINITY)
+    - pattern: $E.unwrap_or($T::NEG_INFINITY)
+    - pattern: $E.unwrap_or($T::NAN)
+    - pattern: $E.unwrap_or_else(|| $T::MAX)
+    - pattern: $E.unwrap_or_else(|| $T::MIN)
+    - pattern: $E.unwrap_or_else(|| $T::INFINITY)
+    - pattern: $E.unwrap_or_else(|| $T::NEG_INFINITY)
+    - pattern: $E.unwrap_or_else(|| $T::NAN)
+    - pattern: $E.unwrap_or_else(|_| $T::MAX)
+    - pattern: $E.unwrap_or_else(|_| $T::MIN)
+    - pattern: $E.unwrap_or_else(|_| $T::INFINITY)
+    - pattern: $E.unwrap_or_else(|_| $T::NEG_INFINITY)
+    - pattern: $E.unwrap_or_else(|_| $T::NAN)
