@@ -69,6 +69,8 @@ pub(crate) struct CanonicalType {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
+    pub(crate) cfg_density: CfgDensityThreshold,
+    #[serde(default)]
     pub(crate) file_size: FileSizeThreshold,
     #[serde(default)]
     pub(crate) file_density: FileDensityThreshold,
@@ -249,6 +251,28 @@ fn default_redundant_reexport_detect() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CfgDensityThreshold {
+    pub(crate) warn: usize,
+    pub(crate) deny: usize,
+    #[serde(default)]
+    pub(crate) exempt_crates: Vec<String>,
+    #[serde(default)]
+    pub(crate) exclude_globs: Vec<String>,
+}
+
+impl Default for CfgDensityThreshold {
+    fn default() -> Self {
+        Self {
+            warn: 5,
+            deny: 10,
+            exempt_crates: Vec::new(),
+            exclude_globs: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

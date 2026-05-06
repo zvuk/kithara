@@ -1,6 +1,15 @@
 # Numeric thresholds for size/density/nesting checks.
 # Each section has `warn` and `deny` levels; values below `warn` are clean.
 
+[cfg_density]
+# `#[cfg(...)]` attributes per file. High density signals the file should be
+# split into platform/feature modules with a single gate on the `mod` decl.
+warn = 5
+deny = 10
+# Platform adapter crate: cfg gates are its raison d'être.
+exempt_crates = ["kithara-platform"]
+exclude_globs = ["**/tests/**", "**/benches/**"]
+
 [file_size]
 warn = 400
 deny = 1000
