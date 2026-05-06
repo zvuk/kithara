@@ -48,6 +48,7 @@ mod kithara_hls {
     mod html_error_cleanup;
     mod keys_integration;
     mod playlist_integration;
+    mod prefetch_403_fails_open;
     mod red_leak_pattern;
     mod red_leak_peer_handle_cycle;
     mod red_leak_small_cache_seek;

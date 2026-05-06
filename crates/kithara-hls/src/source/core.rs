@@ -7,7 +7,7 @@ use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_platform::Mutex;
-use kithara_probes::kithara;
+use kithara_probes::{IntoProbeArg, kithara};
 use tracing::trace;
 
 use crate::{
@@ -171,14 +171,25 @@ impl HlsSource {
         Some((variant, segment_index, "playlist.find_segment_at_offset"))
     }
 
+    #[kithara::probe(probe_return)]
     pub(super) fn init_segment_range_for_variant(
         &self,
         variant: VariantIndex,
-    ) -> Option<Range<u64>> {
+    ) -> InitRangeResolution {
         let segments = self.segments.lock_sync();
-        let vs = segments.variant_segments(variant)?;
+        let Some(vs) = segments.variant_segments(variant) else {
+            return InitRangeResolution::none(variant, 0, None, InitRangeOutcome::NoneNoVariant);
+        };
+        let committed_count = vs.iter().count() as u64;
         // Find first committed segment with init data
-        let (seg_idx, seg_data) = vs.iter().find(|(_, data)| data.init_len > 0)?;
+        let Some((seg_idx, seg_data)) = vs.iter().find(|(_, data)| data.init_len > 0) else {
+            return InitRangeResolution::none(
+                variant,
+                committed_count,
+                None,
+                InitRangeOutcome::NoneNoCommittedInit,
+            );
+        };
 
         // Always return a range starting from offset 0 (segment 0).
         // During midstream ABR switches the downloader commits a later segment
@@ -189,23 +200,73 @@ impl HlsSource {
         // The pipeline waits (source_is_ready_for_boundary) until segment 0
         // is actually downloaded before creating the decoder.
         if seg_idx == 0 {
-            let seg_range = segments.item_range((variant, 0))?;
+            let Some(seg_range) = segments.item_range((variant, 0)) else {
+                return InitRangeResolution::none(
+                    variant,
+                    committed_count,
+                    Some(0),
+                    InitRangeOutcome::NoneSeg0NoRange,
+                );
+            };
             if seg_data.init_url.is_none() {
                 drop(segments);
                 if let Some(metadata_range) = self.metadata_range_for_segment(variant, 0) {
-                    return Some(metadata_range);
+                    return InitRangeResolution::ok(
+                        variant,
+                        committed_count,
+                        Some(0),
+                        InitRangeOutcome::OkMetadataFallback,
+                        metadata_range,
+                    );
                 }
+                return InitRangeResolution::ok(
+                    variant,
+                    committed_count,
+                    Some(0),
+                    InitRangeOutcome::OkSeg0,
+                    seg_range.start..seg_range.end,
+                );
             }
-            return Some(seg_range.start..seg_range.end);
+            return InitRangeResolution::ok(
+                variant,
+                committed_count,
+                Some(0),
+                InitRangeOutcome::OkSeg0,
+                seg_range.start..seg_range.end,
+            );
         }
 
         // Init-bearing segment is not segment 0 — use segment 0's range
         // (from byte map or metadata) so the decoder starts at offset 0.
         if let Some(seg0_range) = segments.item_range((variant, 0)) {
-            return Some(seg0_range);
+            return InitRangeResolution::ok(
+                variant,
+                committed_count,
+                Some(seg_idx as u64),
+                InitRangeOutcome::OkSeg0ViaRange,
+                seg0_range,
+            );
         }
         drop(segments);
-        self.metadata_range_for_segment(variant, 0)
+        self.metadata_range_for_segment(variant, 0).map_or_else(
+            || {
+                InitRangeResolution::none(
+                    variant,
+                    committed_count,
+                    Some(seg_idx as u64),
+                    InitRangeOutcome::NoneFallback,
+                )
+            },
+            |metadata_range| {
+                InitRangeResolution::ok(
+                    variant,
+                    committed_count,
+                    Some(seg_idx as u64),
+                    InitRangeOutcome::OkMetadataFallback,
+                    metadata_range,
+                )
+            },
+        )
     }
 
     pub(super) fn is_past_eof(&self, segments: &StreamIndex, range: &Range<u64>) -> bool {
@@ -352,5 +413,97 @@ impl HlsSource {
     /// Set the peer handle (called after the peer is activated).
     pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
         self._peer_handle = Some(handle);
+    }
+}
+
+/// Outcome of [`HlsSource::init_segment_range_for_variant`].
+///
+/// Encodes which path resolved the byte range (or why it could not).
+/// On the synthetic contract fixtures every variant's seg-0 is committed
+/// upfront with an explicit `init_url`, so anything other than
+/// [`InitRangeOutcome::OkSeg0`] in production logs is a code smell:
+/// either the cache lost seg-0, the resolver raced against an ABR
+/// mid-stream switch, or the byte map for seg-0 never committed.
+///
+/// Wire encoding (`u64`) is stable across versions and consumed by
+/// `probe_capture` filters — do NOT renumber.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InitRangeOutcome {
+    /// Segment 0 was committed and its byte map produced a valid range.
+    OkSeg0 = 0,
+    /// Segment 0 was committed without an explicit `init_url`; the
+    /// range came from the playlist's metadata-derived byte offsets.
+    OkMetadataFallback = 1,
+    /// The init-bearing segment was not segment 0 (mid-stream ABR
+    /// commit race); the returned range covers seg-0 instead.
+    OkSeg0ViaRange = 2,
+    /// The variant has no `VariantSegments` entry yet (variant index
+    /// is out of range or the layout has not been populated).
+    NoneNoVariant = 3,
+    /// No committed segment carries init data — the resolver cannot
+    /// produce a range until at least one segment with `init_len > 0`
+    /// commits.
+    NoneNoCommittedInit = 4,
+    /// Seg-0 was found but its `item_range` lookup failed (corrupt
+    /// byte map, transient race against `commit_segment`).
+    NoneSeg0NoRange = 5,
+    /// All fallbacks (committed seg-0 range, then metadata range)
+    /// returned `None`. Resolver gave up.
+    NoneFallback = 6,
+}
+
+impl IntoProbeArg for InitRangeOutcome {
+    fn into_probe_arg(self) -> u64 {
+        self as u64
+    }
+}
+
+/// Result of [`HlsSource::init_segment_range_for_variant`]: the resolved
+/// byte range plus the trace fields that explain *how* it was resolved.
+///
+/// Carries the wire payload of the
+/// `record_init_range_for_variant_outcome` USDT/tracing probe; the
+/// macro's `probe_return` mode picks `Probe::record_probe` up off the
+/// return value automatically.
+#[derive(Clone, kithara_probes::kithara::Probe)]
+pub(crate) struct InitRangeResolution {
+    pub(crate) outcome: InitRangeOutcome,
+    pub(crate) variant: u64,
+    pub(crate) committed_count: u64,
+    pub(crate) seg_idx_with_init: Option<u64>,
+    #[probe(skip)]
+    pub(crate) range: Option<Range<u64>>,
+}
+
+impl InitRangeResolution {
+    pub(crate) fn ok(
+        variant: VariantIndex,
+        committed_count: u64,
+        seg_idx_with_init: Option<u64>,
+        outcome: InitRangeOutcome,
+        range: Range<u64>,
+    ) -> Self {
+        Self {
+            outcome,
+            variant: variant as u64,
+            committed_count,
+            seg_idx_with_init,
+            range: Some(range),
+        }
+    }
+
+    pub(crate) fn none(
+        variant: VariantIndex,
+        committed_count: u64,
+        seg_idx_with_init: Option<u64>,
+        outcome: InitRangeOutcome,
+    ) -> Self {
+        Self {
+            outcome,
+            variant: variant as u64,
+            committed_count,
+            seg_idx_with_init,
+            range: None,
+        }
     }
 }

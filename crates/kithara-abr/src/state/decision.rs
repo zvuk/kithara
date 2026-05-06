@@ -11,6 +11,7 @@
 
 use kithara_events::{AbrMode, AbrReason, AbrVariant};
 use kithara_platform::time::Instant;
+use kithara_probes::IntoProbeArg;
 use num_traits::ToPrimitive;
 
 use super::{core::AbrState, view::AbrView};
@@ -22,6 +23,12 @@ pub struct AbrDecision {
     pub reason: AbrReason,
     pub did_change: bool,
     pub target_variant_index: usize,
+}
+
+impl IntoProbeArg for &AbrDecision {
+    fn into_probe_arg(self) -> u64 {
+        self.target_variant_index as u64
+    }
 }
 
 /// Produce a decision without mutating state.

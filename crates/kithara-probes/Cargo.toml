@@ -25,4 +25,13 @@ usdt = { workspace = true, optional = true }
 # *consumer* crate gate their USDT/tracing emission on the consumer's
 # own `usdt-probes` feature; this flag only enables the runtime
 # `register_probes()` helper.
-usdt-probes = ["dep:usdt"]
+#
+# Implies `tracing-probes` — USDT consumers want tracing emission too.
+usdt-probes = ["dep:usdt", "tracing-probes"]
+# Activates the `tracing::event!` arm of `#[kithara::probe]` without
+# pulling in `usdt`. Use this in crates that keep `#![forbid(unsafe_code)]`
+# (e.g. `kithara-abr`) — the macro expansion contains no inline asm and
+# stays unsafe-free. Test harnesses that observe probes through
+# `probe_capture` only need this feature; production builds can opt
+# additionally into `usdt-probes` for dtrace/bpftrace integration.
+tracing-probes = []

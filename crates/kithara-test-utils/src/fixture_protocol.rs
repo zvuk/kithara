@@ -312,6 +312,76 @@ pub fn eval_delay(rules: &[DelayRule], variant: usize, segment: usize) -> u64 {
         .unwrap_or(0)
 }
 
+/// HLS route kind for [`HttpErrorRule`] matching.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HlsRouteKind {
+    #[default]
+    Master,
+    Media,
+    Init,
+    Segment,
+    Key,
+}
+
+/// Declarative HTTP error rule for [`HlsTestServerBuilder`].
+///
+/// Matches the request route kind plus optional variant/segment filters and
+/// makes the server respond with the configured status. Used to exercise
+/// fail-fast paths (e.g. 403 on the key endpoint) that production code must
+/// surface as an error rather than swallow into a hang.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct HttpErrorRule {
+    pub kind: HlsRouteKind,
+    /// Match only this variant index. `None` = any variant.
+    /// Ignored for [`HlsRouteKind::Master`] and [`HlsRouteKind::Key`].
+    pub variant: Option<usize>,
+    /// Match only this exact segment index (only for [`HlsRouteKind::Segment`]).
+    pub segment_eq: Option<usize>,
+    /// HTTP status code to return (e.g. 403, 503).
+    pub status: u16,
+    /// Optional response body. Defaults to a generic message.
+    pub body: Option<String>,
+}
+
+impl HttpErrorRule {
+    #[must_use]
+    pub fn matches(
+        &self,
+        kind: HlsRouteKind,
+        variant: Option<usize>,
+        segment: Option<usize>,
+    ) -> bool {
+        if self.kind != kind {
+            return false;
+        }
+        if let Some(rv) = self.variant
+            && let Some(av) = variant
+            && rv != av
+        {
+            return false;
+        }
+        if let Some(re) = self.segment_eq
+            && let Some(seg) = segment
+            && re != seg
+        {
+            return false;
+        }
+        true
+    }
+}
+
+/// Find the first matching error rule, if any.
+#[must_use]
+pub fn eval_http_error(
+    rules: &[HttpErrorRule],
+    kind: HlsRouteKind,
+    variant: Option<usize>,
+    segment: Option<usize>,
+) -> Option<&HttpErrorRule> {
+    rules.iter().find(|r| r.matches(kind, variant, segment))
+}
+
 /// Encryption parameters for HLS segments.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EncryptionRequest {

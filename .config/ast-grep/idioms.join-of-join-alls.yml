@@ -1,0 +1,45 @@
+id: idioms.join-of-join-alls
+message: |
+  `join(join_all(a), join_all(b))` — нет short-circuit на ошибке: если первый
+  future в `a` упал на 50ms, остальные `a` и весь `b` продолжают работать
+  полные таймауты, прежде чем вы узнаете об ошибке. Это тратит I/O
+  и удлиняет critical path в холодном старте.
+
+  Заменяй на short-circuit вариант:
+
+      // ❌
+      let (a_results, b_results) =
+          join(join_all(futs_a), join_all(futs_b)).await;
+      for r in a_results { r?; }
+      for r in b_results { r?; }
+
+      // ✅
+      try_join(try_join_all(futs_a), try_join_all(futs_b)).await?;
+      // или, если предпочитаете макрос:
+      // try_join!(try_join_all(futs_a), try_join_all(futs_b))?;
+
+  Заметь: если future-замыкания заворачивают результат в кортеж
+  `(key, result)` только чтобы цикл `for` мог его деструктурировать
+  (а сам `key` потом игнорируется через `_`), это dead weight — после
+  перехода на `try_*` кортеж становится ненужным, и замыкания
+  возвращают `Result<T, E>` напрямую.
+
+  Suppress with `// ast-grep-ignore: idioms.join-of-join-alls` only when
+  partial-success aggregation is the actual goal (per-result inspection
+  even if some failed) — in that case `join_all` is intentional, but
+  consider whether `FuturesUnordered` would express the intent more
+  clearly.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: join(join_all($A), join_all($B))
+    - pattern: futures::future::join(futures::future::join_all($A), futures::future::join_all($B))

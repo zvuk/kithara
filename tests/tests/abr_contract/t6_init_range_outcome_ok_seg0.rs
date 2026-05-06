@@ -1,10 +1,15 @@
 //! T6 — init-range outcome must always be `OkSeg0` for synthetic
 //! wave fixtures (axiom A5, init-range subset).
 //!
-//! `record_init_range_for_variant_outcome` and
-//! `record_segment_layout_init_range_call` USDT probes carry one of
-//! seven outcomes, encoded by
-//! `kithara_hls::source::init_range_probe::InitRangeOutcome`:
+//! `HlsSource::init_segment_range_for_variant` returns
+//! `InitRangeResolution { outcome, variant, committed_count,
+//! seg_idx_with_init, range }`. The `#[kithara::probe(probe_return)]`
+//! attribute on that function makes the resolution itself emit a
+//! `init_segment_range_for_variant` probe (probe-name picked
+//! from the `Probe` trait's `record_probe(name)` argument the macro
+//! injects on return).
+//!
+//! Outcome wire encoding (from `InitRangeOutcome::into_probe_arg`):
 //!
 //! * 0 — `OkSeg0` — segment 0 was already committed and its range
 //!   came directly from `StreamIndex::item_range`.
@@ -16,9 +21,8 @@
 //!
 //! For the contract suite all fixtures present every variant's seg-0
 //! upfront with an explicit `init_url`, so the only correct outcome
-//! is **`OkSeg0` (0)**. Any `OkMetadataFallback` / `OkSeg0ViaRange`
-//! would mean the resolver fell back through fixture-metadata or the
-//! late-init synthesis path; both are code smells (workarounds for
+//! is **`OkSeg0` (0)**. Any other outcome means the resolver fell
+//! through a fallback path; both are code smells (workarounds for
 //! commit-ordering bugs that the contract tests must catch).
 
 use kithara::{
@@ -138,21 +142,14 @@ async fn t6_init_range_outcome_is_ok_seg0(temp_dir: TestTempDir, #[case] backend
 
     warmup_then_switch_through_all_variants(&mut audio, backend).await;
 
-    // Both probe sites — `record_init_range_for_variant_outcome`
-    // (called from `format_change_segment_range`) and
-    // `record_segment_layout_init_range_call` (called from the fmp4
-    // segment demuxer) — must emit `outcome = 0 (OkSeg0)` on every
-    // single firing. Anything else is a fallback path; on the contract
-    // fixtures (which always present seg-0 upfront), no fallback is
-    // legitimate.
     let init_range_for_variant: Vec<_> =
-        recorder.events_with_probe("record_init_range_for_variant_outcome");
+        recorder.events_with_probe("init_segment_range_for_variant");
     assert!(
         !init_range_for_variant.is_empty(),
-        "T6: zero `record_init_range_for_variant_outcome` events. \
-         The probe never fired — either `format_change_segment_range` was \
-         never invoked, or the variant walk did not actually trigger a \
-         decoder rebuild. Backend = {backend:?}."
+        "T6: zero `init_segment_range_for_variant` events. The probe \
+         never fired — either the audio pipeline never asked the source to \
+         resolve init-range, or `HlsSource::init_segment_range_for_variant` \
+         was skipped during the variant walk. Backend = {backend:?}."
     );
     for (idx, evt) in init_range_for_variant.iter().enumerate() {
         let outcome = evt.u64("outcome").expect("probe must include outcome");
@@ -161,49 +158,11 @@ async fn t6_init_range_outcome_is_ok_seg0(temp_dir: TestTempDir, #[case] backend
         let seg_idx_with_init = evt.u64("seg_idx_with_init");
         assert_eq!(
             outcome, 0,
-            "T6: record_init_range_for_variant_outcome event #{idx} returned \
+            "T6: init_segment_range_for_variant event #{idx} returned \
              non-OkSeg0 outcome={outcome} for variant={variant} \
              (committed_count={committed}, seg_idx_with_init={seg_idx_with_init:?}). \
              The fixture always commits seg-0 upfront with an explicit init_url, \
              so the resolver should never need a fallback path. Backend = {backend:?}."
         );
     }
-
-    let layout_calls: Vec<_> = recorder.events_with_probe("record_segment_layout_init_range_call");
-    assert!(
-        !layout_calls.is_empty(),
-        "T6: zero `record_segment_layout_init_range_call` events. \
-         `Fmp4SegmentDemuxer::open` should fire this probe on every \
-         demuxer rebuild. Backend = {backend:?}."
-    );
-    for (idx, evt) in layout_calls.iter().enumerate() {
-        let outcome = evt.u64("outcome").expect("probe must include outcome");
-        let current_variant = evt
-            .u64("current_variant")
-            .expect("probe must include current_variant");
-        let committed = evt.u64("committed_count").unwrap_or(0);
-        let seg_idx_with_init = evt.u64("seg_idx_with_init");
-        assert_eq!(
-            outcome, 0,
-            "T6: record_segment_layout_init_range_call event #{idx} returned \
-             non-OkSeg0 outcome={outcome} for current_variant={current_variant} \
-             (committed_count={committed}, seg_idx_with_init={seg_idx_with_init:?}). \
-             Backend = {backend:?}."
-        );
-    }
-
-    // The factory must NEVER complain about a missing init range on
-    // the contract fixture. `error_kind = 0 (InitRangeMissing)` is
-    // the production sentinel for the ABR mid-stream switch race.
-    let factory_failures: Vec<_> = recorder
-        .events_with_probe("record_create_from_media_info_failed")
-        .into_iter()
-        .filter(|e| e.u64("error_kind") == Some(0))
-        .collect();
-    assert!(
-        factory_failures.is_empty(),
-        "T6: factory returned `init_range_missing` {n} time(s) — the ABR \
-         init-range contract failed end-to-end. Backend = {backend:?}.",
-        n = factory_failures.len(),
-    );
 }

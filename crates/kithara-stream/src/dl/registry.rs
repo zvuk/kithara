@@ -367,10 +367,10 @@ impl Registry {
         let mut dispatched: usize = 0;
 
         // 1. Urgent: drain slots [0],[1].
-        let mut urgent_cmds: Vec<SlotEntry> = Vec::new();
-        urgent_cmds.extend(self.slots[0].drain(..));
-        urgent_cmds.extend(self.slots[1].drain(..));
-        let urgent_batch = BatchGroup::from_iter(urgent_cmds.into_iter());
+        let urgent_batch = {
+            let [s0, s1, _, _] = &mut self.slots;
+            BatchGroup::from_iter(s0.drain(..).chain(s1.drain(..)))
+        };
         if !urgent_batch.is_empty() {
             dispatched += urgent_batch.process(inner).await;
             return classify_progress(
@@ -397,10 +397,10 @@ impl Registry {
             }
         }
 
-        let mut demand_cmds: Vec<SlotEntry> = Vec::new();
-        demand_cmds.extend(self.slots[Slot::LowHigh as usize].drain(..));
-        demand_cmds.extend(self.slots[Slot::LowLow as usize].drain(..));
-        let demand_batch = BatchGroup::from_iter(demand_cmds.into_iter());
+        let demand_batch = {
+            let [_, _, low_high, low_low] = &mut self.slots;
+            BatchGroup::from_iter(low_high.drain(..).chain(low_low.drain(..)))
+        };
         if !demand_batch.is_empty() {
             dispatched += demand_batch.process(inner).await;
         }

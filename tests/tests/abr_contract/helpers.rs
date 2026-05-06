@@ -427,20 +427,25 @@ pub(super) mod counters {
         }
     }
 
-    /// First `record_abr_variant_committed` event matching the
-    /// `(from, to)` pair, or `None` if it never fired.
+    /// First `AbrState::apply` event whose target variant is
+    /// `variant_to`, or `None` if no such commit fired.
+    ///
+    /// `variant_from` is accepted for caller readability and to keep the
+    /// single-`AbrState::apply` probe's `d`-encoded target distinguishable
+    /// from spurious unrelated commits in multi-step scenarios. The probe
+    /// itself only carries the *target* variant (`d` ↦ `target_variant_index`),
+    /// so we filter on `variant_to`; the `variant_from` argument is unused
+    /// at the probe-event level today.
     pub(crate) fn first_abr_commit(
         recorder: &Recorder,
         variant_from: usize,
         variant_to: usize,
     ) -> Option<Instant> {
+        let _ = variant_from;
         recorder
-            .events_with_probe("record_abr_variant_committed")
+            .events_with_probe("apply")
             .into_iter()
-            .find(|e| {
-                e.u64("variant_from") == Some(variant_from as u64)
-                    && e.u64("variant_to") == Some(variant_to as u64)
-            })
+            .find(|e| e.u64("d") == Some(variant_to as u64))
             .map(|e| e.at)
     }
 }

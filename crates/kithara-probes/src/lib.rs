@@ -26,6 +26,8 @@
 #![cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 
 pub mod kithara;
+mod usdt_wire;
 mod wire;
 
+pub use usdt_wire::{fire_0, fire_1, fire_2, fire_3, fire_4, fire_5, fire_6};
 pub use wire::{IntoProbeArg, Probe, register_probes};

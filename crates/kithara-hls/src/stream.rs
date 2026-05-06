@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-use futures::future::{join, join_all};
+use futures::future::{try_join, try_join_all};
 use kithara_assets::{
     AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
 };
@@ -16,7 +16,7 @@ use kithara_stream::{
 };
 
 use crate::{
-    HlsStreamContext,
+    HlsResult, HlsStreamContext,
     config::HlsConfig,
     coord::HlsCoord,
     loading::{KeyManager, PlaylistCache, SegmentLoader},
@@ -147,7 +147,9 @@ impl StreamType for Hls {
             .current_variant_index()
             .min(master.variants.len().saturating_sub(1));
 
-        prefetch_init_and_keys(&loader, &key_manager, &media_playlists).await;
+        prefetch_init_and_keys(&loader, &key_manager, &media_playlists)
+            .await
+            .map_err(SourceError::from)?;
 
         crate::loading::size_estimation::estimate_size_maps(
             &peer_handle,
@@ -191,48 +193,36 @@ impl StreamType for Hls {
     }
 }
 
+/// Pre-fetch init segments and DRM keys before the scheduler comes up.
+///
+/// Both pieces are required by `prepare_media_sync` — without them the
+/// scheduler's first segment commit fails synchronously and the reader
+/// hangs in `wait_range` until the hang detector panics. Surfacing the
+/// failure here lets `Hls::create` return `Err` immediately, so callers
+/// (player UI, FFI) get an actionable error instead of a 5-second deadlock.
 async fn prefetch_init_and_keys(
     loader: &Arc<SegmentLoader>,
     key_manager: &Arc<KeyManager>,
     media_playlists: &[(url::Url, crate::parsing::MediaPlaylist)],
-) {
-    let num_variants = media_playlists.len();
-
-    let init_futs: Vec<_> = (0..num_variants)
-        .filter(|&v| {
-            media_playlists
-                .get(v)
-                .and_then(|(_, pl)| pl.init_segment.as_ref())
-                .is_some()
-        })
-        .map(|variant| {
+) -> HlsResult<()> {
+    let init_futs = media_playlists
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, pl))| pl.init_segment.is_some())
+        .map(|(variant, _)| {
             let loader = Arc::clone(loader);
-            async move { (variant, loader.load_init_segment(variant).await) }
-        })
-        .collect();
+            async move { loader.load_init_segment(variant).await.map(drop) }
+        });
 
-    let key_urls = collect_aes128_key_urls(media_playlists);
-
-    let key_futs: Vec<_> = key_urls
+    let key_futs = collect_aes128_key_urls(media_playlists)
         .into_iter()
         .map(|url| {
             let km = Arc::clone(key_manager);
-            async move { (url.clone(), km.get_raw_key(&url, None).await) }
-        })
-        .collect();
+            async move { km.get_raw_key(&url, None).await.map(drop) }
+        });
 
-    let (init_results, key_results) = join(join_all(init_futs), join_all(key_futs)).await;
-
-    for (variant, result) in init_results {
-        if let Err(e) = result {
-            tracing::warn!(variant, error = %e, "failed to pre-fetch init segment");
-        }
-    }
-    for (url, result) in key_results {
-        if let Err(e) = result {
-            tracing::warn!(url = %url, error = %e, "failed to pre-fetch DRM key");
-        }
-    }
+    try_join(try_join_all(init_futs), try_join_all(key_futs)).await?;
+    Ok(())
 }
 
 fn collect_aes128_key_urls(
@@ -297,12 +287,12 @@ fn build_abr_variants(
         .iter()
         .zip(media_playlists.iter())
         .map(|(v, (_, playlist))| {
-            let durations: Vec<kithara_platform::time::Duration> =
-                playlist.segments.iter().map(|s| s.duration).collect();
-            let duration = if durations.is_empty() {
+            let duration = if playlist.segments.is_empty() {
                 kithara_events::VariantDuration::Unknown
             } else {
-                kithara_events::VariantDuration::Segmented(durations)
+                kithara_events::VariantDuration::Segmented(
+                    playlist.segments.iter().map(|s| s.duration).collect(),
+                )
             };
             kithara_events::AbrVariant {
                 duration,

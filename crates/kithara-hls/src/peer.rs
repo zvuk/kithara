@@ -719,7 +719,7 @@ fn build_batch(
             Err(e) => {
                 state
                     .scheduler
-                    .publish_download_error("prepare_media_sync", &e);
+                    .publish_segment_failure("prepare_media_sync", variant, seg_idx, e);
                 state.scheduler.advance_current_segment_index(seg_idx + 1);
                 continue;
             }
@@ -849,6 +849,27 @@ fn skip_planned_segment(
     if is_demanded {
         return false;
     }
+    // Drop fetches for segments the reader has already passed. The
+    // playback floor is the segment that currently covers the reader's
+    // byte position; emitting a `FetchCmd` for a seg < floor on the same
+    // (or post-ABR-commit) variant downloads bytes the reader will never
+    // read again — pure bandwidth waste, and the back-fetch the
+    // T2 contract (axiom A3) catches on every same-epoch poll. Symphonia's
+    // `moof` walk on seek is exempt because that demand arrives with
+    // `is_demanded == true` (handled above).
+    let floor = state.scheduler.reader_segment_floor();
+    if seg_idx < floor {
+        debug!(
+            variant,
+            seg_idx,
+            floor,
+            batch_i,
+            cursor = state.scheduler.current_segment_index(),
+            "poll_next: skipped segment — below playback floor"
+        );
+        state.scheduler.advance_current_segment_index(seg_idx + 1);
+        return true;
+    }
     let skipped = state.scheduler.should_skip_planned_segment(
         variant,
         seg_idx,
@@ -889,9 +910,12 @@ fn commit_cached_segment(state: &mut HlsState, c: &CachedCommit<'_>) {
     let meta = match SegmentLoader::complete_media(c.prepared, c.cached_len) {
         Ok(m) => m,
         Err(e) => {
-            state
-                .scheduler
-                .publish_download_error("complete_media cached", &e);
+            state.scheduler.publish_segment_failure(
+                "complete_media cached",
+                c.variant,
+                c.seg_idx,
+                e,
+            );
             state.scheduler.advance_current_segment_index(c.seg_idx + 1);
             return;
         }

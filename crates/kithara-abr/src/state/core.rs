@@ -8,6 +8,7 @@ use kithara_platform::{
     Mutex,
     time::{Duration, Instant},
 };
+use kithara_probes::kithara;
 use num_traits::ToPrimitive;
 
 use super::{decision::AbrDecision, error::AbrError, view::AbrView};
@@ -53,6 +54,7 @@ impl AbrState {
     /// 2. `kithara-hls` scheduler when the user manually selects a variant —
     ///    HLS holds `Arc<AbrState>` and applies a `Manual` decision so the
     ///    layout switch and the ABR state stay in sync.
+    #[kithara::probe(d)]
     pub fn apply(&self, d: &AbrDecision, now: Instant) {
         if cfg!(debug_assertions) {
             let variants = self.variants.lock_sync();

@@ -45,6 +45,12 @@ internal = []
 # `::usdt::provider!` paths directly (the attribute hard-codes
 # `::usdt::...` so it must resolve from the consumer crate's deps).
 usdt-probes = ["dep:usdt", "kithara-probes/usdt-probes"]
+# Emit `tracing::event!` from `#[kithara::probe]` sites without pulling
+# in `usdt`. Use this when the consumer keeps `#![forbid(unsafe_code)]`
+# on the source files containing probes — the macro expansion stays
+# unsafe-free. `probe_capture` consumes the tracing path, so this is
+# enough for test observability.
+tracing-probes = ["kithara-probes/tracing-probes"]
 disable-hang-detector = [
     "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",

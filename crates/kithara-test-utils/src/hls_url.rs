@@ -2,7 +2,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 
 use crate::fixture_protocol::{
-    DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
+    DataMode, DelayRule, EncryptionRequest, HttpErrorRule, InitMode, PackagedAudioRequest,
 };
 
 fn default_variant_count() -> usize {
@@ -97,6 +97,8 @@ pub struct HlsSpec {
     pub variant_bandwidths: Option<Vec<u64>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delay_rules: Vec<DelayRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub error_rules: Vec<HttpErrorRule>,
     #[serde(
         default = "default_segment_duration_secs",
         skip_serializing_if = "is_default_segment_duration_secs"
@@ -130,6 +132,7 @@ impl Default for HlsSpec {
             init_mode: InitMode::None,
             variant_bandwidths: None,
             delay_rules: Vec::new(),
+            error_rules: Vec::new(),
             encryption: None,
             head_reported_segment_size: None,
             key_hex: None,

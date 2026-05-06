@@ -10,8 +10,9 @@ use thiserror::Error;
 use crate::{
     consts::Consts,
     fixture_protocol::{
-        DataMode, DelayRule, EncryptionRequest, GaplessEncoding, InitMode, PackagedAudioRequest,
-        PackagedAudioSource, PackagedAudioVariantOverride, PackagedSignal, PcmPattern,
+        DataMode, DelayRule, EncryptionRequest, GaplessEncoding, HttpErrorRule, InitMode,
+        PackagedAudioRequest, PackagedAudioSource, PackagedAudioVariantOverride, PackagedSignal,
+        PcmPattern,
     },
     hls_url::HlsSpec,
 };
@@ -26,6 +27,7 @@ pub(crate) struct ResolvedHlsSpec {
     pub(crate) init_mode: ResolvedInitMode,
     pub(crate) variant_bandwidths: Vec<u64>,
     pub(crate) delay_rules: Vec<DelayRule>,
+    pub(crate) error_rules: Vec<HttpErrorRule>,
     pub(crate) encryption: Option<ResolvedEncryption>,
     pub(crate) head_reported_segment_size: Option<usize>,
     pub(crate) key_data: Option<Arc<Vec<u8>>>,
@@ -204,6 +206,7 @@ where
         init_mode,
         variant_bandwidths,
         delay_rules: spec.delay_rules,
+        error_rules: spec.error_rules,
         encryption,
         head_reported_segment_size: spec.head_reported_segment_size,
         key_data,

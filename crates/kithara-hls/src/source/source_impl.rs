@@ -33,6 +33,27 @@ fn wait_range_hang_timeout(timeout: Option<Duration>) -> Duration {
     })
 }
 
+/// `HlsError` is not `Clone` (transitive `kithara_net::NetError` /
+/// `kithara_assets::AssetsError` are not), so the permanent-error path
+/// rebuilds an equivalent variant from the stored `Arc<HlsError>`.
+/// Only the variants the scheduler actually marks as permanent are
+/// preserved verbatim — any leaked `Net`/`Storage`/`Assets` is surfaced
+/// as `KeyProcessing` carrying the original `Display` so the reader
+/// still gets an actionable message.
+fn clone_hls_error(err: &HlsError) -> HlsError {
+    match err {
+        HlsError::KeyProcessing(s) => HlsError::KeyProcessing(s.clone()),
+        HlsError::PlaylistParse(s) => HlsError::PlaylistParse(s.clone()),
+        HlsError::VariantNotFound(s) => HlsError::VariantNotFound(s.clone()),
+        HlsError::SegmentNotFound(s) => HlsError::SegmentNotFound(s.clone()),
+        HlsError::InvalidUrl(s) => HlsError::InvalidUrl(s.clone()),
+        HlsError::Cancelled => HlsError::Cancelled,
+        HlsError::WaitBudgetExceeded => HlsError::WaitBudgetExceeded,
+        HlsError::Timeout(s) => HlsError::Timeout(s.clone()),
+        other => HlsError::KeyProcessing(format!("permanent: {other}")),
+    }
+}
+
 /// Probe site fired the moment `wait_range` notices that the timeline's
 /// `seek_epoch` advanced past the epoch it captured on entry. Lets
 /// tests pin the bug fix from Phase 3: under the bug the same probe
@@ -116,6 +137,7 @@ impl Source for HlsSource {
         self.queue_segment_request_for_offset(range.start, seek_epoch);
     }
 
+    #[kithara::probe]
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         let current_variant = self.coord.variant_index();
 
@@ -128,7 +150,7 @@ impl Source for HlsSource {
         // from step_recreating_decoder() right before building the new
         // decoder.
 
-        if let Some(range) = self.init_segment_range_for_variant(current_variant) {
+        if let Some(range) = self.init_segment_range_for_variant(current_variant).range {
             return Some(range);
         }
 
@@ -153,7 +175,7 @@ impl Source for HlsSource {
                 })
         };
         if let Some(fallback_variant) = fallback_variant
-            && let Some(range) = self.init_segment_range_for_variant(fallback_variant)
+            && let Some(range) = self.init_segment_range_for_variant(fallback_variant).range
         {
             return Some(range);
         }
@@ -447,6 +469,7 @@ impl Source for HlsSource {
             let stopped;
             let seeking;
             let past_eof;
+            let permanent_error;
             {
                 let segments = self.segments.lock_sync();
                 seek_epoch = self.coord.timeline().seek_epoch();
@@ -477,6 +500,9 @@ impl Source for HlsSource {
                 range_ready = self.range_ready_from_segments(&segments, &range);
                 seeking = self.coord.timeline().is_flushing();
                 past_eof = self.is_past_eof(&segments, &range);
+                permanent_error = (!range_ready)
+                    .then(|| segments.find_failed_at_offset(range.start))
+                    .flatten();
 
                 if !range_ready && !cancelled && !stopped && !seeking && !past_eof {
                     trace!(
@@ -509,6 +535,14 @@ impl Source for HlsSource {
                 } else {
                     Err(StreamError::Source(HlsError::Cancelled.into()))
                 };
+            }
+            if let Some(err) = permanent_error {
+                debug!(
+                    range_start = range.start,
+                    error = %err,
+                    "wait_range: scheduler reported permanent failure"
+                );
+                return Err(StreamError::Source(clone_hls_error(&err).into()));
             }
             if seeking {
                 return Ok(WaitOutcome::Interrupted);

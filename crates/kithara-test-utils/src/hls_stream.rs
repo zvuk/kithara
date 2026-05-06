@@ -15,7 +15,9 @@ use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRe
 use kithara_stream::MediaInfo;
 
 use crate::{
-    fixture_protocol::{create_wav_init_header, generate_segment},
+    fixture_protocol::{
+        HlsRouteKind, HttpErrorRule, create_wav_init_header, eval_http_error, generate_segment,
+    },
     fmp4::{PackagedVariantData, mux_audio_track},
     hls_spec::{
         HlsSpecError, ResolvedDataMode, ResolvedEncryption, ResolvedHlsSpec, ResolvedInitMode,
@@ -261,6 +263,15 @@ impl GeneratedHls {
             .iter()
             .find_map(|rule| rule.matches(variant, segment))
             .unwrap_or(0)
+    }
+
+    pub(crate) fn match_http_error(
+        &self,
+        kind: HlsRouteKind,
+        variant: Option<usize>,
+        segment: Option<usize>,
+    ) -> Option<&HttpErrorRule> {
+        eval_http_error(&self.spec.error_rules, kind, variant, segment)
     }
 
     fn segment_plaintext(&self, variant: usize, segment: usize) -> Option<Vec<u8>> {

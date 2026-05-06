@@ -24,7 +24,7 @@ use url::Url;
 use crate::token_store::{TokenRequest, TokenResponse};
 use crate::{
     fixture_protocol::{
-        DataMode, DelayRule, EncryptionRequest, InitMode, PackagedAudioRequest,
+        DataMode, DelayRule, EncryptionRequest, HttpErrorRule, InitMode, PackagedAudioRequest,
         PackagedAudioSource, PackagedAudioVariantOverride, PackagedSignal, PcmPattern,
     },
     hls_spec::HlsSpecError,
@@ -169,6 +169,12 @@ impl HlsFixtureBuilder {
     #[must_use]
     pub fn delay_rules(mut self, delay_rules: Vec<DelayRule>) -> Self {
         self.spec.delay_rules = delay_rules;
+        self
+    }
+
+    #[must_use]
+    pub fn error_rules(mut self, error_rules: Vec<HttpErrorRule>) -> Self {
+        self.spec.error_rules = error_rules;
         self
     }
 

@@ -10,7 +10,7 @@
 //! - `layout_variant` selects the active byte map for decoder reads
 //! - `total_bytes` is derived (committed actual + estimated remaining), never formula-computed
 
-use std::{collections::BTreeMap, ops::Range};
+use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
 use kithara_assets::ResourceKey;
 use rangemap::RangeMap;
@@ -18,6 +18,7 @@ use tracing::trace;
 use url::Url;
 
 use crate::{
+    HlsError,
     ids::{SegmentIndex, VariantIndex},
     playlist::PlaylistAccess,
 };
@@ -64,6 +65,11 @@ struct SegmentSlot {
 #[derive(Debug, Default)]
 pub struct VariantSegments {
     segments: BTreeMap<SegmentIndex, SegmentSlot>,
+    /// Permanent scheduler failures by segment index. Held alongside
+    /// `segments` (not inside the slot) so failed-only entries do not
+    /// fabricate a zero-sized `SegmentData` and trick `range_ready` into
+    /// reporting "ready" for bytes that never arrived.
+    failed: BTreeMap<SegmentIndex, Arc<HlsError>>,
 }
 
 impl VariantSegments {
@@ -107,6 +113,9 @@ impl VariantSegments {
     }
 
     /// Insert or replace a committed segment.
+    ///
+    /// A successful commit clears any prior permanent-failure marker on
+    /// the same segment — the data the reader was blocked on now exists.
     pub fn insert(&mut self, segment_index: SegmentIndex, data: SegmentData) {
         self.segments.insert(
             segment_index,
@@ -115,6 +124,18 @@ impl VariantSegments {
                 available: true,
             },
         );
+        self.failed.remove(&segment_index);
+    }
+
+    /// Record a permanent failure for a segment.
+    pub fn mark_failed(&mut self, segment_index: SegmentIndex, error: Arc<HlsError>) {
+        self.failed.insert(segment_index, error);
+    }
+
+    /// Permanent failure recorded for a segment, if any.
+    #[must_use]
+    pub fn failed_at(&self, segment_index: SegmentIndex) -> Option<&Arc<HlsError>> {
+        self.failed.get(&segment_index)
     }
 
     /// Mark a segment unavailable while preserving its last known lengths.
@@ -314,6 +335,51 @@ impl StreamIndex {
         );
         self.variants[variant].insert(segment_index, data);
         self.rebuild_variant_byte_map(variant, segment_index);
+    }
+
+    /// Record a permanent failure for `(variant, segment_index)`.
+    ///
+    /// Only meant for errors the scheduler cannot recover from
+    /// (`KeyProcessing`, `PlaylistParse`, `VariantNotFound`,
+    /// `SegmentNotFound`, `InvalidUrl`). Network errors stay on the
+    /// scheduler retry path. The reader's `wait_range` consults
+    /// [`StreamIndex::find_failed_at_offset`] every iteration and exits
+    /// with this error rather than spinning until the hang detector fires.
+    pub fn mark_segment_failed(
+        &mut self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+        error: Arc<HlsError>,
+    ) {
+        if let Some(vs) = self.variants.get_mut(variant) {
+            vs.mark_failed(segment_index, error);
+        }
+    }
+
+    /// Permanent failure recorded for the segment owning `offset` in the
+    /// active layout variant, if any.
+    ///
+    /// Mirrors [`Self::find_at_offset`] — uses the same byte map so the
+    /// reader and the scheduler agree on segment ownership at every offset.
+    #[must_use]
+    pub fn find_failed_at_offset(&self, offset: u64) -> Option<Arc<HlsError>> {
+        self.find_failed_at_offset_in(self.layout_variant, offset)
+    }
+
+    /// Permanent failure recorded for the segment owning `offset` in
+    /// `variant`, if any.
+    #[must_use]
+    pub fn find_failed_at_offset_in(
+        &self,
+        variant: VariantIndex,
+        offset: u64,
+    ) -> Option<Arc<HlsError>> {
+        let byte_map = self.variant_byte_maps.get(variant)?;
+        let (_range, &seg_idx) = byte_map.get_key_value(&offset)?;
+        self.variants
+            .get(variant)
+            .and_then(|vs| vs.failed_at(seg_idx))
+            .cloned()
     }
 
     /// Cache invalidation: remove a single segment.

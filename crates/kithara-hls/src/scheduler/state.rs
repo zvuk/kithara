@@ -258,6 +258,32 @@ impl HlsScheduler {
         self.bus.publish(HlsEvent::Error { error: public });
     }
 
+    /// Publish a download error and, if the error is permanent, record it
+    /// on the affected segment slot so the reader's `wait_range` can exit
+    /// instead of spinning until the hang detector fires.
+    ///
+    /// "Permanent" means the same retry cannot succeed without external
+    /// intervention: bad DRM key (auth/expiration), broken playlist,
+    /// missing variant/segment in metadata, or unparseable URL. Network
+    /// errors stay on the existing retry path (`peer.rs`'s `rewinding
+    /// cursor` flow handles those).
+    pub(crate) fn publish_segment_failure(
+        &self,
+        context: &str,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+        error: HlsError,
+    ) {
+        self.publish_download_error(context, &error);
+        if !is_permanent_error(&error) {
+            return;
+        }
+        self.segments
+            .lock_sync()
+            .mark_segment_failed(variant, segment_index, Arc::new(error));
+        self.coord.condvar.notify_all();
+    }
+
     /// Segment index the reader is currently inside, in the layout variant.
     ///
     /// Tail-state gap scans must not consider segments strictly behind the
@@ -395,4 +421,15 @@ impl HlsScheduler {
     pub(crate) fn variant_has_init(&self, variant: usize) -> bool {
         self.playlist_state.init_url(variant).is_some()
     }
+}
+
+fn is_permanent_error(error: &HlsError) -> bool {
+    matches!(
+        error,
+        HlsError::KeyProcessing(_)
+            | HlsError::PlaylistParse(_)
+            | HlsError::VariantNotFound(_)
+            | HlsError::SegmentNotFound(_)
+            | HlsError::InvalidUrl(_)
+    )
 }

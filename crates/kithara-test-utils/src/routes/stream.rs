@@ -13,7 +13,10 @@ use axum::{
 use kithara_platform::time::{Duration, sleep};
 
 use crate::{
-    hls_spec::HlsSpecError, hls_stream::GeneratedHls, test_server_state::TestServerState,
+    fixture_protocol::{HlsRouteKind, HttpErrorRule},
+    hls_spec::HlsSpecError,
+    hls_stream::GeneratedHls,
+    test_server_state::TestServerState,
     token_store::is_token,
 };
 
@@ -36,6 +39,9 @@ async fn master_playlist(
 
     match resolve_hls_spec(&state, spec_b64) {
         Ok((fixture, spec_ref)) => {
+            if let Some(rule) = fixture.match_http_error(HlsRouteKind::Master, None, None) {
+                return inject_error(rule);
+            }
             let playlist = fixture.master_playlist(spec_ref);
             response_with_type(StatusCode::OK, "application/vnd.apple.mpegurl", playlist)
         }
@@ -52,16 +58,21 @@ async fn media_playlist(
     };
 
     match resolve_hls_spec(&state, &hls_spec) {
-        Ok((fixture, _)) => fixture.media_playlist(variant).map_or_else(
-            || StatusCode::NOT_FOUND.into_response(),
-            |playlist| {
-                response_with_type(
-                    StatusCode::OK,
-                    "application/vnd.apple.mpegurl",
-                    playlist.to_owned(),
-                )
-            },
-        ),
+        Ok((fixture, _)) => {
+            if let Some(rule) = fixture.match_http_error(HlsRouteKind::Media, Some(variant), None) {
+                return inject_error(rule);
+            }
+            fixture.media_playlist(variant).map_or_else(
+                || StatusCode::NOT_FOUND.into_response(),
+                |playlist| {
+                    response_with_type(
+                        StatusCode::OK,
+                        "application/vnd.apple.mpegurl",
+                        playlist.to_owned(),
+                    )
+                },
+            )
+        }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
 }
@@ -76,12 +87,17 @@ async fn init_segment(
     };
 
     match resolve_hls_spec(&state, &hls_spec) {
-        Ok((fixture, _)) => fixture.init_bytes(variant).map_or_else(
-            || StatusCode::NOT_FOUND.into_response(),
-            |bytes| {
-                build_range_response(&bytes, &headers, true, false, fixture.init_content_type())
-            },
-        ),
+        Ok((fixture, _)) => {
+            if let Some(rule) = fixture.match_http_error(HlsRouteKind::Init, Some(variant), None) {
+                return inject_error(rule);
+            }
+            fixture.init_bytes(variant).map_or_else(
+                || StatusCode::NOT_FOUND.into_response(),
+                |bytes| {
+                    build_range_response(&bytes, &headers, true, false, fixture.init_content_type())
+                },
+            )
+        }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
 }
@@ -106,6 +122,11 @@ async fn serve_media_segment(
 
     match resolve_hls_spec(state, hls_spec) {
         Ok((fixture, _)) => {
+            if let Some(rule) =
+                fixture.match_http_error(HlsRouteKind::Segment, Some(variant), Some(segment))
+            {
+                return inject_error(rule);
+            }
             // GET respects per-segment latency simulation; HEAD is metadata-only
             // and always returns immediately.
             if matches!(method, SegmentMethod::Get) {
@@ -174,12 +195,30 @@ async fn key(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     match resolve_hls_spec(&state, &hls_spec) {
-        Ok((fixture, _)) => fixture.key_bytes().map_or_else(
-            || StatusCode::NOT_FOUND.into_response(),
-            |bytes| build_range_response(&bytes, &headers, true, false, None),
-        ),
+        Ok((fixture, _)) => {
+            if let Some(rule) = fixture.match_http_error(HlsRouteKind::Key, None, None) {
+                return inject_error(rule);
+            }
+            fixture.key_bytes().map_or_else(
+                || StatusCode::NOT_FOUND.into_response(),
+                |bytes| build_range_response(&bytes, &headers, true, false, None),
+            )
+        }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
+}
+
+fn inject_error(rule: &HttpErrorRule) -> Response<Body> {
+    let status = StatusCode::from_u16(rule.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let body = rule
+        .body
+        .clone()
+        .unwrap_or_else(|| format!("injected http error {}", rule.status));
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body(Body::from(body))
+        .expect("inject error response")
 }
 
 fn response_with_type(

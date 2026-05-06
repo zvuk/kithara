@@ -9,6 +9,7 @@ use std::{
 };
 
 use bitflags::bitflags;
+use kithara_probes::kithara;
 
 /// Decoder-reported chunk position used to advance the timeline.
 ///
@@ -422,6 +423,7 @@ impl Timeline {
         self.segment_position.load(Ordering::Acquire)
     }
 
+    #[kithara::probe(position)]
     pub fn set_byte_position(&self, position: u64) {
         self.byte_position.store(position, Ordering::Release);
     }
@@ -435,6 +437,7 @@ impl Timeline {
         self.committed_position_ns.store(nanos, Ordering::Release);
     }
 
+    #[kithara::probe(position)]
     pub fn set_download_position(&self, position: u64) {
         self.download_position.store(position, Ordering::Release);
     }
@@ -451,6 +454,7 @@ impl Timeline {
         self.replace_flags(TimelineFlags::PLAYING, playing);
     }
 
+    #[kithara::probe(position)]
     pub fn set_segment_position(&self, position: u64) {
         self.segment_position.store(position, Ordering::Release);
     }

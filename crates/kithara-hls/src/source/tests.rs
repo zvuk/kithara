@@ -700,6 +700,59 @@ fn wait_range_reissues_request_after_pending_request_is_cleared() {
 }
 
 #[kithara::test]
+fn wait_range_returns_err_after_segment_marked_permanently_failed() {
+    // B1 contract: when scheduler marks a segment as permanently failed
+    // (e.g. KeyProcessing because of stale auth), wait_range that targets
+    // a byte inside that segment must return Err quickly — no condvar
+    // hang waiting for bytes that will never commit.
+    const SEG_SIZE: u64 = 100;
+    const TIMEOUT_MS: u64 = 2_000;
+    const FAIL_DELAY_MS: u64 = 50;
+    let mut source = build_source_with_size_map(&[SEG_SIZE]);
+    source.coord.stopped.store(false, Ordering::Release);
+    // Populate the variant byte map so `find_failed_at_offset(0)` resolves
+    // segment 0; `build_source_with_size_map` only sets the size map on
+    // `PlaylistState`.
+    source
+        .segments
+        .lock_sync()
+        .set_expected_sizes(0, vec![SEG_SIZE]);
+
+    let segments = Arc::clone(&source.segments);
+    let coord = Arc::clone(&source.coord);
+    let join = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(FAIL_DELAY_MS));
+        segments.lock_sync().mark_segment_failed(
+            0,
+            0,
+            Arc::new(crate::HlsError::KeyProcessing(
+                "test: DRM key not prefetched".to_string(),
+            )),
+        );
+        coord.condvar.notify_all();
+    });
+
+    let started = std::time::Instant::now();
+    let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
+    let elapsed = started.elapsed();
+    join.join().expect("helper thread must complete");
+
+    assert!(
+        elapsed < StdDuration::from_millis(500),
+        "wait_range must unblock within 500ms after mark_failed; elapsed {elapsed:?}"
+    );
+    match result {
+        Err(StreamError::Source(kithara_stream::SourceError::KeyProcessing(msg))) => {
+            assert!(
+                msg.contains("DRM key not prefetched"),
+                "expected propagated key error message, got {msg}"
+            );
+        }
+        other => panic!("expected KeyProcessing error, got {other:?}"),
+    }
+}
+
+#[kithara::test]
 fn wait_range_replaces_mismatched_pending_request_for_same_epoch() {
     const SEG_SIZE: u64 = 100;
     const TIMEOUT_MS: u64 = 80;

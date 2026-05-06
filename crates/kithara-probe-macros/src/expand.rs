@@ -7,22 +7,46 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
     Data, DataStruct, DeriveInput, Error, Field, Fields, FnArg, Ident, ItemFn, LitStr, Pat,
-    PatIdent, Token, parse::Parser, punctuated::Punctuated,
+    PatIdent, ReturnType, Token, parse::Parser, punctuated::Punctuated,
 };
 
-pub(crate) fn parse_filter(attr: TokenStream2) -> syn::Result<Option<Vec<Ident>>> {
+#[derive(Default)]
+pub(crate) struct ProbeFilter {
+    /// Names of arguments to record (`None` = all eligible args).
+    pub args: Option<Vec<Ident>>,
+    /// `probe_return` marker: emit a `Probe::record_probe` call on the
+    /// function's return value after the body runs. Used when the
+    /// payload of interest is computed inside the body (e.g. `outcome`
+    /// in a resolver) and surfaced via the return type instead of an
+    /// argument. The return type must implement `kithara_probes::Probe`
+    /// — typically via `#[derive(kithara_probes::Probe)]`.
+    pub probe_return: bool,
+}
+
+pub(crate) fn parse_filter(attr: TokenStream2) -> syn::Result<ProbeFilter> {
     if attr.is_empty() {
-        return Ok(None);
+        return Ok(ProbeFilter::default());
     }
     let parser = Punctuated::<Ident, Token![,]>::parse_terminated;
     let parsed = parser.parse2(attr)?;
-    Ok(Some(parsed.into_iter().collect()))
+    let mut filter = ProbeFilter::default();
+    let mut args: Vec<Ident> = Vec::new();
+    for ident in parsed {
+        if ident == "probe_return" {
+            filter.probe_return = true;
+        } else {
+            args.push(ident);
+        }
+    }
+    if !args.is_empty() {
+        filter.args = Some(args);
+    }
+    Ok(filter)
 }
 
-pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<TokenStream2> {
+pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenStream2> {
     let fn_name = input.sig.ident.clone();
     let fn_name_str = fn_name.to_string();
-    let probe_mod = format_ident!("__kithara_probe_{}", fn_name);
 
     let crate_name = std::env::var("CARGO_PKG_NAME")
         .map_err(|_| {
@@ -32,7 +56,6 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
             )
         })?
         .replace('-', "_");
-    let provider = crate_name.clone();
     let target = format!("{crate_name}_probe");
 
     let mut all_args: Vec<Ident> = Vec::new();
@@ -54,7 +77,7 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
         }
     }
 
-    let arg_idents: Vec<Ident> = match filter {
+    let arg_idents: Vec<Ident> = match filter.args {
         None => all_args,
         Some(names) => {
             if let Some(missing) = names
@@ -71,6 +94,16 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
             names
         }
     };
+    if arg_idents.len() > 6 {
+        return Err(Error::new_spanned(
+            &input.sig.ident,
+            "#[kithara::probe] supports at most 6 wire arguments \
+             (USDT provider arity ceiling). Pass fewer fields, fold them \
+             into a single struct via `#[derive(Probe)]`, or split the \
+             function so each probe site stays under the limit.",
+        ));
+    }
+    let probe_return = filter.probe_return;
 
     let probe_idents: Vec<Ident> = (0..arg_idents.len())
         .map(|i| format_ident!("__probe_arg_{}", i))
@@ -81,7 +114,7 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
         .zip(probe_idents.iter())
         .map(|(arg, slot)| {
             quote! {
-                #[cfg(feature = "usdt-probes")]
+                #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
                 let #slot: u64 = ::kithara_probes::IntoProbeArg::into_probe_arg(#arg);
             }
         })
@@ -94,16 +127,8 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
     let arg_consume: Vec<TokenStream2> =
         arg_idents.iter().map(|a| quote! { let _ = &#a; }).collect();
 
-    let usdt_provider_params: Vec<TokenStream2> = probe_idents
-        .iter()
-        .enumerate()
-        .map(|(i, _)| {
-            let p = format_ident!("_a{i}");
-            quote! { #p: u64 }
-        })
-        .collect();
+    let fire_fn = format_ident!("fire_{}", arg_idents.len());
 
-    let usdt_call_tuple = &probe_idents;
     let tracing_fields: Vec<TokenStream2> = arg_idents
         .iter()
         .zip(probe_idents.iter())
@@ -115,41 +140,67 @@ pub(crate) fn expand(input: &ItemFn, filter: Option<Vec<Ident>>) -> syn::Result<
     let sig = &input.sig;
     let block = &input.block;
 
-    Ok(quote! {
-        #(#attrs)*
-        #[cfg_attr(
-            all(feature = "usdt-probes", not(target_arch = "wasm32")),
-            expect(
-                unsafe_code,
-                clippy::items_after_statements,
-                reason = "USDT inline asm + per-probe `static` items emitted inline by `usdt::provider!`"
-            )
-        )]
-        #vis #sig {
-            // The USDT provider module must be declared BEFORE any
-            // statements; otherwise clippy's `items_after_statements`
-            // fires on the macro expansion site.
-            #[cfg(all(feature = "usdt-probes", not(target_arch = "wasm32")))]
-            #[::usdt::provider(provider = #provider)]
-            mod #probe_mod {
-                pub(super) fn #fn_name( #(#usdt_provider_params),* ) {}
-            }
+    let body = if probe_return {
+        // Wrap the body in a closure so any `return X;` inside `#block`
+        // becomes a `return X;` from the closure — `__probe_ret` then
+        // captures the actual final value regardless of which branch
+        // returned it. The return type is inferred from the closure's
+        // return expressions; matching `sig.output` annotation on the
+        // closure would force callers to repeat the type and confuses
+        // type inference for `Option<...>` / generic returns.
+        let _ = ReturnType::Default; // keep ReturnType import live
+        quote! {
+            let __probe_ret = (|| #block)();
+            #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
+            ::kithara_probes::Probe::record_probe(&__probe_ret, #fn_name_str);
+            __probe_ret
+        }
+    } else {
+        quote! { #block }
+    };
 
-            #(#arg_consume)*
-            #(#arg_bindings)*
-
-            #[cfg(all(feature = "usdt-probes", not(target_arch = "wasm32")))]
-            #probe_mod::#fn_name!(|| ( #(#usdt_call_tuple),* ));
-
-            #[cfg(feature = "usdt-probes")]
+    // Skip the entry-time `tracing::event!` emission when the macro
+    // is asked to publish via `record_probe` on the return value:
+    // emitting both would create two events with the same `probe = "..."`
+    // tag — the entry one with no fields, the return one with the
+    // actual payload. Consumers that filter `events_with_probe(name)`
+    // would get the wrong shape (whichever fired first).
+    let emit_entry_event = if probe_return {
+        quote! {}
+    } else {
+        quote! {
             ::tracing::event!(
                 target: #target,
                 ::tracing::Level::TRACE,
                 probe = #fn_name_str,
                 #(#tracing_fields),*
             );
+        }
+    };
 
-            #block
+    Ok(quote! {
+        #(#attrs)*
+        #vis #sig {
+            #(#arg_consume)*
+            #(#arg_bindings)*
+
+            // USDT emit goes through the safe `kithara_probes::fire_N`
+            // wrappers — all `unsafe` inline asm lives in
+            // `kithara-probes::usdt_wire`, so consumer crates can keep
+            // `#![forbid(unsafe_code)]` and still publish probes.
+            #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
+            ::kithara_probes::#fire_fn(#fn_name_str, #(#probe_idents),*);
+
+            // Emit the entry-time tracing event only when args are
+            // captured. With `probe_return` the payload of interest
+            // lives on the *return value* and is published via
+            // `Probe::record_probe`; emitting an extra empty entry-event
+            // would just race the consumer's filter and produce an
+            // uninformative duplicate.
+            #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
+            #emit_entry_event
+
+            #body
         }
     })
 }
@@ -201,7 +252,7 @@ fn camel_to_snake(s: &str) -> String {
 
 pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = &input.ident;
-    let snake = camel_to_snake(&struct_name.to_string());
+    let _ = camel_to_snake; // helper retained for backward-compat callers
 
     let crate_name = std::env::var("CARGO_PKG_NAME")
         .map_err(|_| {
@@ -211,9 +262,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
             )
         })?
         .replace('-', "_");
-    let provider = crate_name.clone();
     let target = format!("{crate_name}_probe");
-    let usdt_mod = format_ident!("__kithara_probe_struct_{}", snake);
 
     let fields = match &input.data {
         Data::Struct(DataStruct {
@@ -250,6 +299,16 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         wire_names.push(wire);
     }
 
+    if field_idents.len() > 6 {
+        return Err(Error::new_spanned(
+            struct_name,
+            "#[derive(Probe)] supports at most 6 wire fields (USDT \
+             provider arity ceiling). Mark extra fields with `#[probe(skip)]` \
+             or split the struct.",
+        ));
+    }
+    let fire_fn = format_ident!("fire_{}", field_idents.len());
+
     let slot_idents: Vec<Ident> = (0..field_idents.len())
         .map(|i| format_ident!("__probe_slot_{}", i))
         .collect();
@@ -263,14 +322,6 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
             }
         });
 
-    let usdt_params: Vec<TokenStream2> = (0..slot_idents.len())
-        .map(|i| {
-            let p = format_ident!("_a{i}");
-            quote! { #p: u64 }
-        })
-        .collect();
-
-    let usdt_call_args = slot_idents.iter();
     let tracing_pairs = wire_names
         .iter()
         .zip(slot_idents.iter())
@@ -284,28 +335,15 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     Ok(quote! {
         impl #impl_generics ::kithara_probes::Probe for #struct_name #ty_generics #where_clause {
             #[inline]
-            #[cfg_attr(
-                all(feature = "usdt-probes", not(target_arch = "wasm32")),
-                expect(
-                    unsafe_code,
-                    reason = "USDT inline asm in usdt::provider expansion"
-                )
-            )]
             fn record_probe(&self, name: &'static str) {
-                #[cfg(feature = "usdt-probes")]
+                #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
                 {
-                    let _ = name;
                     #(#bindings)*
-
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        #[::usdt::provider(provider = #provider)]
-                        mod #usdt_mod {
-                            pub(super) fn record( #(#usdt_params),* ) {}
-                        }
-                        #usdt_mod::record!(|| ( #(#usdt_call_args),* ));
-                    }
-
+                    // USDT goes through the safe wrappers in
+                    // `kithara-probes::usdt_wire`. No inline asm in the
+                    // consumer crate, so `#[derive(Probe)]` is usable
+                    // under `#![forbid(unsafe_code)]`.
+                    ::kithara_probes::#fire_fn(name, #(#slot_idents),*);
                     ::tracing::event!(
                         target: #target,
                         ::tracing::Level::TRACE,
@@ -313,7 +351,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         #(#tracing_pairs),*
                     );
                 }
-                #[cfg(not(feature = "usdt-probes"))]
+                #[cfg(not(any(feature = "tracing-probes", feature = "usdt-probes")))]
                 {
                     let _ = name;
                 }

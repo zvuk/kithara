@@ -6,7 +6,7 @@ use url::Url;
 
 use crate::{
     CreatedHls, HlsFixtureBuilder, HlsSpec, TestServerHelper,
-    fixture_protocol::{DataMode, DelayRule, EncryptionRequest, InitMode},
+    fixture_protocol::{DataMode, DelayRule, EncryptionRequest, HttpErrorRule, InitMode},
 };
 
 /// Compatibility fixture that preserves historical byte-exact HLS payloads.
@@ -399,6 +399,27 @@ impl PackagedTestServer {
             .expect("create packaged plain HLS fixture");
         let encrypted = helper
             .create_hls(packaged_encrypted_builder())
+            .await
+            .expect("create packaged encrypted HLS fixture");
+        Self {
+            plain,
+            encrypted,
+            _helper: helper,
+        }
+    }
+
+    /// Build a server whose encrypted fixture applies the given HTTP
+    /// error rules (e.g. 403 on the key endpoint). The plain fixture is
+    /// built without error rules and stays usable for unaffected tests.
+    #[must_use]
+    pub async fn with_error_rules(error_rules: Vec<HttpErrorRule>) -> Self {
+        let helper = TestServerHelper::new().await;
+        let plain = helper
+            .create_hls(packaged_plain_builder())
+            .await
+            .expect("create packaged plain HLS fixture");
+        let encrypted = helper
+            .create_hls(packaged_encrypted_builder().error_rules(error_rules))
             .await
             .expect("create packaged encrypted HLS fixture");
         Self {
