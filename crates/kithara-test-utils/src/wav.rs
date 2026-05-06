@@ -4,7 +4,7 @@ use crate::signal_pcm::{Finite, SignalPcm, signal};
 
 const WAV_HEADER_SIZE: usize = 44;
 
-/// Create WAV with `signal` patten, sized exactly to `total_bytes`.
+/// Create WAV with `signal` pattern, sized exactly to `total_bytes`.
 pub fn create_wav_exact_bytes<S: signal::SignalFn>(
     signal: S,
     sample_rate: u32,

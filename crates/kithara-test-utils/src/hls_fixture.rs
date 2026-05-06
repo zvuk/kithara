@@ -46,35 +46,38 @@ impl TestServer {
 
     #[must_use]
     pub fn url(&self, path: &str) -> Url {
-        match path {
-            "/master.m3u8" => self.plain.master_url(),
-            "/master-init.m3u8" => self.init.master_url(),
-            "/master-encrypted.m3u8" => self.encrypted.master_url(),
-            "/v0.m3u8" => self.plain.media_url(0),
-            "/v1.m3u8" | "/video/480p/playlist.m3u8" => self.plain.media_url(1),
-            "/v2.m3u8" => self.plain.media_url(2),
-            "/v0-init.m3u8" => self.init.media_url(0),
-            "/v1-init.m3u8" => self.init.media_url(1),
-            "/v2-init.m3u8" => self.init.media_url(2),
-            "/v0-encrypted.m3u8" => self.encrypted.media_url(0),
-            "/seg/v0_0.bin" => self.plain.segment_url(0, 0),
-            "/seg/v0_1.bin" => self.plain.segment_url(0, 1),
-            "/seg/v0_2.bin" => self.plain.segment_url(0, 2),
-            "/seg/v1_0.bin" => self.plain.segment_url(1, 0),
-            "/seg/v1_1.bin" => self.plain.segment_url(1, 1),
-            "/seg/v1_2.bin" => self.plain.segment_url(1, 2),
-            "/seg/v2_0.bin" => self.plain.segment_url(2, 0),
-            "/seg/v2_1.bin" => self.plain.segment_url(2, 1),
-            "/seg/v2_2.bin" => self.plain.segment_url(2, 2),
-            "/init/v0.bin" => self.init.init_url(0),
-            "/init/v1.bin" => self.init.init_url(1),
-            "/init/v2.bin" => self.init.init_url(2),
-            "/key.bin" => self.plain.key_url(),
-            "/aes/key.bin" => self.encrypted.key_url(),
-            "/aes/seg0.bin" => self.encrypted.segment_url(0, 0),
-            "/custom/base/" | "/base/" => self._helper.url(path),
-            other => panic!("unknown TestServer compatibility path `{other}`"),
+        // Aliases that don't fit the simple variant-prefix pattern: master
+        // playlists per fixture, the legacy "/video/480p/playlist.m3u8"
+        // alias, the encrypted-only key path, and the helper passthrough.
+        if let Some(url) = match path {
+            "/master.m3u8" => Some(self.plain.master_url()),
+            "/master-init.m3u8" => Some(self.init.master_url()),
+            "/master-encrypted.m3u8" => Some(self.encrypted.master_url()),
+            "/video/480p/playlist.m3u8" => Some(self.plain.media_url(1)),
+            "/v0-init.m3u8" => Some(self.init.media_url(0)),
+            "/v1-init.m3u8" => Some(self.init.media_url(1)),
+            "/v2-init.m3u8" => Some(self.init.media_url(2)),
+            "/v0-encrypted.m3u8" => Some(self.encrypted.media_url(0)),
+            "/key.bin" => Some(self.plain.key_url()),
+            "/aes/key.bin" => Some(self.encrypted.key_url()),
+            "/aes/seg0.bin" => Some(self.encrypted.segment_url(0, 0)),
+            "/custom/base/" | "/base/" => Some(self._helper.url(path)),
+            _ => None,
+        } {
+            return url;
         }
+        // Plain fixture prefixes — segment paths, init paths, and the
+        // bare media playlist `/vN.m3u8`.
+        if let Some(url) = route_segment_path(&self.plain, path, "/seg/", ".bin") {
+            return url;
+        }
+        if let Some(url) = route_init_path(&self.init, path, "/init/", ".bin") {
+            return url;
+        }
+        if let Some(url) = route_media_playlist_path(&self.plain, path) {
+            return url;
+        }
+        panic!("unknown TestServer compatibility path `{path}`")
     }
 }
 
@@ -316,32 +319,31 @@ impl HlsTestServer {
 
     #[must_use]
     pub fn url(&self, path: &str) -> Url {
-        match path {
-            "/master.m3u8" => self.created.master_url(),
-            "/key.bin" => self.created.key_url(),
-            other if other.starts_with("/playlist/v") && other.ends_with(".m3u8") => {
-                let variant = parse_variant(other, "/playlist/v", ".m3u8")
-                    // formatted message captures `other` via closure binding
-                    // ast-grep-ignore: style.prefer-expect
-                    .unwrap_or_else(|| panic!("invalid HlsTestServer playlist path `{other}`"));
-                self.created.media_url(variant)
-            }
-            other if other.starts_with("/seg/v") && other.ends_with(".bin") => {
-                let (variant, segment) = parse_segment(other)
-                    // formatted message captures `other` via closure binding
-                    // ast-grep-ignore: style.prefer-expect
-                    .unwrap_or_else(|| panic!("invalid HlsTestServer segment path `{other}`"));
-                self.created.segment_url(variant, segment)
-            }
-            other if other.starts_with("/init/v") && other.ends_with("_init.bin") => {
-                let variant = parse_variant(other, "/init/v", "_init.bin")
-                    // formatted message captures `other` via closure binding
-                    // ast-grep-ignore: style.prefer-expect
-                    .unwrap_or_else(|| panic!("invalid HlsTestServer init path `{other}`"));
-                self.created.init_url(variant)
-            }
-            other => panic!("unknown HlsTestServer path `{other}`"),
+        if path == "/master.m3u8" {
+            return self.created.master_url();
         }
+        if path == "/key.bin" {
+            return self.created.key_url();
+        }
+        // Variant playlist lives under `/playlist/v...` (rather than the
+        // bare `/vN.m3u8` other servers use).
+        if let Some(variant_part) = path
+            .strip_prefix("/playlist/v")
+            .and_then(|s| s.strip_suffix(".m3u8"))
+        {
+            let variant: usize = variant_part
+                .parse()
+                .unwrap_or_else(|_| panic!("invalid HlsTestServer playlist path `{path}`"));
+            return self.created.media_url(variant);
+        }
+        if let Some(url) = route_segment_path(&self.created, path, "/seg/", ".bin") {
+            return url;
+        }
+        // Init segments live at `/init/vX_init.bin`.
+        if let Some(url) = route_init_path(&self.created, path, "/init/", "_init.bin") {
+            return url;
+        }
+        panic!("unknown HlsTestServer path `{path}`")
     }
 }
 
@@ -360,29 +362,28 @@ impl PackagedTestServer {
 
     #[must_use]
     pub fn url(&self, path: &str) -> Url {
-        match path {
-            "/master.m3u8" | "/master-init.m3u8" => self.plain.master_url(),
-            "/master-encrypted.m3u8" => self.encrypted.master_url(),
-            "/v0.m3u8" => self.plain.media_url(0),
-            "/v1.m3u8" | "/video/480p/playlist.m3u8" => self.plain.media_url(1),
-            "/v2.m3u8" => self.plain.media_url(2),
-            "/v0-encrypted.m3u8" => self.encrypted.media_url(0),
-            "/init/v0.mp4" => self.plain.init_url(0),
-            "/init/v1.mp4" => self.plain.init_url(1),
-            "/init/v2.mp4" => self.plain.init_url(2),
-            "/seg/v0_0.m4s" => self.plain.segment_url(0, 0),
-            "/seg/v0_1.m4s" => self.plain.segment_url(0, 1),
-            "/seg/v0_2.m4s" => self.plain.segment_url(0, 2),
-            "/seg/v1_0.m4s" => self.plain.segment_url(1, 0),
-            "/seg/v1_1.m4s" => self.plain.segment_url(1, 1),
-            "/seg/v1_2.m4s" => self.plain.segment_url(1, 2),
-            "/seg/v2_0.m4s" => self.plain.segment_url(2, 0),
-            "/seg/v2_1.m4s" => self.plain.segment_url(2, 1),
-            "/seg/v2_2.m4s" => self.plain.segment_url(2, 2),
-            "/key.bin" | "/aes/key.bin" => self.encrypted.key_url(),
-            "/aes/seg0.m4s" => self.encrypted.segment_url(0, 0),
-            other => panic!("unknown PackagedTestServer path `{other}`"),
+        let aliased = match path {
+            "/master.m3u8" | "/master-init.m3u8" => Some(self.plain.master_url()),
+            "/master-encrypted.m3u8" => Some(self.encrypted.master_url()),
+            "/video/480p/playlist.m3u8" => Some(self.plain.media_url(1)),
+            "/v0-encrypted.m3u8" => Some(self.encrypted.media_url(0)),
+            "/key.bin" | "/aes/key.bin" => Some(self.encrypted.key_url()),
+            "/aes/seg0.m4s" => Some(self.encrypted.segment_url(0, 0)),
+            _ => None,
+        };
+        if let Some(url) = aliased {
+            return url;
         }
+        if let Some(url) = route_segment_path(&self.plain, path, "/seg/", ".m4s") {
+            return url;
+        }
+        if let Some(url) = route_init_path(&self.plain, path, "/init/", ".mp4") {
+            return url;
+        }
+        if let Some(url) = route_media_playlist_path(&self.plain, path) {
+            return url;
+        }
+        panic!("unknown PackagedTestServer path `{path}`")
     }
 
     /// Build a server whose plain (3-variant AAC fMP4) fixture applies the
@@ -459,26 +460,45 @@ impl AbrTestServer {
 
     #[must_use]
     pub fn url(&self, path: &str) -> Url {
-        match path {
-            "/master.m3u8" => self.created.master_url(),
-            "/v0.m3u8" => self.created.media_url(0),
-            "/v1.m3u8" => self.created.media_url(1),
-            "/v2.m3u8" => self.created.media_url(2),
-            "/seg/v0_0.bin" => self.created.segment_url(0, 0),
-            "/seg/v0_1.bin" => self.created.segment_url(0, 1),
-            "/seg/v0_2.bin" => self.created.segment_url(0, 2),
-            "/seg/v1_0.bin" => self.created.segment_url(1, 0),
-            "/seg/v1_1.bin" => self.created.segment_url(1, 1),
-            "/seg/v1_2.bin" => self.created.segment_url(1, 2),
-            "/seg/v2_0.bin" => self.created.segment_url(2, 0),
-            "/seg/v2_1.bin" => self.created.segment_url(2, 1),
-            "/seg/v2_2.bin" => self.created.segment_url(2, 2),
-            "/init/v0.bin" => self.created.init_url(0),
-            "/init/v1.bin" => self.created.init_url(1),
-            "/init/v2.bin" => self.created.init_url(2),
-            other => panic!("unknown AbrTestServer path `{other}`"),
+        if path == "/master.m3u8" {
+            return self.created.master_url();
         }
+        if let Some(url) = route_media_playlist_path(&self.created, path) {
+            return url;
+        }
+        if let Some(url) = route_segment_path(&self.created, path, "/seg/", ".bin") {
+            return url;
+        }
+        if let Some(url) = route_init_path(&self.created, path, "/init/", ".bin") {
+            return url;
+        }
+        panic!("unknown AbrTestServer path `{path}`")
     }
+}
+
+/// Resolve a `/<prefix>vX_Y<ext>` segment path on the given fixture.
+/// Returns `None` for non-matching paths so callers can fall through to
+/// their fixture-specific routes.
+fn route_segment_path(fixture: &CreatedHls, path: &str, prefix: &str, ext: &str) -> Option<Url> {
+    let body = path.strip_prefix(prefix)?.strip_suffix(ext)?;
+    let (variant_part, segment_part) = body.split_once('_')?;
+    let variant: usize = variant_part.strip_prefix('v')?.parse().ok()?;
+    let segment: usize = segment_part.parse().ok()?;
+    Some(fixture.segment_url(variant, segment))
+}
+
+/// Resolve a `/<prefix>vX<ext>` init path on the given fixture.
+fn route_init_path(fixture: &CreatedHls, path: &str, prefix: &str, ext: &str) -> Option<Url> {
+    let variant_part = path.strip_prefix(prefix)?.strip_suffix(ext)?;
+    let variant: usize = variant_part.strip_prefix('v')?.parse().ok()?;
+    Some(fixture.init_url(variant))
+}
+
+/// Resolve a `/vX.m3u8` media-playlist path on the given fixture.
+fn route_media_playlist_path(fixture: &CreatedHls, path: &str) -> Option<Url> {
+    let variant_part = path.strip_prefix("/v")?.strip_suffix(".m3u8")?;
+    let variant: usize = variant_part.parse().ok()?;
+    Some(fixture.media_url(variant))
 }
 
 #[must_use]
@@ -622,19 +642,6 @@ fn parse_master_bandwidths(master_playlist: &str) -> Vec<u64> {
         .filter_map(|value| value.split(',').next())
         .filter_map(|value| value.parse::<u64>().ok())
         .collect()
-}
-
-fn parse_variant(path: &str, prefix: &str, suffix: &str) -> Option<usize> {
-    path.strip_prefix(prefix)?
-        .strip_suffix(suffix)?
-        .parse()
-        .ok()
-}
-
-fn parse_segment(path: &str) -> Option<(usize, usize)> {
-    let path = path.strip_prefix("/seg/v")?.strip_suffix(".bin")?;
-    let (variant, segment) = path.split_once('_')?;
-    Some((variant.parse().ok()?, segment.parse().ok()?))
 }
 
 fn compat_abr_init_data(variant: usize) -> Vec<u8> {

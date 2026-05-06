@@ -67,8 +67,20 @@ pub(crate) fn run(args: &SimilarityArgs) -> Result<()> {
     let roots = if args.paths.is_empty() {
         default_roots()?
     } else {
-        args.paths.clone()
+        // Drop any explicitly-passed path that points into an excluded
+        // crate so per-crate audit (`just audit kithara-test-utils`)
+        // honours the same exclusion as the workspace default scan.
+        // Without this filter, `Consts::EXCLUDED_CRATES` only applies
+        // to the workspace-wide run.
+        args.paths
+            .iter()
+            .filter(|p| !path_is_in_excluded_crate(p))
+            .cloned()
+            .collect::<Vec<_>>()
     };
+    if roots.is_empty() {
+        return Ok(());
+    }
     for r in &roots {
         cmd.arg(r);
     }
@@ -78,6 +90,13 @@ pub(crate) fn run(args: &SimilarityArgs) -> Result<()> {
         bail!("similarity-rs failed (exit code {:?})", status.code());
     }
     Ok(())
+}
+
+fn path_is_in_excluded_crate(path: &str) -> bool {
+    Consts::EXCLUDED_CRATES.iter().any(|crate_name| {
+        let prefix = format!("crates/{crate_name}/");
+        path == format!("crates/{crate_name}") || path.starts_with(&prefix)
+    })
 }
 
 fn default_roots() -> Result<Vec<String>> {

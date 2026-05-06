@@ -5,10 +5,10 @@ use std::sync::Arc;
 use axum::{
     Router,
     body::Body,
-    extract::{Path, State},
-    http::{HeaderMap, Response, StatusCode, header},
+    extract::{Path, Request, State},
+    http::{HeaderMap, Method, Response, StatusCode, header},
     response::IntoResponse,
-    routing::get,
+    routing::{any, get},
 };
 use kithara_platform::time::{Duration, sleep};
 
@@ -23,10 +23,7 @@ pub(crate) fn router() -> Router<Arc<TestServerState>> {
         .route("/stream/{hls_spec}/{media_playlist}", get(media_playlist))
         .route("/stream/{hls_spec}/init/{init_segment}", get(init_segment))
         .route("/stream/{hls_spec}/key.bin", get(key))
-        .route(
-            "/stream/{hls_spec}/seg/{media_segment}",
-            get(media_segment).head(media_segment_head),
-        )
+        .route("/stream/{hls_spec}/seg/{media_segment}", any(media_segment))
 }
 
 async fn master_playlist(
@@ -89,31 +86,57 @@ async fn init_segment(
     }
 }
 
-async fn media_segment(
-    State(state): State<Arc<TestServerState>>,
-    Path((hls_spec, media_segment)): Path<(String, String)>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let Some((variant, segment)) = parse_segment_path(&media_segment) else {
+/// Whether the request is a GET (full body) or HEAD (metadata only).
+#[derive(Clone, Copy)]
+enum SegmentMethod {
+    Get,
+    Head,
+}
+
+async fn serve_media_segment(
+    state: &Arc<TestServerState>,
+    hls_spec: &str,
+    media_segment: &str,
+    headers: &HeaderMap,
+    method: SegmentMethod,
+) -> axum::response::Response {
+    let Some((variant, segment)) = parse_segment_path(media_segment) else {
         return (StatusCode::NOT_FOUND, "invalid media segment path").into_response();
     };
 
-    match resolve_hls_spec(&state, &hls_spec) {
+    match resolve_hls_spec(state, hls_spec) {
         Ok((fixture, _)) => {
-            let delay_ms = fixture.segment_delay_ms(variant, segment);
-            if delay_ms > 0 {
-                sleep(Duration::from_millis(delay_ms)).await;
+            // GET respects per-segment latency simulation; HEAD is metadata-only
+            // and always returns immediately.
+            if matches!(method, SegmentMethod::Get) {
+                let delay_ms = fixture.segment_delay_ms(variant, segment);
+                if delay_ms > 0 {
+                    sleep(Duration::from_millis(delay_ms)).await;
+                }
             }
             fixture.segment_bytes(variant, segment).map_or_else(
                 || StatusCode::NOT_FOUND.into_response(),
-                |bytes| {
-                    build_range_response(
+                |bytes| match method {
+                    SegmentMethod::Get => build_range_response(
                         &bytes,
-                        &headers,
+                        headers,
                         true,
                         true,
                         fixture.segment_content_type(),
-                    )
+                    ),
+                    SegmentMethod::Head => {
+                        let override_len = fixture
+                            .segment_len(variant, segment, true)
+                            .unwrap_or(bytes.len());
+                        build_range_response_with_len(
+                            &bytes,
+                            headers,
+                            false,
+                            true,
+                            Some(override_len),
+                            fixture.segment_content_type(),
+                        )
+                    }
                 },
             )
         }
@@ -121,34 +144,28 @@ async fn media_segment(
     }
 }
 
-async fn media_segment_head(
+/// Single GET / HEAD entry point for media segments. The handler picks
+/// the [`SegmentMethod`] from the request method so the per-method
+/// branches stay in [`serve_media_segment`] instead of being duplicated
+/// at the route level.
+async fn media_segment(
     State(state): State<Arc<TestServerState>>,
     Path((hls_spec, media_segment)): Path<(String, String)>,
-    headers: HeaderMap,
+    request: Request,
 ) -> impl IntoResponse {
-    let Some((variant, segment)) = parse_segment_path(&media_segment) else {
-        return (StatusCode::NOT_FOUND, "invalid media segment path").into_response();
+    let method = match *request.method() {
+        Method::GET => SegmentMethod::Get,
+        Method::HEAD => SegmentMethod::Head,
+        ref other => {
+            return (
+                StatusCode::METHOD_NOT_ALLOWED,
+                format!("media segment route only accepts GET / HEAD, got {other}"),
+            )
+                .into_response();
+        }
     };
-
-    match resolve_hls_spec(&state, &hls_spec) {
-        Ok((fixture, _)) => fixture.segment_bytes(variant, segment).map_or_else(
-            || StatusCode::NOT_FOUND.into_response(),
-            |bytes| {
-                let override_len = fixture
-                    .segment_len(variant, segment, true)
-                    .unwrap_or(bytes.len());
-                build_range_response_with_len(
-                    &bytes,
-                    &headers,
-                    false,
-                    true,
-                    Some(override_len),
-                    fixture.segment_content_type(),
-                )
-            },
-        ),
-        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-    }
+    let headers = request.headers().clone();
+    serve_media_segment(&state, &hls_spec, &media_segment, &headers, method).await
 }
 
 async fn key(
