@@ -300,15 +300,19 @@ fn collect_encoded_packets(
             bytes: packet.data().unwrap_or(&[]).to_vec(),
             pts: normalize_timestamp(raw_pts, origin),
             dts: normalize_timestamp(raw_dts, origin),
-            duration: u32::try_from(packet.duration().max(0)).unwrap_or(u32::MAX),
+            duration: {
+                const SATURATE: u32 = u32::MAX;
+                u32::try_from(packet.duration().max(0)).unwrap_or(SATURATE)
+            },
             is_sync: encoded.is_key(),
         });
     }
 }
 
 fn normalize_timestamp(value: i64, origin: i64) -> u64 {
+    const SATURATE: u64 = u64::MAX;
     let normalized = i128::from(value) - i128::from(origin);
-    u64::try_from(normalized.max(0)).unwrap_or(u64::MAX)
+    u64::try_from(normalized.max(0)).unwrap_or(SATURATE)
 }
 
 #[cfg(test)]
@@ -332,7 +336,8 @@ mod tests {
             0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0xAC, 0x44, 0x09, 0x1A, 0x92, 0x07, 0x6E, 0xC3,
             0xBC, 0x84, 0x8E, 0x7F, 0x60, 0x75, 0x8D, 0x3A, 0x77, 0x61,
         ];
-        let normalized = normalize_flac_codec_config(&data).expect("normalize dfLa payload");
+        let normalized = normalize_flac_codec_config(&data)
+            .expect("BUG: hard-coded dfLa payload normalises successfully");
         assert_eq!(normalized.len(), 34);
         assert_eq!(&normalized[..4], &[0x12, 0x00, 0x12, 0x00]);
     }

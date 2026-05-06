@@ -198,15 +198,19 @@ fn collect_encoded_packets(
             bytes: packet.data().unwrap_or(&[]).to_vec(),
             pts: normalize_timestamp(raw_pts, origin),
             dts: normalize_timestamp(raw_dts, origin),
-            duration: u32::try_from(packet.duration().max(0)).unwrap_or(u32::MAX),
+            duration: {
+                const SATURATE: u32 = u32::MAX;
+                u32::try_from(packet.duration().max(0)).unwrap_or(SATURATE)
+            },
             is_sync: encoded.is_key(),
         });
     }
 }
 
 fn normalize_timestamp(value: i64, origin: i64) -> u64 {
+    const SATURATE: u64 = u64::MAX;
     let normalized = i128::from(value) - i128::from(origin);
-    u64::try_from(normalized.max(0)).unwrap_or(u64::MAX)
+    u64::try_from(normalized.max(0)).unwrap_or(SATURATE)
 }
 
 #[cfg(test)]
