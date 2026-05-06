@@ -79,7 +79,7 @@ impl DecoderNode {
     /// `seek_epoch` so a spurious latch consume costs at most one
     /// no-op compare.
     fn sync_seek_epoch(&mut self) {
-        if !self.source.timeline().take_decoder_node_seek() {
+        if !self.source.timeline().did_take_decoder_node_seek() {
             return;
         }
         let current = self.source.timeline().seek_epoch();

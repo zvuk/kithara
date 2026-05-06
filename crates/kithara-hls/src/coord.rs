@@ -64,7 +64,7 @@ impl HlsCoord {
     }
 
     pub(crate) fn enqueue_segment_request(&self, request: SegmentRequest) -> bool {
-        let inserted = self.demand.submit(request);
+        let inserted = self.demand.did_replace(request);
         self.reader_advanced.notify_one();
         inserted
     }

@@ -1098,7 +1098,7 @@ fn set_seek_epoch_is_non_destructive() {
     // Non-destructive: segments, download_position, and exact-EOF visibility
     // are preserved. Only the midstream-switch coordination flag is reset.
     assert_eq!(shared.timeline.seek_epoch(), 3);
-    assert!(shared.timeline.eof());
+    assert!(shared.timeline.is_eof());
     assert_eq!(shared.timeline.download_position(), 200);
     assert!(!shared.had_midstream_switch.load(Ordering::Acquire));
     assert_eq!(shared.segments.lock_sync().num_committed(), 2);
@@ -1508,7 +1508,10 @@ fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
         matches!(result, Ok(WaitOutcome::Interrupted)),
         "stale EOF should not end playback while seek flushing is active"
     );
-    assert!(shared.timeline.eof(), "bug reproducer relies on stale EOF");
+    assert!(
+        shared.timeline.is_eof(),
+        "bug reproducer relies on stale EOF"
+    );
 }
 
 #[kithara::test(tokio, browser)]

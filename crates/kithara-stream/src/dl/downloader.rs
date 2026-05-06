@@ -96,12 +96,17 @@ impl DownloaderInner {
         // and never zero in practice. We also guard with a `max(1)` to
         // satisfy the NonZeroU64 invariant defensively.
         let nz = std::num::NonZeroU64::new(raw.max(1))
-            .expect("next_request_id starts at 1, fetch_add never yields 0");
+            .expect("BUG: next_request_id starts at 1; fetch_add never yields 0");
         kithara_events::RequestId::new(nz)
     }
 }
 
 impl Downloader {
+    /// Hang-detector timeout for the downloader run loop. 60 s covers
+    /// the worst legitimate quiet period (single peer waiting on a
+    /// slow first byte) without delaying real-deadlock diagnostics.
+    const HANG_TIMEOUT: Duration = Duration::from_secs(60);
+
     /// Create a new downloader from configuration.
     ///
     /// Constructs the internal `HttpClient` from the supplied network options
@@ -187,7 +192,7 @@ impl Downloader {
             cancel: cancel.clone(),
             bus: Arc::clone(&bus),
         };
-        let _ = self.inner.register_tx.send(entry);
+        self.inner.register_tx.send(entry).ok();
         PeerHandle::new(Arc::clone(&self.inner), cancel, cmd_tx, bus, abr_handle)
     }
 
@@ -211,7 +216,7 @@ impl Downloader {
     /// - `Stalled` — work exists (queued cmds or inflight > 0) but no
     ///   forward motion this tick. Tick the watchdog; N consecutive
     ///   stalls across the timeout window → panic.
-    #[kithara_hang_detector::hang_watchdog(timeout = Duration::from_secs(60))]
+    #[kithara_hang_detector::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
         let mut registry = Registry::new();
 

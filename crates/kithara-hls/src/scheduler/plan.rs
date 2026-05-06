@@ -18,7 +18,7 @@ impl HlsScheduler {
             return true;
         }
 
-        if !self.coord.timeline().eof() {
+        if !self.coord.timeline().is_eof() {
             debug!("reached end of playlist");
             self.coord.timeline().set_eof(true);
             self.bus.publish(HlsEvent::EndOfStream);

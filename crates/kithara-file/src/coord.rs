@@ -47,7 +47,7 @@ impl FileCoord {
     }
 
     pub(crate) fn request_range(&self, range: Range<u64>) -> bool {
-        let inserted = self.demand.submit(range);
+        let inserted = self.demand.did_replace(range);
         if inserted {
             self.downloader_wake.notify_one();
         }

@@ -99,7 +99,7 @@ impl Source for TestSource {
         }
 
         let len = self.state.lock_sync().len;
-        if self.timeline.eof() && len.is_some_and(|total| total > 0 && range.start >= total) {
+        if self.timeline.is_eof() && len.is_some_and(|total| total > 0 && range.start >= total) {
             return Ok(WaitOutcome::Eof);
         }
 

@@ -35,7 +35,7 @@ where
         *self.inner.lock_sync() = Some(demand);
     }
 
-    pub fn submit(&self, demand: D) -> bool
+    pub fn did_replace(&self, demand: D) -> bool
     where
         D: PartialEq,
     {

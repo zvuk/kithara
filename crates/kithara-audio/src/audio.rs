@@ -248,7 +248,7 @@ impl<S> Audio<S> {
             seek_epoch,
             position: (*self).position(),
         });
-        let _ = self.timeline.clear_pending_seek_epoch(seek_epoch);
+        let _ = self.timeline.did_clear_pending_seek_epoch(seek_epoch);
     }
 
     /// Receive next chunk and store it as `current_chunk`.

@@ -284,7 +284,7 @@ impl Peer for HlsPeer {
                 num_segments,
                 cursor = state.scheduler.current_segment_index(),
                 reader_pos = state.scheduler.coord.timeline().byte_position(),
-                eof = state.scheduler.coord.timeline().eof(),
+                eof = state.scheduler.coord.timeline().is_eof(),
                 "poll_next: tail state, Pending"
             );
             return Poll::Pending;

@@ -440,7 +440,10 @@ impl<T: StreamType> Seek for Stream<T> {
         // clamp to u64 covers the (impossible) overflow path without an `as`
         // cast: a value that does not fit u64 would already exceed any seekable
         // resource, so capping is the faithful "past end" signal.
-        let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX);
+        let new_pos = {
+            const SATURATE: u64 = u64::MAX;
+            u64::try_from(new_pos).unwrap_or(SATURATE)
+        };
 
         // Wait for the target byte unboundedly; only `coord.cancel` (track
         // replaced / resource dropped / shutdown) or `seek_epoch` advance
@@ -494,7 +497,8 @@ mod tests {
     }
 
     fn bytes(count: usize) -> ReadOutcome {
-        let nz = NonZeroUsize::new(count).expect("ScriptSource::bytes: count must be > 0");
+        let nz = NonZeroUsize::new(count)
+            .expect("BUG: ScriptSource::bytes invariant — count must be > 0");
         ReadOutcome::Bytes(nz)
     }
 
@@ -642,7 +646,7 @@ mod tests {
 
         let n = stream
             .read(&mut buf)
-            .expect("read must succeed after retry");
+            .expect("BUG: read must succeed after the explicit retry in this test scenario");
         assert_eq!(n, 4);
         assert_eq!(&buf, b"ABCD");
     }
@@ -657,7 +661,7 @@ mod tests {
 
         let outcome = stream
             .try_read(&mut buf)
-            .expect("seek-pending is a status, not an error");
+            .expect("BUG: seek-pending is a status return; not a hard error in this test");
         assert!(matches!(
             outcome,
             StreamReadOutcome::Pending(PendingReason::SeekPending)
@@ -676,7 +680,7 @@ mod tests {
 
         let outcome = stream
             .try_read(&mut buf)
-            .expect("seek-pending is a status, not an error");
+            .expect("BUG: seek-pending is a status return; not a hard error in this test");
 
         assert!(matches!(
             outcome,
@@ -692,7 +696,9 @@ mod tests {
         let source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
         let mut stream = Stream::<DummyType> { source };
 
-        let pos = stream.seek(SeekFrom::Start(3)).expect("seek must succeed");
+        let pos = stream
+            .seek(SeekFrom::Start(3))
+            .expect("BUG: seek to a position within the test stream must succeed");
 
         assert_eq!(pos, 3);
         assert_eq!(stream.position(), 3);
@@ -714,8 +720,8 @@ mod tests {
 
         let anchor = stream
             .seek_time_anchor(Duration::from_millis(8_500))
-            .expect("anchor resolution should succeed")
-            .expect("stream should return the resolved anchor");
+            .expect("BUG: anchor resolution must succeed for the constructed test stream")
+            .expect("BUG: stream must return the resolved anchor in this test");
 
         assert_eq!(anchor.byte_offset, 3);
         assert_eq!(

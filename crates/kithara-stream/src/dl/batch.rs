@@ -320,10 +320,14 @@ async fn establish(
 fn bandwidth_bps(bytes: u64, duration: Duration) -> u64 {
     // `u128 → u64` is safe in practice — durations longer than
     // 2^64 ms (≈ 580M years) cannot occur for a single fetch.
+    const SATURATE: u64 = u64::MAX;
+    /// Bits per byte × milliseconds-per-second-power-of-ten conversion
+    /// for the bps formula `bytes * 8 * 1000 / duration_ms`.
+    const BITS_TIMES_MS_PER_SEC: u64 = 8_000;
     let ms = u64::try_from(duration.as_millis())
-        .unwrap_or(u64::MAX)
+        .unwrap_or(SATURATE)
         .max(1);
-    bytes.saturating_mul(8_000) / ms
+    bytes.saturating_mul(BITS_TIMES_MS_PER_SEC) / ms
 }
 
 /// Determine why a fetch was cancelled.
@@ -386,7 +390,7 @@ async fn deliver(ctx: DeliveryContext<'_>) {
     } = ctx;
     match target {
         ResponseTarget::Channel(tx) => {
-            let _ = tx.send(result);
+            tx.send(result).ok();
         }
         ResponseTarget::Streaming => match result {
             Ok(resp) => {
@@ -486,7 +490,7 @@ pub(super) fn deliver_cancelled(target: ResponseTarget, mut cmd: FetchCmd) {
     let err = NetError::Cancelled;
     match target {
         ResponseTarget::Channel(tx) => {
-            let _ = tx.send(Err(err));
+            tx.send(Err(err)).ok();
         }
         ResponseTarget::Streaming => {
             if let Some(cb) = cmd.on_complete.take() {

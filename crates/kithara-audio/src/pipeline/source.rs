@@ -321,7 +321,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// below re-validates against `Timeline`.
     #[inline]
     fn preempt_seek_target(&self) -> Option<Duration> {
-        if !self.timeline.take_seek_preempt() {
+        if !self.timeline.did_take_seek_preempt() {
             return None;
         }
         let timeline_epoch = self.timeline.seek_epoch();

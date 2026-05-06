@@ -172,7 +172,7 @@ impl Timeline {
     }
 
     #[must_use]
-    pub fn clear_pending_seek_epoch(&self, seek_epoch: u64) -> bool {
+    pub fn did_clear_pending_seek_epoch(&self, seek_epoch: u64) -> bool {
         self.pending_seek_epoch
             .compare_exchange(
                 seek_epoch,
@@ -254,7 +254,7 @@ impl Timeline {
     }
 
     #[must_use]
-    pub fn eof(&self) -> bool {
+    pub fn is_eof(&self) -> bool {
         self.contains_flag(TimelineFlags::EOF)
     }
 
@@ -276,7 +276,7 @@ impl Timeline {
     #[must_use]
     pub fn initiate_seek(&self, target: Duration) -> u64 {
         let nanos = u64::try_from(target.as_nanos())
-            .expect("initiate_seek: target.as_nanos() exceeds u64::MAX");
+            .expect("BUG: initiate_seek target.as_nanos() fits in u64 for any realistic Duration");
         let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.seek_target_ns.store(nanos, Ordering::Release);
         // NOTE: do NOT pre-set `committed_position` to `target` here.
@@ -310,7 +310,7 @@ impl Timeline {
     /// `true` here means the new `seek_epoch` and `seek_target_ns`
     /// stores are also visible.
     #[must_use]
-    pub fn take_seek_preempt(&self) -> bool {
+    pub fn did_take_seek_preempt(&self) -> bool {
         self.seek_preempt_latch.swap(false, Ordering::Acquire)
     }
 
@@ -323,7 +323,7 @@ impl Timeline {
     /// here means `seek_epoch` was just bumped and the node must run
     /// the cleanup branch; otherwise the tick falls through.
     #[must_use]
-    pub fn take_decoder_node_seek(&self) -> bool {
+    pub fn did_take_decoder_node_seek(&self) -> bool {
         self.decoder_node_seek_latch.swap(false, Ordering::Acquire)
     }
 
@@ -430,8 +430,8 @@ impl Timeline {
     /// Panics if `position` overflows `u64::MAX` nanoseconds (≈584 years);
     /// no realistic media stream can hit this.
     pub fn set_committed_position(&self, position: Duration) {
-        let nanos =
-            u64::try_from(position.as_nanos()).expect("position.as_nanos() exceeds u64::MAX");
+        let nanos = u64::try_from(position.as_nanos())
+            .expect("BUG: position.as_nanos() fits in u64 for any realistic playback time");
         self.committed_position_ns.store(nanos, Ordering::Release);
     }
 
@@ -666,18 +666,18 @@ mod tests {
         assert!(clone.is_seek_pending());
     }
 
-    // --- bitflags migration tests ---
+    // bitflags migration tests
 
     #[kithara::test]
     fn set_eof_toggles_flag_without_affecting_others() {
         let tl = Timeline::new();
-        assert!(!tl.eof());
+        assert!(!tl.is_eof());
         tl.set_eof(true);
-        assert!(tl.eof());
+        assert!(tl.is_eof());
         assert!(!tl.is_flushing());
         assert!(!tl.is_seek_pending());
         tl.set_eof(false);
-        assert!(!tl.eof());
+        assert!(!tl.is_eof());
     }
 
     #[kithara::test]
@@ -707,7 +707,7 @@ mod tests {
                 want_seek_pending,
                 "mask {mask:#05b} seek_pending"
             );
-            assert_eq!(tl.eof(), want_eof, "mask {mask:#05b} eof");
+            assert_eq!(tl.is_eof(), want_eof, "mask {mask:#05b} eof");
 
             let snapshot = tl.flags_snapshot_with(Ordering::Acquire);
             assert_eq!(
@@ -795,14 +795,18 @@ mod tests {
             observed
         });
 
-        a.join().expect("thread A");
-        b.join().expect("thread B");
-        let _ = c.join().expect("thread C");
+        a.join()
+            .expect("BUG: spawned thread A must not panic in this test");
+        b.join()
+            .expect("BUG: spawned thread B must not panic in this test");
+        let _ = c
+            .join()
+            .expect("BUG: spawned thread C must not panic in this test");
 
         // Final invariant: after all writers finish, EOF reflects the
         // last A iteration (ITER-1 ⇒ odd ⇒ false); FLUSHING/SEEK_PENDING
         // fully cleared by B's last complete_seek + clear_seek_pending.
-        assert!(!tl.eof(), "EOF must match the last deterministic write");
+        assert!(!tl.is_eof(), "EOF must match the last deterministic write");
         assert!(!tl.is_flushing(), "FLUSHING must be fully cleared");
         assert!(
             !tl.is_seek_pending(),
@@ -810,7 +814,7 @@ mod tests {
         );
     }
 
-    // --- PLAYING flag tests (Task 4) ---
+    // PLAYING flag tests (Task 4)
 
     #[kithara::test]
     fn playing_defaults_to_false() {
@@ -875,7 +879,7 @@ mod tests {
                     "mask {mask:#05b} play={initial_playing} seek_pending"
                 );
                 assert_eq!(
-                    tl.eof(),
+                    tl.is_eof(),
                     want_eof,
                     "mask {mask:#05b} play={initial_playing} eof"
                 );
@@ -886,7 +890,7 @@ mod tests {
                 assert_eq!(tl.is_playing(), !initial_playing);
                 assert_eq!(tl.is_flushing(), want_flushing);
                 assert_eq!(tl.is_seek_pending(), want_seek_pending);
-                assert_eq!(tl.eof(), want_eof);
+                assert_eq!(tl.is_eof(), want_eof);
             }
         }
     }
