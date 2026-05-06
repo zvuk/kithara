@@ -10,10 +10,10 @@
 //! Also provides `#[kithara::fixture]` as a no-op marker (replaces `#[rstest::fixture]`).
 
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Expr, FnArg, Ident, ItemFn, Pat, Token,
+    Attribute, Error, Expr, FnArg, Ident, ItemFn, Meta, Pat, Token,
     parse::{Parse, ParseStream, Parser},
     parse_macro_input,
     punctuated::Punctuated,
@@ -39,8 +39,8 @@ struct TestArgs {
 impl TestArgs {
     fn check_exclusive(a: bool, a_name: &str, b: bool, b_name: &str) -> syn::Result<()> {
         if a && b {
-            Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
+            Err(Error::new(
+                Span::call_site(),
                 format!("`{a_name}` and `{b_name}` are mutually exclusive"),
             ))
         } else {
@@ -64,8 +64,8 @@ impl TestArgs {
         }
 
         if self.is_multi_thread && !self.is_tokio {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
+            return Err(Error::new(
+                Span::call_site(),
                 "`multi_thread` requires `tokio` (or `selenium` which implies it)",
             ));
         }
@@ -123,7 +123,7 @@ impl Parse for TestArgs {
                         Ok(pattern.value())
                     })?;
                     if args.soft_fail_patterns.is_empty() {
-                        return Err(syn::Error::new(
+                        return Err(Error::new(
                             ident.span(),
                             "soft_fail requires at least one pattern string",
                         ));
@@ -136,7 +136,7 @@ impl Parse for TestArgs {
                     args.tracing_filter = Some(value.value());
                 }
                 other => {
-                    return Err(syn::Error::new(
+                    return Err(Error::new(
                         ident.span(),
                         format!("unknown argument: {other}"),
                     ));
@@ -173,7 +173,7 @@ fn extract_cases(attrs: &[Attribute]) -> syn::Result<Vec<Case>> {
         } else {
             None
         };
-        let values = if let syn::Meta::List(list) = &attr.meta {
+        let values = if let Meta::List(list) = &attr.meta {
             Punctuated::<Expr, Token![,]>::parse_terminated
                 .parse2(list.tokens.clone())?
                 .into_iter()
@@ -482,7 +482,10 @@ fn emit_async_timeout_test(
     args: &TestArgs,
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
-    let dur = args.timeout.as_ref().expect("caller verified timeout");
+    let dur = args
+        .timeout
+        .as_ref()
+        .expect("BUG: caller checks `args.timeout.is_some()` before this fn");
     let fn_name_str = fn_name.to_string();
     let timeout_panic_arm = if args.soft_fail_patterns.is_empty() {
         quote! {
