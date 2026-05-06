@@ -57,7 +57,7 @@ pub struct QueueConfig {
     /// `false`, the queue stops at the end of the current track and
     /// requires an explicit `Queue::play_next` call. Default: `true`.
     #[derivative(Default(value = "true"))]
-    pub autoplay: bool,
+    pub should_autoplay: bool,
 }
 
 impl QueueConfig {

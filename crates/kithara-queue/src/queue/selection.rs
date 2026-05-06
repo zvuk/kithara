@@ -200,30 +200,8 @@ impl Queue {
                 // Test path: if a respawn resource was pre-supplied via
                 // `supply_test_resource_for_respawn`, plant it directly
                 // and select synchronously — bypasses the real loader.
-                #[cfg(any(test, feature = "test-utils"))]
-                {
-                    let cached = self
-                        .test_resources
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .remove(&id);
-                    if let Some(resource) = cached {
-                        self.player.replace_item(index, resource);
-                        self.set_status(id, TrackStatus::Loaded);
-                        let was_playing = self.player.is_playing();
-                        let crossfade =
-                            transition.crossfade_seconds(self.player.crossfade_duration());
-                        self.player
-                            .select_item_with_crossfade(index, true, crossfade)?;
-                        self.lock_navigation_mut().select(index);
-                        if was_playing && crossfade > 0.0 {
-                            self.bus.publish(QueueEvent::CrossfadeStarted {
-                                duration_seconds: crossfade,
-                            });
-                        }
-                        self.set_status(id, TrackStatus::Consumed);
-                        return Ok(());
-                    }
+                if let Some(result) = self.try_replant_test_resource(id, index, transition) {
+                    return result;
                 }
                 let source = self
                     .sources
@@ -332,6 +310,55 @@ impl Queue {
             }
         });
     }
+
+    /// Test-only path: if a respawn resource was pre-supplied via
+    /// `supply_test_resource_for_respawn`, plant it directly and select
+    /// synchronously, bypassing the real loader. Returns `Some(result)`
+    /// when the test path took the request, `None` to fall through to
+    /// the production loader respawn.
+    #[cfg(any(test, feature = "test-utils"))]
+    fn try_replant_test_resource(
+        &self,
+        id: TrackId,
+        index: usize,
+        transition: Transition,
+    ) -> Option<Result<(), QueueError>> {
+        let cached = self
+            .test_resources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&id);
+        let resource = cached?;
+        self.player.replace_item(index, resource);
+        self.set_status(id, TrackStatus::Loaded);
+        let was_playing = self.player.is_playing();
+        let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
+        if let Err(err) = self
+            .player
+            .select_item_with_crossfade(index, true, crossfade)
+        {
+            return Some(Err(err.into()));
+        }
+        self.lock_navigation_mut().select(index);
+        if was_playing && crossfade > 0.0 {
+            self.bus.publish(QueueEvent::CrossfadeStarted {
+                duration_seconds: crossfade,
+            });
+        }
+        self.set_status(id, TrackStatus::Consumed);
+        Some(Ok(()))
+    }
+
+    #[cfg(not(any(test, feature = "test-utils")))]
+    fn try_replant_test_resource(
+        &self,
+        _id: TrackId,
+        _index: usize,
+        _transition: Transition,
+    ) -> Option<Result<(), QueueError>> {
+        let _ = self;
+        None
+    }
 }
 
 #[cfg(test)]
@@ -359,9 +386,9 @@ mod tests {
         let pending = queue
             .pending_select
             .lock()
-            .expect("pending_select lock")
+            .expect("BUG: pending_select Mutex is not held across await")
             .to_owned();
-        let pending = pending.expect("pending set");
+        let pending = pending.expect("BUG: select stashes pending entry");
         assert_eq!(pending.id, id);
         assert_eq!(pending.transition, Transition::None);
     }

@@ -59,21 +59,30 @@ pub(super) enum Placement {
     At(usize),
 }
 
+/// Current playback position and total duration in seconds, bundled
+/// so the `should_arm_crossfade` signature does not put 3 consecutive
+/// raw float parameters at the API boundary.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlaybackTime {
+    pub(crate) pos: f64,
+    pub(crate) dur: f64,
+}
+
 /// Decide whether `Queue::tick` should arm the pre-end advance.
 ///
 /// Returns `true` when:
 /// - `crossfade > 0` (no pre-arm without crossfade — natural-EOF advance is
 ///   handled via [`PlayerEvent::ItemDidPlayToEnd`] instead), AND
-/// - `pos` and `dur` are positive (track has meaningful position + duration), AND
+/// - `time.pos` and `time.dur` are positive (track has meaningful position + duration), AND
 /// - remaining playtime is below `crossfade` seconds, AND
 /// - we haven't already armed for this track this play-through.
 pub(crate) fn should_arm_crossfade(
-    pos: f64,
-    dur: f64,
+    time: PlaybackTime,
     crossfade: f32,
     current_id: TrackId,
     armed_for: Option<TrackId>,
 ) -> bool {
+    let PlaybackTime { pos, dur } = time;
     if crossfade <= 0.0 {
         return false;
     }

@@ -95,7 +95,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
@@ -165,7 +165,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
@@ -236,7 +236,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
     let mut rx = queue.subscribe();
 
@@ -306,7 +306,7 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(true),
+            .with_should_autoplay(true),
     );
 
     // Register both BEFORE any load completes, exactly like the real
@@ -378,7 +378,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
@@ -453,7 +453,7 @@ async fn queue_pauses_player_when_last_track_ends() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
     let mut rx = queue.subscribe();
 
@@ -512,7 +512,7 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(true),
+            .with_should_autoplay(true),
     );
 
     // With the bug, peek_next(None) -> Some(0) arms this slot against itself.

@@ -45,7 +45,7 @@ impl Queue {
         self.player.reserve_slots(self.len());
         // Arm autoplay on the first registered id so the load-completion
         // race (B finishing before A) cannot promote the wrong track.
-        if self.autoplay {
+        if self.should_autoplay {
             let _ = self.autoplay_target.compare_exchange(
                 Self::NO_ARMED_TRACK,
                 id.as_u64(),
@@ -73,7 +73,7 @@ impl Queue {
             // Honour the autoplay arm: if THIS id is the registered
             // autoplay target and it just finished loading, select it
             // so playback starts without an explicit `select` call.
-            if self.autoplay
+            if self.should_autoplay
                 && self
                     .autoplay_target
                     .compare_exchange(
@@ -211,10 +211,9 @@ impl Queue {
             let guard = self.lock_tracks();
             let pos = guard.iter().position(|e| e.id == id);
             let result = pos.and_then(|p| {
-                guard
-                    .get(p + 1)
-                    .or_else(|| if p > 0 { guard.get(p - 1) } else { None })
-                    .map(|e| e.id)
+                let next = guard.get(p + 1);
+                let prev = if p > 0 { guard.get(p - 1) } else { None };
+                next.or(prev).map(|e| e.id)
             });
             drop(guard);
             result
@@ -310,7 +309,9 @@ mod tests {
         let _b = queue.append("https://example.com/b.mp3");
         let mut rx = queue.subscribe();
 
-        queue.remove(a).expect("removed");
+        queue
+            .remove(a)
+            .expect("BUG: just-appended track must be removable");
         assert_eq!(queue.len(), 1);
         let saw_removed = wait_for_queue_event(
             &mut rx,
@@ -350,7 +351,7 @@ mod tests {
         let b = queue.append("https://example.com/b.mp3");
         let mid = queue
             .insert("https://example.com/mid.mp3", Some(a))
-            .expect("insert");
+            .expect("BUG: insert relative to existing track");
         let snapshot = queue.tracks();
         let ids: Vec<TrackId> = snapshot.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![a, mid, b]);

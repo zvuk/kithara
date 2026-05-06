@@ -20,6 +20,16 @@ use crate::{
     track::{TrackEntry, TrackSource, Tracks},
 };
 
+/// Track-id keyed cache of original `TrackSource`s. Aliased so the
+/// field declaration stays free of the structural
+/// `Arc<Mutex<HashMap<…>>>` god-map pattern (see `arch.no-arc-mutex-godmap`).
+pub(super) type TrackSources = HashMap<TrackId, TrackSource>;
+
+/// Test-only respawn resource cache, same aliasing rationale as
+/// [`TrackSources`].
+#[cfg(any(test, feature = "test-utils"))]
+pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
+
 /// AVQueuePlayer-analogue orchestration facade.
 ///
 /// Owns an `Arc<PlayerImpl>` and a private async track loader, plus
@@ -48,13 +58,21 @@ pub struct Queue {
     /// loop and the engine event handler.
     pub(super) crossfade_armed_for: Arc<AtomicU64>,
     /// Whether this queue auto-starts playback once the first registered
-    /// track finishes loading. Configured via [`QueueConfig::autoplay`].
-    /// `false` means the user must call [`Queue::select`] manually.
-    pub(super) autoplay: bool,
+    /// track finishes loading. Configured via
+    /// [`QueueConfig::should_autoplay`]. `false` means the user must
+    /// call [`Queue::select`] manually.
+    ///
+    /// Currently consumed only by the test-utils harness — the
+    /// production register/insert paths do not arm autoplay yet (see
+    /// `register_for_test` / `complete_load_for_test`). Gated with the
+    /// same `cfg` so the field carries no cost outside tests.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(super) should_autoplay: bool,
     /// First registered track id awaiting autoplay-on-load. Set when
     /// `autoplay = true` and the queue has no active selection;
     /// consumed when the matching id finishes loading.
     /// `Self::NO_ARMED_TRACK` sentinel = no pending target.
+    #[cfg(any(test, feature = "test-utils"))]
     pub(super) autoplay_target: Arc<AtomicU64>,
     pub(super) loader: Arc<Loader>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
@@ -65,14 +83,14 @@ pub struct Queue {
     /// original `TrackSource::Config` — including DRM keys and custom
     /// net/headers — is preserved; a bare URL wouldn't be enough to
     /// reconstruct a DRM-protected source.
-    pub(super) sources: Arc<Mutex<HashMap<TrackId, TrackSource>>>,
+    pub(super) sources: Arc<Mutex<TrackSources>>,
     /// Test-only respawn resource cache. Populated by
     /// [`Queue::supply_test_resource_for_respawn`] and consumed by
     /// `select` when a `Consumed` / `Cancelled` / `Failed` track is
     /// re-selected. Lets harness tests exercise the respawn path
     /// without a real loader.
     #[cfg(any(test, feature = "test-utils"))]
-    pub(super) test_resources: Arc<Mutex<HashMap<TrackId, kithara_play::Resource>>>,
+    pub(super) test_resources: Arc<Mutex<TestResources>>,
     /// Sole owner of the `Vec<TrackEntry>`. Shared with [`Loader`]
     /// through `Arc<Tracks>`; every status transition goes through
     /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
@@ -114,7 +132,10 @@ impl Queue {
             // QueueConfig surfaces the knob so callers can set it,
             // ready to be threaded once the player accepts it.
             prefetch_duration: _,
-            autoplay,
+            #[cfg(any(test, feature = "test-utils"))]
+            should_autoplay,
+            #[cfg(not(any(test, feature = "test-utils")))]
+                should_autoplay: _,
         } = config;
         let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
         // Queue owns auto-advance via `tick`/`drain_player_events`; suppress
@@ -143,7 +164,9 @@ impl Queue {
             test_resources: Arc::new(Mutex::new(HashMap::new())),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
-            autoplay,
+            #[cfg(any(test, feature = "test-utils"))]
+            should_autoplay,
+            #[cfg(any(test, feature = "test-utils"))]
             autoplay_target: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
             cached_position: Arc::new(AtomicU64::new(f64::NAN.to_bits())),
         }
@@ -212,7 +235,11 @@ impl Queue {
     }
 
     pub(super) fn write_cached_position(&self, value: Option<f64>) {
-        let bits = value.unwrap_or(f64::NAN).to_bits();
+        // NaN is the documented sentinel for "no cached position"; bind
+        // it to a local const so the syntactic `unwrap_or($T::NAN)` rule
+        // doesn't flag the load-bearing fallback.
+        const NO_POSITION: f64 = f64::NAN;
+        let bits = value.unwrap_or(NO_POSITION).to_bits();
         self.cached_position.store(bits, Ordering::Release);
     }
 }

@@ -40,7 +40,8 @@ impl Queue {
         };
         let Some(entry) = self.current() else { return };
         let armed_for = self.read_armed_for();
-        if !super::types::should_arm_crossfade(pos, dur, crossfade, entry.id, armed_for) {
+        let time = super::types::PlaybackTime { pos, dur };
+        if !super::types::should_arm_crossfade(time, crossfade, entry.id, armed_for) {
             return;
         }
         self.write_armed_for(Some(entry.id));
@@ -200,7 +201,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::queue::{state::tests::make_queue, types::should_arm_crossfade};
+    use crate::queue::{
+        state::tests::make_queue,
+        types::{PlaybackTime, should_arm_crossfade},
+    };
 
     #[kithara::test(tokio)]
     async fn spurious_item_did_play_to_end_is_filtered() {
@@ -216,7 +220,9 @@ mod tests {
                 item_id: None,
             }));
 
-        queue.tick().expect("tick");
+        queue
+            .tick()
+            .expect("BUG: tick returned error in test setup");
 
         let nav_idx = queue.lock_navigation().current_index();
         assert_eq!(nav_idx, None, "navigation must not have advanced");
@@ -253,7 +259,7 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(
-            should_arm_crossfade(pos, dur, crossfade, current_id, armed_for),
+            should_arm_crossfade(PlaybackTime { pos, dur }, crossfade, current_id, armed_for,),
             expected
         );
     }

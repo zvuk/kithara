@@ -219,7 +219,7 @@ mod tests {
 
     #[kithara::test(tokio, multi_thread)]
     async fn semaphore_caps_concurrent_loads() {
-        let cap = NonZeroUsize::new(2).expect("2 > 0");
+        let cap = NonZeroUsize::new(2).expect("BUG: 2 > 0 is mathematically guaranteed");
         let loader = LoaderBuilder::default().with_cap(cap).build().loader;
 
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -231,7 +231,10 @@ mod tests {
             let in_flight = Arc::clone(&in_flight);
             let max_seen = Arc::clone(&max_seen);
             handles.push(spawn(async move {
-                let _permit = sem.acquire_owned().await.expect("acquire");
+                let _permit = sem
+                    .acquire_owned()
+                    .await
+                    .expect("BUG: semaphore not closed in test");
                 let cur = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 max_seen.fetch_max(cur, Ordering::SeqCst);
                 tokio_sleep(Duration::from_millis(50)).await;
@@ -239,7 +242,7 @@ mod tests {
             }));
         }
         for h in handles {
-            h.await.expect("joined");
+            h.await.expect("BUG: spawned task panicked");
         }
         assert!(
             max_seen.load(Ordering::SeqCst) <= 2,
@@ -261,7 +264,7 @@ mod tests {
         let loader = fx.loader;
 
         let handle = loader.spawn_load(TrackId(42), TrackSource::Uri("not-a-url".into()));
-        let result = handle.await.expect("join");
+        let result = handle.await.expect("BUG: spawned task panicked");
         assert!(matches!(result, Err(QueueError::InvalidUrl(_))));
 
         let mut saw_loading = false;

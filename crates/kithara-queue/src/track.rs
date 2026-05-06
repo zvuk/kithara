@@ -47,9 +47,10 @@ impl TrackSource {
     /// Returns the source URI if the variant is [`TrackSource::Uri`].
     #[must_use]
     pub fn uri(&self) -> Option<&str> {
-        match self {
-            Self::Uri(s) => Some(s),
-            Self::Config(_) => None,
+        if let Self::Uri(s) = self {
+            Some(s)
+        } else {
+            None
         }
     }
 }
@@ -141,7 +142,8 @@ mod tests {
 
     #[kithara::test]
     fn track_source_from_resource_config() {
-        let cfg = ResourceConfig::new("https://example.com/a.mp3").expect("valid url");
+        let cfg =
+            ResourceConfig::new("https://example.com/a.mp3").expect("BUG: hard-coded URL is valid");
         let src: TrackSource = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));
         assert_eq!(src.uri(), None);
