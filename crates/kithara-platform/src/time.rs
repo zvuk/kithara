@@ -26,10 +26,15 @@ pub use web_time::Instant;
 
 #[cfg(target_arch = "wasm32")]
 pub async fn sleep(duration: Duration) {
-    let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);
+    /// Saturate `setTimeout(...)` arguments at i32::MAX so a u128
+    /// duration that does not fit just becomes a long-but-finite
+    /// browser timer (≈24.85 days), not a wrap-around to a near-zero
+    /// delay.
+    const SATURATE: i32 = i32::MAX;
+    let ms = i32::try_from(duration.as_millis()).unwrap_or(SATURATE);
     let promise = Promise::new(&mut |resolve, _| {
         let set_timeout: Function = Reflect::get(&global(), &JsValue::from_str("setTimeout"))
-            .expect("setTimeout must exist")
+            .expect("BUG: setTimeout is a standard browser global, must always exist")
             .unchecked_into();
         let _ = set_timeout.call2(&JsValue::UNDEFINED, &resolve, &JsValue::from(ms));
     });

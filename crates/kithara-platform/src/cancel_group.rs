@@ -51,7 +51,7 @@ impl CancelGroup {
 
     /// Returns `true` if both groups share the same underlying source array.
     #[must_use]
-    pub fn ptr_eq(&self, other: &Self) -> bool {
+    pub fn equals_ptr(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.sources, &other.sources)
     }
 
@@ -239,8 +239,8 @@ mod tests {
 
                     tokio_time::timeout(Duration::from_secs(2), handle)
                         .await
-                        .expect("cancelled() must resolve within timeout")
-                        .expect("task must not panic");
+                        .expect("BUG: cancelled() must resolve within the test timeout")
+                        .expect("BUG: spawned cancellation task must not panic");
                 }
             )*
         }
@@ -273,7 +273,7 @@ mod tests {
 
         tokio_time::timeout(Duration::from_secs(1), group.cancelled())
             .await
-            .expect("cancelled() must return immediately for pre-cancelled source");
+            .expect("BUG: cancelled() must return immediately for a pre-cancelled source");
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -378,7 +378,7 @@ mod tests {
 
         tokio_time::timeout(Duration::from_secs(2), handle)
             .await
-            .expect("cancelled() must resolve")
-            .expect("task must not panic");
+            .expect("BUG: cancelled() must resolve once one source has cancelled")
+            .expect("BUG: spawned task awaiting cancellation must not panic");
     }
 }

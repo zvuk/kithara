@@ -40,7 +40,7 @@ impl SchedulerWake {
                 drop(guard);
                 return true;
             }
-            if result.timed_out() {
+            if result.did_time_out() {
                 return false;
             }
         }

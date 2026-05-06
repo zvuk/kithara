@@ -128,7 +128,7 @@ impl BatchGroup {
         for entry in entries {
             let found = epochs
                 .iter_mut()
-                .find(|g| g.cancel.ptr_eq(&entry.cmd.cancel));
+                .find(|g| g.cancel.equals_ptr(&entry.cmd.cancel));
             match found {
                 Some(group) => group.entries.push(entry),
                 None => epochs.push(EpochGroup {

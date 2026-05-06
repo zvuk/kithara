@@ -30,7 +30,9 @@ where
             Ok(val) => Ok(val),
             Err(_) => Err(JoinError { cancelled: true }),
         };
-        let _ = tx.send(result);
+        // Receiver may have been dropped if the JoinHandle is gone;
+        // fire-and-forget — there is nothing more to do here.
+        drop(tx.send(result));
     });
 }
 
@@ -48,7 +50,8 @@ where
     if crate::thread::is_worker_thread() {
         wasm_safe_thread::task_begin();
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = tx.send(Ok(future.await));
+            // Receiver may have been dropped — fire-and-forget.
+            drop(tx.send(Ok(future.await)));
             wasm_safe_thread::task_finished();
         });
     } else {
@@ -70,9 +73,12 @@ where
     let (tx, rx) = oneshot::channel();
 
     if crate::thread::is_worker_thread() {
-        let _ = crate::thread::spawn(move || {
-            let _ = tx.send(Ok(f()));
-        });
+        // Spawn handle and oneshot receiver are both fire-and-forget:
+        // the JoinHandle exposes the result via `rx`, and we don't
+        // need to track the spawn handle separately.
+        drop(crate::thread::spawn(move || {
+            drop(tx.send(Ok(f())));
+        }));
     } else {
         forward_tww_handle(tx, tww_task::spawn_blocking(f));
     }

@@ -174,7 +174,9 @@ where
     std::thread::Builder::new()
         .name(name.into())
         .spawn(counted(f))
-        .expect("failed to spawn named thread")
+        .expect(
+            "BUG: spawn_named must succeed; thread::Builder only fails on OS resource exhaustion",
+        )
 }
 
 /// Spawn a new named thread (WASM variant).
@@ -211,7 +213,7 @@ where
             console_error_panic_hook::set_once();
             f()
         })
-        .expect("failed to spawn thread")
+        .expect("BUG: WASM Worker spawn must succeed; only fails on OS resource exhaustion")
 }
 
 /// Block the current thread for at least `duration`.
@@ -321,7 +323,8 @@ mod tests {
                 parked.unpark();
             });
             park_timeout(Duration::from_secs(1));
-            join.join().expect("wake helper thread");
+            join.join()
+                .expect("BUG: wake-helper thread joined cleanly without panicking");
             assert!(start.elapsed() < Duration::from_millis(250));
         }
     }

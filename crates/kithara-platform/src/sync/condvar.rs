@@ -108,7 +108,7 @@ impl WaitTimeoutResult {
     /// Returns `true` if the wait timed out (deadline elapsed).
     #[inline]
     #[must_use]
-    pub fn timed_out(&self) -> bool {
+    pub fn did_time_out(&self) -> bool {
         self.0
     }
 }
