@@ -305,10 +305,10 @@ impl Peer for HlsPeer {
                 .scheduler
                 .look_ahead_segments
                 .unwrap_or(state.scheduler.prefetch_count);
-            state.scheduler.demand_throttle_until = Some(ds + ahead);
+            state.scheduler.runtime.demand_throttle_until = Some(ds + ahead);
         }
         if demand_segment.is_none()
-            && let Some(cap) = state.scheduler.demand_throttle_until
+            && let Some(cap) = state.scheduler.runtime.demand_throttle_until
             && state.scheduler.current_segment_index() >= cap
         {
             return Poll::Pending;
@@ -408,7 +408,7 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     let is_flushing = sched.coord.timeline().is_flushing();
     if is_flushing {
         match sched.coord.peek_segment_request() {
-            Some(req) if req.seek_epoch == sched.active_seek_epoch => {
+            Some(req) if req.seek_epoch == sched.runtime.active_seek_epoch => {
                 return DemandResult::None;
             }
             _ => {}
@@ -421,11 +421,11 @@ fn process_demand(state: &mut HlsState, cx: &mut Context<'_>) -> DemandResult {
     // `active_seek_epoch` to match `req.seek_epoch`. By the time we
     // get the request back the field already equals the new epoch,
     // so comparing `req.seek_epoch` against the post-update
-    // `sched.active_seek_epoch` is a no-op and the cancellation path
+    // `sched.runtime.active_seek_epoch` is a no-op and the cancellation path
     // below would never fire (this is the bug that left in-flight
     // fetches of the prior epoch hogging Downloader slots after a
     // user seek).
-    let active_before = sched.active_seek_epoch;
+    let active_before = sched.runtime.active_seek_epoch;
     let Some(req) = sched.next_valid_demand_request() else {
         return DemandResult::None;
     };
@@ -472,7 +472,7 @@ fn seek_epoch_reset(state: &mut HlsState, seek_epoch: u64, segment_index: usize,
     let sched = &mut state.scheduler;
     state.epoch_cancel.cancel();
     state.epoch_cancel = CancellationToken::new();
-    sched.demand_throttle_until = None;
+    sched.runtime.demand_throttle_until = None;
     let _ = seek_epoch;
 
     let (is_variant_switch, is_midstream_switch) =
@@ -534,6 +534,7 @@ fn maybe_rewind_for_demand(sched: &mut HlsScheduler, req: &crate::coord::Segment
 
 fn classify_rewind(sched: &HlsScheduler, req: &crate::coord::SegmentRequest) -> &'static str {
     if sched
+        .runtime
         .in_flight_segments
         .contains(&(req.variant, req.segment_index))
     {
@@ -570,7 +571,7 @@ fn resolve_variant(
     }
 
     // Layout gap-fill override.
-    if sched.filling_layout_gap
+    if sched.runtime.filling_layout_gap
         && demand_variant_override.is_none()
         && sched.download_variant != variant
     {
@@ -625,7 +626,7 @@ fn apply_variant_readiness(
     // decoder cannot complete the seek otherwise.
     if let Some(ds) = demand_segment
         && sched.current_segment_index() > ds
-        && !sched.in_flight_segments.contains(&(variant, ds))
+        && !sched.runtime.in_flight_segments.contains(&(variant, ds))
     {
         let prev_cursor = sched.current_segment_index();
         let seek_epoch = sched.coord.timeline().seek_epoch();
@@ -674,7 +675,7 @@ fn build_batch(
         .scheduler
         .classify_variant_transition(variant, state.scheduler.current_segment_index());
     let mut need_init = has_init
-        && (state.scheduler.force_init_for_seek
+        && (state.scheduler.runtime.force_init_for_seek
             || state.scheduler.switch_needs_init(
                 variant,
                 state.scheduler.current_segment_index(),
@@ -709,7 +710,7 @@ fn build_batch(
         let plan_need_init = has_init
             && crate::scheduler::helpers::should_request_init(need_init, SegmentId::Media(seg_idx));
         if plan_need_init {
-            state.scheduler.force_init_for_seek = false;
+            state.scheduler.runtime.force_init_for_seek = false;
         }
         need_init = false;
 
@@ -798,6 +799,7 @@ fn emit_fetch_cmd(
     );
     state
         .scheduler
+        .runtime
         .in_flight_segments
         .insert((variant, segment_index));
     state
@@ -829,6 +831,7 @@ fn skip_planned_segment(
     // comment on `maybe_rewind_for_demand` warns about.
     if state
         .scheduler
+        .runtime
         .in_flight_segments
         .contains(&(variant, seg_idx))
     {
@@ -992,7 +995,10 @@ fn build_fetch_cmd(
                 // set on a true seek, so a no-op remove here is safe;
                 // for non-seek cancellations (variant switch, peer
                 // shutdown) this is the only cleanup point.
-                st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
+                st.scheduler
+                    .runtime
+                    .in_flight_segments
+                    .remove(&(variant, seg_idx));
                 if seek_epoch != st.scheduler.coord.timeline().seek_epoch() {
                     debug!(
                         variant,
@@ -1035,7 +1041,10 @@ fn build_fetch_cmd(
                         duration: start.elapsed(),
                     });
             }
-            st.scheduler.in_flight_segments.remove(&(variant, seg_idx));
+            st.scheduler
+                .runtime
+                .in_flight_segments
+                .remove(&(variant, seg_idx));
             if let Some(waker) = st.waker.as_ref() {
                 waker.wake_by_ref();
             }
@@ -1083,7 +1092,7 @@ mod tests {
         loading::PlaylistCache,
         parsing::{VariantId, VariantStream},
         playlist::{PlaylistState, SegmentState, VariantState},
-        source::build_pair,
+        scheduler::HlsScheduler,
         stream_index::SegmentData,
     };
 
@@ -1162,16 +1171,15 @@ mod tests {
         let abr = Arc::new(AbrState::new(Vec::new(), AbrMode::default()));
         let _ = handle;
         let _ = &parsed;
-        let (scheduler, _source) = build_pair(crate::source::BuildPair {
+        let scheduler = HlsScheduler::new(
             backend,
-            config: &config,
-            abr,
-            reader_segment: Arc::new(AtomicUsize::new(0)),
-            committed_segment: Arc::new(AtomicUsize::new(0)),
             playlist_state,
-            bus: EventBus::new(16),
+            abr,
             timeline,
-        });
+            EventBus::new(16),
+            &config,
+            Arc::new(AtomicUsize::new(0)),
+        );
         HlsState {
             scheduler,
             loader,
@@ -1286,7 +1294,7 @@ mod tests {
              FetchCmds under the new epoch"
         );
         assert_eq!(
-            state.scheduler.active_seek_epoch, new_epoch,
+            state.scheduler.runtime.active_seek_epoch, new_epoch,
             "seek_epoch_reset must update active_seek_epoch so a \
              follow-up same-epoch demand goes through the same-epoch \
              dispatch path"
@@ -1317,7 +1325,7 @@ mod tests {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
         let _ = process_demand(&mut state, &mut cx);
-        assert_eq!(state.scheduler.active_seek_epoch, new_epoch);
+        assert_eq!(state.scheduler.runtime.active_seek_epoch, new_epoch);
         assert!(
             state.scheduler.coord.timeline().is_flushing(),
             "audio has not yet called complete_seek"
@@ -1409,7 +1417,10 @@ mod tests {
         }
 
         // Cursor is past the tail — every segment was fetched once.
-        scheduler.cursor.reopen_fill(0, Consts::NUM_SEGMENTS);
+        scheduler
+            .runtime
+            .cursor
+            .reopen_fill(0, Consts::NUM_SEGMENTS);
         assert_eq!(scheduler.current_segment_index(), Consts::NUM_SEGMENTS);
 
         // Reader's byte position is inside the cache window — seg
@@ -1530,9 +1541,10 @@ mod tests {
         state.scheduler.download_variant = 0;
         state
             .scheduler
+            .runtime
             .cursor
             .reopen_fill(READER_SEG, Consts::NUM_SEGMENTS);
-        state.scheduler.filling_layout_gap = false;
+        state.scheduler.runtime.filling_layout_gap = false;
         // Simulate ABR having picked variant 1 (e.g. after a down-switch).
         state.scheduler.abr.apply(
             &AbrDecision {
@@ -1633,7 +1645,7 @@ mod tests {
         // mirrors the production log: `cursor::rewind_fill_to from=23 to=22
         // floor=20 target=22` — seg 22 is above the floor so the unconditional
         // rewind in process_demand actually reduces the cursor.
-        state.scheduler.cursor.reopen_fill(20, 23);
+        state.scheduler.runtime.cursor.reopen_fill(20, 23);
         let cursor_before = state.scheduler.current_segment_index();
         assert_eq!(cursor_before, 23);
 
@@ -1725,11 +1737,11 @@ mod tests {
         // for (variant=0, segment=12) yet, so `is_segment_loaded`
         // returns false and the existing fix's skip branch does NOT
         // fire.
-        state.scheduler.cursor.reopen_fill(12, 13);
+        state.scheduler.runtime.cursor.reopen_fill(12, 13);
         // `build_batch` marks the segment in-flight when it emits the
         // FetchCmd; the production log captures this as `insert_in_flight`
         // immediately before `advance_current_segment_index(12 + 1)`.
-        state.scheduler.in_flight_segments.insert((0, 12));
+        state.scheduler.runtime.in_flight_segments.insert((0, 12));
         let cursor_before = state.scheduler.current_segment_index();
         assert_eq!(cursor_before, 13);
 
@@ -1860,9 +1872,10 @@ mod tests {
         state.scheduler.download_variant = 0;
         state
             .scheduler
+            .runtime
             .cursor
             .reopen_fill(LIVE_START, Consts::NUM_SEGMENTS);
-        state.scheduler.filling_layout_gap = false;
+        state.scheduler.runtime.filling_layout_gap = false;
 
         // ABR's initial pick was variant 0 (`AbrMode::Auto(Some(0))`).
         // After throughput measurement it decides to up-switch to
@@ -1998,8 +2011,8 @@ mod tests {
         let captured_seek_epoch = {
             let mut guard = state_arc.lock_sync();
             let st = guard.as_mut().expect("state must be initialized");
-            st.scheduler.cursor.reopen_fill(20, 23);
-            st.scheduler.in_flight_segments.insert((0, 22));
+            st.scheduler.runtime.cursor.reopen_fill(20, 23);
+            st.scheduler.runtime.in_flight_segments.insert((0, 22));
             let epoch = st.scheduler.coord.timeline().seek_epoch();
             drop(guard);
             epoch
@@ -2051,8 +2064,8 @@ mod tests {
                 new_epoch > captured_seek_epoch,
                 "seek must produce a strictly newer epoch",
             );
-            st.scheduler.active_seek_epoch = new_epoch;
-            st.scheduler.in_flight_segments.clear();
+            st.scheduler.runtime.active_seek_epoch = new_epoch;
+            st.scheduler.runtime.in_flight_segments.clear();
             st.scheduler.reset_cursor(10);
             let cursor = st.scheduler.current_segment_index();
             drop(guard);

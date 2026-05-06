@@ -13,7 +13,7 @@ use kithara_storage::ResourceExt;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio_util::sync::CancellationToken;
 
-use crate::source::build_pair;
+use crate::scheduler::HlsScheduler;
 pub use crate::{
     config::HlsConfig,
     coord::{HlsCoord, SegmentRequest},
@@ -168,17 +168,16 @@ pub fn build_source(
         .collect();
     hls_peer.set_abr_variants(abr_variants);
     let _handle = downloader.register(Arc::clone(&hls_peer) as Arc<dyn kithara_stream::dl::Peer>);
-    let (_downloader, source) = build_pair(crate::source::BuildPair {
+    let scheduler = HlsScheduler::new(
         backend,
-        config,
-        abr: Arc::clone(hls_peer.abr()),
-        reader_segment: hls_peer.reader_segment_cursor(),
-        committed_segment: hls_peer.committed_segment_cursor(),
         playlist_state,
-        bus,
+        Arc::clone(hls_peer.abr()),
         timeline,
-    });
-    source
+        bus,
+        config,
+        hls_peer.committed_segment_cursor(),
+    );
+    scheduler.spawn_source(hls_peer.reader_segment_cursor())
 }
 
 pub fn set_source_variant_fence(source: &mut HlsSource, fence: Option<usize>) {

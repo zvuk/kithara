@@ -30,7 +30,7 @@ impl HlsScheduler {
         if cached_count > self.current_segment_index() {
             self.advance_current_segment_index(cached_count);
         }
-        self.sent_init_for_variant.insert(variant);
+        self.runtime.sent_init_for_variant.insert(variant);
 
         // Cached-segment "completion" announcement was a download-fact
         // dupe of `DownloaderEvent::RequestCompleted` and is no longer
@@ -38,7 +38,7 @@ impl HlsScheduler {
         // `SegmentReadComplete` come from `source_impl::read_at` once
         // the reader actually crosses the segment boundary.
         let _ = cached_count;
-        let _ = self.announced_cached_count.entry(variant);
+        let _ = self.runtime.announced_cached_count.entry(variant);
     }
 
     pub(crate) fn populate_cached_segments(
@@ -79,6 +79,7 @@ impl HlsScheduler {
         let num_segments = self.playlist_state.num_segments(variant).unwrap_or(0);
         if num_segments > 0
             && self
+                .runtime
                 .populated_cached_count
                 .get(&variant)
                 .copied()
@@ -95,7 +96,7 @@ impl HlsScheduler {
             &self.playlist_state,
             variant,
         );
-        self.populated_cached_count.insert(variant, count);
+        self.runtime.populated_cached_count.insert(variant, count);
         (count, cumulative_offset)
     }
 

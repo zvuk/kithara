@@ -23,7 +23,8 @@ use crate::{
     parsing::{EncryptionMethod, variant_info_from_master},
     peer::HlsPeer,
     playlist::PlaylistState,
-    source::{HlsSource, build_pair},
+    scheduler::HlsScheduler,
+    source::HlsSource,
     stream_index::StreamIndex,
 };
 
@@ -163,16 +164,16 @@ impl StreamType for Hls {
         let _ = initial_variant;
         let _ = variant_info_from_master;
 
-        let (hls_downloader, mut source) = build_pair(crate::source::BuildPair {
+        let hls_downloader = HlsScheduler::new(
             backend,
-            config: &config,
-            abr: Arc::clone(hls_peer.abr()),
-            reader_segment: hls_peer.reader_segment_cursor(),
-            committed_segment: hls_peer.committed_segment_cursor(),
-            playlist_state: Arc::clone(&playlist_state),
-            bus,
+            Arc::clone(&playlist_state),
+            Arc::clone(hls_peer.abr()),
             timeline,
-        });
+            bus,
+            &config,
+            hls_peer.committed_segment_cursor(),
+        );
+        let mut source = hls_downloader.spawn_source(hls_peer.reader_segment_cursor());
         *invalidation_target
             .lock()
             .expect("HLS invalidation target lock poisoned") =

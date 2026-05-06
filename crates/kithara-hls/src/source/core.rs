@@ -1,16 +1,13 @@
 use std::{
-    collections::{HashMap, HashSet},
     ops::Range,
     sync::{Arc, atomic::AtomicUsize},
 };
 
-use kithara_abr::AbrState;
 use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_platform::Mutex;
 use kithara_probes::kithara;
-use kithara_stream::Timeline;
 use tracing::trace;
 
 use crate::{
@@ -18,7 +15,6 @@ use crate::{
     ids::{SegmentIndex, VariantIndex},
     peer::HlsPeer,
     playlist::{PlaylistAccess, PlaylistState},
-    scheduler::{DownloadCursor, HlsScheduler},
     source::HlsSegmentView,
     stream_index::StreamIndex,
 };
@@ -357,97 +353,4 @@ impl HlsSource {
     pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
         self._peer_handle = Some(handle);
     }
-}
-
-/// Build an `HlsScheduler` + `HlsSource` pair from config.
-///
-/// `timeline` is the shared [`Timeline`] that the caller has already
-/// handed to [`HlsPeer::new`]. Passing it in — instead of minting a new
-/// one inside — guarantees the peer's `priority()` reads the same
-/// `PLAYING` flag the audio FSM writes through the coord.
-/// All inputs the HLS scheduler/source pair needs at construction time.
-/// Lifted out of the function signature so callers don't list eight
-/// positional arguments.
-pub(crate) struct BuildPair<'a> {
-    pub(crate) backend: AssetStore<DecryptContext>,
-    pub(crate) config: &'a crate::config::HlsConfig,
-    pub(crate) abr: Arc<AbrState>,
-    pub(crate) reader_segment: Arc<AtomicUsize>,
-    pub(crate) committed_segment: Arc<AtomicUsize>,
-    pub(crate) playlist_state: Arc<PlaylistState>,
-    pub(crate) bus: EventBus,
-    pub(crate) timeline: Timeline,
-}
-
-pub(crate) fn build_pair(args: BuildPair<'_>) -> (HlsScheduler, HlsSource) {
-    let BuildPair {
-        backend,
-        config,
-        abr,
-        reader_segment,
-        committed_segment,
-        playlist_state,
-        bus,
-        timeline,
-    } = args;
-    let cancel = config.cancel.clone().unwrap_or_default();
-    timeline.set_total_duration(playlist_state.track_duration());
-    let coord = Arc::new(HlsCoord::new(cancel, timeline, Arc::clone(&abr)));
-    let num_variants = playlist_state.num_variants();
-    let num_segments = playlist_state.num_segments(0).unwrap_or(0);
-    let initial_variant = coord.variant_index();
-    let mut stream_index = StreamIndex::new(num_variants, num_segments);
-    if initial_variant < num_variants {
-        stream_index.set_layout_variant(initial_variant);
-    }
-    let segments = Arc::new(Mutex::new(stream_index));
-    // Segment-based throttle: only for ephemeral backends where LRU eviction
-    // destroys data. Disk backends don't need this — files survive eviction.
-    // Each fMP4 segment uses up to SLOTS_PER_SEGMENT LRU slots (init + media).
-    let look_ahead_segments = if backend.is_ephemeral() {
-        const SLOTS_PER_SEGMENT: usize = 2;
-        let cache_cap = config.store.effective_cache_capacity().get();
-        Some((cache_cap.saturating_sub(SLOTS_PER_SEGMENT) / SLOTS_PER_SEGMENT).max(1))
-    } else {
-        None
-    };
-
-    let downloader = HlsScheduler {
-        look_ahead_segments,
-        committed_segment,
-        active_seek_epoch: 0,
-        backend: backend.clone(),
-        playlist_state: Arc::clone(&playlist_state),
-        cursor: DownloadCursor::fill(0),
-        force_init_for_seek: false,
-        sent_init_for_variant: HashSet::new(),
-        abr: Arc::clone(&abr),
-        coord: Arc::clone(&coord),
-        segments: Arc::clone(&segments),
-        bus: bus.clone(),
-        prefetch_count: config.download_batch_size.max(1),
-        download_variant: initial_variant,
-        filling_layout_gap: false,
-        demand_throttle_until: None,
-        announced_cached_count: HashMap::new(),
-        populated_cached_count: HashMap::new(),
-        in_flight_segments: HashSet::new(),
-    };
-
-    let segmented_view = HlsSegmentView::new(Arc::clone(&playlist_state), Arc::clone(&segments));
-
-    let source = HlsSource {
-        coord,
-        backend,
-        segments,
-        playlist_state,
-        bus,
-        reader_segment,
-        segmented_view,
-        variant_fence: None,
-        _hls_peer: None,
-        _peer_handle: None,
-    };
-
-    (downloader, source)
 }

@@ -71,13 +71,13 @@ impl HlsScheduler {
                 layout,
                 gap_seg, variant, "tail: ABR variant done, filling layout variant gap"
             );
-            self.filling_layout_gap = true;
+            self.runtime.filling_layout_gap = true;
             self.download_variant = layout;
             self.reset_cursor(gap_seg);
             self.coord.condvar.notify_all();
             return true;
         }
-        self.filling_layout_gap = false;
+        self.runtime.filling_layout_gap = false;
         false
     }
 
@@ -87,7 +87,7 @@ impl HlsScheduler {
         }
 
         let timeline_seek_epoch = self.coord.timeline().seek_epoch();
-        if timeline_seek_epoch != self.active_seek_epoch {
+        if timeline_seek_epoch != self.runtime.active_seek_epoch {
             self.coord.timeline().set_eof(false);
             self.coord.condvar.notify_all();
             return false;
@@ -110,7 +110,7 @@ impl HlsScheduler {
             return false;
         }
         if layout == variant {
-            self.filling_layout_gap = false;
+            self.runtime.filling_layout_gap = false;
         }
 
         self.finalize_tail_state()
@@ -145,7 +145,7 @@ impl HlsScheduler {
             let req = self.coord.take_segment_request()?;
             let current_epoch = self.coord.timeline().seek_epoch();
             if req.seek_epoch == current_epoch {
-                if req.seek_epoch != self.active_seek_epoch {
+                if req.seek_epoch != self.runtime.active_seek_epoch {
                     self.reset_for_seek_epoch(req.seek_epoch, req.variant, req.segment_index);
                 }
                 return Some(req);

@@ -22,6 +22,5 @@ mod plan;
 mod size_map;
 mod trait_impl;
 
-pub(crate) use cursor::DownloadCursor;
 pub(crate) use state::HlsScheduler;
 pub(crate) use trait_impl::CommitFetch;

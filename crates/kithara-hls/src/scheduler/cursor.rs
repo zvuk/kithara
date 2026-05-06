@@ -8,7 +8,7 @@
 //! (the next segment to fetch). `next` is monotonically non-decreasing
 //! within an epoch and is clamped to `>= floor` on rewind.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DownloadCursor<I> {
     floor: I,
     next: I,

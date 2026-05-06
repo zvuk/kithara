@@ -113,7 +113,7 @@ impl HlsScheduler {
             .unwrap_or(num_segments)
         };
 
-        self.cursor.reopen_fill(cursor_pos, cursor_pos);
+        self.runtime.cursor.reopen_fill(cursor_pos, cursor_pos);
         self.coord
             .had_midstream_switch
             .store(true, Ordering::Release);

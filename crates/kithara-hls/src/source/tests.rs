@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::{
-    core::{HlsSource, build_pair},
+    core::HlsSource,
     types::{ReadSegment, SeekLayout},
 };
 use crate::{
@@ -39,6 +39,7 @@ use crate::{
     coord::SegmentRequest,
     parsing::{VariantId, VariantStream},
     playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
+    scheduler::HlsScheduler,
     stream_index::{SegmentData, StreamIndex},
 };
 
@@ -153,20 +154,19 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
     };
     let _ = track;
     let _ = parsed;
-    let (_downloader, source) = build_pair(super::BuildPair {
+    let _downloader = HlsScheduler::new(
         backend,
-        config: &config,
-        abr: Arc::new(kithara_abr::AbrState::new(
+        playlist_state,
+        Arc::new(kithara_abr::AbrState::new(
             Vec::new(),
             kithara_abr::AbrMode::Auto(None),
         )),
-        reader_segment: Arc::new(AtomicUsize::new(0)),
-        committed_segment: Arc::new(AtomicUsize::new(0)),
-        playlist_state,
-        bus: EventBus::new(BUS_CAPACITY),
-        timeline: kithara_stream::Timeline::new(),
-    });
-    source
+        kithara_stream::Timeline::new(),
+        EventBus::new(BUS_CAPACITY),
+        &config,
+        Arc::new(AtomicUsize::new(0)),
+    );
+    _downloader.spawn_source(Arc::new(AtomicUsize::new(0)))
 }
 
 fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
@@ -202,20 +202,19 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
     };
     let _ = track;
     let _ = parsed;
-    let (_downloader, source) = build_pair(super::BuildPair {
+    let _downloader = HlsScheduler::new(
         backend,
-        config: &config,
-        abr: Arc::new(kithara_abr::AbrState::new(
+        playlist_state,
+        Arc::new(kithara_abr::AbrState::new(
             Vec::new(),
             kithara_abr::AbrMode::Auto(None),
         )),
-        reader_segment: Arc::new(AtomicUsize::new(0)),
-        committed_segment: Arc::new(AtomicUsize::new(0)),
-        playlist_state,
-        bus: EventBus::new(BUS_CAPACITY),
-        timeline: kithara_stream::Timeline::new(),
-    });
-    source
+        kithara_stream::Timeline::new(),
+        EventBus::new(BUS_CAPACITY),
+        &config,
+        Arc::new(AtomicUsize::new(0)),
+    );
+    _downloader.spawn_source(Arc::new(AtomicUsize::new(0)))
 }
 
 fn set_variant_size_map(state: &PlaylistState, variant: usize, segment_sizes: &[u64]) {
@@ -770,19 +769,19 @@ fn demand_range_queues_request_for_unloaded_offset() {
     };
     let _ = track;
     let _ = parsed;
-    let (_downloader, source) = build_pair(super::BuildPair {
+    let _downloader = HlsScheduler::new(
         backend,
-        config: &config,
-        abr: Arc::new(kithara_abr::AbrState::new(
+        playlist_state,
+        Arc::new(kithara_abr::AbrState::new(
             Vec::new(),
             kithara_abr::AbrMode::Auto(None),
         )),
-        reader_segment: Arc::new(AtomicUsize::new(0)),
-        committed_segment: Arc::new(AtomicUsize::new(0)),
-        playlist_state,
-        bus: EventBus::new(BUS_CAPACITY),
-        timeline: kithara_stream::Timeline::new(),
-    });
+        kithara_stream::Timeline::new(),
+        EventBus::new(BUS_CAPACITY),
+        &config,
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let source = _downloader.spawn_source(Arc::new(AtomicUsize::new(0)));
 
     source.demand_range(DEMAND_OFFSET..DEMAND_OFFSET + 1);
 
@@ -828,19 +827,19 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     };
     let _ = track;
     let _ = parsed;
-    let (_downloader, source) = build_pair(super::BuildPair {
+    let _downloader = HlsScheduler::new(
         backend,
-        config: &config,
-        abr: Arc::new(kithara_abr::AbrState::new(
+        playlist_state,
+        Arc::new(kithara_abr::AbrState::new(
             Vec::new(),
             kithara_abr::AbrMode::Auto(None),
         )),
-        reader_segment: Arc::new(AtomicUsize::new(0)),
-        committed_segment: Arc::new(AtomicUsize::new(0)),
-        playlist_state,
-        bus: EventBus::new(BUS_CAPACITY),
-        timeline: kithara_stream::Timeline::new(),
-    });
+        kithara_stream::Timeline::new(),
+        EventBus::new(BUS_CAPACITY),
+        &config,
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let source = _downloader.spawn_source(Arc::new(AtomicUsize::new(0)));
 
     let offsets: Vec<u64> = (0..NUM_SEGS as u64).map(|i| i * SEG_SIZE).collect();
     let total = NUM_SEGS as u64 * SEG_SIZE;
@@ -1058,19 +1057,19 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
     };
     let _ = track;
     let _ = parsed;
-    let (_downloader, mut source) = build_pair(super::BuildPair {
+    let _downloader = HlsScheduler::new(
         backend,
-        config: &config,
-        abr: Arc::new(kithara_abr::AbrState::new(
+        playlist_state,
+        Arc::new(kithara_abr::AbrState::new(
             Vec::new(),
             kithara_abr::AbrMode::Auto(None),
         )),
-        reader_segment: Arc::new(AtomicUsize::new(0)),
-        committed_segment: Arc::new(AtomicUsize::new(0)),
-        playlist_state,
-        bus: EventBus::new(BUS_CAPACITY),
-        timeline: kithara_stream::Timeline::new(),
-    });
+        kithara_stream::Timeline::new(),
+        EventBus::new(BUS_CAPACITY),
+        &config,
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let mut source = _downloader.spawn_source(Arc::new(AtomicUsize::new(0)));
 
     source.segments.lock_sync().commit_segment(
         0,
@@ -1157,19 +1156,19 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
     };
     let _ = track;
     let _ = parsed;
-    let (_downloader, mut source) = build_pair(super::BuildPair {
+    let _downloader = HlsScheduler::new(
         backend,
-        config: &config,
-        abr: Arc::new(kithara_abr::AbrState::new(
+        playlist_state,
+        Arc::new(kithara_abr::AbrState::new(
             Vec::new(),
             kithara_abr::AbrMode::Auto(None),
         )),
-        reader_segment: Arc::new(AtomicUsize::new(0)),
-        committed_segment: Arc::new(AtomicUsize::new(0)),
-        playlist_state,
-        bus: EventBus::new(BUS_CAPACITY),
-        timeline: kithara_stream::Timeline::new(),
-    });
+        kithara_stream::Timeline::new(),
+        EventBus::new(BUS_CAPACITY),
+        &config,
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let mut source = _downloader.spawn_source(Arc::new(AtomicUsize::new(0)));
 
     let mut segments = Vec::new();
     for index in 0..NUM_SEGS {
