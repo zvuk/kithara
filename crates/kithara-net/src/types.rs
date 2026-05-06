@@ -142,7 +142,7 @@ pub struct NetOptions {
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
-    pub insecure: bool,
+    pub is_insecure: bool,
     /// Max idle connections per host. Enables HTTP keep-alive connection
     /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
     /// Set to 0 to disable pooling.

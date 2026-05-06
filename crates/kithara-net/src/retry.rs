@@ -159,7 +159,7 @@ mod tests {
     use crate::traits::NetMock;
 
     fn test_url() -> Url {
-        Url::parse("http://test.com").expect("valid URL")
+        Url::parse("http://test.com").expect("BUG: hard-coded test URL is valid")
     }
 
     fn empty_stream() -> ByteStream {
@@ -472,8 +472,8 @@ mod tests {
 
         let result = timeout(Duration::from_millis(200), handle)
             .await
-            .expect("task should complete within 200ms")
-            .expect("task should not panic");
+            .expect("BUG: spawned retry task must finish within 200ms in this test")
+            .expect("BUG: spawned retry task must not panic in this test");
 
         assert!(matches!(result, Err(NetError::Cancelled)));
     }

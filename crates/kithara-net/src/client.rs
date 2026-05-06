@@ -35,13 +35,37 @@ fn truncate_error_body(mut body: String) -> String {
     body
 }
 
+/// Build a `reqwest::Client` with our default configuration. Native
+/// build applies pool / TLS / read-timeout knobs; wasm32 takes the
+/// builder defaults because most options aren't supported there.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
+    Client::builder()
+        .pool_max_idle_per_host(options.pool_max_idle_per_host)
+        .danger_accept_invalid_certs(options.is_insecure)
+        // reqwest's `read_timeout` is documented as "applied for each
+        // read operation" — i.e. inactivity between reads, not a total
+        // deadline. Maps directly to our `NetOptions::inactivity_timeout`.
+        // The Downloader-layer `BodyStream` wrapper enforces the same
+        // notion at the chunk level downstream of reqwest.
+        .read_timeout(options.inactivity_timeout)
+        .build()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_client(_options: &NetOptions) -> reqwest::Result<Client> {
+    Client::builder().build()
+}
+
 /// Extract response headers into our [`Headers`] type.
 fn extract_headers(resp: &reqwest::Response) -> Headers {
     let mut headers = Headers::new();
-    for (name, value) in resp.headers() {
-        if let Ok(v) = value.to_str() {
-            headers.insert(name.as_str(), v);
-        }
+    let str_pairs = resp
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str(), v)));
+    for (name, value) in str_pairs {
+        headers.insert(name, value);
     }
     headers
 }
@@ -58,20 +82,22 @@ impl HttpClient {
     /// Panics if the `reqwest::Client` builder fails to build.
     #[must_use]
     pub fn new(options: NetOptions) -> Self {
-        let builder = Client::builder();
-        #[cfg(not(target_arch = "wasm32"))]
-        let builder = builder
-            .pool_max_idle_per_host(options.pool_max_idle_per_host)
-            .danger_accept_invalid_certs(options.insecure)
-            // reqwest's `read_timeout` is documented as "applied for each
-            // read operation" — i.e. inactivity between reads, not a
-            // total deadline. Maps directly to our
-            // `NetOptions::inactivity_timeout`. The Downloader-layer
-            // `BodyStream` wrapper enforces the same notion at the chunk
-            // level downstream of reqwest.
-            .read_timeout(options.inactivity_timeout);
-        let inner = builder.build().expect("failed to build reqwest client");
+        let inner = build_client(&options)
+            .expect("BUG: reqwest::Client::builder().build() with our defaults cannot fail");
         Self { inner, options }
+    }
+
+    /// Build the metadata request used by `Net::head`. On native this
+    /// is a real `HEAD`; on wasm32 we issue a zero-byte ranged `GET`
+    /// because most CORS configs block `HEAD`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
+        self.inner.head(url)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
+        self.inner.get(url).header("Range", "bytes=0-0")
     }
 
     fn apply_headers(
@@ -192,32 +218,14 @@ impl Net for HttpClient {
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        // On WASM, HEAD is often blocked by CORS (servers typically allow
-        // only GET/OPTIONS). Use a zero-byte range GET instead — the 206
-        // response carries the same metadata headers.
-        #[cfg(target_arch = "wasm32")]
-        let resp = {
-            let mut req = self.inner.get(url.clone()).header("Range", "bytes=0-0");
-            req = Self::apply_headers(req, headers);
-            let req = if let Some(total) = self.options.total_timeout {
-                req.timeout(total)
-            } else {
-                req
-            };
-            req.send().await.map_err(NetError::from)?
+        let req = self.head_request(url.clone());
+        let req = Self::apply_headers(req, headers);
+        let req = if let Some(total) = self.options.total_timeout {
+            req.timeout(total)
+        } else {
+            req
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let resp = {
-            let req = self.inner.head(url.clone());
-            let req = Self::apply_headers(req, headers);
-            let req = if let Some(total) = self.options.total_timeout {
-                req.timeout(total)
-            } else {
-                req
-            };
-            req.send().await.map_err(NetError::from)?
-        };
+        let resp = req.send().await.map_err(NetError::from)?;
 
         let status = resp.status();
 
@@ -231,10 +239,12 @@ impl Net for HttpClient {
         }
 
         let mut out = Headers::new();
-        for (name, value) in resp.headers() {
-            if let Ok(v) = value.to_str() {
-                out.insert(name.as_str(), v);
-            }
+        let str_pairs = resp
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str(), v)));
+        for (name, v) in str_pairs {
+            out.insert(name, v);
         }
 
         // For range GET responses, derive content-length from Content-Range.

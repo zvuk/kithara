@@ -42,7 +42,7 @@ pub(crate) type ItemRegistry = HashMap<TrackId, Arc<AudioPlayerItem>>;
 /// validate TLS.
 fn default_net_options() -> NetOptions {
     const INSECURE: bool = cfg!(feature = "dev");
-    NetOptions::default().with_insecure(INSECURE)
+    NetOptions::default().with_is_insecure(INSECURE)
 }
 
 /// FFI-facing audio player.

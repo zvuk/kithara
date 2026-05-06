@@ -100,7 +100,7 @@ mod tests {
     use super::*;
 
     fn test_url(raw: &str) -> Url {
-        Url::parse(raw).expect("valid test URL")
+        Url::parse(raw).expect("BUG: hard-coded test URL is valid")
     }
 
     // Test error creation methods
