@@ -80,11 +80,11 @@ mod tests {
     #[cfg(feature = "file")]
     #[case(ResourceSrc::Path(PathBuf::from("/tmp/song.mp3")), "local")]
     #[case(
-        ResourceSrc::Url(Url::parse("https://example.com/song.mp3").expect("valid URL")),
+        ResourceSrc::Url(Url::parse("https://example.com/song.mp3").expect("BUG: valid URL")),
         "remote"
     )]
     fn detect_file_sources(#[case] src: ResourceSrc, #[case] expected: &str) {
-        let detected = SourceType::detect(&src).expect("source must be detected");
+        let detected = SourceType::detect(&src).expect("BUG: source must be detected");
         assert_eq!(source_tag(&detected), expected);
     }
 
@@ -93,8 +93,8 @@ mod tests {
     #[case("https://example.com/playlist.m3u8")]
     #[case("https://example.com/live/index.m3u8")]
     fn detect_hls_url(#[case] url: &str) {
-        let src = ResourceSrc::Url(Url::parse(url).expect("valid URL"));
-        let detected = SourceType::detect(&src).expect("source must be detected");
+        let src = ResourceSrc::Url(Url::parse(url).expect("BUG: valid URL"));
+        let detected = SourceType::detect(&src).expect("BUG: source must be detected");
         assert_eq!(source_tag(&detected), "hls");
     }
 
@@ -107,7 +107,7 @@ mod tests {
         // With file feature enabled, it's accepted as LocalFile
         #[cfg(feature = "file")]
         assert_eq!(
-            source_tag(&result.expect("relative path must map to local")),
+            source_tag(&result.expect("BUG: relative path must map to local")),
             "local"
         );
         #[cfg(not(feature = "file"))]

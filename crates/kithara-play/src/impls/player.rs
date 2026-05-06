@@ -1209,7 +1209,7 @@ mod tests {
             ..PlayerConfig::default()
         });
         let mut config = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
-            .expect("valid resource config");
+            .expect("BUG: valid resource config");
 
         player.prepare_config(&mut config);
 
@@ -1793,7 +1793,9 @@ mod tests {
         player.ensure_engine_started().unwrap();
         player.ensure_slot().unwrap();
 
-        let src = player.arm_next(1).expect("arm_next succeeds for items[1]");
+        let src = player
+            .arm_next(1)
+            .expect("BUG: arm_next succeeds for items[1]");
         assert_eq!(player.armed_next(), Some(1));
         let _ = session.render(512);
         let notifications = player.drain_notifications();
@@ -1998,7 +2000,7 @@ mod tests {
 
         player.ensure_engine_started().unwrap();
         player.ensure_slot().unwrap();
-        let src = player.arm_next(1).expect("arm_next loads items[1]");
+        let src = player.arm_next(1).expect("BUG: arm_next loads items[1]");
         assert_eq!(player.armed_next(), Some(1));
 
         player.select_item(2, true).unwrap();
@@ -2032,7 +2034,7 @@ mod tests {
         player.ensure_slot().unwrap();
         player.select_item(0, true).unwrap();
         let _ = session.render(256);
-        let armed_src = player.arm_next(1).expect("arm_next loads items[1]");
+        let armed_src = player.arm_next(1).expect("BUG: arm_next loads items[1]");
         assert_eq!(player.armed_next(), Some(1));
 
         player.select_item(1, true).unwrap();

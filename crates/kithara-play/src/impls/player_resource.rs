@@ -470,7 +470,7 @@ mod tests {
         assert!(matches!(result, ReadOutcome::Full));
         let remaining = pr
             .frames_until_eof()
-            .expect("EOF should be known after prefetch");
+            .expect("BUG: EOF should be known after prefetch");
         assert!(remaining > 0);
         assert!(remaining < 512);
     }

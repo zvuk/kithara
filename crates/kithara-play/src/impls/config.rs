@@ -588,7 +588,7 @@ mod tests {
             .with_events(bus)
             .with_hint("mp3")
             .with_name("test")
-            .with_preload_chunks(NonZeroUsize::new(5).expect("5 > 0"));
+            .with_preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"));
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
         assert_eq!(config.name.as_deref(), Some("test"));

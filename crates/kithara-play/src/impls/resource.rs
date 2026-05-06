@@ -89,7 +89,10 @@ impl Resource {
     ///
     /// The resource shares the reader's event bus directly.
     /// Use this for custom sources.
-    #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
+    ///
+    /// Only compiled in test / `test-utils` builds — production paths
+    /// always go through [`Resource::new`] / [`Resource::from_stream_audio`].
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
         Self::from_reader_with_src(reader, Arc::from("unknown"))
     }
@@ -97,7 +100,10 @@ impl Resource {
     /// Create a resource from any `PcmReader` with an explicit `src`
     /// identifier. The src tag rides along on `PlayerEvent::ItemDidPlayToEnd`
     /// and is what the queue uses to tell which track ended.
-    #[cfg_attr(not(any(test, feature = "test-utils")), expect(dead_code))]
+    ///
+    /// Only compiled in test / `test-utils` builds — production paths
+    /// always go through [`Resource::new`] / [`Resource::from_stream_audio`].
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn from_reader_with_src(reader: impl PcmReader + 'static, src: Arc<str>) -> Self {
         let bus = reader.event_bus().clone();
         let mut inner: Box<dyn PcmReader> = Box::new(reader);
@@ -306,7 +312,7 @@ mod tests {
         match mode {
             ReadMode::Interleaved => {
                 let mut buf = [0.0f32; 64];
-                let outcome = resource.read(&mut buf).expect("read");
+                let outcome = resource.read(&mut buf).expect("BUG: read");
                 let ReadOutcome::Frames { count, .. } = outcome else {
                     panic!("expected Frames, got {outcome:?}");
                 };
@@ -319,7 +325,7 @@ mod tests {
                 let mut ch0 = [0.0f32; 32];
                 let mut ch1 = [0.0f32; 32];
                 let mut output: Vec<&mut [f32]> = vec![&mut ch0, &mut ch1];
-                let outcome = resource.read_planar(&mut output).expect("read_planar");
+                let outcome = resource.read_planar(&mut output).expect("BUG: read_planar");
                 let ReadOutcome::Frames { count, .. } = outcome else {
                     panic!("expected Frames, got {outcome:?}");
                 };
@@ -356,7 +362,9 @@ mod tests {
         let mut resource = make_resource();
         assert_eq!(resource.position(), Duration::ZERO);
 
-        let outcome = resource.seek(Duration::from_millis(500)).expect("seek");
+        let outcome = resource
+            .seek(Duration::from_millis(500))
+            .expect("BUG: seek");
         assert!(matches!(outcome, kithara_audio::SeekOutcome::Landed { .. }));
         let pos = resource.position();
         assert!((pos.as_secs_f64() - 0.5).abs() < 0.001);
@@ -369,7 +377,7 @@ mod tests {
         // Read all samples: 44100 frames * 2 channels = 88200 samples
         let mut buf = [0.0f32; 4096];
         let saw_eof = loop {
-            match resource.read(&mut buf).expect("read") {
+            match resource.read(&mut buf).expect("BUG: read") {
                 ReadOutcome::Pending { .. } => break false,
                 ReadOutcome::Frames { .. } => continue,
                 ReadOutcome::Eof { .. } => break true,

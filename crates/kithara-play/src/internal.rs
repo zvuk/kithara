@@ -34,7 +34,7 @@ pub mod engine {
 #[cfg(any(test, feature = "test-utils"))]
 pub fn init_offline_backend() {
     crate::impls::session_engine::try_init_offline_session()
-        .expect("failed to initialise offline session backend");
+        .expect("BUG: failed to initialise offline session backend");
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -88,7 +88,7 @@ pub mod offline {
                 block_frames: Self::OFFLINE_BLOCK_FRAMES,
             };
             ctx.start_stream(stream_config)
-                .expect("start offline stream");
+                .expect("BUG: start offline stream");
 
             let shared_state = Arc::new(SharedPlayerState::new());
             let (cmd_tx, cmd_rx) = HeapRb::new(Self::CMD_RINGBUF_CAPACITY).split();
@@ -103,8 +103,8 @@ pub mod offline {
             let node_id = ctx.add_node(player_node, None);
             let graph_out = ctx.graph_out_node_id();
             ctx.connect(node_id, graph_out, &[(0, 0), (1, 1)], false)
-                .expect("connect player to output");
-            ctx.update().expect("initial graph update");
+                .expect("BUG: connect player to output");
+            ctx.update().expect("BUG: initial graph update");
 
             Self {
                 shared_state,
@@ -133,13 +133,13 @@ pub mod offline {
                     src: Arc::clone(&src),
                     item_id: None,
                 })
-                .expect("send LoadTrack");
+                .expect("BUG: send LoadTrack");
             self.cmd_tx
                 .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(src)))
-                .expect("send FadeIn");
+                .expect("BUG: send FadeIn");
             self.cmd_tx
                 .try_push(PlayerCmd::SetPaused(false))
-                .expect("send SetPaused");
+                .expect("BUG: send SetPaused");
         }
 
         /// Current playback position in seconds.
@@ -158,10 +158,10 @@ pub mod offline {
         ///
         /// Panics if the graph update or backend access fails.
         pub fn render(&mut self, frames: usize) -> Vec<f32> {
-            self.ctx.update().expect("graph update");
+            self.ctx.update().expect("BUG: graph update");
             self.ctx
                 .active_backend_mut()
-                .expect("backend active")
+                .expect("BUG: backend active")
                 .render(frames)
         }
 
@@ -179,7 +179,7 @@ pub mod offline {
                     seconds,
                     seek_epoch,
                 })
-                .expect("send Seek");
+                .expect("BUG: send Seek");
         }
 
         /// Drain pending processor notifications.

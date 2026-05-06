@@ -666,7 +666,7 @@ mod tests {
             &kithara_bufpool::PcmPool::default(),
         );
         let arc_resource = Arc::new(Mutex::new(player_resource));
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         PlayerTrack::new(
             arc_resource,
             item_id,
@@ -719,7 +719,7 @@ mod tests {
             self.remaining_frames -= frames;
             self.position_frames += frames;
             Ok(kithara_audio::ReadOutcome::Frames {
-                count: std::num::NonZeroUsize::new(frames).expect("frames > 0"),
+                count: std::num::NonZeroUsize::new(frames).expect("BUG: frames > 0"),
                 position: self.position(),
             })
         }
@@ -745,7 +745,7 @@ mod tests {
             self.remaining_frames -= frames;
             self.position_frames += frames;
             Ok(kithara_audio::ReadOutcome::Frames {
-                count: std::num::NonZeroUsize::new(frames).expect("frames > 0"),
+                count: std::num::NonZeroUsize::new(frames).expect("BUG: frames > 0"),
                 position: self.position(),
             })
         }
@@ -999,7 +999,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn handover_emits_once_when_position_crosses_fade_threshold() {
         let mut track = make_track_with(10.0, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.2, sample_rate);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
         let notification_tx = Mutex::new(tx);
@@ -1061,7 +1061,7 @@ mod tests {
         let resource =
             Resource::from_reader_with_src(MisreportedDurationReader::new(900), Arc::clone(&src));
         let mut track = make_track_from_resource(resource, src, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.0, sample_rate);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
         let notification_tx = Mutex::new(tx);
@@ -1108,7 +1108,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
         let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.0, sample_rate);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
         let notification_tx = Mutex::new(tx);
@@ -1152,7 +1152,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
         let mut track = make_track_with(5.0, Some(Arc::from("item-1")));
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.2, sample_rate);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
         let notification_tx = Mutex::new(tx);
@@ -1201,7 +1201,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
         let mut track = make_track_with(10.0, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.0, sample_rate);
         track.set_prefetch_duration(2.0);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
@@ -1240,7 +1240,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
         let mut track = make_track_with(10.0, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.2, sample_rate);
         track.set_prefetch_duration(2.0);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
@@ -1292,7 +1292,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() {
         let mut track = make_track_with(0.5, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.0, sample_rate);
         track.set_prefetch_duration(5.0);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
@@ -1323,7 +1323,7 @@ mod tests {
         // prefetch leaves them without an armed slot and the handover is
         // a no-op.
         let mut track = make_track_with(10.0, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.2, sample_rate);
         track.set_prefetch_duration(0.0);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();

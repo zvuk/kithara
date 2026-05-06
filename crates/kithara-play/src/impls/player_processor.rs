@@ -742,7 +742,7 @@ mod tests {
     fn make_processor() -> (PlayerNodeProcessor, HeapProd<PlayerCmd>) {
         let shared_state = make_shared_state();
         let (tx, rx) = HeapRb::<PlayerCmd>::new(32).split();
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
         let processor = PlayerNodeProcessor::new(
             rx,
             shared_state,
@@ -848,7 +848,7 @@ mod tests {
 
         let shared_state = make_shared_state();
         let (tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
-        let sample_rate = NonZeroU32::new(host_rate).expect("non-zero");
+        let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
         let mut processor = PlayerNodeProcessor::new(
             rx,
             shared_state,
@@ -1076,12 +1076,12 @@ mod tests {
         processor
             .tracks
             .get_mut(&short_src)
-            .expect("short track must be loaded")
+            .expect("BUG: short track must be loaded")
             .play();
         processor
             .tracks
             .get_mut(&long_src)
-            .expect("long track must be loaded")
+            .expect("BUG: long track must be loaded")
             .play();
 
         let inputs: [&[f32]; 0] = [];
@@ -1132,7 +1132,7 @@ mod tests {
         processor
             .tracks
             .get_mut(&short_src)
-            .expect("short track must be loaded")
+            .expect("BUG: short track must be loaded")
             .play();
 
         let inputs: [&[f32]; 0] = [];
@@ -1161,7 +1161,7 @@ mod tests {
             processor
                 .tracks
                 .get(&preload_src)
-                .expect("preloading track must remain loaded")
+                .expect("BUG: preloading track must remain loaded")
                 .state(),
             TrackState::Playing
         );
@@ -1198,17 +1198,17 @@ mod tests {
         processor
             .tracks
             .get_mut(&short_src)
-            .expect("short track must be loaded")
+            .expect("BUG: short track must be loaded")
             .play();
         processor
             .tracks
             .get_mut(&fading_src)
-            .expect("fading track must be loaded")
+            .expect("BUG: fading track must be loaded")
             .play();
         processor
             .tracks
             .get_mut(&fading_src)
-            .expect("fading track must remain loaded")
+            .expect("BUG: fading track must remain loaded")
             .fade_out();
 
         let inputs: [&[f32]; 0] = [];
@@ -1227,7 +1227,7 @@ mod tests {
             processor
                 .tracks
                 .get(&preload_src)
-                .expect("preloading track must remain loaded")
+                .expect("BUG: preloading track must remain loaded")
                 .state(),
             TrackState::Playing
         );

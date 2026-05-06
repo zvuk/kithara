@@ -71,9 +71,10 @@ impl AudioBackend for OfflineBackend {
     }
 
     fn start_stream(config: Self::Config) -> Result<(Self, StreamInfo), Self::StartStreamError> {
-        let sr = NonZeroU32::new(config.sample_rate).expect("non-zero sample rate");
-        let block = NonZeroU32::new(config.block_frames).expect("non-zero block frames");
-        let declick = NonZeroU32::new(OfflineConfig::default().block_frames).expect("non-zero");
+        let sr = NonZeroU32::new(config.sample_rate).expect("BUG: non-zero sample rate");
+        let block = NonZeroU32::new(config.block_frames).expect("BUG: non-zero block frames");
+        let declick =
+            NonZeroU32::new(OfflineConfig::default().block_frames).expect("BUG: non-zero");
         let stream_info = StreamInfo {
             sample_rate: sr,
             sample_rate_recip: 1.0 / f64::from(config.sample_rate),
