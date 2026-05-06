@@ -64,7 +64,7 @@ impl Fmp4SegmentDemuxer {
         let cursor = self
             .cursor
             .as_mut()
-            .expect("ensure_cursor must run before fill_cursor");
+            .expect("BUG: ensure_cursor must run before fill_cursor");
         if cursor.frames.is_some() {
             return Ok(FillStatus::Ready);
         }
@@ -153,8 +153,11 @@ impl Demuxer for Fmp4SegmentDemuxer {
                 let cursor = self
                     .cursor
                     .as_mut()
-                    .expect("cursor present after ensure_cursor");
-                let frames_state = cursor.frames.as_mut().expect("frames present after Ready");
+                    .expect("BUG: cursor present after ensure_cursor");
+                let frames_state = cursor
+                    .frames
+                    .as_mut()
+                    .expect("BUG: frames present after Ready");
                 let frame_idx = frames_state.next_index;
                 if frame_idx >= frames_state.frames.len() {
                     None
@@ -168,7 +171,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
                 self.cursor = None;
                 continue;
             };
-            let cursor = self.cursor.as_ref().expect("cursor still present");
+            let cursor = self.cursor.as_ref().expect("BUG: cursor still present");
             let pts = ticks_to_duration(frame.decode_time, self.init.timescale);
             let dur = ticks_to_duration(u64::from(frame.duration), self.init.timescale);
             let data: &[u8] = &cursor.read.buffer[frame.offset..frame.offset + frame.size];

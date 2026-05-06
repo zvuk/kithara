@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn extracts_lame_trim_from_xing_frame() {
         let buf = build_mpeg1_stereo_xing(576, 960);
-        let lame = read_lame_trim(&buf).expect("lame");
+        let lame = read_lame_trim(&buf).expect("BUG: lame");
         assert_eq!(lame.enc_delay, 576);
         assert_eq!(lame.enc_padding, 960);
     }

@@ -38,7 +38,7 @@ impl std::io::Read for InstrumentedSource {
         if self.record.load(Ordering::Acquire) && n > 0 {
             self.reads
                 .lock()
-                .expect("reads lock")
+                .expect("BUG: reads lock")
                 .push(pos..pos + n as u64);
         }
         Ok(n)
@@ -117,7 +117,7 @@ fn build_test_layout(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
         let len = seg_bytes.len() as u64;
         let start = byte_cursor;
         let end = start + len;
-        let seg_index = u32::try_from(i - 1).expect("segment index fits u32");
+        let seg_index = u32::try_from(i - 1).expect("BUG: segment index fits u32");
         descs.push(SegmentDescriptor::new(
             start..end,
             Duration::from_secs((u64::from(seg_index)) * segment_duration_secs),
@@ -153,9 +153,9 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         record: Arc::clone(&record),
     });
     let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
-    let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("build demuxer");
+    let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
-        .expect("open codec");
+        .expect("BUG: open codec");
     let decoder = ComposedDecoder::new(
         demuxer,
         codec,
@@ -177,7 +177,7 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
     // (Symphonia AAC may emit a zero-frame priming chunk).
     let mut got_chunk = None;
     for _ in 0..16 {
-        match decoder.next_chunk().expect("decode") {
+        match decoder.next_chunk().expect("BUG: decode") {
             DecoderChunkOutcome::Chunk(chunk) => {
                 got_chunk = Some(chunk);
                 break;
@@ -186,7 +186,7 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
             DecoderChunkOutcome::Eof => break,
         }
     }
-    let chunk = got_chunk.expect("at least one PCM chunk from segment 0");
+    let chunk = got_chunk.expect("BUG: at least one PCM chunk from segment 0");
     assert!(chunk.frames() > 0);
     assert!(chunk.spec().sample_rate >= 8_000);
     assert!(chunk.spec().channels >= 1);
@@ -200,12 +200,12 @@ fn seek_reads_only_init_and_target_segment() {
     // Init was already loaded during decoder construction; clear the
     // history and start recording from this point on so the asserts
     // measure only post-seek reads.
-    reads.lock().expect("clear").clear();
+    reads.lock().expect("BUG: clear").clear();
     record.store(true, Ordering::Release);
 
     // Seek into segment 3 (decode_time = 18s).
     let target = Duration::from_secs(18);
-    let outcome = decoder.seek(target).expect("seek");
+    let outcome = decoder.seek(target).expect("BUG: seek");
     let DecoderSeekOutcome::Landed {
         landed_at,
         landed_byte,
@@ -215,13 +215,13 @@ fn seek_reads_only_init_and_target_segment() {
         panic!("expected Landed, got {outcome:?}");
     };
     assert!(landed_at >= Duration::from_secs(18) && landed_at < Duration::from_secs(24));
-    let landed_byte = landed_byte.expect("landed_byte should be set");
+    let landed_byte = landed_byte.expect("BUG: landed_byte should be set");
     let segment_3 = &segmented.segments[3];
     assert_eq!(landed_byte, segment_3.byte_range.start);
 
     // Pull one chunk to force the segment to actually be loaded.
     for _ in 0..16 {
-        match decoder.next_chunk().expect("decode after seek") {
+        match decoder.next_chunk().expect("BUG: decode after seek") {
             DecoderChunkOutcome::Chunk(_) | DecoderChunkOutcome::Eof => break,
             DecoderChunkOutcome::Pending(_) => continue,
         }
@@ -230,7 +230,7 @@ fn seek_reads_only_init_and_target_segment() {
 
     // All recorded reads must be inside segment 3's byte range —
     // never inside segment 0/1/2's ranges.
-    let reads_snapshot = reads.lock().expect("reads lock").clone();
+    let reads_snapshot = reads.lock().expect("BUG: reads lock").clone();
     let target_range = segment_3.byte_range.clone();
     for r in &reads_snapshot {
         assert!(

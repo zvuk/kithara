@@ -156,7 +156,7 @@ mod tests {
             codec: Some(AudioCodec::Vorbis),
             ..Default::default()
         };
-        let codec = probe_codec(&hint).expect("should probe successfully");
+        let codec = probe_codec(&hint).expect("BUG: should probe successfully");
         assert_eq!(codec, AudioCodec::Vorbis);
     }
 
@@ -174,7 +174,7 @@ mod tests {
             extension: Some(extension.into()),
             ..Default::default()
         };
-        let codec = probe_codec(&hint).expect("should probe successfully");
+        let codec = probe_codec(&hint).expect("BUG: should probe successfully");
         assert_eq!(codec, expected);
     }
 
@@ -192,7 +192,7 @@ mod tests {
             mime: Some(mime.into()),
             ..Default::default()
         };
-        let codec = probe_codec(&hint).expect("should probe successfully");
+        let codec = probe_codec(&hint).expect("BUG: should probe successfully");
         assert_eq!(codec, expected);
     }
 
@@ -208,7 +208,7 @@ mod tests {
             container: Some(container),
             ..Default::default()
         };
-        let codec = probe_codec(&hint).expect("should probe successfully");
+        let codec = probe_codec(&hint).expect("BUG: should probe successfully");
         assert_eq!(codec, expected);
     }
 
@@ -219,7 +219,7 @@ mod tests {
             extension: Some("mp3".into()),
             ..Default::default()
         };
-        let codec = probe_codec(&hint).expect("should probe successfully");
+        let codec = probe_codec(&hint).expect("BUG: should probe successfully");
         assert_eq!(codec, AudioCodec::Flac);
     }
 
@@ -230,7 +230,7 @@ mod tests {
             mime: Some("audio/mpeg".into()),
             ..Default::default()
         };
-        let codec = probe_codec(&hint).expect("should probe successfully");
+        let codec = probe_codec(&hint).expect("BUG: should probe successfully");
         assert_eq!(codec, AudioCodec::Flac);
     }
 

@@ -312,8 +312,8 @@ mod smoke_tests {
                 FormatOptions::default(),
                 MetadataOptions::default(),
             )
-            .expect("MP3 probe should succeed");
-        SymphoniaDemuxer::from_reader(format_reader, None).expect("MP3 demuxer should build")
+            .expect("BUG: MP3 probe should succeed");
+        SymphoniaDemuxer::from_reader(format_reader, None).expect("BUG: MP3 demuxer should build")
     }
 
     #[kithara::test]
@@ -330,7 +330,7 @@ mod smoke_tests {
         let demuxer = build_mp3_demuxer();
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
-            .expect("MP3 codec should open");
+            .expect("BUG: MP3 codec should open");
         let mut decoder = ComposedDecoder::new(
             demuxer,
             codec,
@@ -345,7 +345,10 @@ mod smoke_tests {
 
         let mut got_chunk = false;
         for _ in 0..16 {
-            match decoder.next_chunk().expect("next_chunk should not error") {
+            match decoder
+                .next_chunk()
+                .expect("BUG: next_chunk should not error")
+            {
                 DecoderChunkOutcome::Chunk(chunk) => {
                     assert!(chunk.frames() > 0, "Chunk frames must be > 0");
                     assert!(chunk.spec().sample_rate > 0);
@@ -365,7 +368,7 @@ mod smoke_tests {
         let demuxer = build_mp3_demuxer();
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
-            .expect("MP3 codec should open");
+            .expect("BUG: MP3 codec should open");
         let mut decoder = ComposedDecoder::new(
             demuxer,
             codec,
@@ -381,12 +384,12 @@ mod smoke_tests {
         for _ in 0..4 {
             let _ = decoder
                 .next_chunk()
-                .expect("priming chunks should not error");
+                .expect("BUG: priming chunks should not error");
         }
 
         let outcome = decoder
             .seek(Duration::ZERO)
-            .expect("seek to start must not error");
+            .expect("BUG: seek to start must not error");
         match outcome {
             DecoderSeekOutcome::Landed { landed_at, .. } => {
                 assert!(
@@ -713,7 +716,7 @@ mod pool_budget_tests {
             let mut buf = pool.get();
             let frames = codec
                 .decode_frame(&[], Duration::ZERO, &mut buf)
-                .expect("decode_frame");
+                .expect("BUG: decode_frame");
             assert_eq!(frames, 1024);
             // buf drops, returning to pool.
         }

@@ -54,7 +54,7 @@ impl SegmentReadState {
 
     pub(crate) fn total(&self) -> usize {
         usize::try_from(self.range.end - self.range.start)
-            .expect("segment range fits usize on supported targets")
+            .expect("BUG: segment range fits usize on supported targets")
     }
 }
 

@@ -42,7 +42,7 @@ fn test_next_chunk_returns_data() {
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let mut decoder =
         DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
-            .expect("decoder");
+            .expect("BUG: decoder");
 
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
@@ -60,7 +60,7 @@ fn test_next_chunk_eof() {
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let mut decoder =
         DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
-            .expect("decoder");
+            .expect("BUG: decoder");
 
     while decoder.next_chunk().unwrap().is_chunk() {}
 
@@ -75,7 +75,7 @@ fn test_seek_to_beginning() {
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let mut decoder =
         DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
-            .expect("decoder");
+            .expect("BUG: decoder");
 
     let _ = decoder.next_chunk().unwrap();
     let _ = decoder.next_chunk().unwrap();
@@ -93,7 +93,7 @@ fn test_duration_available() {
     let media_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let decoder =
         DecoderFactory::create_from_media_info(cursor, &media_info, &DecoderConfig::default())
-            .expect("decoder");
+            .expect("BUG: decoder");
 
     let duration = decoder.duration();
     assert!(duration.is_some());

@@ -86,7 +86,7 @@ fn test_create_with_probe_with_mp3_hint_succeeds() {
         Some("mp3"),
         &DecoderConfig::default(),
     )
-    .expect("mp3 hint should produce a decoder");
+    .expect("BUG: mp3 hint should produce a decoder");
 
     let spec = decoder.spec();
     assert!(spec.channels > 0);
@@ -127,7 +127,7 @@ fn test_create_with_probe_maps_m4a_to_mp4_container_hint() {
 
     assert_eq!(probe_hint.container, Some(ContainerFormat::Mp4));
     assert_eq!(
-        probe_codec(&probe_hint).expect("m4a should map to AAC"),
+        probe_codec(&probe_hint).expect("BUG: m4a should map to AAC"),
         AudioCodec::AacLc
     );
 }

@@ -472,7 +472,7 @@ mod tests {
     #[kithara::test]
     fn parse_init_aac_extracts_codec_and_asc() {
         let bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&bytes).expect("parse init");
+        let init = parse_init(&bytes).expect("BUG: parse init");
         assert_eq!(init.codec, AudioCodec::AacLc);
         assert!(init.timescale > 0, "timescale={}", init.timescale);
         assert!(init.sample_rate >= 8_000 && init.sample_rate <= 96_000);
@@ -491,7 +491,7 @@ mod tests {
     #[kithara::test]
     fn parse_init_flac_extracts_streaminfo() {
         let bytes = read_fixture("init-slossless-a1.mp4");
-        let init = parse_init(&bytes).expect("parse FLAC init");
+        let init = parse_init(&bytes).expect("BUG: parse FLAC init");
         assert_eq!(init.codec, AudioCodec::Flac);
         assert!(matches!(init.config, CodecConfig::Flac(_)));
         // STREAMINFO body is exactly 34 bytes per RFC 9639. Symphonia's
@@ -504,9 +504,9 @@ mod tests {
     #[kithara::test]
     fn parse_segment_frames_aac_yields_monotonic_frames() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("parse init");
+        let init = parse_init(&init_bytes).expect("BUG: parse init");
         let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
-        let frames = parse_segment_frames(&init, &seg_bytes).expect("parse seg");
+        let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         assert!(
             frames.len() > 40,
             "expected ≥40 frames, got {}",
@@ -539,9 +539,9 @@ mod tests {
     #[kithara::test]
     fn parse_segment_frames_total_duration_matches_extinf() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("parse init");
+        let init = parse_init(&init_bytes).expect("BUG: parse init");
         let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
-        let frames = parse_segment_frames(&init, &seg_bytes).expect("parse seg");
+        let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         let total_ticks: u64 = frames.iter().map(|f| u64::from(f.duration)).sum();
         let total_seconds =
             Duration::from_nanos(total_ticks * 1_000_000_000 / u64::from(init.timescale))

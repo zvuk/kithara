@@ -9,7 +9,7 @@ use crate::{GaplessInfo, PcmChunk, PcmMeta, PcmSpec, gapless::heuristic::Silence
 fn chunk(spec: PcmSpec, frame_offset: u64, frames: usize) -> PcmChunk {
     let samples = frames.saturating_mul(usize::from(spec.channels));
     let pcm = (0..samples)
-        .map(|idx| f32::from(u16::try_from(idx).expect("test sample fits in u16")))
+        .map(|idx| f32::from(u16::try_from(idx).expect("BUG: test sample fits in u16")))
         .collect::<Vec<_>>();
     PcmChunk::new(
         PcmMeta {
@@ -219,7 +219,7 @@ fn codec_priming_drops_leading_frames_and_fades_in() {
     // Use a synthetic constant signal so the fade-in shape is
     // easy to inspect: every sample is 1.0 prior to fading.
     let trim = 100u64;
-    let trim_len = usize::try_from(trim).expect("test trim fits in usize");
+    let trim_len = usize::try_from(trim).expect("BUG: test trim fits in usize");
     let total_frames = trim_len + fade_frames_for(spec) + 32;
     let pcm = vec![1.0_f32; total_frames];
     let mut trimmer = GaplessTrimmer::codec_priming(trim, spec.sample_rate);
@@ -520,7 +520,7 @@ fn silence_trim_trailing_window_rms_ignores_zero_crossings_in_audible_signal() {
         (u64::from(spec.sample_rate) * Consts::FADE_OUT_DURATION_MS / 1000).max(1) as usize;
     let pre_fade_end = pcm_out.len().saturating_sub(fade_frames);
     let pre_fade = &pcm_out[..pre_fade_end];
-    let pre_fade_len = u32::try_from(pre_fade.len()).expect("pre-fade window fits in u32");
+    let pre_fade_len = u32::try_from(pre_fade.len()).expect("BUG: pre-fade window fits in u32");
     let sum_sq: f64 = pre_fade.iter().map(|s| f64::from(*s) * f64::from(*s)).sum();
     let rms_f64: f64 = (sum_sq / f64::from(pre_fade_len)).sqrt();
     // f64 → f32 narrowing is the canonical PCM-sample conversion;

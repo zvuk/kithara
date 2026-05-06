@@ -35,7 +35,7 @@ impl<T> MockLog<T> {
     pub fn lock(&self) -> MutexGuard<'_, T> {
         self.inner
             .lock()
-            .expect("decoder mock log mutex should not be poisoned")
+            .expect("BUG: decoder mock log mutex should not be poisoned")
     }
 }
 

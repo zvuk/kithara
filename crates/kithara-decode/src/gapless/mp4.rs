@@ -283,7 +283,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader).expect("probe"),
+            probe_mp4_gapless(&mut reader).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
                 trailing_frames: 1_920,
@@ -306,7 +306,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader).expect("probe"),
+            probe_mp4_gapless(&mut reader).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 0x840,
                 trailing_frames: 0x48,
@@ -332,7 +332,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader).expect("probe"),
+            probe_mp4_gapless(&mut reader).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
                 trailing_frames: 1_920,
@@ -345,7 +345,7 @@ mod tests {
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd(1_000));
         let mut reader = Cursor::new(atom(*b"moov", &moov));
-        assert_eq!(probe_mp4_gapless(&mut reader).expect("probe"), None);
+        assert_eq!(probe_mp4_gapless(&mut reader).expect("BUG: probe"), None);
     }
 
     #[kithara::test]
@@ -362,6 +362,6 @@ mod tests {
         moov.extend_from_slice(&atom(*b"udta", &atom(*b"meta", &meta_payload)));
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
-        assert_eq!(probe_mp4_gapless(&mut reader).expect("probe"), None);
+        assert_eq!(probe_mp4_gapless(&mut reader).expect("BUG: probe"), None);
     }
 }

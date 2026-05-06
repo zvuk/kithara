@@ -72,7 +72,7 @@ impl Mp4Visitor for RecordingVisitor {
 
 fn record(reader: &mut dyn super::DecoderInput) -> RecordingVisitor {
     let mut visitor = RecordingVisitor::default();
-    scan_mp4(reader, &mut visitor).expect("scan");
+    scan_mp4(reader, &mut visitor).expect("BUG: scan");
     visitor
 }
 
@@ -465,7 +465,7 @@ fn visitor_break_stops_scan_at_track_end() {
 
     let mut visitor = BreakAfterFirstTrack { tracks_seen: 0 };
     let mut reader = Cursor::new(bytes);
-    scan_mp4(&mut reader, &mut visitor).expect("scan");
+    scan_mp4(&mut reader, &mut visitor).expect("BUG: scan");
     assert_eq!(visitor.tracks_seen, 1);
 }
 
@@ -488,14 +488,16 @@ fn scan_restores_reader_position() {
     let mut reader = Cursor::new(make_itunsmpb_mp4(
         " 00000000 00000840 00000048 0000000000000000",
     ));
-    reader.seek(SeekFrom::Start(3)).expect("seek inside mp4");
+    reader
+        .seek(SeekFrom::Start(3))
+        .expect("BUG: seek inside mp4");
 
     let mut visitor = RecordingVisitor::default();
-    scan_mp4(&mut reader, &mut visitor).expect("scan");
+    scan_mp4(&mut reader, &mut visitor).expect("BUG: scan");
 
     // Position 3 is mid-`ftyp`-style header — the scan must not have moved
     // the cursor for the caller, regardless of what it read internally.
-    assert_eq!(reader.stream_position().expect("position"), 3);
+    assert_eq!(reader.stream_position().expect("BUG: position"), 3);
 }
 
 #[kithara::test]
@@ -507,7 +509,7 @@ fn scan_uses_current_reader_position() {
     bytes.extend_from_slice(&make_track_mp4());
 
     let mut reader = Cursor::new(bytes);
-    reader.seek(SeekFrom::Start(8)).expect("skip prefix");
+    reader.seek(SeekFrom::Start(8)).expect("BUG: skip prefix");
 
     let recorded = record(&mut reader);
     assert_eq!(recorded.movie_timescale, Some(1_000));
@@ -618,7 +620,7 @@ fn parse_data_box_strips_version_byte_from_type_code() {
     payload.extend_from_slice(&0u32.to_be_bytes()); // locale
     payload.extend_from_slice(b"\xff\xd8\xff");
 
-    let (data_type, value) = parse_data_box(&payload).expect("data box");
+    let (data_type, value) = parse_data_box(&payload).expect("BUG: data box");
     assert_eq!(data_type, 13);
     assert_eq!(value, b"\xff\xd8\xff");
 }
@@ -651,8 +653,8 @@ fn elst_caps_entry_count() {
 
 #[kithara::test]
 fn parse_itunsmpb_extracts_leading_and_trailing_frames() {
-    let info =
-        parse_itunsmpb(b" 00000000 00000840 00000048 0000000000000000").expect("itunsmpb parses");
+    let info = parse_itunsmpb(b" 00000000 00000840 00000048 0000000000000000")
+        .expect("BUG: itunsmpb parses");
     assert_eq!(
         info,
         ItunSmpb {
