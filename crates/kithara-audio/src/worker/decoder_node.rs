@@ -16,6 +16,19 @@ use crate::{
     runtime::{Node, Outlet, TickResult},
 };
 
+/// Per-tick state of a [`DecoderNode`] — preload progress, EOF flag, and
+/// the cached seek epoch — bundled so the constructor and the
+/// epoch-reset path can spell `DecoderRuntime::default()` instead of
+/// listing each zero field at every call site.
+#[derive(Default)]
+#[non_exhaustive]
+pub(crate) struct DecoderRuntime {
+    pub(crate) chunks_sent: usize,
+    pub(crate) preloaded: bool,
+    pub(crate) eof_sent: bool,
+    pub(crate) seek_epoch: u64,
+}
+
 /// A node that decodes audio chunks.
 ///
 /// The source's FSM must be ticked every pass to make progress on
@@ -28,43 +41,40 @@ pub(crate) struct DecoderNode {
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     outlet: Outlet<Fetch<PcmChunk>>,
     service_class: ServiceClass,
-    eof_sent: bool,
-    preloaded: bool,
-    seek_epoch: u64,
-    chunks_sent: usize,
     preload_chunks: usize,
+    runtime: DecoderRuntime,
 }
 
 impl DecoderNode {
     fn complete_preload(&mut self) {
-        if !self.preloaded {
+        if !self.runtime.preloaded {
             self.preload_notify.notify_one();
-            self.preloaded = true;
+            self.runtime.preloaded = true;
         }
     }
 
     pub(crate) fn from_registration(_track_id: TrackId, reg: TrackRegistration) -> Self {
         let seek_epoch = reg.source.timeline().seek_epoch();
         Self {
-            seek_epoch,
             source: reg.source,
             outlet: reg.outlet,
             service_class: reg.service_class,
             preload_notify: reg.preload_notify,
             preload_chunks: reg.preload_chunks,
-            chunks_sent: 0,
-            preloaded: false,
-            eof_sent: false,
+            runtime: DecoderRuntime {
+                seek_epoch,
+                ..Default::default()
+            },
         }
     }
 
     fn mark_preload_progress(&mut self) {
-        if self.preloaded {
+        if self.runtime.preloaded {
             return;
         }
 
-        self.chunks_sent += 1;
-        if self.chunks_sent >= self.preload_chunks && !self.outlet.has_pending() {
+        self.runtime.chunks_sent += 1;
+        if self.runtime.chunks_sent >= self.preload_chunks && !self.outlet.has_pending() {
             self.complete_preload();
         }
     }
@@ -83,16 +93,16 @@ impl DecoderNode {
             return;
         }
         let current = self.source.timeline().seek_epoch();
-        if current == self.seek_epoch {
+        if current == self.runtime.seek_epoch {
             return;
         }
 
-        self.seek_epoch = current;
         // Drop any chunk parked from the previous epoch — it is stale now.
         let _ = self.outlet.take_pending();
-        self.chunks_sent = 0;
-        self.preloaded = false;
-        self.eof_sent = false;
+        self.runtime = DecoderRuntime {
+            seek_epoch: current,
+            ..Default::default()
+        };
     }
 }
 
@@ -117,13 +127,13 @@ impl Node for DecoderNode {
 
         // If we had pending chunks that just got flushed to the ring,
         // we might now meet the preload condition.
-        if self.chunks_sent >= self.preload_chunks && !self.preloaded {
+        if self.runtime.chunks_sent >= self.preload_chunks && !self.runtime.preloaded {
             self.complete_preload();
         }
 
         match self.source.step_track() {
             TrackStep::Produced(fetch) => {
-                self.eof_sent = false;
+                self.runtime.eof_sent = false;
                 // Outlet was just drained → try_push is infallible here.
                 let _ = self.outlet.try_push(fetch);
                 self.mark_preload_progress();
@@ -131,7 +141,7 @@ impl Node for DecoderNode {
             }
 
             TrackStep::StateChanged => {
-                self.eof_sent = false;
+                self.runtime.eof_sent = false;
                 TickResult::Progress
             }
 
@@ -140,7 +150,7 @@ impl Node for DecoderNode {
                 TickResult::Waiting
             }
 
-            TrackStep::Eof if self.eof_sent => TickResult::Waiting,
+            TrackStep::Eof if self.runtime.eof_sent => TickResult::Waiting,
 
             TrackStep::Eof => {
                 let epoch = self.source.timeline().seek_epoch();
@@ -150,7 +160,7 @@ impl Node for DecoderNode {
                 // if the internal FSM or port contracts change in the future.
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
-                    self.eof_sent = true;
+                    self.runtime.eof_sent = true;
                     TickResult::Progress
                 } else {
                     debug_assert!(false, "EOF marker rejected — overflow invariant violated");
@@ -226,15 +236,12 @@ mod tests {
             service_class: ServiceClass::default(),
             preload_notify: notify,
             preload_chunks: 1,
-            chunks_sent: 0,
-            preloaded: false,
-            seek_epoch: 0,
-            eof_sent: false,
+            runtime: DecoderRuntime::default(),
         };
 
         // Tick 1: flush fails, returns Waiting
         assert_eq!(node.tick(), TickResult::Waiting);
-        assert!(!node.eof_sent);
+        assert!(!node.runtime.eof_sent);
 
         // Drain the inlet so flush can succeed
         let _ = node.outlet.take_pending();
@@ -242,7 +249,7 @@ mod tests {
         // Tick 2: flush succeeds (overflow is empty). Now step_track returns Eof.
         // It pushes the EOF marker.
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(node.eof_sent);
+        assert!(node.runtime.eof_sent);
         assert!(node.outlet.has_pending()); // EOF marker is now in overflow
     }
 
@@ -307,10 +314,7 @@ mod tests {
             service_class: ServiceClass::default(),
             preload_notify: Arc::clone(&notify),
             preload_chunks: 1,
-            chunks_sent: 0,
-            preloaded: false,
-            seek_epoch: 0,
-            eof_sent: false,
+            runtime: DecoderRuntime::default(),
         };
         assert_eq!(eof_node.tick(), TickResult::Progress);
         let eof_kind = drain_marker_kind(&mut eof_node.outlet, &mut eof_inlet);
@@ -333,10 +337,7 @@ mod tests {
             service_class: ServiceClass::default(),
             preload_notify: notify,
             preload_chunks: 1,
-            chunks_sent: 0,
-            preloaded: false,
-            seek_epoch: 0,
-            eof_sent: false,
+            runtime: DecoderRuntime::default(),
         };
         let _ = failed_node.tick();
         let failed_kind = drain_marker_kind(&mut failed_node.outlet, &mut failed_inlet);
@@ -386,22 +387,19 @@ mod tests {
             service_class: ServiceClass::default(),
             preload_notify: notify.clone(),
             preload_chunks: 1, // We want 1 chunk to trigger preload
-            chunks_sent: 0,
-            preloaded: false,
-            seek_epoch: 0,
-            eof_sent: false,
+            runtime: DecoderRuntime::default(),
         };
 
         // Tick 1: flush succeeds (overflow was empty). step_track produces chunk.
         // Chunk goes to overflow because ring is full.
         // chunks_sent becomes 1, but has_pending is true, so preloaded stays false.
         assert_eq!(node.tick(), TickResult::Progress);
-        assert_eq!(node.chunks_sent, 1);
-        assert!(!node.preloaded);
+        assert_eq!(node.runtime.chunks_sent, 1);
+        assert!(!node.runtime.preloaded);
 
         // Tick 2: flush fails (ring still full, overflow has chunk).
         assert_eq!(node.tick(), TickResult::Waiting);
-        assert!(!node.preloaded);
+        assert!(!node.runtime.preloaded);
 
         // Consumer reads from ring
         let _ = inlet.try_pop();
@@ -409,6 +407,6 @@ mod tests {
         // Tick 3: flush succeeds (moves chunk from overflow to ring).
         // Now chunks_sent >= 1 and !has_pending, so complete_preload is called!
         assert_eq!(node.tick(), TickResult::Waiting); // step_track returns Blocked
-        assert!(node.preloaded);
+        assert!(node.runtime.preloaded);
     }
 }

@@ -270,8 +270,8 @@ pub mod source {
             attempt: 0,
             cause: RecreateCause::VariantSwitch,
             next: RecreateNext::Seek(SeekRequest {
-                attempt: 0,
                 seek: SeekContext { target, epoch },
+                ..Default::default()
             }),
         }
     }

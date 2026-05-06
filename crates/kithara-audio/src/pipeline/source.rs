@@ -531,12 +531,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.emit_seek_lifecycle(SeekLifecycleStage::SeekApplied, epoch, location);
         self.update_state(TrackState::AwaitingResume(ResumeState {
             anchor_offset,
-            recover_attempts: 0,
             seek: SeekContext {
                 epoch,
                 target: position,
             },
-            skip: None,
+            ..Default::default()
         }));
     }
 
@@ -2061,11 +2060,11 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         //    every scheduler pass on every track.
         if let Some(target) = self.preempt_seek_target() {
             self.update_state(TrackState::SeekRequested(SeekRequest {
-                attempt: 0,
                 seek: SeekContext {
                     epoch: self.timeline.seek_epoch(),
                     target,
                 },
+                ..Default::default()
             }));
             reset_effects(&mut self.effects);
             self.gapless.notify_seek();
@@ -2244,8 +2243,8 @@ mod playing_flag_tests {
 
     fn seek_req() -> SeekRequest {
         SeekRequest {
-            attempt: 0,
             seek: seek_ctx(),
+            ..Default::default()
         }
     }
 
@@ -2274,10 +2273,8 @@ mod playing_flag_tests {
         )));
         assert!(playing_for_state(&TrackState::AwaitingResume(
             ResumeState {
-                recover_attempts: 0,
                 seek: seek_ctx(),
-                skip: None,
-                anchor_offset: None,
+                ..Default::default()
             }
         )));
     }
@@ -2339,10 +2336,8 @@ mod playing_flag_tests {
             ),
             (
                 TrackState::AwaitingResume(ResumeState {
-                    recover_attempts: 0,
                     seek: seek_ctx(),
-                    skip: None,
-                    anchor_offset: None,
+                    ..Default::default()
                 }),
                 true,
             ),

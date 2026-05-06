@@ -46,14 +46,14 @@ pub(crate) enum TrackState {
 }
 
 /// Context for a pending seek, carried through multiple states.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SeekContext {
     pub target: Duration,
     pub epoch: u64,
 }
 
 /// Stateful seek request tracked across retries and waits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SeekRequest {
     pub seek: SeekContext,
     pub attempt: u8,
@@ -67,7 +67,7 @@ pub(crate) struct ApplySeekState {
 }
 
 /// Resume state after a seek has been applied to the decoder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ResumeState {
     /// Anchor byte offset from the seek — used for readiness checks and demand
     /// when the decoder's stream position differs from the `StreamIndex` layout.
@@ -336,11 +336,11 @@ mod tests {
         let non_terminal = [
             TrackState::Decoding,
             TrackState::SeekRequested(SeekRequest {
-                attempt: 0,
                 seek: SeekContext {
                     epoch: 1,
                     target: Duration::from_secs(5),
                 },
+                ..Default::default()
             }),
             TrackState::WaitingForSource {
                 context: WaitContext::Playback,
@@ -349,11 +349,11 @@ mod tests {
             TrackState::ApplyingSeek(ApplySeekState {
                 mode: SeekMode::Direct { target_byte: None },
                 request: SeekRequest {
-                    attempt: 0,
                     seek: SeekContext {
                         epoch: 1,
                         target: Duration::from_secs(5),
                     },
+                    ..Default::default()
                 },
             }),
             TrackState::RecreatingDecoder(RecreateState {
@@ -392,11 +392,11 @@ mod tests {
         assert_eq!(TrackState::Decoding.phase_tag(), TrackPhaseTag::Decoding);
         assert_eq!(
             TrackState::SeekRequested(SeekRequest {
-                attempt: 0,
                 seek: SeekContext {
                     epoch: 1,
                     target: Duration::ZERO,
                 },
+                ..Default::default()
             })
             .phase_tag(),
             TrackPhaseTag::SeekRequested
@@ -413,11 +413,11 @@ mod tests {
             TrackState::ApplyingSeek(ApplySeekState {
                 mode: SeekMode::Direct { target_byte: None },
                 request: SeekRequest {
-                    attempt: 0,
                     seek: SeekContext {
                         epoch: 1,
                         target: Duration::ZERO,
                     },
+                    ..Default::default()
                 },
             })
             .phase_tag(),
@@ -516,7 +516,10 @@ mod tests {
             epoch: 1,
             target: Duration::from_secs(5),
         };
-        let req = SeekRequest { attempt: 0, seek };
+        let req = SeekRequest {
+            seek,
+            ..Default::default()
+        };
         let anchor = SourceSeekAnchor::new(4096, Duration::from_secs(10)).with_variant_index(1);
 
         // States without a byte target collapse to CurrentPosition.

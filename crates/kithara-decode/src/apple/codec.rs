@@ -346,13 +346,9 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             let asbd = AudioStreamBasicDescription {
                 mSampleRate: f64::from(track.sample_rate),
                 mFormatID: Consts::kAudioFormatMPEG4AAC,
-                mFormatFlags: 0,
-                mBytesPerPacket: 0,
                 mFramesPerPacket: Consts::AAC_FRAMES_PER_PACKET,
-                mBytesPerFrame: 0,
                 mChannelsPerFrame: u32::from(track.channels),
-                mBitsPerChannel: 0,
-                mReserved: 0,
+                ..Default::default()
             };
             // AAC magic cookie = AudioSpecificConfig bytes verbatim.
             let cookie = (!track.extra_data.is_empty()).then(|| track.extra_data.clone());
@@ -397,13 +393,9 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             let asbd = AudioStreamBasicDescription {
                 mSampleRate: f64::from(track.sample_rate),
                 mFormatID: Consts::kAudioFormatFLAC,
-                mFormatFlags: 0,
-                mBytesPerPacket: 0,
                 mFramesPerPacket: max_block,
-                mBytesPerFrame: 0,
                 mChannelsPerFrame: u32::from(track.channels),
-                mBitsPerChannel: 0,
-                mReserved: 0,
+                ..Default::default()
             };
             Ok(AppleInputFormat {
                 asbd,
@@ -425,6 +417,6 @@ fn build_pcm_output_format(sample_rate: u32, channels: u16) -> AudioStreamBasicD
         mBytesPerFrame: Consts::BYTES_PER_F32_SAMPLE * u32::from(channels),
         mChannelsPerFrame: u32::from(channels),
         mBitsPerChannel: Consts::BITS_PER_F32_SAMPLE,
-        mReserved: 0,
+        ..Default::default()
     }
 }
