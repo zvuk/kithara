@@ -165,10 +165,17 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     // tag — the entry one with no fields, the return one with the
     // actual payload. Consumers that filter `events_with_probe(name)`
     // would get the wrong shape (whichever fired first).
+    //
+    // The cfg-gate must live *inside* this branch: emitting a bare
+    // `#[cfg(...)]` attribute before an empty `quote!{}` would attach
+    // the attribute to whatever syntactic item follows in the outer
+    // `quote!` (the first statement of `#body`), silently disabling it
+    // when the probe features are off.
     let emit_entry_event = if probe_return {
         quote! {}
     } else {
         quote! {
+            #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
             ::tracing::event!(
                 target: #target,
                 ::tracing::Level::TRACE,
@@ -191,13 +198,6 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
             #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
             ::kithara_probes::#fire_fn(#fn_name_str, #(#probe_idents),*);
 
-            // Emit the entry-time tracing event only when args are
-            // captured. With `probe_return` the payload of interest
-            // lives on the *return value* and is published via
-            // `Probe::record_probe`; emitting an extra empty entry-event
-            // would just race the consumer's filter and produce an
-            // uninformative duplicate.
-            #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
             #emit_entry_event
 
             #body
@@ -330,6 +330,16 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
             quote! { #ident = #slot }
         });
 
+    // No-feature ack: fields participate in probe wire only under
+    // `tracing-probes` / `usdt-probes`. Without those features the
+    // struct fields would look unused to `dead_code`. Touch each one
+    // through a zero-codegen `let _ = &self.f;` so the warning stays
+    // off and the no-feature build matches production layout exactly.
+    let no_feature_consume: Vec<TokenStream2> = field_idents
+        .iter()
+        .map(|f| quote! { let _ = &self.#f; })
+        .collect();
+
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
@@ -354,6 +364,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 #[cfg(not(any(feature = "tracing-probes", feature = "usdt-probes")))]
                 {
                     let _ = name;
+                    #(#no_feature_consume)*
                 }
             }
         }
