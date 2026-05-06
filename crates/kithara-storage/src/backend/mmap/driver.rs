@@ -125,7 +125,7 @@ impl Driver for MmapDriver {
             available.insert(0..len);
             let init = DriverState {
                 available,
-                committed: true,
+                is_committed: true,
                 final_len: Some(len),
             };
             (mmap_state, init)
@@ -134,7 +134,7 @@ impl Driver for MmapDriver {
                 MmapState::Empty,
                 DriverState {
                     available: RangeSet::new(),
-                    committed: true,
+                    is_committed: true,
                     final_len: Some(0),
                 },
             )
@@ -198,7 +198,7 @@ mod tests {
                 mode: OpenMode::Auto,
             },
         )
-        .expect("open test resource")
+        .expect("BUG: open test resource with hard-coded params must succeed")
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -305,7 +305,7 @@ mod tests {
                 mode: OpenMode::Auto,
             },
         )
-        .expect("open cancel test resource");
+        .expect("BUG: open cancel-test resource with hard-coded params must succeed");
 
         let handle = thread::spawn({
             let cancel = cancel.clone();
@@ -334,7 +334,7 @@ mod tests {
                     mode: OpenMode::Auto,
                 },
             )
-            .expect("open first resource");
+            .expect("BUG: opening the first resource in this test setup must succeed");
             res.write_all(b"persisted data").unwrap();
         }
 
@@ -346,7 +346,7 @@ mod tests {
                 mode: OpenMode::Auto,
             },
         )
-        .expect("open reopened resource");
+        .expect("BUG: re-opening the resource in this test setup must succeed");
 
         assert_eq!(
             res.status(),

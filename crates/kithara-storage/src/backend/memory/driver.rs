@@ -81,7 +81,7 @@ impl Driver for MemDriver {
                 len,
                 DriverState {
                     available,
-                    committed: true,
+                    is_committed: true,
                     final_len: Some(len),
                 },
             )
@@ -117,7 +117,7 @@ impl MemResource {
     pub fn new(cancel: CancellationToken) -> Self {
         // MemDriver::open with default opts never fails.
         Self::open(cancel, MemOptions::default())
-            .expect("MemDriver::open with default options should never fail")
+            .expect("BUG: MemDriver::open with default options is infallible")
     }
 
     /// Create a committed resource pre-filled with data.
@@ -134,6 +134,6 @@ impl MemResource {
                 ..MemOptions::default()
             },
         )
-        .expect("MemDriver::open with initial_data should never fail")
+        .expect("BUG: MemDriver::open with initial_data is infallible")
     }
 }

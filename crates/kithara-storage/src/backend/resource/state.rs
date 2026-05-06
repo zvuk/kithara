@@ -103,7 +103,7 @@ impl<D: Driver> Resource<D> {
                     failed: None,
                     final_len: init.final_len,
                     available: init.available,
-                    committed: init.committed,
+                    committed: init.is_committed,
                 }),
             }),
         })

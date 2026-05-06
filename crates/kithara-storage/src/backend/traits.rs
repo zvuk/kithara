@@ -108,7 +108,7 @@ pub struct DriverState {
     /// Pre-populated available byte ranges.
     pub available: RangeSet<u64>,
     /// Whether the resource starts as committed.
-    pub committed: bool,
+    pub is_committed: bool,
 }
 
 /// Driver factory + I/O contract.
