@@ -11,12 +11,11 @@ use ratatui::{
 use crate::theme::tui::TuiPalette;
 
 /// Saturating-clamp a `usize` count into `u16` for terminal-cell measurements.
-/// Terminal dimensions are bounded by ratatui's `u16` API; counts that exceed
-/// `u16::MAX` would already exceed any displayable area, so reporting the cap
-/// is the correct rendering semantic.
+/// ratatui's layout API is bounded by `u16`; a count past `u16::MAX` already
+/// exceeds any displayable terminal area, so the ceiling is the truthful
+/// rendering signal — best effort within what the terminal can show.
 fn count_to_u16(count: usize) -> u16 {
-    const SATURATE: u16 = u16::MAX;
-    u16::try_from(count).unwrap_or(SATURATE)
+    u16::try_from(count).unwrap_or(u16::MAX) // ast-grep-ignore: rust.no-sentinel-fallback
 }
 
 /// TUI dashboard widget for the Kithara player.
@@ -93,10 +92,10 @@ impl Dashboard {
         if total_ms == 0 {
             return "▱".repeat(width);
         }
-        let width_u64 = {
-            const SATURATE: u64 = u64::MAX;
-            u64::try_from(width).unwrap_or(SATURATE)
-        };
+        // usize→u64 conversion-clamp: a terminal width past u64::MAX is
+        // physically impossible; the saturating ceiling is dead code in
+        // practice but keeps the cast lossless without an `as u64`.
+        let width_u64 = u64::try_from(width).unwrap_or(u64::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
         let filled_u64 = self.position_ms.min(total_ms).saturating_mul(width_u64) / total_ms;
         let filled = usize::try_from(filled_u64).unwrap_or(width).min(width);
         format!(
@@ -226,8 +225,9 @@ impl Dashboard {
     }
 
     pub fn set_position(&mut self, position: Duration) {
-        const SATURATE: u64 = u64::MAX;
-        self.position_ms = u64::try_from(position.as_millis()).unwrap_or(SATURATE);
+        // u128→u64 ms conversion-clamp: a position past u64::MAX ms is
+        // ~580M years; the ceiling is dead code in practice.
+        self.position_ms = u64::try_from(position.as_millis()).unwrap_or(u64::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
     }
 
     pub fn set_queue(&mut self, current_index: usize, item_count: usize) {
@@ -236,9 +236,9 @@ impl Dashboard {
     }
 
     pub fn set_total(&mut self, total: Option<Duration>) {
-        const SATURATE: u64 = u64::MAX;
+        // u128→u64 ms conversion-clamp: a duration past u64::MAX ms is ~580M years.
         self.total_ms =
-            total.map(|duration| u64::try_from(duration.as_millis()).unwrap_or(SATURATE));
+            total.map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)); // ast-grep-ignore: rust.no-sentinel-fallback
     }
 
     pub fn set_volume(&mut self, volume: f32) {

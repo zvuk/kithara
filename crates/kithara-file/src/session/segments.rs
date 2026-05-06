@@ -53,8 +53,15 @@ impl FileSegmentIndex {
     }
 
     pub(crate) fn segment_count(&self) -> u32 {
-        const SATURATE: u32 = u32::MAX;
-        u32::try_from(self.segments.len()).unwrap_or(SATURATE)
+        // A fragment list with >u32::MAX entries is an invariant violation
+        // (real fMP4 sources carry thousands at most). Log it loudly and
+        // surface 0; downstream callers see "no segments" instead of ~4G
+        // which would cause off-by-one logic to overflow downstream.
+        let n = self.segments.len();
+        u32::try_from(n).unwrap_or_else(|_| {
+            tracing::error!(segment_count = n, "BUG: fragment count exceeds u32::MAX");
+            0
+        })
     }
 
     /// Try to derive a fragmented-mp4 index from the given file bytes.

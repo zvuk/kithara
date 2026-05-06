@@ -318,14 +318,13 @@ async fn establish(
 /// (cache hits / instant responses) so subscribers don't repeat the
 /// math or hit a div-by-zero.
 fn bandwidth_bps(bytes: u64, duration: Duration) -> u64 {
-    // `u128 → u64` is safe in practice — durations longer than
-    // 2^64 ms (≈ 580M years) cannot occur for a single fetch.
-    const SATURATE: u64 = u64::MAX;
     /// Bits per byte × milliseconds-per-second-power-of-ten conversion
     /// for the bps formula `bytes * 8 * 1000 / duration_ms`.
     const BITS_TIMES_MS_PER_SEC: u64 = 8_000;
+    // u128→u64 conversion-clamp: a fetch lasting > 2^64 ms (≈580M years)
+    // is impossible; ceiling here keeps the cast lossless.
     let ms = u64::try_from(duration.as_millis())
-        .unwrap_or(SATURATE)
+        .unwrap_or(u64::MAX) // ast-grep-ignore: rust.no-sentinel-fallback
         .max(1);
     bytes.saturating_mul(BITS_TIMES_MS_PER_SEC) / ms
 }

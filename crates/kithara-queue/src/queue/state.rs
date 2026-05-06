@@ -110,6 +110,11 @@ impl Queue {
     /// allocated monotonically starting from 0 by `next_id`.
     pub(super) const NO_ARMED_TRACK: u64 = u64::MAX;
 
+    /// Sentinel for "no cached position" stored in `cached_position`
+    /// (as `f64::NAN.to_bits()`). Queried via [`Self::read_cached_position`],
+    /// which filters `NaN` back to `None`.
+    pub(super) const NO_CACHED_POSITION: f64 = f64::NAN;
+
     /// Build a queue from a [`QueueConfig`].
     ///
     /// If `config.player` is `Some`, the caller-supplied
@@ -168,7 +173,7 @@ impl Queue {
             should_autoplay,
             #[cfg(any(test, feature = "test-utils"))]
             autoplay_target: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
-            cached_position: Arc::new(AtomicU64::new(f64::NAN.to_bits())),
+            cached_position: Arc::new(AtomicU64::new(Self::NO_CACHED_POSITION.to_bits())),
         }
     }
 
@@ -235,11 +240,7 @@ impl Queue {
     }
 
     pub(super) fn write_cached_position(&self, value: Option<f64>) {
-        // NaN is the documented sentinel for "no cached position"; bind
-        // it to a local const so the syntactic `unwrap_or($T::NAN)` rule
-        // doesn't flag the load-bearing fallback.
-        const NO_POSITION: f64 = f64::NAN;
-        let bits = value.unwrap_or(NO_POSITION).to_bits();
+        let bits = value.unwrap_or(Self::NO_CACHED_POSITION).to_bits();
         self.cached_position.store(bits, Ordering::Release);
     }
 }

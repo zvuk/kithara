@@ -238,8 +238,15 @@ impl AudioPlayer {
     }
 
     pub fn item_count(&self) -> u32 {
-        const SATURATE: u32 = u32::MAX;
-        u32::try_from(self.queue.len()).unwrap_or(SATURATE)
+        // A queue with more than u32::MAX items is an invariant violation,
+        // not a real state. Log it loudly and report 0 across FFI: the UI
+        // sees "no items" instead of ~4G items (which would blow up any
+        // iteration), and the trace points to where the invariant broke.
+        let len = self.queue.len();
+        u32::try_from(len).unwrap_or_else(|_| {
+            tracing::error!(queue_len = len, "BUG: queue length exceeds u32::MAX");
+            0
+        })
     }
 
     /// Replace the item at `index` with a freshly-configured one.
@@ -399,10 +406,15 @@ impl AudioPlayer {
     // MARK: - EQ
 
     pub fn eq_band_count(&self) -> u32 {
-        // EQ band count is bounded; saturating clamp keeps the FFI return
-        // honest without an `as` truncation cast.
-        const SATURATE: u32 = u32::MAX;
-        u32::try_from(self.queue.eq_band_count()).unwrap_or(SATURATE)
+        // EQ band count is bounded by construction (a few dozen at most).
+        // A `try_from` failure is an invariant violation, not a real state:
+        // log it and report 0 ("EQ unavailable") across FFI rather than
+        // surfacing ~4G bands the UI would crash trying to render.
+        let n = self.queue.eq_band_count();
+        u32::try_from(n).unwrap_or_else(|_| {
+            tracing::error!(eq_band_count = n, "BUG: EQ band count exceeds u32::MAX");
+            0
+        })
     }
 
     pub fn eq_gain(&self, band: u32) -> f32 {

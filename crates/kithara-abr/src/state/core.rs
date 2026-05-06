@@ -102,14 +102,13 @@ impl AbrState {
     }
 
     fn instant_to_nanos(&self, instant: Instant) -> u64 {
-        // Saturate u128 → u64 at the type max; an Instant past 2^64 ns
-        // (~584 years) is unreachable in practice.
-        const SATURATE: u64 = u64::MAX;
+        // u128→u64 conversion-clamp: an Instant past 2^64 ns (~584 years)
+        // is unreachable in practice; ceiling here keeps the cast lossless.
         let nanos = instant
             .saturating_duration_since(self.reference_instant)
             .as_nanos()
             .to_u64()
-            .unwrap_or(SATURATE);
+            .unwrap_or(u64::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
         nanos.max(1)
     }
 

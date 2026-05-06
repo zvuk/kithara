@@ -89,8 +89,7 @@ impl IntoProbeArg for Duration {
     fn into_probe_arg(self) -> u64 {
         // Saturating cast: durations beyond ~585 000 years clamp to the
         // wire ceiling. Documented in lib.rs Wire format section.
-        const SATURATE: u64 = u64::MAX;
-        u64::try_from(self.as_micros()).unwrap_or(SATURATE)
+        u64::try_from(self.as_micros()).unwrap_or(u64::MAX) // ast-grep-ignore: rust.no-sentinel-fallback
     }
 }
 

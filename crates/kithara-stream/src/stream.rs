@@ -436,14 +436,10 @@ impl<T: StreamType> Seek for Stream<T> {
             ));
         }
 
-        // After the >=0 guard above, `new_pos` is non-negative. Saturating
-        // clamp to u64 covers the (impossible) overflow path without an `as`
-        // cast: a value that does not fit u64 would already exceed any seekable
-        // resource, so capping is the faithful "past end" signal.
-        let new_pos = {
-            const SATURATE: u64 = u64::MAX;
-            u64::try_from(new_pos).unwrap_or(SATURATE)
-        };
+        // After the >=0 guard above, `new_pos` is non-negative. i64→u64
+        // conversion-clamp: a value past u64::MAX already exceeds any seekable
+        // resource, so the ceiling is the faithful "past end" signal.
+        let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
 
         // Wait for the target byte unboundedly; only `coord.cancel` (track
         // replaced / resource dropped / shutdown) or `seek_epoch` advance

@@ -12,9 +12,6 @@ use crate::{
 impl<D: DriverIo> Resource<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn read_at_inner(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        // Clamp buf to effective_len. Resource bytes fit in memory; saturating
-        // clamp on the (impossible) overflow path keeps the conversion honest.
-        const SATURATE: usize = usize::MAX;
         if buf.is_empty() {
             return Ok(0);
         }
@@ -32,7 +29,9 @@ impl<D: DriverIo> Resource<D> {
             return Ok(0);
         }
 
-        let available = usize::try_from(effective_len - offset).unwrap_or(SATURATE);
+        // u64→usize conversion-clamp: resource bytes fit in addressable memory,
+        // saturating ceiling on the (otherwise impossible) overflow keeps the cast lossless.
+        let available = usize::try_from(effective_len - offset).unwrap_or(usize::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
         let to_read = buf.len().min(available);
 
         self.inner
@@ -42,7 +41,6 @@ impl<D: DriverIo> Resource<D> {
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn write_at_inner(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        const NO_FINAL_LEN: u64 = u64::MAX;
         if data.is_empty() {
             return Ok(());
         }
@@ -79,7 +77,8 @@ impl<D: DriverIo> Resource<D> {
                 }
                 // Also evict data above window end (backward seek case).
                 // For ring buffers, data outside the valid window is overwritten.
-                let upper = state.final_len.unwrap_or(NO_FINAL_LEN);
+                // No final_len yet → upper bound is open-ended; saturate at u64::MAX.
+                let upper = state.final_len.unwrap_or(u64::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
                 if window.end < upper {
                     state.available.remove(window.end..upper);
                 }

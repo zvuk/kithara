@@ -198,9 +198,20 @@ fn collect_encoded_packets(
             bytes: packet.data().unwrap_or(&[]).to_vec(),
             pts: normalize_timestamp(raw_pts, origin),
             dts: normalize_timestamp(raw_dts, origin),
+            // AAC frame durations are bounded (typically 1024 samples ≈ a
+            // few thousand ticks in any sane time_base). A try_from failure
+            // here is an invariant violation in the FFmpeg pipeline, not an
+            // overflow we should paper over with a u32::MAX ceiling — log
+            // it loudly and surface 0 so downstream timing math fails fast.
             duration: {
-                const SATURATE: u32 = u32::MAX;
-                u32::try_from(packet.duration().max(0)).unwrap_or(SATURATE)
+                let d = packet.duration().max(0);
+                u32::try_from(d).unwrap_or_else(|_| {
+                    tracing::error!(
+                        packet_duration = d,
+                        "BUG: AAC packet duration exceeds u32::MAX in target_time_base"
+                    );
+                    0
+                })
             },
             is_sync: encoded.is_key(),
         });
@@ -208,9 +219,16 @@ fn collect_encoded_packets(
 }
 
 fn normalize_timestamp(value: i64, origin: i64) -> u64 {
-    const SATURATE: u64 = u64::MAX;
     let normalized = i128::from(value) - i128::from(origin);
-    u64::try_from(normalized.max(0)).unwrap_or(SATURATE)
+    // A normalized timestamp past u64::MAX cannot come from a real audio
+    // pipeline (24h at 48 kHz ≪ u64::MAX). A try_from failure is an
+    // invariant violation; log it and report 0 so downstream timing math
+    // surfaces the inconsistency rather than continuing on a bogus ~18EB ts.
+    let clamped = normalized.max(0);
+    u64::try_from(clamped).unwrap_or_else(|_| {
+        tracing::error!(normalized = ?clamped, "BUG: normalized timestamp exceeds u64::MAX");
+        0
+    })
 }
 
 #[cfg(test)]

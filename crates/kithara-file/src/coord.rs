@@ -22,6 +22,9 @@ pub(crate) struct FileCoord {
 }
 
 impl FileCoord {
+    /// Sentinel for "total length unknown" stored in `total_bytes`
+    /// (atomic). `set_total_bytes` replaces it once the HEAD/Range
+    /// response settles; `total_bytes()` filters it back to `None`.
     const NO_TOTAL_BYTES: u64 = u64::MAX;
 
     #[must_use]

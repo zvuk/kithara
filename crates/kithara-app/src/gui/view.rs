@@ -192,10 +192,10 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
 }
 
 fn format_time(seconds: f32) -> String {
-    // Saturating-clamp the floored, non-negative seconds value to u32; values
-    // past u32::MAX (~136 years) already exceed any practical UI display.
-    const SATURATE: u32 = u32::MAX;
-    let total = seconds.max(0.0).floor().to_u32().unwrap_or(SATURATE);
+    // f32→u32 conversion-clamp: a value past u32::MAX seconds (~136 years)
+    // is impossible for any practical media; the ceiling is the truthful
+    // "off the chart" UI display.
+    let total = seconds.max(0.0).floor().to_u32().unwrap_or(u32::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
     let minutes = total / Consts::SECONDS_PER_MINUTE;
     let remaining = total % Consts::SECONDS_PER_MINUTE;
     format!("{minutes:02}:{remaining:02}")
@@ -384,10 +384,10 @@ fn view_playrate(state: &Kithara) -> Element<'_, Message> {
     let buttons = RATES.iter().map(|&rate| {
         let is_selected = (state.selected_rate - rate).abs() < f32::EPSILON;
         let label = if rate == rate.floor() {
-            // Playback rate is bounded to 0.5–2.0; saturating-clamp keeps the
-            // formatter honest if a rate ever drifts outside that band.
-            const SATURATE: u8 = u8::MAX;
-            let rate_u8 = rate.to_u8().unwrap_or(SATURATE);
+            // f32→u8 conversion-clamp: rates are bounded by RATES (≤2.0);
+            // a value past u8::MAX (255×) is impossible for any real
+            // playback rate, the ceiling is dead code in practice.
+            let rate_u8 = rate.to_u8().unwrap_or(u8::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
             format!("{rate_u8}x")
         } else {
             format!("{rate:.2}x")

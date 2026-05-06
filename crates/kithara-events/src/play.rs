@@ -78,8 +78,13 @@ impl MediaTime {
         value: 0,
         timescale: 0,
     };
+    /// Anchor for "indefinite" media times: an `f64`→`i64` conversion
+    /// overflow or a `NaN` input is mapped to this value. Queried via
+    /// [`MediaTime::is_indefinite`]; carried by [`MediaTime::POSITIVE_INFINITY`].
+    pub const INDEFINITE_VALUE: i64 = i64::MAX;
+
     pub const POSITIVE_INFINITY: Self = Self {
-        value: i64::MAX,
+        value: Self::INDEFINITE_VALUE,
         timescale: 1,
     };
 
@@ -90,13 +95,9 @@ impl MediaTime {
 
     #[must_use]
     pub fn with_seconds(seconds: f64, timescale: i32) -> Self {
-        // Saturating-clamp the f64 product to i64; values past ±i64::MAX
-        // ticks already exceed any realistic media duration, so capping is
-        // the truthful "out of range" signal.
-        const SATURATE: i64 = i64::MAX;
         let value = (seconds * f64::from(timescale))
             .to_i64()
-            .unwrap_or(SATURATE);
+            .unwrap_or(Self::INDEFINITE_VALUE);
         Self { value, timescale }
     }
 
@@ -133,7 +134,7 @@ impl MediaTime {
 
     #[must_use]
     pub fn is_indefinite(&self) -> bool {
-        self.value == i64::MAX
+        self.value == Self::INDEFINITE_VALUE
     }
 
     #[must_use]

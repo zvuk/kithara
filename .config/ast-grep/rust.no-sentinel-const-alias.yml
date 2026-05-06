@@ -1,0 +1,70 @@
+id: rust.no-sentinel-const-alias
+message: |
+  `const $N: $T = $T::MAX;` (and `MIN` / `INFINITY` / `NEG_INFINITY` /
+  `NAN`) is a workaround for `rust.no-sentinel-fallback`: the alias keeps
+  the sentinel-as-fallback shape (`.unwrap_or(SATURATE)`) but renames the
+  value so the lint cannot see it. Defining a constant whose entire body
+  is another constant adds zero meaning — the only effect is to slip past
+  the pattern matcher.
+
+  Same root problem, different label: a missing value still keeps running
+  with an out-of-band number that overflows, distorts comparisons, or
+  poisons downstream arithmetic. Pick one of:
+    • propagate with `?` (`.ok_or(MyError::Missing)?`),
+    • return early with a typed error,
+    • fall back to a value whose semantics make sense in context
+      (`0`, `Duration::ZERO`, an empty buffer).
+
+      // ❌
+      const SATURATE: i64 = i64::MAX;
+      let value = (seconds * f64::from(timescale))
+          .to_i64()
+          .unwrap_or(SATURATE);
+
+      // ✅  — propagate
+      let value = (seconds * f64::from(timescale))
+          .to_i64()
+          .ok_or(TimeError::OutOfRange)?;
+
+      // ✅  — meaningful fallback
+      let value = (seconds * f64::from(timescale))
+          .to_i64()
+          .unwrap_or(0);
+
+  This rule fires only on **function-body-local** constants. A constant
+  declared on an `impl` or at module level — at any visibility — is
+  considered a domain sentinel: it lives next to its consuming methods,
+  it can be queried, it is part of the type's surface even when private
+  to the module. Hiding `T::MAX` inside one function body has no such
+  excuse — there is no domain reason to confine a sentinel to a single
+  call site.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+  - xtask/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  all:
+    - any:
+        - pattern: "const $N: $T = $T::MAX;"
+        - pattern: "const $N: $T = $T::MIN;"
+        - pattern: "const $N: $T = $T::INFINITY;"
+        - pattern: "const $N: $T = $T::NEG_INFINITY;"
+        - pattern: "const $N: $T = $T::NAN;"
+        - pattern: "static $N: $T = $T::MAX;"
+        - pattern: "static $N: $T = $T::MIN;"
+        - pattern: "static $N: $T = $T::INFINITY;"
+        - pattern: "static $N: $T = $T::NEG_INFINITY;"
+        - pattern: "static $N: $T = $T::NAN;"
+    - inside:
+        any:
+          - kind: function_item
+          - kind: closure_expression
+        stopBy: end
