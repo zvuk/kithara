@@ -21,6 +21,9 @@ mod registry;
 #[cfg(feature = "internal")]
 pub mod internal;
 
+#[cfg(test)]
+mod tests;
+
 pub use cipher::UniqueBinaryCipher;
 pub use context::DecryptContext;
 pub use decrypt::aes128_cbc_process_chunk;
