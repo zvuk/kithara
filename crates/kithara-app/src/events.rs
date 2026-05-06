@@ -1,9 +1,8 @@
-use std::time::Duration;
-
 use kithara::{
     events::{AbrEvent, DownloaderEvent},
     prelude::{AudioEvent, Event, FileEvent, HlsEvent},
 };
+use kithara_platform::time::Duration;
 
 #[must_use]
 pub fn is_progress_event(event: &Event) -> bool {

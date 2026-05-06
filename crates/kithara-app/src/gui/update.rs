@@ -1,5 +1,7 @@
 use iced::Task;
+use kithara::abr::AbrMode;
 use kithara_queue::{TrackId, Transition};
+use num_traits::cast::AsPrimitive;
 use tracing::error;
 
 use super::{
@@ -85,9 +87,7 @@ fn handle_set_abr_mode(state: &mut Kithara, variant: Option<usize>) {
     state.abr_mode_is_auto = variant.is_none();
     state.selected_variant = variant;
     if let Some(handle) = state.queue.current_abr_handle() {
-        let mode = variant.map_or(kithara::abr::AbrMode::Auto(None), |idx| {
-            kithara::abr::AbrMode::Manual(idx)
-        });
+        let mode = variant.map_or(AbrMode::Auto(None), AbrMode::Manual);
         if let Err(err) = handle.set_mode(mode) {
             error!(?err, ?variant, "SetAbrMode rejected by ABR state");
         }
@@ -95,8 +95,6 @@ fn handle_set_abr_mode(state: &mut Kithara, variant: Option<usize>) {
 }
 
 fn handle_tick(state: &mut Kithara) {
-    use num_traits::cast::AsPrimitive;
-
     let _ = state.queue.tick();
     state.blink_counter = state.blink_counter.wrapping_add(1);
 

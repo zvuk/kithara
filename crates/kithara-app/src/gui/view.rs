@@ -17,6 +17,7 @@ use iced::{
     },
 };
 use kithara_queue::TrackStatus;
+use num_traits::cast::ToPrimitive;
 
 use super::{
     app::Kithara,
@@ -193,8 +194,8 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
 fn format_time(seconds: f32) -> String {
     // Saturating-clamp the floored, non-negative seconds value to u32; values
     // past u32::MAX (~136 years) already exceed any practical UI display.
-    let total =
-        num_traits::cast::ToPrimitive::to_u32(&seconds.max(0.0).floor()).unwrap_or(u32::MAX);
+    const SATURATE: u32 = u32::MAX;
+    let total = seconds.max(0.0).floor().to_u32().unwrap_or(SATURATE);
     let minutes = total / Consts::SECONDS_PER_MINUTE;
     let remaining = total % Consts::SECONDS_PER_MINUTE;
     format!("{minutes:02}:{remaining:02}")
@@ -385,7 +386,8 @@ fn view_playrate(state: &Kithara) -> Element<'_, Message> {
         let label = if rate == rate.floor() {
             // Playback rate is bounded to 0.5–2.0; saturating-clamp keeps the
             // formatter honest if a rate ever drifts outside that band.
-            let rate_u8 = num_traits::cast::ToPrimitive::to_u8(&rate).unwrap_or(u8::MAX);
+            const SATURATE: u8 = u8::MAX;
+            let rate_u8 = rate.to_u8().unwrap_or(SATURATE);
             format!("{rate_u8}x")
         } else {
             format!("{rate:.2}x")

@@ -44,7 +44,7 @@ pub struct AppConfig {
     #[setters(skip)]
     pub tracks: Vec<String>,
     /// Accept invalid TLS certificates (self-signed, expired). Test servers only.
-    pub danger_accept_invalid_certs: bool,
+    pub should_accept_invalid_certs: bool,
     /// Crossfade duration in seconds.
     pub crossfade_seconds: f32,
     /// Number of EQ bands for the UI.
@@ -87,7 +87,7 @@ impl AppConfig {
             eq_band_count: Self::DEFAULT_EQ_BANDS,
             log_directives: Vec::new(),
             palette: Palette::default(),
-            danger_accept_invalid_certs: true,
+            should_accept_invalid_certs: true,
         }
     }
 

@@ -23,31 +23,30 @@ pub(crate) enum Icon {
     MusicNote,
 }
 
-impl Icon {
-    /// Raw SVG bytes embedded at compile time.
-    fn bytes(self) -> &'static [u8] {
-        match self {
-            Self::Play => include_bytes!("../../assets/icons/play.svg"),
-            Self::Pause => include_bytes!("../../assets/icons/pause.svg"),
-            Self::SkipNext => include_bytes!("../../assets/icons/skip-forward.svg"),
-            Self::SkipPrev => include_bytes!("../../assets/icons/skip-back.svg"),
-            Self::Shuffle => include_bytes!("../../assets/icons/shuffle.svg"),
-            Self::Repeat => include_bytes!("../../assets/icons/repeat.svg"),
-            Self::RepeatOnce => include_bytes!("../../assets/icons/repeat-once.svg"),
-            Self::VolumeHigh => include_bytes!("../../assets/icons/speaker-high.svg"),
-            Self::VolumeLow => include_bytes!("../../assets/icons/speaker-low.svg"),
-            Self::VolumeMute => include_bytes!("../../assets/icons/speaker-x.svg"),
-            Self::Playlist => include_bytes!("../../assets/icons/playlist.svg"),
-            Self::Equalizer => include_bytes!("../../assets/icons/faders.svg"),
-            Self::Settings => include_bytes!("../../assets/icons/gear.svg"),
-            Self::Dj => include_bytes!("../../assets/icons/disc.svg"),
-            Self::MusicNote => include_bytes!("../../assets/icons/music-note.svg"),
-        }
+fn icon_bytes(icon: Icon) -> &'static [u8] {
+    match icon {
+        Icon::Play => include_bytes!("../../assets/icons/play.svg"),
+        Icon::Pause => include_bytes!("../../assets/icons/pause.svg"),
+        Icon::SkipNext => include_bytes!("../../assets/icons/skip-forward.svg"),
+        Icon::SkipPrev => include_bytes!("../../assets/icons/skip-back.svg"),
+        Icon::Shuffle => include_bytes!("../../assets/icons/shuffle.svg"),
+        Icon::Repeat => include_bytes!("../../assets/icons/repeat.svg"),
+        Icon::RepeatOnce => include_bytes!("../../assets/icons/repeat-once.svg"),
+        Icon::VolumeHigh => include_bytes!("../../assets/icons/speaker-high.svg"),
+        Icon::VolumeLow => include_bytes!("../../assets/icons/speaker-low.svg"),
+        Icon::VolumeMute => include_bytes!("../../assets/icons/speaker-x.svg"),
+        Icon::Playlist => include_bytes!("../../assets/icons/playlist.svg"),
+        Icon::Equalizer => include_bytes!("../../assets/icons/faders.svg"),
+        Icon::Settings => include_bytes!("../../assets/icons/gear.svg"),
+        Icon::Dj => include_bytes!("../../assets/icons/disc.svg"),
+        Icon::MusicNote => include_bytes!("../../assets/icons/music-note.svg"),
     }
+}
 
+impl Icon {
     /// Render this icon as an SVG widget with the given size and color.
     pub(crate) fn view<'a, M: 'a>(self, size: f32, color: Color) -> Element<'a, M> {
-        let handle = SvgHandle::from_memory(self.bytes());
+        let handle = SvgHandle::from_memory(icon_bytes(self));
         Svg::new(handle)
             .width(Length::Fixed(size))
             .height(Length::Fixed(size))

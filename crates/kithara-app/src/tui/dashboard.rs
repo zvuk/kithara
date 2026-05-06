@@ -1,5 +1,4 @@
-use std::time::Duration;
-
+use kithara_platform::time::Duration;
 use kithara_queue::{Queue, TrackEntry, TrackStatus};
 use ratatui::{
     Frame,
@@ -16,7 +15,8 @@ use crate::theme::tui::TuiPalette;
 /// `u16::MAX` would already exceed any displayable area, so reporting the cap
 /// is the correct rendering semantic.
 fn count_to_u16(count: usize) -> u16 {
-    u16::try_from(count).unwrap_or(u16::MAX)
+    const SATURATE: u16 = u16::MAX;
+    u16::try_from(count).unwrap_or(SATURATE)
 }
 
 /// TUI dashboard widget for the Kithara player.
@@ -93,7 +93,10 @@ impl Dashboard {
         if total_ms == 0 {
             return "▱".repeat(width);
         }
-        let width_u64 = u64::try_from(width).unwrap_or(u64::MAX);
+        let width_u64 = {
+            const SATURATE: u64 = u64::MAX;
+            u64::try_from(width).unwrap_or(SATURATE)
+        };
         let filled_u64 = self.position_ms.min(total_ms).saturating_mul(width_u64) / total_ms;
         let filled = usize::try_from(filled_u64).unwrap_or(width).min(width);
         format!(
@@ -223,7 +226,8 @@ impl Dashboard {
     }
 
     pub fn set_position(&mut self, position: Duration) {
-        self.position_ms = u64::try_from(position.as_millis()).unwrap_or(u64::MAX);
+        const SATURATE: u64 = u64::MAX;
+        self.position_ms = u64::try_from(position.as_millis()).unwrap_or(SATURATE);
     }
 
     pub fn set_queue(&mut self, current_index: usize, item_count: usize) {
@@ -232,8 +236,9 @@ impl Dashboard {
     }
 
     pub fn set_total(&mut self, total: Option<Duration>) {
+        const SATURATE: u64 = u64::MAX;
         self.total_ms =
-            total.map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
+            total.map(|duration| u64::try_from(duration.as_millis()).unwrap_or(SATURATE));
     }
 
     pub fn set_volume(&mut self, volume: f32) {

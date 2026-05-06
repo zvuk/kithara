@@ -70,13 +70,36 @@ fn resolve_mode(mode: Mode) -> Mode {
     }
 }
 
-fn main() -> AppResult {
-    // Suppress noisy macOS system logs (OpenGL dlsym, WindowTab, etc.)
-    #[cfg(target_os = "macos")]
+/// Suppress noisy macOS system logs (`OpenGL` `dlsym`, `WindowTab`, etc.)
+/// at program start before any threads are spawned. No-op on other targets.
+#[cfg(target_os = "macos")]
+fn suppress_macos_system_logs() {
     // SAFETY: called at program start before any threads are spawned.
     unsafe {
         std::env::set_var("OS_ACTIVITY_MODE", "disable");
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn suppress_macos_system_logs() {}
+
+#[cfg(feature = "tui")]
+fn init_tracing_for_mode(mode: Mode) -> AppResult<()> {
+    let log_directives: &[&str] = match mode {
+        Mode::Tui => &["off"],
+        _ => &["info"],
+    };
+    init_tui_tracing(log_directives, mode == Mode::Tui)
+}
+
+#[cfg(not(feature = "tui"))]
+fn init_tracing_for_mode(_mode: Mode) -> AppResult<()> {
+    // GUI-only: simple tracing init without CRLF writer.
+    gui::init_tracing()
+}
+
+fn main() -> AppResult {
+    suppress_macos_system_logs();
 
     let args = Args::parse();
     let mode = resolve_mode(args.mode);
@@ -96,22 +119,10 @@ fn main() -> AppResult {
     let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
     let config = AppConfig::new(downloader, flush_hub)
         .with_tracks(args.tracks)
-        .with_danger_accept_invalid_certs(args.insecure);
+        .with_should_accept_invalid_certs(args.insecure);
 
-    // Initialize tracing based on mode.
-    #[cfg(feature = "tui")]
-    {
-        let log_directives: &[&str] = match mode {
-            Mode::Tui => &["off"],
-            _ => &["info"],
-        };
-        init_tui_tracing(log_directives, mode == Mode::Tui)?;
-    }
-    #[cfg(not(feature = "tui"))]
-    {
-        // GUI-only: simple tracing init without CRLF writer.
-        gui::init_tracing()?;
-    }
+    // Initialize tracing based on mode (cfg-gated dispatch in the helper).
+    init_tracing_for_mode(mode)?;
 
     let player_config = PlayerConfig::default()
         .with_crossfade_duration(config.crossfade_seconds)

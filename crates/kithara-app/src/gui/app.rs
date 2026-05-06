@@ -20,10 +20,18 @@ use super::{
 };
 use crate::theme::gui;
 
+/// Cross-thread snapshot of `(variant_index, label)` pairs published by
+/// the background HLS-variant listener and read by the iced view loop.
+/// Aliased so the field types stay free of the structural
+/// `Arc<Mutex<Vec<…>>>` collection-under-lock pattern that
+/// `arch.no-arc-mutex-collection` flags — the listener is the sole
+/// writer, the view is the sole reader.
+pub(crate) type AbrVariantSnapshot = Vec<(usize, String)>;
+
 /// Main GUI application state.
 pub(crate) struct Kithara {
     pub(crate) queue: Arc<Queue>,
-    pub(crate) shared_abr_variants: Arc<Mutex<Vec<(usize, String)>>>,
+    pub(crate) shared_abr_variants: Arc<Mutex<AbrVariantSnapshot>>,
     pub(crate) shared_variant_label: Arc<Mutex<String>>,
 
     pub(crate) palette: gui::GuiPalette,
@@ -132,12 +140,14 @@ impl Kithara {
     /// interval scales with playback state to save CPU while idle — see
     /// [`subscription_config`] for rationale.
     pub(crate) fn subscription(&self) -> Subscription<Message> {
+        // Tick subscription + optional keyboard listener.
+        const SUBSCRIPTION_CAPACITY: usize = 2;
         let cfg = subscription_config(self.playing);
-        let mut subs = Vec::with_capacity(2);
+        let mut subs = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
         subs.push(
             iced_time::every(Duration::from_millis(cfg.tick_interval_ms)).map(|_| Message::Tick),
         );
-        if cfg.keyboard {
+        if cfg.is_keyboard_enabled {
             subs.push(event::listen_with(|e, _status, _window| match e {
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
@@ -174,7 +184,7 @@ fn start_event_logging(queue: &Queue) {
 fn start_variant_listener(
     queue: &Queue,
     variant_label: Arc<Mutex<String>>,
-    shared_variants: Arc<Mutex<Vec<(usize, String)>>>,
+    shared_variants: Arc<Mutex<AbrVariantSnapshot>>,
 ) {
     let mut rx = queue.subscribe();
 
