@@ -14,7 +14,7 @@ use std::{
 use fast_interleave::deinterleave_variable;
 use kithara_bufpool::PcmPool;
 use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
-use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
+use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread::{is_worker_thread, sleep as thread_sleep};
 use kithara_platform::{
@@ -237,10 +237,7 @@ impl<S> Audio<S> {
         self.emit_audio_event(AudioEvent::SeekLifecycle {
             stage: SeekLifecycleStage::OutputCommitted,
             seek_epoch,
-            variant,
-            segment_index,
-            byte_range_start: None,
-            byte_range_end: None,
+            location: SegmentLocation::new(variant, segment_index, None, None),
         });
 
         self.emit_audio_event(AudioEvent::SeekComplete {

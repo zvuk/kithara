@@ -17,7 +17,7 @@ use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, ErrorClass,
     GaplessMode, PcmChunk, PcmSpec,
 };
-use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage};
+use kithara_events::{AudioEvent, AudioFormat, SeekLifecycleStage, SegmentLocation};
 use kithara_platform::{Mutex, thread::yield_now};
 use kithara_stream::{
     ContainerFormat, MediaInfo, PendingReason, SourcePhase, SourceSeekAnchor, Stream, StreamType,
@@ -188,9 +188,6 @@ impl<T: StreamType> Seek for OffsetReader<T> {
 pub(crate) type DecoderFactory<T> =
     Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn Decoder>> + Send>;
 
-/// Variant, segment index, and byte range spanning the current seek target.
-type SeekContextTuple = (Option<usize>, Option<u32>, Option<u64>, Option<u64>);
-
 /// Audio source for Stream with format change detection.
 ///
 /// Monitors `media_info` changes and recreates decoder at segment boundaries.
@@ -219,46 +216,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     gapless_mode: GaplessMode,
     /// Per-track gapless trimmer adapter.
     gapless: GaplessStage,
-}
-
-/// Context for `recover_from_decoder_seek_error`: the failure mode, the
-/// fallback offset to recreate at, and the diagnostic strings used in
-/// `warn!` / `fail_seek` paths. Lifted out of the function signature so
-/// callers don't need to spell out eight positional arguments.
-#[derive(Clone, Copy)]
-struct SeekRecoveryContext {
-    position: Duration,
-    epoch: u64,
-    recreate_offset: u64,
-    seek_mode: SeekMode,
-    warn_msg: &'static str,
-    fail_ctx: &'static str,
-}
-
-/// All the per-event fields attached to an `AudioEvent::SeekLifecycle`,
-/// grouped so callers do not need to spell out six optional arguments
-/// at every emit site.
-#[derive(Clone, Copy)]
-struct SeekLifecycleFields {
-    seek_epoch: u64,
-    variant: Option<usize>,
-    segment_index: Option<u32>,
-    byte_range_start: Option<u64>,
-    byte_range_end: Option<u64>,
-}
-
-/// Context for finishing a seek lifecycle: the post-seek state (epoch,
-/// position, byte ranges, anchor) that emits a `SeekApplied` event and
-/// transitions the FSM into `AwaitingResume`.
-#[derive(Clone, Copy)]
-struct SeekAppliedContext {
-    epoch: u64,
-    position: Duration,
-    variant: Option<usize>,
-    segment_index: Option<u32>,
-    byte_range_start: Option<u64>,
-    byte_range_end: Option<u64>,
-    anchor_offset: Option<u64>,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -563,27 +520,15 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.recreate_decoder(new_info, target_offset)
     }
 
-    fn apply_seek_applied(&mut self, ctx: &SeekAppliedContext) {
-        let &SeekAppliedContext {
-            epoch,
-            position,
-            variant,
-            segment_index,
-            byte_range_start,
-            byte_range_end,
-            anchor_offset,
-        } = ctx;
+    fn apply_seek_applied(
+        &mut self,
+        epoch: u64,
+        position: Duration,
+        location: SegmentLocation,
+        anchor_offset: Option<u64>,
+    ) {
         reset_effects(&mut self.effects);
-        self.emit_seek_lifecycle(
-            SeekLifecycleStage::SeekApplied,
-            SeekLifecycleFields {
-                seek_epoch: epoch,
-                variant,
-                segment_index,
-                byte_range_start,
-                byte_range_end,
-            },
-        );
+        self.emit_seek_lifecycle(SeekLifecycleStage::SeekApplied, epoch, location);
         self.update_state(TrackState::AwaitingResume(ResumeState {
             anchor_offset,
             recover_attempts: 0,
@@ -636,30 +581,18 @@ impl<T: StreamType> StreamAudioSource<T> {
             return self.recover_from_decoder_seek_error(
                 request,
                 err,
-                SeekRecoveryContext {
-                    position,
-                    epoch,
-                    recreate_offset: self.session.base_offset,
-                    seek_mode: SeekMode::Direct {
-                        target_byte: self.estimate_target_byte(position),
-                    },
-                    warn_msg: "seek: decoder.seek failed, recreating decoder and retrying",
-                    fail_ctx: "seek: decoder.seek failed",
+                position,
+                epoch,
+                self.session.base_offset,
+                SeekMode::Direct {
+                    target_byte: self.estimate_target_byte(position),
                 },
             );
         }
         self.shared_stream.commit_seek_landing(None);
 
-        let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
-        self.apply_seek_applied(&SeekAppliedContext {
-            epoch,
-            position,
-            variant,
-            segment_index,
-            byte_range_start,
-            byte_range_end,
-            anchor_offset: None, // Direct seek — no anchor offset
-        });
+        // Direct seek — no anchor offset.
+        self.apply_seek_applied(epoch, position, self.seek_context(), None);
         true
     }
 
@@ -764,14 +697,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             return self.recover_from_decoder_seek_error(
                 request,
                 err,
-                SeekRecoveryContext {
-                    position,
-                    epoch,
-                    recreate_offset: anchor.byte_offset,
-                    seek_mode: SeekMode::Anchor(anchor),
-                    warn_msg: "seek anchor path: decoder seek failed, recreating decoder",
-                    fail_ctx: "seek anchor path: exact decoder seek failed",
-                },
+                position,
+                epoch,
+                anchor.byte_offset,
+                SeekMode::Anchor(anchor),
             );
         }
         trace!(
@@ -782,16 +711,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         );
         self.shared_stream.commit_seek_landing(Some(anchor));
 
-        let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
-        self.apply_seek_applied(&SeekAppliedContext {
+        self.apply_seek_applied(
             epoch,
             position,
-            variant,
-            segment_index,
-            byte_range_start,
-            byte_range_end,
-            anchor_offset: Some(anchor.byte_offset),
-        });
+            self.seek_context(),
+            Some(anchor.byte_offset),
+        );
         true
     }
 
@@ -930,21 +855,16 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn emit_seek_lifecycle(&self, stage: SeekLifecycleStage, fields: SeekLifecycleFields) {
-        let SeekLifecycleFields {
-            seek_epoch,
-            variant,
-            segment_index,
-            byte_range_start,
-            byte_range_end,
-        } = fields;
+    fn emit_seek_lifecycle(
+        &self,
+        stage: SeekLifecycleStage,
+        seek_epoch: u64,
+        location: SegmentLocation,
+    ) {
         self.emit_event(AudioEvent::SeekLifecycle {
             stage,
             seek_epoch,
-            variant,
-            segment_index,
-            byte_range_start,
-            byte_range_end,
+            location,
         });
     }
 
@@ -1097,16 +1017,21 @@ impl<T: StreamType> StreamAudioSource<T> {
         &mut self,
         request: SeekRequest,
         err: DecodeError,
-        ctx: SeekRecoveryContext,
+        position: Duration,
+        epoch: u64,
+        recreate_offset: u64,
+        seek_mode: SeekMode,
     ) -> bool {
-        let SeekRecoveryContext {
-            position,
-            epoch,
-            recreate_offset,
-            seek_mode,
-            warn_msg,
-            fail_ctx,
-        } = ctx;
+        let (warn_msg, fail_ctx) = match seek_mode {
+            SeekMode::Direct { .. } => (
+                "seek: decoder.seek failed, recreating decoder and retrying",
+                "seek: decoder.seek failed",
+            ),
+            SeekMode::Anchor(_) => (
+                "seek anchor path: decoder seek failed, recreating decoder",
+                "seek anchor path: exact decoder seek failed",
+            ),
+        };
         warn!(?err, epoch, ?position, "{warn_msg}");
 
         if matches!(err, DecodeError::SeekOutOfRange(_)) {
@@ -1255,10 +1180,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    fn seek_context(&self) -> SeekContextTuple {
+    fn seek_context(&self) -> SegmentLocation {
         let stream_ctx = self.shared_stream.build_stream_context();
         let segment_range = self.shared_stream.current_segment_range();
-        (
+        SegmentLocation::new(
             stream_ctx.variant_index(),
             stream_ctx.segment_index(),
             segment_range.as_ref().map(|range| range.start),
@@ -1582,17 +1507,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
 
         if request.attempt == 0 {
-            let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
-            self.emit_seek_lifecycle(
-                SeekLifecycleStage::SeekRequest,
-                SeekLifecycleFields {
-                    seek_epoch: epoch,
-                    variant,
-                    segment_index,
-                    byte_range_start,
-                    byte_range_end,
-                },
-            );
+            self.emit_seek_lifecycle(SeekLifecycleStage::SeekRequest, epoch, self.seek_context());
         }
 
         self.shared_stream.set_seek_epoch(epoch);
@@ -1654,13 +1569,13 @@ impl<T: StreamType> StreamAudioSource<T> {
                     let segment_range = self.shared_stream.current_segment_range();
                     self.emit_seek_lifecycle(
                         SeekLifecycleStage::DecodeStarted,
-                        SeekLifecycleFields {
-                            seek_epoch: current_epoch,
-                            variant: chunk.meta.variant_index,
-                            segment_index: chunk.meta.segment_index,
-                            byte_range_start: segment_range.as_ref().map(|range| range.start),
-                            byte_range_end: segment_range.as_ref().map(|range| range.end),
-                        },
+                        current_epoch,
+                        SegmentLocation::new(
+                            chunk.meta.variant_index,
+                            chunk.meta.segment_index,
+                            segment_range.as_ref().map(|range| range.start),
+                            segment_range.as_ref().map(|range| range.end),
+                        ),
                     );
                     // FSM: AwaitingResume → Decoding (first valid chunk)
                     self.update_state(TrackState::Decoding);
@@ -1839,17 +1754,13 @@ impl<T: StreamType> StreamAudioSource<T> {
         match self.decoder_seek_safe(request.seek.target) {
             Ok(_outcome) => {
                 self.shared_stream.commit_seek_landing(None);
-                let (variant, segment_index, byte_range_start, byte_range_end) =
-                    self.seek_context();
-                self.apply_seek_applied(&SeekAppliedContext {
-                    epoch: request.seek.epoch,
-                    position: request.seek.target,
-                    variant,
-                    segment_index,
-                    byte_range_start,
-                    byte_range_end,
-                    anchor_offset: None, // Recreate path — no anchor offset available
-                });
+                // Recreate path — no anchor offset available.
+                self.apply_seek_applied(
+                    request.seek.epoch,
+                    request.seek.target,
+                    self.seek_context(),
+                    None,
+                );
                 self.epoch.store(request.seek.epoch, Ordering::Release);
                 self.timeline.clear_seek_pending(request.seek.epoch);
                 TrackStep::StateChanged

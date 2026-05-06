@@ -45,6 +45,37 @@ impl std::fmt::Display for AudioFormat {
     }
 }
 
+/// Position of a seek target inside the source's variant/segment grid.
+///
+/// All fields are `Option`: callers may know only some coordinates (e.g. a
+/// pre-decode `SeekRequest` knows the variant but not the resolved byte
+/// range yet). Empty `SegmentLocation::default()` means "no information".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SegmentLocation {
+    pub variant: Option<usize>,
+    pub segment_index: Option<u32>,
+    pub byte_range_start: Option<u64>,
+    pub byte_range_end: Option<u64>,
+}
+
+impl SegmentLocation {
+    #[must_use]
+    pub const fn new(
+        variant: Option<usize>,
+        segment_index: Option<u32>,
+        byte_range_start: Option<u64>,
+        byte_range_end: Option<u64>,
+    ) -> Self {
+        Self {
+            variant,
+            segment_index,
+            byte_range_start,
+            byte_range_end,
+        }
+    }
+}
+
 /// Events from the audio pipeline.
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
@@ -62,10 +93,7 @@ pub enum AudioEvent {
     SeekLifecycle {
         stage: SeekLifecycleStage,
         seek_epoch: SeekEpoch,
-        variant: Option<usize>,
-        segment_index: Option<u32>,
-        byte_range_start: Option<u64>,
-        byte_range_end: Option<u64>,
+        location: SegmentLocation,
     },
     /// Seek completed.
     SeekComplete {
