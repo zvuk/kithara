@@ -8,7 +8,10 @@
 use std::{fmt, fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
-use kithara_platform::{Condvar, Mutex, time::Instant};
+use kithara_platform::{
+    Condvar, Mutex,
+    time::{Duration, Instant},
+};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
 use crate::{AssetResourceState, AssetsResult, ResourceKey, base::Assets};
@@ -117,6 +120,10 @@ impl ReadinessGate {
     /// failed/cancelled. Returns `true` if the gate was reached,
     /// `false` if the wait was aborted.
     fn wait_until_ready(&self, should_abort: &dyn Fn() -> bool) -> bool {
+        /// Per-iteration wait cap for the processed-state condvar. Caps
+        /// the latency of a missed-notification cycle without burning
+        /// CPU on tight polling.
+        const COND_WAIT_MS: u64 = 100;
         loop {
             // Bounded wake-up so a missed notify (or a status change
             // that does not flow through `mark_ready`) cannot strand
@@ -131,7 +138,7 @@ impl ReadinessGate {
                 if *guard {
                     return true;
                 }
-                let deadline = Instant::now() + kithara_platform::time::Duration::from_millis(100);
+                let deadline = Instant::now() + Duration::from_millis(COND_WAIT_MS);
                 let (next, _) = self.cv.wait_sync_timeout(guard, deadline);
                 *next
             };
@@ -664,11 +671,11 @@ mod tests {
         // This parks a ProcessedResource with ctx=Some, processed=false in the cache.
         let writer = store
             .acquire_resource_with_ctx(&key, Some(ctx.clone()))
-            .expect("acquire with ctx must succeed");
+            .expect("BUG: acquire with ctx must succeed");
         let payload = b"uncommitted encrypted bytes";
         writer
             .write_at(0, payload)
-            .expect("writer must be able to stream bytes before commit");
+            .expect("BUG: writer must be able to stream bytes before commit");
 
         // Reader asks for the same key without ctx.  Under the old
         // behaviour, the cache's ctx=None fall-through returned the
@@ -736,7 +743,7 @@ mod tests {
         let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
 
         let len = encrypted_first.len() as u64;
-        processed.commit(Some(len)).expect("first commit");
+        processed.commit(Some(len)).expect("BUG: first commit");
         let first_call_count = call_count.load(Ordering::SeqCst);
         assert!(
             first_call_count > 0,
@@ -751,7 +758,7 @@ mod tests {
         // on a cache hit so the resource becomes writable again.
         processed
             .reactivate()
-            .expect("reactivate after commit must succeed");
+            .expect("BUG: reactivate after commit must succeed");
         assert!(
             matches!(processed.status(), ResourceStatus::Active),
             "reactivate must clear committed state"
@@ -764,8 +771,8 @@ mod tests {
         // symptom in `live_ephemeral_small_cache_playback_drm`.
         processed
             .write_at(0, &encrypted_second)
-            .expect("re-write encrypted bytes");
-        processed.commit(Some(len)).expect("second commit");
+            .expect("BUG: re-write encrypted bytes");
+        processed.commit(Some(len)).expect("BUG: second commit");
 
         let second_call_count = call_count.load(Ordering::SeqCst);
         assert!(
@@ -782,7 +789,7 @@ mod tests {
         let mut out = vec![0u8; encrypted_second.len()];
         processed
             .read_at(0, &mut out)
-            .expect("read_at after second commit");
+            .expect("BUG: read_at after second commit");
         assert_eq!(
             &out[..],
             b"second payload",
@@ -870,7 +877,7 @@ mod tests {
             .asset_root(Some("drm-reactivate-poisons-reader"))
             .process_fn(process_fn)
             .ephemeral(true)
-            .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
+            .cache_capacity(NonZeroUsize::new(4).expect("BUG: nonzero"))
             .build();
 
         let key = ResourceKey::new("segment-0.m4s");
@@ -882,10 +889,10 @@ mod tests {
         {
             let a = store
                 .acquire_resource_with_ctx(&key, Some(ctx.clone()))
-                .expect("writer A acquire");
-            a.write_at(0, &ciphertext).expect("writer A write");
+                .expect("BUG: writer A acquire");
+            a.write_at(0, &ciphertext).expect("BUG: writer A write");
             a.commit(Some(ciphertext.len() as u64))
-                .expect("writer A commit");
+                .expect("BUG: writer A commit");
         }
 
         // Sanity: availability + a plain open_resource see the
@@ -899,12 +906,12 @@ mod tests {
         // Reader holds a clone over the committed DRM entry.
         let reader = store
             .open_resource(&key)
-            .expect("reader open_resource after commit");
+            .expect("BUG: reader open_resource after commit");
 
         let mut probe = vec![0u8; ciphertext.len()];
         let n = reader
             .read_at(0, &mut probe)
-            .expect("reader sanity read before writer B");
+            .expect("BUG: reader sanity read before writer B");
         assert_eq!(n, ciphertext.len());
         assert_eq!(
             &probe[..],
@@ -920,7 +927,7 @@ mod tests {
         // `ProcessedResource`. That flips `processed` to `false`.
         let _writer_b = store
             .acquire_resource_with_ctx(&key, Some(ctx.clone()))
-            .expect("writer B reacquire");
+            .expect("BUG: writer B reacquire");
 
         // Availability still advertises the committed range — the
         // LRU displace did not fire, so `on_invalidated` did not run
@@ -991,7 +998,7 @@ mod tests {
     /// Before the gate fix this race collapsed to `wait_range = Ready`
     /// + `read_at = NotReadable`, the production hang surfaced by
     /// `local_queue_playlist_behavior_symphonia`.
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(5)))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn wait_range_blocks_until_commit_processes() {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x55, Arc::clone(&call_count));
@@ -1015,7 +1022,7 @@ mod tests {
         });
 
         // Give the reader long enough to enter the gate's wait loop.
-        std::thread::sleep(kithara_platform::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
         assert_eq!(
             call_count.load(Ordering::SeqCst),
             0,
@@ -1036,7 +1043,7 @@ mod tests {
     /// not poll on the watchdog tick until something else nudges it.
     /// Surfacing the cancel through `ResourceStatus::Cancelled` is
     /// what closes that observation gap.
-    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(5)))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn wait_range_aborts_on_cancellation() {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
@@ -1056,13 +1063,13 @@ mod tests {
 
         let reader = std::thread::spawn(move || processed_for_reader.wait_range(0..16));
 
-        std::thread::sleep(kithara_platform::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
         cancel.cancel();
 
         let outcome = reader
             .join()
-            .expect("reader thread panicked")
-            .expect("wait_range must not surface a hard error on cancel");
+            .expect("BUG: reader thread panicked")
+            .expect("BUG: wait_range must not surface a hard error on cancel");
         assert_eq!(
             outcome,
             WaitOutcome::Interrupted,

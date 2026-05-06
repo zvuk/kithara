@@ -336,7 +336,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     let net = NetOptions::default().with_pool_max_idle_per_host(8);
                     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
                     let store = StoreOptions::new(temp_dir.path())
-                        .with_ephemeral(true)
+                        .with_is_ephemeral(true)
                         .with_max_bytes(200_000);
                     let config = HlsConfig::new(url)
                         .with_store(store)

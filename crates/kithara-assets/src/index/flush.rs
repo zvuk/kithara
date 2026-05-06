@@ -96,10 +96,19 @@ pub struct FlushPolicy {
 
 impl Default for FlushPolicy {
     fn default() -> Self {
+        /// Default debounce window; coalesces bursts of writes into one
+        /// flush without delaying isolated writes too long.
+        const DEFAULT_DEBOUNCE_MS: u64 = 50;
+        /// Default ops cap before a forced flush — prevents unbounded
+        /// dirty growth when writes never debounce.
+        const DEFAULT_FORCE_OPS: usize = 256;
+        /// Default poll cadence for the background flush worker.
+        const DEFAULT_POLL_INTERVAL_MS: u64 = 100;
         Self {
-            debounce: Duration::from_millis(50),
-            force_every_n_ops: NonZeroUsize::new(256).expect("256 > 0"),
-            poll_interval: Duration::from_millis(100),
+            debounce: Duration::from_millis(DEFAULT_DEBOUNCE_MS),
+            force_every_n_ops: NonZeroUsize::new(DEFAULT_FORCE_OPS)
+                .expect("BUG: DEFAULT_FORCE_OPS const is statically non-zero"),
+            poll_interval: Duration::from_millis(DEFAULT_POLL_INTERVAL_MS),
         }
     }
 }
@@ -367,6 +376,7 @@ pub(crate) fn signal_or_flush_sync(
 mod tests {
     use std::sync::atomic::AtomicUsize;
 
+    use kithara_storage::StorageError;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -587,9 +597,9 @@ mod tests {
             fn flush(&self) -> AssetsResult<()> {
                 self.attempts.fetch_add(1, Ordering::AcqRel);
                 if self.fail_first.swap(false, Ordering::AcqRel) {
-                    Err(crate::error::AssetsError::Storage(
-                        kithara_storage::StorageError::Failed("simulated".into()),
-                    ))
+                    Err(crate::error::AssetsError::Storage(StorageError::Failed(
+                        "simulated".into(),
+                    )))
                 } else {
                     Ok(())
                 }

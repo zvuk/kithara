@@ -45,5 +45,5 @@ pub struct AssetAvailabilityFile {
 pub struct ResourceAvailabilityFile {
     pub final_len: Option<u64>,
     pub ranges: Vec<(u64, u64)>,
-    pub committed: bool,
+    pub is_committed: bool,
 }

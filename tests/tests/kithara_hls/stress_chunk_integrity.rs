@@ -190,7 +190,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         // 2 variants × Consts::SEGMENT_COUNT segments + headroom.
         store.cache_capacity =
             Some(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"));
-        store.ephemeral = true;
+        store.is_ephemeral = true;
     }
 
     let hls_config = HlsConfig::new(url)

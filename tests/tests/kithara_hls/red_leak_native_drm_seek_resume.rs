@@ -88,7 +88,7 @@ async fn run_drm_seek_resume_cycle(
 ) {
     let url = server.asset("drm/master.m3u8");
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
 
     let hls_config = HlsConfig::new(url)

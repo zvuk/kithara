@@ -187,7 +187,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
         let cap =
             NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
         store.cache_capacity = Some(cap);
-        store.ephemeral = true;
+        store.is_ephemeral = true;
     }
 
     let hls_config = HlsConfig::new(url)

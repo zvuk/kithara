@@ -115,9 +115,9 @@ impl File {
             .root_dir(&config.store.cache_dir)
             .asset_root(Some(asset_root.as_str()))
             .evict_config(config.store.to_evict_config())
-            .ephemeral(config.store.ephemeral)
+            .ephemeral(config.store.is_ephemeral)
             .cancel(cancel.clone());
-        if cfg!(target_arch = "wasm32") || config.store.ephemeral {
+        if cfg!(target_arch = "wasm32") || config.store.is_ephemeral {
             // No pre-allocation — length unknown until on_connect.
         }
         let backend = Arc::new(backend_builder.build());

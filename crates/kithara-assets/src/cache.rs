@@ -179,7 +179,7 @@ where
         // actual count beyond `lru::LruCache::cap()`.
         if cache.len() >= cache.cap().get() {
             let grow = NonZeroUsize::new(cache.len() + 1)
-                .expect("cache overflow capacity must stay non-zero");
+                .expect("BUG: cache overflow capacity must stay non-zero");
             cache.resize(grow);
         }
 

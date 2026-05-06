@@ -26,18 +26,19 @@ enum AccessMode {
 
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 
+/// Shared registry of live (non-dropped) lease resources keyed by
+/// [`ResourceKey`]. Held under a single `Mutex` because every operation
+/// is a quick map mutation; contention is bounded by lease churn rate.
+type LiveRegistry = Mutex<HashMap<ResourceKey, Weak<LiveResource>>>;
+
 struct LiveResource {
     state: Mutex<AssetResourceState>,
     key: ResourceKey,
-    registry: Weak<Mutex<HashMap<ResourceKey, Weak<Self>>>>,
+    registry: Weak<LiveRegistry>,
 }
 
 impl LiveResource {
-    fn new(
-        key: ResourceKey,
-        registry: Weak<Mutex<HashMap<ResourceKey, Weak<Self>>>>,
-        state: AssetResourceState,
-    ) -> Self {
+    fn new(key: ResourceKey, registry: Weak<LiveRegistry>, state: AssetResourceState) -> Self {
         Self {
             key,
             registry,
@@ -84,7 +85,7 @@ where
     A: Assets,
 {
     inner: Arc<A>,
-    live: Arc<Mutex<HashMap<ResourceKey, Weak<LiveResource>>>>,
+    live: Arc<LiveRegistry>,
     cancel: CancellationToken,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
     /// Shared pins index — same instance held by `EvictAssets` and

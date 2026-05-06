@@ -111,7 +111,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         // Increase capacity so all segments remain accessible for random seeks.
         store.cache_capacity =
             Some(NonZeroUsize::new(Consts::SEGMENT_COUNT + 10).expect("nonzero"));
-        store.ephemeral = true;
+        store.is_ephemeral = true;
     }
 
     let hls_config = HlsConfig::new(url)

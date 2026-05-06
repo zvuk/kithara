@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
     fs,
     num::NonZeroU32,
     path::PathBuf,
@@ -91,7 +91,6 @@ impl PinsIndex {
     /// Propagates the underlying [`AssetsError`] when the on-disk
     /// flush fails (mmap open, atomic swap, rkyv serialise).
     pub(crate) fn add(&self, asset_root: &str) -> AssetsResult<bool> {
-        use std::collections::hash_map::Entry;
         let transitioned = match self.inner.pins.lock_sync().entry(asset_root.to_string()) {
             Entry::Occupied(mut e) => {
                 let count = e.get_mut();
@@ -305,12 +304,12 @@ fn read_pins(
     // Hydrating from disk: every persisted pin starts at refcount 1. The disk
     // format only records the pinned set (not refcounts) — fresh leases will
     // re-increment as they take their guards.
-    let mut pinned = HashMap::new();
-    for (k, v) in archived.pinned.iter() {
-        if *v {
-            pinned.insert(k.as_str().to_string(), NonZeroU32::MIN);
-        }
-    }
+    let pinned = archived
+        .pinned
+        .iter()
+        .filter(|(_, v)| **v)
+        .map(|(k, _)| (k.as_str().to_string(), NonZeroU32::MIN))
+        .collect();
     Ok(pinned)
 }
 

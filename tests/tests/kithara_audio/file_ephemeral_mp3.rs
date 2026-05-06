@@ -169,7 +169,7 @@ async fn audio_file_mp3_decodes_with_duration(
     let temp_dir = TestTempDir::new();
 
     let file_config = FileConfig::new(server.url(path).into())
-        .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
+        .with_store(StoreOptions::new(temp_dir.path()).with_is_ephemeral(true));
     let mut config = AudioConfig::<File>::new(file_config).with_decoder_backend(backend);
     if let Some(h) = hint {
         config = config.with_hint(h);
@@ -241,7 +241,7 @@ async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Op
     let temp_dir = TestTempDir::new();
 
     let file_config = FileConfig::new(server.url(path).into())
-        .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
+        .with_store(StoreOptions::new(temp_dir.path()).with_is_ephemeral(true));
     let mut config = AudioConfig::<File>::new(file_config);
     if let Some(h) = hint {
         config = config.with_hint(h);
@@ -270,7 +270,7 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     let temp_dir = TestTempDir::new();
 
     let file_config = FileConfig::new(server.url("/track/stream").into())
-        .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
+        .with_store(StoreOptions::new(temp_dir.path()).with_is_ephemeral(true));
     let config = AudioConfig::<File>::new(file_config);
     let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
 

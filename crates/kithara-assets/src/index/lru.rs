@@ -276,7 +276,7 @@ fn read_state(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<LruSt
     let file =
         match rkyv::access::<super::schema::ArchivedLruIndexFile, rkyv::rancor::Error>(&buf[..n]) {
             Ok(archived) => rkyv::deserialize::<LruIndexFile, rkyv::rancor::Error>(archived)
-                .expect("LRU archived → owned deserialize"),
+                .expect("BUG: LRU archived → owned deserialize"),
             Err(e) => {
                 tracing::debug!("Failed to deserialize lru index: {}", e);
                 return Ok(LruState::default());

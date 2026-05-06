@@ -200,7 +200,7 @@ async fn build_live_audio(
 ) -> Audio<Stream<Hls>> {
     let url = server.asset(path);
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"));
     let hls_config = HlsConfig::new(url)
         .with_store(store)
@@ -319,7 +319,7 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
     let url = server.asset("drm/master.m3u8");
     info!(%url, "starting real DRM playback smoke");
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
 
     let hls_config = HlsConfig::new(url)
@@ -393,7 +393,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
 
     let hls_config = HlsConfig::new(url)
@@ -640,7 +640,7 @@ async fn live_real_stream_seek_resume_native(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
 
     let hls_config = HlsConfig::new(url)
@@ -729,7 +729,7 @@ async fn live_stress_real_stream_seek_read_cache(
     let url = server.asset(path);
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        store.ephemeral = true;
+        store.is_ephemeral = true;
         // Large enough for most seeks to hit cache, small enough for
         // eviction to exercise the Retry / re-download path.
         store.cache_capacity = Some(NonZeroUsize::new(24).expect("nonzero"));
@@ -1029,7 +1029,7 @@ async fn live_ephemeral_small_cache_playback(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
 
     let hls_config = HlsConfig::new(url)
@@ -1106,7 +1106,7 @@ async fn live_ephemeral_small_cache_seek_stress(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
 
     let hls_config = HlsConfig::new(url)

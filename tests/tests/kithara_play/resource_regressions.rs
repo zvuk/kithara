@@ -164,7 +164,7 @@ fn test_app() -> Router {
 fn store_options(temp_dir: &TestTempDir, ephemeral: bool) -> StoreOptions {
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        store.ephemeral = true;
+        store.is_ephemeral = true;
         store.cache_capacity = Some(NonZeroUsize::new(4).expect("nonzero"));
         store.max_assets = Some(8);
     }

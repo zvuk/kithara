@@ -4,26 +4,16 @@
 use std::env;
 use std::{fmt, hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
+use dashmap::DashMap;
 use derive_setters::Setters;
 use kithara_bufpool::BytePool;
 use kithara_storage::StorageResource;
 use tokio_util::sync::CancellationToken;
 
-use crate::cache::CachedResource;
-
-/// Private module-level defaults, grouped per ast-grep style rule.
-struct Consts;
-impl Consts {
-    /// Default in-memory LRU cache capacity (init + 2-3 media segments).
-    const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
-}
-
-use dashmap::DashMap;
-
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;
 use crate::{
-    cache::CachedAssets,
+    cache::{CachedAssets, CachedResource},
     evict::EvictAssets,
     index::{AvailabilityIndex, EvictConfig, FlushHub, FlushPolicy},
     key::ResourceKey,
@@ -32,6 +22,13 @@ use crate::{
     process::{ProcessChunkFn, ProcessedResource, ProcessingAssets},
     unified::AssetStore,
 };
+
+/// Private module-level defaults, grouped per ast-grep style rule.
+struct Consts;
+impl Consts {
+    /// Default in-memory LRU cache capacity (init + 2-3 media segments).
+    const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
+}
 
 /// Callback invoked when a cached resource is invalidated (displaced from LRU cache).
 ///
@@ -74,7 +71,7 @@ pub struct StoreOptions {
     /// When `true`, the asset store uses `MemAssetStore` instead of
     /// `DiskAssetStore`. Data is never written to disk.
     /// Default: `false`.
-    pub ephemeral: bool,
+    pub is_ephemeral: bool,
 }
 
 impl fmt::Debug for StoreOptions {
@@ -82,7 +79,7 @@ impl fmt::Debug for StoreOptions {
         f.debug_struct("StoreOptions")
             .field("cache_dir", &self.cache_dir)
             .field("cache_capacity", &self.cache_capacity)
-            .field("ephemeral", &self.ephemeral)
+            .field("is_ephemeral", &self.is_ephemeral)
             .field("flush_hub", &self.flush_hub.as_ref().map(|_| "..."))
             .field("max_assets", &self.max_assets)
             .field("max_bytes", &self.max_bytes)
@@ -102,7 +99,7 @@ impl Default for StoreOptions {
             #[cfg(target_arch = "wasm32")]
             cache_dir: PathBuf::from("/kithara"),
             cache_capacity: None,
-            ephemeral: false,
+            is_ephemeral: false,
             flush_hub: None,
             max_assets: None,
             max_bytes: None,
@@ -117,7 +114,7 @@ impl StoreOptions {
         Self {
             cache_dir: cache_dir.into(),
             cache_capacity: None,
-            ephemeral: false,
+            is_ephemeral: false,
             flush_hub: None,
             max_assets: None,
             max_bytes: None,
@@ -335,7 +332,7 @@ where
     ) -> (DiskStore<Ctx>, Arc<DiskAssetStore>) {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempfile::tempdir()
-                .expect("failed to create AssetStore temp dir")
+                .expect("BUG: failed to create AssetStore temp dir")
                 .keep()
         });
         let asset_root = self.asset_root.unwrap_or_default();
@@ -344,7 +341,7 @@ where
 
         let process_fn = self
             .process_fn
-            .expect("process_fn is required for AssetStoreBuilder");
+            .expect("BUG: process_fn is required for AssetStoreBuilder");
 
         // AssetStoreBuilder fallback safety net — caller must inject pool via with_pool
         // ast-grep-ignore: perf.no-global-pool-accessor
@@ -434,7 +431,7 @@ where
         let evict_cfg = self.evict_config.unwrap_or_default();
         let process_fn = self
             .process_fn
-            .expect("process_fn is required for AssetStoreBuilder");
+            .expect("BUG: process_fn is required for AssetStoreBuilder");
         // AssetStoreBuilder fallback safety net — caller must inject pool via with_pool
         // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
@@ -1008,7 +1005,7 @@ mod tests {
         // DiskStore deletes the file. Availability is never told.
         {
             let writer2 = store.acquire_resource(&target).unwrap();
-            writer2.reactivate().expect("reactivate committed");
+            writer2.reactivate().expect("BUG: reactivate committed");
         }
 
         // Post-condition: file is gone from disk, but the index never

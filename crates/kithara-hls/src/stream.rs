@@ -275,7 +275,7 @@ fn build_asset_store(
         .on_invalidated(on_invalidated)
         .root_dir(&config.store.cache_dir)
         .evict_config(config.store.to_evict_config())
-        .ephemeral(config.store.ephemeral);
+        .ephemeral(config.store.is_ephemeral);
     if let Some(ref pool) = config.pool {
         builder = builder.pool(pool.clone());
     }

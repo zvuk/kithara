@@ -5,7 +5,7 @@
 //! process is marked `LEAK [~0.6s]` by nextest, meaning the test process
 //! still has live tasks / threads past nextest's leak-timeout (~100 ms).
 //!
-//! The two cases in the original report share the `with_ephemeral(true)`
+//! The two cases in the original report share the `with_is_ephemeral(true)`
 //! + `with_cache_capacity(NonZeroUsize::new(4))` + seek-stress path but
 //! differ in decoder (HW vs SW/DRM). A common upstream cause in the
 //! asset/stream layer is therefore more plausible than decoder-specific
@@ -85,7 +85,7 @@ async fn build_small_cache_stream(
 ) -> Stream<Hls> {
     let url = server.url("/master.m3u8");
     let store = StoreOptions::new(temp_path)
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
     let config = HlsConfig::new(url)
         .with_store(store)

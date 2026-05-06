@@ -280,7 +280,7 @@ impl AvailabilityIndex {
                 if let Some(flen) = final_len {
                     avail.mark_committed(flen);
                 } else {
-                    avail.committed = res_record.committed;
+                    avail.committed = res_record.is_committed;
                 }
 
                 asset_map.insert(path.as_str().to_string(), Arc::new(Mutex::new(avail)));
@@ -390,7 +390,7 @@ fn write_aggregate<R: ResourceExt>(
                 ResourceAvailabilityFile {
                     ranges,
                     final_len: avail.final_len,
-                    committed: avail.committed,
+                    is_committed: avail.committed,
                 },
             );
         }

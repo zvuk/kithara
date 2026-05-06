@@ -164,7 +164,7 @@ async fn drm_stream_byte_integrity(
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        store.ephemeral = true;
+        store.is_ephemeral = true;
         store.cache_capacity = Some(NonZeroUsize::new(40).expect("nonzero"));
     }
 

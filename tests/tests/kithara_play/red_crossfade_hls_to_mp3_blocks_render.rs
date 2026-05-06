@@ -86,7 +86,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     .await;
     let temp = temp_dir();
     let mut store = StoreOptions::new(temp.path());
-    store.ephemeral = true;
+    store.is_ephemeral = true;
     store.cache_capacity = Some(std::num::NonZeroUsize::new(4).expect("nonzero"));
     store.max_assets = Some(8);
     let hls_url = hls_server.url("/master.m3u8");

@@ -84,7 +84,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     // Tighter than production (cap=4) to force the race deterministically
     // without needing CPU contention to surface it.
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(1).expect("nonzero"));
 
     let hls_config = HlsConfig::new(url)
