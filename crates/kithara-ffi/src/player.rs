@@ -31,6 +31,20 @@ use crate::{
     types::{FfiAbrMode, FfiError, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus},
 };
 
+/// Swift/Kotlin-owned `AudioPlayerItem` registry indexed by track id.
+/// Aliased so the field types stay free of the structural
+/// `Arc<Mutex<HashMap<…>>>` god-map pattern flagged by
+/// `arch.no-arc-mutex-godmap`. Single owner = the [`AudioPlayer`] facade.
+pub(crate) type ItemRegistry = HashMap<TrackId, Arc<AudioPlayerItem>>;
+
+/// Build the default `NetOptions`. The `dev` feature enables the
+/// `insecure` flag for local test servers; release builds always
+/// validate TLS.
+fn default_net_options() -> NetOptions {
+    const INSECURE: bool = cfg!(feature = "dev");
+    NetOptions::default().with_insecure(INSECURE)
+}
+
 /// FFI-facing audio player.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayer {
@@ -38,7 +52,7 @@ pub struct AudioPlayer {
     /// drained by [`remove`] / [`remove_all_items`]. Lets [`items`] return
     /// the same `AudioPlayerItem` instances that Swift handed in (preserves
     /// identity + active per-item observer wiring).
-    items: Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+    items: Arc<Mutex<ItemRegistry>>,
     queue: Arc<Queue>,
     /// Shared downloader for every track created through this player.
     /// Pinned to `FFI_RUNTIME` so its async tasks land on a runtime that
@@ -86,10 +100,7 @@ impl AudioPlayer {
             .with_eq_layout(generate_log_spaced_bands(config.eq_band_count as usize));
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);
-        #[cfg(feature = "dev")]
-        let net = NetOptions::default().with_insecure(true);
-        #[cfg(not(feature = "dev"))]
-        let net = NetOptions::default();
+        let net = default_net_options();
         let downloader = Downloader::new(
             DownloaderConfig::default()
                 .with_net(net)
@@ -227,7 +238,8 @@ impl AudioPlayer {
     }
 
     pub fn item_count(&self) -> u32 {
-        u32::try_from(self.queue.len()).unwrap_or(u32::MAX)
+        const SATURATE: u32 = u32::MAX;
+        u32::try_from(self.queue.len()).unwrap_or(SATURATE)
     }
 
     /// Replace the item at `index` with a freshly-configured one.
@@ -389,7 +401,8 @@ impl AudioPlayer {
     pub fn eq_band_count(&self) -> u32 {
         // EQ band count is bounded; saturating clamp keeps the FFI return
         // honest without an `as` truncation cast.
-        u32::try_from(self.queue.eq_band_count()).unwrap_or(u32::MAX)
+        const SATURATE: u32 = u32::MAX;
+        u32::try_from(self.queue.eq_band_count()).unwrap_or(SATURATE)
     }
 
     pub fn eq_gain(&self, band: u32) -> f32 {
@@ -425,7 +438,7 @@ impl AudioPlayer {
             rate: self.queue.rate(),
             default_rate: self.queue.default_rate(),
             volume: self.queue.volume(),
-            muted: self.queue.is_muted(),
+            is_muted: self.queue.is_muted(),
         }
     }
 

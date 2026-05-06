@@ -10,6 +10,7 @@ use jni::{
     sys::jint,
 };
 use jni_rpv::{
+    JNIEnv as JniEnv021,
     objects::JObject as JObject021,
     sys::{JNIEnv as SysEnv021, jobject as JObject021Raw},
 };
@@ -79,8 +80,8 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
         //   as a global ref in `init_android_context`.
         // - `sys::JNIEnv` is the C-FFI layout shared across jni 0.21/0.22.
         let result = unsafe {
-            let mut env_021 = jni_rpv::JNIEnv::from_raw(raw_env.cast::<SysEnv021>())
-                .expect("jni_rpv::JNIEnv::from_raw");
+            let mut env_021 = JniEnv021::from_raw(raw_env.cast::<SysEnv021>())
+                .expect("BUG: caller-supplied raw JNIEnv pointer is non-null");
             let ctx_021 = JObject021::from_raw(raw_ctx);
             rustls_android::init_with_env(&mut env_021, ctx_021)
         };

@@ -1,9 +1,8 @@
 //! FFI-compatible type conversions between `kithara-play` and platform bindings.
 
-use std::time::Duration;
-
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 use kithara_events::TrackStatus as TS;
+use kithara_platform::time::Duration;
 use url::Url;
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
@@ -40,14 +39,18 @@ impl FfiError {
 
     #[must_use]
     pub fn observer_code(&self) -> i32 {
-        match self {
-            Self::Internal { .. } => Self::ERROR_CODE_INTERNAL,
-            Self::NotReady => Self::ERROR_CODE_NOT_READY,
-            Self::ItemFailed { .. } => Self::ERROR_CODE_ITEM_FAILED,
-            Self::SeekFailed { .. } => Self::ERROR_CODE_SEEK_FAILED,
-            Self::EngineNotRunning => Self::ERROR_CODE_ENGINE_NOT_RUNNING,
-            Self::InvalidArgument { .. } => Self::ERROR_CODE_INVALID_ARGUMENT,
-        }
+        ffi_error_observer_code(self)
+    }
+}
+
+fn ffi_error_observer_code(error: &FfiError) -> i32 {
+    match error {
+        FfiError::Internal { .. } => FfiError::ERROR_CODE_INTERNAL,
+        FfiError::NotReady => FfiError::ERROR_CODE_NOT_READY,
+        FfiError::ItemFailed { .. } => FfiError::ERROR_CODE_ITEM_FAILED,
+        FfiError::SeekFailed { .. } => FfiError::ERROR_CODE_SEEK_FAILED,
+        FfiError::EngineNotRunning => FfiError::ERROR_CODE_ENGINE_NOT_RUNNING,
+        FfiError::InvalidArgument { .. } => FfiError::ERROR_CODE_INVALID_ARGUMENT,
     }
 }
 
@@ -436,7 +439,7 @@ pub struct FfiPlayerSnapshot {
     pub status: FfiPlayerStatus,
     pub current_time: Option<f64>,
     pub duration: Option<f64>,
-    pub muted: bool,
+    pub is_muted: bool,
     pub default_rate: f32,
     pub rate: f32,
     pub volume: f32,
@@ -448,13 +451,13 @@ mod tests {
 
     #[kithara::test]
     fn seconds_to_duration_valid() {
-        let d = seconds_to_duration(1.5).expect("valid");
+        let d = seconds_to_duration(1.5).expect("BUG: hard-coded test input is in the valid range");
         assert_eq!(d, Duration::from_secs_f64(1.5));
     }
 
     #[kithara::test]
     fn seconds_to_duration_zero() {
-        let d = seconds_to_duration(0.0).expect("valid");
+        let d = seconds_to_duration(0.0).expect("BUG: hard-coded test input is in the valid range");
         assert_eq!(d, Duration::ZERO);
     }
 
@@ -477,20 +480,23 @@ mod tests {
     #[kithara::test]
     fn duration_roundtrip() {
         let secs = 42.123_456;
-        let d = seconds_to_duration(secs).expect("valid");
+        let d =
+            seconds_to_duration(secs).expect("BUG: hard-coded test input is in the valid range");
         let back = duration_to_seconds(d);
         assert!((back - secs).abs() < 1e-9);
     }
 
     #[kithara::test]
     fn parse_url_valid() {
-        let u = parse_url("https://example.com/song.mp3").expect("valid");
+        let u = parse_url("https://example.com/song.mp3")
+            .expect("BUG: hard-coded test input is in the valid range");
         assert_eq!(u.scheme(), "https");
     }
 
     #[kithara::test]
     fn parse_url_trimmed() {
-        let u = parse_url("  https://example.com/  ").expect("valid");
+        let u = parse_url("  https://example.com/  ")
+            .expect("BUG: hard-coded test input is in the valid range");
         assert_eq!(u.host_str(), Some("example.com"));
     }
 

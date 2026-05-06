@@ -92,13 +92,14 @@ impl ItemEventBridge {
                 variants: v,
                 initial,
             }) => {
+                // Variant indices beyond u32::MAX cannot exist for any
+                // realistic source; saturating-clamp keeps the bridge honest
+                // without an `as u32` truncation cast.
+                const SATURATE: u32 = u32::MAX;
                 let ffi_variants: Vec<crate::types::FfiVariant> = v
                     .iter()
                     .map(|vi| crate::types::FfiVariant {
-                        // Variant index beyond u32::MAX cannot exist for any
-                        // realistic source; saturating-clamp keeps the bridge
-                        // honest without an `as u32` truncation cast.
-                        index: u32::try_from(vi.index).unwrap_or(u32::MAX),
+                        index: u32::try_from(vi.index).unwrap_or(SATURATE),
                         bandwidth_bps: vi.bandwidth_bps.unwrap_or(0),
                         name: vi.name.clone(),
                     })
@@ -109,7 +110,7 @@ impl ItemEventBridge {
                 });
                 // Synthesize initial VariantApplied so the UI immediately
                 // knows the current quality without waiting for an ABR change.
-                let initial_u32 = u32::try_from(*initial).unwrap_or(u32::MAX);
+                let initial_u32 = u32::try_from(*initial).unwrap_or(SATURATE);
                 if let Some(initial) = variants.iter().find(|v| v.index == initial_u32) {
                     observer.on_event(FfiItemEvent::VariantApplied {
                         variant: initial.clone(),
@@ -119,7 +120,8 @@ impl ItemEventBridge {
             Event::Abr(AbrEvent::ModeChanged {
                 mode: AbrMode::Manual(idx),
             }) => {
-                let idx_u32 = u32::try_from(*idx).unwrap_or(u32::MAX);
+                const SATURATE: u32 = u32::MAX;
+                let idx_u32 = u32::try_from(*idx).unwrap_or(SATURATE);
                 let variant = variants
                     .iter()
                     .find(|v| v.index == idx_u32)
@@ -132,7 +134,8 @@ impl ItemEventBridge {
                 observer.on_event(FfiItemEvent::VariantSelected { variant });
             }
             Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
-                let idx_u32 = u32::try_from(*to).unwrap_or(u32::MAX);
+                const SATURATE: u32 = u32::MAX;
+                let idx_u32 = u32::try_from(*to).unwrap_or(SATURATE);
                 let variant = variants
                     .iter()
                     .find(|v| v.index == idx_u32)

@@ -163,7 +163,9 @@ mod tests {
             ..FfiItemConfig::with_url("https://example.com/a.mp3".to_string())
         };
         let item = AudioPlayerItem::new(config);
-        let returned = item.headers().expect("headers set");
+        let returned = item
+            .headers()
+            .expect("BUG: headers were just set on the config above");
         assert_eq!(returned.get("Authorization"), Some(&"Bearer token".into()));
     }
 }

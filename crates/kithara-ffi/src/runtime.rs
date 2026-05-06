@@ -16,7 +16,7 @@ pub(crate) static FFI_RUNTIME: LazyLock<runtime::Handle> = LazyLock::new(|| {
     let rt = RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
-        .expect("failed to create FFI tokio runtime");
+        .expect("BUG: tokio current-thread runtime build cannot fail in normal startup");
     let handle = rt.handle().clone();
     kithara_platform::spawn(move || {
         // Keep the runtime alive indefinitely so its `Handle` remains valid.

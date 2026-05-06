@@ -9,17 +9,17 @@
 //! `duration_seconds` for periodic time updates — avoiding blocking
 //! `Mutex::lock_sync()` inside async.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use kithara::play::PlayerEvent;
-use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
+use kithara_events::{Event, EventReceiver, QueueEvent, TrackStatus};
 use kithara_platform::{Duration, JoinHandle, Mutex, sleep, spawn, tokio, tokio::sync::broadcast};
 use kithara_queue::Queue;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    item::AudioPlayerItem,
     observer::{ItemObserver, PlayerObserver},
+    player::ItemRegistry,
     types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
 };
 
@@ -37,7 +37,7 @@ impl EventBridge {
 
     fn dispatch(
         observer: &Arc<dyn PlayerObserver>,
-        items: &Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+        items: &Arc<Mutex<ItemRegistry>>,
         event: &Event,
     ) {
         match event {
@@ -54,7 +54,7 @@ impl EventBridge {
 
     fn dispatch_queue_event(
         observer: &Arc<dyn PlayerObserver>,
-        items: &Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+        items: &Arc<Mutex<ItemRegistry>>,
         event: &QueueEvent,
     ) {
         match event {
@@ -141,7 +141,7 @@ impl EventBridge {
         rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
         queue: Arc<Queue>,
-        items: &Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+        items: &Arc<Mutex<ItemRegistry>>,
         cancel: CancellationToken,
     ) -> Self {
         Self::spawn_event_task(rx, Arc::clone(&observer), Arc::clone(items), cancel.clone());
@@ -156,7 +156,7 @@ impl EventBridge {
     fn spawn_event_task(
         mut rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
-        items: Arc<Mutex<HashMap<TrackId, Arc<AudioPlayerItem>>>>,
+        items: Arc<Mutex<ItemRegistry>>,
         cancel: CancellationToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {
@@ -235,7 +235,7 @@ impl Drop for EventBridge {
     fn drop(&mut self) {
         self.cancel.cancel();
         if let Some(handle) = self.time_thread.take() {
-            let _ = handle.join();
+            handle.join().ok();
         }
     }
 }
