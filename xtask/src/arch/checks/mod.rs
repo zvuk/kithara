@@ -12,9 +12,12 @@ use super::config::ArchConfig;
 use crate::common::{scope::Scope, violation::Violation};
 
 pub(crate) mod arc_clone_hotspots;
+pub(crate) mod args_wrapper_struct;
 pub(crate) mod canonical_types;
 pub(crate) mod direction;
 pub(crate) mod duplicate_error_enums;
+pub(crate) mod field_always_constant;
+pub(crate) mod field_always_equals_other_field;
 pub(crate) mod field_passthrough;
 pub(crate) mod file_density;
 pub(crate) mod file_size;
@@ -38,6 +41,7 @@ pub(crate) mod shared_state;
 pub(crate) mod single_impl_size;
 pub(crate) mod single_word_filenames;
 pub(crate) mod stray_rs_files;
+pub(crate) mod struct_index;
 pub(crate) mod trait_impl_count;
 
 pub(crate) struct Context<'a> {
@@ -55,6 +59,7 @@ pub(crate) trait Check {
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(direction::Direction),
+        Box::new(args_wrapper_struct::ArgsWrapperStruct),
         Box::new(canonical_types::CanonicalTypes),
         Box::new(arc_clone_hotspots::ArcCloneHotspots),
         Box::new(fn_arg_count::FnArgCount),
@@ -68,6 +73,8 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(pub_struct_open_fields::PubStructOpenFields),
         Box::new(trait_impl_count::TraitImplCount),
         Box::new(duplicate_error_enums::DuplicateErrorEnums),
+        Box::new(field_always_constant::FieldAlwaysConstant),
+        Box::new(field_always_equals_other_field::FieldAlwaysEqualsOtherField),
         Box::new(field_passthrough::FieldPassthrough),
         Box::new(stray_rs_files::StrayRsFiles),
         Box::new(file_size::FileSize),

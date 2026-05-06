@@ -114,6 +114,12 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) multi_constructor: MultiConstructorThreshold,
     #[serde(default)]
     pub(crate) field_passthrough: FieldPassthroughThreshold,
+    #[serde(default)]
+    pub(crate) args_wrapper_struct: ArgsWrapperStructThreshold,
+    #[serde(default)]
+    pub(crate) field_always_constant: FieldAlwaysConstantThreshold,
+    #[serde(default)]
+    pub(crate) field_always_equals_other_field: FieldAlwaysEqualsOtherFieldThreshold,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +153,75 @@ impl Default for MultiConstructorThreshold {
 pub(crate) struct FieldPassthroughThreshold {
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArgsWrapperStructThreshold {
+    #[serde(default = "default_args_wrapper_min_fields")]
+    pub(crate) min_fields: usize,
+    #[serde(default = "default_args_wrapper_min_call_sites")]
+    pub(crate) min_call_sites: usize,
+    #[serde(default)]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for ArgsWrapperStructThreshold {
+    fn default() -> Self {
+        Self {
+            min_fields: default_args_wrapper_min_fields(),
+            min_call_sites: default_args_wrapper_min_call_sites(),
+            exempt_files: Vec::new(),
+        }
+    }
+}
+
+fn default_args_wrapper_min_fields() -> usize {
+    5
+}
+
+fn default_args_wrapper_min_call_sites() -> usize {
+    2
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FieldAlwaysConstantThreshold {
+    #[serde(default = "default_field_always_min_call_sites")]
+    pub(crate) min_call_sites: usize,
+    #[serde(default)]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for FieldAlwaysConstantThreshold {
+    fn default() -> Self {
+        Self {
+            min_call_sites: default_field_always_min_call_sites(),
+            exempt_files: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FieldAlwaysEqualsOtherFieldThreshold {
+    #[serde(default = "default_field_always_min_call_sites")]
+    pub(crate) min_call_sites: usize,
+    #[serde(default)]
+    pub(crate) exempt_files: Vec<String>,
+}
+
+impl Default for FieldAlwaysEqualsOtherFieldThreshold {
+    fn default() -> Self {
+        Self {
+            min_call_sites: default_field_always_min_call_sites(),
+            exempt_files: Vec::new(),
+        }
+    }
+}
+
+fn default_field_always_min_call_sites() -> usize {
+    3
 }
 
 #[derive(Debug, Deserialize)]
