@@ -229,7 +229,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
 struct SeekRecoveryContext {
     position: Duration,
     epoch: u64,
-    fallback_offset: u64,
+    recreate_offset: u64,
     seek_mode: SeekMode,
     warn_msg: &'static str,
     fail_ctx: &'static str,
@@ -528,7 +528,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         false
     }
 
-    fn apply_anchor_seek_with_fallback(
+    fn apply_aligned_anchor_seek(
         &mut self,
         request: SeekRequest,
         anchor: SourceSeekAnchor,
@@ -641,7 +641,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 SeekRecoveryContext {
                     position,
                     epoch,
-                    fallback_offset: self.session.base_offset,
+                    recreate_offset: self.session.base_offset,
                     seek_mode: SeekMode::Direct {
                         target_byte: self.estimate_target_byte(position),
                     },
@@ -769,7 +769,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 SeekRecoveryContext {
                     position,
                     epoch,
-                    fallback_offset: anchor.byte_offset,
+                    recreate_offset: anchor.byte_offset,
                     seek_mode: SeekMode::Anchor(anchor),
                     warn_msg: "seek anchor path: decoder seek failed, recreating decoder",
                     fail_ctx: "seek anchor path: exact decoder seek failed",
@@ -1092,7 +1092,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// the source's init segment range; mid-segment recreate would land
     /// on bytes with no ftyp/RIFF/EBML header and the factory would fail
     /// silently. Mid-stream-decodable containers (MPEG-ES/ADTS/FLAC/Ogg/
-    /// MPEG-TS) and unknown containers use `fallback_offset` directly.
+    /// MPEG-TS) and unknown containers use `recreate_offset` directly.
     ///
     /// Calls `fail_seek` for class (2), missing `MediaInfo`, or when an
     /// init-bearing container has no available init range. Always
@@ -1106,7 +1106,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let SeekRecoveryContext {
             position,
             epoch,
-            fallback_offset,
+            recreate_offset,
             seek_mode,
             warn_msg,
             fail_ctx,
@@ -1161,7 +1161,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             // current codec — no cross-codec transition happens here —
             // so the codec-change fallback to the anchor byte is off.
             false,
-            fallback_offset,
+            recreate_offset,
         ) else {
             self.fail_seek(
                 request,
@@ -1893,7 +1893,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
         let request = applying.request;
         let applied = match applying.mode {
-            SeekMode::Anchor(anchor) => self.apply_anchor_seek_with_fallback(request, anchor),
+            SeekMode::Anchor(anchor) => self.apply_aligned_anchor_seek(request, anchor),
             SeekMode::Direct { .. } => self.apply_seek_from_decoder(request),
         };
         if applied {

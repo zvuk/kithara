@@ -38,12 +38,12 @@ pub(crate) struct Slot<N> {
     pub node: N,
     pub service_class: ServiceClass,
     pub id: SlotId,
-    pub terminal: bool,
+    pub is_terminal: bool,
 }
 
 impl<N: Node> Slot<N> {
     fn is_removable(&self) -> bool {
-        self.terminal
+        self.is_terminal
     }
 }
 
@@ -68,7 +68,10 @@ struct SchedulerInner<N> {
 
 impl<N> SchedulerInner<N> {
     fn shutdown(&self) {
-        let _ = self.cmd_tx.send_sync(SchedulerCmd::Shutdown);
+        if self.cmd_tx.send_sync(SchedulerCmd::Shutdown).is_err() {
+            // Scheduler thread already exited / channel closed — cancel
+            // and wake remain idempotent guarantees for any clones.
+        }
         self.cancel.cancel();
         self.wake.wake();
     }
@@ -96,10 +99,14 @@ impl<N: Node> SchedulerHandle<N> {
 
     /// Update scheduling priority for a node.
     pub(crate) fn set_service_class(&self, id: SlotId, class: ServiceClass) {
-        let _ = self
+        if self
             .inner
             .cmd_tx
-            .send_sync(SchedulerCmd::SetServiceClass(id, class));
+            .send_sync(SchedulerCmd::SetServiceClass(id, class))
+            .is_err()
+        {
+            warn!(slot_id = id, "set_service_class: scheduler channel closed");
+        }
         self.inner.wake.wake();
     }
 
@@ -110,7 +117,14 @@ impl<N: Node> SchedulerHandle<N> {
 
     /// Remove a node by ID.
     pub(crate) fn unregister(&self, id: SlotId) {
-        let _ = self.inner.cmd_tx.send_sync(SchedulerCmd::Unregister(id));
+        if self
+            .inner
+            .cmd_tx
+            .send_sync(SchedulerCmd::Unregister(id))
+            .is_err()
+        {
+            warn!(slot_id = id, "unregister: scheduler channel closed");
+        }
         self.inner.wake.wake();
     }
 
@@ -260,7 +274,7 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
             r
         } else {
             warn!(slot_id = slot.id, "scheduler: node panicked");
-            slot.terminal = true;
+            slot.is_terminal = true;
             slot.node.on_cancel();
             TickResult::Done
         };
@@ -274,7 +288,7 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
         }
 
         if result == TickResult::Done {
-            slot.terminal = true;
+            slot.is_terminal = true;
         }
 
         best = match (best, result) {
@@ -354,7 +368,7 @@ fn register_slot<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool, id
         id,
         node,
         service_class,
-        terminal: false,
+        is_terminal: false,
     });
     *needs_reorder = true;
 }
@@ -555,7 +569,7 @@ mod tests {
                     service_class: ServiceClass::Idle,
                 },
                 service_class: ServiceClass::Idle,
-                terminal: false,
+                is_terminal: false,
             },
             Slot {
                 id: 2,
@@ -563,7 +577,7 @@ mod tests {
                     service_class: ServiceClass::Audible,
                 },
                 service_class: ServiceClass::Audible,
-                terminal: false,
+                is_terminal: false,
             },
             Slot {
                 id: 3,
@@ -571,7 +585,7 @@ mod tests {
                     service_class: ServiceClass::Warm,
                 },
                 service_class: ServiceClass::Warm,
-                terminal: false,
+                is_terminal: false,
             },
         ];
 

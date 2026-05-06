@@ -1057,7 +1057,11 @@ where
         byte_pool: &kithara_bufpool::BytePool,
     ) -> Result<Stream<T>, DecodeError> {
         let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
-        let _ = stream.read(&mut probe_buf);
+        // Best-effort sniff: probe failures fall through; the
+        // subsequent seek-to-0 surfaces any underlying I/O error.
+        if let Err(e) = stream.read(&mut probe_buf) {
+            tracing::debug!(?e, "probe_stream_blocking: probe read failed");
+        }
         stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
         Ok(stream)
     }

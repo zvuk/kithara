@@ -1,9 +1,8 @@
-use std::time::Duration;
-
 use kithara_decode::{
     Decoder, GaplessMode, GaplessOutput, GaplessTrimmer, PcmChunk, codec_priming_frames,
     duration_for_frames,
 };
+use kithara_platform::time::Duration;
 use kithara_stream::MediaInfo;
 
 /// Iterator over one pending gapless output batch.

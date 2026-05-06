@@ -13,7 +13,7 @@ pub mod audio {
 
     impl<S> Audio<S> {
         #[must_use]
-        pub fn test_has_current_chunk(&self) -> bool {
+        pub fn has_current_chunk(&self) -> bool {
             self.current_chunk.is_some()
         }
 
@@ -42,7 +42,7 @@ pub mod audio {
 
     #[must_use]
     pub fn has_current_chunk<S>(audio: &Audio<S>) -> bool {
-        audio.test_has_current_chunk()
+        audio.has_current_chunk()
     }
 
     #[must_use]

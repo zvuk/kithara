@@ -2,6 +2,8 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub use crate::runtime::ServiceClass;
+
 /// Unique identifier for a track registered with a shared worker.
 pub(crate) type TrackId = u64;
 
@@ -17,8 +19,6 @@ impl TrackIdGen {
         self.0.fetch_add(1, Ordering::Relaxed)
     }
 }
-
-pub use crate::runtime::ServiceClass;
 
 #[cfg(test)]
 mod tests {

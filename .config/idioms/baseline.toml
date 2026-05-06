@@ -1072,7 +1072,6 @@ schema_version = 1
 [retry_fallback]
 "crates/kithara-assets/src/index/flush.rs:574:failed_flush_keeps_dirty_for_retry" = 1
 "crates/kithara-assets/src/index/flush.rs:577:attempts" = 1
-"crates/kithara-audio/src/pipeline/source.rs:489:apply_anchor_seek_with_fallback" = 1
 "crates/kithara-audio/src/pipeline/track_fsm.rs:110:attempt" = 1
 "crates/kithara-audio/src/pipeline/track_fsm.rs:59:attempt" = 1
 "crates/kithara-events/src/audio.rs:80:attempts" = 1
