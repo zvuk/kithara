@@ -136,7 +136,7 @@ impl HlsScheduler {
         AbrDecision {
             reason,
             target_variant_index: current_variant,
-            changed: false,
+            did_change: false,
         }
     }
 

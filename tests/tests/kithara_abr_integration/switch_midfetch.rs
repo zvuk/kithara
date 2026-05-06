@@ -45,7 +45,7 @@ fn manual_switch_wins_over_in_flight_auto_decisions() {
     };
     let d = state.decide(&view, now);
     // Apply partially: simulate "in-flight" segment for variant d.target.
-    assert!(d.changed);
+    assert!(d.did_change);
 
     // Before the controller can apply, the user flips to Manual(0).
     state.set_mode(AbrMode::Manual(0)).unwrap();

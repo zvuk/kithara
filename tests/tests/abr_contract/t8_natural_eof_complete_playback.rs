@@ -152,7 +152,7 @@ async fn t8_natural_eof_complete_playback(
     // No ABR commit and no midstream switch are expected on the
     // baseline path. `record_abr_variant_committed` only fires for
     // controller-driven transitions through `AbrController::tick` ⇒
-    // `decision.changed`; the seed `set_initial_abr_mode(Manual(_))`
+    // `decision.did_change`; the seed `set_initial_abr_mode(Manual(_))`
     // bypasses that path, so the probe count is exactly zero. Any
     // non-zero count here means the controller spuriously transitioned
     // a variant during a no-set_mode test — a contract violation.

@@ -116,7 +116,7 @@ impl AbrController {
             .saturating_add(1);
         AbrPeerId::new(
             NonZeroU64::new(raw)
-                .unwrap_or_else(|| NonZeroU64::new(1).expect("1 is always non-zero")),
+                .unwrap_or_else(|| NonZeroU64::new(1).expect("BUG: 1 is statically non-zero")),
         )
     }
 

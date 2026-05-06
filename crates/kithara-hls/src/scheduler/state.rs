@@ -259,7 +259,7 @@ impl HlsScheduler {
                 &AbrDecision {
                     target_variant_index: variant,
                     reason: AbrReason::ManualOverride,
-                    changed: true,
+                    did_change: true,
                 },
                 Instant::now(),
             );

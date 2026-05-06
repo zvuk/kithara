@@ -46,7 +46,7 @@ fn run_profile(profile: &[u64]) -> usize {
         };
         let now = base + StdDuration::from_millis((i as u64) + 1);
         let d = state.decide(&view, now);
-        if d.changed {
+        if d.did_change {
             state.apply(&d, now);
         }
     }

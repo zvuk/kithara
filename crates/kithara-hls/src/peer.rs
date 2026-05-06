@@ -1548,7 +1548,7 @@ mod tests {
             &AbrDecision {
                 target_variant_index: 1,
                 reason: AbrReason::DownSwitch,
-                changed: true,
+                did_change: true,
             },
             PlatformInstant::now(),
         );
@@ -1882,7 +1882,7 @@ mod tests {
             &AbrDecision {
                 target_variant_index: 1,
                 reason: AbrReason::UpSwitch,
-                changed: true,
+                did_change: true,
             },
             PlatformInstant::now(),
         );

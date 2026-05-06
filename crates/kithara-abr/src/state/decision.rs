@@ -20,7 +20,7 @@ use crate::controller::AbrSettings;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AbrDecision {
     pub reason: AbrReason,
-    pub changed: bool,
+    pub did_change: bool,
     pub target_variant_index: usize,
 }
 
@@ -106,7 +106,7 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
 pub(super) fn decision(current: usize, target: usize, reason: AbrReason) -> AbrDecision {
     AbrDecision {
         reason,
-        changed: target != current,
+        did_change: target != current,
         target_variant_index: target,
     }
 }
@@ -134,13 +134,16 @@ fn adjusted_throughput(estimate_bps: u64, safety_factor: f64) -> f64 {
 }
 
 fn candidate_variant(sorted: &[(usize, u64)], adjusted_bps: f64) -> Option<(usize, u64)> {
+    // Saturating sentinel: a u64 → f64 conversion failure here is
+    // unreachable for any realistic bandwidth and only filters the
+    // variant out of the candidate set.
+    const SATURATE: f64 = f64::INFINITY;
     let best_under = sorted
         .iter()
-        .filter(|(_, bw)| bw.to_f64().unwrap_or(f64::INFINITY) <= adjusted_bps)
+        .filter(|(_, bw)| bw.to_f64().unwrap_or(SATURATE) <= adjusted_bps)
         .max_by_key(|(_, bw)| *bw);
-    best_under
-        .or_else(|| sorted.first())
-        .map(|(idx, bw)| (*idx, *bw))
+    let lowest = sorted.first();
+    best_under.or(lowest).map(|(idx, bw)| (*idx, *bw))
 }
 
 #[derive(Clone, Copy)]
@@ -155,10 +158,11 @@ struct SwitchContext<'a> {
 }
 
 fn up_switch(ctx: SwitchContext<'_>) -> AbrDecision {
+    const SATURATE: f64 = f64::INFINITY;
     let buffer_ok = ctx
         .buffer_ahead
         .is_none_or(|b| b >= ctx.settings.min_buffer_for_up_switch);
-    let candidate_bw_f = ctx.candidate_bw.to_f64().unwrap_or(f64::INFINITY);
+    let candidate_bw_f = ctx.candidate_bw.to_f64().unwrap_or(SATURATE);
     let headroom_ok = ctx.adjusted_bps >= candidate_bw_f * ctx.settings.up_hysteresis_ratio;
     if buffer_ok && headroom_ok {
         return decision(ctx.current, ctx.candidate_idx, AbrReason::UpSwitch);
@@ -167,10 +171,11 @@ fn up_switch(ctx: SwitchContext<'_>) -> AbrDecision {
 }
 
 fn down_switch(ctx: SwitchContext<'_>) -> Option<AbrDecision> {
+    const SATURATE: f64 = f64::INFINITY;
     let urgent = ctx
         .buffer_ahead
         .is_some_and(|b| b <= ctx.settings.urgent_downswitch_buffer);
-    let current_bw_f = ctx.current_bw.to_f64().unwrap_or(f64::INFINITY);
+    let current_bw_f = ctx.current_bw.to_f64().unwrap_or(SATURATE);
     let margin_ok = ctx.adjusted_bps <= current_bw_f * ctx.settings.down_hysteresis_ratio;
     if urgent {
         return Some(decision(

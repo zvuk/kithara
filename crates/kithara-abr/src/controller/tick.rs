@@ -126,7 +126,7 @@ impl AbrController {
         };
         let decision = state.decide(&view, now);
 
-        if decision.changed {
+        if decision.did_change {
             let current_before = state.current_variant_index();
             state.apply(&decision, now);
             if let Some(ref bus) = bus {

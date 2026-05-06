@@ -61,7 +61,7 @@ fn decide_locked_never_switches() {
     let settings = settings_fast();
     let view = view_with_bw(Some(10_000_000), &variants, &settings);
     let d = state.decide(&view, Instant::now());
-    assert!(!d.changed);
+    assert!(!d.did_change);
     assert_eq!(d.reason, AbrReason::Locked);
 }
 
@@ -98,7 +98,7 @@ fn decide_warmup_blocks_switch() {
     };
     let d = state.decide(&view, Instant::now());
     assert_eq!(d.reason, AbrReason::Warmup);
-    assert!(!d.changed);
+    assert!(!d.did_change);
 }
 
 #[kithara::test]
@@ -120,7 +120,7 @@ fn decide_no_estimate_stays_put() {
     let view = view_with_bw(None, &variants, &settings);
     let d = state.decide(&view, Instant::now());
     assert_eq!(d.reason, AbrReason::NoEstimate);
-    assert!(!d.changed);
+    assert!(!d.did_change);
 }
 
 #[kithara::test]
@@ -186,7 +186,7 @@ fn decide_buffer_too_low_for_upswitch() {
     };
     let d = state.decide(&view, Instant::now());
     assert_eq!(d.reason, AbrReason::BufferTooLowForUpSwitch);
-    assert!(!d.changed);
+    assert!(!d.did_change);
 }
 
 #[kithara::test]
@@ -195,7 +195,7 @@ fn apply_updates_current_variant_and_timestamp() {
     state.apply(
         &AbrDecision {
             reason: AbrReason::UpSwitch,
-            changed: true,
+            did_change: true,
             target_variant_index: 2,
         },
         Instant::now(),
@@ -209,7 +209,7 @@ fn apply_noop_when_same_variant() {
     state.apply(
         &AbrDecision {
             reason: AbrReason::AlreadyOptimal,
-            changed: false,
+            did_change: false,
             target_variant_index: 1,
         },
         Instant::now(),
@@ -261,7 +261,7 @@ fn min_switch_interval_prevents_oscillation() {
         settings: &settings,
     };
     let d1 = state.decide(&view, now);
-    assert!(d1.changed);
+    assert!(d1.did_change);
     state.apply(&d1, now);
     let d2 = state.decide(&view, now + Duration::from_secs(1));
     assert_eq!(d2.reason, AbrReason::MinInterval);
@@ -294,7 +294,7 @@ fn locked_state_rejects_switch(
     for i in 0..50u64 {
         let v = view_with_bw(Some(base_bps + i * step_bps), &variants, &settings);
         let d = state.decide(&v, now + StdDuration::from_millis(i));
-        assert!(!d.changed, "locked state decided to switch at iter {i}");
+        assert!(!d.did_change, "locked state decided to switch at iter {i}");
     }
     assert_eq!(state.current_variant_index(), locked_variant);
 }
@@ -441,7 +441,7 @@ proptest! {
                 Op::Tick => {
                     let view = view_with_bw(current_bps, &variants, &settings);
                     let d = state.decide(&view, now);
-                    if d.changed {
+                    if d.did_change {
                         state.apply(&d, now);
                     }
                 }
@@ -469,7 +469,7 @@ proptest! {
             {
                 let view = view_with_bw(current_bps, &variants, &settings);
                 let d = state.decide(&view, now);
-                if d.changed {
+                if d.did_change {
                     state.apply(&d, now);
                 }
                 prop_assert_eq!(
@@ -500,13 +500,13 @@ proptest! {
             let now = base_now + StdDuration::from_millis((tick as u64).saturating_add(1) * 10);
             let view = view_with_bw(Some(cumulative_bps), &variants, &settings);
             let d = state.decide(&view, now);
-            if d.changed && d.reason == AbrReason::DownSwitch {
+            if d.did_change && d.reason == AbrReason::DownSwitch {
                 prop_assert!(
                     false,
                     "DownSwitch must not fire under monotonic bandwidth: bps={cumulative_bps}",
                 );
             }
-            if d.changed {
+            if d.did_change {
                 state.apply(&d, now);
             }
             let current = state.current_variant_index();

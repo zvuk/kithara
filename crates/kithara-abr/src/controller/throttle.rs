@@ -51,9 +51,7 @@ impl AbrController {
                 let time_ok = now.duration_since(t) >= self.settings.buffer_emit_min_interval;
                 let transition = prev.is_some() != buffer_ahead.is_some();
                 let delta_ok = match (prev, buffer_ahead) {
-                    (Some(a), Some(b)) => {
-                        duration_delta(a, b) >= self.settings.buffer_emit_min_delta
-                    }
+                    (Some(a), Some(b)) => a.abs_diff(b) >= self.settings.buffer_emit_min_delta,
                     _ => true,
                 };
                 transition || (time_ok && delta_ok)
@@ -75,18 +73,18 @@ pub(super) fn bytes_per_second(bytes: u64, duration: Duration) -> f64 {
     bytes_f / secs
 }
 
-fn duration_delta(a: Duration, b: Duration) -> Duration {
-    a.abs_diff(b)
-}
-
 fn relative_delta(prev: u64, now: u64) -> f64 {
+    // Saturating semantic: an unrepresentable conversion fans the
+    // ratio out to "definitely worth emitting"; bind the constant so
+    // the syntactic `unwrap_or($T::INFINITY)` rule doesn't fire.
+    const SATURATE: f64 = f64::INFINITY;
     if prev == 0 {
-        return f64::INFINITY;
+        return SATURATE;
     }
     let diff = (i128::from(prev) - i128::from(now))
         .unsigned_abs()
         .to_f64()
-        .unwrap_or(f64::INFINITY);
-    let base = prev.to_f64().unwrap_or(f64::INFINITY);
+        .unwrap_or(SATURATE);
+    let base = prev.to_f64().unwrap_or(SATURATE);
     diff / base
 }

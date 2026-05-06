@@ -2,7 +2,11 @@
 //! not advanced within `incoherence_deadline` after a variant switch.
 
 use kithara_events::AbrEvent;
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    time::{Duration, Instant},
+    tokio,
+    tokio::time::sleep,
+};
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -75,9 +79,9 @@ impl AbrController {
 
         let deadline = self.settings.incoherence_deadline;
         let controller_weak = self.self_weak.clone();
-        kithara_platform::tokio::spawn(async move {
-            kithara_platform::tokio::select! {
-                () = kithara_platform::tokio::time::sleep(deadline) => {}
+        tokio::spawn(async move {
+            tokio::select! {
+                () = sleep(deadline) => {}
                 () = token.cancelled() => return,
             }
             let Some(ctrl) = controller_weak.upgrade() else {

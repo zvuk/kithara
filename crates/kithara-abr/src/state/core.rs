@@ -4,7 +4,10 @@ use std::sync::{
 };
 
 use kithara_events::{AbrMode, AbrVariant};
-use kithara_platform::{Mutex, time::Instant};
+use kithara_platform::{
+    Mutex,
+    time::{Duration, Instant},
+};
 use num_traits::ToPrimitive;
 
 use super::{decision::AbrDecision, error::AbrError, view::AbrView};
@@ -78,16 +81,12 @@ impl AbrState {
         self.record_switch(now);
     }
 
-    pub(super) fn can_switch_now(
-        &self,
-        now: Instant,
-        min_interval: kithara_platform::time::Duration,
-    ) -> bool {
+    pub(super) fn can_switch_now(&self, now: Instant, min_interval: Duration) -> bool {
         let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
         if nanos == Self::NO_SWITCH {
             return true;
         }
-        let last = self.reference_instant + kithara_platform::time::Duration::from_nanos(nanos);
+        let last = self.reference_instant + Duration::from_nanos(nanos);
         now.duration_since(last) >= min_interval
     }
 
@@ -103,11 +102,14 @@ impl AbrState {
     }
 
     fn instant_to_nanos(&self, instant: Instant) -> u64 {
+        // Saturate u128 → u64 at the type max; an Instant past 2^64 ns
+        // (~584 years) is unreachable in practice.
+        const SATURATE: u64 = u64::MAX;
         let nanos = instant
             .saturating_duration_since(self.reference_instant)
             .as_nanos()
             .to_u64()
-            .unwrap_or(u64::MAX);
+            .unwrap_or(SATURATE);
         nanos.max(1)
     }
 
