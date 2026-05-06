@@ -898,17 +898,19 @@ fn commit_cached_segment(state: &mut HlsState, c: &CachedCommit<'_>) {
     };
 
     let cursor_before = state.scheduler.current_segment_index();
-    state
-        .scheduler
-        .commit_fetch_inline(crate::scheduler::CommitFetch {
+    state.scheduler.commit_fetch_inline(
+        crate::coord::SegmentRequest {
             variant: c.variant,
-            seg_idx: c.seg_idx,
+            segment_index: c.seg_idx,
             seek_epoch: c.seek_epoch,
+        },
+        crate::scheduler::LoadedSegmentBody {
             media: &meta,
             init_len,
             init_url,
             duration: Duration::ZERO,
-        });
+        },
+    );
     state.scheduler.advance_current_segment_index(c.seg_idx + 1);
     debug!(
         variant = c.variant,
@@ -1030,16 +1032,19 @@ fn build_fetch_cmd(
             // duplicate `FetchCmd` and race two writers (see
             // `skip_planned_segment` in-flight protection).
             if let Ok(ref meta) = meta {
-                st.scheduler
-                    .commit_fetch_inline(crate::scheduler::CommitFetch {
+                st.scheduler.commit_fetch_inline(
+                    crate::coord::SegmentRequest {
                         variant,
-                        seg_idx,
+                        segment_index: seg_idx,
                         seek_epoch,
+                    },
+                    crate::scheduler::LoadedSegmentBody {
                         media: meta,
                         init_len,
                         init_url: init_url.clone(),
                         duration: start.elapsed(),
-                    });
+                    },
+                );
             }
             st.scheduler
                 .runtime

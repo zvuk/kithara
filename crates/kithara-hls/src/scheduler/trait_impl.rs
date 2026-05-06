@@ -1,13 +1,14 @@
-use std::sync::atomic::Ordering;
+use std::{sync::atomic::Ordering, time::Duration};
 
 use kithara_events::HlsEvent;
 use tracing::{debug, trace};
+use url::Url;
 
 use super::{
     helpers::is_stale_epoch,
     state::{HlsScheduler, VERBOSE_SEGMENT_LIMIT},
 };
-use crate::{coord::SegmentRequest, ids::VariantIndex};
+use crate::{coord::SegmentRequest, ids::VariantIndex, loading::SegmentMeta};
 
 impl Drop for HlsScheduler {
     fn drop(&mut self) {
@@ -16,33 +17,39 @@ impl Drop for HlsScheduler {
     }
 }
 
-/// All metadata needed to commit a completed segment fetch into the
-/// scheduler: identity (variant + segment + epoch), the media body
-/// (`SegmentMeta`), and any matching init segment plus duration.
-pub(crate) struct CommitFetch<'a> {
-    pub(crate) variant: VariantIndex,
-    pub(crate) seg_idx: usize,
-    pub(crate) seek_epoch: kithara_events::SeekEpoch,
-    pub(crate) media: &'a crate::loading::SegmentMeta,
+/// Outcome of a completed segment fetch ready to be committed: the media
+/// body, the optional init segment, and how long the fetch took.
+///
+/// Produced where the fetch finishes (`HlsPeer::on_complete`, the cached
+/// commit path) and consumed by [`HlsScheduler::commit_fetch_inline`].
+pub(crate) struct LoadedSegmentBody<'a> {
+    pub(crate) media: &'a SegmentMeta,
     pub(crate) init_len: u64,
-    pub(crate) init_url: Option<url::Url>,
-    pub(crate) duration: std::time::Duration,
+    pub(crate) init_url: Option<Url>,
+    pub(crate) duration: Duration,
 }
 
 impl HlsScheduler {
-    /// Commit a completed fetch with individual arguments.
+    /// Commit a completed fetch into the scheduler's segment index and
+    /// clear the matching pending demand.
     ///
     /// Used by `HlsPeer::on_complete` — the Downloader-driven path.
-    pub(crate) fn commit_fetch_inline(&mut self, ctx: CommitFetch<'_>) {
-        let CommitFetch {
+    pub(crate) fn commit_fetch_inline(
+        &mut self,
+        request: SegmentRequest,
+        body: LoadedSegmentBody<'_>,
+    ) {
+        let SegmentRequest {
             variant,
-            seg_idx,
             seek_epoch,
+            segment_index: seg_idx,
+        } = request;
+        let LoadedSegmentBody {
             media,
             init_len,
             init_url,
             duration,
-        } = ctx;
+        } = body;
         if self.reject_stale_fetch(variant, seg_idx, seek_epoch) {
             return;
         }
@@ -64,11 +71,7 @@ impl HlsScheduler {
             );
         }
 
-        self.coord.clear_pending_segment_request(SegmentRequest {
-            variant,
-            seek_epoch,
-            segment_index: seg_idx,
-        });
+        self.coord.clear_pending_segment_request(request);
 
         self.commit_segment(variant, seg_idx, media, init_len, init_url, duration);
     }

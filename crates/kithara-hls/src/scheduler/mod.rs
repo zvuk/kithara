@@ -23,4 +23,4 @@ mod size_map;
 mod trait_impl;
 
 pub(crate) use state::HlsScheduler;
-pub(crate) use trait_impl::CommitFetch;
+pub(crate) use trait_impl::LoadedSegmentBody;
