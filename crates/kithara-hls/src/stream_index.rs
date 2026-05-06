@@ -950,15 +950,11 @@ mod tests {
         // Actual sizes jitter around baseline; seg 0 carries the init.
         let actual_0_to_8: Vec<(u64, u64)> = (0..9_usize)
             .map(|i| {
-                #[expect(
-                    clippy::cast_possible_wrap,
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    reason = "jitter fits in i64/u64"
-                )]
-                let jitter = (i as i64 - 4) * 2_000;
-                let media = u64::try_from((baseline_size as i64 + jitter).max(1_000))
-                    .unwrap_or(baseline_size);
+                let jitter = (i64::try_from(i).expect("BUG: 0..9 fits in i64") - 4) * 2_000;
+                let baseline_signed =
+                    i64::try_from(baseline_size).expect("BUG: baseline_size fits in i64");
+                let media =
+                    u64::try_from((baseline_signed + jitter).max(1_000)).unwrap_or(baseline_size);
                 if i == 0 { (627, media) } else { (0, media) }
             })
             .collect();
@@ -973,15 +969,12 @@ mod tests {
         let actual_22_to_26: Vec<(usize, u64, u64)> = (22..=26)
             .enumerate()
             .map(|(i, seg_idx)| {
-                #[expect(
-                    clippy::cast_possible_wrap,
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    reason = "jitter fits in i64/u64"
-                )]
-                let jitter = (i as i64 - 2) * 1_500;
-                let media = u64::try_from((baseline_size as i64 + jitter).max(1_000))
-                    .unwrap_or(baseline_size);
+                let jitter =
+                    (i64::try_from(i).expect("BUG: enumerate index fits in i64") - 2) * 1_500;
+                let baseline_signed =
+                    i64::try_from(baseline_size).expect("BUG: baseline_size fits in i64");
+                let media =
+                    u64::try_from((baseline_signed + jitter).max(1_000)).unwrap_or(baseline_size);
                 let init = if seg_idx == 22 { 627 } else { 0 };
                 (seg_idx, init, media)
             })

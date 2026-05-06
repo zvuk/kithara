@@ -189,13 +189,9 @@ mod tests {
                 url: Url::parse(&format!("https://h.example/seg-{i}.m4s"))
                     .expect("valid segment URL"),
                 duration: Duration::from_secs(4),
-                key: None,
             })
             .collect();
         let variant = VariantState {
-            id: 0,
-            uri: Url::parse("https://h.example/v0.m3u8").expect("valid uri"),
-            bandwidth: Some(128_000),
             codec: Some(kithara_stream::AudioCodec::AacLc),
             container: Some(kithara_stream::ContainerFormat::Fmp4),
             init_url: Some(Url::parse("https://h.example/init.mp4").expect("valid init")),

@@ -7,7 +7,7 @@
 //! decryption contexts via an optional [`KeyManager`]. No dependency
 //! on `FetchManager` — all the segment loading state lives here.
 
-use std::{io::Error as IoError, sync::Arc, time::Duration};
+use std::{io::Error as IoError, sync::Arc};
 
 use dashmap::DashMap;
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
@@ -36,7 +36,6 @@ type DecryptInputs<'a> = (&'a Arc<KeyManager>, [u8; AES_KEY_LEN], Url);
 /// Segment metadata (data is on disk, not in memory).
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
-    pub duration: Option<Duration>,
     pub url: Url,
     pub len: u64,
 }
@@ -99,11 +98,7 @@ impl SegmentLoader {
     ///
     /// # Errors
     /// Returns an error when commit fails or zero bytes were written.
-    pub fn complete_media(
-        &self,
-        prepared: &PreparedMedia,
-        bytes_written: u64,
-    ) -> HlsResult<SegmentMeta> {
+    pub fn complete_media(prepared: &PreparedMedia, bytes_written: u64) -> HlsResult<SegmentMeta> {
         if bytes_written == 0 && prepared.cached_len.is_none() {
             return Err(HlsError::SegmentNotFound(format!(
                 "0 bytes downloaded for {}",
@@ -123,7 +118,6 @@ impl SegmentLoader {
         Ok(SegmentMeta {
             len,
             url: prepared.url.clone(),
-            duration: prepared.duration,
         })
     }
 
@@ -191,7 +185,6 @@ impl SegmentLoader {
 
         Ok(SegmentMeta {
             url: init_url,
-            duration: None,
             len: init_len,
         })
     }
@@ -307,7 +300,6 @@ impl SegmentLoader {
         if let Some(len) = self.backend.final_len(&key) {
             return Ok(PreparedMedia {
                 url: segment_url,
-                duration: Some(segment.duration),
                 cached_len: Some(len),
                 resource: None,
             });
@@ -326,7 +318,6 @@ impl SegmentLoader {
             let len = final_len.unwrap_or(0);
             return Ok(PreparedMedia {
                 url: segment_url,
-                duration: Some(segment.duration),
                 cached_len: Some(len),
                 resource: None,
             });
@@ -340,7 +331,6 @@ impl SegmentLoader {
 
         Ok(PreparedMedia {
             url: segment_url,
-            duration: Some(segment.duration),
             cached_len: None,
             resource: Some(res),
         })
@@ -489,8 +479,6 @@ enum CachedOrPending {
 pub struct PreparedMedia {
     /// Set when cached — no fetch needed.
     pub cached_len: Option<u64>,
-    /// Segment duration from the playlist.
-    pub duration: Option<Duration>,
     /// Open resource for writing. `None` when cached.
     pub resource: Option<AssetResource<DecryptContext>>,
     /// Segment URL.

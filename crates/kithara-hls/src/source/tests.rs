@@ -56,10 +56,10 @@ type LoaderPair = (
 );
 
 fn make_test_loader_pair(
-    cancel: CancellationToken,
+    cancel: &CancellationToken,
     backend: kithara_assets::AssetStore<DecryptContext>,
 ) -> LoaderPair {
-    let handle = test_peer_handle(&cancel);
+    let handle = test_peer_handle(cancel);
     let cache = crate::loading::PlaylistCache::new(
         backend.clone(),
         handle.clone(),
@@ -85,7 +85,7 @@ fn test_fetch_manager(cancel: CancellationToken) -> LoaderPair {
         .cancel(cancel.clone())
         .process_fn(noop_drm)
         .build();
-    make_test_loader_pair(cancel, backend)
+    make_test_loader_pair(&cancel, backend)
 }
 
 fn test_disk_fetch_manager(cancel: CancellationToken, root_dir: &Path) -> LoaderPair {
@@ -101,7 +101,7 @@ fn test_disk_fetch_manager(cancel: CancellationToken, root_dir: &Path) -> Loader
         .cancel(cancel.clone())
         .process_fn(noop_drm)
         .build();
-    make_test_loader_pair(cancel, backend)
+    make_test_loader_pair(&cancel, backend)
 }
 
 fn parsed_variants(count: usize) -> Vec<VariantStream> {
@@ -118,15 +118,9 @@ fn parsed_variants(count: usize) -> Vec<VariantStream> {
 }
 
 fn make_variant_state_with_segments(id: usize, segments: usize) -> VariantState {
-    const BANDWIDTH: u64 = 128_000;
     const SEGMENT_SECS: u64 = 4;
     let base = Url::parse("https://example.com/").expect("valid base URL");
     VariantState {
-        id,
-        uri: base
-            .join(&format!("v{id}.m3u8"))
-            .expect("valid playlist URL"),
-        bandwidth: Some(BANDWIDTH),
         codec: None,
         container: None,
         init_url: None,
@@ -137,7 +131,6 @@ fn make_variant_state_with_segments(id: usize, segments: usize) -> VariantState 
                     .join(&format!("seg-{id}-{index}.m4s"))
                     .expect("valid segment URL"),
                 duration: Duration::from_secs(SEGMENT_SECS),
-                key: None,
             })
             .collect(),
         size_map: None,
@@ -990,7 +983,7 @@ fn read_media_segment_checked_reads_active_resource_in_ephemeral_mode() {
         init_len: 0,
         init_url: None,
     };
-    let mut buf = vec![0u8; media_len as usize];
+    let mut buf = vec![0u8; usize::try_from(media_len).expect("BUG: media_len > usize::MAX")];
 
     let read = source
         .read_media_segment_checked(&seg, 0, &mut buf)
@@ -1023,7 +1016,7 @@ fn read_at_does_not_advance_timeline_position() {
     );
     source.coord.timeline().set_byte_position(0);
 
-    let mut buf = vec![0u8; media_len as usize];
+    let mut buf = vec![0u8; usize::try_from(media_len).expect("BUG: media_len > usize::MAX")];
     let read = source.read_at(0, &mut buf).unwrap();
 
     assert_eq!(read, nz_bytes(10));
@@ -1113,7 +1106,10 @@ fn wait_range_allows_short_read_when_range_crosses_known_eof() {
     let media_key = ResourceKey::from_url(&media_url);
     let media_res = &source.backend.acquire_resource(&media_key).unwrap();
     media_res
-        .write_at(0, &vec![0u8; SEG_SIZE as usize])
+        .write_at(
+            0,
+            &vec![0u8; usize::try_from(SEG_SIZE).expect("BUG: SEG_SIZE > usize::MAX")],
+        )
         .unwrap();
     media_res.commit(Some(SEG_SIZE)).unwrap();
 
@@ -1235,7 +1231,11 @@ fn hls_phase_ready_when_range_ready() {
     // Write actual resource data so ephemeral backend reports it as present.
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
     let res = &source.backend.acquire_resource(&key).unwrap();
-    res.write_at(0, &vec![0u8; SEG_SIZE as usize]).unwrap();
+    res.write_at(
+        0,
+        &vec![0u8; usize::try_from(SEG_SIZE).expect("BUG: SEG_SIZE > usize::MAX")],
+    )
+    .unwrap();
     res.commit(Some(SEG_SIZE)).unwrap();
 
     assert_eq!(source.phase_at(0..RANGE_END), SourcePhase::Ready);
@@ -1251,7 +1251,11 @@ fn hls_phase_waiting_when_active_segment_does_not_cover_requested_range() {
 
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
     let res = &source.backend.acquire_resource(&key).unwrap();
-    res.write_at(0, &vec![0u8; WRITTEN as usize]).unwrap();
+    res.write_at(
+        0,
+        &vec![0u8; usize::try_from(WRITTEN).expect("BUG: WRITTEN > usize::MAX")],
+    )
+    .unwrap();
 
     assert_eq!(source.phase_at(0..WRITTEN), SourcePhase::Ready);
     assert_eq!(source.phase_at(0..RANGE_END), SourcePhase::Waiting);
@@ -1319,7 +1323,11 @@ fn hls_phase_parameterless_ready_when_segment_loaded() {
     // Write actual resource data so ephemeral backend reports it as present.
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
     let res = &source.backend.acquire_resource(&key).unwrap();
-    res.write_at(0, &vec![0u8; SEG_SIZE as usize]).unwrap();
+    res.write_at(
+        0,
+        &vec![0u8; usize::try_from(SEG_SIZE).expect("BUG: SEG_SIZE > usize::MAX")],
+    )
+    .unwrap();
     res.commit(Some(SEG_SIZE)).unwrap();
 
     assert_eq!(source.phase(), SourcePhase::Ready);
@@ -1334,7 +1342,11 @@ fn hls_phase_parameterless_waiting_when_segment_only_partially_streamed() {
 
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
     let res = &source.backend.acquire_resource(&key).unwrap();
-    res.write_at(0, &vec![0u8; WRITTEN as usize]).unwrap();
+    res.write_at(
+        0,
+        &vec![0u8; usize::try_from(WRITTEN).expect("BUG: WRITTEN > usize::MAX")],
+    )
+    .unwrap();
 
     assert_eq!(source.phase(), SourcePhase::Waiting);
 }

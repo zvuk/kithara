@@ -206,16 +206,10 @@ fn make_variant_state_with_codec(
                 .join(&format!("v{id}/seg-{index}.m4s"))
                 .expect("valid segment URL"),
             duration: Duration::from_secs(4),
-            key: None,
         })
         .collect();
 
     VariantState {
-        id,
-        uri: base
-            .join(&format!("v{id}.m3u8"))
-            .expect("valid playlist URL"),
-        bandwidth: Some(128_000),
         codec,
         container: None,
         init_url: None,

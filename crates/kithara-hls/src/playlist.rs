@@ -8,10 +8,7 @@ use kithara_platform::{RwLock, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
-use crate::{
-    ids::{SegmentIndex, VariantIndex},
-    parsing::SegmentKey,
-};
+use crate::ids::{SegmentIndex, VariantIndex};
 
 // Types
 
@@ -20,8 +17,6 @@ use crate::{
 pub struct SegmentState {
     /// Duration of the segment.
     pub duration: Duration,
-    /// Encryption key for this segment (if encrypted).
-    pub key: Option<SegmentKey>,
     /// Segment index within the variant's media playlist.
     pub index: SegmentIndex,
     /// Absolute URL of the segment.
@@ -47,8 +42,6 @@ pub struct VariantSizeMap {
 /// Per-variant parsed data.
 #[derive(Debug)]
 pub struct VariantState {
-    /// Advertised bandwidth in bits per second.
-    pub bandwidth: Option<u64>,
     /// Audio codec (parsed from CODECS attribute).
     pub codec: Option<AudioCodec>,
     /// Container format (detected from segment URIs).
@@ -57,10 +50,6 @@ pub struct VariantState {
     pub init_url: Option<Url>,
     /// Size map (populated after HEAD requests or first download).
     pub size_map: Option<VariantSizeMap>,
-    /// Absolute URL of the variant's media playlist.
-    pub uri: Url,
-    /// Variant index in the master playlist.
-    pub id: VariantIndex,
     /// Parsed segments from the media playlist.
     pub segments: Vec<SegmentState>,
 }
@@ -121,7 +110,6 @@ impl PlaylistState {
                             index,
                             url,
                             duration: seg.duration,
-                            key: seg.key.clone(),
                         }
                     })
                     .collect();
@@ -131,9 +119,6 @@ impl PlaylistState {
                     container,
                     init_url,
                     segments,
-                    id: variant.id.0,
-                    uri: media_url.clone(),
-                    bandwidth: variant.bandwidth,
                     size_map: None,
                 }
             })
@@ -439,17 +424,13 @@ mod tests {
                 .join(&format!("segment-{index}.m4s"))
                 .expect("valid segment URL"),
             duration: Duration::from_secs(4),
-            key: None,
         }
     }
 
-    fn make_variant(id: usize, num_segments: usize) -> VariantState {
+    fn make_variant(_id: usize, num_segments: usize) -> VariantState {
         let segments: Vec<SegmentState> = (0..num_segments).map(make_segment).collect();
         VariantState {
-            id,
             segments,
-            uri: base_url().join("variant.m3u8").expect("valid variant URL"),
-            bandwidth: Some(128_000),
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Fmp4),
             init_url: Some(base_url().join("init.mp4").expect("valid init URL")),
@@ -749,16 +730,11 @@ mod tests {
                     byte_range_len: None,
                 },
             ],
-            target_duration: Some(Duration::from_secs(4)),
             init_segment: Some(InitSegment {
                 uri: "init.mp4".to_string(),
                 key: None,
             }),
-            media_sequence: 0,
-            end_list: true,
-            current_key: None,
             detected_container: Some(ContainerFormat::Fmp4),
-            allow_cache: true,
         };
 
         let media_playlists = vec![(media_url, playlist)];

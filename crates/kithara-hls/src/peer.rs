@@ -883,7 +883,7 @@ fn commit_cached_segment(state: &mut HlsState, c: &CachedCommit<'_>) {
     let init_len = init_meta.as_ref().map_or(0, |m| m.len);
     let init_url = init_meta.map(|m| m.url);
 
-    let meta = match state.loader.complete_media(c.prepared, c.cached_len) {
+    let meta = match SegmentLoader::complete_media(c.prepared, c.cached_len) {
         Ok(m) => m,
         Err(e) => {
             state
@@ -1012,14 +1012,7 @@ fn build_fetch_cmd(
                 }
                 return;
             }
-            let loader = {
-                let guard = state_arc.lock_sync();
-                let Some(ref st) = *guard else {
-                    return;
-                };
-                Arc::clone(&st.loader)
-            };
-            let meta = loader.complete_media(&prepared, bytes_written);
+            let meta = SegmentLoader::complete_media(&prepared, bytes_written);
             let mut guard = state_arc.lock_sync();
             let Some(ref mut st) = *guard else {
                 return;
@@ -1103,11 +1096,6 @@ mod tests {
     fn make_variant_state(id: usize) -> VariantState {
         let base = Url::parse("https://example.com/").expect("valid base URL");
         VariantState {
-            id,
-            uri: base
-                .join(&format!("v{id}.m3u8"))
-                .expect("valid playlist URL"),
-            bandwidth: Some(128_000),
             codec: None,
             container: None,
             init_url: None,
@@ -1118,7 +1106,6 @@ mod tests {
                         .join(&format!("seg-{id}-{index}.m4s"))
                         .expect("valid segment URL"),
                     duration: Duration::from_secs(4),
-                    key: None,
                 })
                 .collect(),
             size_map: None,
@@ -1215,8 +1202,11 @@ mod tests {
             .backend
             .acquire_resource(&key)
             .expect("acquire");
-        res.write_at(0, &vec![0u8; media_len as usize])
-            .expect("write");
+        res.write_at(
+            0,
+            &vec![0u8; usize::try_from(media_len).expect("BUG: media_len > usize::MAX")],
+        )
+        .expect("write");
         res.commit(None).expect("commit");
 
         state.scheduler.segments.lock_sync().commit_segment(
@@ -1571,12 +1561,11 @@ mod tests {
         let mut cx = Context::from_waker(&waker);
 
         let (demand_segment, demand_variant_override) = match process_demand(&mut state, &mut cx) {
-            DemandResult::ResetAndPend => (None, None),
             DemandResult::Demand {
                 segment,
                 variant_override,
             } => (Some(segment), variant_override),
-            DemandResult::None => (None, None),
+            DemandResult::ResetAndPend | DemandResult::None => (None, None),
         };
 
         let (old_variant, variant) = resolve_variant(&mut state.scheduler, demand_variant_override);
@@ -1900,12 +1889,11 @@ mod tests {
         let mut cx = Context::from_waker(&waker);
 
         let (demand_segment, demand_variant_override) = match process_demand(&mut state, &mut cx) {
-            DemandResult::ResetAndPend => (None, None),
             DemandResult::Demand {
                 segment,
                 variant_override,
             } => (Some(segment), variant_override),
-            DemandResult::None => (None, None),
+            DemandResult::ResetAndPend | DemandResult::None => (None, None),
         };
 
         let (old_variant, variant) = resolve_variant(&mut state.scheduler, demand_variant_override);
@@ -2012,7 +2000,9 @@ mod tests {
             let st = guard.as_mut().expect("state must be initialized");
             st.scheduler.cursor.reopen_fill(20, 23);
             st.scheduler.in_flight_segments.insert((0, 22));
-            st.scheduler.coord.timeline().seek_epoch()
+            let epoch = st.scheduler.coord.timeline().seek_epoch();
+            drop(guard);
+            epoch
         };
         assert_eq!(
             captured_seek_epoch, 0,
@@ -2033,11 +2023,12 @@ mod tests {
                 .expect("acquire resource");
             let prepared = crate::loading::segment_loader::PreparedMedia {
                 url: url.clone(),
-                duration: Some(Duration::from_secs(4)),
                 cached_len: None,
                 resource: Some(res),
             };
-            build_fetch_cmd(st, &state_arc, 0, 22, captured_seek_epoch, prepared, false)
+            let cmd = build_fetch_cmd(st, &state_arc, 0, 22, captured_seek_epoch, prepared, false);
+            drop(guard);
+            cmd
         };
         let on_complete = cmd
             .on_complete
@@ -2063,7 +2054,9 @@ mod tests {
             st.scheduler.active_seek_epoch = new_epoch;
             st.scheduler.in_flight_segments.clear();
             st.scheduler.reset_cursor(10);
-            st.scheduler.current_segment_index()
+            let cursor = st.scheduler.current_segment_index();
+            drop(guard);
+            cursor
         };
         assert_eq!(
             cursor_after_seek, 10,
@@ -2082,7 +2075,9 @@ mod tests {
         let cursor_after_stale_callback = {
             let guard = state_arc.lock_sync();
             let st = guard.as_ref().expect("state must be initialized");
-            st.scheduler.current_segment_index()
+            let cursor = st.scheduler.current_segment_index();
+            drop(guard);
+            cursor
         };
 
         assert!(
