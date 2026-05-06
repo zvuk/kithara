@@ -82,10 +82,23 @@ fn emit(idx: &WorkspaceStructIndex, min_call_sites: usize, out: &mut Vec<Violati
 /// Return the shared expression string when *every* site assigns the same
 /// expression to `field`. `None` if expressions differ, the field is missing
 /// from any site, or there are no sites.
+///
+/// Two no-information patterns are filtered out:
+///
+/// 1. Shorthand `X { field }` desugars to `X { field: field }` — every site
+///    "agrees" textually but the value really comes from a same-named local.
+/// 2. Trivial defaults — `T::default()`, `Default::default()`, `Vec::new()`,
+///    `HashMap::new()`, `HashSet::new()`. These mean "no per-site value", and
+///    flagging them just nags the caller to write `..Default::default()`,
+///    which the caller may already have a reason not to do (e.g. the type
+///    has no `Default` for the rest of its fields).
 fn constant_value(field: &str, sites: &[&LiteralSite]) -> Option<String> {
     let mut shared: Option<&str> = None;
     for site in sites {
         let value = site.field_exprs.get(field)?;
+        if is_no_information_expr(value, field) {
+            return None;
+        }
         match shared {
             None => shared = Some(value.as_str()),
             Some(prev) if prev == value.as_str() => {}
@@ -93,6 +106,19 @@ fn constant_value(field: &str, sites: &[&LiteralSite]) -> Option<String> {
         }
     }
     shared.map(str::to_string)
+}
+
+fn is_no_information_expr(expr: &str, field: &str) -> bool {
+    if expr == field {
+        return true;
+    }
+    let trimmed = expr.replace(' ', "");
+    trimmed == "Default::default()"
+        || trimmed == "Vec::new()"
+        || trimmed == "HashMap::new()"
+        || trimmed == "HashSet::new()"
+        || trimmed.ends_with("::default()")
+        || trimmed.ends_with("::new()")
 }
 
 #[cfg(test)]
@@ -189,16 +215,29 @@ mod tests {
     }
 
     #[test]
-    fn shorthand_counts_as_same_expression() {
-        // `X { a }` is sugar for `X { a: a }`. If the same variable name is
-        // used at every site (intentional or accidental), expressions match.
+    fn shorthand_is_no_information_skipped() {
+        // `X { a }` desugars to `X { a: a }` — every site agrees textually
+        // but the value really comes from a same-named local. Filtered out.
         let src = r#"
             pub(crate) struct E { id: u32, kind: u32 }
             fn a() -> E { let id = 0; E { id, kind: 1 } }
             fn b() -> E { let id = 0; E { id, kind: 2 } }
             fn c() -> E { let id = 0; E { id, kind: 3 } }
         "#;
-        let ks = keys(src, 3);
-        assert!(ks.iter().any(|k| k.ends_with("E::id")), "{ks:?}");
+        assert_eq!(count(src, 3), 0);
+    }
+
+    #[test]
+    fn trivial_default_skipped() {
+        // `T::default()` / `Default::default()` / `Vec::new()` / similar are
+        // "no per-site value" — flagging them just nags the caller to write
+        // `..Default::default()`. Filter them out.
+        let src = r#"
+            pub(crate) struct E { items: Vec<u32>, cfg: Cfg, kind: u32 }
+            fn a() -> E { E { items: Vec::new(), cfg: Cfg::default(), kind: 1 } }
+            fn b() -> E { E { items: Vec::new(), cfg: Cfg::default(), kind: 2 } }
+            fn c() -> E { E { items: Vec::new(), cfg: Cfg::default(), kind: 3 } }
+        "#;
+        assert_eq!(count(src, 3), 0);
     }
 }

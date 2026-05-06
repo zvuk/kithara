@@ -617,6 +617,26 @@ struct TaggedPriorityPeer {
     url: Url,
 }
 
+impl TaggedPriorityPeer {
+    fn new(
+        tag: PeerTag,
+        timeline: crate::Timeline,
+        url: Url,
+        cmds: usize,
+        completion_counter: &Arc<AtomicUsize>,
+        completion_log: &Arc<Mutex<Vec<(PeerTag, usize)>>>,
+    ) -> Self {
+        Self {
+            tag,
+            timeline,
+            url,
+            remaining: Mutex::new(cmds),
+            completion_counter: Arc::clone(completion_counter),
+            completion_log: Arc::clone(completion_log),
+        }
+    }
+}
+
 impl Abr for TaggedPriorityPeer {}
 impl Peer for TaggedPriorityPeer {
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
@@ -696,25 +716,25 @@ async fn active_peer_completes_before_preload_under_contention() {
 
     let timeline_active = crate::Timeline::new();
     timeline_active.set_playing(true);
-    let active = Arc::new(TaggedPriorityPeer {
-        timeline: timeline_active,
-        remaining: Mutex::new(CMDS_PER_PEER),
-        url: url.clone(),
-        completion_log: Arc::clone(&completion_log),
-        completion_counter: Arc::clone(&completion_counter),
-        tag: PeerTag::Active,
-    });
+    let active = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Active,
+        timeline_active,
+        url.clone(),
+        CMDS_PER_PEER,
+        &completion_counter,
+        &completion_log,
+    ));
 
     let timeline_preload = crate::Timeline::new();
     // preload stays PLAYING=false (default)
-    let preload = Arc::new(TaggedPriorityPeer {
+    let preload = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Preload,
+        timeline_preload,
         url,
-        timeline: timeline_preload,
-        remaining: Mutex::new(CMDS_PER_PEER),
-        completion_log: Arc::clone(&completion_log),
-        completion_counter: Arc::clone(&completion_counter),
-        tag: PeerTag::Preload,
-    });
+        CMDS_PER_PEER,
+        &completion_counter,
+        &completion_log,
+    ));
 
     let active_handle = dl.register(active.clone());
     let preload_handle = dl.register(preload.clone());
@@ -796,22 +816,22 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
     let completion_log = Arc::new(Mutex::new(Vec::<(PeerTag, usize)>::new()));
     let completion_counter = Arc::new(AtomicUsize::new(0));
 
-    let a = Arc::new(TaggedPriorityPeer {
-        timeline: crate::Timeline::new(),
-        remaining: Mutex::new(CMDS_PER_PEER),
-        url: url.clone(),
-        completion_log: Arc::clone(&completion_log),
-        completion_counter: Arc::clone(&completion_counter),
-        tag: PeerTag::Active,
-    });
-    let b = Arc::new(TaggedPriorityPeer {
+    let a = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Active,
+        crate::Timeline::new(),
+        url.clone(),
+        CMDS_PER_PEER,
+        &completion_counter,
+        &completion_log,
+    ));
+    let b = Arc::new(TaggedPriorityPeer::new(
+        PeerTag::Preload,
+        crate::Timeline::new(),
         url,
-        timeline: crate::Timeline::new(),
-        remaining: Mutex::new(CMDS_PER_PEER),
-        completion_log: Arc::clone(&completion_log),
-        completion_counter: Arc::clone(&completion_counter),
-        tag: PeerTag::Preload,
-    });
+        CMDS_PER_PEER,
+        &completion_counter,
+        &completion_log,
+    ));
 
     let handle_a = dl.register(a);
     let handle_b = dl.register(b);

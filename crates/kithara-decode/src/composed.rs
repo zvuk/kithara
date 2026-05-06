@@ -535,6 +535,17 @@ mod hook_tests {
         seek: Vec<DemuxSeekOutcome>,
     }
 
+    impl StubDemuxer {
+        fn with_outcomes(next: Vec<StubOutcome>, seek: Vec<DemuxSeekOutcome>) -> Self {
+            Self {
+                track: empty_track(),
+                held: Vec::new(),
+                next,
+                seek,
+            }
+        }
+    }
+
     impl Demuxer for StubDemuxer {
         fn duration(&self) -> Option<Duration> {
             None
@@ -608,16 +619,14 @@ mod hook_tests {
     #[kithara::test]
     fn next_chunk_emits_chunk_signal() {
         let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer {
-            next: vec![StubOutcome::Frame {
+        let demuxer = StubDemuxer::with_outcomes(
+            vec![StubOutcome::Frame {
                 data: vec![0u8; 4],
                 pts: Duration::ZERO,
                 duration: Duration::from_millis(20),
             }],
-            seek: Vec::new(),
-            track: empty_track(),
-            held: Vec::new(),
-        };
+            Vec::new(),
+        );
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.next_chunk().unwrap();
         assert_eq!(log.lock().unwrap().chunks, vec!["chunk"]);
@@ -626,12 +635,10 @@ mod hook_tests {
     #[kithara::test]
     fn next_chunk_emits_pending_signal() {
         let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer {
-            next: vec![StubOutcome::Pending(PendingReason::SeekPending)],
-            seek: Vec::new(),
-            track: empty_track(),
-            held: Vec::new(),
-        };
+        let demuxer = StubDemuxer::with_outcomes(
+            vec![StubOutcome::Pending(PendingReason::SeekPending)],
+            Vec::new(),
+        );
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.next_chunk().unwrap();
         assert_eq!(log.lock().unwrap().chunks, vec!["pending"]);
@@ -640,15 +647,13 @@ mod hook_tests {
     #[kithara::test]
     fn seek_emits_landed_signal() {
         let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer {
-            next: Vec::new(),
-            seek: vec![DemuxSeekOutcome::Landed {
+        let demuxer = StubDemuxer::with_outcomes(
+            Vec::new(),
+            vec![DemuxSeekOutcome::Landed {
                 landed_at: Duration::from_secs(1),
                 landed_byte: Some(123),
             }],
-            track: empty_track(),
-            held: Vec::new(),
-        };
+        );
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.seek(Duration::from_secs(1)).unwrap();
         assert_eq!(log.lock().unwrap().seeks, vec!["landed"]);
@@ -657,14 +662,12 @@ mod hook_tests {
     #[kithara::test]
     fn seek_emits_past_eof_signal() {
         let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer {
-            next: Vec::new(),
-            seek: vec![DemuxSeekOutcome::PastEof {
+        let demuxer = StubDemuxer::with_outcomes(
+            Vec::new(),
+            vec![DemuxSeekOutcome::PastEof {
                 duration: Duration::from_secs(10),
             }],
-            track: empty_track(),
-            held: Vec::new(),
-        };
+        );
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.seek(Duration::from_secs(15)).unwrap();
         assert_eq!(log.lock().unwrap().seeks, vec!["past_eof"]);

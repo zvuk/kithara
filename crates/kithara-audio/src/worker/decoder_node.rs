@@ -206,6 +206,24 @@ mod tests {
         worker::MockAudioWorkerSource,
     };
 
+    /// Build a `DecoderNode` for tests: same defaults across the whole
+    /// suite (preload after one chunk, default service class, fresh
+    /// runtime), so call sites only spell out what they vary.
+    fn test_node(
+        source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+        outlet: Outlet<Fetch<PcmChunk>>,
+        preload_notify: Arc<Notify>,
+    ) -> DecoderNode {
+        DecoderNode {
+            source,
+            outlet,
+            service_class: ServiceClass::default(),
+            preload_notify,
+            preload_chunks: 1,
+            runtime: DecoderRuntime::default(),
+        }
+    }
+
     #[kithara::test]
     fn decoder_node_eof_under_backpressure() {
         let notify = Arc::new(Notify::new());
@@ -230,14 +248,7 @@ mod tests {
             }),
         )));
 
-        let mut node = DecoderNode {
-            source,
-            outlet,
-            service_class: ServiceClass::default(),
-            preload_notify: notify,
-            preload_chunks: 1,
-            runtime: DecoderRuntime::default(),
-        };
+        let mut node = test_node(source, outlet, notify);
 
         // Tick 1: flush fails, returns Waiting
         assert_eq!(node.tick(), TickResult::Waiting);
@@ -308,14 +319,7 @@ mod tests {
                 each.call(matching!()).returns(eof_timeline.clone());
             }),
         )));
-        let mut eof_node = DecoderNode {
-            source: eof_source,
-            outlet: eof_outlet,
-            service_class: ServiceClass::default(),
-            preload_notify: Arc::clone(&notify),
-            preload_chunks: 1,
-            runtime: DecoderRuntime::default(),
-        };
+        let mut eof_node = test_node(eof_source, eof_outlet, Arc::clone(&notify));
         assert_eq!(eof_node.tick(), TickResult::Progress);
         let eof_kind = drain_marker_kind(&mut eof_node.outlet, &mut eof_inlet);
 
@@ -331,14 +335,7 @@ mod tests {
                 each.call(matching!()).returns(failed_timeline.clone());
             }),
         )));
-        let mut failed_node = DecoderNode {
-            source: failed_source,
-            outlet: failed_outlet,
-            service_class: ServiceClass::default(),
-            preload_notify: notify,
-            preload_chunks: 1,
-            runtime: DecoderRuntime::default(),
-        };
+        let mut failed_node = test_node(failed_source, failed_outlet, notify);
         let _ = failed_node.tick();
         let failed_kind = drain_marker_kind(&mut failed_node.outlet, &mut failed_inlet);
 
@@ -381,14 +378,7 @@ mod tests {
             }),
         )));
 
-        let mut node = DecoderNode {
-            source,
-            outlet,
-            service_class: ServiceClass::default(),
-            preload_notify: notify.clone(),
-            preload_chunks: 1, // We want 1 chunk to trigger preload
-            runtime: DecoderRuntime::default(),
-        };
+        let mut node = test_node(source, outlet, notify.clone());
 
         // Tick 1: flush succeeds (overflow was empty). step_track produces chunk.
         // Chunk goes to overflow because ring is full.
