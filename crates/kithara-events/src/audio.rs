@@ -2,7 +2,7 @@
 
 use kithara_platform::time::Duration;
 
-use crate::{SeekEpoch, SeekTaskId};
+use crate::SeekEpoch;
 
 /// Seek lifecycle stage used for end-to-end diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +62,6 @@ pub enum AudioEvent {
     SeekLifecycle {
         stage: SeekLifecycleStage,
         seek_epoch: SeekEpoch,
-        task_id: SeekTaskId,
         variant: Option<usize>,
         segment_index: Option<u32>,
         byte_range_start: Option<u64>,

@@ -54,4 +54,4 @@ pub use play::{
 pub use queue::{QueueEvent, TrackId, TrackStatus};
 pub use receiver::EventReceiver;
 pub use scope::BusScope;
-pub use seek::{SeekEpoch, SeekTaskId};
+pub use seek::SeekEpoch;

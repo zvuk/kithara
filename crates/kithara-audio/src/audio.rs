@@ -237,7 +237,6 @@ impl<S> Audio<S> {
         self.emit_audio_event(AudioEvent::SeekLifecycle {
             stage: SeekLifecycleStage::OutputCommitted,
             seek_epoch,
-            task_id: seek_epoch,
             variant,
             segment_index,
             byte_range_start: None,

@@ -236,12 +236,11 @@ struct SeekRecoveryContext {
 }
 
 /// All the per-event fields attached to an `AudioEvent::SeekLifecycle`,
-/// grouped so callers do not need to spell out seven optional arguments
+/// grouped so callers do not need to spell out six optional arguments
 /// at every emit site.
 #[derive(Clone, Copy)]
 struct SeekLifecycleFields {
     seek_epoch: u64,
-    task_id: u64,
     variant: Option<usize>,
     segment_index: Option<u32>,
     byte_range_start: Option<u64>,
@@ -579,7 +578,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             SeekLifecycleStage::SeekApplied,
             SeekLifecycleFields {
                 seek_epoch: epoch,
-                task_id: epoch,
                 variant,
                 segment_index,
                 byte_range_start,
@@ -935,7 +933,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn emit_seek_lifecycle(&self, stage: SeekLifecycleStage, fields: SeekLifecycleFields) {
         let SeekLifecycleFields {
             seek_epoch,
-            task_id,
             variant,
             segment_index,
             byte_range_start,
@@ -944,7 +941,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.emit_event(AudioEvent::SeekLifecycle {
             stage,
             seek_epoch,
-            task_id,
             variant,
             segment_index,
             byte_range_start,
@@ -1591,7 +1587,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 SeekLifecycleStage::SeekRequest,
                 SeekLifecycleFields {
                     seek_epoch: epoch,
-                    task_id: epoch,
                     variant,
                     segment_index,
                     byte_range_start,
@@ -1661,7 +1656,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                         SeekLifecycleStage::DecodeStarted,
                         SeekLifecycleFields {
                             seek_epoch: current_epoch,
-                            task_id: current_epoch,
                             variant: chunk.meta.variant_index,
                             segment_index: chunk.meta.segment_index,
                             byte_range_start: segment_range.as_ref().map(|range| range.start),

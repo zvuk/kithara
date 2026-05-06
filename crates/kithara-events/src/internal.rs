@@ -4,4 +4,4 @@
 pub use crate::HlsEvent;
 #[cfg(feature = "audio")]
 pub use crate::{AudioEvent, SeekLifecycleStage};
-pub use crate::{Event, EventBus, FileEvent, SeekEpoch, SeekTaskId};
+pub use crate::{Event, EventBus, FileEvent, SeekEpoch};
