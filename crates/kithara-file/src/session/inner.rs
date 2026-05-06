@@ -65,13 +65,17 @@ pub(crate) enum FilePhase {
     Complete = 2,
 }
 
-/// Immutable creation-time parameters for `FileInner::new`.
-pub(crate) struct FileInnerParams {
-    pub(crate) backend: Arc<AssetStore>,
+/// Control-plane handles shared between the source and the download driver.
+pub(crate) struct FileSourceCtx {
     pub(crate) coord: Arc<FileCoord>,
-    pub(crate) res: AssetResource,
     pub(crate) cancel: CancellationToken,
     pub(crate) bus: EventBus,
+}
+
+/// Data-plane handles describing where the file lives and how to fetch it.
+pub(crate) struct FileAssetCtx {
+    pub(crate) backend: Arc<AssetStore>,
+    pub(crate) res: AssetResource,
     pub(crate) headers: Option<Headers>,
     pub(crate) key: ResourceKey,
     pub(crate) url: Url,
@@ -80,11 +84,8 @@ pub(crate) struct FileInnerParams {
 /// Shared inner state for a `FileSource`. All fields are either immutable
 /// (set at construction) or self-synchronizing — there is no `Mutex`.
 pub(crate) struct FileInner {
-    pub(crate) backend: Arc<AssetStore>,
-    pub(crate) coord: Arc<FileCoord>,
-    pub(crate) res: AssetResource,
-    pub(crate) cancel: CancellationToken,
-    pub(crate) bus: EventBus,
+    pub(crate) source: FileSourceCtx,
+    pub(crate) asset: FileAssetCtx,
     /// Codec discovered from the HTTP `Content-Type` header on first connect.
     /// Set at most once by the download driver.
     pub(crate) content_type_codec: OnceLock<AudioCodec>,
@@ -93,35 +94,20 @@ pub(crate) struct FileInner {
     /// as fragmented mp4. Stays empty for non-mp4 files, classic mp4
     /// (no `moof` chain), or while the file is still downloading.
     pub(crate) segment_index: OnceLock<FileSegmentIndex>,
-    pub(crate) headers: Option<Headers>,
-    pub(crate) key: ResourceKey,
-    pub(crate) url: Url,
 
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.
     phase: AtomicU8,
 }
 
 impl FileInner {
-    pub(crate) fn new(params: FileInnerParams, initial_phase: FilePhase) -> Self {
-        let FileInnerParams {
-            backend,
-            coord,
-            res,
-            cancel,
-            bus,
-            headers,
-            key,
-            url,
-        } = params;
+    pub(crate) fn new(
+        source: FileSourceCtx,
+        asset: FileAssetCtx,
+        initial_phase: FilePhase,
+    ) -> Self {
         Self {
-            backend,
-            bus,
-            cancel,
-            coord,
-            headers,
-            key,
-            res,
-            url,
+            source,
+            asset,
             content_type_codec: OnceLock::new(),
             segment_index: OnceLock::new(),
             phase: AtomicU8::new(initial_phase as u8),
@@ -131,13 +117,13 @@ impl FileInner {
     /// Mark the resource failed and evict the pre-allocated cache file.
     ///
     /// Call on any terminal download error so the file is gone from disk
-    /// before the task returns — without this the clone in `FileInner.res`
+    /// before the task returns — without this the clone in `FileInner.asset.res`
     /// keeps the mmap parked in the cache directory for the full lifetime
     /// of the holding `Stream<File>`.
     pub(crate) fn fail_and_evict(&self, reason: &str) {
         self.set_phase(FilePhase::Complete);
-        self.res.fail(reason.to_string());
-        self.backend.remove_resource(&self.key);
+        self.asset.res.fail(reason.to_string());
+        self.asset.backend.remove_resource(&self.asset.key);
     }
 
     /// Lock-free FSM transition.

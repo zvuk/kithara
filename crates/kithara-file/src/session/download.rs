@@ -37,8 +37,8 @@ pub(super) async fn run_full_download(
 ) {
     inner.set_phase(FilePhase::Downloading);
 
-    let cmd = FetchCmd::get(inner.url.clone())
-        .headers(inner.headers.clone())
+    let cmd = FetchCmd::get(inner.asset.url.clone())
+        .headers(inner.asset.headers.clone())
         .with_validator(reject_html_response);
 
     let resp = match peer.execute(cmd).await {
@@ -53,7 +53,7 @@ pub(super) async fn run_full_download(
             // signal.
             let msg = e.to_string();
             inner.fail_and_evict(&msg);
-            inner.bus.publish(FileEvent::Error {
+            inner.source.bus.publish(FileEvent::Error {
                 error: FileError::Io(msg),
             });
             return;
@@ -66,9 +66,9 @@ pub(super) async fn run_full_download(
     // Stream body to resource.
     let result = stream_body_to_resource(
         resp.body,
-        &inner.res,
-        &inner.coord,
-        &inner.cancel,
+        &inner.asset.res,
+        &inner.source.coord,
+        &inner.source.cancel,
         look_ahead_bytes,
     )
     .await;
@@ -78,7 +78,7 @@ pub(super) async fn run_full_download(
             debug!(?e, "write error during full download");
             let msg = e.to_string();
             inner.fail_and_evict(&msg);
-            inner.bus.publish(FileEvent::Error {
+            inner.source.bus.publish(FileEvent::Error {
                 error: FileError::Io(msg),
             });
         }
@@ -112,7 +112,7 @@ fn process_response_headers(inner: &Arc<FileInner>, headers: &Headers) -> Option
     let cl_title = headers.get("Content-Length");
     let expected_len = cl_lower.or(cl_title).and_then(|v| v.parse::<u64>().ok());
     if let Some(len) = expected_len {
-        inner.coord.set_total_bytes(Some(len));
+        inner.source.coord.set_total_bytes(Some(len));
     }
     let ct_lower = headers.get("content-type");
     let ct_title = headers.get("Content-Type");
@@ -172,10 +172,10 @@ fn commit_full_download(inner: &Arc<FileInner>, bytes_written: u64, expected_len
     let expected = expected_len.unwrap_or(bytes_written);
 
     if bytes_written >= expected {
-        if let Err(e) = inner.res.commit(Some(bytes_written)) {
+        if let Err(e) = inner.asset.res.commit(Some(bytes_written)) {
             debug!(?e, "failed to commit file resource");
         }
-        let _ = inner.coord.take_range_request();
+        let _ = inner.source.coord.take_range_request();
         inner.set_phase(FilePhase::Complete);
         // Download completion is in `DownloaderEvent::RequestCompleted`;
         // reader-side `FileEvent::EndOfStream` fires when the reader
@@ -186,7 +186,7 @@ fn commit_full_download(inner: &Arc<FileInner>, bytes_written: u64, expected_len
             bytes_written,
             expected, "partial download, resource stays active"
         );
-        inner.bus.publish(FileEvent::Error {
+        inner.source.bus.publish(FileEvent::Error {
             error: FileError::Io(format!("incomplete: {bytes_written}/{expected} bytes")),
         });
     }
@@ -210,7 +210,7 @@ pub(super) async fn run_range_watcher(
         }
 
         while let Some(range) = coord.take_range_request() {
-            if inner.res.contains_range(range.clone()) {
+            if inner.asset.res.contains_range(range.clone()) {
                 continue;
             }
             let task_inner = Arc::clone(&inner);
@@ -225,9 +225,9 @@ pub(super) async fn run_range_watcher(
 /// Download a byte range (on-demand seek fill).
 async fn run_range_download(inner: Arc<FileInner>, peer: PeerHandle, range: Range<u64>) {
     let range_spec = RangeSpec::new(range.start, Some(range.end.saturating_sub(1)));
-    let cmd = FetchCmd::get(inner.url.clone())
+    let cmd = FetchCmd::get(inner.asset.url.clone())
         .range(Some(range_spec))
-        .headers(inner.headers.clone())
+        .headers(inner.asset.headers.clone())
         .with_validator(reject_html_response);
 
     let resp = match peer.execute(cmd).await {
@@ -235,8 +235,8 @@ async fn run_range_download(inner: Arc<FileInner>, peer: PeerHandle, range: Rang
         Err(e) => {
             // Network failure is in `DownloaderEvent::RequestFailed`;
             // mirror only the local resource teardown.
-            if !matches!(inner.res.status(), ResourceStatus::Committed { .. }) {
-                inner.res.fail(e.to_string());
+            if !matches!(inner.asset.res.status(), ResourceStatus::Committed { .. }) {
+                inner.asset.res.fail(e.to_string());
             }
             return;
         }
@@ -250,15 +250,15 @@ async fn run_range_download(inner: Arc<FileInner>, peer: PeerHandle, range: Rang
             Ok(data) => {
                 let pos = written;
                 written += data.len() as u64;
-                match inner.res.write_at(pos, &data) {
+                match inner.asset.res.write_at(pos, &data) {
                     Ok(()) => {
-                        inner.coord.set_download_pos(written);
+                        inner.source.coord.set_download_pos(written);
                     }
                     Err(e) => {
                         // If the resource was committed (full download finished
                         // while this range request was in flight), silently
                         // succeed — data is already available.
-                        if !matches!(inner.res.status(), ResourceStatus::Committed { .. }) {
+                        if !matches!(inner.asset.res.status(), ResourceStatus::Committed { .. }) {
                             debug!(?e, "range write error");
                             return;
                         }
@@ -266,8 +266,8 @@ async fn run_range_download(inner: Arc<FileInner>, peer: PeerHandle, range: Rang
                 }
             }
             Err(e) => {
-                if !matches!(inner.res.status(), ResourceStatus::Committed { .. }) {
-                    inner.res.fail(e.to_string());
+                if !matches!(inner.asset.res.status(), ResourceStatus::Committed { .. }) {
+                    inner.asset.res.fail(e.to_string());
                 }
                 return;
             }

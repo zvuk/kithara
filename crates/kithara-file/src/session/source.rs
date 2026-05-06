@@ -21,7 +21,7 @@ use url::Url;
 
 use super::{
     download::{run_full_download, run_range_watcher},
-    inner::{FileInner, FileInnerParams, FilePhase, FileStreamState},
+    inner::{FileAssetCtx, FileInner, FilePhase, FileSourceCtx, FileStreamState},
     segments::FileSegmentIndex,
 };
 use crate::{coord::FileCoord, error::SourceError as FileSourceError};
@@ -47,18 +47,18 @@ impl FileSource {
         if let Some(idx) = self.inner.segment_index.get() {
             return Some(idx);
         }
-        let total = self.inner.res.len()?;
+        let total = self.inner.asset.res.len()?;
         if total == 0 {
             return None;
         }
-        if !self.inner.res.contains_range(0..total) {
+        if !self.inner.asset.res.contains_range(0..total) {
             return None;
         }
         let total_usize = usize::try_from(total).ok()?;
         // One-shot fMP4 metadata parse — outside the realtime path,
         // so the rule's BytePool requirement does not apply here.
         let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
-        self.inner.res.read_at(0, &mut buf).ok()?;
+        self.inner.asset.res.read_at(0, &mut buf).ok()?;
         let index = FileSegmentIndex::try_build(&buf)?;
         // OnceLock::set fails if a concurrent caller raced us to the
         // store — both winners observe a valid index, so the loser
@@ -76,14 +76,16 @@ impl FileSource {
         key: ResourceKey,
     ) -> Self {
         let inner = Arc::new(FileInner::new(
-            FileInnerParams {
-                backend,
-                bus,
-                key,
-                res,
-                cancel: CancellationToken::new(),
+            FileSourceCtx {
                 coord: Arc::clone(&coord),
+                cancel: CancellationToken::new(),
+                bus,
+            },
+            FileAssetCtx {
+                backend,
+                res,
                 headers: None,
+                key,
                 url: Url::parse("file:///local")
                     .expect("BUG: hard-coded literal `file:///local` is a valid URL"),
             },
@@ -109,15 +111,17 @@ impl FileSource {
         peer: PeerHandle,
     ) -> Self {
         let inner = Arc::new(FileInner::new(
-            FileInnerParams {
-                headers,
-                url,
-                backend: Arc::clone(&state.backend),
-                bus: state.bus.clone(),
-                cancel: cancel.clone(),
+            FileSourceCtx {
                 coord: Arc::clone(&coord),
-                key: state.key.clone(),
+                cancel: cancel.clone(),
+                bus: state.bus.clone(),
+            },
+            FileAssetCtx {
+                backend: Arc::clone(&state.backend),
                 res: state.res.clone(),
+                headers,
+                key: state.key.clone(),
+                url,
             },
             FilePhase::Init,
         ));
@@ -149,7 +153,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn demand_range(&self, range: Range<u64>) {
-        if self.inner.res.contains_range(range.clone()) {
+        if self.inner.asset.res.contains_range(range.clone()) {
             return;
         }
         self.coord.request_range(range);
@@ -161,7 +165,7 @@ impl kithara_stream::Source for FileSource {
         // already report (e.g. fully cached file with a known size).
         // Both paths return `Option<u64>` of the same physical length.
         let from_coord = self.coord.total_bytes();
-        let from_res = self.inner.res.len();
+        let from_res = self.inner.asset.res.len();
         from_coord.or(from_res)
     }
 
@@ -179,13 +183,13 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        let contains = self.inner.res.contains_range(range.clone());
+        let contains = self.inner.asset.res.contains_range(range.clone());
         if contains {
             return SourcePhase::Ready;
         }
 
         let from_coord = self.coord.total_bytes();
-        let from_res = self.inner.res.len();
+        let from_res = self.inner.asset.res.len();
         let past_eof = from_coord
             .or(from_res)
             .is_some_and(|total| total > 0 && range.start >= total);
@@ -207,6 +211,7 @@ impl kithara_stream::Source for FileSource {
     ) -> kithara_stream::StreamResult<ReadOutcome> {
         let n = self
             .inner
+            .asset
             .res
             .read_at(offset, buf)
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))?;
@@ -225,7 +230,7 @@ impl kithara_stream::Source for FileSource {
 
     fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
         let hooks = super::reader::FileReaderHooks::new(
-            self.inner.bus.clone(),
+            self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.timeline().byte_position_handle(),
             self.coord.timeline().seek_epoch_handle(),
@@ -263,7 +268,7 @@ impl kithara_stream::Source for FileSource {
         }
 
         // Issue on-demand Range request when data is missing.
-        if !self.inner.res.contains_range(range.clone()) {
+        if !self.inner.asset.res.contains_range(range.clone()) {
             debug!(
                 range_start = range.start,
                 range_end = range.end,
@@ -273,6 +278,7 @@ impl kithara_stream::Source for FileSource {
         }
 
         self.inner
+            .asset
             .res
             .wait_range(range)
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))
@@ -300,7 +306,7 @@ impl kithara_stream::SegmentLayout for FileSegmentLayout {
     }
 
     fn len(&self) -> Option<u64> {
-        self.inner.res.len()
+        self.inner.asset.res.len()
     }
 
     fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor> {
