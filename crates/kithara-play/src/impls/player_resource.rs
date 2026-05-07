@@ -20,7 +20,7 @@ use crate::impls::resource::Resource;
 /// that are filled from the underlying `PcmReader`. The audio thread
 /// reads from these buffers, avoiding direct interaction with the
 /// potentially-blocking decoder on every callback.
-pub(crate) struct PlayerResource {
+pub struct PlayerResource {
     resource: Resource,
     channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
     write_len: usize,
@@ -31,7 +31,7 @@ pub(crate) struct PlayerResource {
 
 /// Result of a bounded audio-thread read from [`PlayerResource`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReadOutcome {
+pub enum ReadOutcome {
     /// The requested range was filled completely.
     Full,
     /// A strict prefix of the requested range was written.
@@ -55,7 +55,8 @@ impl PlayerResource {
     ///
     /// Allocates two channel scratch buffers from the given PCM pool,
     /// sized to `sample_rate / 5` frames (200ms worth of audio).
-    pub(crate) fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
+    #[must_use]
+    pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let spec = resource.spec();
         let channels = spec.channels as usize;
         let buffer_len = (spec.sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
@@ -92,7 +93,7 @@ impl PlayerResource {
     /// zero-fills the requested range and reports [`ReadOutcome::Full`].
     /// That silence is not a terminal condition and must not trigger track
     /// advancement.
-    pub(crate) fn read(&mut self, output: &mut [&mut [f32]], range: Range<usize>) -> ReadOutcome {
+    pub fn read(&mut self, output: &mut [&mut [f32]], range: Range<usize>) -> ReadOutcome {
         let frames_to_read = range.end - range.start;
         let mut eof_reached = self.fill_scratch(frames_to_read);
 
@@ -191,7 +192,7 @@ impl PlayerResource {
     /// Seek to the given position in seconds.
     ///
     /// Clears the internal scratch buffers on success.
-    pub(crate) fn seek(&mut self, seconds: f64) {
+    pub fn seek(&mut self, seconds: f64) {
         let position = Duration::from_secs_f64(seconds);
         match self.resource.seek(position) {
             Ok(_) => {
@@ -206,7 +207,8 @@ impl PlayerResource {
     }
 
     /// Total duration in seconds. Returns 0.0 if unknown.
-    pub(crate) fn duration(&self) -> f64 {
+    #[must_use]
+    pub fn duration(&self) -> f64 {
         self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
     }
 
@@ -214,7 +216,8 @@ impl PlayerResource {
     ///
     /// `Some(0)` means the current read drained the last buffered frame exactly;
     /// the next read will return [`ReadOutcome::Eof`].
-    pub(crate) fn frames_until_eof(&self) -> Option<usize> {
+    #[must_use]
+    pub fn frames_until_eof(&self) -> Option<usize> {
         self.eof_seen.then_some(self.write_len)
     }
 
@@ -231,319 +234,5 @@ impl PlayerResource {
     /// Update the scheduling priority hint for the shared worker.
     pub(crate) fn set_service_class(&self, class: ServiceClass) {
         self.resource.set_service_class(class);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_audio::{PcmReader, mock::TestPcmReader};
-    use kithara_decode::{PcmSpec, TrackMetadata};
-    use kithara_events::EventBus;
-    use kithara_platform::time::Duration;
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    fn mock_spec() -> PcmSpec {
-        PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        }
-    }
-
-    fn make_player_resource() -> PlayerResource {
-        let reader = TestPcmReader::new(mock_spec(), 1.0);
-        let resource = Resource::from_reader(reader, None);
-        PlayerResource::new(
-            resource,
-            Arc::from("test.mp3"),
-            &kithara_bufpool::PcmPool::default(),
-        )
-    }
-
-    struct PendingReader {
-        bus: EventBus,
-        meta: TrackMetadata,
-        spec: PcmSpec,
-    }
-
-    impl PendingReader {
-        fn new() -> Self {
-            Self {
-                bus: EventBus::default(),
-                meta: TrackMetadata::default(),
-                spec: mock_spec(),
-            }
-        }
-    }
-
-    impl PcmReader for PendingReader {
-        fn read(
-            &mut self,
-            _buf: &mut [f32],
-        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
-            Ok(kithara_audio::ReadOutcome::Pending {
-                reason: kithara_audio::PendingReason::Buffering,
-                position: Duration::ZERO,
-            })
-        }
-
-        fn read_planar<'a>(
-            &mut self,
-            _output: &'a mut [&'a mut [f32]],
-        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
-            Ok(kithara_audio::ReadOutcome::Pending {
-                reason: kithara_audio::PendingReason::Buffering,
-                position: Duration::ZERO,
-            })
-        }
-
-        fn seek(
-            &mut self,
-            position: Duration,
-        ) -> Result<kithara_audio::SeekOutcome, kithara_audio::DecodeError> {
-            Ok(kithara_audio::SeekOutcome::Landed {
-                target: position,
-                landed_at: position,
-            })
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn position(&self) -> Duration {
-            Duration::ZERO
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(1))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.meta
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
-        }
-    }
-
-    type AccessorAssertion = fn(&PlayerResource);
-
-    fn assert_buffers_initialized(pr: &PlayerResource) {
-        // Buffer size = (44100 / 5) * max(2, 2) = 8820 * 2 = 17640
-        assert!(!pr.channel_buffers[0].is_empty());
-        assert!(!pr.channel_buffers[1].is_empty());
-        assert_eq!(pr.write_len, 0);
-        assert_eq!(pr.write_pos, 0);
-    }
-
-    fn assert_duration(pr: &PlayerResource) {
-        assert!((pr.duration() - 1.0).abs() < 0.01);
-    }
-
-    #[kithara::test(tokio)]
-    #[case(assert_buffers_initialized)]
-    #[case(assert_duration)]
-    async fn resource_accessors(#[case] assert_fn: AccessorAssertion) {
-        let pr = make_player_resource();
-        assert_fn(&pr);
-    }
-
-    #[kithara::test(tokio)]
-    async fn resource_read_returns_samples() {
-        let mut pr = make_player_resource();
-        let mut left = vec![0.0f32; 128];
-        let mut right = vec![0.0f32; 128];
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let result = pr.read(&mut output, 0..128);
-        assert!(matches!(result, ReadOutcome::Full));
-        // Should have filled with 0.5 sample value
-        for &s in &left[..128] {
-            assert!((s - 0.5).abs() < f32::EPSILON);
-        }
-        for &s in &right[..128] {
-            assert!((s - 0.5).abs() < f32::EPSILON);
-        }
-    }
-
-    #[kithara::test(tokio)]
-    async fn resource_seek_clears_buffer() {
-        let mut pr = make_player_resource();
-
-        // Read some data first to fill buffers
-        let mut left = vec![0.0f32; 128];
-        let mut right = vec![0.0f32; 128];
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let _ = pr.read(&mut output, 0..128);
-
-        // Seek resets internal buffer state
-        pr.seek(0.5);
-        assert_eq!(pr.write_len, 0);
-        assert_eq!(pr.write_pos, 0);
-    }
-
-    #[kithara::test(tokio)]
-    async fn resource_zero_read_without_eof_is_not_error() {
-        let reader = PendingReader::new();
-        let resource = Resource::from_reader(reader, None);
-        let mut pr = PlayerResource::new(
-            resource,
-            Arc::from("pending"),
-            &kithara_bufpool::PcmPool::default(),
-        );
-
-        let mut left = vec![0.0f32; 128];
-        let mut right = vec![0.0f32; 128];
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-
-        let result = pr.read(&mut output, 0..128);
-        assert!(matches!(result, ReadOutcome::Full));
-    }
-
-    /// When the reader returns 0 frames and is NOT at EOF (e.g. async seek
-    /// in progress), `read()` must zero-fill the output buffers. Otherwise
-    /// the caller's stale samples from the previous audio-thread cycle leak
-    /// through, heard as a looped/glitched frame during seek.
-    #[kithara::test(tokio)]
-    async fn resource_read_zeroes_output_when_no_data_available() {
-        let reader = PendingReader::new();
-        let resource = Resource::from_reader(reader, None);
-        let mut pr = PlayerResource::new(
-            resource,
-            Arc::from("pending"),
-            &kithara_bufpool::PcmPool::default(),
-        );
-
-        // Fill output buffers with a sentinel value that simulates stale
-        // audio data left over from the previous process() cycle.
-        let mut left = vec![0.999f32; 128];
-        let mut right = vec![0.999f32; 128];
-
-        {
-            let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-            let result = pr.read(&mut output, 0..128);
-            assert!(
-                matches!(result, ReadOutcome::Full),
-                "zero-read without EOF must not error"
-            );
-        }
-
-        // Output MUST be silence — the stale sentinel must not survive.
-        let max_left = left.iter().copied().fold(0.0f32, f32::max);
-        let max_right = right.iter().copied().fold(0.0f32, f32::max);
-        assert!(
-            max_left == 0.0 && max_right == 0.0,
-            "output must be silence when reader returns 0 frames, \
-             but got max_left={max_left} max_right={max_right}"
-        );
-    }
-
-    #[kithara::test(tokio)]
-    async fn read_returns_full_when_buffer_has_data() {
-        let mut pr = make_player_resource();
-        let mut left = vec![0.0f32; 128];
-        let mut right = vec![0.0f32; 128];
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-
-        let result = pr.read(&mut output, 0..128);
-
-        assert!(matches!(result, ReadOutcome::Full));
-    }
-
-    #[kithara::test(tokio)]
-    async fn full_read_prefetches_buffered_eof() {
-        let reader = TestPcmReader::new(mock_spec(), 900.0 / 44100.0);
-        let resource = Resource::from_reader(reader, None);
-        let mut pr = PlayerResource::new(
-            resource,
-            Arc::from("short.mp3"),
-            &kithara_bufpool::PcmPool::default(),
-        );
-        let mut left = vec![0.0f32; 512];
-        let mut right = vec![0.0f32; 512];
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-
-        let result = pr.read(&mut output, 0..512);
-
-        assert!(matches!(result, ReadOutcome::Full));
-        let remaining = pr
-            .frames_until_eof()
-            .expect("BUG: EOF should be known after prefetch");
-        assert!(remaining > 0);
-        assert!(remaining < 512);
-    }
-
-    #[kithara::test(tokio)]
-    async fn read_returns_partial_when_eof_inside_buffer() {
-        let reader = TestPcmReader::new(mock_spec(), 0.01);
-        let resource = Resource::from_reader(reader, None);
-        let mut pr = PlayerResource::new(
-            resource,
-            Arc::from("short.mp3"),
-            &kithara_bufpool::PcmPool::default(),
-        );
-        let mut left = vec![0.0f32; 4096];
-        let mut right = vec![0.0f32; 4096];
-
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let result = pr.read(&mut output, 0..4096);
-
-        let frames = match result {
-            ReadOutcome::Partial(frames) => frames,
-            other => panic!("expected Partial outcome, got {other:?}"),
-        };
-        assert!(frames > 0);
-        assert!(frames < 4096);
-
-        let mut output2: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let result2 = pr.read(&mut output2, 0..4096);
-        assert!(matches!(result2, ReadOutcome::Eof));
-    }
-
-    #[kithara::test(tokio)]
-    async fn read_returns_eof_when_already_drained() {
-        let reader = TestPcmReader::new(mock_spec(), 0.01);
-        let resource = Resource::from_reader(reader, None);
-        let mut pr = PlayerResource::new(
-            resource,
-            Arc::from("short.mp3"),
-            &kithara_bufpool::PcmPool::default(),
-        );
-        let mut left = vec![0.0f32; 4096];
-        let mut right = vec![0.0f32; 4096];
-
-        loop {
-            let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-            match pr.read(&mut output, 0..4096) {
-                ReadOutcome::Full | ReadOutcome::Partial(_) => {}
-                ReadOutcome::Eof => break,
-            }
-        }
-
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let result = pr.read(&mut output, 0..4096);
-        assert!(matches!(result, ReadOutcome::Eof));
-    }
-
-    #[kithara::test(tokio)]
-    async fn read_zeros_output_on_pending_reader_returns_full() {
-        let reader = PendingReader::new();
-        let resource = Resource::from_reader(reader, None);
-        let mut pr = PlayerResource::new(
-            resource,
-            Arc::from("pending"),
-            &kithara_bufpool::PcmPool::default(),
-        );
-        let mut left = vec![0.999f32; 128];
-        let mut right = vec![0.999f32; 128];
-
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let result = pr.read(&mut output, 0..128);
-
-        assert!(matches!(result, ReadOutcome::Full));
-        assert!(left.iter().all(|sample| *sample == 0.0));
-        assert!(right.iter().all(|sample| *sample == 0.0));
     }
 }

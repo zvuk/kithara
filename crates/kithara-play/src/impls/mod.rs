@@ -9,7 +9,7 @@ pub mod player;
 pub(crate) mod player_node;
 pub(crate) mod player_notification;
 pub(crate) mod player_processor;
-pub(crate) mod player_resource;
+pub mod player_resource;
 pub(crate) mod player_track;
 pub mod resource;
 pub(crate) mod session_engine;
