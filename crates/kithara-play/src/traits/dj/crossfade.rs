@@ -3,6 +3,10 @@ use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 
 use crate::{error::PlayError, types::SlotId};
 
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CrossfadeCurve {
@@ -28,10 +32,7 @@ pub struct CrossfadeConfig {
     pub cut_outgoing_at: f32,
 }
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = CrossfadeControllerMock)
-)]
+#[kithara::mock(api = CrossfadeControllerMock)]
 pub trait CrossfadeController: MaybeSend + MaybeSync + 'static {
     fn cancel(&self) -> Result<(), PlayError>;
 

@@ -8,7 +8,8 @@
 
 use std::{io::Cursor, num::NonZeroU32};
 
-use kithara::{decode::probe_mp4_gapless, platform::time::Duration, stream::AudioCodec};
+use kithara::{decode::probe_mp4_gapless, platform::time::Duration};
+use kithara_encode::codec::AudioCodec;
 use kithara_test_utils::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{

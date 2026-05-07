@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kithara::internal::{MasterPlaylist, parse_master_playlist};
+use kithara::hls::{MasterPlaylist, parse_master_playlist};
 use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrVariant};
 use kithara_events::VariantDuration;
 use kithara_platform::time::Duration;

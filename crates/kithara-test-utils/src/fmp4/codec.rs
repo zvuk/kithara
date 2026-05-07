@@ -1,4 +1,4 @@
-use kithara_stream::AudioCodec;
+use kithara_encode::codec::AudioCodec;
 
 use crate::fmp4::bytes::{Mp4Bytes, descriptor, full_box, mp4_box};
 
@@ -128,7 +128,7 @@ fn flac_dfla(codec_config: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_stream::AudioCodec;
+    use kithara_encode::codec::AudioCodec;
 
     use super::CodecDescriptor;
     use crate::kithara;

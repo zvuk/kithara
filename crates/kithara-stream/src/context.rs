@@ -5,13 +5,15 @@
 
 #![forbid(unsafe_code)]
 
+use kithara_test_utils::kithara;
+
 use crate::Timeline;
 
 /// Read-only view of stream state for the decoder.
 ///
 /// Provides byte position and segment context. Implementations expose
 /// atomic state from Reader and Source without locking.
-#[cfg_attr(test, unimock::unimock(api = StreamContextMock))]
+#[kithara::mock(api = StreamContextMock)]
 pub trait StreamContext: Send + Sync {
     /// Current byte offset in the underlying data stream.
     fn byte_offset(&self) -> u64;
@@ -51,9 +53,7 @@ impl StreamContext for NullStreamContext {
 
 #[cfg(test)]
 mod tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
+    use kithara_test_utils::kithara;
 
     use super::*;
 

@@ -1,6 +1,7 @@
-use kithara_stream::AudioCodec;
-
-use crate::{BytesEncodeRequest, EncodeResult, EncodedBytes, EncodedTrack, PackagedEncodeRequest};
+use crate::{
+    BytesEncodeRequest, EncodeResult, EncodedBytes, EncodedTrack, PackagedEncodeRequest,
+    codec::AudioCodec,
+};
 
 /// Runtime-polymorphic audio encoder backend.
 ///
@@ -27,16 +28,4 @@ pub trait InnerEncoder: Send + Sync + 'static {
     ///
     /// Returns an error when the codec does not support packaged encoding.
     fn packaged_frame_samples(&self, codec: AudioCodec) -> EncodeResult<usize>;
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn trait_is_object_safe() {
-        fn _accepts_boxed(_: Box<dyn InnerEncoder>) {}
-    }
 }

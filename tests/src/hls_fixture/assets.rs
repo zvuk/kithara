@@ -8,7 +8,7 @@ use std::sync::Arc;
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn},
     drm::{DecryptContext, aes128_cbc_process_chunk},
-    internal::{KeyManager, PlaylistCache},
+    hls::{KeyManager, PlaylistCache},
     net::{HttpClient, NetOptions},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle};

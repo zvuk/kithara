@@ -2,10 +2,11 @@ use kithara_platform::{MaybeSend, MaybeSync};
 
 use crate::{metadata::Metadata, time::MediaTime};
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = AssetMock)
-)]
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
+#[kithara::mock(api = AssetMock)]
 pub trait Asset: MaybeSend + MaybeSync + 'static {
     fn duration(&self) -> MediaTime;
 

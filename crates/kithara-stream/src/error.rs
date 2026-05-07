@@ -92,11 +92,9 @@ pub type StreamResult<T> = Result<T, StreamError>;
 
 #[cfg(test)]
 mod tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
-
     use std::io::{Error as IoError, ErrorKind};
+
+    use kithara_test_utils::kithara;
 
     use super::*;
 

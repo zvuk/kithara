@@ -11,7 +11,15 @@
     clippy::unwrap_used
 )]
 
+pub mod abr_fixtures;
+pub mod asset_fixture;
 pub mod audio_fixture;
 pub mod hls_fixture;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod hls_test_helpers;
+pub mod memory_source;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod net_fixture;
+pub mod signal_source;
+
+pub use abr_fixtures::{abr_fast, abr_initial_mode, abr_switch_trigger};

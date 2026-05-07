@@ -11,7 +11,7 @@
 
 use kithara_events::{AbrMode, AbrReason, AbrVariant};
 use kithara_platform::time::Instant;
-use kithara_probes::IntoProbeArg;
+use kithara_test_utils::probes::IntoProbeArg;
 use num_traits::ToPrimitive;
 
 use super::{core::AbrState, view::AbrView};

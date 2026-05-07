@@ -2,10 +2,11 @@ use kithara_platform::{MaybeSend, MaybeSync};
 
 use crate::{error::PlayError, types::SlotId};
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = MixerMock)
-)]
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
+#[kithara::mock(api = MixerMock)]
 pub trait Mixer: MaybeSend + MaybeSync + 'static {
     // -- master bus --
 

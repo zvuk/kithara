@@ -10,9 +10,6 @@ description = "DRM decryption support for kithara (AES-128-CBC and extensible ke
 [lints]
 workspace = true
 
-[features]
-internal = []
-
 [package.metadata.cargo-machete]
 ignored = ["kithara-workspace-hack"]
 
@@ -30,6 +27,6 @@ url = { workspace = true }
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
-kithara-drm = { path = ".", default-features = false, features = ["internal"] }
+kithara-drm = { path = ".", default-features = false }
 kithara-test-utils = { workspace = true }
 wasm-bindgen-test = { workspace = true }

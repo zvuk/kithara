@@ -7,7 +7,7 @@ use kithara_assets::AssetStore;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_platform::Mutex;
-use kithara_probes::{IntoProbeArg, kithara};
+use kithara_test_utils::kithara;
 use tracing::trace;
 
 use crate::{
@@ -66,6 +66,26 @@ impl Drop for HlsSource {
 }
 
 impl HlsSource {
+    #[doc(hidden)]
+    #[must_use]
+    pub fn backend(&self) -> &AssetStore<DecryptContext> {
+        &self.backend
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn coord(&self) -> &Arc<HlsCoord> {
+        &self.coord
+    }
+
+    /// Override the variant fence — escape hatch for test scenarios that
+    /// bypass the auto-detection that normally sets the fence on first read.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[doc(hidden)]
+    pub fn set_variant_fence(&mut self, fence: Option<VariantIndex>) {
+        self.variant_fence = fence;
+    }
+
     pub(super) fn byte_offset_for_segment(
         &self,
         variant: VariantIndex,
@@ -83,7 +103,12 @@ impl HlsSource {
             .or(layout_offset)
     }
 
-    pub(crate) fn can_cross_variant_without_reset(
+    /// Whether a transition from `from_variant` to `to_variant` can keep
+    /// the underlying stream state intact: true only if both variants
+    /// share the same audio codec (the playlist's `variant_codec` fingerprint).
+    /// A false answer means the reader must reset on the variant boundary.
+    #[must_use]
+    pub fn can_cross_variant_without_reset(
         &self,
         from_variant: VariantIndex,
         to_variant: VariantIndex,
@@ -452,7 +477,7 @@ pub(crate) enum InitRangeOutcome {
     NoneFallback = 6,
 }
 
-impl IntoProbeArg for InitRangeOutcome {
+impl kithara_test_utils::probes::IntoProbeArg for InitRangeOutcome {
     fn into_probe_arg(self) -> u64 {
         self as u64
     }
@@ -461,11 +486,11 @@ impl IntoProbeArg for InitRangeOutcome {
 /// Result of [`HlsSource::init_segment_range_for_variant`]: the resolved
 /// byte range plus the trace fields that explain *how* it was resolved.
 ///
-/// Carries the wire payload of the
-/// `record_init_range_for_variant_outcome` USDT/tracing probe; the
-/// macro's `probe_return` mode picks `Probe::record_probe` up off the
-/// return value automatically.
-#[derive(Clone, kithara_probes::kithara::Probe)]
+/// Carries the wire payload of the `record_init_range_for_variant_outcome`
+/// tracing probe; the `probe_return` mode picks the inherent
+/// `record_probe` (from `derive(kithara::Probe)`) off the return value
+/// automatically.
+#[derive(Clone, kithara::Probe)]
 pub(crate) struct InitRangeResolution {
     pub(crate) outcome: InitRangeOutcome,
     pub(crate) variant: u64,

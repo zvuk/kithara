@@ -25,7 +25,7 @@ kithara-net = { workspace = true, optional = true }
 kithara-abr = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true, optional = true }
-kithara-test-macros = { workspace = true, optional = true }
+kithara-test-macros = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
@@ -44,7 +44,6 @@ assets = ["dep:kithara-assets", "dep:kithara-storage"]
 net = ["dep:kithara-net"]
 bufpool = []
 test-utils = [
-    "dep:kithara-test-macros",
     "kithara-audio/test-utils",
     "kithara-decode/test-utils",
     "kithara-stream/test-utils",
@@ -67,14 +66,9 @@ disable-hang-detector = [
 apple = ["kithara-audio/apple", "kithara-play/apple"]
 android = ["kithara-audio/android", "kithara-decode/android"]
 full = ["file", "hls", "assets", "net", "bufpool"]
-internal = [
-    "kithara-assets?/internal",
-    "kithara-hls?/internal",
-    "kithara-net?/internal",
-]
 
 [dev-dependencies]
-kithara = { path = ".", default-features = false, features = ["internal"] }
+kithara = { path = ".", default-features = false }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }

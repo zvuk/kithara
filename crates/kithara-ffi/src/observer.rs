@@ -10,14 +10,14 @@ use crate::types::{FfiItemEvent, FfiPlayerEvent};
 ///
 /// All calls happen on an arbitrary background thread.
 /// Platform bindings must dispatch to the UI thread as needed.
-#[cfg_attr(test, unimock::unimock(api = PlayerObserverMock))]
+#[kithara::mock(api = PlayerObserverMock)]
 #[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
 pub trait PlayerObserver: Send + Sync {
     fn on_event(&self, event: FfiPlayerEvent);
 }
 
 /// Receives item-level state changes from Rust.
-#[cfg_attr(test, unimock::unimock(api = ItemObserverMock))]
+#[kithara::mock(api = ItemObserverMock)]
 #[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
 pub trait ItemObserver: Send + Sync {
     fn on_event(&self, event: FfiItemEvent);

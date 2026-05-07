@@ -9,12 +9,12 @@ use kithara_platform::{
     thread::yield_now,
     time::{Duration, Instant},
 };
-use kithara_probes::kithara;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     MediaInfo, PendingReason, ReadOutcome, Source, SourcePhase, SourceSeekAnchor, StreamError,
     StreamResult, Timeline,
 };
+use kithara_test_utils::kithara;
 use tracing::{debug, trace};
 
 use super::{

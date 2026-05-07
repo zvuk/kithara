@@ -20,8 +20,6 @@ mod downloader;
 mod file;
 #[cfg(feature = "hls")]
 mod hls;
-#[cfg(feature = "internal")]
-pub mod internal;
 #[cfg(feature = "player")]
 mod play;
 #[cfg(feature = "queue")]

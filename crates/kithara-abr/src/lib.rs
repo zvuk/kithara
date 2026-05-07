@@ -10,10 +10,6 @@
 //! `kithara-events`; we re-export the names for convenience.
 
 #![forbid(unsafe_code)]
-#![cfg_attr(
-    any(test, feature = "internal"),
-    allow(clippy::ignored_unit_patterns, clippy::allow_attributes)
-)]
 
 mod abr;
 mod controller;
@@ -22,14 +18,11 @@ mod handle;
 mod state;
 mod types;
 
-#[cfg(feature = "internal")]
-pub mod internal;
-
 pub use abr::Abr;
-#[cfg(any(test, feature = "internal"))]
+#[cfg(test)]
 pub use abr::AbrMock;
 pub use controller::AbrController;
-#[cfg(any(test, feature = "internal"))]
+#[cfg(test)]
 pub use estimator::EstimatorMock;
 pub use estimator::{Estimator, ThroughputEstimator};
 pub use handle::AbrHandle;

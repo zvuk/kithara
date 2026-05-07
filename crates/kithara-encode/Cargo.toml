@@ -12,7 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
-kithara-stream = { workspace = true }
+derive_setters = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -21,6 +21,3 @@ kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 ffmpeg-next = { workspace = true }
 tempfile = { workspace = true }
 
-[dev-dependencies]
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }

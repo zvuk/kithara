@@ -3,6 +3,10 @@ use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 
 use crate::error::PlayError;
 
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SessionCategory {
@@ -39,10 +43,7 @@ pub struct SessionOptions {
     pub mix_with_others: bool,
 }
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = AudioSessionMock)
-)]
+#[kithara::mock(api = AudioSessionMock)]
 pub trait AudioSession: MaybeSend + MaybeSync + 'static {
     fn category(&self) -> SessionCategory;
 

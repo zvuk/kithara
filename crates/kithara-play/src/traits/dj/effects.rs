@@ -2,6 +2,10 @@ use kithara_platform::{MaybeSend, MaybeSync};
 
 use crate::{error::PlayError, types::SlotId};
 
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DjEffectKind {
@@ -17,10 +21,7 @@ pub enum DjEffectKind {
     BitCrusher,
 }
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = DjEffectMock)
-)]
+#[kithara::mock(api = DjEffectMock)]
 pub trait DjEffect: MaybeSend + MaybeSync + 'static {
     fn is_active(&self, slot: SlotId) -> bool;
 

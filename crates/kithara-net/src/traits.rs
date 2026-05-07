@@ -9,9 +9,11 @@ use bytes::Bytes;
 use futures::Stream;
 use kithara_platform::{MaybeSend, MaybeSync};
 use tokio_util::sync::CancellationToken;
-#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
-use unimock::unimock;
 use url::Url;
+
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
 
 use crate::{
     error::NetError,
@@ -81,10 +83,7 @@ impl Stream for ByteStream {
 /// Single definition for both native and wasm32 targets.
 /// On native: `MaybeSend` = `Send`, `MaybeSync` = `Sync`, futures are `Send`.
 /// On wasm32: `MaybeSend`/`MaybeSync` are blanket-implemented (no-op), futures are `!Send`.
-#[cfg_attr(
-    all(not(target_arch = "wasm32"), any(test, feature = "test-utils")),
-    unimock(api = NetMock)
-)]
+#[cfg_attr(not(target_arch = "wasm32"), kithara::mock(api = NetMock))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait Net: MaybeSend + MaybeSync {

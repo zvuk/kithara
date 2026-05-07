@@ -34,10 +34,9 @@ audio = []
 player = []
 queue = []
 downloader = ["dep:kithara-net", "dep:url"]
-internal = []
 
 [dev-dependencies]
-kithara-events = { path = ".", default-features = false, features = ["internal"] }
+kithara-events = { path = ".", default-features = false }
 kithara-test-utils = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

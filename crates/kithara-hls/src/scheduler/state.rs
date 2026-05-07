@@ -77,7 +77,7 @@ pub(crate) struct SchedulerRuntime {
 }
 
 /// HLS downloader: fetches segments and maintains ABR state.
-pub(crate) struct HlsScheduler {
+pub struct HlsScheduler {
     /// Shared ABR state — same `Arc` the owning `HlsPeer` exposes via
     /// `Abr::state()`. Lock/unlock drives the seek-no-switch invariant;
     /// `current_variant_index()` is the source of truth for the scheduler.

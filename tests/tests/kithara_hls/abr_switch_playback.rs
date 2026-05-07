@@ -12,7 +12,7 @@ use kithara::{
     events::{AbrEvent, Event, EventBus},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
-    play::internal::offline::{OfflinePlayer, resource_from_reader},
+    play::test_helpers::offline::{OfflinePlayer, resource_from_reader},
     stream::{AudioCodec, Stream},
 };
 use kithara_platform::time::{Duration, Instant, sleep};

@@ -4,10 +4,11 @@ use kithara_platform::{MaybeSend, MaybeSync, tokio::sync::broadcast};
 use crate::traits::item::PlayerItem;
 use crate::{events::PlayerEvent, types::SlotId};
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = QueuePlayerMock, type Item = unimock::Unimock;)
-)]
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
+#[kithara::mock(api = QueuePlayerMock, type Item = unimock::Unimock;)]
 pub trait QueuePlayer: MaybeSend + MaybeSync + 'static {
     type Item: PlayerItem;
 

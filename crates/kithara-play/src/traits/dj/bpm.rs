@@ -4,6 +4,10 @@ use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 
 use crate::{error::PlayError, types::SlotId};
 
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 #[derive(Clone, Debug, Derivative, PartialEq)]
 #[derivative(Default)]
 #[non_exhaustive]
@@ -15,10 +19,7 @@ pub struct BeatGrid {
     pub beats_per_bar: u8,
 }
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = BpmAnalyzerMock)
-)]
+#[kithara::mock(api = BpmAnalyzerMock)]
 pub trait BpmAnalyzer: MaybeSend + MaybeSync + 'static {
     fn analyze(&self, slot: SlotId) -> Result<BpmInfo, PlayError>;
 
@@ -37,10 +38,7 @@ pub trait BpmAnalyzer: MaybeSend + MaybeSync + 'static {
     fn tap_tempo(&self, slot: SlotId) -> Result<f64, PlayError>;
 }
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = BpmSyncMock)
-)]
+#[kithara::mock(api = BpmSyncMock)]
 pub trait BpmSync: MaybeSend + MaybeSync + 'static {
     fn is_synced(&self, slot: SlotId) -> bool;
 

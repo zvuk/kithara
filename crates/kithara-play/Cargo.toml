@@ -23,6 +23,7 @@ kithara-abr = { workspace = true }
 kithara-assets = { workspace = true, optional = true }
 kithara-net = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
+kithara-test-macros = { workspace = true }
 num-traits = { workspace = true }
 
 # Audio engine
@@ -42,8 +43,7 @@ url = { workspace = true }
 portable-atomic = { workspace = true }
 smallvec = { workspace = true }
 
-# Testing
-unimock = { workspace = true, optional = true }
+unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
@@ -61,13 +61,11 @@ backend-web-audio = ["dep:firewheel-web-audio"]
 backend-offline = []
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple"]
-test-utils = ["unimock", "backend-offline"]
-internal = []
+test-utils = ["backend-offline"]
 
 [dev-dependencies]
-kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "internal"] }
+kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "test-utils"] }
 kithara-audio = { workspace = true, features = ["test-utils"] }
-unimock = { workspace = true }
 kithara-test-utils = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

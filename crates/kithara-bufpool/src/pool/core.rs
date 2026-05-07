@@ -79,7 +79,7 @@ where
     }
 
     /// Return a buffer to the pool.
-    pub(crate) fn put(&self, value: T, shard_idx: usize) {
+    pub fn put(&self, value: T, shard_idx: usize) {
         let bytes = value.byte_size();
         let mut shard = self.shards[shard_idx].lock_sync();
         if !shard.try_put(value) {
@@ -150,10 +150,18 @@ where
     /// `usize::try_from` here is infallible in practice and the
     /// `.unwrap_or(0)` is just a non-panicking fallback.
     #[inline]
-    pub(crate) fn shard_index() -> usize {
+    #[must_use]
+    pub fn shard_index() -> usize {
         let tid = current_thread_id();
         let shards_u64 = SHARDS as u64;
         usize::try_from(tid % shards_u64).unwrap_or(0)
+    }
+
+    /// Instance-method form of [`Pool::shard_index`] for callers that
+    /// have a `&Pool` and don't want to spell out the generics.
+    #[inline]
+    pub fn shard_index_of(&self) -> usize {
+        Self::shard_index()
     }
 
     /// Get pool hit/miss statistics.

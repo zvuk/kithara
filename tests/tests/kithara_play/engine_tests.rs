@@ -1,7 +1,7 @@
 use std::sync::{Mutex as StdMutex, OnceLock};
 
 use kithara_events::EventBus;
-use kithara_play::internal::engine::*;
+use kithara_play::test_helpers::engine::*;
 use kithara_test_utils::kithara;
 
 fn make_engine() -> EngineImpl {

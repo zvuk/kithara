@@ -7,12 +7,7 @@
 //! - `dl::Downloader`: unified download orchestrator (owns `HttpClient`,
 //!   dispatches `FetchCmd` with per-chunk writer callbacks)
 
-// `deny` (not `forbid`) because `#[kithara::probe]` expansion contains
-// `usdt::provider!` which emits inline asm. The macro itself locally
-// uses `#[expect(unsafe_code)]` on the generated USDT module; production
-// code outside those expansions remains unsafe-free.
-#![deny(unsafe_code)]
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
+#![forbid(unsafe_code)]
 
 mod context;
 mod demand;
@@ -24,9 +19,6 @@ mod media_rfc6381;
 mod source;
 mod stream;
 mod timeline;
-
-#[cfg(feature = "internal")]
-pub mod internal;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;

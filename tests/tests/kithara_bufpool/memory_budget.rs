@@ -1,4 +1,4 @@
-use kithara_bufpool::{BudgetExhausted, internal::*};
+use kithara_bufpool::{BudgetExhausted, ByteBudget, Pool, SharedPool};
 use kithara_test_utils::kithara;
 
 // Tier 1: Pool-native memory budget tests
@@ -144,12 +144,12 @@ fn test_pcm_pool_budget_stable() {
 fn test_put_drops_when_shard_full() {
     // 4 shards, 4 max_buffers total => 1 per shard
     let pool = Pool::<4, Vec<u8>>::new(4, 1024);
-    let shard = shard_index(&pool);
+    let shard = pool.shard_index_of();
 
     // Force-put 5 buffers into one shard — at least 4 should be dropped
     for _ in 0..5 {
         let buf = Vec::with_capacity(64);
-        put(&pool, buf, shard);
+        pool.put(buf, shard);
     }
 
     let stats = pool.stats();

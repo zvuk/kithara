@@ -1,9 +1,10 @@
 use std::{collections::HashSet, num::NonZeroUsize, path::Path, sync::Arc};
 
 use kithara_assets::{
-    AssetResourceState, AssetStoreBuilder, EvictConfig, ProcessChunkFn, ResourceKey,
-    internal::{BytePool, DiskAssetStore, PinsIndex},
+    AssetResourceState, AssetStoreBuilder, BytePool, DiskAssetStore, EvictConfig, ProcessChunkFn,
+    ResourceKey,
 };
+use kithara_integration_tests::asset_fixture::PinsIndex;
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceExt;
 use kithara_test_utils::kithara;

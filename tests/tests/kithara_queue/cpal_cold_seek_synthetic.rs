@@ -16,7 +16,7 @@ use std::{
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, internal::init_offline_backend};
+use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, test_helpers::init_offline_backend};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{

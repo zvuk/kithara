@@ -12,7 +12,7 @@ use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     storage::ResourceExt,
 };
-use kithara_assets::{index::schema::ArchivedPinsIndexFile, internal::schema::PinsIndexFile};
+use kithara_assets::index::schema::{ArchivedPinsIndexFile, PinsIndexFile};
 use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::temp_dir;
 

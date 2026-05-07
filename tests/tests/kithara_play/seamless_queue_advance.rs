@@ -258,7 +258,7 @@ async fn create_gapless_hls_resource(
                 .segments_per_variant(AAC_GAPLESS_SEGMENTS)
                 .segment_duration_secs(AAC_GAPLESS_SEGMENT_SECS)
                 .packaged_audio(PackagedAudioRequest {
-                    codec: kithara_stream::AudioCodec::AacLc,
+                    codec: kithara_encode::codec::AudioCodec::AacLc,
                     sample_rate: GAPLESS_SAMPLE_RATE,
                     channels: GAPLESS_CHANNELS,
                     start_frame: NonZeroU32::new(

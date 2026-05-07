@@ -18,7 +18,7 @@ use std::sync::Arc;
 use kithara_events::{Event, EventReceiver, PlayerEvent};
 use kithara_platform::Mutex;
 use kithara_play::{
-    EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, internal::offline::OfflineSessionHandle,
+    EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, test_helpers::offline::OfflineSessionHandle,
 };
 
 pub(crate) struct OfflinePlayerHarness {

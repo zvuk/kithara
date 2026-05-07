@@ -31,9 +31,6 @@ pub mod thread;
 pub mod time;
 pub mod tokio;
 
-#[cfg(feature = "internal")]
-pub mod internal;
-
 pub use cancel_group::CancelGroup;
 pub use kithara_hang_detector::{HangDetector, default_timeout, hang_watchdog};
 pub use maybe_send::{BoxFuture, MaybeSend, MaybeSendFuture, MaybeSync, WasmSend};

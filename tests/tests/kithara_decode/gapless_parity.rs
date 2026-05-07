@@ -5,8 +5,9 @@ use kithara::{
         DecodeResult, Decoder, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer,
     },
     platform::time::Duration,
-    stream::{AudioCodec, ContainerFormat, MediaInfo},
+    stream::{AudioCodec as StreamAudioCodec, ContainerFormat, MediaInfo},
 };
+use kithara_encode::codec::AudioCodec;
 use kithara_test_utils::{
     HlsFixtureBuilder, SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
@@ -151,7 +152,7 @@ async fn generated_aac_elst_fixture(
 
     GaplessFixture {
         bytes,
-        media_info: MediaInfo::new(Some(AudioCodec::AacLc), Some(ContainerFormat::Fmp4))
+        media_info: MediaInfo::new(Some(StreamAudioCodec::AacLc), Some(ContainerFormat::Fmp4))
             .with_sample_rate(GAPLESS_SAMPLE_RATE)
             .with_channels(GAPLESS_CHANNELS),
         expected_visible_frames: crate::gapless_common::generated_aac_elst_visible_frames(),

@@ -26,7 +26,7 @@ use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_net::NetOptions;
-use kithara_play::internal::init_offline_backend;
+use kithara_play::test_helpers::init_offline_backend;
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{TestTempDir, Xorshift64, kithara};

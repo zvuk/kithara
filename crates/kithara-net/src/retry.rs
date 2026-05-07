@@ -7,9 +7,11 @@ use kithara_platform::{
     tokio,
 };
 use tokio_util::sync::CancellationToken;
-#[cfg(test)]
-use unimock::unimock;
 use url::Url;
+
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
 
 use crate::{
     ByteStream,
@@ -123,7 +125,7 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     }
 }
 
-#[cfg_attr(test, unimock(api = RetryPolicyMock))]
+#[kithara::mock(api = RetryPolicyMock)]
 pub trait RetryPolicyTrait: Send + Sync {
     fn delay_for_attempt(&self, attempt: u32) -> Duration;
     fn max_attempts(&self) -> u32;

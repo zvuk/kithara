@@ -30,7 +30,7 @@ use kithara::{
     assets::StoreOptions,
     play::{
         Resource, ResourceConfig,
-        internal::{
+        test_helpers::{
             init_offline_backend,
             offline::{NotificationKind, OfflinePlayer},
         },

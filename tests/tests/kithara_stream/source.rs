@@ -2,8 +2,8 @@
 
 use std::io::{self, Read, Seek, SeekFrom};
 
+use kithara_integration_tests::memory_source::{MemorySource, memory_stream, unknown_len_stream};
 use kithara_platform::time::Duration;
-use kithara_test_utils::memory_source::{MemorySource, memory_stream, unknown_len_stream};
 
 // Fixtures
 

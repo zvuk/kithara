@@ -32,10 +32,12 @@ kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
 kithara-queue = { workspace = true }
-# Optional direct dep so the `test` feature can enable `internal` on
+kithara-test-macros = { workspace = true }
+# Optional direct dep so the `test` feature can enable `test-utils` on
 # kithara-play (needed for `init_offline_backend` / offline module).
-kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "internal"] }
+kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "test-utils"] }
 bytes = { workspace = true }
+unimock = { workspace = true }
 
 tokio-util = { workspace = true }
 thiserror = { workspace = true }
@@ -56,6 +58,7 @@ default = ["backend-uniffi"]
 backend-uniffi = ["dep:uniffi"]
 apple = ["kithara/apple"]
 android = ["kithara/android"]
+test-utils = []
 # Dev-only conveniences enabled in xcframework builds for demo/staging.
 # Currently: accepts TLS certs with invalid hostname / CA / expiry.
 # Not for production use.
@@ -71,7 +74,6 @@ futures = { workspace = true }
 kithara = { workspace = true, features = ["test-utils"] }
 kithara-test-utils = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-unimock = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }

@@ -5,10 +5,11 @@ use kithara_platform::{MaybeSend, MaybeSync};
 use crate::traits::dj::crossfade::CrossfadeConfig;
 use crate::{error::PlayError, types::SlotId};
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = EngineMock)
-)]
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
+#[kithara::mock(api = EngineMock)]
 pub trait Engine: MaybeSend + MaybeSync + 'static {
     // -- lifecycle --
 

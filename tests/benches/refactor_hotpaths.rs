@@ -34,7 +34,7 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_audio::internal::{ResamplerParams, ResamplerProcessor};
+use kithara_audio::{ResamplerParams, ResamplerProcessor};
 use kithara_platform::tokio::runtime::{Builder, Runtime};
 use kithara_test_utils::TestHttpServer;
 use tempfile::TempDir;

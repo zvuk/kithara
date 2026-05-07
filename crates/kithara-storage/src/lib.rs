@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 //! `kithara-storage`
 //!
@@ -19,8 +18,6 @@ mod error;
 mod resource;
 mod unified;
 
-#[cfg(feature = "internal")]
-pub mod internal;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 

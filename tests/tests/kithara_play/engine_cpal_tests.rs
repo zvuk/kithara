@@ -12,7 +12,7 @@ use std::sync::Once;
 use kithara_events::EventBus;
 use kithara_play::{
     PlayError,
-    internal::{engine::*, init_offline_backend},
+    test_helpers::{engine::*, init_offline_backend},
 };
 use kithara_test_utils::kithara;
 

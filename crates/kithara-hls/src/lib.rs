@@ -3,12 +3,6 @@
 // when the `usdt-probes` feature is enabled. Production code outside
 // that module remains unsafe-free.
 #![deny(unsafe_code)]
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns))]
-// Without the `internal` feature many helpers are `pub` solely so the feature
-// can re-export them without widening the stable API surface. clippy then sees
-// them as `unreachable_pub`. With the feature on the items are genuinely
-// reachable and the lint does not fire — no allow is needed in that case.
-#![cfg_attr(not(feature = "internal"), allow(unreachable_pub))]
 
 //! HLS (HTTP Live Streaming) VOD implementation.
 //!
@@ -32,26 +26,37 @@
 pub mod config;
 pub mod error;
 
-#[cfg(feature = "internal")]
-pub mod internal;
-
 mod context;
 mod coord;
 mod ids;
-pub(crate) mod loading;
+mod loading;
 mod parsing;
 mod peer;
-pub(crate) mod playlist;
-pub(crate) mod scheduler;
+mod playlist;
+mod scheduler;
 mod source;
 mod stream;
-pub(crate) mod stream_index;
+mod stream_index;
+
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 
 // Public API re-exports
 
 pub use config::{HlsConfig, KeyOptions};
 pub use context::HlsStreamContext;
+pub use coord::{HlsCoord, SegmentRequest};
 pub use error::{HlsError, HlsResult};
+pub use ids::VariantIndex;
 pub use kithara_abr::AbrMode;
 pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
+pub use loading::{KeyManager, PlaylistCache, SegmentLoader};
+pub use parsing::{
+    MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
+    parse_media_playlist, variant_info_from_master,
+};
+pub use playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState};
+pub use scheduler::HlsScheduler;
+pub use source::HlsSource;
 pub use stream::Hls;
+pub use stream_index::{SegmentData, StreamIndex};

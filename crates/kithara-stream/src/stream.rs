@@ -474,13 +474,10 @@ mod tests {
     use std::collections::VecDeque;
 
     use kithara_storage::WaitOutcome;
+    use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{ReadOutcome, Source, SourcePhase};
-
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
 
     /// Test helper — script entry that maps to either `Bytes(N)` (with
     /// the source slicing actual `data`) or a terminal `Eof`. Pending

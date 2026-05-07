@@ -14,7 +14,7 @@ use kithara::{
     assets::StoreOptions,
     play::{
         Resource, ResourceConfig,
-        internal::{init_offline_backend, offline::OfflinePlayer},
+        test_helpers::{init_offline_backend, offline::OfflinePlayer},
     },
     stream::dl::{Downloader, DownloaderConfig},
 };

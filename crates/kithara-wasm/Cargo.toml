@@ -15,7 +15,7 @@ tracing = { workspace = true }
 
 [features]
 default = []
-internal = []
+test-utils = []
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-platform = { workspace = true }
@@ -34,4 +34,4 @@ kithara-wasm-macros = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-kithara-wasm = { path = ".", default-features = false, features = ["internal"] }
+kithara-wasm = { path = ".", default-features = false, features = ["test-utils"] }

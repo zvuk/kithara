@@ -230,9 +230,10 @@ pub(super) mod params {
         audio::Audio,
         decode::DecoderBackend,
         hls::{AbrMode, Hls, HlsConfig},
-        stream::{AudioCodec, Stream},
+        stream::Stream,
     };
     use kithara_audio::AudioConfig;
+    use kithara_encode::codec::AudioCodec;
     use kithara_test_utils::{
         HlsFixtureBuilder,
         fixture_protocol::{DelayRule, PackagedSignal},

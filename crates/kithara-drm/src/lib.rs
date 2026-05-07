@@ -18,9 +18,6 @@ mod decrypt;
 mod error;
 mod registry;
 
-#[cfg(feature = "internal")]
-pub mod internal;
-
 #[cfg(test)]
 mod tests;
 

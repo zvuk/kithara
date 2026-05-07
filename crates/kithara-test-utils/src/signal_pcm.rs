@@ -308,7 +308,7 @@ impl<S: signal::SignalFn> SignalPcm<S> {
     }
 
     /// Fill `buf` with PCM bytes starting at a PCM-relative byte offset.
-    pub(crate) fn render_pcm(&self, offset: usize, max_bytes: usize, buf: &mut [u8]) -> usize {
+    pub fn render_pcm(&self, offset: usize, max_bytes: usize, buf: &mut [u8]) -> usize {
         if buf.is_empty() || offset >= max_bytes {
             return 0;
         }

@@ -16,19 +16,21 @@
 //! })?;
 //! ```
 
+pub mod codec;
 mod error;
 mod factory;
+pub mod test_pcm;
 mod traits;
 mod types;
-
-#[cfg(test)]
-mod test_pcm;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod ffmpeg;
 
+pub use codec::{AudioCodec, ContainerFormat, MediaInfo, audio_codec_supports_fmp4_packaging};
 pub use error::{EncodeError, EncodeResult};
 pub use factory::EncoderFactory;
+#[cfg(not(target_arch = "wasm32"))]
+pub use ffmpeg::flac::normalize_flac_codec_config;
 pub use traits::InnerEncoder;
 pub use types::{
     BytesEncodeRequest, BytesEncodeTarget, EncodedAccessUnit, EncodedBytes, EncodedTrack,

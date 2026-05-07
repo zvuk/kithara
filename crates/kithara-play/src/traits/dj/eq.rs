@@ -2,14 +2,15 @@ use kithara_platform::{MaybeSend, MaybeSync};
 
 use crate::error::PlayError;
 
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 /// Master N-band equalizer.
 ///
 /// Provides read/write access to per-band gains by index. The number of bands
 /// is fixed at player construction time via [`PlayerConfig::eq_layout`].
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = EqualizerMock)
-)]
+#[kithara::mock(api = EqualizerMock)]
 pub trait Equalizer: MaybeSend + MaybeSync + 'static {
     /// Number of EQ bands.
     fn band_count(&self) -> usize;

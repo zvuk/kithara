@@ -9,10 +9,10 @@ use std::{
 };
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, EvictConfig},
+    assets::{AssetStore, AssetStoreBuilder, DiskAssetStore, EvictConfig},
     bufpool::BytePool,
-    internal::{DiskAssetStore, PinsIndex},
 };
+use kithara_integration_tests::asset_fixture::PinsIndex;
 use kithara_test_utils::temp_dir;
 use tokio_util::sync::CancellationToken;
 

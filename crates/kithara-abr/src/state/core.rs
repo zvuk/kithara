@@ -8,7 +8,7 @@ use kithara_platform::{
     Mutex,
     time::{Duration, Instant},
 };
-use kithara_probes::kithara;
+use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{decision::AbrDecision, error::AbrError, view::AbrView};
@@ -170,16 +170,6 @@ impl AbrState {
         }
         self.mode.store(mode.into(), Ordering::Release);
         Ok(())
-    }
-
-    /// Force a variant index without going through `apply()` / the controller.
-    ///
-    /// Used in `kithara-hls` integration tests to set up scenarios that would
-    /// otherwise require a full ABR tick cycle to reach. Gated under the
-    /// `internal` feature so production callers cannot bypass the FSM.
-    #[cfg(any(test, feature = "internal"))]
-    pub fn set_variant_for_test(&self, idx: usize) {
-        self.current_variant.store(idx, Ordering::Release);
     }
 
     /// Replace the variant list. Used at setup; not a hot path.

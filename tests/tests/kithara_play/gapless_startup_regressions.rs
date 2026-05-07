@@ -4,9 +4,9 @@ use std::{num::NonZeroU32, path::Path};
 
 use kithara_assets::StoreOptions;
 use kithara_decode::{GaplessMode, SilenceTrimParams};
+use kithara_encode::codec::AudioCodec;
 use kithara_platform::time::{Duration, Instant, sleep};
 use kithara_play::{PlayerConfig, Resource, ResourceConfig};
-use kithara_stream::AudioCodec;
 use kithara_test_utils::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{

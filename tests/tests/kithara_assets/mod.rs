@@ -7,4 +7,5 @@ mod integration_storage_assets;
 mod pins_index_integration;
 mod processing_integration;
 mod resource_path_test;
+mod resource_state;
 mod streaming_resources_comprehensive;

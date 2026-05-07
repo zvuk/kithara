@@ -25,6 +25,9 @@ use kithara_stream::{
 fn nz_bytes(n: usize) -> ReadOutcome {
     ReadOutcome::Bytes(NonZeroUsize::new(n).expect("test: byte count must be > 0"))
 }
+use kithara_abr::{AbrDecision, AbrState};
+use kithara_events::AbrReason;
+use kithara_platform::time::Instant;
 use kithara_test_utils::{kithara, probe_capture};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
@@ -42,6 +45,17 @@ use crate::{
     scheduler::HlsScheduler,
     stream_index::{SegmentData, StreamIndex},
 };
+
+fn pin_variant(abr: &AbrState, idx: usize) {
+    abr.apply(
+        &AbrDecision {
+            reason: AbrReason::ManualOverride,
+            did_change: true,
+            target_variant_index: idx,
+        },
+        Instant::now(),
+    );
+}
 
 fn test_peer_handle(cancel: &CancellationToken) -> PeerHandle {
     let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
@@ -157,10 +171,7 @@ fn build_test_source_with_segments(num_variants: usize, segments_per_variant: us
     let _downloader = HlsScheduler::new(
         backend,
         playlist_state,
-        Arc::new(kithara_abr::AbrState::new(
-            Vec::new(),
-            kithara_abr::AbrMode::Auto(None),
-        )),
+        Arc::new(AbrState::new(Vec::new(), kithara_abr::AbrMode::Auto(None))),
         kithara_stream::Timeline::new(),
         EventBus::new(BUS_CAPACITY),
         &config,
@@ -205,10 +216,7 @@ fn build_source_with_size_map(segment_sizes: &[u64]) -> HlsSource {
     let _downloader = HlsScheduler::new(
         backend,
         playlist_state,
-        Arc::new(kithara_abr::AbrState::new(
-            Vec::new(),
-            kithara_abr::AbrMode::Auto(None),
-        )),
+        Arc::new(AbrState::new(Vec::new(), kithara_abr::AbrMode::Auto(None))),
         kithara_stream::Timeline::new(),
         EventBus::new(BUS_CAPACITY),
         &config,
@@ -298,7 +306,7 @@ fn seek_resolves_in_layout_variant_not_abr_target() {
     push_segment(&source.segments, 0, 0, 0, SEG0_LEN);
 
     // ABR wants variant 1, but layout is variant 0
-    source.coord.abr_state.set_variant_for_test(1);
+    pin_variant(&source.coord.abr_state, 1);
 
     let anchor = source
         .resolve_seek_anchor(Duration::from_millis(SEEK_MS))
@@ -325,7 +333,7 @@ fn seek_does_not_switch_layout_variant() {
     );
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
 
-    source.coord.abr_state.set_variant_for_test(1);
+    pin_variant(&source.coord.abr_state, 1);
 
     let anchor = make_anchor(0, 0, 0);
     let layout = source.classify_seek(&anchor);
@@ -390,7 +398,7 @@ fn commit_seek_landing_keeps_switched_tail_in_mixed_layout() {
 fn resolve_current_variant_uses_layout_variant() {
     const NUM_VARIANTS: usize = 2;
     let source = build_test_source_with_segments(NUM_VARIANTS, 1);
-    source.coord.abr_state.set_variant_for_test(1);
+    pin_variant(&source.coord.abr_state, 1);
 
     // resolve_current_variant uses layout_variant, not ABR
     assert_eq!(
@@ -419,7 +427,7 @@ fn seek_anchor_uses_layout_variant_not_abr_target() {
     push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
     push_segment(&source.segments, 0, 2, 2 * SEG_SIZE, SEG_SIZE);
     // ABR wants variant 1, but seek must use layout_variant (0)
-    source.coord.abr_state.set_variant_for_test(1);
+    pin_variant(&source.coord.abr_state, 1);
 
     let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(SEEK_MS))
         .expect("seek anchor resolution should not error")
@@ -459,7 +467,7 @@ fn abr_does_not_affect_any_seek_state() {
     push_segment(&source.segments, 0, 1, V0_SEG_SIZE, V0_SEG_SIZE);
 
     // ABR switches to variant 1 mid-stream
-    source.coord.abr_state.set_variant_for_test(1);
+    pin_variant(&source.coord.abr_state, 1);
     source
         .coord
         .had_midstream_switch
@@ -512,7 +520,7 @@ fn commit_seek_landing_uses_layout_variant_for_invalidated_segment() {
     assert!(source.segments.lock_sync().remove_resource(&evicted));
 
     // ABR wants variant 1, but layout is still variant 0
-    source.coord.abr_state.set_variant_for_test(1);
+    pin_variant(&source.coord.abr_state, 1);
     source.coord.timeline().set_byte_position(0);
 
     source.commit_seek_landing(Some(make_anchor(0, 0, 0)));
@@ -554,7 +562,7 @@ fn commit_seek_landing_uses_anchor_variant_metadata_when_reset_truncates_prefix(
         1,
         &[SEG_SIZE, SEG_SIZE, SEG_SIZE, SEG_SIZE],
     );
-    source.coord.abr_state.set_variant_for_test(1);
+    pin_variant(&source.coord.abr_state, 1);
 
     let anchor = make_anchor(ANCHOR_VARIANT, ANCHOR_SEGMENT, ANCHOR_OFFSET);
     source.apply_seek_plan(&anchor, &SeekLayout::Reset);
@@ -640,7 +648,7 @@ fn queue_segment_request_uses_layout_variant_for_invalidated_segment() {
     assert!(removed);
 
     // ABR wants variant 1, but layout is still variant 0
-    source.coord.abr_state.set_variant_for_test(1);
+    pin_variant(&source.coord.abr_state, 1);
 
     assert!(
         source.queue_segment_request_for_offset(0, SEEK_EPOCH),
@@ -732,7 +740,7 @@ fn wait_range_returns_err_after_segment_marked_permanently_failed() {
         coord.condvar.notify_all();
     });
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let result = source.wait_range(0..1, Some(Duration::from_millis(TIMEOUT_MS)));
     let elapsed = started.elapsed();
     join.join().expect("helper thread must complete");
@@ -825,10 +833,7 @@ fn demand_range_queues_request_for_unloaded_offset() {
     let _downloader = HlsScheduler::new(
         backend,
         playlist_state,
-        Arc::new(kithara_abr::AbrState::new(
-            Vec::new(),
-            kithara_abr::AbrMode::Auto(None),
-        )),
+        Arc::new(AbrState::new(Vec::new(), kithara_abr::AbrMode::Auto(None))),
         kithara_stream::Timeline::new(),
         EventBus::new(BUS_CAPACITY),
         &config,
@@ -883,10 +888,7 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     let _downloader = HlsScheduler::new(
         backend,
         playlist_state,
-        Arc::new(kithara_abr::AbrState::new(
-            Vec::new(),
-            kithara_abr::AbrMode::Auto(None),
-        )),
+        Arc::new(AbrState::new(Vec::new(), kithara_abr::AbrMode::Auto(None))),
         kithara_stream::Timeline::new(),
         EventBus::new(BUS_CAPACITY),
         &config,
@@ -1113,10 +1115,7 @@ fn read_at_missing_segment_before_effective_total_returns_retry() {
     let _downloader = HlsScheduler::new(
         backend,
         playlist_state,
-        Arc::new(kithara_abr::AbrState::new(
-            Vec::new(),
-            kithara_abr::AbrMode::Auto(None),
-        )),
+        Arc::new(AbrState::new(Vec::new(), kithara_abr::AbrMode::Auto(None))),
         kithara_stream::Timeline::new(),
         EventBus::new(BUS_CAPACITY),
         &config,
@@ -1212,10 +1211,7 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
     let _downloader = HlsScheduler::new(
         backend,
         playlist_state,
-        Arc::new(kithara_abr::AbrState::new(
-            Vec::new(),
-            kithara_abr::AbrMode::Auto(None),
-        )),
+        Arc::new(AbrState::new(Vec::new(), kithara_abr::AbrMode::Auto(None))),
         kithara_stream::Timeline::new(),
         EventBus::new(BUS_CAPACITY),
         &config,
@@ -1589,7 +1585,7 @@ fn seek_anchor_falls_back_to_abr_when_layout_variant_has_no_target_segment() {
     // ABR has since picked variant 1 and the peer is fetching it — even
     // if variant 1 has no committed segments yet, its forward fetch is
     // what will actually arrive at the anchor offset.
-    source.coord.abr_state.set_variant_for_test(1);
+    pin_variant(&source.coord.abr_state, 1);
     assert_eq!(
         source.segments.lock_sync().layout_variant(),
         0,

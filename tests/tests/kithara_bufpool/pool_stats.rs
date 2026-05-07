@@ -1,4 +1,4 @@
-use kithara_bufpool::internal::*;
+use kithara_bufpool::*;
 use kithara_test_utils::kithara;
 
 #[kithara::test]
@@ -26,12 +26,12 @@ fn test_pool_stats_tracks_misses() {
 #[kithara::test]
 fn test_pool_stats_tracks_steals() {
     let pool = Pool::<4, Vec<u8>>::new(128, 1024);
-    let home = shard_index(&pool);
+    let home = pool.shard_index_of();
     let other = (home + 1) % 4;
 
     let mut buf = Vec::with_capacity(256);
     buf.push(0);
-    put(&pool, buf, other);
+    pool.put(buf, other);
 
     let _buf = pool.get();
     let stats = pool.stats();
@@ -41,12 +41,12 @@ fn test_pool_stats_tracks_steals() {
 #[kithara::test]
 fn test_pool_stats_tracks_drops() {
     let pool = Pool::<4, Vec<u8>>::new(4, 1024);
-    let shard = shard_index(&pool);
+    let shard = pool.shard_index_of();
 
     for _ in 0..2 {
         let mut buf = Vec::with_capacity(64);
         buf.push(0);
-        put(&pool, buf, shard);
+        pool.put(buf, shard);
     }
 
     let stats = pool.stats();

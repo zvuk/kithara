@@ -13,6 +13,10 @@ use std::{ops::Range, path::Path};
 
 use rangemap::RangeSet;
 
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 use crate::StorageResult;
 
 /// Controls how [`MmapDriver`](crate::MmapDriver) opens the backing file.
@@ -73,10 +77,7 @@ pub enum ResourceStatus {
 ///
 /// For streaming: use `write_at` + `commit`.
 /// For atomic: use `write_all` / `read_into` convenience methods.
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = ResourceMock)
-)]
+#[kithara::mock(api = ResourceMock)]
 pub trait ResourceExt: Send + Sync + 'static {
     /// Mark the resource as fully written.
     ///

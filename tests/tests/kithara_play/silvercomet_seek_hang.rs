@@ -28,7 +28,7 @@ use kithara::{
     assets::StoreOptions,
     events::AbrMode,
     net::NetOptions,
-    play::{Resource, ResourceConfig, internal::offline::OfflinePlayer},
+    play::{Resource, ResourceConfig, test_helpers::offline::OfflinePlayer},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_decode::DecoderBackend;

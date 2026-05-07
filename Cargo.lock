@@ -4003,10 +4003,8 @@ dependencies = [
  "criterion",
  "derivative",
  "derive_setters",
- "kithara-abr",
  "kithara-events",
  "kithara-platform",
- "kithara-probes",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -4063,6 +4061,7 @@ dependencies = [
  "kithara-drm",
  "kithara-platform",
  "kithara-storage",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "lru 0.17.0",
@@ -4110,6 +4109,7 @@ dependencies = [
  "kithara-net",
  "kithara-platform",
  "kithara-stream",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -4156,6 +4156,7 @@ dependencies = [
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "ndk-context",
@@ -4193,10 +4194,8 @@ dependencies = [
 name = "kithara-encode"
 version = "0.1.0"
 dependencies = [
+ "derive_setters",
  "ffmpeg-next",
- "kithara-stream",
- "kithara-test-macros",
- "kithara-test-utils",
  "kithara-workspace-hack",
  "tempfile",
  "thiserror 2.0.18",
@@ -4247,6 +4246,7 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
+ "kithara-test-macros",
  "kithara-test-utils",
  "ndk-context",
  "rustls-platform-verifier",
@@ -4361,7 +4361,6 @@ dependencies = [
  "kithara-hls",
  "kithara-net",
  "kithara-platform",
- "kithara-probes",
  "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",
@@ -4377,7 +4376,6 @@ dependencies = [
  "tracing-subscriber",
  "unimock",
  "url",
- "usdt",
  "wasm-bindgen-test",
 ]
 
@@ -4405,6 +4403,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-decode",
  "kithara-drm",
+ "kithara-encode",
  "kithara-events",
  "kithara-file",
  "kithara-hls",
@@ -4426,6 +4425,7 @@ dependencies = [
  "serial_test",
  "tempfile",
  "thirtyfour",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -4514,6 +4514,7 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-stream",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -4527,28 +4528,6 @@ dependencies = [
  "unimock",
  "url",
  "wasm-bindgen-test",
-]
-
-[[package]]
-name = "kithara-probe-macros"
-version = "0.1.0"
-dependencies = [
- "kithara-workspace-hack",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "kithara-probes"
-version = "0.1.0"
-dependencies = [
- "kithara-events",
- "kithara-probe-macros",
- "kithara-workspace-hack",
- "tracing",
- "url",
- "usdt",
 ]
 
 [[package]]
@@ -4610,10 +4589,8 @@ dependencies = [
  "kithara-hang-detector",
  "kithara-net",
  "kithara-platform",
- "kithara-probes",
  "kithara-storage",
  "kithara-stream",
- "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "memory-stats",
@@ -4625,7 +4602,6 @@ dependencies = [
  "tracing",
  "unimock",
  "url",
- "usdt",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "wasm_safe_thread",
@@ -4651,11 +4627,9 @@ dependencies = [
  "cbc",
  "futures",
  "hex",
- "kithara-abr",
  "kithara-encode",
+ "kithara-events",
  "kithara-platform",
- "kithara-storage",
- "kithara-stream",
  "kithara-test-macros",
  "kithara-workspace-hack",
  "reqwest",
@@ -4671,6 +4645,7 @@ dependencies = [
  "tracing-subscriber",
  "tracing-wasm",
  "url",
+ "usdt",
  "uuid",
 ]
 

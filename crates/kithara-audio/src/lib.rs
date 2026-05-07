@@ -35,7 +35,6 @@
 //! ```
 
 #![forbid(unsafe_code)]
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 // Internal modules
 mod audio;
@@ -48,8 +47,8 @@ mod runtime;
 mod traits;
 pub(crate) mod worker;
 
-#[cfg(feature = "internal")]
-pub mod internal;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_helpers;
 
 // Public API exports
 pub use audio::Audio;

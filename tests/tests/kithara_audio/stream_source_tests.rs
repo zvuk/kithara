@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kithara_audio::internal::source::*;
+use kithara_audio::test_helpers::source::*;
 use kithara_bufpool::PcmPool;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, PcmChunk, PcmMeta,

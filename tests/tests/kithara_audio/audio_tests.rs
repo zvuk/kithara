@@ -3,7 +3,7 @@
 use std::{fs::File, io::Write};
 
 use kithara_assets::StoreOptions;
-use kithara_audio::{ReadOutcome, internal::audio::*};
+use kithara_audio::{ReadOutcome, test_helpers::audio::*};
 use kithara_decode::{GaplessMode, SilenceTrimParams};
 use kithara_events::{AudioEvent, Event, SeekLifecycleStage};
 use kithara_file::{FileConfig, FileSrc};
@@ -385,7 +385,7 @@ async fn test_audio_preload_rearms_after_seek() {
 /// blocking recv — parking the thread on every empty ringbuf poll.
 #[kithara::test(tokio)]
 async fn preloaded_survives_seek() {
-    use kithara_audio::internal::audio::is_preloaded;
+    use kithara_audio::test_helpers::audio::is_preloaded;
 
     let (_cache, _tmp, config) = test_wav_config(44100 * 2);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)

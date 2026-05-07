@@ -7,10 +7,11 @@ use crate::{
     types::{ObserverId, PlayerStatus, SlotId, TimeControlStatus, WaitingReason},
 };
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = PlayerMock, type Item = unimock::Unimock;)
-)]
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
+#[kithara::mock(api = PlayerMock, type Item = unimock::Unimock;)]
 pub trait Player: MaybeSend + MaybeSync + 'static {
     type Item: crate::traits::item::PlayerItem;
 

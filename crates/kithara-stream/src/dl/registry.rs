@@ -10,7 +10,7 @@ use std::{
 use kithara_abr::AbrPeerId;
 use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
 use kithara_platform::{CancelGroup, RwLock, tokio, tokio::sync::mpsc};
-use kithara_probes::kithara;
+use kithara_test_utils::kithara;
 use thunderdome::{Arena, Index};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -444,9 +444,7 @@ fn classify_progress(
 
 #[cfg(test)]
 mod classify_progress_tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
+    use kithara_test_utils::kithara;
 
     use super::{FetchProgress, PollStats, classify_progress};
 

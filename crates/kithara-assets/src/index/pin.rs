@@ -47,7 +47,7 @@ use crate::error::{AssetsError, AssetsResult};
 ///   * `EvictAssets` (read pinned set when picking eviction candidates),
 ///   * `DiskAssetDeleter` (drop pin when an `asset_root` is fully removed).
 #[derive(Clone)]
-pub(crate) struct PinsIndex {
+pub struct PinsIndex {
     inner: Arc<PinsInner>,
 }
 
@@ -90,7 +90,7 @@ impl PinsIndex {
     ///
     /// Propagates the underlying [`AssetsError`] when the on-disk
     /// flush fails (mmap open, atomic swap, rkyv serialise).
-    pub(crate) fn add(&self, asset_root: &str) -> AssetsResult<bool> {
+    pub fn add(&self, asset_root: &str) -> AssetsResult<bool> {
         let transitioned = match self.inner.pins.lock_sync().entry(asset_root.to_string()) {
             Entry::Occupied(mut e) => {
                 let count = e.get_mut();
@@ -146,7 +146,7 @@ impl PinsIndex {
     /// # Errors
     ///
     /// Propagates the first per-source flush error encountered.
-    pub(crate) fn flush(&self) -> AssetsResult<()> {
+    pub fn flush(&self) -> AssetsResult<()> {
         self.inner
             .hub
             .get()
@@ -164,7 +164,7 @@ impl PinsIndex {
     ///
     /// Propagates the underlying [`AssetsError`] when the on-disk
     /// flush fails.
-    pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<bool> {
+    pub fn remove(&self, asset_root: &str) -> AssetsResult<bool> {
         let transitioned = {
             let mut pins = self.inner.pins.lock_sync();
             let next = pins.get(asset_root).map(|c| NonZeroU32::new(c.get() - 1));
@@ -187,7 +187,8 @@ impl PinsIndex {
     }
 
     /// Snapshot of currently pinned `asset_root`s (keys only — refcount stays internal).
-    pub(crate) fn snapshot(&self) -> HashSet<String> {
+    #[must_use]
+    pub fn snapshot(&self) -> HashSet<String> {
         self.inner.pins.lock_sync().keys().cloned().collect()
     }
 
@@ -197,11 +198,7 @@ impl PinsIndex {
     /// hydrated synchronously. Otherwise the disk file is **not**
     /// materialised — it appears the first time [`Self::add`] /
     /// [`Self::remove`] flush a real change.
-    pub(crate) fn with_persist_at(
-        path: PathBuf,
-        cancel: CancellationToken,
-        pool: &BytePool,
-    ) -> Self {
+    pub fn with_persist_at(path: PathBuf, cancel: CancellationToken, pool: &BytePool) -> Self {
         let (initial, opened) = hydrate_existing(&path, &cancel, pool);
         Self {
             inner: Arc::new(PinsInner {

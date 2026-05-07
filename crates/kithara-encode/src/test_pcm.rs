@@ -5,7 +5,7 @@ use std::mem::size_of;
 use crate::PcmSource;
 
 /// Interleaved PCM buffer: each frame repeats one 16-bit little-endian sawtooth sample per channel.
-pub(crate) struct SawtoothPcmFixture {
+pub struct SawtoothPcmFixture {
     bytes: Vec<u8>,
     channels: u16,
     sample_rate: u32,
@@ -15,7 +15,8 @@ impl SawtoothPcmFixture {
     const SAWTOOTH_CENTER: i32 = 32_768;
     const SAWTOOTH_PERIOD: usize = 65_536;
 
-    pub(crate) fn new(total_frames: usize, sample_rate: u32, channels: u16) -> Self {
+    #[must_use]
+    pub fn new(total_frames: usize, sample_rate: u32, channels: u16) -> Self {
         let mut bytes = Vec::with_capacity(
             total_frames.saturating_mul(usize::from(channels)) * size_of::<i16>(),
         );

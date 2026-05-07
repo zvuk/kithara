@@ -26,8 +26,6 @@ members = [
     "crates/kithara-app",
     "crates/kithara-wasm-macros",
     "crates/kithara-ffi",
-    "crates/kithara-probes",
-    "crates/kithara-probe-macros",
     "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
@@ -57,8 +55,6 @@ default-members = [
     "crates/kithara-queue",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
-    "crates/kithara-probes",
-    "crates/kithara-probe-macros",
     "tests",
     "examples",
 ]
@@ -66,13 +62,6 @@ default-members = [
 [workspace.lints.rust]
 unreachable_pub = "warn"
 unused_qualifications = "warn"
-# `#[kithara::probe]` expands to `cfg(feature = "tracing-probes")` and
-# `cfg(feature = "usdt-probes")` checks at every site. Most crates only
-# declare one of those features (or neither), so without this declaration
-# rustc fires `unexpected_cfgs` on every probe-macro expansion.
-unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("tracing-probes", "usdt-probes"))',
-] }
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
@@ -94,7 +83,13 @@ manual_map = "deny"
 question_mark = "deny"
 doc_markdown = "warn"
 default_trait_access = "warn"
-ignored_unit_patterns = "warn"
+# `unimock`-generated `MockFn` impls (sibling to the trait, inside an
+# anonymous `const _: () = { ... };` block) trip this lint with `_` over
+# `()` patterns we cannot reach from `#[kithara::mock]` — neither the
+# trait-level `#[allow]` nor a wrapper mod propagates inside that const
+# block. Workspace-wide `allow` is the smallest blast-radius option
+# given how many traits use `#[kithara::mock]` (15+ as of 2026-05-07).
+ignored_unit_patterns = "allow"
 semicolon_if_nothing_returned = "warn"
 missing_fields_in_debug = "warn"
 use_self = "warn"
@@ -181,8 +176,6 @@ kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 kithara-test-macros = { path = "crates/kithara-test-macros" }
 kithara-test-utils = { path = "crates/kithara-test-utils" }
-kithara-probes = { path = "crates/kithara-probes", version = "0.1.0" }
-kithara-probe-macros = { path = "crates/kithara-probe-macros", version = "0.1.0" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
 kithara-ffi = { path = "crates/kithara-ffi" }
@@ -252,16 +245,15 @@ portable-atomic = { version = "1.13.1", default-features = false, features = ["f
 
 # errors/logging/metrics
 thiserror = "2.0.18"
+# USDT probe runtime (consumed by `kithara-test-utils::probes`).
+# Default-features off + `asm` keeps the inline-asm path on macOS/Linux
+# without dragging in the linker shim used by older toolchains.
+usdt = { version = "0.5", default-features = false, features = ["asm"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 tracing-wasm = "0.2"
 tracing-android = "0.2.0"
 tracing-log = "0.2"
-# USDT probes for production observability (dtrace/bpftrace) and
-# defense-in-depth in tests against EventBus broadcast overflow.
-# Linux x86_64 + macOS aarch64 supported via the `asm` backend on
-# stable Rust; Windows is a no-op stub.
-usdt = { version = "0.5", default-features = false, features = ["asm"] }
 web-time = "1.1"
 gloo-timers = { version = "0.4", features = ["futures"] }
 console_error_panic_hook = "0.1"

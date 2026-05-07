@@ -1,25 +1,28 @@
-//! Expansion logic for `#[kithara::probe]` and `#[derive(Probe)]`.
+//! Expansion logic for `#[kithara::probe]` and `#[derive(kithara::Probe)]`.
 //!
-//! Kept out of `lib.rs` because workspace lint policy forbids non-entry
-//! items (functions, structs, helpers) in `lib.rs` / `mod.rs` files.
+//! Emits two arms per probe site, both gated by
+//! `cfg(any(test, feature = "test-utils"))` of the consumer crate:
+//!
+//! - `kithara_test_utils::probes::fire_N(...)` — USDT entry point.
+//!   Values are converted via `IntoProbeArg::into_probe_arg` to the
+//!   `u64` wire format. The actual inline-asm USDT emission only fires
+//!   when `kithara-test-utils/usdt-probes` is enabled at build time;
+//!   otherwise `fire_N` is a no-op stub.
+//! - `tracing::event!` — observable from
+//!   `kithara_test_utils::probe_capture` and any other tracing
+//!   subscriber. Records the same `u64` slot values for parity with
+//!   the USDT path.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
     Data, DataStruct, DeriveInput, Error, Field, Fields, FnArg, Ident, ItemFn, LitStr, Pat,
-    PatIdent, ReturnType, Token, parse::Parser, punctuated::Punctuated,
+    PatIdent, Token, parse::Parser, punctuated::Punctuated,
 };
 
 #[derive(Default)]
 pub(crate) struct ProbeFilter {
-    /// Names of arguments to record (`None` = all eligible args).
     pub args: Option<Vec<Ident>>,
-    /// `probe_return` marker: emit a `Probe::record_probe` call on the
-    /// function's return value after the body runs. Used when the
-    /// payload of interest is computed inside the body (e.g. `outcome`
-    /// in a resolver) and surfaced via the return type instead of an
-    /// argument. The return type must implement `kithara_probes::Probe`
-    /// — typically via `#[derive(kithara_probes::Probe)]`.
     pub probe_return: bool,
 }
 
@@ -61,10 +64,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let mut all_args: Vec<Ident> = Vec::new();
     for arg in &input.sig.inputs {
         match arg {
-            FnArg::Receiver(_) => {
-                // `self` / `&self` / `&mut self` is allowed — it's
-                // simply not eligible to participate in the probe wire.
-            }
+            FnArg::Receiver(_) => {}
             FnArg::Typed(typed) => match typed.pat.as_ref() {
                 Pat::Ident(PatIdent { ident, .. }) => all_args.push(ident.clone()),
                 other => {
@@ -114,16 +114,15 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         .zip(probe_idents.iter())
         .map(|(arg, slot)| {
             quote! {
-                #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
-                let #slot: u64 = ::kithara_probes::IntoProbeArg::into_probe_arg(#arg);
+                #[cfg(any(test, feature = "test-utils"))]
+                let #slot: u64 = ::kithara_test_utils::probes::IntoProbeArg::into_probe_arg(#arg);
             }
         })
         .collect();
 
-    // Suppress unused-variable warnings on probe args when the
-    // `usdt-probes` feature is off (probe body becomes empty, args
-    // appear unused). `let _ = &arg;` is a zero-codegen no-op the
-    // compiler folds away.
+    // `let _ = &arg;` is a zero-codegen no-op the compiler folds away;
+    // it suppresses unused-variable warnings on probe args when the
+    // gate is off.
     let arg_consume: Vec<TokenStream2> =
         arg_idents.iter().map(|a| quote! { let _ = &#a; }).collect();
 
@@ -140,48 +139,42 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let sig = &input.sig;
     let block = &input.block;
 
+    // `register_probes()` is idempotent (`OnceLock`-guarded) and a no-op
+    // when `kithara-test-utils/usdt-probes` is off. Emitting it from the
+    // macro means every probe site auto-registers on first fire — tests
+    // and external dtrace consumers don't need a separate bootstrap.
     let body = if probe_return {
-        // Wrap the body in a closure so any `return X;` inside `#block`
-        // becomes a `return X;` from the closure — `__probe_ret` then
-        // captures the actual final value regardless of which branch
-        // returned it. The return type is inferred from the closure's
-        // return expressions; matching `sig.output` annotation on the
-        // closure would force callers to repeat the type and confuses
-        // type inference for `Option<...>` / generic returns.
-        let _ = ReturnType::Default; // keep ReturnType import live
+        // Wrap the body in a closure so any `return X;` becomes a return
+        // from the closure — `__probe_ret` then captures the actual final
+        // value regardless of which branch produced it.
         quote! {
             let __probe_ret = (|| #block)();
-            #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
-            ::kithara_probes::Probe::record_probe(&__probe_ret, #fn_name_str);
+            #[cfg(any(test, feature = "test-utils"))]
+            {
+                ::kithara_test_utils::probes::register_probes();
+                ::kithara_test_utils::probes::Probe::record_probe(&__probe_ret, #fn_name_str);
+            }
             __probe_ret
         }
     } else {
         quote! { #block }
     };
 
-    // Skip the entry-time `tracing::event!` emission when the macro
-    // is asked to publish via `record_probe` on the return value:
-    // emitting both would create two events with the same `probe = "..."`
-    // tag — the entry one with no fields, the return one with the
-    // actual payload. Consumers that filter `events_with_probe(name)`
-    // would get the wrong shape (whichever fired first).
-    //
-    // The cfg-gate must live *inside* this branch: emitting a bare
-    // `#[cfg(...)]` attribute before an empty `quote!{}` would attach
-    // the attribute to whatever syntactic item follows in the outer
-    // `quote!` (the first statement of `#body`), silently disabling it
-    // when the probe features are off.
     let emit_entry_event = if probe_return {
         quote! {}
     } else {
         quote! {
-            #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
-            ::tracing::event!(
-                target: #target,
-                ::tracing::Level::TRACE,
-                probe = #fn_name_str,
-                #(#tracing_fields),*
-            );
+            #[cfg(any(test, feature = "test-utils"))]
+            {
+                ::kithara_test_utils::probes::register_probes();
+                ::kithara_test_utils::probes::#fire_fn(#fn_name_str, #(#probe_idents),*);
+                ::tracing::event!(
+                    target: #target,
+                    ::tracing::Level::TRACE,
+                    probe = #fn_name_str,
+                    #(#tracing_fields),*
+                );
+            }
         }
     };
 
@@ -190,16 +183,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         #vis #sig {
             #(#arg_consume)*
             #(#arg_bindings)*
-
-            // USDT emit goes through the safe `kithara_probes::fire_N`
-            // wrappers — all `unsafe` inline asm lives in
-            // `kithara-probes::usdt_wire`, so consumer crates can keep
-            // `#![forbid(unsafe_code)]` and still publish probes.
-            #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
-            ::kithara_probes::#fire_fn(#fn_name_str, #(#probe_idents),*);
-
             #emit_entry_event
-
             #body
         }
     })
@@ -233,26 +217,8 @@ fn parse_field_opts(field: &Field) -> syn::Result<FieldOpts> {
     Ok(opts)
 }
 
-fn camel_to_snake(s: &str) -> String {
-    // Reserve a few extra bytes for the underscores we may insert.
-    const EXTRA_CAPACITY: usize = 4;
-    let mut out = String::with_capacity(s.len() + EXTRA_CAPACITY);
-    s.chars().enumerate().for_each(|(i, ch)| {
-        if ch.is_ascii_uppercase() {
-            if i > 0 {
-                out.push('_');
-            }
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push(ch);
-        }
-    });
-    out
-}
-
 pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = &input.ident;
-    let _ = camel_to_snake; // helper retained for backward-compat callers
 
     let crate_name = std::env::var("CARGO_PKG_NAME")
         .map_err(|_| {
@@ -313,29 +279,26 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .map(|i| format_ident!("__probe_slot_{}", i))
         .collect();
 
-    let bindings = field_idents
+    let bindings: Vec<TokenStream2> = field_idents
         .iter()
         .zip(slot_idents.iter())
         .map(|(field, slot)| {
             quote! {
-                let #slot: u64 = ::kithara_probes::IntoProbeArg::into_probe_arg(self.#field);
+                let #slot: u64 = ::kithara_test_utils::probes::IntoProbeArg::into_probe_arg(self.#field);
             }
-        });
+        })
+        .collect();
 
-    let tracing_pairs = wire_names
+    let tracing_pairs: Vec<TokenStream2> = wire_names
         .iter()
         .zip(slot_idents.iter())
         .map(|(name, slot)| {
             let ident = format_ident!("{}", name);
             quote! { #ident = #slot }
-        });
+        })
+        .collect();
 
-    // No-feature ack: fields participate in probe wire only under
-    // `tracing-probes` / `usdt-probes`. Without those features the
-    // struct fields would look unused to `dead_code`. Touch each one
-    // through a zero-codegen `let _ = &self.f;` so the warning stays
-    // off and the no-feature build matches production layout exactly.
-    let no_feature_consume: Vec<TokenStream2> = field_idents
+    let field_consume: Vec<TokenStream2> = field_idents
         .iter()
         .map(|f| quote! { let _ = &self.#f; })
         .collect();
@@ -343,28 +306,22 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
-        impl #impl_generics ::kithara_probes::Probe for #struct_name #ty_generics #where_clause {
+        impl #impl_generics ::kithara_test_utils::probes::Probe for #struct_name #ty_generics #where_clause {
             #[inline]
             fn record_probe(&self, name: &'static str) {
-                #[cfg(any(feature = "tracing-probes", feature = "usdt-probes"))]
+                let _ = name;
+                #(#field_consume)*
+                #[cfg(any(test, feature = "test-utils"))]
                 {
+                    ::kithara_test_utils::probes::register_probes();
                     #(#bindings)*
-                    // USDT goes through the safe wrappers in
-                    // `kithara-probes::usdt_wire`. No inline asm in the
-                    // consumer crate, so `#[derive(Probe)]` is usable
-                    // under `#![forbid(unsafe_code)]`.
-                    ::kithara_probes::#fire_fn(name, #(#slot_idents),*);
+                    ::kithara_test_utils::probes::#fire_fn(name, #(#slot_idents),*);
                     ::tracing::event!(
                         target: #target,
                         ::tracing::Level::TRACE,
                         probe = name,
                         #(#tracing_pairs),*
                     );
-                }
-                #[cfg(not(any(feature = "tracing-probes", feature = "usdt-probes")))]
-                {
-                    let _ = name;
-                    #(#no_feature_consume)*
                 }
             }
         }

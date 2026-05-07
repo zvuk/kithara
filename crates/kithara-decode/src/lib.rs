@@ -1,11 +1,5 @@
 // NOTE: deny instead of forbid to allow unsafe in platform-specific FFI modules (apple, android)
 #![deny(unsafe_code)]
-// `unimock`'s proc-macro emits `match _ { ... }` patterns the
-// `ignored_unit_patterns` lint flags; we can't rewrite generated code.
-#![allow(clippy::ignored_unit_patterns)]
-// Test code re-attaches `unimock`-generated `#[allow(...)]` annotations
-// the `allow_attributes` lint normally rejects.
-#![cfg_attr(test, allow(clippy::allow_attributes))]
 
 //! # Kithara Decode
 //!

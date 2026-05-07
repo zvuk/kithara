@@ -170,9 +170,7 @@ impl AudioCodec {
 
 #[cfg(test)]
 mod tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
+    use kithara_test_utils::kithara;
 
     use super::*;
 

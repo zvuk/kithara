@@ -3,7 +3,7 @@ use std::fmt;
 
 use kithara::{
     events::{AudioEvent, Event, EventReceiver},
-    play::internal::offline::OfflinePlayer,
+    play::test_helpers::offline::OfflinePlayer,
 };
 use kithara_platform::{
     thread,

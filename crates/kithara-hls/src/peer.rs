@@ -15,12 +15,12 @@ use kithara_platform::{
     time::{Duration, Instant},
     tokio,
 };
-use kithara_probes::kithara;
 use kithara_storage::ResourceExt;
 use kithara_stream::{
     Timeline,
     dl::{FetchCmd, OnCompleteFn, Peer, RequestPriority, WriterFn},
 };
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
@@ -64,7 +64,6 @@ pub(crate) struct HlsPeer {
 
 impl HlsPeer {
     pub(crate) fn new(timeline: Timeline, initial_mode: AbrMode) -> Self {
-        kithara_probes::register_probes();
         Self {
             timeline,
             state: Arc::new(Mutex::new(None)),
@@ -84,6 +83,13 @@ impl HlsPeer {
     pub(crate) fn activate(self: &Arc<Self>, scheduler: HlsScheduler, loader: Arc<SegmentLoader>) {
         let reader_advanced = scheduler.coord.reader_advanced.clone();
         let cancel = scheduler.coord.cancel.clone();
+        // `epoch_cancel` is a child of the track-level cancel
+        // (`coord.cancel`) so dropping the track cascades through
+        // every in-flight FetchCmd whose `cancel` slot is a clone of
+        // this token. Same hierarchy invariant the AssetStore and
+        // Downloader already follow — child of track cancel, not an
+        // orphaned `CancellationToken::new()`.
+        let epoch_cancel = cancel.child_token();
 
         {
             let mut guard = self.state.lock_sync();
@@ -91,7 +97,7 @@ impl HlsPeer {
                 scheduler,
                 loader,
                 waker: None,
-                epoch_cancel: CancellationToken::new(),
+                epoch_cancel,
             });
         }
 
@@ -469,9 +475,12 @@ fn dispatch_seek_demand(
 /// are invalidated and the cursor is repositioned for the seek target.
 #[kithara::probe(seek_epoch, segment_index, variant)]
 fn seek_epoch_reset(state: &mut HlsState, seek_epoch: u64, segment_index: usize, variant: usize) {
-    let sched = &mut state.scheduler;
     state.epoch_cancel.cancel();
-    state.epoch_cancel = CancellationToken::new();
+    // Replace with a fresh child of the track-level cancel so the
+    // hierarchy invariant holds: track drop still cascades through
+    // the new epoch token even though the old one already fired.
+    state.epoch_cancel = state.scheduler.coord.cancel.child_token();
+    let sched = &mut state.scheduler;
     sched.runtime.demand_throttle_until = None;
     let _ = seek_epoch;
 

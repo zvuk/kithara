@@ -16,12 +16,11 @@ kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-internal = []
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-kithara-bufpool = { path = ".", default-features = false, features = ["internal"] }
+kithara-bufpool = { path = ".", default-features = false }
 kithara-test-macros = { workspace = true }
 wasm-bindgen-test = { workspace = true }

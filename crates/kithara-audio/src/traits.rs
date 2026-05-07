@@ -1,11 +1,3 @@
-// `unimock` (only enabled in `test`/`test-utils` builds) generates `let () = ...`
-// match arms that trip `clippy::ignored_unit_patterns`. The lint is only
-// silenced under those feature gates so production builds remain strict.
-#![cfg_attr(
-    any(test, feature = "test-utils"),
-    allow(clippy::ignored_unit_patterns)
-)]
-
 //! Audio pipeline traits.
 
 use std::{
@@ -20,8 +12,10 @@ use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::tokio as platform_tokio;
 use platform_tokio::sync::Notify;
-#[cfg(any(test, feature = "test-utils"))]
-use unimock::unimock;
+
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
 
 use crate::ServiceClass;
 
@@ -47,7 +41,7 @@ pub enum PendingReason {
 }
 
 /// Audio processing effect in the chain (transforms PCM chunks).
-#[cfg_attr(any(test, feature = "test-utils"), unimock(api = AudioEffectMock))]
+#[kithara::mock(api = AudioEffectMock)]
 pub trait AudioEffect: Send + 'static {
     /// Flush remaining buffered data (called at end of stream).
     fn flush(&mut self) -> Option<PcmChunk>;
@@ -158,7 +152,7 @@ pub enum ChunkOutcome {
 ///     ReadOutcome::Eof { .. } => finalise_track(),
 /// }
 /// ```
-#[cfg_attr(any(test, feature = "test-utils"), unimock(api = PcmReaderMock))]
+#[kithara::mock(api = PcmReaderMock)]
 pub trait PcmReader: Send {
     /// Runtime ABR handle for the underlying stream.
     ///

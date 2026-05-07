@@ -10,10 +10,6 @@
 // where unimock generates `let () = ...` patterns; under default builds the
 // lint is dormant.
 #![cfg_attr(all(), allow(clippy::missing_errors_doc))]
-#![cfg_attr(
-    any(test, feature = "test-utils"),
-    allow(clippy::ignored_unit_patterns)
-)]
 
 #[cfg(all(target_arch = "wasm32", not(feature = "backend-web-audio")))]
 compile_error!("kithara-play: wasm32 build requires `backend-web-audio`");
@@ -30,8 +26,8 @@ mod metadata;
 mod time;
 mod types;
 
-#[cfg(feature = "internal")]
-pub mod internal;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_helpers;
 
 pub mod impls;
 pub mod traits;

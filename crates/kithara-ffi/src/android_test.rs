@@ -29,7 +29,7 @@ use jni::{
 use kithara::{
     audio::{Audio, AudioConfig, AudioWorkerHandle},
     file::{File as FileSource, FileConfig, FileSrc},
-    play::internal::{
+    play::test_helpers::{
         init_offline_backend,
         offline::{OfflinePlayer, resource_from_reader},
     },

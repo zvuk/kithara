@@ -1,25 +1,20 @@
 //! Audio worker traits and effect utilities.
 
-// `unimock::unimock` macro expands a generated `MockAudioWorkerSource` impl
-// that matches over `()` returns with `_` patterns. The macro output isn't
-// editable, so suppress the lint at the module level when test-utils are
-// compiled in.
-#![cfg_attr(
-    any(test, feature = "test-utils"),
-    allow(clippy::ignored_unit_patterns)
-)]
-
 use kithara_decode::PcmChunk;
 use kithara_stream::Timeline;
 
 use crate::{pipeline::track_fsm, traits::AudioEffect};
+
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
 
 /// Trait for audio sources processed in a blocking worker thread.
 ///
 /// The worker calls `step_track()` once per scheduling round. Each call
 /// performs at most one FSM transition and returns a [`TrackStep`] that
 /// tells the worker what happened.
-#[cfg_attr(any(test, feature = "test-utils"), unimock::unimock(api = MockAudioWorkerSource, type Chunk = PcmChunk;))]
+#[kithara::mock(api = MockAudioWorkerSource, type Chunk = PcmChunk;)]
 pub trait AudioWorkerSource: Send + 'static {
     type Chunk: Send + 'static;
 

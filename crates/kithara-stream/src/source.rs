@@ -1,11 +1,4 @@
 #![forbid(unsafe_code)]
-// `unimock` (only enabled in test/test-utils builds) generates `let () = ...`
-// match arms that trip `clippy::ignored_unit_patterns`. The lint is silenced
-// only under those feature gates so production builds remain strict.
-#![cfg_attr(
-    any(test, feature = "test-utils"),
-    allow(clippy::ignored_unit_patterns)
-)]
 
 //! Source trait for sync random-access data.
 //!
@@ -16,8 +9,7 @@ use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Ar
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
-#[cfg(any(test, feature = "test-utils"))]
-use unimock::unimock;
+use kithara_test_utils::kithara;
 
 use crate::{Timeline, error::StreamResult, media::MediaInfo};
 
@@ -173,10 +165,7 @@ impl SourceSeekAnchor {
 ///
 /// Methods take `&mut self` to allow sources to maintain internal state
 /// (e.g., progress tracking, segment index updates).
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock(api = SourceMock)
-)]
+#[kithara::mock(api = SourceMock)]
 pub trait Source: Send + Sync + 'static {
     /// Whether the source currently reports zero bytes. Default mirrors
     /// `self.len()` returning `0` (or being unknown — both are treated as
@@ -429,9 +418,7 @@ pub trait SegmentLayout: Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
+    use kithara_test_utils::kithara;
 
     use super::*;
 

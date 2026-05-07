@@ -11,4 +11,4 @@ pub(crate) use availability::{AvailabilityIndex, ScopedAvailabilityObserver};
 pub use flush::{FlushHub, FlushPolicy};
 pub use lru::EvictConfig;
 pub(crate) use lru::LruIndex;
-pub(crate) use pin::PinsIndex;
+pub use pin::PinsIndex;

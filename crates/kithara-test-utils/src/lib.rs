@@ -1,16 +1,18 @@
-#![forbid(unsafe_code)]
-#![expect(
+// `unsafe_code` is permitted only in `probes::usdt_wire` to host the
+// inline-asm USDT provider expansion; the rest of this crate stays
+// `unsafe`-free.
+#![allow(
     clippy::unwrap_used,
     reason = "test utility crate — unwraps are acceptable"
 )]
-#![expect(
+#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
     clippy::cast_lossless,
     reason = "test utility crate — numeric casts are acceptable for WAV generation"
 )]
-#![expect(
+#![allow(
     clippy::missing_panics_doc,
     reason = "test utility crate — panic documentation not needed"
 )]
@@ -34,15 +36,14 @@ pub mod hls_url;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_server;
 mod log_filter;
-pub mod memory_source;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod probe_capture;
+pub mod probes;
 pub mod rng;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod routes;
 pub mod server_url;
 pub mod signal_pcm;
-pub mod signal_source;
 mod signal_source_utils;
 pub(crate) mod signal_spec;
 pub mod signal_url;
@@ -57,7 +58,7 @@ pub mod wav;
 /// Allows `use kithara_test_utils::kithara` and then `#[kithara::test]`
 /// or `#[kithara::test(tokio)]` in test modules.
 pub mod kithara {
-    pub use kithara_test_macros::{fixture, test};
+    pub use kithara_test_macros::{Probe, fixture, mock, probe, test};
 }
 
 pub use fixtures::*;

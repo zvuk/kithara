@@ -12,29 +12,25 @@ derivative = { workspace = true }
 derive_setters = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
-kithara-probes = { workspace = true }
+kithara-test-utils = { workspace = true }
 num-traits = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-unimock = { workspace = true, optional = true }
+unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
-internal = ["dep:unimock"]
-# Emit `tracing::event!` from `#[kithara::probe]` sites so observers
-# (e.g. `probe_capture` in tests) can pick them up. No USDT integration —
-# the macro expansion stays unsafe-free, preserving `#![forbid(unsafe_code)]`.
-# This crate intentionally does NOT expose a `usdt-probes` feature
-# because `usdt::provider!` emits inline asm that requires `unsafe`.
-tracing-probes = ["kithara-probes/tracing-probes"]
+# No-op shim retained so `#[kithara::probe]` macro expansions
+# (which emit `cfg(any(test, feature = "test-utils"))`) don't trigger
+# `unexpected_cfgs` warnings on this crate. No production code is
+# gated by this feature; the canonical test escape hatch was removed
+# in plan async-juggling-plum.md.
+test-utils = []
 
 [dev-dependencies]
-kithara-abr = { path = ".", default-features = false, features = ["internal"] }
-unimock = { workspace = true }
-kithara-test-utils = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 proptest = { workspace = true }
 

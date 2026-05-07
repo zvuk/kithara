@@ -9,7 +9,7 @@ use std::{
 };
 
 use bitflags::bitflags;
-use kithara_probes::kithara;
+use kithara_test_utils::kithara;
 
 /// Decoder-reported chunk position used to advance the timeline.
 ///
@@ -520,14 +520,12 @@ impl Default for Timeline {
 
 #[cfg(test)]
 mod tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
-
     use std::{
         sync::{Arc, Barrier},
         thread,
     };
+
+    use kithara_test_utils::kithara;
 
     use super::*;
 

@@ -11,9 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
-kithara-stream = { workspace = true }
-kithara-abr = { workspace = true }
-kithara-storage = { workspace = true }
+kithara-events = { workspace = true, features = ["downloader"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 tokio-util = { workspace = true }
@@ -43,3 +41,4 @@ tower-http = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt"] }
 aes = { workspace = true }
 cbc = { workspace = true }
+usdt = { workspace = true }

@@ -13,7 +13,7 @@ use kithara_platform::{
     tokio,
     tokio::task,
 };
-use kithara_probes::kithara;
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 

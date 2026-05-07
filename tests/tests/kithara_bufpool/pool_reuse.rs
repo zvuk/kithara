@@ -1,4 +1,4 @@
-use kithara_bufpool::internal::*;
+use kithara_bufpool::*;
 use kithara_test_utils::kithara;
 
 #[kithara::test]
@@ -63,12 +63,12 @@ fn test_byte_pool_budget_tracks_correctly() {
 #[kithara::test]
 fn test_pcm_pool_shard_capacity() {
     let pool = Pool::<8, Vec<f32>>::new(128, 200_000);
-    let shard = shard_index(&pool);
+    let shard = pool.shard_index_of();
 
     for _ in 0..8 {
         let mut buf = Vec::with_capacity(4096);
         buf.resize(1024, 0.0);
-        put(&pool, buf, shard);
+        pool.put(buf, shard);
     }
 
     let bufs: Vec<_> = (0..8).map(|_| pool.get()).collect();
@@ -98,12 +98,12 @@ fn test_pcm_pool_no_cross_shard_needed_typical() {
 #[kithara::test]
 fn test_cross_shard_probe_finds_nearby() {
     let pool = Pool::<8, Vec<u8>>::new(128, 1024);
-    let home = shard_index(&pool);
+    let home = pool.shard_index_of();
     let target = (home + 2) % 8;
 
     let mut buf = Vec::with_capacity(512);
     buf.push(0);
-    put(&pool, buf, target);
+    pool.put(buf, target);
 
     let retrieved = pool.get();
     assert!(retrieved.capacity() > 0);
@@ -112,12 +112,12 @@ fn test_cross_shard_probe_finds_nearby() {
 #[kithara::test]
 fn test_cross_shard_fresh_alloc_when_out_of_range() {
     let pool = Pool::<8, Vec<u8>>::new(128, 1024);
-    let home = shard_index(&pool);
+    let home = pool.shard_index_of();
     let far = (home + 7) % 8;
 
     let mut buf = Vec::with_capacity(512);
     buf.push(0);
-    put(&pool, buf, far);
+    pool.put(buf, far);
 
     let retrieved = pool.get();
     assert_eq!(retrieved.capacity(), 0);

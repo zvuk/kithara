@@ -6,10 +6,11 @@ use crate::{
     types::{ItemStatus, TimeRange},
 };
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = PlayerItemMock)
-)]
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
+#[kithara::mock(api = PlayerItemMock)]
 pub trait PlayerItem: MaybeSend + MaybeSync + 'static {
     fn asset_duration(&self) -> MediaTime;
 

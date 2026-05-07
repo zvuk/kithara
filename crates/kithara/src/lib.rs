@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 //! # Kithara
 //!
@@ -18,9 +17,6 @@
 //! let mut buf = [0.0f32; 1024];
 //! resource.read(&mut buf);
 //! ```
-
-#[cfg(feature = "internal")]
-pub mod internal;
 
 // Virtual modules — namespaced access to all subcrates.
 
@@ -87,7 +83,8 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
-// Test macros — `#[kithara::test]` and `#[kithara::fixture]`.
+// Test macros — `#[kithara::test]`, `#[kithara::fixture]`, `#[kithara::mock]`.
+pub use kithara_test_macros::mock;
 #[cfg(feature = "test-utils")]
 pub use kithara_test_macros::{fixture, test};
 

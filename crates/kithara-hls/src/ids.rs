@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-pub(crate) type VariantIndex = usize;
+pub type VariantIndex = usize;
 pub(crate) type SegmentIndex = usize;
 
 /// Distinguishes media segments by index in download plans.

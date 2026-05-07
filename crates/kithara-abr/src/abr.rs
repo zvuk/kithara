@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use kithara_events::{AbrProgressSnapshot, AbrVariant};
-#[cfg(any(test, feature = "internal"))]
-use unimock::unimock;
+use kithara_test_utils::kithara;
 
 use crate::state::AbrState;
 
@@ -13,7 +12,7 @@ use crate::state::AbrState;
 /// direct file download) rely on the default methods — no variants, no state,
 /// no progress. The track-scoped event bus is owned by
 /// [`AbrHandle`](crate::AbrHandle); peers do not need to juggle it.
-#[cfg_attr(any(test, feature = "internal"), unimock(api = AbrMock))]
+#[kithara::mock(api = AbrMock)]
 pub trait Abr: Send + Sync + 'static {
     /// Pull-model buffer observation used for buffer-aware decisions.
     /// Returning `None` disables buffer gates for this peer.

@@ -19,6 +19,7 @@ kithara-decode = { workspace = true }
 kithara-events = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-test-macros = { workspace = true }
 biquad = { workspace = true }
 rubato = { workspace = true }
 audioadapter-buffers = { workspace = true }
@@ -32,12 +33,11 @@ portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }
 num-traits = { workspace = true }
 hotpath = { workspace = true, optional = true }
-unimock = { workspace = true, optional = true }
+unimock = { workspace = true }
 
 [features]
 default = ["symphonia"]
-test-utils = ["unimock"]
-internal = []
+test-utils = []
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)
@@ -69,7 +69,7 @@ web-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-kithara-audio = { path = ".", default-features = false, features = ["internal", "symphonia"] }
+kithara-audio = { path = ".", default-features = false, features = ["test-utils", "symphonia"] }
 assert_no_alloc = { workspace = true }
 tokio-util = { workspace = true }
 bytes = { workspace = true }
@@ -80,7 +80,6 @@ kithara-test-utils = { workspace = true }
 tempfile = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
-unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

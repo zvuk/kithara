@@ -109,10 +109,6 @@ src/
   `kithara-hls`'s `HlsCoord` reads the variant via `Arc<AbrState>` (no
   cloneable `Arc<AtomicUsize>` handle is exposed) — see `redundant_accessors`
   in `xtask/src/arch/checks` for the rationale.
-- **`AbrState::set_variant_for_test`** is a `#[cfg(any(test, feature = "internal"))]`
-  escape hatch for HLS integration tests that want to reproduce a midstream
-  variant switch without simulating a full ABR tick.
-
 ## Decision flow
 
 ```

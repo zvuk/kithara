@@ -7,8 +7,10 @@ use std::{
 };
 
 use kithara_stream::{PendingReason, StreamReadError, VariantChangeError};
-#[cfg(any(test, feature = "test-utils"))]
-use unimock::unimock;
+
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
 
 use crate::{
     error::DecodeResult,
@@ -179,7 +181,7 @@ pub(crate) type BoxedSource = Box<dyn DecoderInput>;
 ///
 /// This trait is used by kithara-audio for dynamic dispatch when the
 /// decoder type is determined at runtime (e.g., based on media info).
-#[cfg_attr(any(test, feature = "test-utils"), unimock(api = DecoderMock))]
+#[kithara::mock(api = DecoderMock)]
 pub trait Decoder: Send + 'static {
     /// Get total duration from track metadata.
     ///

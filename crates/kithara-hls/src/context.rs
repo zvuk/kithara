@@ -57,8 +57,9 @@ impl StreamContext for HlsStreamContext {
 
 #[cfg(test)]
 mod tests {
-    use kithara_abr::AbrState;
-    use kithara_events::AbrMode;
+    use kithara_abr::{AbrDecision, AbrState};
+    use kithara_events::{AbrMode, AbrReason};
+    use kithara_platform::time::Instant;
     use kithara_test_utils::kithara;
     use url::Url;
 
@@ -70,6 +71,17 @@ mod tests {
             Vec::new(),
             AbrMode::Auto(Some(initial_variant)),
         ))
+    }
+
+    fn pin_variant(abr: &AbrState, idx: usize) {
+        abr.apply(
+            &AbrDecision {
+                reason: AbrReason::ManualOverride,
+                did_change: true,
+                target_variant_index: idx,
+            },
+            Instant::now(),
+        );
     }
 
     #[kithara::test]
@@ -112,7 +124,7 @@ mod tests {
                 media_url: Url::parse("https://example.com/seg-2.m4s").unwrap(),
             },
         );
-        abr.set_variant_for_test(3);
+        pin_variant(&abr, 3);
 
         // Variant 3 segment 10 covers byte range 0..200
         timeline.set_segment_position(100);

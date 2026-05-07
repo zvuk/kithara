@@ -31,9 +31,6 @@ mod global;
 mod growth;
 mod pool;
 
-#[cfg(feature = "internal")]
-pub mod internal;
-
 pub use global::{BytePool, PcmBuf, PcmPool};
 pub use growth::BudgetExhausted;
 pub use pool::ByteBudget;

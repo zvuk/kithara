@@ -22,5 +22,5 @@ mod plan;
 mod size_map;
 mod trait_impl;
 
-pub(crate) use state::HlsScheduler;
+pub use state::HlsScheduler;
 pub(crate) use trait_impl::LoadedSegmentBody;

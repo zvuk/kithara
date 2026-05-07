@@ -14,8 +14,12 @@ use crate::{
     key::ResourceKey,
 };
 
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 /// Trait for recording asset bytes for eviction tracking.
-#[cfg_attr(test, unimock::unimock(api = ByteRecorderMock))]
+#[kithara::mock(api = ByteRecorderMock)]
 pub(crate) trait ByteRecorder: Send + Sync {
     /// Record asset bytes and check if eviction is needed.
     fn record_bytes(&self, asset_root: &str, bytes: u64);

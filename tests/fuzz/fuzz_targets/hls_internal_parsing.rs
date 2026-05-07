@@ -1,9 +1,7 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara_hls::internal::{
-    parse_master_playlist, parse_media_playlist, variant_info_from_master,
-};
+use kithara_hls::{parse_master_playlist, parse_media_playlist, variant_info_from_master};
 use libfuzzer_sys::fuzz_target;
 
 #[derive(Arbitrary, Debug)]

@@ -1,8 +1,7 @@
 use kithara_events::BandwidthSource;
 use kithara_platform::{Mutex, time::Duration};
+use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
-#[cfg(any(test, feature = "internal"))]
-use unimock::unimock;
 
 #[derive(Clone, Debug)]
 struct Ewma {
@@ -46,7 +45,7 @@ impl Ewma {
 ///
 /// Uses interior mutability so that the controller can hold an
 /// `Arc<dyn Estimator>` and share it across tick invocations.
-#[cfg_attr(any(test, feature = "internal"), unimock(api = EstimatorMock))]
+#[kithara::mock(api = EstimatorMock)]
 pub trait Estimator: Send + Sync {
     /// Current bandwidth estimate in bits per second. `None` while no
     /// samples have been absorbed yet.

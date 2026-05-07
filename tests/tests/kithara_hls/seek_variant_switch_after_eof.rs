@@ -19,10 +19,12 @@ use std::io::{Read, Seek, SeekFrom};
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, Hls, HlsConfig},
-    internal::set_source_variant_for_test,
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+    hls_test_helpers::pin_abr_variant,
+};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
@@ -72,7 +74,7 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
         info!("All variant 0 data read to EOF");
 
         // Step 2: Force ABR switch to variant 1.
-        set_source_variant_for_test(stream.source(), 1);
+        pin_abr_variant(&stream.source().coord().abr_state, 1);
         info!("ABR variant switched 0 → 1");
 
         // Step 3: Seek to middle of stream (segment 1 territory).

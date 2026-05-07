@@ -9,11 +9,13 @@
 )]
 //! Also provides `#[kithara::fixture]` as a no-op marker (replaces `#[rstest::fixture]`).
 
+mod probe_expand;
+
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Error, Expr, FnArg, Ident, ItemFn, Meta, Pat, Token,
+    Attribute, DeriveInput, Error, Expr, FnArg, Ident, ItemFn, Meta, Pat, Token,
     parse::{Parse, ParseStream, Parser},
     parse_macro_input,
     punctuated::Punctuated,
@@ -1303,6 +1305,90 @@ pub fn fixture(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #(#dep_bindings)*
             #(#body_stmts)*
         }
+    }
+    .into()
+}
+
+/// `#[kithara::probe]` — instrument a function with a `tracing::event!`
+/// emission for `kithara_test_utils::probe_capture` consumers.
+///
+/// Args:
+/// - bare `#[kithara::probe]` records every named function argument;
+/// - `#[kithara::probe(arg1, arg2)]` filters to listed args;
+/// - `#[kithara::probe(probe_return)]` skips entry emission and instead
+///   calls `record_probe(name)` on the return value (the return type
+///   must derive `kithara::Probe`).
+///
+/// Args are recorded with `?value` (Debug). The whole emission is
+/// gated on `cfg(any(test, feature = "test-utils"))` of the consumer
+/// crate, so production builds compile probes to no-ops.
+#[proc_macro_attribute]
+pub fn probe(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr2 = TokenStream2::from(attr);
+    let filter = match probe_expand::parse_filter(attr2) {
+        Ok(f) => f,
+        Err(e) => return e.into_compile_error().into(),
+    };
+    let input = parse_macro_input!(item as ItemFn);
+    probe_expand::expand(&input, filter)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Derive `kithara::Probe` for a struct.
+///
+/// Generates an inherent `pub fn record_probe(&self, name: &'static str)`
+/// method that fires a single `tracing::event!` carrying every named
+/// field as `field = ?self.field`. Field-level options:
+/// - `#[probe(skip)]` — exclude from the wire payload;
+/// - `#[probe(name = "alias")]` — rename the emitted field.
+///
+/// The emission is gated on `cfg(any(test, feature = "test-utils"))`.
+#[proc_macro_derive(Probe, attributes(probe))]
+pub fn derive_probe(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    probe_expand::expand_derive(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// `#[kithara::mock]` — workspace replacement for `#[unimock(...)]`.
+///
+/// Forwards all arguments to `::unimock::unimock(...)` and pre-applies the
+/// clippy allow-set required by unimock-generated code. Gates the
+/// expansion behind `cfg(any(test, feature = "test-utils"))` so production
+/// builds of crates depending on this one don't pay the cost of compiling
+/// mock impls; call sites don't need to write the `cfg_attr` themselves.
+///
+/// The trait declaration that carries this attribute remains a plain
+/// declaration with no `cfg_attr` boilerplate — all conditional logic
+/// lives inside the macro expansion. Crates using this macro must declare
+/// a `test-utils = []` feature in their `Cargo.toml`.
+#[proc_macro_attribute]
+pub fn mock(args: TokenStream, item: TokenStream) -> TokenStream {
+    let args2: TokenStream2 = args.into();
+    let item2: TokenStream2 = item.into();
+
+    quote! {
+        #[cfg_attr(
+            any(test, feature = "test-utils"),
+            allow(
+                clippy::ignored_unit_patterns,
+                clippy::allow_attributes,
+                clippy::needless_lifetimes,
+                clippy::redundant_pub_crate,
+                clippy::needless_pass_by_value,
+                clippy::redundant_closure_for_method_calls,
+                clippy::too_many_arguments,
+                clippy::elidable_lifetime_names,
+                dead_code
+            )
+        )]
+        #[cfg_attr(
+            any(test, feature = "test-utils"),
+            ::unimock::unimock(#args2)
+        )]
+        #item2
     }
     .into()
 }

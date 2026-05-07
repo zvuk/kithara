@@ -3,7 +3,7 @@
 use std::{hint::black_box, thread, time::Duration};
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use kithara_bufpool::{ByteBudget, BytePool, PcmPool, Pool, internal};
+use kithara_bufpool::{ByteBudget, BytePool, PcmPool, Pool};
 
 fn run_threaded_get_put(pool: BytePool, threads: usize, iters_per_thread: usize) {
     let handles: Vec<_> = (0..threads)
@@ -86,7 +86,7 @@ fn bench_ensure_len(c: &mut Criterion) {
 
 fn bench_cross_shard_steal(c: &mut Criterion) {
     let pool = Pool::<32, Vec<u8>>::with_byte_budget(1024, 0, ByteBudget(256 * 1024 * 1024));
-    let home = internal::shard_index(&pool);
+    let home = pool.shard_index_of();
     let donor = (home + 1) % 32;
 
     let mut group = c.benchmark_group("bufpool_steal");
@@ -98,7 +98,7 @@ fn bench_cross_shard_steal(c: &mut Criterion) {
             || {
                 let mut seed = Vec::new();
                 seed.resize(4 * 1024, 1);
-                internal::put(&pool, seed, donor);
+                pool.put(seed, donor);
             },
             |()| {
                 let buf = pool.get();

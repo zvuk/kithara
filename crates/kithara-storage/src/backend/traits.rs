@@ -16,6 +16,10 @@ use rangemap::RangeSet;
 
 use crate::StorageResult;
 
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
 /// Backend-specific storage operations.
 ///
 /// Drivers handle raw byte I/O and storage lifecycle transitions.
@@ -25,7 +29,7 @@ use crate::StorageResult;
 ///
 /// Each driver manages its own interior mutability (e.g. `Mutex<MmapState>`
 /// for mmap, `Mutex<Vec<u8>>` for memory).
-#[cfg_attr(any(test, feature = "test-utils"), unimock::unimock(api = DriverIoMock))]
+#[kithara::mock(api = DriverIoMock)]
 pub trait DriverIo: Send + Sync + 'static {
     /// Finalize backing store (e.g. mmap: resize + reopen read-only; memory: truncate).
     ///
