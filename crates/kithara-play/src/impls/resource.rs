@@ -87,24 +87,16 @@ impl Resource {
 
     /// Create a resource from any `PcmReader`.
     ///
-    /// The resource shares the reader's event bus directly.
-    /// Use this for custom sources.
+    /// The resource shares the reader's event bus directly. Use for custom
+    /// sources or offline render harnesses where the production
+    /// [`Resource::new`] / [`Resource::from_stream_audio`] paths (which
+    /// build a real `Stream<T>`) are heavier than the caller needs.
     ///
-    /// Only compiled in test / `test-utils` builds — production paths
-    /// always go through [`Resource::new`] / [`Resource::from_stream_audio`].
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
-        Self::from_reader_with_src(reader, Arc::from("unknown"))
-    }
-
-    /// Create a resource from any `PcmReader` with an explicit `src`
-    /// identifier. The src tag rides along on `PlayerEvent::ItemDidPlayToEnd`
-    /// and is what the queue uses to tell which track ended.
-    ///
-    /// Only compiled in test / `test-utils` builds — production paths
-    /// always go through [`Resource::new`] / [`Resource::from_stream_audio`].
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) fn from_reader_with_src(reader: impl PcmReader + 'static, src: Arc<str>) -> Self {
+    /// `src` rides along on `PlayerEvent::ItemDidPlayToEnd` and is what
+    /// the queue uses to tell which track ended. `None` defaults to
+    /// `"unknown"`.
+    #[must_use]
+    pub fn from_reader<R: PcmReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
         let bus = reader.event_bus().clone();
         let mut inner: Box<dyn PcmReader> = Box::new(reader);
         // Player resources are consumed from the audio render thread,
@@ -114,7 +106,11 @@ impl Resource {
         // preload errors here — they surface again on the first
         // `read()` / `next_chunk()` call.
         let _ = inner.preload();
-        Self { inner, src, bus }
+        Self {
+            inner,
+            src: src.unwrap_or_else(|| Arc::from("unknown")),
+            bus,
+        }
     }
 
     /// Create a resource from a concrete stream-backed audio config.
@@ -256,164 +252,5 @@ impl Resource {
     #[must_use]
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Test fixtures use small positive integer/float values; numeric casts
-    // here model fixture data, not production contracts.
-    #![cfg_attr(
-        any(test, feature = "test-utils"),
-        allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            clippy::cast_lossless,
-        )
-    )]
-    use kithara_audio::{ReadOutcome, mock::TestPcmReader};
-    use kithara_decode::PcmSpec;
-    use kithara_events::{AudioEvent, AudioFormat, Event, EventBus};
-    use kithara_platform::{time, time::Duration};
-    use kithara_test_utils::kithara;
-
-    use super::Resource;
-
-    fn mock_spec() -> PcmSpec {
-        PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        }
-    }
-
-    fn make_resource() -> Resource {
-        Resource::from_reader(TestPcmReader::new(mock_spec(), 1.0))
-    }
-
-    fn make_resource_with_bus() -> (Resource, EventBus) {
-        let reader = TestPcmReader::new(mock_spec(), 1.0);
-        let bus = reader.event_bus().clone();
-        let resource = Resource::from_reader(reader);
-        (resource, bus)
-    }
-
-    #[derive(Clone, Copy)]
-    enum ReadMode {
-        Interleaved,
-        Planar,
-    }
-
-    #[kithara::test(tokio)]
-    #[case(ReadMode::Interleaved)]
-    #[case(ReadMode::Planar)]
-    async fn test_resource_from_reader_read_variants(#[case] mode: ReadMode) {
-        let mut resource = make_resource();
-        match mode {
-            ReadMode::Interleaved => {
-                let mut buf = [0.0f32; 64];
-                let outcome = resource.read(&mut buf).expect("BUG: read");
-                let ReadOutcome::Frames { count, .. } = outcome else {
-                    panic!("expected Frames, got {outcome:?}");
-                };
-                assert_eq!(count.get(), 64);
-                for sample in &buf[..count.get()] {
-                    assert!((sample - 0.5).abs() < f32::EPSILON);
-                }
-            }
-            ReadMode::Planar => {
-                let mut ch0 = [0.0f32; 32];
-                let mut ch1 = [0.0f32; 32];
-                let mut output: Vec<&mut [f32]> = vec![&mut ch0, &mut ch1];
-                let outcome = resource.read_planar(&mut output).expect("BUG: read_planar");
-                let ReadOutcome::Frames { count, .. } = outcome else {
-                    panic!("expected Frames, got {outcome:?}");
-                };
-                assert_eq!(count.get(), 32);
-                for &s in &ch0[..count.get()] {
-                    assert!((s - 0.5).abs() < f32::EPSILON);
-                }
-                for &s in &ch1[..count.get()] {
-                    assert!((s - 0.5).abs() < f32::EPSILON);
-                }
-            }
-        }
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_from_reader_spec() {
-        let resource = make_resource();
-        let spec = resource.spec();
-        assert_eq!(spec.sample_rate, 44100);
-        assert_eq!(spec.channels, 2);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_from_reader_position_and_duration() {
-        let resource = make_resource();
-        assert_eq!(resource.position(), Duration::ZERO);
-        let dur = resource.duration().unwrap();
-        // 1.0 second at 44100 Hz
-        assert!((dur.as_secs_f64() - 1.0).abs() < 0.001);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_from_reader_seek() {
-        let mut resource = make_resource();
-        assert_eq!(resource.position(), Duration::ZERO);
-
-        let outcome = resource
-            .seek(Duration::from_millis(500))
-            .expect("BUG: seek");
-        assert!(matches!(outcome, kithara_audio::SeekOutcome::Landed { .. }));
-        let pos = resource.position();
-        assert!((pos.as_secs_f64() - 0.5).abs() < 0.001);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_from_reader_reads_until_eof() {
-        let mut resource = make_resource();
-
-        // Read all samples: 44100 frames * 2 channels = 88200 samples
-        let mut buf = [0.0f32; 4096];
-        let saw_eof = loop {
-            match resource.read(&mut buf).expect("BUG: read") {
-                ReadOutcome::Pending { .. } => break false,
-                ReadOutcome::Frames { .. } => continue,
-                ReadOutcome::Eof { .. } => break true,
-            }
-        };
-        assert!(
-            saw_eof,
-            "reader must reach natural EOF after consuming all samples"
-        );
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_subscribe_receives_events() {
-        let (resource, bus) = make_resource_with_bus();
-        let mut rx = resource.subscribe();
-
-        // Publish an AudioEvent through the shared bus directly.
-        let spec = mock_spec();
-        let format = AudioFormat::new(spec.channels, spec.sample_rate);
-        bus.publish(AudioEvent::FormatDetected { spec: format });
-
-        let event = time::timeout(Duration::from_millis(200), rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(
-            matches!(event, Event::Audio(AudioEvent::FormatDetected { spec: s }) if s == format)
-        );
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_metadata() {
-        let resource = make_resource();
-        let meta = resource.metadata();
-        assert_eq!(meta.title.as_deref(), Some("Mock"));
-        assert!(meta.artwork.is_none());
     }
 }

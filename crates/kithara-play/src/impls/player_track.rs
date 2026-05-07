@@ -651,7 +651,7 @@ mod tests {
     // this helper must use `#[kithara::test(tokio)]`.
     fn make_track_with(duration_secs: f64, item_id: Option<Arc<str>>) -> PlayerTrack {
         let src: Arc<str> = Arc::from("test.mp3");
-        let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs));
+        let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs), None);
         make_track_from_resource(resource, src, item_id)
     }
 
@@ -1059,7 +1059,7 @@ mod tests {
     async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
         let src = Arc::from("misreported.mp3");
         let resource =
-            Resource::from_reader_with_src(MisreportedDurationReader::new(900), Arc::clone(&src));
+            Resource::from_reader(MisreportedDurationReader::new(900), Some(Arc::clone(&src)));
         let mut track = make_track_from_resource(resource, src, None);
         let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.0, sample_rate);

@@ -253,7 +253,7 @@ mod tests {
 
     fn make_player_resource() -> PlayerResource {
         let reader = TestPcmReader::new(mock_spec(), 1.0);
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         PlayerResource::new(
             resource,
             Arc::from("test.mp3"),
@@ -387,7 +387,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn resource_zero_read_without_eof_is_not_error() {
         let reader = PendingReader::new();
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         let mut pr = PlayerResource::new(
             resource,
             Arc::from("pending"),
@@ -409,7 +409,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn resource_read_zeroes_output_when_no_data_available() {
         let reader = PendingReader::new();
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         let mut pr = PlayerResource::new(
             resource,
             Arc::from("pending"),
@@ -455,7 +455,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn full_read_prefetches_buffered_eof() {
         let reader = TestPcmReader::new(mock_spec(), 900.0 / 44100.0);
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         let mut pr = PlayerResource::new(
             resource,
             Arc::from("short.mp3"),
@@ -478,7 +478,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn read_returns_partial_when_eof_inside_buffer() {
         let reader = TestPcmReader::new(mock_spec(), 0.01);
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         let mut pr = PlayerResource::new(
             resource,
             Arc::from("short.mp3"),
@@ -505,7 +505,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn read_returns_eof_when_already_drained() {
         let reader = TestPcmReader::new(mock_spec(), 0.01);
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         let mut pr = PlayerResource::new(
             resource,
             Arc::from("short.mp3"),
@@ -530,7 +530,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn read_zeros_output_on_pending_reader_returns_full() {
         let reader = PendingReader::new();
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         let mut pr = PlayerResource::new(
             resource,
             Arc::from("pending"),

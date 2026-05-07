@@ -839,7 +839,7 @@ mod tests {
             sample_rate: 44_100,
         });
 
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
@@ -1044,7 +1044,7 @@ mod tests {
         };
         let reader = TestPcmReader::new(spec, duration_secs);
 
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
@@ -1317,7 +1317,7 @@ mod tests {
             bus: EventBus::default(),
         };
 
-        let resource = Resource::from_reader(reader);
+        let resource = Resource::from_reader(reader, None);
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),

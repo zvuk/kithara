@@ -1196,9 +1196,9 @@ mod tests {
     }
 
     fn make_resource(duration_secs: f64) -> Resource {
-        Resource::from_reader_with_src(
+        Resource::from_reader(
             TestPcmReader::new(mock_spec(), duration_secs),
-            Arc::from(format!("test-resource-{duration_secs}")),
+            Some(Arc::from(format!("test-resource-{duration_secs}"))),
         )
     }
 
@@ -1559,9 +1559,9 @@ mod tests {
     fn make_tagged_resource(item_id: &'static str, duration_secs: f64) -> (Resource, Arc<str>) {
         let item_id = Arc::<str>::from(item_id);
         (
-            Resource::from_reader_with_src(
+            Resource::from_reader(
                 TestPcmReader::new(mock_spec(), duration_secs),
-                Arc::from(format!("memory://{item_id}")),
+                Some(Arc::from(format!("memory://{item_id}"))),
             ),
             item_id,
         )

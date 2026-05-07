@@ -234,14 +234,14 @@ pub mod offline {
 
     /// Create a [`Resource`](crate::Resource) from any [`PcmReader`].
     ///
-    /// Test-only wrapper around the `pub(crate)` constructor.
+    /// Thin wrapper around [`Resource::from_reader`](crate::Resource::from_reader).
     ///
     /// [`PcmReader`]: kithara_audio::PcmReader
     pub fn resource_from_reader<R>(reader: R) -> crate::Resource
     where
         R: kithara_audio::PcmReader + 'static,
     {
-        crate::Resource::from_reader(reader)
+        crate::Resource::from_reader(reader, None)
     }
 
     /// Create a [`Resource`](crate::Resource) from a [`PcmReader`] with
@@ -254,7 +254,7 @@ pub mod offline {
         R: kithara_audio::PcmReader + 'static,
         S: Into<Arc<str>>,
     {
-        crate::Resource::from_reader_with_src(reader, src.into())
+        crate::Resource::from_reader(reader, Some(src.into()))
     }
 
     /// Re-export of the per-instance offline session handle returned by
