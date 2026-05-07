@@ -4657,7 +4657,6 @@ dependencies = [
  "js-sys",
  "kithara-platform",
  "kithara-play",
- "kithara-wasm",
  "kithara-wasm-macros",
  "num-traits",
  "tracing",

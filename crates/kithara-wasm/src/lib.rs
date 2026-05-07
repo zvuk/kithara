@@ -4,9 +4,6 @@
 // `kithara-platform` for native targets). All wasm-only code lives under
 // the single cfg-gated `mod wasm;` below — see crate README for details.
 
-#[cfg(any(test, feature = "test-utils"))]
-pub mod test_helpers;
-
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 

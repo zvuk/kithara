@@ -1,10 +1,10 @@
 id: arch.no-test-in-prod
 message: |
   Тестовые артефакты не должны жить в production source. Имена с
-  суффиксом `_for_test`/`_for_tests`, префиксом `test_` (для функций) или
-  модули `tests`/`test` в `crates/*/src/` (вне `#[cfg(test)] mod`) загрязняют
-  public API и rustdoc, попадают в `cargo build --features test-utils`,
-  и часто создают параллельные пути записи, обходящие документированные
+  суффиксом `_for_test`/`_for_tests` или модули `tests`/`test` в
+  `crates/*/src/` (вне `#[cfg(test)] mod`) загрязняют public API и
+  rustdoc, попадают в `cargo build --features test-utils`, и часто
+  создают параллельные пути записи, обходящие документированные
   prod-входы (см. AGENTS.md, "Do not introduce parallel mutable sources
   of truth without an explicit transition contract").
 
@@ -29,14 +29,13 @@ ignores:
   # the entire crate is test scaffolding.
   - "**/kithara-encode/**"
   - "**/tests/**"
-  - "**/test_*.rs"
+  # Sibling test files pulled in via `#[cfg(test)] mod foo_test;` in
+  # the parent — the cfg gate lives on the `mod` decl in lib.rs, not
+  # at the top of the included file, so the AST `not follows cfg(test)`
+  # carve-out can't see it. File-glob ignore is the only option.
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
-  - "**/test_utils.rs"
-  - "**/test_utils/**"
-  - "**/test_helpers.rs"
-  - "**/test_helpers/**"
   # `kithara-queue` lifecycle holds `register_for_test`, `complete_load_for_test`,
   # `insert_loaded_for_test`. Removing them requires introducing a `TrackLoader`
   # trait — tracked as a separate plan; see plan async-juggling-plum.md
@@ -49,7 +48,7 @@ rule:
             - kind: function_item
             - has:
                 field: name
-                regex: '_for_test$|_for_tests$|^test_'
+                regex: '_for_test$|_for_tests$'
         - all:
             - kind: mod_item
             - has:

@@ -19,7 +19,7 @@
 //! macro expands into a sync `#[test]` fn whose tail is:
 //!
 //!   1. Inside the body: `_kithara_env_guard` acquired — takes
-//!      `kithara_platform::test_env_lock()` (a global `std::sync::Mutex<()>`
+//!      `kithara_platform::env_mutation_lock()` (a global `std::sync::Mutex<()>`
 //!      shared by **every** `env(...)` test in the process) and saves
 //!      previous values for up to 7 vars (`NO_PROXY`, `HTTP_PROXY`,
 //!      `HTTPS_PROXY`, `ALL_PROXY`, `http_proxy`, `https_proxy`, `all_proxy`).
@@ -37,7 +37,7 @@
 //!      subprocess exits.
 //!
 //! Steps 2 + 3 + 4 are the tail latency nextest measures.  Under
-//! workspace-wide load (8+ contenders on `test_env_lock`, many subprocess
+//! workspace-wide load (8+ contenders on `env_mutation_lock`, many subprocess
 //! spawns competing for kernel resources), this tail can exceed 100 ms —
 //! which is what triggers LEAK.
 //!
@@ -48,7 +48,7 @@
 //! stdout and the child actually reporting `Exited`** — exactly what nextest
 //! uses to decide LEAK.  We assert that gap stays under the 100 ms grace
 //! window, both in isolation and under sustained contention on the
-//! `test_env_lock`.
+//! `env_mutation_lock`.
 //!
 //! In isolation, today, the test passes — the tail is ~10 ms.  Under the
 //! workspace-wide load profile (reproduced here by `N` background threads
@@ -145,7 +145,7 @@ fn red_env_guard_no_leak_in_isolation() {
 #[kithara_test(native)]
 fn red_env_guard_no_leak_under_env_lock_contention() {
     // Reproduce LEAK conditions: many in-parent workers hammer the
-    // `test_env_lock` while the child subprocess runs its own env test.
+    // `env_mutation_lock` while the child subprocess runs its own env test.
     // Because the lock is process-local, the child has its own copy — so
     // this tests the *OS-level* shutdown overhead under sustained CPU
     // pressure from our own threads, which is what happens under
