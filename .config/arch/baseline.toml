@@ -260,7 +260,6 @@ schema_version = 1
 "crates/kithara-hls/src/source/tests.rs::push_segment" = 1
 "crates/kithara-hls/src/test_utils.rs::build_source_full" = 1
 "crates/kithara-net/src/types.rs::tests::test_retry_policy_delay_for_attempt_custom" = 1
-"crates/kithara-play/src/impls/player.rs::tests::render_until_events" = 1
 "crates/kithara-play/src/impls/player_track.rs::PlayerTrack::new" = 1
 "crates/kithara-queue/src/queue/playback.rs::tests::should_arm_crossfade_cases" = 1
 "crates/kithara-stream/src/dl/batch.rs::abort_request" = 1
