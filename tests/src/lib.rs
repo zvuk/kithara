@@ -14,6 +14,7 @@
 pub mod abr_fixtures;
 pub mod asset_fixture;
 pub mod audio_fixture;
+pub mod audio_mock;
 pub mod hls_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hls_test_helpers;

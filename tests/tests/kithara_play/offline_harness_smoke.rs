@@ -20,7 +20,7 @@ fn mock_spec() -> PcmSpec {
 }
 
 fn make_resource(duration_secs: f64) -> Resource {
-    resource_from_reader(kithara_audio::mock::TestPcmReader::new(
+    resource_from_reader(kithara_integration_tests::audio_mock::TestPcmReader::new(
         mock_spec(),
         duration_secs,
     ))
