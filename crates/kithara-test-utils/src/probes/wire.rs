@@ -129,13 +129,14 @@ impl<T: IntoProbeArg> IntoProbeArg for Option<T> {
 
 /// Register all USDT probes embedded in the binary with the host
 /// kernel tracer (dtrace on macOS, bpftrace on Linux). Safe to call
-/// from multiple init paths — guarded by an internal `OnceLock`. On
-/// wasm32 this is a no-op.
+/// from multiple init paths — guarded by an internal `OnceLock`. На
+/// wasm32 и в прод-сборке (`feature = "test-utils"` выключена) это
+/// no-op stub — `usdt`-крейт оптуально и не пуллится.
 pub fn register_probes() {
     imp::register();
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
 mod imp {
     use std::sync::OnceLock;
 
@@ -148,7 +149,7 @@ mod imp {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", not(feature = "test-utils")))]
 mod imp {
     pub(super) fn register() {}
 }

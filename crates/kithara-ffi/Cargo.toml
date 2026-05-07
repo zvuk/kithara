@@ -73,7 +73,7 @@ test = ["kithara/test-utils", "dep:kithara-play", "dep:tokio", "dep:cpal"]
 [dev-dependencies]
 futures = { workspace = true }
 kithara = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(target_os = "android")'.dependencies]

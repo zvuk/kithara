@@ -30,5 +30,5 @@ kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 [dev-dependencies]
 kithara-hang-detector = { path = "." }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 wasm-bindgen-test = { workspace = true }

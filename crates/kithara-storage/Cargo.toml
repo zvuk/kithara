@@ -47,6 +47,6 @@ tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 kithara-storage = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }

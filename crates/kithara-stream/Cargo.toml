@@ -50,6 +50,7 @@ wasm_safe_thread = { workspace = true }
 
 [dev-dependencies]
 kithara-stream = { path = ".", default-features = false }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 tokio-stream = { workspace = true }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }

@@ -13,12 +13,34 @@
 //!   subscriber. Records the same `u64` slot values for parity with
 //!   the USDT path.
 
+use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
     Data, DataStruct, DeriveInput, Error, Field, Fields, FnArg, Ident, ItemFn, LitStr, Pat,
-    PatIdent, Token, parse::Parser, punctuated::Punctuated,
+    PatIdent, Token, parse::Parser, parse_macro_input, punctuated::Punctuated,
 };
+
+/// Entry-point for `#[kithara::probe]` — forwarded from `lib.rs`.
+pub(crate) fn expand_attr(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr2 = TokenStream2::from(attr);
+    let filter = match parse_filter(attr2) {
+        Ok(f) => f,
+        Err(e) => return e.into_compile_error().into(),
+    };
+    let input = parse_macro_input!(item as ItemFn);
+    expand(&input, filter)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Entry-point for `#[derive(kithara::Probe)]` — forwarded from `lib.rs`.
+pub(crate) fn expand_derive_entry(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_derive(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
 
 #[derive(Default)]
 pub(crate) struct ProbeFilter {

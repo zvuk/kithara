@@ -55,6 +55,7 @@ aes = { workspace = true }
 cbc = { workspace = true }
 kithara-hls = { path = ".", default-features = false, features = ["test-utils"] }
 kithara-net = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 wasm-bindgen-test = { workspace = true }

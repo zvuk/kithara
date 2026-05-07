@@ -18,70 +18,27 @@
 )]
 
 //! Shared test utilities for the kithara workspace.
+//!
+//! Прод-сборка видит только лёгкий `probes/` runtime (trait `Probe`,
+//! `IntoProbeArg`, no-op `fire_N` stubs) и `pub mod kithara` re-export
+//! макросов. Всё остальное — фикстуры, тестовый HTTP-сервер, fmp4,
+//! signal/wav-генераторы — за единственным `feature = "test-utils"`,
+//! который dev-deps потребителей включают для тестовой сборки.
 
 #[cfg(test)]
 extern crate self as kithara_test_utils;
 
-pub(crate) mod consts;
-pub mod fixture_protocol;
-pub mod fixtures;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod fmp4;
-mod hls_blob_store;
-pub mod hls_fixture;
-pub(crate) mod hls_spec;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod hls_stream;
-pub mod hls_url;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod http_server;
-mod log_filter;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod probe_capture;
 pub mod probes;
-pub mod rng;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod routes;
-pub mod server_url;
-pub mod signal_pcm;
-mod signal_source_utils;
-pub(crate) mod signal_spec;
-pub mod signal_url;
-pub mod test_server;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod test_server_state;
-mod token_store;
-pub mod wav;
 
-/// Re-export of `kithara_test_macros::test` under the `kithara` namespace.
-///
-/// Allows `use kithara_test_utils::kithara` and then `#[kithara::test]`
-/// or `#[kithara::test(tokio)]` in test modules.
+/// Re-export of `kithara_test_macros` под `kithara::*`-namespace.
+/// Позволяет писать `use kithara_test_utils::kithara` и затем
+/// `#[kithara::test]`, `#[kithara::probe]`, `#[kithara::mock]`.
 pub mod kithara {
     pub use kithara_test_macros::{Probe, fixture, mock, probe, test};
 }
 
-pub use fixtures::*;
-pub use hls_fixture::{
-    AbrTestServer, EncryptionConfig, HlsTestServer, HlsTestServerConfig, PackagedTestServer,
-    TestServer, abr, compat, master_playlist, packaged, packaged_test_server, test_master_playlist,
-    test_master_playlist_encrypted, test_master_playlist_with_init, test_media_playlist,
-    test_media_playlist_encrypted, test_media_playlist_with_init, test_segment_data, test_server,
-};
-pub use hls_url::{
-    HlsSpec, encode_hls_spec, hls_init_path, hls_key_path, hls_master_path, hls_media_path,
-    hls_segment_path,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub use http_server::TestHttpServer;
-pub use log_filter::rust_log_filter;
-pub use rng::*;
-pub use server_url::join_server_url;
-pub use signal_source_utils::*;
-pub use signal_url::{
-    SignalFormat, SignalKind, SignalSpec, SignalSpecLength, SweepMode, signal_path,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub use test_server::run_test_server;
-pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
-pub use wav::{create_test_wav, create_wav_exact_bytes};
+#[cfg(feature = "test-utils")]
+mod inner;
+
+#[cfg(feature = "test-utils")]
+pub use inner::*;

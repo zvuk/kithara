@@ -25,7 +25,7 @@ kithara-events = { workspace = true }
 kithara-hls = { workspace = true, features = ["test-utils"] }
 kithara-queue = { workspace = true, features = ["test-utils"] }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 rkyv = { workspace = true }
 kithara-net = { workspace = true, features = ["test-utils"] }
 kithara-platform = { workspace = true }

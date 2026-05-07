@@ -67,7 +67,7 @@ test-utils = []
 [dev-dependencies]
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "test-utils"] }
 kithara-audio = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
