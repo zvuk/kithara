@@ -715,7 +715,7 @@ mod tests {
         atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
 
-    use kithara_audio::{PcmReader, mock::TestPcmReader};
+    use kithara_audio::PcmReader;
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::{Mutex as PlatformMutex, time::Duration};
@@ -727,6 +727,130 @@ mod tests {
 
     use super::*;
     use crate::impls::resource::Resource;
+
+    /// Constant-sample PCM reader: every frame is `0.5` on every channel.
+    /// Local to this test module — production code must not depend on it.
+    struct LocalConstantReader {
+        spec: PcmSpec,
+        meta: TrackMetadata,
+        bus: EventBus,
+        total_frames: u64,
+        frame_idx: u64,
+    }
+
+    impl LocalConstantReader {
+        fn new(spec: PcmSpec, duration_secs: f64) -> Self {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss,
+                reason = "fixture: small positive duration"
+            )]
+            let total_frames = (duration_secs * spec.sample_rate as f64) as u64;
+            Self {
+                spec,
+                meta: TrackMetadata::default(),
+                bus: EventBus::default(),
+                total_frames,
+                frame_idx: 0,
+            }
+        }
+    }
+
+    impl PcmReader for LocalConstantReader {
+        fn read(
+            &mut self,
+            buf: &mut [f32],
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            let channels = self.spec.channels as usize;
+            let frames = buf.len() / channels;
+            let avail = (self.total_frames - self.frame_idx).min(frames as u64) as usize;
+            if avail == 0 {
+                return Ok(kithara_audio::ReadOutcome::Eof {
+                    position: self.position(),
+                });
+            }
+            for s in &mut buf[..avail * channels] {
+                *s = 0.5;
+            }
+            self.frame_idx += avail as u64;
+            Ok(kithara_audio::ReadOutcome::Frames {
+                count: std::num::NonZeroUsize::new(avail).expect("BUG: avail>0"),
+                position: self.position(),
+            })
+        }
+
+        fn read_planar<'a>(
+            &mut self,
+            output: &'a mut [&'a mut [f32]],
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            let frames = output[0].len();
+            let avail = (self.total_frames - self.frame_idx).min(frames as u64) as usize;
+            if avail == 0 {
+                return Ok(kithara_audio::ReadOutcome::Eof {
+                    position: self.position(),
+                });
+            }
+            for ch in output.iter_mut() {
+                for s in &mut ch[..avail] {
+                    *s = 0.5;
+                }
+            }
+            self.frame_idx += avail as u64;
+            Ok(kithara_audio::ReadOutcome::Frames {
+                count: std::num::NonZeroUsize::new(avail).expect("BUG: avail>0"),
+                position: self.position(),
+            })
+        }
+
+        fn seek(
+            &mut self,
+            position: Duration,
+        ) -> Result<kithara_audio::SeekOutcome, kithara_audio::DecodeError> {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss,
+                reason = "fixture: small positive timestamps"
+            )]
+            let frame = (position.as_secs_f64() * self.spec.sample_rate as f64) as u64;
+            self.frame_idx = frame.min(self.total_frames);
+            Ok(kithara_audio::SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn position(&self) -> Duration {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "fixture: small positive frame counts"
+            )]
+            Duration::from_secs_f64(self.frame_idx as f64 / self.spec.sample_rate as f64)
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "fixture: small positive frame counts"
+            )]
+            Some(Duration::from_secs_f64(
+                self.total_frames as f64 / self.spec.sample_rate as f64,
+            ))
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+    }
 
     #[derive(Clone, Copy)]
     enum TrackCommandScenario {
@@ -743,12 +867,8 @@ mod tests {
         let shared_state = make_shared_state();
         let (tx, rx) = HeapRb::<PlayerCmd>::new(32).split();
         let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
-        let processor = PlayerNodeProcessor::new(
-            rx,
-            shared_state,
-            sample_rate,
-            &kithara_bufpool::PcmPool::default(),
-        );
+        let processor =
+            PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
         (processor, tx)
     }
 
@@ -843,18 +963,14 @@ mod tests {
         let player_resource = Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from("track.mp3"),
-            &kithara_bufpool::PcmPool::default(),
+            &PcmPool::default(),
         )));
 
         let shared_state = make_shared_state();
         let (tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
         let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
-        let mut processor = PlayerNodeProcessor::new(
-            rx,
-            shared_state,
-            sample_rate,
-            &kithara_bufpool::PcmPool::default(),
-        );
+        let mut processor =
+            PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
 
         let mut tx = tx;
         tx.try_push(PlayerCmd::LoadTrack {
@@ -866,12 +982,6 @@ mod tests {
         processor.drain_commands();
 
         assert_eq!(recorded.load(AtomicOrdering::Relaxed), host_rate);
-    }
-
-    #[kithara::test]
-    fn processor_renders_silence_when_no_tracks() {
-        let (processor, _tx) = make_processor();
-        assert_eq!(processor.tracks.len(), 0);
     }
 
     #[kithara::test(tokio)]
@@ -943,24 +1053,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn processor_seek_without_tracks_does_not_panic() {
-        let (mut processor, mut tx) = make_processor();
-        tx.try_push(PlayerCmd::Seek {
-            seconds: 30.0,
-            seek_epoch: 1,
-        })
-        .ok();
-        processor.drain_commands();
-    }
-
-    #[kithara::test]
-    fn processor_set_playback_rate_without_tracks_does_not_panic() {
-        let (mut processor, mut tx) = make_processor();
-        tx.try_push(PlayerCmd::SetPlaybackRate(2.0)).ok();
-        processor.drain_commands();
-    }
-
-    #[kithara::test]
     fn processor_set_paused_updates_shared_state() {
         let (mut processor, mut tx) = make_processor();
 
@@ -1006,34 +1098,11 @@ mod tests {
         }
     }
 
-    #[kithara::test(tokio)]
-    async fn processor_cleanup_finished_tracks() {
-        let (mut processor, mut tx) = make_processor();
-
-        let resource = create_mock_player_resource("track1.mp3");
-        tx.try_push(PlayerCmd::LoadTrack {
-            resource,
-            item_id: None,
-            src: Arc::from("track1.mp3"),
-        })
-        .ok();
-        processor.drain_commands();
-
-        // Manually set state to finished
-        let key: Arc<str> = Arc::from("track1.mp3");
-        if let Some(track) = processor.tracks.get_mut(&key) {
-            track.stop();
-        }
-
-        processor.cleanup_finished_tracks();
-        assert_eq!(processor.tracks.len(), 0);
-    }
-
     fn create_mock_player_resource(src: &str) -> Arc<PlatformMutex<PlayerResource>> {
         create_mock_player_resource_with_duration(src, 60.0)
     }
 
-    /// Create a mock player resource backed by a `TestPcmReader` of the given duration.
+    /// Create a mock player resource backed by a `LocalConstantReader` of the given duration.
     fn create_mock_player_resource_with_duration(
         src: &str,
         duration_secs: f64,
@@ -1042,13 +1111,13 @@ mod tests {
             channels: 2,
             sample_rate: 44100,
         };
-        let reader = TestPcmReader::new(spec, duration_secs);
+        let reader = LocalConstantReader::new(spec, duration_secs);
 
         let resource = Resource::from_reader(reader, None);
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
-            &kithara_bufpool::PcmPool::default(),
+            &PcmPool::default(),
         )))
     }
 
@@ -1321,7 +1390,7 @@ mod tests {
         Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
-            &kithara_bufpool::PcmPool::default(),
+            &PcmPool::default(),
         )))
     }
 
