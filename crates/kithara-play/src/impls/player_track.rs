@@ -27,7 +27,7 @@ const MIN_STEREO_CHANNELS: usize = 2;
 
 /// State machine for a single track's lifecycle.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TrackState {
+pub enum TrackState {
     /// Track is loaded but not yet playing.
     #[default]
     Preloading,
@@ -54,8 +54,8 @@ impl TrackState {
 }
 
 /// Transition command for a track.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum TrackTransition {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrackTransition {
     /// Start fading in the track with the given source identifier.
     FadeIn(Arc<str>),
     /// Start fading out the track with the given source identifier.
@@ -64,7 +64,7 @@ pub(crate) enum TrackTransition {
 
 /// Result of a single track render attempt.
 #[derive(Debug)]
-pub(crate) enum TrackReadOutcome {
+pub enum TrackReadOutcome {
     /// The full requested block was written into the mix buffer.
     Full {
         /// Playback position snapshot after the read (seconds).
@@ -97,7 +97,7 @@ pub(crate) enum TrackReadOutcome {
 ///
 /// Manages the `MixDSP` fade, track state, cached position/duration,
 /// and notification logic for a single loaded track.
-pub(crate) struct PlayerTrack {
+pub struct PlayerTrack {
     resource: Arc<Mutex<PlayerResource>>,
     state: TrackState,
     state_dirty: bool,
@@ -136,7 +136,8 @@ impl PlayerTrack {
     ///
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
     /// `fade_in()` or `play()` is required to produce audio.
-    pub(crate) fn new(
+    #[must_use]
+    pub fn new(
         resource: Arc<Mutex<PlayerResource>>,
         item_id: Option<Arc<str>>,
         src: Arc<str>,
@@ -183,7 +184,7 @@ impl PlayerTrack {
     ///
     /// `range` selects the destination subrange inside `scratch_bufs` and
     /// `mix_bufs` that this read may fill.
-    pub(crate) fn read(
+    pub fn read(
         &mut self,
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
@@ -504,7 +505,7 @@ impl PlayerTrack {
     }
 
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
-    pub(crate) fn fade_in(&mut self) {
+    pub fn fade_in(&mut self) {
         self.set_state(TrackState::FadingIn);
         self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
         self.notified_track_requested = false;
@@ -512,13 +513,13 @@ impl PlayerTrack {
     }
 
     /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
-    pub(crate) fn fade_out(&mut self) {
+    pub fn fade_out(&mut self) {
         self.set_state(TrackState::FadingOut);
         self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
     }
 
     /// Instantly start playing at full volume.
-    pub(crate) fn play(&mut self) {
+    pub fn play(&mut self) {
         self.set_state(TrackState::Playing);
         self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
         self.mix.reset_to_target();
@@ -527,7 +528,7 @@ impl PlayerTrack {
     }
 
     /// Instantly stop (silent, finished state).
-    pub(crate) fn stop(&mut self) {
+    pub fn stop(&mut self) {
         self.set_state(TrackState::Finished);
         self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
         self.mix.reset_to_target();
@@ -535,7 +536,7 @@ impl PlayerTrack {
 
     /// Seek the underlying resource and re-sync the served-frame counter
     /// so trigger thresholds reflect the new playback origin.
-    pub(crate) fn seek(&mut self, seconds: f64) {
+    pub fn seek(&mut self, seconds: f64) {
         if let Ok(mut resource) = self.resource.try_lock() {
             resource.seek(seconds);
         }
@@ -556,7 +557,8 @@ impl PlayerTrack {
     /// Tracks `served_frames / sample_rate` — i.e. what has actually been
     /// mixed into the output — so the value matches the trigger evaluator
     /// instead of the decoder's pre-buffered position.
-    pub(crate) fn position(&self) -> f64 {
+    #[must_use]
+    pub fn position(&self) -> f64 {
         let sample_rate = self.sample_rate.max(1);
         let served_f64: f64 = num_traits::cast::AsPrimitive::as_(self.served_frames);
         served_f64 / f64::from(sample_rate)
@@ -567,7 +569,8 @@ impl PlayerTrack {
     /// Mirrors `PlayerResource::duration()` captured under the resource
     /// lock during the last `read()`. Falls back to a fresh `try_lock`
     /// when invoked before any `read()` (e.g. immediately after `seek`).
-    pub(crate) fn duration(&self) -> f64 {
+    #[must_use]
+    pub fn duration(&self) -> f64 {
         if self.observed_duration > 0.0 {
             return self.observed_duration;
         }
@@ -578,22 +581,25 @@ impl PlayerTrack {
     }
 
     /// Current track state.
-    pub(crate) fn state(&self) -> TrackState {
+    #[must_use]
+    pub fn state(&self) -> TrackState {
         self.state
     }
 
     /// Source identifier.
-    pub(crate) fn src(&self) -> &Arc<str> {
+    #[must_use]
+    pub fn src(&self) -> &Arc<str> {
         &self.src
     }
 
     /// Reference to the underlying shared resource.
-    pub(crate) fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
+    #[must_use]
+    pub fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
         &self.resource
     }
 
     /// Re-create the `MixDSP` with a new fade duration.
-    pub(crate) fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
+    pub fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
         let fade_conf = SmootherConfig {
             smooth_seconds: fade_duration,
             settle_epsilon: DEFAULT_SETTLE_EPSILON,
@@ -610,7 +616,7 @@ impl PlayerTrack {
     }
 
     /// Update the prefetch lead time used for the preload trigger.
-    pub(crate) fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
+    pub fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
         self.prefetch_duration = prefetch_duration.max(0.0);
     }
 }

@@ -7,14 +7,14 @@ pub(crate) mod master_eq_node;
 pub mod offline_backend;
 pub mod player;
 pub(crate) mod player_node;
-pub(crate) mod player_notification;
-pub(crate) mod player_processor;
+pub mod player_notification;
+pub mod player_processor;
 pub mod player_resource;
-pub(crate) mod player_track;
+pub mod player_track;
 pub mod resource;
 pub(crate) mod session_engine;
 pub(crate) mod shared_eq;
-pub(crate) mod shared_player_state;
+pub mod shared_player_state;
 pub mod source_type;
 
 pub use config::{ResourceConfig, ResourceSrc};

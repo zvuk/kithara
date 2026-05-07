@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TrackPlaybackStopReason {
+pub enum TrackPlaybackStopReason {
     /// Playback stopped because the track naturally reached EOF.
     Eof,
     /// Playback stopped because the track was explicitly stopped or interrupted.
@@ -14,7 +14,7 @@ pub(crate) enum TrackPlaybackStopReason {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum PlayerNotification {
+pub enum PlayerNotification {
     /// A track was successfully loaded into the processor arena.
     Loaded { src: Arc<str> },
     /// A track was removed from the processor arena.
@@ -52,7 +52,8 @@ impl PlayerNotification {
     /// Used by the offline test harness (`take_notification_kinds`) and by
     /// tracing call-sites that need to discriminate between concurrent
     /// tracks beyond what the variant tag alone can express.
-    pub(crate) fn src(&self) -> Option<&Arc<str>> {
+    #[must_use]
+    pub fn src(&self) -> Option<&Arc<str>> {
         match self {
             Self::Loaded { src }
             | Self::Unloaded { src }

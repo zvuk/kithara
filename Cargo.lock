@@ -4391,6 +4391,7 @@ dependencies = [
  "cbc",
  "console_error_panic_hook",
  "criterion",
+ "firewheel",
  "futures",
  "gloo-timers",
  "hotpath",

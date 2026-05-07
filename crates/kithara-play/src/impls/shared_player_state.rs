@@ -20,7 +20,7 @@ const NOTIFICATION_RINGBUF_CAPACITY: usize = 32;
 ///
 /// Position and duration are updated by the processor every render cycle.
 /// Notifications flow from the processor to the main thread via a bounded channel.
-pub(crate) struct SharedPlayerState {
+pub struct SharedPlayerState {
     /// Whether playback is active.
     pub(crate) playing: AtomicBool,
     /// Last observed total duration snapshot in seconds.
@@ -43,12 +43,19 @@ pub(crate) struct SharedPlayerState {
     pub(crate) notification_tx: Mutex<HeapProd<PlayerNotification>>,
 }
 
+impl Default for SharedPlayerState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SharedPlayerState {
     /// Create a new shared state with default values.
     ///
     /// The notification channel is bounded to 32 to avoid dropping
     /// notifications during high activity while keeping memory bounded.
-    pub(crate) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         let (tx, rx) = HeapRb::<PlayerNotification>::new(NOTIFICATION_RINGBUF_CAPACITY).split();
         Self {
             playing: AtomicBool::new(false),
