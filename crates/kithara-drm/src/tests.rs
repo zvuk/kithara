@@ -159,6 +159,43 @@ mod registry {
     }
 
     #[kithara::test]
+    fn parse_wildcard_all() {
+        assert!(matches!(DomainMatcher::parse("*"), DomainMatcher::All));
+    }
+
+    #[kithara::test]
+    fn wildcard_all_matches_any_host() {
+        let m = DomainMatcher::parse("*");
+        assert!(m.matches("zvuk.com"));
+        assert!(m.matches("cdn.zvq.me"));
+        assert!(m.matches("a.b.c.d.example.org"));
+        assert!(m.matches("LOCALHOST"));
+    }
+
+    #[kithara::test]
+    fn registry_find_with_wildcard_all() {
+        let mut reg = KeyProcessorRegistry::new();
+        reg.add(KeyProcessorRule::new(["*"], noop_processor()));
+
+        for host in ["cdn.zvuk.com", "silvercomet.top", "example.org"] {
+            let url = Url::parse(&format!("https://{host}/key.bin")).expect("test URL is valid");
+            assert!(reg.find(&url).is_some());
+        }
+    }
+
+    #[kithara::test]
+    fn registry_specific_rule_overrides_wildcard_all_when_registered_first() {
+        let mut reg = KeyProcessorRegistry::new();
+        reg.add(KeyProcessorRule::new(["*.zvuk.com"], reverse_processor()));
+        reg.add(KeyProcessorRule::new(["*"], noop_processor()));
+
+        let url = Url::parse("https://cdn.zvuk.com/key.bin").expect("test URL is valid");
+        let rule = reg.find(&url).expect("matched");
+        let result = rule.processor()(Bytes::from_static(b"abcd")).expect("ok");
+        assert_eq!(&result[..], b"dcba");
+    }
+
+    #[kithara::test]
     fn rule_builder_sets_headers_and_query_params() {
         let mut headers = HashMap::new();
         headers.insert("X-Encrypted-Key".to_string(), "seed123".to_string());

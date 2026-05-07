@@ -4249,6 +4249,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "ndk-context",
+ "rand 0.10.1",
  "rustls-platform-verifier",
  "thiserror 2.0.18",
  "tokio",

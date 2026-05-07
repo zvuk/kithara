@@ -60,3 +60,15 @@ IV derivation happens in `kithara-hls`'s `KeyManager`:
 ## Integration
 
 Used by `kithara-hls` via `AssetStore<DecryptContext>`. The HLS crate sets up the processing callback when building the asset store, enabling transparent decryption of AES-128-CBC encrypted segments.
+
+## Domain Matchers
+
+`DomainMatcher::parse(pattern)` recognises three pattern shapes used by `KeyProcessorRegistry` to route key URLs to per-domain rules:
+
+| Pattern | Variant | Matches |
+|---------|---------|---------|
+| `"zvuk.com"` | `Exact` | host equal to `zvuk.com` only |
+| `"*.zvuk.com"` | `Wildcard` | any subdomain of `zvuk.com` (e.g. `cdn.zvuk.com`, `edge.cdn.zvuk.com`), but **not** `zvuk.com` itself |
+| `"*"` | `All` | any host |
+
+Registry order matters: `KeyProcessorRegistry::find` returns the first matching rule. Place specific rules first; an `"*"`-rule must be last, otherwise it masks every rule registered after it.

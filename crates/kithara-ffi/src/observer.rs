@@ -29,14 +29,32 @@ pub trait SeekCallback: Send + Sync {
     fn on_complete(&self, finished: bool);
 }
 
+/// Callback fired when [`crate::item::AudioPlayerItem::load`] resolves.
+#[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
+pub trait ItemLoadCallback: Send + Sync {
+    fn on_complete(&self, result: crate::types::FfiItemLoadResult);
+}
+
 /// Callback for processing (decrypting) HLS encryption keys.
 ///
-/// Called for each key fetched from the server. The implementation should
-/// return the decrypted key bytes.
+/// Called for each key fetched from the server. `salt` carries the value
+/// the player generated and attached to outgoing HTTP requests under
+/// [`SALT_HEADER`] — implementations that derive a per-session cipher
+/// from the salt should re-build it on every call. Implementations that
+/// hold a pre-built cipher (legacy behaviour) can ignore the argument.
 #[cfg_attr(feature = "backend-uniffi", uniffi::export(with_foreign))]
 pub trait FfiKeyProcessor: Send + Sync {
-    fn process_key(&self, key: Vec<u8>) -> Vec<u8>;
+    fn process_key(&self, key: Vec<u8>, salt: String) -> Vec<u8>;
 }
+
+/// HTTP header name carrying the player-generated DRM salt. Mirrors the
+/// value [`crate::player::AudioPlayer::setup_hls_aes`] writes into the
+/// player-wide header map and forwards into [`FfiKeyProcessor::process_key`].
+pub const SALT_HEADER: &str = "X-Encrypted-Key";
+
+/// HTTP header name carrying the auth token configured via
+/// [`crate::player::AudioPlayer::setup_network`].
+pub const AUTH_TOKEN_HEADER: &str = "X-Auth-Token";
 
 #[cfg(test)]
 mod tests {

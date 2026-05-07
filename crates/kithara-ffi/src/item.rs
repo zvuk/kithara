@@ -22,9 +22,22 @@ use uuid::Uuid;
 
 use crate::{
     item_bridge::ItemEventBridge,
-    observer::ItemObserver,
-    types::{FfiAbrMode, FfiItemConfig},
+    observer::{ItemLoadCallback, ItemObserver},
+    types::{FfiAbrMode, FfiItemConfig, FfiItemLoadResult, FfiTimeRange},
 };
+
+/// Cached subset of item state surfaced through synchronous getters
+/// (`duration_sec`, `is_live_stream`, …) and the `load()` resolver.
+/// Updated by [`ItemEventBridge`] as the underlying resource emits
+/// metadata events.
+#[derive(Default, Debug, Clone, Copy)]
+pub(crate) struct ItemState {
+    pub duration_sec: f64,
+    pub is_live_stream: bool,
+    pub is_ready_to_play: bool,
+    pub is_failed: bool,
+    pub has_protected_content: bool,
+}
 
 /// FFI-facing audio player item with UUID identity.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
@@ -40,8 +53,13 @@ pub struct AudioPlayerItem {
     config: FfiItemConfig,
     event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
+    pub(crate) state: Arc<Mutex<ItemState>>,
     id: Uuid,
 }
+
+/// Number of leading hex digits taken from the UUID to derive
+/// [`AudioPlayerItem::uuid_i64`]. Must be 16 (i.e. 64 bits).
+const UUID_HEX_PREFIX_LEN: usize = 16;
 
 /// Methods exported across the FFI boundary.
 #[cfg_attr(feature = "backend-uniffi", uniffi::export)]
@@ -52,19 +70,42 @@ impl AudioPlayerItem {
     #[must_use]
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new(config: FfiItemConfig) -> Arc<Self> {
+        let live = config.is_live_stream;
         Arc::new(Self {
-            config,
             id: Uuid::new_v4(),
             event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
             bus: Mutex::new(None),
             track_id: Mutex::new(None),
+            state: Arc::new(Mutex::new(ItemState {
+                is_live_stream: live,
+                ..ItemState::default()
+            })),
+            config,
         })
     }
 
-    /// String representation of the item's unique ID.
-    pub fn id(&self) -> String {
+    /// Stable per-item identifier (`UUIDv4` string). Mirrors the iOS
+    /// `AudioPlayerItemProtocol.audioId`.
+    pub fn audio_id(&self) -> String {
         self.id.to_string()
+    }
+
+    /// 64-bit numeric form of [`Self::audio_id`]. Derived from the
+    /// first 16 hex digits of the UUID — stable for the same UUID, but
+    /// **not** cryptographically unique. Treat as an opaque numeric
+    /// handle.
+    pub fn uuid_i64(&self) -> i64 {
+        let hex: String = self
+            .audio_id()
+            .chars()
+            .filter(char::is_ascii_hexdigit)
+            .take(UUID_HEX_PREFIX_LEN)
+            .collect();
+        let raw = u64::from_str_radix(&hex, 16).unwrap_or(0);
+        // Reinterpret without changing bit pattern. Sign is opaque per
+        // the doc-comment above.
+        raw as i64
     }
 
     pub fn preferred_peak_bitrate(&self) -> f64 {
@@ -82,6 +123,77 @@ impl AudioPlayerItem {
 
     pub fn url(&self) -> String {
         self.config.url.clone()
+    }
+
+    /// Cached item duration in seconds. Defaults to `0.0` until the
+    /// underlying resource emits a duration update.
+    pub fn duration_sec(&self) -> f64 {
+        self.state.lock_sync().duration_sec
+    }
+
+    /// Whether this item represents a live HLS feed. The flag is set
+    /// from [`FfiItemConfig::is_live_stream`] at construction; in the
+    /// future this getter will also surface auto-detected live streams.
+    pub fn is_live_stream(&self) -> bool {
+        self.state.lock_sync().is_live_stream
+    }
+
+    /// Resolve `callback` with the item's current load status. If the
+    /// item has not yet been inserted into a queue (or has been
+    /// removed), the callback fires with
+    /// `FfiItemLoadResult { has_protected_content: false, is_playable: false }`.
+    ///
+    /// `load` does not trigger an additional fetch — `AudioPlayer::insert`
+    /// already kicks off background loading. This method is the FFI
+    /// answer to the iOS protocol's `func load() -> Observable<…>`:
+    /// it surfaces the cached state once the metadata layer has caught
+    /// up.
+    // UniFFI's `Lift` trait is implemented for owned `Arc<T>` only — the
+    // FFI ABI cannot marshal `&Arc<T>` across the bridge.
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
+        )
+    )]
+    pub fn load(&self, callback: Arc<dyn ItemLoadCallback>) {
+        let inserted = self.track_id.lock_sync().is_some();
+        let snapshot = *self.state.lock_sync();
+        let result = if inserted {
+            FfiItemLoadResult {
+                has_protected_content: snapshot.has_protected_content,
+                is_playable: snapshot.is_ready_to_play && !snapshot.is_failed,
+            }
+        } else {
+            FfiItemLoadResult {
+                has_protected_content: false,
+                is_playable: false,
+            }
+        };
+        callback.on_complete(result);
+    }
+
+    /// Whether the item is playable at `progress` (seconds) given the
+    /// caller-supplied buffered `ranges`. Live streams are reported
+    /// playable unconditionally.
+    // UniFFI's marshalling expects owned `Vec<T>` across the FFI ABI;
+    // the slice optimisation `clippy` proposes is not representable in
+    // the bridge.
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift requires owned Vec across FFI ABI"
+        )
+    )]
+    pub fn is_playable(&self, progress: f64, ranges: Vec<FfiTimeRange>) -> bool {
+        if self.is_live_stream() {
+            return true;
+        }
+        ranges
+            .iter()
+            .any(|r| progress >= r.start_seconds && progress < r.start_seconds + r.duration_seconds)
     }
 }
 
@@ -111,8 +223,13 @@ impl AudioPlayerItem {
             *self.event_bridge.lock_sync() = None;
             return;
         };
-        let bridge =
-            ItemEventBridge::spawn(bus.subscribe(), observer, None, CancellationToken::new());
+        let bridge = ItemEventBridge::spawn(
+            bus.subscribe(),
+            observer,
+            None,
+            Arc::clone(&self.state),
+            CancellationToken::new(),
+        );
         *self.event_bridge.lock_sync() = Some(bridge);
     }
 }
@@ -126,10 +243,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn new_item_has_unique_id() {
+    fn new_item_has_unique_audio_id() {
         let a = item_for("https://example.com/a.mp3");
         let b = item_for("https://example.com/b.mp3");
-        assert_ne!(a.id(), b.id());
+        assert_ne!(a.audio_id(), b.audio_id());
     }
 
     #[kithara::test]
@@ -167,5 +284,60 @@ mod tests {
             .headers()
             .expect("BUG: headers were just set on the config above");
         assert_eq!(returned.get("Authorization"), Some(&"Bearer token".into()));
+    }
+
+    #[kithara::test]
+    fn uuid_i64_is_stable_for_same_audio_id() {
+        let item = item_for("https://example.com/a.mp3");
+        let first = item.uuid_i64();
+        let second = item.uuid_i64();
+        assert_eq!(first, second);
+    }
+
+    #[kithara::test]
+    fn uuid_i64_differs_across_items() {
+        let a = item_for("https://example.com/a.mp3");
+        let b = item_for("https://example.com/b.mp3");
+        assert_ne!(a.uuid_i64(), b.uuid_i64());
+    }
+
+    #[kithara::test]
+    fn is_live_stream_defaults_false() {
+        let item = item_for("https://example.com/song.mp3");
+        assert!(!item.is_live_stream());
+    }
+
+    #[kithara::test]
+    fn is_live_stream_from_config() {
+        let config = FfiItemConfig {
+            is_live_stream: true,
+            ..FfiItemConfig::with_url("https://example.com/live.m3u8".to_string())
+        };
+        let item = AudioPlayerItem::new(config);
+        assert!(item.is_live_stream());
+    }
+
+    #[kithara::test]
+    fn is_playable_live_stream_always_true() {
+        let config = FfiItemConfig {
+            is_live_stream: true,
+            ..FfiItemConfig::with_url("https://example.com/live.m3u8".to_string())
+        };
+        let item = AudioPlayerItem::new(config);
+        assert!(item.is_playable(0.0, vec![]));
+        assert!(item.is_playable(9999.0, vec![]));
+    }
+
+    #[kithara::test]
+    fn is_playable_within_ranges() {
+        let item = item_for("https://example.com/song.mp3");
+        let ranges = vec![FfiTimeRange {
+            start_seconds: 0.0,
+            duration_seconds: 30.0,
+        }];
+        assert!(item.is_playable(0.0, ranges.clone()));
+        assert!(item.is_playable(15.0, ranges.clone()));
+        assert!(!item.is_playable(30.0, ranges.clone())); // exclusive end
+        assert!(!item.is_playable(45.0, ranges));
     }
 }

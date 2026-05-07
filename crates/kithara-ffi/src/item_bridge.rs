@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use kithara::abr::AbrMode;
 use kithara_events::{AbrEvent, AudioEvent, DownloaderEvent, Event, FileEvent, HlsEvent};
-use kithara_platform::{tokio, tokio::sync::broadcast};
+use kithara_platform::{Mutex, tokio, tokio::sync::broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    item::ItemState,
     observer::ItemObserver,
-    types::{FfiError, FfiItemEvent, FfiItemStatus},
+    types::{FfiError, FfiItemEvent, FfiItemStatus, FfiTimeRange},
 };
 
 pub(crate) struct ItemEventBridge {
@@ -53,12 +54,18 @@ impl ItemEventBridge {
         duration_seconds: &mut Option<f64>,
         last_buffered: &mut Option<f64>,
         variants: &mut Vec<crate::types::FfiVariant>,
+        state: &Arc<Mutex<ItemState>>,
     ) {
         if let Some(duration) = Self::duration_from_event(event)
             && duration_seconds
                 .is_none_or(|current| (current - duration).abs() > Self::UPDATE_THRESHOLD)
         {
             *duration_seconds = Some(duration);
+            {
+                let mut s = state.lock_sync();
+                s.duration_sec = duration;
+                s.is_ready_to_play = true;
+            }
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
 
@@ -67,12 +74,25 @@ impl ItemEventBridge {
                 .is_none_or(|current| (current - buffered).abs() > Self::UPDATE_THRESHOLD)
         {
             *last_buffered = Some(buffered);
-            observer.on_event(FfiItemEvent::BufferedDurationChanged { seconds: buffered });
+            // Surface the buffered window as a single contiguous range
+            // [0, buffered). Future work: surface non-contiguous ranges
+            // when the underlying loader exposes per-segment loaded
+            // intervals.
+            let ranges = if buffered > 0.0 {
+                vec![FfiTimeRange {
+                    start_seconds: 0.0,
+                    duration_seconds: buffered,
+                }]
+            } else {
+                Vec::new()
+            };
+            observer.on_event(FfiItemEvent::LoadedRangesChanged { ranges });
         }
 
         Self::dispatch_variant_events(observer, event, variants);
 
         if let Some(error) = Self::error_from_event(event) {
+            state.lock_sync().is_failed = true;
             observer.on_event(FfiItemEvent::StatusChanged {
                 status: FfiItemStatus::Failed,
             });
@@ -211,17 +231,21 @@ impl ItemEventBridge {
         Some((duration_seconds * ratio).clamp(0.0, duration_seconds))
     }
 
-    /// Spawn a task that translates resource events into item callbacks.
+    /// Spawn a task that translates resource events into item callbacks
+    /// and refreshes the shared [`ItemState`] cache backing the item's
+    /// synchronous getters (`duration_sec`, `is_live_stream`, …).
     pub(crate) fn spawn(
         rx: kithara_events::EventReceiver,
         observer: Arc<dyn ItemObserver>,
         duration_seconds: Option<f64>,
+        state: Arc<Mutex<ItemState>>,
         cancel: CancellationToken,
     ) -> Self {
         if let Some(duration) = duration_seconds {
+            state.lock_sync().duration_sec = duration;
             observer.on_event(FfiItemEvent::DurationChanged { seconds: duration });
         }
-        Self::spawn_event_task(rx, observer, duration_seconds, cancel.clone());
+        Self::spawn_event_task(rx, observer, duration_seconds, state, cancel.clone());
         Self { cancel }
     }
 
@@ -229,6 +253,7 @@ impl ItemEventBridge {
         mut rx: kithara_events::EventReceiver,
         observer: Arc<dyn ItemObserver>,
         mut duration_seconds: Option<f64>,
+        state: Arc<Mutex<ItemState>>,
         cancel: CancellationToken,
     ) {
         crate::FFI_RUNTIME.spawn(async move {
@@ -245,6 +270,7 @@ impl ItemEventBridge {
                                 &mut duration_seconds,
                                 &mut last_buffered,
                                 &mut variants,
+                                &state,
                             ),
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => break,

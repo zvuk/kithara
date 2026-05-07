@@ -37,6 +37,7 @@ kithara-test-macros = { workspace = true }
 # kithara-play (needed for `init_offline_backend` / offline module).
 kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "test-utils"] }
 bytes = { workspace = true }
+rand = { workspace = true }
 unimock = { workspace = true }
 
 tokio-util = { workspace = true }

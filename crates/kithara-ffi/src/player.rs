@@ -21,15 +21,41 @@ use kithara::{
 use kithara_events::TrackId;
 use kithara_platform::Mutex;
 use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource};
+use rand::{distr::Alphanumeric, prelude::*};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{self, StoreOptions},
     event_bridge::EventBridge,
     item::AudioPlayerItem,
-    observer::{PlayerObserver, SeekCallback},
-    types::{FfiAbrMode, FfiError, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus},
+    observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
+    types::{
+        FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus,
+    },
 };
+
+/// Length of the alphanumeric salt produced by [`AudioPlayer::setup_hls_aes`].
+/// Mirrors `kithara_app::drm::SEED_LEN`.
+const SALT_LEN: usize = 16;
+
+fn generate_salt() -> String {
+    rand::rng()
+        .sample_iter(Alphanumeric)
+        .take(SALT_LEN)
+        .map(char::from)
+        .collect()
+}
+
+fn build_processor_closure(
+    processor: Arc<dyn FfiKeyProcessor>,
+    salt: String,
+) -> kithara_drm::KeyProcessor {
+    Arc::new(move |key: Bytes| {
+        Ok(Bytes::from(
+            processor.process_key(key.to_vec(), salt.clone()),
+        ))
+    })
+}
 
 /// Swift/Kotlin-owned `AudioPlayerItem` registry indexed by track id.
 /// Aliased so the field types stay free of the structural
@@ -59,35 +85,107 @@ pub struct AudioPlayer {
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
-    /// Immutable [`KeyOptions`] built once from [`FfiPlayerConfig`].
-    key_options: KeyOptions,
+    /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
+    /// and extended at runtime by [`AudioPlayer::setup_hls_aes`].
+    /// Cloned per-item on insert (snapshot semantics: items already in
+    /// the queue keep their original key registry).
+    key_options: Mutex<KeyOptions>,
+    /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
+    /// `X-Auth-Token`). Merged into per-item `headers` on insert.
+    /// Item-supplied headers take precedence on key collision.
+    player_headers: Mutex<HashMap<String, String>>,
+    /// Bandwidth caps configured via
+    /// [`AudioPlayer::update_peak_bitrate`]. Wifi value drives the ABR
+    /// cap unless cellular is tighter; cellular is held for future
+    /// network-state-aware switching.
+    peak_bitrate: Mutex<PeakBitrate>,
     event_bridge: Mutex<Option<EventBridge>>,
     observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     /// Shared storage options (cache dir, etc.) applied to every item.
     store: StoreOptions,
 }
 
-/// Convert the FFI-level [`crate::types::FfiKeyOptions`] into a
-/// core-level [`KeyOptions`] with a populated registry.
-fn build_key_options(ffi: crate::types::FfiKeyOptions) -> KeyOptions {
+#[derive(Clone, Copy, Default, Debug)]
+struct PeakBitrate {
+    wifi_bps: f64,
+    cellular_bps: f64,
+}
+
+impl PeakBitrate {
+    /// Effective ABR cap, in bits/sec, derived from the configured
+    /// `wifi_bps` and `cellular_bps` ceilings.
+    /// Returns `None` when both are unset (`0.0`), letting ABR consider
+    /// every variant. Saturates at [`u64::MAX`] for absurdly large
+    /// inputs (real bitrates fit comfortably in `u64`, but `UniFFI`
+    /// `f64` callers can pass anything).
+    fn effective_cap(self) -> Option<u64> {
+        const U64_MAX_AS_F64: f64 = 18_446_744_073_709_551_615.0;
+        let limits = [self.wifi_bps, self.cellular_bps]
+            .into_iter()
+            .filter(|v| *v > 0.0);
+        let cap = limits
+            .reduce(f64::min)
+            .filter(|v| v.is_finite() && *v > 0.0)?;
+        if cap >= U64_MAX_AS_F64 {
+            return Some(u64::MAX);
+        }
+        // `cap` is non-negative and below `U64_MAX_AS_F64` here; the
+        // `as u64` cast is sign-loss- and truncation-safe for any
+        // realistic bitrate (the only loss is sub-bit/s precision,
+        // which the ABR controller does not consume).
+        #[cfg_attr(
+            all(),
+            expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "non-negative finite bitrate clamped above; the cast is safe for any\
+                          realistic peak bitrate"
+            )
+        )]
+        let cap_u64 = cap.trunc() as u64;
+        Some(cap_u64)
+    }
+}
+
+/// Build a core-level [`KeyProcessorRule`] from an FFI rule. The rule's
+/// `salt` is baked into the closure passed to `kithara_drm::KeyProcessor`.
+fn build_processor_rule(rule: FfiKeyRule) -> KeyProcessorRule {
+    let salt = rule.salt.unwrap_or_default();
+    let proc = build_processor_closure(rule.processor, salt);
+    let mut built = KeyProcessorRule::new(&rule.domains, proc);
+    if let Some(h) = rule.headers {
+        built = built.with_headers(h);
+    }
+    if let Some(q) = rule.query_params {
+        built = built.with_query_params(q);
+    }
+    built
+}
+
+/// Convert the FFI-level [`crate::types::FfiKeyOptions`] into the
+/// initial registry + the player-wide header snapshot to expose to
+/// outgoing HTTP requests.
+fn build_initial_key_state(
+    ffi: crate::types::FfiKeyOptions,
+) -> (KeyOptions, HashMap<String, String>) {
     if ffi.rules.is_empty() {
-        return KeyOptions::new();
+        return (KeyOptions::new(), HashMap::new());
     }
     let mut registry = KeyProcessorRegistry::new();
+    let mut player_headers: HashMap<String, String> = HashMap::new();
     for r in ffi.rules {
-        let processor = r.processor;
-        let proc: kithara_drm::KeyProcessor =
-            Arc::new(move |key: Bytes| Ok(Bytes::from(processor.process_key(key.to_vec()))));
-        let mut rule = KeyProcessorRule::new(&r.domains, proc);
-        if let Some(h) = r.headers {
-            rule = rule.with_headers(h);
+        if let Some(headers) = r.headers.as_ref() {
+            for (k, v) in headers {
+                player_headers.insert(k.clone(), v.clone());
+            }
         }
-        if let Some(q) = r.query_params {
-            rule = rule.with_query_params(q);
+        if let Some(salt) = r.salt.as_ref() {
+            player_headers.insert(SALT_HEADER.to_string(), salt.clone());
         }
-        registry.add(rule);
+        registry.add(build_processor_rule(r));
     }
-    KeyOptions::new().with_key_registry(registry)
+    let key_options = KeyOptions::new().with_key_registry(registry);
+    (key_options, player_headers)
 }
 
 /// Methods exported across the FFI boundary.
@@ -106,10 +204,12 @@ impl AudioPlayer {
                 .with_net(net)
                 .with_runtime(crate::FFI_RUNTIME.clone()),
         );
-        let key_options = build_key_options(config.key_options);
+        let (key_options, player_headers) = build_initial_key_state(config.key_options);
         Arc::new(Self {
             downloader,
-            key_options,
+            key_options: Mutex::new(key_options),
+            player_headers: Mutex::new(player_headers),
+            peak_bitrate: Mutex::new(PeakBitrate::default()),
             queue: Arc::new(Queue::new(queue_config)),
             store: config.store,
             observer: Mutex::new(None),
@@ -128,6 +228,11 @@ impl AudioPlayer {
 
     /// Seek to a position in the current item.
     ///
+    /// `tolerance` is currently advisory — the underlying engine uses its
+    /// own seek heuristics. Passing `Some` reserves the slot for future
+    /// `seek_with_tolerance` wiring without forcing callers to migrate
+    /// twice; `None` preserves legacy behaviour.
+    ///
     /// The callback is invoked synchronously with `true` if the seek
     /// command was accepted, `false` otherwise (matches `AVPlayer`
     /// semantics).
@@ -143,7 +248,8 @@ impl AudioPlayer {
             reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
         )
     )]
-    pub fn seek(&self, to_seconds: f64, callback: Arc<dyn SeekCallback>) {
+    pub fn seek(&self, to_seconds: f64, tolerance: Option<f64>, callback: Arc<dyn SeekCallback>) {
+        let _ = tolerance;
         match self.queue.seek(to_seconds) {
             Ok(_outcome) => callback.on_complete(true),
             Err(_) => callback.on_complete(false),
@@ -183,7 +289,7 @@ impl AudioPlayer {
         let id = if let Some(after_item) = after.as_ref() {
             let after_id =
                 (*after_item.track_id.lock_sync()).ok_or_else(|| FfiError::InvalidArgument {
-                    reason: format!("item {} not found in queue", after_item.id()),
+                    reason: format!("item {} not found in queue", after_item.audio_id()),
                 })?;
             self.queue
                 .insert(source, Some(after_id))
@@ -208,7 +314,7 @@ impl AudioPlayer {
     /// queue.
     pub fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
         let id = (*item.track_id.lock_sync()).ok_or_else(|| FfiError::InvalidArgument {
-            reason: format!("item {} not in queue", item.id()),
+            reason: format!("item {} not in queue", item.audio_id()),
         })?;
         self.queue
             .remove(id)
@@ -346,11 +452,15 @@ impl AudioPlayer {
         self.queue.set_crossfade_duration(seconds);
     }
 
-    pub fn default_rate(&self) -> f32 {
+    /// Target playback speed used by `play()`. When the player is
+    /// playing, the live `rate()` equals this value; on pause it falls
+    /// to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`
+    /// terminology.
+    pub fn playing_rate(&self) -> f32 {
         self.queue.default_rate()
     }
 
-    pub fn set_default_rate(&self, rate: f32) {
+    pub fn set_playing_rate(&self, rate: f32) {
         self.queue.set_default_rate(rate);
     }
 
@@ -367,20 +477,23 @@ impl AudioPlayer {
         }
     }
 
-    /// Cap the ABR controller's choice by a preferred peak bitrate (bps).
+    /// Cap the ABR controller's choice by per-network peak bitrate
+    /// limits (bits/sec). Pass `0.0` for either argument to clear that
+    /// limit; with both zero the ABR considers every variant again.
     ///
-    /// Pass `0` to clear the cap and let ABR consider all variants again.
-    /// No-op when no adaptive item is currently loaded.
-    pub fn set_preferred_peak_bitrate(&self, bitrate_bps: u64) {
-        let Some(handle) = self.queue.current_abr_handle() else {
-            return;
+    /// The effective cap is the tighter of the two non-zero limits —
+    /// without an explicit network-state signal this guarantees neither
+    /// limit is exceeded on either link. Caller-side network monitoring
+    /// can re-call this method on connectivity changes.
+    pub fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {
+        let updated = PeakBitrate {
+            wifi_bps,
+            cellular_bps,
         };
-        let cap = if bitrate_bps == 0 {
-            None
-        } else {
-            Some(bitrate_bps)
-        };
-        handle.set_max_bandwidth_bps(cap);
+        *self.peak_bitrate.lock_sync() = updated;
+        if let Some(handle) = self.queue.current_abr_handle() {
+            handle.set_max_bandwidth_bps(updated.effective_cap());
+        }
     }
 
     pub fn rate(&self) -> f32 {
@@ -448,10 +561,113 @@ impl AudioPlayer {
             current_time: self.queue.position_seconds(),
             duration: self.queue.duration_seconds(),
             rate: self.queue.rate(),
-            default_rate: self.queue.default_rate(),
+            playing_rate: self.queue.default_rate(),
             volume: self.queue.volume(),
             is_muted: self.queue.is_muted(),
         }
+    }
+
+    /// Currently playing item (if any). Resolves the queue's current
+    /// track id against the player's Swift-owned item registry so
+    /// callers get back the same `AudioPlayerItem` instance they passed
+    /// to [`insert`].
+    #[must_use]
+    pub fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
+        let entry = self.queue.current()?;
+        self.items.lock_sync().get(&entry.id).cloned()
+    }
+
+    /// Live playback position in seconds, or `0.0` if no item is loaded.
+    /// Convenience over [`snapshot().current_time`] for hot-path UI
+    /// updates.
+    #[must_use]
+    pub fn current_time(&self) -> f64 {
+        self.queue.position_seconds().unwrap_or(0.0)
+    }
+
+    /// Advance to the next item in the queue, no-op if already on the
+    /// last item or the queue is empty. Uses [`FfiTransition::None`]
+    /// for an immediate cut.
+    pub fn advance_to_next_item(&self) {
+        let _rt = crate::FFI_RUNTIME.enter();
+        let tracks = self.queue.tracks();
+        let Some(current_idx) = self.queue.current_index() else {
+            return;
+        };
+        let next_idx = current_idx + 1;
+        let Some(next) = tracks.get(next_idx) else {
+            return;
+        };
+        let _ = self.queue.select(next.id, kithara_queue::Transition::None);
+    }
+
+    /// Stop playback: pause the engine, drop every queued item, and
+    /// reset the current-item slot. Mirrors `AVPlayer.stop` semantics —
+    /// after `stop()`, the player is ready to receive a fresh queue
+    /// via [`insert`].
+    pub fn stop(&self) {
+        self.queue.pause();
+        self.remove_all_items();
+    }
+
+    /// Player-wide auth header. Stores `auth_token` under
+    /// [`AUTH_TOKEN_HEADER`]; merged into per-item HTTP headers on
+    /// every subsequent [`insert`]. Pass an empty string to clear.
+    pub fn setup_network(&self, auth_token: String) {
+        let mut headers = self.player_headers.lock_sync();
+        if auth_token.is_empty() {
+            headers.remove(AUTH_TOKEN_HEADER);
+        } else {
+            headers.insert(AUTH_TOKEN_HEADER.to_string(), auth_token);
+        }
+    }
+
+    /// Register a runtime DRM key processor for every host (`"*"`).
+    ///
+    /// Generates a fresh 16-character alphanumeric `salt`, mirrors it
+    /// into the player-wide [`SALT_HEADER`] (so it accompanies every
+    /// outgoing manifest/segment/key request), and forwards it to
+    /// `processor.process_key(key, salt)` on each decrypt.
+    ///
+    /// Items already in the queue keep their original key registry —
+    /// re-call this method *before* [`insert`] for the new processor
+    /// to apply.
+    pub fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
+        let salt = generate_salt();
+        let mut rule_headers = HashMap::new();
+        rule_headers.insert(SALT_HEADER.to_string(), salt.clone());
+        let rule = FfiKeyRule {
+            processor,
+            headers: Some(rule_headers),
+            query_params: None,
+            domains: vec!["*".to_string()],
+            salt: Some(salt.clone()),
+        };
+        self.setup_hls_aes_with_rule(rule);
+    }
+
+    /// Register a runtime DRM key processor with explicit rule control
+    /// (custom domains, headers, salt). The rule's salt — if any — is
+    /// mirrored into the player-wide header map under [`SALT_HEADER`].
+    ///
+    /// Items already in the queue keep their original key registry.
+    pub fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
+        let mut player_headers = self.player_headers.lock_sync();
+        if let Some(headers) = rule.headers.as_ref() {
+            for (k, v) in headers {
+                player_headers.insert(k.clone(), v.clone());
+            }
+        }
+        if let Some(salt) = rule.salt.as_ref() {
+            player_headers.insert(SALT_HEADER.to_string(), salt.clone());
+        }
+        drop(player_headers);
+
+        let processor_rule = build_processor_rule(rule);
+        let mut opts = self.key_options.lock_sync();
+        let mut registry = opts.key_registry.take().unwrap_or_default();
+        registry.add(processor_rule);
+        *opts = KeyOptions::new().with_key_registry(registry);
     }
 
     pub fn set_observer(self: &Arc<Self>, observer: Arc<dyn PlayerObserver>) {
@@ -494,7 +710,8 @@ impl AudioPlayer {
             config = config.with_preferred_peak_bitrate(bitrate);
         }
 
-        if let Some(headers) = item.headers() {
+        let merged_headers = self.merged_headers_for_item(item);
+        if let Some(headers) = merged_headers {
             config = config.with_headers(headers.into());
         }
 
@@ -504,8 +721,9 @@ impl AudioPlayer {
 
         config = config.with_downloader(self.downloader.clone());
 
-        if self.key_options.key_registry.is_some() {
-            config = config.with_keys(self.key_options.clone());
+        let key_options = self.key_options.lock_sync().clone();
+        if key_options.key_registry.is_some() {
+            config = config.with_keys(key_options);
         }
 
         if let Some(mode) = item.abr_mode() {
@@ -517,6 +735,30 @@ impl AudioPlayer {
         }
 
         Ok(TrackSource::Config(Box::new(config)))
+    }
+
+    /// Merge player-wide headers (auth, salt, …) into the item's own
+    /// headers. Item-supplied entries win on key collision so callers
+    /// can override player defaults per-item.
+    fn merged_headers_for_item(
+        &self,
+        item: &Arc<AudioPlayerItem>,
+    ) -> Option<HashMap<String, String>> {
+        let player_headers = self.player_headers.lock_sync();
+        let item_headers = item.headers();
+        if player_headers.is_empty() && item_headers.is_none() {
+            return None;
+        }
+        let mut merged = player_headers.clone();
+        drop(player_headers);
+        if let Some(item_h) = item_headers {
+            merged.extend(item_h);
+        }
+        if merged.is_empty() {
+            None
+        } else {
+            Some(merged)
+        }
     }
 }
 
@@ -530,11 +772,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn default_rate_roundtrip() {
+    fn playing_rate_roundtrip() {
         let player = AudioPlayer::new(FfiPlayerConfig::default());
-        assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
-        player.set_default_rate(0.5);
-        assert!((player.default_rate() - 0.5).abs() < f32::EPSILON);
+        assert!((player.playing_rate() - 1.0).abs() < f32::EPSILON);
+        player.set_playing_rate(0.5);
+        assert!((player.playing_rate() - 0.5).abs() < f32::EPSILON);
     }
 
     #[kithara::test]
@@ -602,5 +844,99 @@ mod tests {
             ..FfiPlayerConfig::default()
         });
         assert!((player.eq_gain(99) - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    fn setup_network_writes_auth_token_into_player_headers() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        player.setup_network("token-123".to_string());
+        let headers = player.player_headers.lock_sync().clone();
+        assert_eq!(headers.get(AUTH_TOKEN_HEADER), Some(&"token-123".into()));
+    }
+
+    #[kithara::test]
+    fn setup_network_clears_auth_token_when_empty() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        player.setup_network("token-123".to_string());
+        player.setup_network(String::new());
+        assert!(
+            !player
+                .player_headers
+                .lock_sync()
+                .contains_key(AUTH_TOKEN_HEADER)
+        );
+    }
+
+    #[kithara::test]
+    fn setup_hls_aes_registers_wildcard_rule_with_auto_salt() {
+        struct DummyProcessor;
+        impl FfiKeyProcessor for DummyProcessor {
+            fn process_key(&self, _key: Vec<u8>, _salt: String) -> Vec<u8> {
+                Vec::new()
+            }
+        }
+
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        player.setup_hls_aes(Arc::new(DummyProcessor));
+
+        let headers = player.player_headers.lock_sync().clone();
+        let salt = headers.get(SALT_HEADER).expect("salt header populated");
+        assert_eq!(salt.len(), SALT_LEN);
+        assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()));
+
+        let key_options = player.key_options.lock_sync().clone();
+        assert!(
+            key_options.key_registry.is_some(),
+            "registry must hold the wildcard rule"
+        );
+    }
+
+    #[kithara::test]
+    fn update_peak_bitrate_remembers_both_limits() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        player.update_peak_bitrate(2_000_000.0, 500_000.0);
+        let snapshot = *player.peak_bitrate.lock_sync();
+        assert!((snapshot.wifi_bps - 2_000_000.0).abs() < f64::EPSILON);
+        assert!((snapshot.cellular_bps - 500_000.0).abs() < f64::EPSILON);
+    }
+
+    #[kithara::test]
+    fn peak_bitrate_effective_cap_picks_min_non_zero() {
+        let pb = PeakBitrate {
+            wifi_bps: 2_000_000.0,
+            cellular_bps: 500_000.0,
+        };
+        assert_eq!(pb.effective_cap(), Some(500_000));
+
+        let pb = PeakBitrate {
+            wifi_bps: 0.0,
+            cellular_bps: 750_000.0,
+        };
+        assert_eq!(pb.effective_cap(), Some(750_000));
+
+        let pb = PeakBitrate {
+            wifi_bps: 0.0,
+            cellular_bps: 0.0,
+        };
+        assert_eq!(pb.effective_cap(), None);
+    }
+
+    #[kithara::test]
+    fn current_time_zero_when_no_item() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        assert!((player.current_time() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[kithara::test]
+    fn current_item_none_when_queue_empty() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        assert!(player.current_item().is_none());
+    }
+
+    #[kithara::test]
+    fn snapshot_uses_playing_rate_field_name() {
+        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        let snap = player.snapshot();
+        assert!((snap.playing_rate - 1.0).abs() < f32::EPSILON);
     }
 }

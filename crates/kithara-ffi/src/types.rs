@@ -173,9 +173,16 @@ pub struct FfiKeyRule {
     pub processor: std::sync::Arc<dyn crate::observer::FfiKeyProcessor>,
     pub headers: Option<std::collections::HashMap<String, String>>,
     pub query_params: Option<std::collections::HashMap<String, String>>,
-    /// Domain patterns — exact (`"example.com"`) or wildcard
-    /// subdomain (`"*.example.com"`).
+    /// Domain patterns — exact (`"example.com"`), wildcard subdomain
+    /// (`"*.example.com"`), or match-any (`"*"`).
     pub domains: Vec<String>,
+    /// Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
+    /// on every decrypt. `None` is treated as an empty string.
+    ///
+    /// `setup_hls_aes` populates this automatically with a freshly
+    /// generated 16-character alphanumeric value and mirrors it into
+    /// [`crate::observer::SALT_HEADER`] in the player-wide header map.
+    pub salt: Option<String>,
 }
 
 impl std::fmt::Debug for FfiKeyRule {
@@ -184,6 +191,7 @@ impl std::fmt::Debug for FfiKeyRule {
             .field("domains", &self.domains)
             .field("headers", &self.headers)
             .field("query_params", &self.query_params)
+            .field("salt", &self.salt.as_ref().map(|_| "<set>"))
             .finish_non_exhaustive()
     }
 }
@@ -201,6 +209,12 @@ pub struct FfiItemConfig {
     /// Peak bitrate ceiling on expensive networks (cellular). `0.0`
     /// means no cap.
     pub preferred_peak_bitrate_expensive: f64,
+    /// Caller-declared live-stream flag. `true` means the source is a
+    /// live HLS feed (radio / broadcast); the player skips end-of-stream
+    /// gating and `is_playable` always returns `true` for the item.
+    /// Defaults to `false`. Auto-detection from the manifest is a
+    /// future improvement.
+    pub is_live_stream: bool,
 }
 
 impl FfiItemConfig {
@@ -212,6 +226,7 @@ impl FfiItemConfig {
             preferred_peak_bitrate: 0.0,
             preferred_peak_bitrate_expensive: 0.0,
             abr_mode: None,
+            is_live_stream: false,
         }
     }
 }
@@ -390,8 +405,12 @@ pub enum FfiItemEvent {
     DurationChanged {
         seconds: f64,
     },
-    BufferedDurationChanged {
-        seconds: f64,
+    /// Buffered byte ranges, expressed as `[start, start + duration)` in
+    /// seconds. Replaces the older scalar `BufferedDurationChanged` —
+    /// the total buffered time is the sum of `range.duration_seconds`.
+    /// Mirrors the iOS `AudioPlayerItemProtocol.rxLoadedRanges` shape.
+    LoadedRangesChanged {
+        ranges: Vec<FfiTimeRange>,
     },
     StatusChanged {
         status: FfiItemStatus,
@@ -407,6 +426,12 @@ pub enum FfiItemEvent {
     VariantApplied {
         variant: FfiVariant,
     },
+    /// The item reached natural end-of-stream. Mirrors the iOS
+    /// `AudioPlayerItemProtocol.rxDidReachEnd`.
+    DidReachEnd,
+    /// Playback stalled (the player is waiting for more data).
+    /// Mirrors the iOS `AudioPlayerItemProtocol.rxDidStall`.
+    DidStall,
     Error {
         error: String,
     },
@@ -419,6 +444,17 @@ pub struct FfiVariant {
     pub name: Option<String>,
     pub index: u32,
     pub bandwidth_bps: u64,
+}
+
+/// Outcome reported by [`crate::observer::ItemLoadCallback::on_complete`]
+/// when [`crate::item::AudioPlayerItem::load`] resolves.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiItemLoadResult {
+    /// `true` once the metadata layer recognises encrypted segments.
+    pub has_protected_content: bool,
+    /// `true` when the item has enough metadata to start playback.
+    pub is_playable: bool,
 }
 
 /// FFI-friendly ABR mode.
@@ -440,7 +476,9 @@ pub struct FfiPlayerSnapshot {
     pub current_time: Option<f64>,
     pub duration: Option<f64>,
     pub is_muted: bool,
-    pub default_rate: f32,
+    /// Target playback speed (the value used by `play()`). Live `rate`
+    /// equals this while playing and `0.0` while paused.
+    pub playing_rate: f32,
     pub rate: f32,
     pub volume: f32,
 }

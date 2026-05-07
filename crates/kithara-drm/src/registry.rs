@@ -15,6 +15,10 @@ pub type KeyProcessor = Arc<dyn Fn(Bytes) -> KeyProcessResult + Send + Sync>;
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum DomainMatcher {
+    /// Match-any-host pattern (`"*"`). Place rules with this matcher
+    /// LAST in the registry — they would otherwise mask any specific
+    /// rule registered after them.
+    All,
     /// Exact domain match (e.g. `"zvuk.com"` matches only `zvuk.com`).
     Exact(String),
     /// Wildcard subdomain match (e.g. `"*.zvuk.com"` matches
@@ -26,6 +30,7 @@ impl DomainMatcher {
     pub(crate) fn matches(&self, host: &str) -> bool {
         let host = host.to_ascii_lowercase();
         match self {
+            Self::All => true,
             Self::Exact(domain) => host == *domain,
             Self::Wildcard(suffix) => {
                 host.ends_with(suffix.as_str())
@@ -37,11 +42,15 @@ impl DomainMatcher {
 
     /// Parse a pattern string into a [`DomainMatcher`].
     ///
+    /// `"*"` → [`DomainMatcher::All`],
     /// `"*.example.com"` → [`DomainMatcher::Wildcard`],
     /// `"example.com"` → [`DomainMatcher::Exact`].
     #[must_use]
     pub fn parse(pattern: &str) -> Self {
         let lower = pattern.to_ascii_lowercase();
+        if lower == "*" {
+            return Self::All;
+        }
         lower.strip_prefix("*.").map_or_else(
             || Self::Exact(lower.clone()),
             |suffix| Self::Wildcard(suffix.to_string()),

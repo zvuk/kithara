@@ -41,7 +41,7 @@ impl FfiCipher {
 
 #[cfg_attr(feature = "backend-uniffi", uniffi::export)]
 impl FfiKeyProcessor for FfiCipher {
-    fn process_key(&self, key: Vec<u8>) -> Vec<u8> {
+    fn process_key(&self, key: Vec<u8>, _salt: String) -> Vec<u8> {
         self.decrypt(key)
     }
 }
