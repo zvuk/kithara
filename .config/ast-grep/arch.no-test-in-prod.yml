@@ -23,6 +23,11 @@ files:
 ignores:
   - "**/kithara-test-utils/**"
   - "**/kithara-test-macros/**"
+  # `kithara-encode` is a test-infra crate (consumed only by
+  # `kithara-test-utils` and `tests/`); no production dependency
+  # graph reaches it. Ungated `pub mod test_pcm` is intentional —
+  # the entire crate is test scaffolding.
+  - "**/kithara-encode/**"
   - "**/tests/**"
   - "**/test_*.rs"
   - "**/*_test.rs"
