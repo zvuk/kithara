@@ -29,38 +29,9 @@ enum class ItemStatus {
 }
 
 /**
- * How leading/trailing PCM is trimmed for resources loaded by a player.
- */
-sealed interface GaplessMode {
-    /** Do not trim decoder-reported gapless padding. */
-    data object Disabled : GaplessMode
-
-    /** Use media/container gapless metadata when present. */
-    data object MediaOnly : GaplessMode
-
-    /** Use media metadata, or fall back to codec priming estimates. */
-    data object CodecPriming : GaplessMode
-
-    /** Use media metadata, or fall back to leading silence detection. */
-    data class SilenceTrim(
-        val params: SilenceTrimParams = SilenceTrimParams(),
-    ) : GaplessMode
-}
-
-/**
- * Tunables for [GaplessMode.SilenceTrim].
- */
-data class SilenceTrimParams(
-    val thresholdDb: Float = 60f,
-    val minTrimFrames: ULong = 256u,
-    val scanWindowFrames: ULong = 4096u,
-    val trimTrailing: Boolean = false,
-)
-
-/**
  * Snapshot of player state for Compose, ViewModel, or Flow consumers.
  *
- * @property bufferedDuration Buffered media duration in seconds.
+ * @property loadedRanges Buffered ranges expressed as `[start, start + duration)`.
  * @property currentTime Current playback position in seconds.
  * @property duration Total item duration in seconds, if known.
  * @property error Last reported player error, if any.
@@ -69,7 +40,7 @@ data class SilenceTrimParams(
  * @property status Current player readiness status.
  */
 data class PlayerState(
-    val bufferedDuration: Double = 0.0,
+    val loadedRanges: List<ItemLoadedRange> = emptyList(),
     val currentTime: Double = 0.0,
     val duration: Double? = null,
     val error: KitharaError? = null,
@@ -81,13 +52,13 @@ data class PlayerState(
 /**
  * Snapshot of item state for Flow consumers.
  *
- * @property bufferedDuration Buffered media duration in seconds.
+ * @property loadedRanges Buffered ranges expressed as `[start, start + duration)`.
  * @property duration Total item duration in seconds, if known.
  * @property error Last reported item error, if any.
  * @property status Current item readiness status.
  */
 data class ItemState(
-    val bufferedDuration: Double = 0.0,
+    val loadedRanges: List<ItemLoadedRange> = emptyList(),
     val duration: Double? = null,
     val error: KitharaError? = null,
     val status: ItemStatus = ItemStatus.Unknown,
@@ -107,6 +78,7 @@ sealed interface TrackStatus {
     data object Loaded : TrackStatus
     data class Failed(val reason: String) : TrackStatus
     data object Consumed : TrackStatus
+    data object Cancelled : TrackStatus
 }
 
 /**

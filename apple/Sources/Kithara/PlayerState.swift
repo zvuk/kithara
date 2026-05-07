@@ -83,40 +83,6 @@ public enum AbrMode: Sendable {
     case manual(variantIndex: Int)
 }
 
-// MARK: - Gapless
-
-/// How leading/trailing PCM is trimmed for resources loaded by a player.
-public enum GaplessMode: Sendable, Equatable {
-    /// Do not trim decoder-reported gapless padding.
-    case disabled
-    /// Use media/container gapless metadata when present.
-    case mediaOnly
-    /// Use media metadata, or fall back to codec priming estimates.
-    case codecPriming
-    /// Use media metadata, or fall back to leading silence detection.
-    case silenceTrim(params: SilenceTrimParams)
-}
-
-/// Tunables for ``GaplessMode/silenceTrim(params:)``.
-public struct SilenceTrimParams: Sendable, Equatable {
-    public var thresholdDb: Float
-    public var minTrimFrames: UInt64
-    public var scanWindowFrames: UInt64
-    public var trimTrailing: Bool
-
-    public init(
-        thresholdDb: Float = 60,
-        minTrimFrames: UInt64 = 256,
-        scanWindowFrames: UInt64 = 4096,
-        trimTrailing: Bool = false
-    ) {
-        self.thresholdDb = thresholdDb
-        self.minTrimFrames = minTrimFrames
-        self.scanWindowFrames = scanWindowFrames
-        self.trimTrailing = trimTrailing
-    }
-}
-
 // MARK: - Public type aliases (avoid `import KitharaFFI` in consumer code)
 
 /// Player event from Rust — use with ``KitharaPlayer/eventPublisher``.
@@ -162,7 +128,8 @@ public struct Transition: Sendable, Equatable {
 /// Snapshot of the player state — use with ``KitharaPlayer/snapshot``.
 public typealias PlayerSnapshot = FfiPlayerSnapshot
 
-/// Seek completion callback — use with ``KitharaPlayer/seek(to:callback:)``.
+/// Seek completion callback — use with
+/// ``KitharaPlayer/seek(to:tolerance:completionHandler:)``.
 public typealias SeekCallback = KitharaFFI.SeekCallback
 
 // MARK: - Internal conversions

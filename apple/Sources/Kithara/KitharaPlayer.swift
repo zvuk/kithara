@@ -38,14 +38,22 @@ public final class KitharaPlayer: @unchecked Sendable {
         PlayerStatus(ffi: _inner.snapshot().status)
     }
 
-    /// Current playback time in seconds, or `nil` if no item is loaded.
-    public var currentTime: TimeInterval? {
-        _inner.snapshot().currentTime
+    /// Current playback time in seconds. `0.0` when no item is loaded.
+    /// Mirrors `AudioPlayerProtocol.currentTime` shape (non-optional).
+    public var currentTime: TimeInterval {
+        _inner.currentTime()
     }
 
     /// Current item duration in seconds, or `nil` if unknown.
     public var duration: TimeInterval? {
         _inner.snapshot().duration
+    }
+
+    /// Currently playing item, or `nil` when the queue is empty.
+    public var currentAudioItem: KitharaPlayerItem? {
+        guard let inner = _inner.currentItem() else { return nil }
+        let id = inner.audioId()
+        return _knownItems[id]
     }
 
     // MARK: - Rate
@@ -55,10 +63,12 @@ public final class KitharaPlayer: @unchecked Sendable {
         _inner.rate()
     }
 
-    /// Default playback rate used when ``play()`` is called.
-    public var defaultRate: Float {
-        get { _inner.defaultRate() }
-        set { _inner.setDefaultRate(rate: newValue) }
+    /// Target playback speed used by ``play()``. Mirrors the iOS
+    /// `AudioPlayerProtocol.playingRate`: while playing, ``rate`` equals
+    /// this value; on pause, ``rate`` falls to `0`.
+    public var playingRate: Float {
+        get { _inner.playingRate() }
+        set { _inner.setPlayingRate(rate: newValue) }
     }
 
     // MARK: - Volume & Mute
@@ -111,25 +121,29 @@ public final class KitharaPlayer: @unchecked Sendable {
     // MARK: - Init
 
     /// A single DRM rule: a key processor bound to one or more domain
-    /// patterns (exact `"example.com"` or wildcard `"*.example.com"`),
-    /// plus optional headers / query params sent with matching key
-    /// requests.
+    /// patterns (exact `"example.com"`, wildcard subdomain
+    /// `"*.example.com"`, or match-any `"*"`), plus optional headers /
+    /// query params sent with matching key requests, and an optional
+    /// per-rule salt forwarded to ``KeyProcessor/processKey(_:salt:)``.
     public struct KeyRule: Sendable {
         public let processor: KeyProcessor
         public let domains: [String]
         public let headers: [String: String]?
         public let queryParams: [String: String]?
+        public let salt: String?
 
         public init(
             processor: KeyProcessor,
             domains: [String],
             headers: [String: String]? = nil,
-            queryParams: [String: String]? = nil
+            queryParams: [String: String]? = nil,
+            salt: String? = nil
         ) {
             self.processor = processor
             self.domains = domains
             self.headers = headers
             self.queryParams = queryParams
+            self.salt = salt
         }
     }
 
@@ -137,21 +151,19 @@ public final class KitharaPlayer: @unchecked Sendable {
     public struct Config: Sendable {
         /// Number of EQ bands (log-spaced). Default: 10.
         public var eqBandCount: Int
-        /// Gapless trimming mode for resources loaded by this player.
-        public var gaplessMode: GaplessMode
         /// Domain-scoped DRM rules. Evaluated in order; first match wins.
+        /// Wildcard `"*"` rules must come last — they mask any rule
+        /// registered after them.
         public var keyRules: [KeyRule]
         /// Optional cache directory path. `nil` uses the platform default.
         public var cacheDir: String?
 
         public init(
             eqBandCount: Int = 10,
-            gaplessMode: GaplessMode = .mediaOnly,
             keyRules: [KeyRule] = [],
             cacheDir: String? = nil
         ) {
             self.eqBandCount = eqBandCount
-            self.gaplessMode = gaplessMode
             self.keyRules = keyRules
             self.cacheDir = cacheDir
         }
@@ -162,16 +174,16 @@ public final class KitharaPlayer: @unchecked Sendable {
         let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
             FfiKeyRule(
                 processor: KeyProcessorBridge(processor: rule.processor),
-                domains: rule.domains,
                 headers: rule.headers,
-                queryParams: rule.queryParams
+                queryParams: rule.queryParams,
+                domains: rule.domains,
+                salt: rule.salt
             )
         }
         let ffiConfig = FfiPlayerConfig(
-            eqBandCount: UInt32(config.eqBandCount),
-            gaplessMode: config.gaplessMode.ffi,
             keyOptions: FfiKeyOptions(rules: ffiRules),
-            store: StoreOptions(cacheDir: config.cacheDir)
+            store: StoreOptions(cacheDir: config.cacheDir),
+            eqBandCount: UInt32(config.eqBandCount)
         )
         self._inner = AudioPlayer(config: ffiConfig)
 
@@ -198,9 +210,18 @@ public final class KitharaPlayer: @unchecked Sendable {
     ///
     /// - Parameters:
     ///   - seconds: Target time in seconds.
-    ///   - callback: Invoked with `true` if the seek was accepted, `false` otherwise.
-    public func seek(to seconds: TimeInterval, callback: SeekCallback) {
-        _inner.seek(toSeconds: seconds, callback: callback)
+    ///   - tolerance: Optional landing-tolerance in seconds. Currently
+    ///     advisory — the engine uses its own seek heuristics; passing
+    ///     `nil` preserves legacy behaviour and reserves the slot for
+    ///     future precise-seek wiring.
+    ///   - completionHandler: Invoked with `true` if the seek was
+    ///     accepted, `false` otherwise.
+    public func seek(
+        to seconds: TimeInterval,
+        tolerance: TimeInterval? = nil,
+        completionHandler: SeekCallback
+    ) {
+        _inner.seek(toSeconds: seconds, tolerance: tolerance, callback: completionHandler)
     }
 
     // MARK: - Queue management (delegated to Rust)
@@ -317,6 +338,63 @@ public final class KitharaPlayer: @unchecked Sendable {
         set { _inner.setCrossfadeDuration(seconds: newValue) }
     }
 
+    // MARK: - Queue navigation
+
+    /// Skip to the next item in the queue. No-op if already on the
+    /// last item or the queue is empty. Mirrors AVQueuePlayer's
+    /// `advanceToNextItem`.
+    public func advanceToNextItem() {
+        _inner.advanceToNextItem()
+    }
+
+    /// Stop playback, clear the queue, and reset the current-item
+    /// slot. Mirrors `AVPlayer.stop` semantics — after `stop()`, the
+    /// player is ready to accept a fresh queue via ``insert(_:after:)``.
+    public func stop() {
+        _inner.stop()
+        _knownItems.removeAll()
+    }
+
+    // MARK: - Network / DRM hooks
+
+    /// Configure the auth token sent on every player HTTP request.
+    /// Pass an empty string to clear.
+    public func setupNetwork(authToken: String) {
+        _inner.setupNetwork(authToken: authToken)
+    }
+
+    /// Per-network bitrate ceilings (bits/sec). Pass `0` for either
+    /// argument to lift that limit; with both zero the ABR considers
+    /// every variant.
+    public func updatePeakBitrate(wifi: Double, cellular: Double) {
+        _inner.updatePeakBitrate(wifiBps: wifi, cellularBps: cellular)
+    }
+
+    /// Register a runtime DRM key decryptor on every host (default
+    /// `"*"` wildcard). The closure receives the encrypted key bytes
+    /// plus the player-generated salt that was attached to outgoing
+    /// requests under `X-Encrypted-Key`. Returning `nil` from the
+    /// closure preserves the input ciphertext unchanged.
+    public func setupHlsAes(keyDecryptor: @escaping (Data, String) -> Data?) {
+        let bridge = ClosureKeyProcessorBridge(decrypt: keyDecryptor)
+        _inner.setupHlsAes(processor: bridge)
+    }
+
+    /// Register a runtime DRM key processor with explicit rule control
+    /// (custom domains, headers, query params, salt). The rule's salt,
+    /// if any, is mirrored into the player-wide HTTP header set so it
+    /// accompanies every outgoing request matching the rule's domains.
+    public func setupHlsAes(rule: KeyRule) {
+        let ffiRule = FfiKeyRule(
+            processor: KeyProcessorBridge(processor: rule.processor),
+            headers: rule.headers,
+            queryParams: rule.queryParams,
+            domains: rule.domains,
+            salt: rule.salt
+        )
+        _inner.setupHlsAesWithRule(rule: ffiRule)
+    }
+
     private func handle(_ event: PlayerEvent) {
         if case let .queueItemRemoved(itemId) = event {
             _knownItems.removeValue(forKey: itemId)
@@ -330,13 +408,21 @@ public final class KitharaPlayer: @unchecked Sendable {
 /// Callback for processing (decrypting) HLS encryption keys.
 ///
 /// Implement this protocol to provide custom key decryption logic.
-/// The player calls ``processKey(_:)`` for each key fetched from the server.
+/// The player calls ``processKey(_:salt:)`` for each key fetched from
+/// the server, passing the salt the player generated and attached to
+/// outgoing requests under `X-Encrypted-Key`.
 public protocol KeyProcessor: Sendable {
     /// Process (decrypt) raw key bytes received from the server.
     ///
-    /// - Parameter key: Encrypted key bytes.
+    /// - Parameters:
+    ///   - key: Encrypted key bytes.
+    ///   - salt: Player-generated salt accompanying the key request
+    ///     (the value mirrored into the `X-Encrypted-Key` HTTP
+    ///     header). Implementations that derive the cipher per-session
+    ///     can rebuild it from this; static-cipher implementations may
+    ///     ignore the argument.
     /// - Returns: Decrypted key bytes.
-    func processKey(_ key: Data) -> Data
+    func processKey(_ key: Data, salt: String) -> Data
 }
 
 private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
@@ -346,34 +432,21 @@ private final class KeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked S
         self.processor = processor
     }
 
-    func processKey(key: Data) -> Data {
-        processor.processKey(key)
+    func processKey(key: Data, salt: String) -> Data {
+        processor.processKey(key, salt: salt)
     }
 }
 
-private extension GaplessMode {
-    var ffi: FfiGaplessMode {
-        switch self {
-        case .disabled:
-            .disabled
-        case .mediaOnly:
-            .mediaOnly
-        case .codecPriming:
-            .codecPriming
-        case let .silenceTrim(params):
-            .silenceTrim(params: params.ffi)
-        }
-    }
-}
+/// Closure-based bridge for ``KitharaPlayer/setupHlsAes(keyDecryptor:)``.
+private final class ClosureKeyProcessorBridge: KitharaFFI.FfiKeyProcessor, @unchecked Sendable {
+    private let decrypt: (Data, String) -> Data?
 
-private extension SilenceTrimParams {
-    var ffi: FfiSilenceTrimParams {
-        FfiSilenceTrimParams(
-            thresholdDb: thresholdDb,
-            minTrimFrames: minTrimFrames,
-            scanWindowFrames: scanWindowFrames,
-            trimTrailing: trimTrailing
-        )
+    init(decrypt: @escaping (Data, String) -> Data?) {
+        self.decrypt = decrypt
+    }
+
+    func processKey(key: Data, salt: String) -> Data {
+        decrypt(key, salt) ?? key
     }
 }
 

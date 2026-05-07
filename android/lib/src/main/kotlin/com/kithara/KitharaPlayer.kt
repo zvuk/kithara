@@ -2,14 +2,12 @@ package com.kithara
 
 import com.kithara.ffi.AudioPlayer as FfiAudioPlayer
 import com.kithara.ffi.FfiException
-import com.kithara.ffi.FfiGaplessMode
 import com.kithara.ffi.FfiKeyOptions
 import com.kithara.ffi.FfiKeyProcessor
 import com.kithara.ffi.FfiKeyRule
 import com.kithara.ffi.FfiPlayerConfig
 import com.kithara.ffi.FfiPlayerEvent
 import com.kithara.ffi.FfiPlayerStatus
-import com.kithara.ffi.FfiSilenceTrimParams
 import com.kithara.ffi.FfiTrackStatus
 import com.kithara.ffi.FfiTransition
 import com.kithara.ffi.PlayerObserver
@@ -39,21 +37,22 @@ import kotlinx.coroutines.flow.update
 class KitharaPlayer(config: Config = Config()) {
     /**
      * A single DRM rule: a key processor bound to one or more domain
-     * patterns (exact `"example.com"` or wildcard `"*.example.com"`),
-     * plus optional headers / query params sent with matching key
-     * requests.
+     * patterns (exact `"example.com"`, wildcard subdomain
+     * `"*.example.com"`, or match-any `"*"`), plus optional headers /
+     * query params sent with matching key requests, and an optional
+     * per-rule salt forwarded to [KeyProcessor.processKey].
      */
     data class KeyRule(
         val processor: KeyProcessor,
         val domains: List<String>,
         val headers: Map<String, String>? = null,
         val queryParams: Map<String, String>? = null,
+        val salt: String? = null,
     )
 
     /** Configuration for [KitharaPlayer] creation. */
     data class Config(
         val eqBandCount: Int = 10,
-        val gaplessMode: GaplessMode = GaplessMode.MediaOnly,
         val keyRules: List<KeyRule> = emptyList(),
         val cacheDir: String? = null,
     )
@@ -74,107 +73,148 @@ class KitharaPlayer(config: Config = Config()) {
 
     /**
      * One-shot player events: item changes, playback completion, and failures.
-     *
-     * Subscribe with [kotlinx.coroutines.flow.collect] to react to lifecycle transitions
-     * without polling [state].
      */
     val events: SharedFlow<KitharaPlayerEvent> = eventsFlow.asSharedFlow()
 
-    /**
-     * Current playback time in seconds.
-     */
+    /** Current playback time in seconds. */
     val currentTime: Double
         get() = state.value.currentTime
 
-    /**
-     * Current playback rate.
-     */
+    /** Current playback rate. */
     val rate: Float
         get() = state.value.rate
 
-    /**
-     * Current player status.
-     */
+    /** Current player status. */
     val status: PlayerStatus
         get() = state.value.status
 
-    /**
-     * Current item duration in seconds, if known.
-     */
+    /** Current item duration in seconds, if known. */
     val duration: Double?
         get() = state.value.duration
 
     /**
-     * Current buffered duration in seconds.
+     * Currently playing item, or `null` if the queue is empty. Mirrors
+     * the iOS `AudioPlayerProtocol.currentAudioItem`.
      */
-    val bufferedDuration: Double
-        get() = state.value.bufferedDuration
+    val currentAudioItem: KitharaPlayerItem?
+        get() {
+            val ffiItem = inner.currentItem() ?: return null
+            val id = ffiItem.audioId()
+            return state.value.items.firstOrNull { it.id == id }
+        }
 
-    /**
-     * Last player error, if any.
-     */
+    /** Last loaded ranges reported by the underlying resource. */
+    val loadedRanges: List<ItemLoadedRange>
+        get() = state.value.loadedRanges
+
+    /** Last player error, if any. */
     val error: KitharaError?
         get() = state.value.error
 
-    /**
-     * Current queue snapshot.
-     */
+    /** Current queue snapshot. */
     val items: List<KitharaPlayerItem>
         get() = state.value.items
 
     /**
-     * Default playback rate used by [play].
+     * Target playback speed used by [play]. While the player is
+     * playing, [rate] equals this; on pause [rate] falls to `0`.
+     * Mirrors the iOS `AudioPlayerProtocol.playingRate`.
      */
-    var defaultRate: Float
-        get() = inner.defaultRate()
+    var playingRate: Float
+        get() = inner.playingRate()
         set(value) {
-            inner.setDefaultRate(value)
+            inner.setPlayingRate(value)
         }
 
-    /**
-     * Crossfade duration in seconds applied on item transitions.
-     *
-     * Set to `0f` to disable crossfade. Negative values are clamped to `0f`
-     * by the underlying engine.
-     */
+    /** Crossfade duration in seconds applied on item transitions. */
     var crossfadeDuration: Float
         get() = inner.crossfadeDuration()
         set(value) {
             inner.setCrossfadeDuration(value)
         }
 
-    /**
-     * Starts or resumes playback.
-     */
+    /** Starts or resumes playback. */
     fun play() {
         inner.play()
     }
 
-    /**
-     * Pauses playback.
-     */
+    /** Pauses playback. */
     fun pause() {
         inner.pause()
     }
 
     /**
-     * Seeks the current item to the given position in seconds.
-     *
-     * Result is delivered asynchronously via [onComplete].
+     * Stop playback, clear the queue, and reset the current-item slot.
+     * Mirrors `AVPlayer.stop` semantics.
+     */
+    fun stop() {
+        inner.stop()
+        updateState { current -> current.copy(items = emptyList()) }
+    }
+
+    /**
+     * Skip to the next item in the queue. No-op if already on the last
+     * item or the queue is empty.
+     */
+    fun advanceToNextItem() {
+        inner.advanceToNextItem()
+    }
+
+    /**
+     * Configure the auth token sent on every player HTTP request. Pass
+     * an empty string to clear.
+     */
+    fun setupNetwork(authToken: String) {
+        inner.setupNetwork(authToken)
+    }
+
+    /**
+     * Per-network bitrate ceilings (bits/sec). Pass `0.0` for either
+     * argument to lift that limit.
+     */
+    fun updatePeakBitrate(wifi: Double, cellular: Double) {
+        inner.updatePeakBitrate(wifi, cellular)
+    }
+
+    /**
+     * Register a runtime DRM key decryptor on every host (default
+     * `"*"` wildcard). The lambda receives the encrypted key bytes
+     * plus the player-generated salt that was attached to outgoing
+     * requests under `X-Encrypted-Key`. Returning `null` preserves
+     * the input ciphertext unchanged.
+     */
+    fun setupHlsAes(keyDecryptor: (key: ByteArray, salt: String) -> ByteArray?) {
+        inner.setupHlsAes(ClosureKeyProcessorBridge(keyDecryptor))
+    }
+
+    /**
+     * Register a runtime DRM key processor with explicit rule control.
+     */
+    fun setupHlsAes(rule: KeyRule) {
+        inner.setupHlsAesWithRule(
+            FfiKeyRule(
+                processor = KeyProcessorBridge(rule.processor),
+                headers = rule.headers,
+                queryParams = rule.queryParams,
+                domains = rule.domains,
+                salt = rule.salt,
+            )
+        )
+    }
+
+    /**
+     * Seek the current item to the given position in seconds.
      *
      * @param seconds Target playback position in seconds from the item start.
+     * @param tolerance Optional landing-tolerance (advisory).
      * @param onComplete Called with `true` if seek succeeded, `false` otherwise.
      */
-    fun seek(seconds: Double, onComplete: (Boolean) -> Unit) {
-        inner.seek(seconds, SeekCallbackAdapter(onComplete))
+    fun seek(seconds: Double, tolerance: Double? = null, onComplete: (Boolean) -> Unit) {
+        inner.seek(seconds, tolerance, SeekCallbackAdapter(onComplete))
     }
 
     /**
      * Inserts an item into the queue.
-     *
-     * @param item Item to insert.
-     * @param after Optional queue item after which the new item should be inserted.
-     * @throws KitharaError If the native insert request fails.
      */
     @Throws(KitharaError::class)
     fun insert(item: KitharaPlayerItem, after: KitharaPlayerItem? = null) {
@@ -188,13 +228,7 @@ class KitharaPlayer(config: Config = Config()) {
         }
     }
 
-
-    /**
-     * Removes an item from the queue.
-     *
-     * @param item Queue item to remove.
-     * @throws KitharaError If the native remove request fails.
-     */
+    /** Removes an item from the queue. */
     @Throws(KitharaError::class)
     fun remove(item: KitharaPlayerItem) {
         try {
@@ -207,9 +241,7 @@ class KitharaPlayer(config: Config = Config()) {
         }
     }
 
-    /**
-     * Clears the queue.
-     */
+    /** Clears the queue. */
     fun removeAllItems() {
         inner.removeAllItems()
         updateState { current -> current.copy(items = emptyList()) }
@@ -217,14 +249,6 @@ class KitharaPlayer(config: Config = Config()) {
 
     /**
      * Select an item at the given queue index.
-     *
-     * @param index Queue index (0-based).
-     * @param transition How the switch plays. [Transition.None] is an
-     *   immediate cut (AVQueuePlayer user-initiated-selection idiom —
-     *   default). [Transition.Crossfade] uses the player's configured
-     *   duration (typical for Next/Prev buttons).
-     * @throws KitharaError If the index is out of range or the item is
-     *   not yet loaded.
      */
     @Throws(KitharaError::class)
     fun selectItem(at: Int, transition: Transition = Transition.None) {
@@ -235,18 +259,7 @@ class KitharaPlayer(config: Config = Config()) {
         }
     }
 
-    /**
-     * Select an item by identity (AVQueuePlayer-style).
-     *
-     * Race-free against concurrent insert/remove that would shift
-     * indices — resolves the item's current index on the fly.
-     *
-     * @param item Item to select; must currently be in the queue.
-     * @param transition `.None` by default (immediate cut); pass
-     *   `.Crossfade` for Next/Prev button UX.
-     * @throws KitharaError If the item is not in the queue, or the
-     *   underlying select fails.
-     */
+    /** Select an item by identity (AVQueuePlayer-style). */
     @Throws(KitharaError::class)
     fun selectItem(item: KitharaPlayerItem, transition: Transition = Transition.None) {
         val idx = items.indexOfFirst { queued -> queued.id == item.id }
@@ -272,7 +285,13 @@ class KitharaPlayer(config: Config = Config()) {
                 updateState { it.copy(duration = event.seconds) }
 
             is FfiPlayerEvent.BufferedDurationChanged ->
-                updateState { it.copy(bufferedDuration = event.seconds) }
+                updateState {
+                    it.copy(
+                        loadedRanges = listOf(
+                            ItemLoadedRange(start = 0.0, duration = event.seconds)
+                        )
+                    )
+                }
 
             is FfiPlayerEvent.StatusChanged ->
                 updateState { it.copy(status = event.status.toPlayerStatus()) }
@@ -304,6 +323,7 @@ class KitharaPlayer(config: Config = Config()) {
             is FfiPlayerEvent.TimeControlStatusChanged,
             is FfiPlayerEvent.VolumeChanged,
             is FfiPlayerEvent.MuteChanged,
+            is FfiPlayerEvent.ItemDidPlayToEnd,
             is FfiPlayerEvent.CrossfadeStarted,
             is FfiPlayerEvent.CrossfadeDurationChanged -> Unit
         }
@@ -332,20 +352,6 @@ private fun FfiPlayerStatus.toPlayerStatus(): PlayerStatus = when (this) {
     FfiPlayerStatus.UNKNOWN -> PlayerStatus.Unknown
 }
 
-private fun GaplessMode.toFfi(): FfiGaplessMode = when (this) {
-    GaplessMode.Disabled -> FfiGaplessMode.Disabled
-    GaplessMode.MediaOnly -> FfiGaplessMode.MediaOnly
-    GaplessMode.CodecPriming -> FfiGaplessMode.CodecPriming
-    is GaplessMode.SilenceTrim -> FfiGaplessMode.SilenceTrim(params.toFfi())
-}
-
-private fun SilenceTrimParams.toFfi(): FfiSilenceTrimParams = FfiSilenceTrimParams(
-    thresholdDb = thresholdDb,
-    minTrimFrames = minTrimFrames,
-    scanWindowFrames = scanWindowFrames,
-    trimTrailing = trimTrailing,
-)
-
 private fun FfiTrackStatus.toTrackStatus(): TrackStatus = when (this) {
     is FfiTrackStatus.Pending -> TrackStatus.Pending
     is FfiTrackStatus.Loading -> TrackStatus.Loading
@@ -353,6 +359,7 @@ private fun FfiTrackStatus.toTrackStatus(): TrackStatus = when (this) {
     is FfiTrackStatus.Loaded -> TrackStatus.Loaded
     is FfiTrackStatus.Failed -> TrackStatus.Failed(reason)
     is FfiTrackStatus.Consumed -> TrackStatus.Consumed
+    is FfiTrackStatus.Cancelled -> TrackStatus.Cancelled
 }
 
 private fun Transition.toFfi(): FfiTransition = when (this) {
@@ -363,29 +370,42 @@ private fun Transition.toFfi(): FfiTransition = when (this) {
 
 /**
  * Callback for processing (decrypting) HLS encryption keys.
+ *
+ * `salt` is the player-generated value attached to outgoing requests
+ * under `X-Encrypted-Key`. Implementations that hold a pre-built
+ * cipher can ignore the argument; implementations that derive the
+ * cipher per-session should rebuild it from `salt` on every call.
  */
 fun interface KeyProcessor {
-    fun processKey(key: ByteArray): ByteArray
+    fun processKey(key: ByteArray, salt: String): ByteArray
 }
 
 private class KeyProcessorBridge(private val processor: KeyProcessor) : FfiKeyProcessor {
-    override fun processKey(key: ByteArray): ByteArray = processor.processKey(key)
+    override fun processKey(key: ByteArray, salt: String): ByteArray =
+        processor.processKey(key, salt)
+}
+
+private class ClosureKeyProcessorBridge(
+    private val decrypt: (ByteArray, String) -> ByteArray?,
+) : FfiKeyProcessor {
+    override fun processKey(key: ByteArray, salt: String): ByteArray =
+        decrypt(key, salt) ?: key
 }
 
 private fun KitharaPlayer.Config.toFfi(): FfiPlayerConfig {
     val ffiRules = keyRules.map { rule ->
         FfiKeyRule(
             processor = KeyProcessorBridge(rule.processor),
-            domains = rule.domains,
             headers = rule.headers,
             queryParams = rule.queryParams,
+            domains = rule.domains,
+            salt = rule.salt,
         )
     }
     return FfiPlayerConfig(
-        eqBandCount = eqBandCount.toUInt(),
-        gaplessMode = gaplessMode.toFfi(),
         keyOptions = FfiKeyOptions(rules = ffiRules),
         store = FfiStoreOptions(cacheDir = cacheDir),
+        eqBandCount = eqBandCount.toUInt(),
     )
 }
 
