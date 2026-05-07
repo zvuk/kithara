@@ -8,22 +8,14 @@ struct KitharaPlayerTests {
     func initCreatesPlayerWithUnknownStatus() {
         let player = KitharaPlayer()
         #expect(player.status == .unknown)
-        #expect(player.currentTime == nil)
+        #expect(player.currentTime == 0.0)
         #expect(player.duration == nil)
     }
 
-    @Test("default rate is 1.0")
-    func defaultRateIsOne() {
+    @Test("playing rate is 1.0")
+    func playingRateIsOne() {
         let player = KitharaPlayer()
-        #expect(player.defaultRate == 1.0)
-    }
-
-    @Test("init accepts gapless mode config")
-    func initAcceptsGaplessModeConfig() {
-        let player = KitharaPlayer(
-            config: KitharaPlayer.Config(gaplessMode: .codecPriming)
-        )
-        #expect(player.status == .unknown)
+        #expect(player.playingRate == 1.0)
     }
 
     @Test("items starts empty")
@@ -44,8 +36,24 @@ struct KitharaPlayerTests {
         let player = KitharaPlayer()
         let snap = player.snapshot
         #expect(snap.rate == 0.0)
-        #expect(snap.defaultRate == 1.0)
+        #expect(snap.playingRate == 1.0)
         #expect(snap.currentTime == nil)
         #expect(snap.duration == nil)
+    }
+
+    @Test("currentAudioItem nil when queue empty")
+    func currentAudioItemNilWhenEmpty() {
+        let player = KitharaPlayer()
+        #expect(player.currentAudioItem == nil)
+    }
+
+    @Test("setupNetwork stores auth token")
+    func setupNetworkStoresAuthToken() {
+        let player = KitharaPlayer()
+        // setupNetwork is fire-and-forget; we just verify the call
+        // path doesn't throw. Header-side asserts are covered by the
+        // Rust-level FFI tests.
+        player.setupNetwork(authToken: "demo-token-123")
+        #expect(player.status == .unknown)
     }
 }

@@ -46,7 +46,6 @@ final class PlayerViewModel: ObservableObject {
 
     private let player = KitharaPlayer(
         config: KitharaPlayer.Config(
-            keyRules: makeZvukKeyRules(),
             cacheDir: PlayerViewModel.defaultCacheDir
         )
     )
@@ -97,10 +96,23 @@ final class PlayerViewModel: ObservableObject {
     init() {
         volume = player.volume
         isMuted = player.isMuted
-        player.defaultRate = selectedRate
+        player.playingRate = selectedRate
         eqGains = Array(repeating: 0, count: player.eqBandCount)
         player.crossfadeDuration = Self.defaultCrossfadeSeconds
         crossfadeDuration = Self.defaultCrossfadeSeconds
+
+        // New runtime DRM flow: register a wildcard `"*"` HLS-AES
+        // decryptor that derives the cipher per-call from the
+        // player-supplied salt (the value mirrored into
+        // `X-Encrypted-Key` on every outgoing request).
+        let cipherKey = readZvukCipherKey()
+        player.setupHlsAes { encryptedKey, salt in
+            let cipher = Cipher(key: cipherKey + salt)
+            return cipher.decrypt(encryptedKey)
+        }
+        if let token = readZvukAuthToken() {
+            player.setupNetwork(authToken: token)
+        }
 
         player.eventPublisher
             .receive(on: DispatchQueue.main)
@@ -226,10 +238,29 @@ final class PlayerViewModel: ObservableObject {
 
     func setRate(_ rate: Float) {
         selectedRate = rate
-        player.defaultRate = rate
+        player.playingRate = rate
         if isPlaying {
             player.play()
         }
+    }
+
+    // MARK: - Stop / Next / Update peak bitrate
+
+    func stop() {
+        player.stop()
+        playlist.removeAll()
+        currentTrackId = nil
+        isPlaying = false
+        currentTime = 0
+        duration = nil
+    }
+
+    func advanceToNextItem() {
+        player.advanceToNextItem()
+    }
+
+    func updatePeakBitrate(wifi: Double, cellular: Double) {
+        player.updatePeakBitrate(wifi: wifi, cellular: cellular)
     }
 
     // MARK: - Crossfade
@@ -298,14 +329,18 @@ final class PlayerViewModel: ObservableObject {
 
     func onSeekEnded(_ value: TimeInterval) {
         currentTime = value
-        player.seek(to: value, callback: SeekHandler { [weak self] finished in
-            DispatchQueue.main.async {
-                self?.isSeeking = false
-                if !finished {
-                    self?.errorMessage = "Seek failed"
+        player.seek(
+            to: value,
+            tolerance: nil,
+            completionHandler: SeekHandler { [weak self] finished in
+                DispatchQueue.main.async {
+                    self?.isSeeking = false
+                    if !finished {
+                        self?.errorMessage = "Seek failed"
+                    }
                 }
             }
-        })
+        )
     }
 
     // MARK: - Private
@@ -362,7 +397,7 @@ final class PlayerViewModel: ObservableObject {
             // Queue drives auto-advance + crossfade timing; UI updates on
             // the subsequent `.currentItemChanged`.
             break
-        case .bufferedDurationChanged, .timeControlStatusChanged:
+        case .timeControlStatusChanged, .itemDidPlayToEnd:
             break
         @unknown default:
             break
@@ -443,7 +478,7 @@ final class PlayerViewModel: ObservableObject {
             if entryId == currentTrackId, errorMessage == nil {
                 errorMessage = message
             }
-        case .statusChanged, .bufferedDurationChanged:
+        case .statusChanged, .loadedRangesChanged, .didReachEnd, .didStall:
             break
         @unknown default:
             break

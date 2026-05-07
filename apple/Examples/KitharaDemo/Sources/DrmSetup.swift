@@ -1,24 +1,20 @@
 import Foundation
 import Kithara
 
-/// Build DRM key rules for the configured zvuk domains.
+/// Read the cipher key for zvuk DRM from the bundled `.env` file.
 ///
-/// Reads cipher key from `.env` file in the app bundle (key `DRM_KEY`),
-/// falls back to `"kithara"` if not found. Generates a random seed,
-/// creates a cipher, and returns a [`KitharaPlayer.KeyRule`] scoped to
-/// zvuk-owned domains. Pass the result to `KitharaPlayer.Config.keyRules`.
-func makeZvukKeyRules() -> [KitharaPlayer.KeyRule] {
-    let cipherKey = readEnvValue("DRM_KEY") ?? "BinaryCipherKey"
-    let seed = randomAlphanumericSeed(length: 16)
-    let secret = cipherKey + seed
-    let cipher = Cipher(key: secret)
+/// The salt is supplied per-call by the player (see
+/// `KitharaPlayer.setupHlsAes`), so the demo no longer pre-generates a
+/// seed — the closure builds the cipher on every decrypt from
+/// `cipherKey + salt` to match the server's encryption.
+func readZvukCipherKey() -> String {
+    readEnvValue("DRM_KEY") ?? "BinaryCipherKey"
+}
 
-    let rule = KitharaPlayer.KeyRule(
-        processor: cipher,
-        domains: ["*.zvq.me", "*.zvuk.com"],
-        headers: ["X-Encrypted-Key": seed]
-    )
-    return [rule]
+/// Auth token for zvuk-style protected streams. Mirrors the
+/// `KITHARA_DRM_AUTH_TOKEN` baked at compile-time in `kithara-app`.
+func readZvukAuthToken() -> String? {
+    readEnvValue("KITHARA_DRM_AUTH_TOKEN")
 }
 
 /// Read a value from `.env` file bundled in the app.
@@ -39,9 +35,4 @@ private func readEnvValue(_ key: String) -> String? {
         }
     }
     return nil
-}
-
-private func randomAlphanumericSeed(length: Int) -> String {
-    let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    return String((0..<length).map { _ in chars.randomElement()! })
 }

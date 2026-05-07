@@ -40,7 +40,16 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         val cacheDir = File(application.filesDir, "kithara-cache").apply { mkdirs() }.absolutePath
         player = KitharaPlayer(
             config = KitharaPlayer.Config(cacheDir = cacheDir),
-        ).apply { defaultRate = _uiState.value.selectedRate }
+        ).apply { playingRate = _uiState.value.selectedRate }
+        // Register a wildcard `"*"` HLS-AES decryptor — the closure
+        // derives the cipher per-call from the player-supplied salt
+        // (`X-Encrypted-Key` header, generated and attached by the
+        // player on every outgoing request).
+        val cipherKey = readZvukCipherKey(application)
+        player.setupHlsAes { encryptedKey, salt ->
+            kitharaCipherDecrypt(cipherKey + salt, encryptedKey)
+        }
+        readZvukAuthToken(application)?.let(player::setupNetwork)
         observePlayer()
         observeEvents()
         for (url in DEFAULT_TRACK_URLS) {
@@ -127,8 +136,29 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
 
     fun setRate(rate: Float) {
         _uiState.update { it.copy(selectedRate = rate) }
-        player.defaultRate = rate
+        player.playingRate = rate
         if (_uiState.value.isPlaying) player.play()
+    }
+
+    fun stop() {
+        player.stop()
+        _uiState.update {
+            it.copy(
+                playlist = emptyList(),
+                currentTrackId = null,
+                isPlaying = false,
+                currentTimeSeconds = 0f,
+                durationSeconds = null,
+            )
+        }
+    }
+
+    fun advanceToNextItem() {
+        player.advanceToNextItem()
+    }
+
+    fun updatePeakBitrate(wifi: Double, cellular: Double) {
+        player.updatePeakBitrate(wifi = wifi, cellular = cellular)
     }
 
     fun onSeekStarted() {
@@ -141,7 +171,7 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
 
     fun onSeekFinished() {
         val target = _uiState.value.currentTimeSeconds.toDouble()
-        player.seek(target) { ok ->
+        player.seek(target, tolerance = null) { ok ->
             if (ok) {
                 _uiState.update { it.copy(isSeeking = false) }
             } else {
