@@ -29,26 +29,19 @@
 
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::Once,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use kithara::{
     assets::StoreOptions,
-    play::{
-        Resource, ResourceConfig,
-        test_helpers::{init_offline_backend, offline::OfflinePlayer},
-    },
+    play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_decode::DecoderBackend;
+use kithara_integration_tests::offline::OfflinePlayer;
 use kithara_test_utils::{PackagedTestServer, fixture_protocol::DelayRule, temp_dir};
 use tokio::time::sleep;
 
 use crate::common::test_defaults::Consts as Shared;
-
-static INIT_OFFLINE: Once = Once::new();
 
 struct Consts;
 impl Consts {
@@ -127,8 +120,6 @@ async fn hls_seek_middle_repeated_seeks_stress(
     #[case] iterations: u32,
     #[case] backend: DecoderBackend,
 ) {
-    INIT_OFFLINE.call_once(init_offline_backend);
-
     let server = PackagedTestServer::with_delay_rules(vec![DelayRule {
         variant: None,
         segment_eq: None,

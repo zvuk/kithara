@@ -17,10 +17,9 @@ use std::sync::Arc;
 
 use kithara_decode::PcmSpec;
 use kithara_events::{Event, EventBus, EventReceiver};
-use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_integration_tests::{audio_mock::TestPcmReader, offline::OfflineSession};
 use kithara_play::{
-    EngineConfig, EngineImpl, PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus,
-    Resource, impls::engine::OfflineSessionHandle,
+    PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource, SessionDispatcher,
 };
 use kithara_test_utils::kithara;
 
@@ -62,15 +61,14 @@ fn make_tagged_resource(item_id: &'static str, duration_secs: f64) -> (Resource,
     )
 }
 
-fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, OfflineSessionHandle) {
+fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSession>) {
     let bus = EventBus::default();
-    let mut engine_config = EngineConfig::default();
-    engine_config.sample_rate = 44_100;
-    let (engine, session) = EngineImpl::new_offline(engine_config, bus.clone());
+    let session = Arc::new(OfflineSession::new_manual());
     let mut player_config = PlayerConfig::default();
     player_config.bus = Some(bus);
     player_config.crossfade_duration = crossfade_duration;
-    let player = PlayerImpl::with_engine(player_config, engine);
+    player_config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
+    let player = PlayerImpl::new(player_config);
     (player, session)
 }
 
@@ -91,7 +89,7 @@ fn drain_player_events(player: &PlayerImpl, rx: &mut EventReceiver) -> Vec<Playe
 
 fn render_until_events(
     player: &PlayerImpl,
-    session: &OfflineSessionHandle,
+    session: &OfflineSession,
     rx: &mut EventReceiver,
     max_blocks: usize,
     mut done: impl FnMut(&[PlayerEvent]) -> bool,
@@ -202,7 +200,11 @@ async fn player_advance_emits_event() {
 
 #[kithara::test(tokio)]
 async fn player_play_without_audio_hardware_logs_warning() {
-    let player = PlayerImpl::new(PlayerConfig::default());
+    // Inject an offline dispatcher so engine start does not poke real
+    // audio hardware. The original assertion (`engine.start()` warns and
+    // recovers when cpal device is missing) only makes sense for the
+    // cpal path — see `engine_cpal_tests.rs` for the e2e variant.
+    let player = PlayerImpl::new(PlayerConfig::default().with_session(OfflineSession::arc_auto()));
     player.insert(make_resource(1.0), None, None);
     player.play();
 }

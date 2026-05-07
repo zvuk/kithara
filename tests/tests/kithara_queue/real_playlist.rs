@@ -16,17 +16,15 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{
-    sync::{Arc, Once},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
+use kithara_integration_tests::offline::OfflineSession;
 use kithara_net::NetOptions;
-use kithara_play::test_helpers::init_offline_backend;
+use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{TestTempDir, Xorshift64, kithara};
@@ -73,17 +71,11 @@ fn build_track_source(
 mod test_statics {
     use super::*;
     pub(super) static TEST_CTX: OnceCell<TestCtx> = OnceCell::const_new();
-    pub(super) static INIT_OFFLINE: Once = Once::new();
 }
 
 async fn shared_test_ctx() -> &'static TestCtx {
     test_statics::TEST_CTX
         .get_or_init(|| async {
-            // Claim the session singleton with OfflineBackend *before*
-            // any PlayerImpl / Queue construction. Once.call_once
-            // guarantees exactly one initialization per process.
-            test_statics::INIT_OFFLINE.call_once(init_offline_backend);
-
             let net = NetOptions::default().with_is_insecure(true);
             let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
             let flush_hub = FlushHub::new(
@@ -91,7 +83,13 @@ async fn shared_test_ctx() -> &'static TestCtx {
                 FlushPolicy::default(),
             );
             let config = AppConfig::new(downloader, flush_hub);
-            let queue = Arc::new(Queue::new(QueueConfig::default()));
+            // Wire a per-process auto-render offline session into the
+            // shared player so real-playlist scenarios never reach the
+            // cpal hardware.
+            let player = Arc::new(PlayerImpl::new(
+                PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+            ));
+            let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
             // Background tick driver: Queue::tick updates cached
             // position, drains engine events, and arms crossfade. In

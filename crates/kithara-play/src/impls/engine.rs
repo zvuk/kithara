@@ -22,8 +22,6 @@ use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
 use tracing::{debug, info, warn};
 
-#[cfg(any(test, feature = "test-utils"))]
-use super::session_engine::OfflineSession;
 use super::{
     arena_registry::ArenaRegistry,
     player_processor::PlayerCmd,
@@ -42,8 +40,8 @@ use crate::{
 };
 
 /// Configuration for the audio engine.
-#[derive(Clone, Debug, Derivative, Setters)]
-#[derivative(Default)]
+#[derive(Clone, Derivative, Setters)]
+#[derivative(Debug, Default)]
 #[setters(prefix = "with_", strip_option)]
 #[non_exhaustive]
 pub struct EngineConfig {
@@ -63,6 +61,15 @@ pub struct EngineConfig {
     /// Maximum number of concurrent player slots. Default: 4.
     #[derivative(Default(value = "4"))]
     pub max_slots: usize,
+    /// Pre-built audio session dispatcher.
+    ///
+    /// `None` → the engine binds to the process-wide cpal-backed session
+    /// (default for production builds).
+    /// `Some(_)` → the engine takes ownership of the supplied dispatcher.
+    /// Integration tests pass an offline session here to drive the audio
+    /// graph synchronously without touching real hardware.
+    #[derivative(Debug = "ignore")]
+    pub session: Option<Arc<dyn SessionDispatcher>>,
 }
 
 /// Handle for a slot, providing command channel and shared state.
@@ -77,9 +84,9 @@ pub(crate) struct SlotHandle {
 /// Multiple `EngineImpl` instances share one CPAL/Firewheel stream while
 /// retaining independent per-player graph controls.
 pub struct EngineImpl {
-    /// Audio session backend. Production paths use the process-wide
-    /// `SessionClient`; tests can plug in a per-instance `OfflineSession`
-    /// via [`EngineImpl::new_offline`].
+    /// Audio session backend. Production paths default to the
+    /// process-wide cpal-backed `SessionClient`; tests inject a
+    /// per-instance offline dispatcher through [`EngineConfig::session`].
     session: Arc<dyn SessionDispatcher>,
 
     /// Whether this engine/player instance is currently running.
@@ -115,11 +122,20 @@ pub struct EngineImpl {
 impl EngineImpl {
     /// Create a new engine with the given configuration.
     ///
+    /// If `config.session` is `Some(_)` the engine binds to the supplied
+    /// dispatcher (used by integration tests for offline render). If
+    /// `None`, it falls back to the process-wide cpal-backed session
+    /// client.
+    ///
     /// The engine is created in the *stopped* state. Call [`Engine::start`]
     /// to begin audio processing.
     #[must_use]
-    pub fn new(config: EngineConfig, bus: EventBus) -> Self {
-        Self::with_session(config, bus, session_client())
+    pub fn new(mut config: EngineConfig, bus: EventBus) -> Self {
+        let session = config
+            .session
+            .take()
+            .unwrap_or_else(|| session_client() as Arc<dyn SessionDispatcher>);
+        Self::with_session(config, bus, session)
     }
 
     fn with_session(
@@ -148,25 +164,6 @@ impl EngineImpl {
             worker: AudioWorkerHandle::new(),
             runtime: RuntimeHandle::try_current().ok(),
         }
-    }
-
-    /// Create a self-contained engine backed by a per-instance offline
-    /// session. The returned [`OfflineSessionHandle`] owns the firewheel
-    /// graph; call [`OfflineSessionHandle::render`] to step it
-    /// synchronously from the test thread. Pair with
-    /// [`PlayerImpl::with_engine`](super::player::PlayerImpl::with_engine).
-    ///
-    /// Test-only — does not touch the global session client, so multiple
-    /// offline engines can coexist in one test binary.
-    #[cfg(any(test, feature = "test-utils"))]
-    #[must_use]
-    pub fn new_offline(config: EngineConfig, bus: EventBus) -> (Self, OfflineSessionHandle) {
-        let session = Arc::new(OfflineSession::new());
-        let handle = OfflineSessionHandle {
-            session: Arc::clone(&session),
-        };
-        let engine = Self::with_session(config, bus, session);
-        (engine, handle)
     }
 
     fn emit(&self, event: EngineEvent) {
@@ -264,27 +261,6 @@ impl EngineImpl {
     #[must_use]
     pub fn worker(&self) -> &AudioWorkerHandle {
         &self.worker
-    }
-}
-
-/// Test-only handle to a per-instance offline session created via
-/// [`EngineImpl::new_offline`]. Owns the firewheel graph; call
-/// [`OfflineSessionHandle::render`] each iteration of the test loop to
-/// drive `ctx.update()` + `OfflineBackend::render(N)` synchronously from
-/// the test thread.
-#[cfg(any(test, feature = "test-utils"))]
-pub struct OfflineSessionHandle {
-    session: Arc<OfflineSession>,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-impl OfflineSessionHandle {
-    /// Synchronously render `frames` of audio. Returns the rendered
-    /// stereo-interleaved (LRLR…) block, or an empty `Vec` if the
-    /// engine has not been started yet.
-    #[must_use]
-    pub fn render(&self, frames: usize) -> Vec<f32> {
-        self.session.render(frames)
     }
 }
 

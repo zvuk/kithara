@@ -12,13 +12,14 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    sync::{Arc, Once},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use kithara_assets::StoreOptions;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, test_helpers::init_offline_backend};
+use kithara_integration_tests::offline::OfflineSession;
+use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{
@@ -26,8 +27,6 @@ use kithara_test_utils::{
     fixture_protocol::DelayRule, kithara, temp_dir,
 };
 use tokio::time::sleep;
-
-static INIT_OFFLINE: Once = Once::new();
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -99,7 +98,9 @@ fn build_queue_with_tick(
     StoreOptions,
     tokio::task::JoinHandle<()>,
 ) {
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+    ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::spawn(async move {
@@ -157,7 +158,6 @@ async fn observe_seek_advance_or_panic(
 
 async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir) {
     install_tracing();
-    INIT_OFFLINE.call_once(init_offline_backend);
 
     let server = PackagedTestServer::new().await;
     let resolved: Vec<String> = urls
@@ -171,7 +171,9 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(DownloaderConfig::default());
 
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+    ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
     // Background tick driver — production uses the UI loop for this; in
@@ -312,7 +314,6 @@ async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     install_tracing();
-    INIT_OFFLINE.call_once(init_offline_backend);
 
     let helper = TestServerHelper::new().await;
     // 20 segments × 4s each = 80s total. Seek at 40s lands in segment
@@ -404,7 +405,6 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     install_tracing();
-    INIT_OFFLINE.call_once(init_offline_backend);
 
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()

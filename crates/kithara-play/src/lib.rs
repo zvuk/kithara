@@ -47,7 +47,13 @@ pub use impls::config::{ResourceConfig, ResourceSrc};
 pub use impls::{
     engine::{EngineConfig, EngineImpl},
     player::{PlayerConfig, PlayerImpl},
+    player_node::PlayerNode,
     resource::Resource,
+    session_engine::{
+        AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionState,
+        StartStreamFn, run_cmd,
+    },
+    shared_eq::SharedEq,
     source_type::SourceType,
 };
 pub use kithara_audio::{AudioWorkerHandle, SeekOutcome, ServiceClass};

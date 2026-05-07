@@ -35,14 +35,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::{Arc, Once},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;
 use kithara_events::{AbrMode, EventReceiver, TrackId, TrackStatus};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, test_helpers::init_offline_backend};
+use kithara_integration_tests::offline::OfflineSession;
+use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{
@@ -51,8 +49,6 @@ use kithara_test_utils::{
 };
 use tokio::time::sleep;
 use url::Url;
-
-static INIT_OFFLINE: Once = Once::new();
 
 struct Consts;
 impl Consts {
@@ -124,7 +120,9 @@ fn build_queue_with_tick(
     StoreOptions,
     tokio::task::JoinHandle<()>,
 ) {
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+    ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::spawn(async move {
@@ -206,8 +204,6 @@ fn drain_event_backlog(rx: &mut EventReceiver) {
 #[case::single_pass(1)]
 #[case::stress_pass(Consts::STRESS_ITERATIONS)]
 async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: u32) {
-    INIT_OFFLINE.call_once(init_offline_backend);
-
     let helper = TestServerHelper::new().await;
     let fast_url = build_hls(
         &helper,

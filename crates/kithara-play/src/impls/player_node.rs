@@ -36,7 +36,7 @@ use super::{
 /// channel and shared state. [`PlayerNode::new`] creates a standalone
 /// node (useful for tests or when wiring is deferred to Task 9).
 #[derive(Clone, Diff, Patch)]
-pub(crate) struct PlayerNode {
+pub struct PlayerNode {
     /// Whether the node is active (used by Diff/Patch for graph updates).
     pub(crate) active: bool,
 
@@ -73,7 +73,7 @@ impl PlayerNode {
     }
 
     /// Create a player node wired to the given command channel and shared state.
-    pub(crate) fn with_channel(
+    pub fn with_channel(
         cmd_rx: HeapCons<PlayerCmd>,
         shared_state: Arc<SharedPlayerState>,
         pcm_pool: PcmPool,

@@ -1,30 +1,28 @@
 //! Per-instance offline harness driving the full PlayerImpl chain.
 //!
-//! Owns an [`EngineImpl::new_offline`] pair: an engine wired to a
-//! private offline session worker, and an [`OfflineSessionHandle`] for
-//! synchronously stepping the firewheel graph from the test thread.
-//! Auto-advance, pending_next preload, and crossfade activation all
-//! exercise the production [`PlayerImpl`] paths — only the audio
-//! backend is swapped from cpal to a stub that renders on demand.
+//! Owns a manual-mode [`OfflineSession`] plus an [`EngineImpl`] wired
+//! to it via [`EngineConfig::session`]. Auto-advance, `pending_next`
+//! preload, and crossfade activation all exercise the production
+//! [`PlayerImpl`] paths — only the audio backend is swapped from cpal
+//! to a stub that renders on demand.
 //!
-//! Use the `render*` family to drive the graph and `tick_and_drain`
-//! to convert audio-thread `PlayerNotification`s into observable
-//! `PlayerEvent`s.
+//! Use [`OfflinePlayerHarness::render`] to drive the graph and
+//! `tick_and_drain` to convert audio-thread `PlayerNotification`s
+//! into observable `PlayerEvent`s.
 
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::sync::Arc;
 
 use kithara_events::{Event, EventReceiver, PlayerEvent};
+use kithara_integration_tests::offline::OfflineSession;
 use kithara_platform::Mutex;
-use kithara_play::{
-    EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, test_helpers::offline::OfflineSessionHandle,
-};
+use kithara_play::{EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, SessionDispatcher};
 
 pub(crate) struct OfflinePlayerHarness {
     events: Mutex<EventReceiver>,
     player: Arc<PlayerImpl>,
-    session: OfflineSessionHandle,
+    session: Arc<OfflineSession>,
 }
 
 impl OfflinePlayerHarness {
@@ -32,14 +30,16 @@ impl OfflinePlayerHarness {
         let bus = player_config.bus.clone().unwrap_or_default();
         player_config.bus = Some(bus.clone());
 
+        let session = Arc::new(OfflineSession::new_manual());
         let mut engine_config = EngineConfig::default()
             .with_eq_layout(player_config.eq_layout.clone())
             .with_max_slots(player_config.max_slots)
-            .with_sample_rate(sample_rate);
+            .with_sample_rate(sample_rate)
+            .with_session(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
         if let Some(pool) = player_config.pcm_pool.clone() {
             engine_config = engine_config.with_pcm_pool(pool);
         }
-        let (engine, session) = EngineImpl::new_offline(engine_config, bus);
+        let engine = EngineImpl::new(engine_config, bus);
         let player = Arc::new(PlayerImpl::with_engine(player_config, engine));
         let events = player.subscribe();
 

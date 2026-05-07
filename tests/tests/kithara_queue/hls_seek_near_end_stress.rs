@@ -21,22 +21,18 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{
-    sync::{Arc, Once},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, TrackId, TrackStatus};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, test_helpers::init_offline_backend};
+use kithara_integration_tests::offline::OfflineSession;
+use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, temp_dir};
 use tokio::time::sleep;
 use url::Url;
-
-static INIT_OFFLINE: Once = Once::new();
 
 struct Consts;
 impl Consts {
@@ -116,7 +112,9 @@ fn build_queue_with_tick(
     StoreOptions,
     tokio::task::JoinHandle<()>,
 ) {
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+    ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::spawn(async move {
@@ -365,8 +363,6 @@ async fn hls_seek_near_end_fresh_player_stress(
     #[case] backend: DecoderBackend,
     #[case] include_sidx: bool,
 ) {
-    INIT_OFFLINE.call_once(init_offline_backend);
-
     let helper = TestServerHelper::new().await;
     let url = build_hls(&helper, include_sidx).await;
 

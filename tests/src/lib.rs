@@ -21,6 +21,8 @@ pub mod hls_test_helpers;
 pub mod memory_source;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod net_fixture;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod offline;
 pub mod signal_source;
 
 pub use abr_fixtures::{abr_fast, abr_initial_mode, abr_switch_trigger};

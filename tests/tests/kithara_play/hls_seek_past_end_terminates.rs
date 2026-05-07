@@ -24,25 +24,18 @@
 
 #![forbid(unsafe_code)]
 
-use std::{sync::Once, time::Duration};
+use std::time::Duration;
 
 use kithara::{
     assets::StoreOptions,
-    play::{
-        Resource, ResourceConfig,
-        test_helpers::{
-            init_offline_backend,
-            offline::{NotificationKind, OfflinePlayer},
-        },
-    },
+    play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
+use kithara_integration_tests::offline::{NotificationKind, OfflinePlayer};
 use kithara_test_utils::{PackagedTestServer, temp_dir};
 use tokio::time::sleep;
 
 use crate::common::test_defaults::Consts as Shared;
-
-static INIT_OFFLINE: Once = Once::new();
 
 struct Consts;
 impl Consts {
@@ -82,8 +75,6 @@ async fn render_burst(player: &mut OfflinePlayer, blocks: u32) {
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(30)))]
 async fn hls_seek_past_end_terminates_in_bounded_time() {
-    INIT_OFFLINE.call_once(init_offline_backend);
-
     let server = PackagedTestServer::new().await;
     let master = server.url("/master.m3u8");
 

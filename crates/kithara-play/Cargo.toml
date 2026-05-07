@@ -58,10 +58,11 @@ file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
 hls = ["dep:kithara-hls", "dep:kithara-assets", "dep:kithara-net"]
 backend-cpal = ["firewheel/cpal"]
 backend-web-audio = ["dep:firewheel-web-audio"]
-backend-offline = []
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple"]
-test-utils = ["backend-offline"]
+# Re-export of testing helpers (engine module + macro mocks).
+# Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
+test-utils = []
 
 [dev-dependencies]
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "test-utils"] }

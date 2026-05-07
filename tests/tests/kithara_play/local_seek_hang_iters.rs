@@ -16,10 +16,11 @@
 use kithara::{
     assets::StoreOptions,
     events::AbrMode,
-    play::{Resource, ResourceConfig, test_helpers::offline::OfflinePlayer},
+    play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_decode::DecoderBackend;
+use kithara_integration_tests::offline::OfflinePlayer;
 use kithara_platform::{
     thread,
     time::{Duration, Instant},

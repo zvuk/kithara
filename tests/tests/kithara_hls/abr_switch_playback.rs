@@ -12,9 +12,9 @@ use kithara::{
     events::{AbrEvent, Event, EventBus},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
-    play::test_helpers::offline::{OfflinePlayer, resource_from_reader},
     stream::{AudioCodec, Stream},
 };
+use kithara_integration_tests::offline::{OfflinePlayer, resource_from_reader};
 use kithara_platform::time::{Duration, Instant, sleep};
 use kithara_test_utils::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,

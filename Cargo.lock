@@ -4418,6 +4418,7 @@ dependencies = [
  "kithara-test-utils",
  "memory-stats",
  "mmap-io",
+ "num-traits",
  "reqwest",
  "ringbuf",
  "rkyv",

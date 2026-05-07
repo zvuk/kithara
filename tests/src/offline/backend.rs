@@ -1,9 +1,10 @@
-//! Offline audio backend for testing.
+//! Offline firewheel `AudioBackend` impl used by integration tests.
 //!
-//! Drives the Firewheel audio graph without a real audio device.
-//! Call [`OfflineBackend::render`] to manually step the graph.
-
-#![cfg(any(test, feature = "test-utils"))]
+//! Drives the firewheel audio graph without a real audio device. Tests
+//! call [`OfflineBackend::render`] (directly or via [`OfflineSession`])
+//! to step the graph synchronously.
+//!
+//! [`OfflineSession`]: super::session::OfflineSession
 
 use std::{num::NonZeroU32, time::Duration};
 
@@ -14,14 +15,14 @@ use firewheel::{
     processor::FirewheelProcessor,
 };
 
-/// Minimal audio backend that renders offline (no real device).
+/// Minimal firewheel `AudioBackend` that renders offline (no real device).
 pub struct OfflineBackend {
     processor: Option<FirewheelProcessor<Self>>,
     sample_rate: u32,
     frames_rendered: u64,
 }
 
-/// Configuration for the offline backend.
+/// Configuration for [`OfflineBackend`].
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct OfflineConfig {
@@ -31,10 +32,7 @@ pub struct OfflineConfig {
 
 impl Default for OfflineConfig {
     fn default() -> Self {
-        /// Default sample rate for offline rendering.
         const DEFAULT_SAMPLE_RATE: u32 = 44100;
-
-        /// Default audio block size in frames.
         const DEFAULT_BLOCK_FRAMES: u32 = 512;
 
         Self {
@@ -44,7 +42,7 @@ impl Default for OfflineConfig {
     }
 }
 
-/// Errors (never happen for offline backend).
+/// Errors (never happen for the offline backend).
 #[derive(Debug, thiserror::Error)]
 #[error("offline backend error")]
 pub struct OfflineError;
@@ -97,7 +95,6 @@ impl AudioBackend for OfflineBackend {
 }
 
 impl OfflineBackend {
-    /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
     /// Render `frames` of audio. Calls `process_interleaved` on the
@@ -107,7 +104,7 @@ impl OfflineBackend {
     pub fn render(&mut self, frames: usize) -> Vec<f32> {
         let channels = Self::STEREO_CHANNELS;
         let total_samples = frames * channels;
-        let input = vec![0.0f32; 0]; // no input channels
+        let input = vec![0.0f32; 0];
         let mut output = vec![0.0f32; total_samples];
 
         if let Some(ref mut processor) = self.processor {

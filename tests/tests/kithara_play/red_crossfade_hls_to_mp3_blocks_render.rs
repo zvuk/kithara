@@ -37,10 +37,11 @@ use std::sync::Arc;
 use kithara::{
     audio::{Audio, AudioConfig, AudioWorkerHandle},
     hls::{Hls, HlsConfig},
-    play::{Resource, test_helpers::offline::resource_from_reader},
+    play::Resource,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_file::{File as FileSource, FileConfig, FileSrc};
+use kithara_integration_tests::offline::resource_from_reader;
 use kithara_platform::time::{Duration, Instant, sleep};
 use tokio::time::timeout;
 use tracing::info;
@@ -60,8 +61,11 @@ impl Consts {
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
 )]
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
-    use kithara::{assets::StoreOptions, play::test_helpers::offline::OfflinePlayer};
-    use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+    use kithara::assets::StoreOptions;
+    use kithara_integration_tests::{
+        hls_fixture::{HlsTestServer, HlsTestServerConfig},
+        offline::OfflinePlayer,
+    };
     use kithara_test_utils::{create_wav_exact_bytes, signal_pcm::signal, temp_dir};
 
     const HLS_SEGMENT_COUNT: usize = 3;

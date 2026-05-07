@@ -20,22 +20,18 @@
 
 #![forbid(unsafe_code)]
 
-use std::{sync::Once, time::Duration};
+use std::time::Duration;
 
 use kithara::{
     assets::StoreOptions,
-    play::{
-        Resource, ResourceConfig,
-        test_helpers::{init_offline_backend, offline::OfflinePlayer},
-    },
+    play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
+use kithara_integration_tests::offline::OfflinePlayer;
 use kithara_test_utils::{PackagedTestServer, fixture_protocol::DelayRule, temp_dir};
 use tokio::time::sleep;
 
 use crate::common::test_defaults::Consts as Shared;
-
-static INIT_OFFLINE: Once = Once::new();
 
 struct Consts;
 impl Consts {
@@ -99,8 +95,6 @@ async fn render_burst_paced(player: &mut OfflinePlayer, blocks: u32, min_wall_ms
 #[case::very_slow_5s(5_000)]
 #[case::near_broken_10s(10_000)]
 async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] delay_ms: u64) {
-    INIT_OFFLINE.call_once(init_offline_backend);
-
     let server = PackagedTestServer::with_delay_rules(if delay_ms == 0 {
         Vec::new()
     } else {

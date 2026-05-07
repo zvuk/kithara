@@ -26,6 +26,7 @@ use super::{
     player_processor::PlayerCmd,
     player_resource::PlayerResource,
     player_track::TrackTransition,
+    session_engine::SessionDispatcher,
 };
 #[rustfmt::skip]
 use crate::traits::engine::Engine;
@@ -113,6 +114,13 @@ pub struct PlayerConfig {
     /// themselves through the public arm / commit API.
     #[derivative(Default(value = "true"))]
     pub auto_advance_enabled: bool,
+    /// Pre-built audio session dispatcher.
+    ///
+    /// Forwarded to [`EngineConfig::session`]. `None` → engine binds to
+    /// the process-wide cpal session. Integration tests pass an offline
+    /// dispatcher here to drive playback without real hardware.
+    #[derivative(Debug = "ignore")]
+    pub session: Option<Arc<dyn SessionDispatcher>>,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -159,6 +167,7 @@ impl PlayerImpl {
             eq_layout: config.eq_layout.clone(),
             max_slots: config.max_slots,
             pcm_pool: Some(resolved_pool.clone()),
+            session: config.session.clone(),
             ..EngineConfig::default()
         };
         let engine = EngineImpl::new(engine_config, bus.clone());
@@ -169,7 +178,11 @@ impl PlayerImpl {
         Self::new_with_engine(config, resolved_pool, bus, engine)
     }
 
-    #[cfg(any(test, feature = "backend-offline"))]
+    /// Build a player on top of an externally-constructed engine.
+    ///
+    /// Used by integration-test harnesses that drive a single
+    /// `EngineImpl` for shared offline-render plumbing. Production code
+    /// uses [`PlayerImpl::new`] which builds its engine internally.
     #[must_use]
     pub fn with_engine(mut config: PlayerConfig, engine: EngineImpl) -> Self {
         let resolved_pool = config.pcm_pool.clone().unwrap_or_default();
@@ -1298,6 +1311,7 @@ mod tests {
             max_slots: 2,
             pcm_pool: None,
             auto_advance_enabled: true,
+            session: None,
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -1326,18 +1340,6 @@ mod tests {
         // Change at runtime
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
-    }
-
-    #[kithara::test]
-    fn player_play_uses_runtime_default_rate() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        // Override default rate before play
-        player.set_default_rate(0.5);
-        // play() stores the rate before attempting engine start (which fails
-        // in test env without audio hardware).
-        player.play();
-        // Rate should reflect the runtime default_rate, not config's 1.0
-        assert!((player.rate() - 0.5).abs() < f32::EPSILON);
     }
 
     #[kithara::test(tokio)]

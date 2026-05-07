@@ -1,11 +1,16 @@
-//! Android-only diagnostic JNI entrypoint: render a track through the
-//! offline firewheel backend and write the result as an IEEE-float WAV.
+//! Android-only diagnostic JNI entrypoint: decode a track through the
+//! production decoder pipeline and write the resulting interleaved
+//! stereo PCM as an IEEE-float WAV.
 //!
-//! Bypasses cpal / AAudio — the exact same decoder and firewheel graph
-//! used in production runs, but samples go straight to disk instead of
-//! to the audio device. Used to localise Android-only audio artefacts:
-//! a clean WAV points at the output path (cpal/AAudio), a distorted WAV
-//! points at the decoder / graph compiled for android.
+//! Bypasses cpal / AAudio — same `Audio<Stream<FileSource>>` decoder
+//! used in production, but samples go straight to disk instead of to
+//! the audio device. Used to localise Android-only audio artefacts:
+//! a clean WAV points at the output path (cpal/AAudio), a distorted
+//! WAV points at the decoder compiled for android.
+//!
+//! Capture is decoder-only — no firewheel graph, no `PlayerImpl`. The
+//! capture path takes whatever channel/rate the decoder produces and
+//! writes it as-is.
 
 // jni 0.22 deprecated `Env::get_string` in favour of `JString::mutf8_chars`
 // + `JString::to_string`, but in this version the replacement method
@@ -27,12 +32,8 @@ use jni::{
     sys::{jint, jlong},
 };
 use kithara::{
-    audio::{Audio, AudioConfig, AudioWorkerHandle},
+    audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
     file::{File as FileSource, FileConfig, FileSrc},
-    play::test_helpers::{
-        init_offline_backend,
-        offline::{OfflinePlayer, resource_from_reader},
-    },
     stream::Stream,
 };
 use tokio::{runtime::Builder, time::sleep};
@@ -136,8 +137,6 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeRunOfflineCapture<'local>(
 }
 
 async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
-    init_offline_backend();
-
     info!(
         input = %input.display(),
         output = %output.display(),
@@ -159,11 +158,10 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         }
     };
 
-    audio.preload();
-
-    let resource = resource_from_reader(audio);
-    let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
-    player.load_and_fadein(resource, "android-offline");
+    if let Err(err) = audio.preload() {
+        error!(?err, "audio preload failed");
+        return Consts::RC_AUDIO_BUILD;
+    }
 
     let mut file = match File::create(&output) {
         Ok(f) => f,
@@ -178,30 +176,49 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         return Consts::RC_OUTPUT_WRITE;
     }
 
+    let channels = usize::from(Consts::CHANNELS);
     let target_frames = seconds.saturating_mul(Consts::SAMPLE_RATE as usize);
     let block_budget = Duration::from_secs_f64(
         f64::from(Consts::BLOCK_FRAMES as u32) / f64::from(Consts::SAMPLE_RATE),
     );
+    // Interleaved stereo scratch buffer (LRLR…). PcmReader::read writes
+    // exactly `Consts::BLOCK_FRAMES * Consts::CHANNELS` samples.
+    let mut samples = vec![0.0f32; Consts::BLOCK_FRAMES * channels];
+    let mut byte_buf = Vec::with_capacity(samples.len() * 4);
     let mut rendered_frames = 0usize;
-    let mut buf = Vec::with_capacity(Consts::BLOCK_FRAMES * usize::from(Consts::CHANNELS) * 4);
+
     while rendered_frames < target_frames {
-        let frames = (target_frames - rendered_frames).min(Consts::BLOCK_FRAMES);
+        let frames_wanted = (target_frames - rendered_frames).min(Consts::BLOCK_FRAMES);
         let tick = Instant::now();
-        let block: Vec<f32> = player.render(frames);
-        buf.clear();
-        for sample in block {
-            let bytes: [u8; 4] = f32::to_le_bytes(sample);
-            buf.extend_from_slice(&bytes);
+        let outcome = audio.read(&mut samples[..frames_wanted * channels]);
+        let frames_written = match outcome {
+            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Pending { .. }) => {
+                // Decoder hasn't filled the ring buffer yet — yield and retry.
+                sleep(Duration::from_millis(5)).await;
+                continue;
+            }
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(err) => {
+                error!(?err, "audio read failed");
+                return Consts::RC_AUDIO_BUILD;
+            }
+        };
+
+        let written_samples = frames_written * channels;
+        byte_buf.clear();
+        for sample in &samples[..written_samples] {
+            byte_buf.extend_from_slice(&sample.to_le_bytes());
         }
-        if let Err(err) = file.write_all(&buf) {
+        if let Err(err) = file.write_all(&byte_buf) {
             error!(?err, "sample write failed");
             return Consts::RC_OUTPUT_WRITE;
         }
-        rendered_frames += frames;
-        // Throttle to real-time block budget so the decoder worker
-        // (separate thread) keeps the ring buffer filled. Without this,
-        // render outruns the worker and the output has silence gaps
-        // which read as breakups in the captured WAV.
+
+        rendered_frames += frames_written;
+        // Pace decode to real-time so the worker thread (separate from
+        // this async task) keeps the ring buffer fed. Without throttling
+        // we outrun the producer and hit `Pending` repeatedly.
         if let Some(remaining) = block_budget.checked_sub(tick.elapsed()) {
             sleep(remaining).await;
         }
@@ -212,7 +229,7 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         return Consts::RC_OUTPUT_WRITE;
     }
 
-    let total_samples = rendered_frames.saturating_mul(usize::from(Consts::CHANNELS));
+    let total_samples = rendered_frames.saturating_mul(channels);
     if let Err(err) = write_wav_header(&mut file, total_samples) {
         error!(?err, "header rewrite failed");
         return Consts::RC_HEADER_REWRITE;

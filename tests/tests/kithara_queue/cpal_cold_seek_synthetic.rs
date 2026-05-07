@@ -10,21 +10,20 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    sync::{Arc, Once},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, test_helpers::init_offline_backend};
+use kithara_integration_tests::offline::OfflineSession;
+use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{
     HlsFixtureBuilder, TestServerHelper, fixture_protocol::DelayRule, kithara, temp_dir,
 };
 use tokio::time::sleep;
-
-static INIT_OFFLINE: Once = Once::new();
 
 async fn wait_for_loader_done(
     queue: &Queue,
@@ -80,8 +79,6 @@ async fn wait_for_position_at_least(
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
-    INIT_OFFLINE.call_once(init_offline_backend);
-
     let helper = TestServerHelper::new().await;
     // 3 variants × 40 segments × 4s = 160s — closer to a real
     // 2–3 minute multi-bitrate HLS master. 200ms delay per segment
@@ -109,7 +106,9 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(DownloaderConfig::default());
 
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+    ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
     let queue_for_tick = Arc::clone(&queue);

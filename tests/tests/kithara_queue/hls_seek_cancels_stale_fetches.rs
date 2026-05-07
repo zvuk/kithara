@@ -29,14 +29,15 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Once},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, DownloaderEvent, Event, HlsEvent, RequestId, TrackId, TrackStatus};
-use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig, test_helpers::init_offline_backend};
+use kithara_integration_tests::offline::OfflineSession;
+use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use kithara_test_utils::{
@@ -45,8 +46,6 @@ use kithara_test_utils::{
 };
 use tokio::time::sleep;
 use url::Url;
-
-static INIT_OFFLINE: Once = Once::new();
 
 struct Consts;
 impl Consts {
@@ -119,7 +118,9 @@ fn build_queue_with_tick(
     StoreOptions,
     tokio::task::JoinHandle<()>,
 ) {
-    let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+    ));
     let queue = Arc::new(Queue::new(
         QueueConfig::default().with_player(Arc::clone(&player)),
     ));
@@ -203,8 +204,6 @@ struct PostSeekObservation {
     case::apple(DecoderBackend::Apple)
 )]
 async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
-    INIT_OFFLINE.call_once(init_offline_backend);
-
     // Install probe recorder BEFORE any Downloader is created. Captures
     // USDT-paired tracing events from `kithara-stream` and `kithara-hls`
     // (target = "kithara_stream_probe" / "kithara_hls_probe", any

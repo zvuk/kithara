@@ -17,10 +17,7 @@ use kithara::{
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
     hls::{Hls, HlsConfig},
     net::NetOptions,
-    play::{
-        PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        test_helpers::offline::resource_from_reader,
-    },
+    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},
     stream::{
         AudioCodec, ContainerFormat, MediaInfo, Stream,
         dl::{Downloader, DownloaderConfig},
@@ -28,7 +25,10 @@ use kithara::{
 };
 use kithara_decode::DecoderBackend;
 use kithara_file::{File as FileSource, FileConfig, FileSrc};
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+    offline::resource_from_reader,
+};
 use kithara_platform::time::{Duration, Instant, sleep};
 use kithara_test_utils::{
     HlsFixtureBuilder, TestHttpServer, TestServerHelper, TestTempDir, create_wav_exact_bytes,
@@ -868,7 +868,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
-    use kithara::play::test_helpers::offline::OfflinePlayer;
+    use kithara_integration_tests::offline::OfflinePlayer;
 
     let (_server, url) = create_packaged_single_variant_fixture(codec).await;
     let store = StoreOptions::new(temp_dir.path());
@@ -1055,7 +1055,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
 )]
 async fn stress_offline_crossfade_no_gaps() {
-    use kithara::play::test_helpers::offline::OfflinePlayer;
+    use kithara_integration_tests::offline::OfflinePlayer;
 
     const BLOCK: usize = 512;
     const SR: u32 = 44100;

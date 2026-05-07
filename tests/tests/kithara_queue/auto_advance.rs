@@ -21,8 +21,10 @@
 use std::sync::Arc;
 
 use kithara_decode::PcmSpec;
-use kithara_integration_tests::audio_mock::TestPcmReader;
-use kithara_play::{PlayerConfig, Resource, test_helpers::offline::resource_from_reader_with_src};
+use kithara_integration_tests::{
+    audio_mock::TestPcmReader, offline::resource_from_reader_with_src,
+};
+use kithara_play::{PlayerConfig, Resource};
 use kithara_queue::{Queue, QueueConfig, Transition};
 use kithara_test_utils::kithara;
 

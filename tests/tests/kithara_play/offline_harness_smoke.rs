@@ -1,7 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara_decode::PcmSpec;
-use kithara_play::{PlayerConfig, Resource, test_helpers::offline::resource_from_reader};
+use kithara_integration_tests::offline::resource_from_reader;
+use kithara_play::{PlayerConfig, Resource};
 use kithara_test_utils::kithara;
 
 use super::offline_player_harness::OfflinePlayerHarness;
