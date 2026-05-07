@@ -13,6 +13,7 @@ mod offline_harness_smoke;
 mod player_processor_internal;
 mod player_queue_api_regressions;
 mod player_resource_internal;
+mod player_track_internal;
 mod red_crossfade_hls_to_mp3_blocks_render;
 mod resource_internal;
 mod resource_regressions;
