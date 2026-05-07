@@ -12,8 +12,8 @@ struct PlaylistEntry: Identifiable, Equatable {
 
     init(from item: KitharaPlayerItem) {
         self.id = item.id
-        self.url = item.url
-        self.name = trackName(for: item.url)
+        self.url = item.url.absoluteString
+        self.name = trackName(for: item.url.absoluteString)
         self.duration = nil
         self.trackStatus = nil
     }

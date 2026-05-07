@@ -17,7 +17,6 @@ import KitharaFFI
 public final class KitharaPlayer: @unchecked Sendable {
     private let _inner: AudioPlayer
     private let _eventSubject = PassthroughSubject<PlayerEvent, Never>()
-    private var _eventSink: AnyCancellable?
 
     // MARK: - Event stream
 
@@ -189,9 +188,6 @@ public final class KitharaPlayer: @unchecked Sendable {
 
         let bridge = PlayerObserverBridge(subject: _eventSubject)
         _inner.setObserver(observer: bridge)
-        _eventSink = _eventSubject.sink { [weak self] event in
-            self?.handle(event)
-        }
     }
 
     // MARK: - Playback control
@@ -236,7 +232,7 @@ public final class KitharaPlayer: @unchecked Sendable {
     public var items: [KitharaPlayerItem] {
         let ffiItems = _inner.items()
         return ffiItems.compactMap { ffiItem in
-            let id = ffiItem.id()
+            let id = ffiItem.audioId()
             return _knownItems[id]
         }
     }
@@ -393,12 +389,6 @@ public final class KitharaPlayer: @unchecked Sendable {
             salt: rule.salt
         )
         _inner.setupHlsAesWithRule(rule: ffiRule)
-    }
-
-    private func handle(_ event: PlayerEvent) {
-        if case let .queueItemRemoved(itemId) = event {
-            _knownItems.removeValue(forKey: itemId)
-        }
     }
 
 }
