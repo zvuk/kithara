@@ -65,7 +65,7 @@ impl AbrController {
         let Some(entry) = self.peer_entry(peer_id) else {
             return;
         };
-        let token = CancellationToken::new();
+        let token = CancellationToken::new(); // kithara:cancel:owner
         {
             let mut slot = entry.last_variant_switch.lock_sync();
             *slot = Some((now, reader_pt));

@@ -116,7 +116,7 @@ fn main() -> AppResult {
     // `FlushHub::with_worker(...)` if a future build wants debounced
     // background flushes; the no-worker default keeps the existing
     // sync-flush-per-mutation behaviour.
-    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
+    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default()); // kithara:cancel:owner
     let config = AppConfig::new(downloader, flush_hub)
         .with_tracks(args.tracks)
         .with_should_accept_invalid_certs(args.insecure);

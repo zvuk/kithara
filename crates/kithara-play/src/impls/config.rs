@@ -327,10 +327,12 @@ impl ResourceConfig {
         if let Some(ref bus) = self.bus {
             file_config = file_config.with_events(bus.clone());
         }
+        let cancel_for_audio = self.cancel.clone();
         if let Some(cancel) = self.cancel {
             file_config = file_config.with_cancel(cancel);
         }
         let mut config = AudioConfig::<kithara_file::File>::new(file_config);
+        config.cancel = cancel_for_audio;
 
         // Apply audio settings from ResourceConfig.
         if let Some(h) = self.hint {
@@ -408,11 +410,13 @@ impl ResourceConfig {
         if let Some(ref bus) = self.bus {
             hls_config = hls_config.with_events(bus.clone());
         }
+        let cancel_for_audio = self.cancel.clone();
         if let Some(cancel) = self.cancel {
             hls_config = hls_config.with_cancel(cancel);
         }
 
         let mut config = AudioConfig::<kithara_hls::Hls>::new(hls_config);
+        config.cancel = cancel_for_audio;
 
         // Apply audio settings from ResourceConfig.
         if let Some(h) = self.hint {

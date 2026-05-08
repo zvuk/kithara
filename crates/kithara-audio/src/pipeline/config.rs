@@ -77,6 +77,11 @@ pub struct AudioConfig<T: StreamType> {
     pub pcm_buffer_chunks: usize,
     /// How leading/trailing PCM is trimmed after the decode.
     pub gapless_mode: GaplessMode,
+    /// Master cancel token for the audio pipeline. Per-track child of
+    /// the player master — see `kithara-play/README.md` "Cancel
+    /// Hierarchy". Populated by `kithara_play::ResourceConfig`'s
+    /// conversion routines from the resource-level cancel.
+    pub cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl<T: StreamType> AudioConfig<T> {
@@ -107,6 +112,7 @@ impl<T: StreamType> AudioConfig<T> {
             effects: Vec::new(),
             worker: None,
             gapless_mode: GaplessMode::default(),
+            cancel: None,
         }
     }
 

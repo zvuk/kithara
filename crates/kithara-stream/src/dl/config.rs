@@ -42,7 +42,7 @@ impl Default for DownloaderConfig {
         const SOFT_TIMEOUT_SECS: u64 = 2;
         Self {
             net: NetOptions::default(),
-            cancel: CancellationToken::new(),
+            cancel: CancellationToken::new(), // kithara:cancel:owner
             runtime: None,
             max_concurrent: MAX_CONCURRENT,
             demand_throttle: Duration::ZERO,

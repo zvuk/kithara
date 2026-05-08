@@ -71,7 +71,7 @@ impl HlsPeer {
             timeline,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
-            wake_signal: CancellationToken::new(),
+            wake_signal: CancellationToken::new(), // kithara:cancel:owner
             abr: Arc::new(AbrState::new(Vec::new(), initial_mode)),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             committed_segment: Arc::new(AtomicUsize::new(0)),

@@ -471,13 +471,14 @@ pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &
     // Reuse the same classifier; `epoch_cancel` lives on the cmd until
     // it's torn apart in `deliver_cancelled` below.
     let epoch_cancel = internal.cmd.cancel.clone();
+    let placeholder_inner = CancellationToken::new(); // kithara:cancel:owner
     let reason = classify_cancel(
         peer_cancel,
         epoch_cancel.as_ref(),
         // Without an inner-cancel reference here we treat "no
         // peer or epoch" as `BeforeStart` — same outcome the
         // classifier would land on.
-        &CancellationToken::new(),
+        &placeholder_inner,
     );
     abort_request(bus.as_ref(), request_id, reason, 0, false);
     deliver_cancelled(internal.response, internal.cmd);

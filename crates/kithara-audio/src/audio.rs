@@ -756,8 +756,6 @@ where
     /// sink.append(audio);
     /// ```
     pub async fn new(config: AudioConfig<T>) -> Result<Self, DecodeError> {
-        let cancel = CancellationToken::new();
-
         let AudioConfig {
             byte_pool,
             hint,
@@ -774,7 +772,14 @@ where
             effects: custom_effects,
             worker: config_worker,
             gapless_mode: config_gapless_mode,
+            cancel: config_cancel,
         } = config;
+        // Subsystem fallback: in production the consumer crate
+        // populates `config.cancel` via `prepare_config` so the
+        // unwrap_or never fires. Test/standalone callers omit it and
+        // get a fresh orphan, which is fine — see
+        // `kithara-play/README.md` "Cancel Hierarchy".
+        let cancel = config_cancel.unwrap_or_default();
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
         // from_parts fallback safety net — caller injects byte_pool via AudioConfig

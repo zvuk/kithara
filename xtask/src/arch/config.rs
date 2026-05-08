@@ -122,6 +122,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) field_always_constant: FieldAlwaysConstantThreshold,
     #[serde(default)]
     pub(crate) field_always_equals_other_field: FieldAlwaysEqualsOtherFieldThreshold,
+    #[serde(default)]
+    pub(crate) cancel_hierarchy: CancelHierarchyThreshold,
 }
 
 #[derive(Debug, Deserialize)]
@@ -470,6 +472,39 @@ fn default_no_lib_statics_exempt_crates() -> Vec<String> {
         "kithara-hang-detector-macros",
         "kithara-wasm-macros",
         "kithara-probe-macros",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CancelHierarchyThreshold {
+    /// Crates whose production *is* test scaffolding (helpers, mocks).
+    /// Their hard-coded `CancellationToken::new()` calls are
+    /// indistinguishable from test fixtures and don't violate the
+    /// hierarchy contract.
+    #[serde(default = "default_cancel_hierarchy_exempt_crates")]
+    pub(crate) exempt_crates: Vec<String>,
+}
+
+impl Default for CancelHierarchyThreshold {
+    fn default() -> Self {
+        Self {
+            exempt_crates: default_cancel_hierarchy_exempt_crates(),
+        }
+    }
+}
+
+fn default_cancel_hierarchy_exempt_crates() -> Vec<String> {
+    [
+        "kithara-test-utils",
+        "kithara-test-macros",
+        "kithara-hang-detector-macros",
+        "kithara-wasm-macros",
+        "kithara-probe-macros",
+        "xtask",
     ]
     .iter()
     .map(|s| (*s).to_string())

@@ -13,6 +13,7 @@ use crate::common::{scope::Scope, violation::Violation};
 
 pub(crate) mod arc_clone_hotspots;
 pub(crate) mod args_wrapper_struct;
+pub(crate) mod cancel_hierarchy;
 pub(crate) mod canonical_types;
 pub(crate) mod cfg_density;
 pub(crate) mod direction;
@@ -59,6 +60,7 @@ pub(crate) trait Check {
 
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
+        Box::new(cancel_hierarchy::CancelHierarchy),
         Box::new(cfg_density::CfgDensity),
         Box::new(direction::Direction),
         Box::new(args_wrapper_struct::ArgsWrapperStruct),
