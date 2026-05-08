@@ -133,6 +133,20 @@ class KitharaPlayer(config: Config = Config()) {
             inner.setCrossfadeDuration(value)
         }
 
+    /** Volume scalar, usually 0.0 to 1.0. */
+    var volume: Float
+        get() = inner.volume()
+        set(value) {
+            inner.setVolume(value)
+        }
+
+    /** Mute state. */
+    var isMuted: Boolean
+        get() = inner.isMuted()
+        set(value) {
+            inner.setMuted(value)
+        }
+
     /** Starts or resumes playback. */
     fun play() {
         inner.play()
@@ -150,6 +164,47 @@ class KitharaPlayer(config: Config = Config()) {
     fun stop() {
         inner.stop()
         updateState { current -> current.copy(items = emptyList()) }
+    }
+
+    /**
+     * Get EQ gain for a specific band.
+     * @param band The band index (0-based).
+     */
+    fun getEqGain(band: Int): Float {
+        return inner.eqGain(band.toUInt())
+    }
+
+    /**
+     * Set EQ gain for a specific band.
+     * @param band The band index (0-based).
+     * @param gainDb The gain in decibels.
+     */
+    @Throws(KitharaError::class)
+    fun setEqGain(band: Int, gainDb: Float) {
+        try {
+            inner.setEqGain(band.toUInt(), gainDb)
+        } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        }
+    }
+
+    /**
+     * Reset all EQ bands to 0 dB.
+     */
+    @Throws(KitharaError::class)
+    fun resetEq() {
+        try {
+            inner.resetEq()
+        } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        }
+    }
+
+    /**
+     * Set the ABR mode.
+     */
+    fun setAbrMode(mode: com.kithara.ffi.FfiAbrMode) {
+        inner.setAbrMode(mode)
     }
 
     /**
@@ -301,13 +356,6 @@ class KitharaPlayer(config: Config = Config()) {
 
             is FfiPlayerEvent.CurrentItemChanged ->
                 eventsFlow.tryEmit(KitharaPlayerEvent.CurrentItemChanged(event.itemId))
-
-            is FfiPlayerEvent.QueueItemRemoved -> {
-                updateState { current ->
-                    current.copy(items = current.items.filterNot { queued -> queued.id == event.itemId })
-                }
-                eventsFlow.tryEmit(KitharaPlayerEvent.QueueItemRemoved(event.itemId))
-            }
 
             is FfiPlayerEvent.TrackStatusChanged ->
                 eventsFlow.tryEmit(

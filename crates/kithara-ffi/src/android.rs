@@ -9,11 +9,6 @@ use jni::{
     strings::JNIString,
     sys::jint,
 };
-use jni_rpv::{
-    JNIEnv as JniEnv021,
-    objects::JObject as JObject021,
-    sys::{JNIEnv as SysEnv021, jobject as JObject021Raw},
-};
 use rustls_platform_verifier::android as rustls_android;
 use tracing::error;
 use tracing_subscriber::{filter::LevelFilter, prelude::*};
@@ -67,15 +62,8 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
     }
 
     let _ = env.with_env_no_catch(|env| -> Result<(), jni::errors::Error> {
-        let raw_env = env.get_raw();
-        let raw_ctx: JObject021Raw = context.as_raw().cast();
-        // SAFETY:
-        let result = unsafe {
-            let mut env_021 = JniEnv021::from_raw(raw_env.cast::<SysEnv021>())
-                .expect("BUG: caller-supplied raw JNIEnv pointer is non-null");
-            let ctx_021 = JObject021::from_raw(raw_ctx);
-            rustls_android::init_with_env(&mut env_021, ctx_021)
-        };
+        let result =
+            unsafe { rustls_android::init_with_env(env, JObject::from_raw(env, context.as_raw())) };
         if let Err(err) = result {
             let message = format!("failed to initialize rustls platform verifier: {err}");
             error!(message = %message);

@@ -93,9 +93,9 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
             abrMode: ffiAbrMode,
             headers: additionalHeaders,
             url: url,
+            isLiveStream: isLiveStream,
             preferredPeakBitrate: preferredPeakBitrate,
-            preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks,
-            isLiveStream: isLiveStream
+            preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks
         )
         self._inner = AudioPlayerItem(config: config)
         self.audioId = _inner.audioId()

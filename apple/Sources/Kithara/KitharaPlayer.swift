@@ -175,8 +175,8 @@ public final class KitharaPlayer: @unchecked Sendable {
                 processor: KeyProcessorBridge(processor: rule.processor),
                 headers: rule.headers,
                 queryParams: rule.queryParams,
-                domains: rule.domains,
-                salt: rule.salt
+                salt: rule.salt,
+                domains: rule.domains
             )
         }
         let ffiConfig = FfiPlayerConfig(
@@ -385,8 +385,8 @@ public final class KitharaPlayer: @unchecked Sendable {
             processor: KeyProcessorBridge(processor: rule.processor),
             headers: rule.headers,
             queryParams: rule.queryParams,
-            domains: rule.domains,
-            salt: rule.salt
+            salt: rule.salt,
+            domains: rule.domains
         )
         _inner.setupHlsAesWithRule(rule: ffiRule)
     }

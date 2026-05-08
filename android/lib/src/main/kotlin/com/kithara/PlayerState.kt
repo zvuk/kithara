@@ -81,6 +81,20 @@ sealed interface TrackStatus {
     data object Cancelled : TrackStatus
 }
 
+data class KitharaVariant(
+    val index: UInt,
+    val bandwidthBps: Long,
+    val name: String?
+)
+
+sealed interface KitharaItemEvent {
+    data class VariantsDiscovered(val variants: List<KitharaVariant>) : KitharaItemEvent
+    data class VariantSelected(val variant: KitharaVariant) : KitharaItemEvent
+    data class VariantApplied(val variant: KitharaVariant) : KitharaItemEvent
+    data class DurationChanged(val seconds: Double) : KitharaItemEvent
+    data class Error(val message: String) : KitharaItemEvent
+}
+
 /**
  * One-shot player events delivered via [KitharaPlayer.events].
  *

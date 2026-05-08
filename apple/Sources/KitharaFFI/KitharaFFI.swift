@@ -2780,6 +2780,14 @@ public struct FfiItemConfig: Equatable, Hashable {
     public let headers: [String: String]?
     public let url: String
     /**
+     * Caller-declared live-stream flag. `true` means the source is a
+     * live HLS feed (radio / broadcast); the player skips end-of-stream
+     * gating and `is_playable` always returns `true` for the item.
+     * Defaults to `false`. Auto-detection from the manifest is a
+     * future improvement.
+     */
+    public let isLiveStream: Bool
+    /**
      * Peak bitrate ceiling in bits/sec. `0.0` means no cap.
      */
     public let preferredPeakBitrate: Double
@@ -2788,38 +2796,30 @@ public struct FfiItemConfig: Equatable, Hashable {
      * means no cap.
      */
     public let preferredPeakBitrateExpensive: Double
-    /**
-     * Caller-declared live-stream flag. `true` means the source is a
-     * live HLS feed (radio / broadcast); the player skips end-of-stream
-     * gating and `is_playable` always returns `true` for the item.
-     * Defaults to `false`. Auto-detection from the manifest is a
-     * future improvement.
-     */
-    public let isLiveStream: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(abrMode: FfiAbrMode?, headers: [String: String]?, url: String, 
-        /**
-         * Peak bitrate ceiling in bits/sec. `0.0` means no cap.
-         */preferredPeakBitrate: Double, 
-        /**
-         * Peak bitrate ceiling on expensive networks (cellular). `0.0`
-         * means no cap.
-         */preferredPeakBitrateExpensive: Double, 
         /**
          * Caller-declared live-stream flag. `true` means the source is a
          * live HLS feed (radio / broadcast); the player skips end-of-stream
          * gating and `is_playable` always returns `true` for the item.
          * Defaults to `false`. Auto-detection from the manifest is a
          * future improvement.
-         */isLiveStream: Bool) {
+         */isLiveStream: Bool, 
+        /**
+         * Peak bitrate ceiling in bits/sec. `0.0` means no cap.
+         */preferredPeakBitrate: Double, 
+        /**
+         * Peak bitrate ceiling on expensive networks (cellular). `0.0`
+         * means no cap.
+         */preferredPeakBitrateExpensive: Double) {
         self.abrMode = abrMode
         self.headers = headers
         self.url = url
+        self.isLiveStream = isLiveStream
         self.preferredPeakBitrate = preferredPeakBitrate
         self.preferredPeakBitrateExpensive = preferredPeakBitrateExpensive
-        self.isLiveStream = isLiveStream
     }
 
     
@@ -2841,9 +2841,9 @@ public struct FfiConverterTypeFfiItemConfig: FfiConverterRustBuffer {
                 abrMode: FfiConverterOptionTypeFfiAbrMode.read(from: &buf), 
                 headers: FfiConverterOptionDictionaryStringString.read(from: &buf), 
                 url: FfiConverterString.read(from: &buf), 
+                isLiveStream: FfiConverterBool.read(from: &buf), 
                 preferredPeakBitrate: FfiConverterDouble.read(from: &buf), 
-                preferredPeakBitrateExpensive: FfiConverterDouble.read(from: &buf), 
-                isLiveStream: FfiConverterBool.read(from: &buf)
+                preferredPeakBitrateExpensive: FfiConverterDouble.read(from: &buf)
         )
     }
 
@@ -2851,9 +2851,9 @@ public struct FfiConverterTypeFfiItemConfig: FfiConverterRustBuffer {
         FfiConverterOptionTypeFfiAbrMode.write(value.abrMode, into: &buf)
         FfiConverterOptionDictionaryStringString.write(value.headers, into: &buf)
         FfiConverterString.write(value.url, into: &buf)
+        FfiConverterBool.write(value.isLiveStream, into: &buf)
         FfiConverterDouble.write(value.preferredPeakBitrate, into: &buf)
         FfiConverterDouble.write(value.preferredPeakBitrateExpensive, into: &buf)
-        FfiConverterBool.write(value.isLiveStream, into: &buf)
     }
 }
 
@@ -3008,11 +3008,6 @@ public struct FfiKeyRule {
     public let headers: [String: String]?
     public let queryParams: [String: String]?
     /**
-     * Domain patterns — exact (`"example.com"`), wildcard subdomain
-     * (`"*.example.com"`), or match-any (`"*"`).
-     */
-    public let domains: [String]
-    /**
      * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
      * on every decrypt. `None` is treated as an empty string.
      *
@@ -3021,14 +3016,15 @@ public struct FfiKeyRule {
      * [`crate::observer::SALT_HEADER`] in the player-wide header map.
      */
     public let salt: String?
+    /**
+     * Domain patterns — exact (`"example.com"`), wildcard subdomain
+     * (`"*.example.com"`), or match-any (`"*"`).
+     */
+    public let domains: [String]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(processor: FfiKeyProcessor, headers: [String: String]?, queryParams: [String: String]?, 
-        /**
-         * Domain patterns — exact (`"example.com"`), wildcard subdomain
-         * (`"*.example.com"`), or match-any (`"*"`).
-         */domains: [String], 
         /**
          * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
          * on every decrypt. `None` is treated as an empty string.
@@ -3036,12 +3032,16 @@ public struct FfiKeyRule {
          * `setup_hls_aes` populates this automatically with a freshly
          * generated 16-character alphanumeric value and mirrors it into
          * [`crate::observer::SALT_HEADER`] in the player-wide header map.
-         */salt: String?) {
+         */salt: String?, 
+        /**
+         * Domain patterns — exact (`"example.com"`), wildcard subdomain
+         * (`"*.example.com"`), or match-any (`"*"`).
+         */domains: [String]) {
         self.processor = processor
         self.headers = headers
         self.queryParams = queryParams
-        self.domains = domains
         self.salt = salt
+        self.domains = domains
     }
 
     
@@ -3063,8 +3063,8 @@ public struct FfiConverterTypeFfiKeyRule: FfiConverterRustBuffer {
                 processor: FfiConverterTypeFfiKeyProcessor.read(from: &buf), 
                 headers: FfiConverterOptionDictionaryStringString.read(from: &buf), 
                 queryParams: FfiConverterOptionDictionaryStringString.read(from: &buf), 
-                domains: FfiConverterSequenceString.read(from: &buf), 
-                salt: FfiConverterOptionString.read(from: &buf)
+                salt: FfiConverterOptionString.read(from: &buf), 
+                domains: FfiConverterSequenceString.read(from: &buf)
         )
     }
 
@@ -3072,8 +3072,8 @@ public struct FfiConverterTypeFfiKeyRule: FfiConverterRustBuffer {
         FfiConverterTypeFfiKeyProcessor.write(value.processor, into: &buf)
         FfiConverterOptionDictionaryStringString.write(value.headers, into: &buf)
         FfiConverterOptionDictionaryStringString.write(value.queryParams, into: &buf)
-        FfiConverterSequenceString.write(value.domains, into: &buf)
         FfiConverterOptionString.write(value.salt, into: &buf)
+        FfiConverterSequenceString.write(value.domains, into: &buf)
     }
 }
 

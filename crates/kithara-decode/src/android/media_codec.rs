@@ -7,7 +7,6 @@ use tracing::{debug, info};
 use super::{
     aformat::OwnedFormat,
     error::AndroidBackendError,
-    extractor::{OwnedExtractor, SelectedTrack},
     ffi::{
         self, KEY_CHANNEL_COUNT, KEY_PCM_ENCODING, KEY_SAMPLE_RATE, MEDIA_STATUS_OK,
         PCM_ENCODING_16BIT, PCM_ENCODING_FLOAT,
@@ -66,12 +65,6 @@ pub(crate) enum DequeueOutput {
     TryAgainLater,
     OutputFormatChanged(OutputFormat),
     Output(OutputBuffer),
-}
-
-pub(crate) struct CodecBootstrap {
-    pub(crate) pcm_encoding: AndroidPcmEncoding,
-    pub(crate) codec: OwnedCodec,
-    pub(crate) spec: PcmSpec,
 }
 
 pub(crate) struct OwnedCodec {
@@ -336,78 +329,6 @@ impl Drop for OwnedCodec {
         }
         let _ = unsafe { ffi::AMediaCodec_delete(self.raw()) };
     }
-}
-
-pub(crate) fn bootstrap_codec(
-    extractor: &OwnedExtractor,
-    track: &SelectedTrack,
-) -> Result<CodecBootstrap, AndroidBackendError> {
-    debug!(
-        track_index = track.index,
-        mime = %track.mime,
-        "Configuring Android MediaCodec decoder"
-    );
-    let mime = CString::new(track.mime.as_str())
-        .map_err(|error| AndroidBackendError::operation("codec-mime-cstring", error.to_string()))?;
-    let codec_raw = NonNull::new(unsafe { ffi::AMediaCodec_createDecoderByType(mime.as_ptr()) })
-        .ok_or_else(|| {
-            AndroidBackendError::operation(
-                "codec-create-decoder",
-                format!("mime={} returned null", track.mime),
-            )
-        })?;
-    let mut codec = OwnedCodec {
-        raw: codec_raw,
-        started: false,
-    };
-
-    let mut format = extractor.track_format(track.index)?;
-    if !format.set_i32(KEY_PCM_ENCODING, PCM_ENCODING_16BIT) {
-        debug!(
-            mime = %track.mime,
-            "Android MediaCodec ignored requested PCM 16-bit output; continuing with negotiated output format"
-        );
-    }
-
-    let status = unsafe {
-        ffi::AMediaCodec_configure(
-            codec.raw(),
-            format.raw(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if status != MEDIA_STATUS_OK {
-        return Err(AndroidBackendError::operation(
-            "codec-configure",
-            format!("mime={} status={status}", track.mime),
-        ));
-    }
-
-    let status = unsafe { ffi::AMediaCodec_start(codec.raw()) };
-    if status != MEDIA_STATUS_OK {
-        return Err(AndroidBackendError::operation(
-            "codec-start",
-            format!("mime={} status={status}", track.mime),
-        ));
-    }
-    codec.started = true;
-
-    let output = load_output_format(&codec)?;
-    info!(
-        mime = %track.mime,
-        sample_rate = output.spec.sample_rate,
-        channels = output.spec.channels,
-        pcm_encoding = ?output.pcm_encoding,
-        "Android MediaCodec decoder started"
-    );
-
-    Ok(CodecBootstrap {
-        codec,
-        spec: output.spec,
-        pcm_encoding: output.pcm_encoding,
-    })
 }
 
 fn load_output_format(codec: &OwnedCodec) -> Result<OutputFormat, AndroidBackendError> {
