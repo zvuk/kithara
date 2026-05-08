@@ -2,7 +2,7 @@ package com.kithara.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-internal val KitharaBackground = Color(0xFF050507)
+internal val KitharaBackground = Color(0xFF1A1A2E)
 internal val CardBackground = Color(0xFF171737)
 internal val PanelBackground = Color(0xFF242454)
 internal val PanelBorder = Color(0xFF32326B)

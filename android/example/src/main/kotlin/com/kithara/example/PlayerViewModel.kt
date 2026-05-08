@@ -1,12 +1,12 @@
 package com.kithara.example
 
 import android.app.Application
-import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kithara.Kithara
 import com.kithara.KitharaError
+import com.kithara.KitharaItemEvent
 import com.kithara.KitharaPlayer
 import com.kithara.KitharaPlayerEvent
 import com.kithara.KitharaPlayerItem
@@ -15,7 +15,7 @@ import com.kithara.PlayerStatus
 import com.kithara.TrackStatus
 import com.kithara.Transition
 import java.io.File
-import java.io.IOException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -29,6 +29,14 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
     val uiState = _uiState.asStateFlow()
 
     private val player: KitharaPlayer
+
+    /**
+     * Per-item event subscriptions keyed by [KitharaPlayerItem.id]. Variant
+     * discovery flows through here; queue-level events flow through
+     * [observeEvents]. Mirrors the iOS demo `itemCancellables` map so
+     * variant and duration data show up identically on both platforms.
+     */
+    private val itemSubscriptions: MutableMap<String, Job> = mutableMapOf()
 
     init {
         Kithara.initialize(application, logLevel = LogLevel.Debug)
@@ -50,6 +58,20 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
             kitharaCipherDecrypt(cipherKey + salt, encryptedKey)
         }
         readZvukAuthToken(application)?.let(player::setupNetwork)
+
+        // Force-align Android default with iOS (PlayerViewModel.swift:88) — the
+        // native player initializes to 1.0s but the demo expects 5.0s on a fresh
+        // install, so the Settings tab shows the same value across platforms.
+        player.crossfadeDuration = 5.0f
+        _uiState.update {
+            it.copy(
+                volume = player.volume,
+                isMuted = player.isMuted,
+                crossfadeDuration = player.crossfadeDuration,
+                eqGains = List(10) { i -> player.getEqGain(i) }
+            )
+        }
+
         observePlayer()
         observeEvents()
         for (url in DEFAULT_TRACK_URLS) {
@@ -82,20 +104,6 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
 
         _uiState.update { it.copy(url = "", errorMessage = null) }
         enqueue(url)
-    }
-
-    fun onFilePicked(uri: Uri) {
-        viewModelScope.launch {
-            val file = try {
-                copyDocumentToCache(getApplication(), uri)
-            } catch (e: IOException) {
-                Log.e(TAG, "Failed to copy file: $uri", e)
-                setLocalError(e.message ?: e::class.simpleName.orEmpty())
-                return@launch
-            }
-
-            enqueue(file.path, file.displayName)
-        }
     }
 
     fun playPause() {
@@ -138,6 +146,64 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
         _uiState.update { it.copy(selectedRate = rate) }
         player.playingRate = rate
         if (_uiState.value.isPlaying) player.play()
+    }
+
+    fun setVolume(volume: Float) {
+        player.volume = volume
+        _uiState.update { it.copy(volume = volume) }
+    }
+
+    fun toggleMute() {
+        val newMuted = !player.isMuted
+        player.isMuted = newMuted
+        _uiState.update { it.copy(isMuted = newMuted) }
+    }
+
+    fun setEqGain(band: Int, gainDb: Float) {
+        player.setEqGain(band, gainDb)
+        _uiState.update { state ->
+            val updated = state.eqGains.toMutableList()
+            if (band in updated.indices) {
+                updated[band] = gainDb
+            }
+            state.copy(eqGains = updated)
+        }
+    }
+
+    fun resetEq() {
+        player.resetEq()
+        _uiState.update { it.copy(eqGains = List(10) { 0f }) }
+    }
+
+    fun setCrossfadeDuration(duration: Float) {
+        player.crossfadeDuration = duration
+        _uiState.update { it.copy(crossfadeDuration = duration) }
+    }
+
+    fun setAbrMode(variantIndex: UInt?) {
+        val mode = if (variantIndex != null) {
+            com.kithara.ffi.FfiAbrMode.Manual(variantIndex)
+        } else {
+            com.kithara.ffi.FfiAbrMode.Auto
+        }
+        player.setAbrMode(mode)
+        _uiState.update {
+            it.copy(
+                abrIsAuto = variantIndex == null,
+                selectedVariantIndex = variantIndex,
+            )
+        }
+    }
+
+    fun removeTrack(trackId: String) {
+        val item = player.items.firstOrNull { it.id == trackId }
+        if (item != null) {
+            player.remove(item)
+        }
+        itemSubscriptions.remove(trackId)?.cancel()
+        _uiState.update { state ->
+            state.copy(playlist = state.playlist.filterNot { it.id == trackId })
+        }
     }
 
     fun stop() {
@@ -188,6 +254,8 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
 
     override fun onCleared() {
         super.onCleared()
+        itemSubscriptions.values.forEach { it.cancel() }
+        itemSubscriptions.clear()
         player.pause()
         player.removeAllItems()
     }
@@ -206,12 +274,70 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
             return
         }
 
+        subscribeItem(item)
+
         val entry = PlaylistEntry(id = item.id, name = name, url = url)
         val wasEmpty = _uiState.value.playlist.isEmpty()
         _uiState.update { it.copy(playlist = it.playlist + entry) }
 
         if (autoPlay && wasEmpty) {
             switchTo(entry.id, Transition.None)
+        }
+    }
+
+    private fun subscribeItem(item: KitharaPlayerItem) {
+        // Cancel any previous subscription for the same id so we never
+        // leak a worker if the same track is re-inserted.
+        itemSubscriptions.remove(item.id)?.cancel()
+        val itemId = item.id
+        itemSubscriptions[itemId] = viewModelScope.launch {
+            item.events.collect { event -> handleItemEvent(itemId, event) }
+        }
+    }
+
+    private fun handleItemEvent(itemId: String, event: KitharaItemEvent) {
+        when (event) {
+            is KitharaItemEvent.VariantsDiscovered -> {
+                if (itemId != _uiState.value.currentTrackId) return
+                val sorted = event.variants.sortedBy { it.bandwidthBps }
+                val mapped = sorted.map { variant ->
+                    val label = variant.name ?: "${variant.bandwidthBps / 1000}k"
+                    variant.index to label
+                }
+                _uiState.update { it.copy(discoveredVariants = mapped) }
+            }
+            is KitharaItemEvent.VariantSelected -> {
+                if (itemId != _uiState.value.currentTrackId) return
+                _uiState.update { it.copy(selectedVariantIndex = event.variant.index) }
+            }
+            is KitharaItemEvent.VariantApplied -> {
+                if (itemId != _uiState.value.currentTrackId) return
+                val label = event.variant.name ?: "${event.variant.bandwidthBps / 1000} kbps"
+                _uiState.update { it.copy(currentVariantLabel = label) }
+            }
+            is KitharaItemEvent.DurationChanged -> {
+                val seconds = event.seconds
+                _uiState.update { state ->
+                    val updatedPlaylist = state.playlist.map { entry ->
+                        if (entry.id == itemId) entry.copy(duration = seconds) else entry
+                    }
+                    if (itemId == state.currentTrackId) {
+                        state.copy(
+                            playlist = updatedPlaylist,
+                            durationSeconds = seconds.toFloat(),
+                        )
+                    } else {
+                        state.copy(playlist = updatedPlaylist)
+                    }
+                }
+            }
+            is KitharaItemEvent.Error -> {
+                if (itemId == _uiState.value.currentTrackId &&
+                    _uiState.value.errorMessage == null
+                ) {
+                    setLocalError(event.message)
+                }
+            }
         }
     }
 
@@ -265,7 +391,18 @@ internal class PlayerViewModel(application: Application) : AndroidViewModel(appl
             player.events.collect { event ->
                 when (event) {
                     is KitharaPlayerEvent.CurrentItemChanged -> {
-                        _uiState.update { it.copy(currentTrackId = event.itemId) }
+                        // New track → drop variant data from the previous track so
+                        // the Settings tab doesn't briefly show stale chips.
+                        _uiState.update {
+                            it.copy(
+                                currentTrackId = event.itemId,
+                                discoveredVariants = emptyList(),
+                                selectedVariantIndex = null,
+                                currentVariantLabel = null,
+                                abrIsAuto = true,
+                                isSeeking = false,
+                            )
+                        }
                     }
                     is KitharaPlayerEvent.TrackStatusChanged -> {
                         _uiState.update { state ->

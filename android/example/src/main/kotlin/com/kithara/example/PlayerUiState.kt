@@ -9,6 +9,7 @@ internal data class PlaylistEntry(
     val name: String,
     val url: String,
     val trackStatus: TrackStatus? = null,
+    val duration: Double? = null,
 )
 
 internal data class PlayerUiState(
@@ -23,6 +24,14 @@ internal data class PlayerUiState(
     val availableRates: List<Float> = AvailableRates,
     val status: PlayerStatus = PlayerStatus.Unknown,
     val url: String = "",
+    val volume: Float = 1.0f,
+    val isMuted: Boolean = false,
+    val eqGains: List<Float> = emptyList(),
+    val crossfadeDuration: Float = 5.0f,
+    val abrIsAuto: Boolean = true,
+    val selectedVariantIndex: UInt? = null,
+    val discoveredVariants: List<Pair<UInt, String>> = emptyList(),
+    val currentVariantLabel: String? = null,
 ) {
 
     val currentTrackIndex: Int = playlist.indexOfFirst { it.id == currentTrackId }
@@ -32,6 +41,8 @@ internal data class PlayerUiState(
 
     companion object {
         private const val DefaultRate = 1.0f
-        private val AvailableRates: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.2f, 1.5f, 2.0f)
+        // Mirrors `PlayerViewModel.availableRates` on iOS — keep in sync to
+        // preserve cross-platform parity.
+        private val AvailableRates: List<Float> = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
     }
 }

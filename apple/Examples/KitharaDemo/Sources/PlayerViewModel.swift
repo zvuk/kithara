@@ -7,6 +7,7 @@ struct PlaylistEntry: Identifiable, Equatable {
     let id: String
     let name: String
     let url: String
+    let subtitle: String?
     var duration: TimeInterval?
     var trackStatus: TrackStatus?
 
@@ -14,6 +15,7 @@ struct PlaylistEntry: Identifiable, Equatable {
         self.id = item.id
         self.url = item.url.absoluteString
         self.name = trackName(for: item.url.absoluteString)
+        self.subtitle = trackSubtitle(for: item.url.absoluteString)
         self.duration = nil
         self.trackStatus = nil
     }
@@ -43,6 +45,8 @@ final class PlayerViewModel: ObservableObject {
     @Published var abrIsAuto = true
     @Published var selectedVariantIndex: UInt32?
     @Published var crossfadeDuration: Float = 0
+    @Published var shuffleEnabled = false
+    @Published var repeatEnabled = false
 
     private let player = KitharaPlayer(
         config: KitharaPlayer.Config(
@@ -130,6 +134,10 @@ final class PlayerViewModel: ObservableObject {
 
     var trackName: String {
         playlist[safe: currentTrackIndex]?.name ?? "No Track"
+    }
+
+    var trackSubtitle: String? {
+        playlist[safe: currentTrackIndex]?.subtitle
     }
 
     var currentTrackIndex: Int {
@@ -511,6 +519,15 @@ private func formatTime(_ seconds: TimeInterval) -> String {
     let mins = Int(seconds) / 60
     let secs = Int(seconds) % 60
     return String(format: "%d:%02d", mins, secs)
+}
+
+private func trackSubtitle(for source: String) -> String? {
+    guard let url = URL(string: source) else { return nil }
+    let components = url.pathComponents.filter { $0 != "/" }
+    guard components.count >= 3 else { return nil }
+    let album = components[components.count - 2]
+    let artist = components[components.count - 3]
+    return "\(artist) / \(album)"
 }
 
 private func trackName(for source: String) -> String {

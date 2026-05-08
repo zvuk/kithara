@@ -13,6 +13,7 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
         versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures {
@@ -25,8 +26,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    sourceSets.named("main") {
-        kotlin.directories.add("src/main/kotlin")
+    sourceSets {
+        named("main") {
+            kotlin.directories.add("src/main/kotlin")
+        }
+        named("androidTest") {
+            kotlin.directories.add("src/androidTest/kotlin")
+        }
     }
 }
 
@@ -43,4 +49,11 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.junit4)
 }

@@ -175,6 +175,12 @@ struct PlayerView: View {
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Color.kitharaLight)
                     .lineLimit(1)
+                if let subtitle = viewModel.trackSubtitle {
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.kitharaMuted)
+                        .lineLimit(1)
+                }
                 if let variant = viewModel.currentVariantLabel {
                     Text(variant)
                         .font(.system(size: 11))

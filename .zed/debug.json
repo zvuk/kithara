@@ -51,4 +51,15 @@
     },
     "sourceLanguages": ["rust"],
   },
+  {
+    "label": "iOS demo",
+    "adapter": "CodeLLDB",
+    "request": "attach",
+    "build": {
+      "command": "cargo",
+      "args": ["run", "-p", "xtask", "--", "apple", "run", "--debug"],
+    },
+    "program": "KitharaDemo",
+    "sourceLanguages": ["swift"],
+  },
 ]

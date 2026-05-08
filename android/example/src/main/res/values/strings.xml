@@ -5,7 +5,6 @@
     <string name="audio_url_hint">Audio URL</string>
     <string name="demo_label">Demo</string>
     <string name="no_track">No Track</string>
-    <string name="open_local_file">Open local file</string>
     <string name="status_failed">Failed</string>
     <string name="status_not_ready">Not Ready</string>
     <string name="status_ready">Ready</string>
