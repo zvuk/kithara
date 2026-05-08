@@ -53,8 +53,11 @@ pub(crate) struct HlsPeer {
     /// decisions in the ABR controller.
     reader_segment: Arc<AtomicUsize>,
     state: Arc<Mutex<Option<HlsState>>>,
-    /// Cancels the waker-forwarding micro-task on drop.
-    wake_cancel: CancellationToken,
+    /// Wake-up trigger for the waker-forwarding micro-task: not a
+    /// cancellation of work — only fires from `teardown()` / `Drop` to
+    /// break the spawn-loop's `select!`. Local to this peer; not part
+    /// of the unified player cancel hierarchy. // kithara:cancel:owner
+    wake_signal: CancellationToken,
     /// Waker stored before activation (`poll_next` called but state is None).
     pending_waker: Mutex<Option<Waker>>,
     /// Same Arc-clone as the one held by `HlsCoord` — reads from the
@@ -68,7 +71,7 @@ impl HlsPeer {
             timeline,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
-            wake_cancel: CancellationToken::new(),
+            wake_signal: CancellationToken::new(),
             abr: Arc::new(AbrState::new(Vec::new(), initial_mode)),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             committed_segment: Arc::new(AtomicUsize::new(0)),
@@ -111,18 +114,18 @@ impl HlsPeer {
         // Use `Weak` so this task does NOT keep `HlsPeer` alive. When
         // the Registry drops its `Arc<HlsPeer>` after the PeerHandle
         // cancel fires, the strong count hits 0 and `HlsPeer::Drop`
-        // fires `wake_cancel`, which wakes this task's select loop and
+        // fires `wake_signal`, which wakes this task's select loop and
         // it exits. Without `Weak` + `Drop` the task held an Arc to the
         // peer and wedged the scheduler/segment-loader graph alive past
         // `HlsSource::drop` — nextest flagged this as a rotating LEAK.
         let peer_weak = Arc::downgrade(self);
-        let wake_cancel = self.wake_cancel.clone();
+        let wake_signal = self.wake_signal.clone();
         tokio::task::spawn(async move {
             loop {
                 tokio::select! {
                     biased;
                     () = cancel.cancelled() => return,
-                    () = wake_cancel.cancelled() => return,
+                    () = wake_signal.cancelled() => return,
                     () = reader_advanced.notified() => {
                         let Some(peer) = peer_weak.upgrade() else { return; };
                         let guard = peer.state.lock_sync();
@@ -174,7 +177,7 @@ impl HlsPeer {
     pub(crate) fn teardown(&self) {
         // Stop the waker-forwarding task first so it never races our
         // state lock after we clear it.
-        self.wake_cancel.cancel();
+        self.wake_signal.cancel();
         let mut guard = self.state.lock_sync();
         *guard = None;
     }
@@ -182,10 +185,10 @@ impl HlsPeer {
 
 impl Drop for HlsPeer {
     fn drop(&mut self) {
-        // Fire wake_cancel so the waker-forwarding spawn above exits
+        // Fire wake_signal so the waker-forwarding spawn above exits
         // even when there is no pending `reader_advanced` notification
         // to trigger its select loop.
-        self.wake_cancel.cancel();
+        self.wake_signal.cancel();
     }
 }
 
