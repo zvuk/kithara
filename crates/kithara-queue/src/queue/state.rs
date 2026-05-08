@@ -11,6 +11,7 @@ use std::{
 
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_play::{PlayerConfig, PlayerImpl};
+use tokio_util::sync::CancellationToken;
 
 use super::types::PendingSelect;
 use crate::{
@@ -102,6 +103,13 @@ pub struct Queue {
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
     pub(super) player_rx: Mutex<EventReceiver>,
+    /// Master cancel token for the queue. When the queue creates its
+    /// own [`PlayerImpl`] (no caller-supplied player), this token is
+    /// passed into `PlayerConfig.cancel` so the queue's `Drop` cascades
+    /// shutdown to the player's subsystems. When a caller supplies a
+    /// pre-built player, this token is independent — the caller owns
+    /// the player's master directly.
+    pub(super) cancel: CancellationToken,
 }
 
 impl Queue {
@@ -142,7 +150,14 @@ impl Queue {
             #[cfg(not(any(test, feature = "test-utils")))]
                 should_autoplay: _,
         } = config;
-        let player = player.unwrap_or_else(|| Arc::new(PlayerImpl::new(PlayerConfig::default())));
+        let cancel = CancellationToken::new(); // kithara:cancel:owner
+        let player = player.unwrap_or_else(|| {
+            let config = PlayerConfig {
+                cancel: Some(cancel.clone()),
+                ..PlayerConfig::default()
+            };
+            Arc::new(PlayerImpl::new(config))
+        });
         // Queue owns auto-advance via `tick`/`drain_player_events`; suppress
         // the player's built-in linear advance so a single EOF does not
         // race-promote the next track twice (player.select_item +
@@ -174,6 +189,7 @@ impl Queue {
             #[cfg(any(test, feature = "test-utils"))]
             autoplay_target: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
             cached_position: Arc::new(AtomicU64::new(Self::NO_CACHED_POSITION.to_bits())),
+            cancel,
         }
     }
 
@@ -242,6 +258,16 @@ impl Queue {
     pub(super) fn write_cached_position(&self, value: Option<f64>) {
         let bits = value.unwrap_or(Self::NO_CACHED_POSITION).to_bits();
         self.cached_position.store(bits, Ordering::Release);
+    }
+}
+
+impl Drop for Queue {
+    fn drop(&mut self) {
+        // Cascade shutdown: cancel the queue master so any
+        // queue-owned `PlayerImpl` (and through it the audio worker,
+        // Downloader, AssetStore, HlsPeer) observe the pulse before
+        // structural Arc teardown unwinds.
+        self.cancel.cancel();
     }
 }
 

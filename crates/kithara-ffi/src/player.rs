@@ -80,6 +80,13 @@ pub struct AudioPlayer {
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
     queue: Arc<Queue>,
+    /// Master cancel token for this FFI player instance. Propagated
+    /// into [`PlayerConfig::cancel`] so the audio worker, downloader,
+    /// asset store, HLS peer, and per-track resources all derive
+    /// children of this token. `Drop` fires `cancel.cancel()` so the
+    /// shutdown pulse reaches subsystems before structural Arc
+    /// teardown unwinds. See `kithara-play/README.md` "Cancel Hierarchy".
+    cancel: CancellationToken,
     /// Shared downloader for every track created through this player.
     /// Pinned to `FFI_RUNTIME` so its async tasks land on a runtime that
     /// is always alive, independent of the caller thread (Swift /
@@ -194,8 +201,10 @@ impl AudioPlayer {
     #[must_use]
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
-        let player_config = PlayerConfig::default()
+        let cancel = CancellationToken::new(); // kithara:cancel:owner
+        let mut player_config = PlayerConfig::default()
             .with_eq_layout(generate_log_spaced_bands(config.eq_band_count as usize));
+        player_config.cancel = Some(cancel.clone());
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);
         let net = default_net_options();
@@ -215,6 +224,7 @@ impl AudioPlayer {
             observer: Mutex::new(None),
             event_bridge: Mutex::new(None),
             items: Arc::new(Mutex::new(HashMap::new())),
+            cancel,
         })
     }
 
@@ -678,7 +688,7 @@ impl AudioPlayer {
             Arc::clone(&observer),
             Arc::clone(&self.queue),
             &self.items,
-            CancellationToken::new(),
+            CancellationToken::new(), // kithara:cancel:bridge
         );
 
         let mut eb = self.event_bridge.lock_sync();
@@ -759,6 +769,15 @@ impl AudioPlayer {
         } else {
             Some(merged)
         }
+    }
+}
+
+impl Drop for AudioPlayer {
+    fn drop(&mut self) {
+        // Cascade shutdown to player subsystems before structural Arc
+        // teardown. The master was constructed in `AudioPlayer::new`
+        // and propagated into `PlayerConfig.cancel`.
+        self.cancel.cancel();
     }
 }
 
