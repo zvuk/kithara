@@ -176,11 +176,20 @@ impl PlayerImpl {
 
         let bus = config.bus.clone().unwrap_or_default();
 
+        // Resolve master once. If the consumer crate (Queue / App / FFI)
+        // supplied a master via PlayerConfig.cancel, the unwrap_or is a
+        // no-op and the parent master flows through; otherwise we
+        // construct a fresh one. Pass it down to the engine so the
+        // shared audio worker shutdown joins this hierarchy.
+        let cancel = config.cancel.clone().unwrap_or_default(); // kithara:cancel:owner
+        config.cancel = Some(cancel.clone());
+
         let engine_config = EngineConfig {
             eq_layout: config.eq_layout.clone(),
             max_slots: config.max_slots,
             pcm_pool: Some(resolved_pool.clone()),
             session: config.session.clone(),
+            cancel: Some(cancel.clone()),
             ..EngineConfig::default()
         };
         let engine = EngineImpl::new(engine_config, bus.clone());
@@ -196,10 +205,18 @@ impl PlayerImpl {
     /// Used by integration-test harnesses that drive a single
     /// `EngineImpl` for shared offline-render plumbing. Production code
     /// uses [`PlayerImpl::new`] which builds its engine internally.
+    ///
+    /// The caller-provided `engine` is expected to share the same cancel
+    /// master as this player (or a parent of it). Test harnesses that
+    /// don't care about the cascade omit `PlayerConfig.cancel` and the
+    /// player creates its own orphan master — the externally-built
+    /// engine's worker keeps its own independent cancel in that case.
     #[must_use]
     pub fn with_engine(mut config: PlayerConfig, engine: EngineImpl) -> Self {
         let resolved_pool = config.pcm_pool.clone().unwrap_or_default();
         let bus = config.bus.clone().unwrap_or_default();
+        let cancel = config.cancel.clone().unwrap_or_default(); // kithara:cancel:owner
+        config.cancel = Some(cancel);
         if config.abr.is_none() {
             config.abr = Some(AbrController::new(AbrSettings::default()));
         }
@@ -208,17 +225,18 @@ impl PlayerImpl {
     }
 
     fn new_with_engine(
-        mut config: PlayerConfig,
+        config: PlayerConfig,
         resolved_pool: PcmPool,
         bus: EventBus,
         engine: EngineImpl,
     ) -> Self {
-        // Single canonical fallback. If the consumer crate (Queue / App /
-        // FFI) supplied a master via PlayerConfig.cancel, the unwrap_or
-        // is a no-op and the parent master flows through. Otherwise we
-        // create a fresh one — see kithara-play/README.md.
-        let cancel = config.cancel.clone().unwrap_or_default(); // kithara:cancel:owner
-        config.cancel = Some(cancel.clone());
+        // Master is already resolved by `new` / `with_engine` (the
+        // canonical entry points). At this point `config.cancel` is
+        // always `Some(master)`; the unwrap is defensive only.
+        let cancel = config
+            .cancel
+            .clone()
+            .expect("BUG: PlayerImpl::new / with_engine must populate config.cancel");
         Self {
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
             prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),

@@ -11,6 +11,7 @@ use std::sync::{
 
 use kithara_decode::PcmChunk;
 use kithara_platform::tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 use super::{
     AudioWorkerSource,
@@ -54,19 +55,33 @@ impl Clone for AudioWorkerHandle {
 static AUDIO_WORKER_ID: AtomicU64 = AtomicU64::new(0);
 
 impl AudioWorkerHandle {
-    /// Spawn a new shared worker thread and return a handle.
+    /// Spawn a new shared worker thread bound to the given cancel token
+    /// and return a handle. Production callers (e.g. `EngineImpl`) pass a
+    /// child of the player master so worker shutdown participates in the
+    /// unified cancel hierarchy.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn with_cancel(cancel: CancellationToken) -> Self {
         let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
         let inner = Scheduler::<Box<dyn crate::runtime::Node>, HangWatchdogObserver>::start(
             format!("kithara-audio-worker-{id}"),
             HangWatchdogObserver::new(),
+            cancel,
         );
 
         Self {
             inner,
             id_gen: Arc::new(TrackIdGen::new()),
         }
+    }
+
+    /// Spawn a new shared worker with a fresh orphan cancel token.
+    ///
+    /// Convenience for tests and standalone usage. Production paths use
+    /// [`AudioWorkerHandle::with_cancel`] with a child of the player
+    /// master — see `kithara-play/README.md` "Cancel Hierarchy".
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_cancel(CancellationToken::new()) // kithara:cancel:owner
     }
 
     /// Register a track. Returns the assigned [`TrackId`].

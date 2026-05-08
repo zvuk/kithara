@@ -20,6 +20,7 @@ use kithara_events::EventBus;
 use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::{
@@ -70,6 +71,14 @@ pub struct EngineConfig {
     /// graph synchronously without touching real hardware.
     #[derivative(Debug = "ignore")]
     pub session: Option<Arc<dyn SessionDispatcher>>,
+    /// Master cancel token for the engine. The shared audio worker
+    /// thread runs as a child of this token so its shutdown
+    /// participates in the unified cancel hierarchy. `PlayerImpl::new`
+    /// populates this with the resolved player master before
+    /// constructing the engine. When `None`, the engine creates a fresh
+    /// orphan (test/standalone fallback only — see `kithara-play/README.md`).
+    #[derivative(Debug = "ignore")]
+    pub cancel: Option<CancellationToken>,
 }
 
 /// Handle for a slot, providing command channel and shared state.
@@ -150,6 +159,12 @@ impl EngineImpl {
             // EngineImpl fallback — caller injects pcm_pool via EngineConfig
             // ast-grep-ignore: perf.no-global-pool-accessor
             .unwrap_or_else(|| PcmPool::default().clone());
+        // Worker shutdown is a child of the engine cancel (which itself
+        // is the player master after `PlayerImpl::new` populates
+        // `EngineConfig.cancel`). Test/standalone callers omit the
+        // field — `unwrap_or_default` then yields a fresh orphan, OK
+        // outside the production path.
+        let worker_cancel = config.cancel.clone().unwrap_or_default().child_token();
 
         Self {
             config,
@@ -161,7 +176,7 @@ impl EngineImpl {
             player_id: Mutex::new(None),
             running: AtomicBool::new(false),
             slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
-            worker: AudioWorkerHandle::new(),
+            worker: AudioWorkerHandle::with_cancel(worker_cancel),
             runtime: RuntimeHandle::try_current().ok(),
         }
     }

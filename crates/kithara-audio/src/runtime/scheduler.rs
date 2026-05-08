@@ -146,11 +146,19 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
 
     /// Spawn a new scheduler thread and return a handle.
+    ///
+    /// `cancel` is the externally-owned token that drives the run loop's
+    /// shutdown. Callers (e.g. [`AudioWorkerHandle`](super::super::worker::AudioWorkerHandle))
+    /// derive it as a child of the player master so worker shutdown
+    /// participates in the unified cancel hierarchy.
     #[must_use]
-    pub(crate) fn start(name: String, observer: O) -> SchedulerHandle<N> {
+    pub(crate) fn start(
+        name: String,
+        observer: O,
+        cancel: CancellationToken,
+    ) -> SchedulerHandle<N> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let wake = Arc::new(SchedulerWake::new());
-        let cancel = CancellationToken::new();
 
         let wake_clone = Arc::clone(&wake);
         let cancel_clone = cancel.clone();
@@ -494,8 +502,11 @@ mod tests {
 
     #[kithara::test]
     fn scheduler_creates_and_drops_cleanly() {
-        let handle =
-            Scheduler::<DummyNode, TestObserver>::start("test-worker".into(), TestObserver);
+        let handle = Scheduler::<DummyNode, TestObserver>::start(
+            "test-worker".into(),
+            TestObserver,
+            CancellationToken::new(),
+        );
         sleep(Duration::from_millis(10));
         handle.shutdown();
         sleep(Duration::from_millis(50));
@@ -503,8 +514,11 @@ mod tests {
 
     #[kithara::test]
     fn scheduler_panic_isolation() {
-        let handle =
-            Scheduler::<DummyNode, TestObserver>::start("test-worker".into(), TestObserver);
+        let handle = Scheduler::<DummyNode, TestObserver>::start(
+            "test-worker".into(),
+            TestObserver,
+            CancellationToken::new(),
+        );
 
         handle.register(
             1,
@@ -538,8 +552,11 @@ mod tests {
 
     #[kithara::test]
     fn scheduler_does_not_busy_spin_on_backpressure() {
-        let handle =
-            Scheduler::<BackpressureNode, TestObserver>::start("test-worker".into(), TestObserver);
+        let handle = Scheduler::<BackpressureNode, TestObserver>::start(
+            "test-worker".into(),
+            TestObserver,
+            CancellationToken::new(),
+        );
 
         handle.register(1, BackpressureNode);
 
