@@ -19,6 +19,7 @@ use kithara_events::EventBus;
 use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
 use ringbuf::traits::Consumer;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::{
@@ -121,6 +122,14 @@ pub struct PlayerConfig {
     /// dispatcher here to drive playback without real hardware.
     #[derivative(Debug = "ignore")]
     pub session: Option<Arc<dyn SessionDispatcher>>,
+    /// Master cancel token for this player. Consumer crates (`Queue` /
+    /// `App` / FFI) construct one and propagate it here so subsystem
+    /// shutdown is driven by a single pulse. When `None`,
+    /// [`PlayerImpl::new`] creates an internal master as the canonical
+    /// fallback. Per-track children are derived in
+    /// [`PlayerImpl::prepare_config`].
+    #[derivative(Debug = "ignore")]
+    pub cancel: Option<CancellationToken>,
 }
 
 /// Concrete Player implementation managing items queue.
@@ -150,6 +159,10 @@ pub struct PlayerImpl {
     rate: AtomicF32,
     status: Mutex<PlayerStatus>,
     volume: AtomicF32,
+    /// Master cancel token. Drop fires `cancel.cancel()` so subsystems
+    /// observe the pulse before structural Arc teardown unwinds. See
+    /// `crates/kithara-play/README.md` "Cancel hierarchy" section.
+    cancel: CancellationToken,
 
     /// Engine drops last — worker shutdown happens after all tracks unregister.
     engine: EngineImpl,
@@ -195,11 +208,17 @@ impl PlayerImpl {
     }
 
     fn new_with_engine(
-        config: PlayerConfig,
+        mut config: PlayerConfig,
         resolved_pool: PcmPool,
         bus: EventBus,
         engine: EngineImpl,
     ) -> Self {
+        // Single canonical fallback. If the consumer crate (Queue / App /
+        // FFI) supplied a master via PlayerConfig.cancel, the unwrap_or
+        // is a no-op and the parent master flows through. Otherwise we
+        // create a fresh one — see kithara-play/README.md.
+        let cancel = config.cancel.clone().unwrap_or_default(); // kithara:cancel:owner
+        config.cancel = Some(cancel.clone());
         Self {
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
             prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
@@ -216,6 +235,7 @@ impl PlayerImpl {
             rate: AtomicF32::new(0.0), // starts paused
             status: Mutex::new(PlayerStatus::Unknown),
             volume: AtomicF32::new(1.0),
+            cancel,
             engine,
             config,
         }
@@ -256,6 +276,9 @@ impl PlayerImpl {
         config.gapless_mode = self.config.gapless_mode;
         if config.bus.is_none() {
             config.bus = Some(self.bus.scoped());
+        }
+        if config.cancel.is_none() {
+            config.cancel = Some(self.cancel.child_token());
         }
     }
 
@@ -1150,6 +1173,16 @@ fn player_event_from_notification(notification: PlayerNotification) -> Option<Pl
     }
 }
 
+impl Drop for PlayerImpl {
+    fn drop(&mut self) {
+        // Fire master pulse before structural Arc teardown so subsystems
+        // (Downloader, HlsPeer, Audio worker, AssetStore) observe the
+        // cancel pulse promptly. Each per-track child token is derived
+        // from `self.cancel` via prepare_config().
+        self.cancel.cancel();
+    }
+}
+
 impl crate::traits::dj::eq::Equalizer for PlayerImpl {
     fn band_count(&self) -> usize {
         self.eq_band_count()
@@ -1198,6 +1231,50 @@ mod tests {
         player.prepare_config(&mut config);
 
         assert_eq!(config.gapless_mode, GaplessMode::Disabled);
+        assert!(
+            config.cancel.is_some(),
+            "prepare_config must inject a per-track cancel child"
+        );
+        player.worker().shutdown();
+    }
+
+    #[kithara::test]
+    fn prepare_config_per_track_cancel_is_child_of_player_master() {
+        let player = PlayerImpl::new(PlayerConfig::default());
+        let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
+            .expect("BUG: valid resource config");
+        player.prepare_config(&mut rc);
+
+        let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
+        let observer = track_cancel.child_token();
+        assert!(!observer.is_cancelled());
+
+        drop(player);
+        assert!(
+            observer.is_cancelled(),
+            "dropping the player must cancel the per-track child via the master"
+        );
+    }
+
+    #[kithara::test]
+    fn prepare_config_preserves_caller_supplied_master() {
+        let parent_master = CancellationToken::new();
+        let player = PlayerImpl::new(PlayerConfig {
+            cancel: Some(parent_master.clone()),
+            ..PlayerConfig::default()
+        });
+        let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
+            .expect("BUG: valid resource config");
+        player.prepare_config(&mut rc);
+
+        let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
+        let observer = track_cancel.child_token();
+        assert!(!observer.is_cancelled());
+
+        // Cancelling the parent (without dropping the player) must
+        // propagate to the per-track child — confirms parent-flow.
+        parent_master.cancel();
+        assert!(observer.is_cancelled());
         player.worker().shutdown();
     }
 
@@ -1312,6 +1389,7 @@ mod tests {
             pcm_pool: None,
             auto_advance_enabled: true,
             session: None,
+            cancel: None,
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
