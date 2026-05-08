@@ -133,11 +133,6 @@ pub mod source {
         }
     }
 
-    /// Test-side factory closure: returns `Some(decoder)` on success or
-    /// `None` on a soft failure. The wrapper translates `None` into the
-    /// production [`crate::pipeline::source::RecreateAttempt::Failed`]
-    /// path; tests that need to exercise the transient
-    /// "source-not-ready" path should use [`new_pending_factory`].
     pub type DecoderFactory<T> =
         Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn Decoder>> + Send>;
 
@@ -168,10 +163,7 @@ pub mod source {
     ) -> StreamAudioSource<T> {
         let inner_factory: crate::pipeline::source::DecoderFactory<T> =
             Box::new(move |shared, media_info, base_offset| {
-                decoder_factory(SharedStream(shared), media_info, base_offset).map_or(
-                    crate::pipeline::source::RecreateAttempt::Failed,
-                    crate::pipeline::source::RecreateAttempt::Created,
-                )
+                decoder_factory(SharedStream(shared), media_info, base_offset)
             });
         StreamAudioSource(crate::pipeline::source::StreamAudioSource::new(
             shared_stream.into_inner(),

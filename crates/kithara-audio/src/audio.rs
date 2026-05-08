@@ -30,7 +30,7 @@ use crate::{
     pipeline::{
         config::{AudioConfig, create_effects, expected_output_spec},
         fetch::{EpochValidator, Fetch, FetchKind},
-        source::{OffsetReader, RecreateAttempt, SharedStream, StreamAudioSource},
+        source::{OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
     traits::{ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
@@ -878,18 +878,11 @@ where
             match DecoderFactory::create_from_media_info(source, info, &config) {
                 Ok(d) => {
                     d.update_byte_len(byte_len);
-                    RecreateAttempt::Created(d)
-                }
-                Err(e) if e.is_interrupted() => {
-                    debug!(
-                        ?e,
-                        base_offset, "decoder recreate deferred — source pending"
-                    );
-                    RecreateAttempt::Pending
+                    Some(d)
                 }
                 Err(e) => {
                     warn!(?e, "failed to recreate decoder");
-                    RecreateAttempt::Failed
+                    None
                 }
             }
         })

@@ -177,37 +177,12 @@ impl<T: StreamType> Seek for OffsetReader<T> {
     }
 }
 
-/// Outcome of a decoder-factory call.
-///
-/// `Pending` is returned when the source is structurally not ready yet
-/// — for example, the HLS `SegmentLayout` cannot announce the init
-/// segment range because no segment of the target variant has been
-/// committed. The pipeline keeps the track alive and retries once the
-/// source signals progress, instead of failing the track.
-pub(crate) enum RecreateAttempt {
-    Created(Box<dyn Decoder>),
-    Pending,
-    Failed,
-}
-
-/// Outcome of [`StreamAudioSource::recreate_decoder`] /
-/// [`StreamAudioSource::apply_format_change`].
-///
-/// Mirrors [`RecreateAttempt`] but without carrying the decoder, since
-/// the new decoder has already been installed in `session` on `Done`.
-#[derive(Clone, Copy)]
-pub(crate) enum RecreateOutcome {
-    Done,
-    Pending,
-    Failed,
-}
-
 /// Factory closure that creates a new decoder from stream, media info, and base offset.
 ///
 /// Production: creates Symphonia `Decoder` via [`OffsetReader`].
 /// Tests: returns `MockDecoder` without real I/O.
 pub(crate) type DecoderFactory<T> =
-    Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> RecreateAttempt + Send>;
+    Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn Decoder>> + Send>;
 
 /// Audio source for Stream with format change detection.
 ///
@@ -445,7 +420,8 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     /// Apply pending format change: clear fence, seek to segment start, recreate decoder.
-    fn apply_format_change(&mut self, new_info: &MediaInfo, target_offset: u64) -> RecreateOutcome {
+    /// Returns true if decoder was recreated successfully.
+    fn apply_format_change(&mut self, new_info: &MediaInfo, target_offset: u64) -> bool {
         let current_pos = self.shared_stream.position();
         debug!(
             current_pos,
@@ -459,7 +435,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         if let Err(e) = self.shared_stream.seek(SeekFrom::Start(target_offset)) {
             warn!(?e, target_offset, "Failed to seek to segment boundary");
-            return RecreateOutcome::Failed;
+            return false;
         }
 
         self.recreate_decoder(new_info, target_offset)
@@ -1032,14 +1008,14 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// Recreate decoder with new `MediaInfo` via factory.
     ///
     /// The factory handles `OffsetReader` creation and decoder instantiation.
+    /// Returns true if decoder was recreated successfully.
+    /// Recreate decoder with new `MediaInfo` via factory.
     ///
     /// On success, updates `session` atomically — all three fields
     /// (`decoder`, `base_offset`, `media_info`) change together.
-    /// On `Pending` or `Failed`, `session` is unchanged. `Pending`
-    /// signals a transient condition (e.g. HLS init segment range not
-    /// yet announced for the target variant) — the caller should keep
-    /// the track alive and wait for the source to make progress.
-    fn recreate_decoder(&mut self, new_info: &MediaInfo, base_offset: u64) -> RecreateOutcome {
+    /// On failure, `session` is unchanged (fixes prior bug where
+    /// `media_info` and `base_offset` were updated before factory call).
+    fn recreate_decoder(&mut self, new_info: &MediaInfo, base_offset: u64) -> bool {
         debug!(
             old = ?self.session.media_info,
             new = ?new_info,
@@ -1047,23 +1023,14 @@ impl<T: StreamType> StreamAudioSource<T> {
             "Recreating decoder for new format"
         );
 
-        match (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset) {
-            RecreateAttempt::Created(new_decoder) => {
-                self.install_recreated_session(new_info, base_offset, new_decoder);
-                RecreateOutcome::Done
-            }
-            RecreateAttempt::Pending => {
-                debug!(
-                    base_offset,
-                    "Decoder recreate pending — source not ready, will retry"
-                );
-                RecreateOutcome::Pending
-            }
-            RecreateAttempt::Failed => {
-                warn!(base_offset, "Failed to recreate decoder");
-                RecreateOutcome::Failed
-            }
-        }
+        let Some(new_decoder) =
+            (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
+        else {
+            warn!(base_offset, "Failed to recreate decoder");
+            return false;
+        };
+        self.install_recreated_session(new_info, base_offset, new_decoder);
+        true
     }
 
     /// Soft seek rejection: the seek attempt cannot be honoured
@@ -1596,11 +1563,10 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Execute the actual decoder recreation once readiness is confirmed.
     ///
-    /// Returns `Some(outcome)` on a normal attempt — the caller decides
-    /// what to do with `Done` / `Pending` / `Failed`. Returns `None`
-    /// when the track was already terminated inside this helper (e.g.
-    /// stream seek error).
-    fn execute_recreation(&mut self, recreate: &RecreateState) -> Option<RecreateOutcome> {
+    /// Returns `Some(true)` on success, `Some(false)` on soft failure
+    /// (caller must mark track failed), or `None` when the track was
+    /// already terminated inside this helper (e.g. stream seek error).
+    fn execute_recreation(&mut self, recreate: &RecreateState) -> Option<bool> {
         if recreate.cause == RecreateCause::FormatBoundary
             && matches!(recreate.next, RecreateNext::Decode)
         {
@@ -1763,28 +1729,17 @@ impl<T: StreamType> StreamAudioSource<T> {
             }
         };
 
-        let Some(outcome) = self.execute_recreation(&recreate) else {
+        let Some(recreated) = self.execute_recreation(&recreate) else {
             return TrackStep::Failed;
         };
-        match outcome {
-            RecreateOutcome::Done => self.apply_recreate_next(&recreate.next),
-            RecreateOutcome::Pending => {
-                let offset = recreate.offset;
-                self.update_state(TrackState::WaitingForSource {
-                    reason: WaitingReason::Waiting,
-                    context: WaitContext::Recreation(recreate),
-                });
-                self.submit_demand_for_current_state();
-                trace!(offset, "recreate pending — waiting for source progress");
-                TrackStep::Blocked(WaitingReason::Waiting)
-            }
-            RecreateOutcome::Failed => {
-                self.update_state(TrackState::Failed(TrackFailure::RecreateFailed {
-                    offset: recreate.offset,
-                }));
-                TrackStep::Failed
-            }
+        if !recreated {
+            self.update_state(TrackState::Failed(TrackFailure::RecreateFailed {
+                offset: recreate.offset,
+            }));
+            return TrackStep::Failed;
         }
+
+        self.apply_recreate_next(&recreate.next)
     }
 
     fn step_seek_requested(&mut self) -> TrackStep<PcmChunk> {

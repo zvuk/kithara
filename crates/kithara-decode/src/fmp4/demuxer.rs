@@ -89,19 +89,19 @@ impl Fmp4SegmentDemuxer {
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError::Interrupted`] when the init segment range is
-    /// not yet announced by the layout (no segment of the target variant
-    /// has been committed) or when the source defers the init read; the
-    /// caller should retry after the underlying source becomes ready.
-    /// Returns [`DecodeError::InvalidData`] when the init buffer fails to
-    /// parse.
+    /// Returns [`DecodeError::InvalidData`] when the init segment range
+    /// is missing, the init buffer fails to fill, or the parsed init
+    /// segment is malformed.
+    /// Returns [`DecodeError::Interrupted`] when the source defers the
+    /// init read; the caller should retry after the underlying source
+    /// becomes ready.
     pub(crate) fn open(
         mut source: BoxedSource,
         segments: Arc<dyn SegmentLayout>,
     ) -> DecodeResult<Self> {
-        let Some(init_range) = segments.init_segment_range() else {
-            return Err(DecodeError::Interrupted);
-        };
+        let init_range = segments.init_segment_range().ok_or_else(|| {
+            DecodeError::InvalidData("HLS init segment range not announced".into())
+        })?;
         let mut init_state = SegmentReadState::new(init_range);
         if let FillStatus::Pending(_) = fill_segment_buffer(&mut source, &mut init_state)? {
             return Err(DecodeError::Interrupted);
