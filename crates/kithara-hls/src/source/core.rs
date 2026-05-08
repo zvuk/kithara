@@ -55,10 +55,6 @@ pub struct HlsSource {
 
 impl Drop for HlsSource {
     fn drop(&mut self) {
-        // Clear `HlsPeer::state` *before* `_peer_handle` and `_hls_peer`
-        // drop — releasing the internal PeerHandle clones stored inside
-        // the scheduler/loader so that the final external drop actually
-        // brings `PeerInner`'s strong count to zero.
         if let Some(ref peer) = self._hls_peer {
             peer.teardown();
         }
@@ -131,7 +127,6 @@ impl HlsSource {
         if let Some(seg_ref) = segments.find_at_offset(pos).filter(|s| s.data.is_some()) {
             return Some(seg_ref.variant);
         }
-        // Fallback: check the last committed segment across all variants
         if segments.max_end_offset() > 0
             && let Some(seg_ref) = segments
                 .find_at_offset(segments.max_end_offset().saturating_sub(1))
@@ -206,7 +201,6 @@ impl HlsSource {
             return InitRangeResolution::none(variant, 0, None, InitRangeOutcome::NoneNoVariant);
         };
         let committed_count = vs.iter().count() as u64;
-        // Find first committed segment with init data
         let Some((seg_idx, seg_data)) = vs.iter().find(|(_, data)| data.init_len > 0) else {
             return InitRangeResolution::none(
                 variant,
@@ -216,14 +210,6 @@ impl HlsSource {
             );
         };
 
-        // Always return a range starting from offset 0 (segment 0).
-        // During midstream ABR switches the downloader commits a later segment
-        // first (e.g. segment 15 with init). Using that segment's byte offset
-        // as base_offset makes the decoder see only a tail of the stream,
-        // causing "unexpected end of file" on late-track seeks.
-        // Returning 0-based range ensures the decoder sees the full stream.
-        // The pipeline waits (source_is_ready_for_boundary) until segment 0
-        // is actually downloaded before creating the decoder.
         if seg_idx == 0 {
             let Some(seg_range) = segments.item_range((variant, 0)) else {
                 return InitRangeResolution::none(
@@ -261,8 +247,6 @@ impl HlsSource {
             );
         }
 
-        // Init-bearing segment is not segment 0 — use segment 0's range
-        // (from byte map or metadata) so the decoder starts at offset 0.
         if let Some(seg0_range) = segments.item_range((variant, 0)) {
             return InitRangeResolution::ok(
                 variant,
@@ -385,9 +369,6 @@ impl HlsSource {
         seek_epoch: u64,
     ) -> bool {
         let Some((variant, segment_index, via)) = self.find_segment_for_offset(range_start) else {
-            // No resolution path found — size map not ready yet.
-            // The caller's condvar loop will retry once the scheduler
-            // commits data and notifies.
             trace!(
                 target: "hls_seek_diag",
                 range_start,

@@ -99,12 +99,6 @@ impl Resource {
     pub fn from_reader<R: PcmReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
         let bus = reader.event_bus().clone();
         let mut inner: Box<dyn PcmReader> = Box::new(reader);
-        // Player resources are consumed from the audio render thread,
-        // which must never block: flip the reader into non-blocking mode
-        // immediately. Callers that want to wait for the first decoded
-        // chunk still use `Resource::preload()` explicitly. We ignore
-        // preload errors here — they surface again on the first
-        // `read()` / `next_chunk()` call.
         let _ = inner.preload();
         Self {
             inner,
@@ -126,20 +120,12 @@ impl Resource {
         T: StreamType<Events = EventBus> + 'static,
         Audio<Stream<T>>: PcmReader + 'static,
     {
-        // Extract existing bus from stream config or fall back to the
-        // top-level `AudioConfig.bus`; create a fresh one when neither is set.
         let bus = T::event_bus(&config.stream)
             .or_else(|| config.bus.clone())
             .unwrap_or_default();
-        // Ensure downstream `Audio::new()` resolves the same bus even
-        // when the stream-level field was empty.
         config.bus = Some(bus.clone());
 
         let mut audio = Audio::<Stream<T>>::new(config).await?;
-        // Always non-blocking for the player render thread; see
-        // `from_reader` for rationale. Preload failures surface again
-        // on the first `read()` / `next_chunk()` call — no need to
-        // propagate here.
         let _ = audio.preload();
         Ok(Self {
             inner: Box::new(audio),

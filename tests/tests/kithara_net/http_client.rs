@@ -27,11 +27,7 @@ use kithara_test_utils::TestHttpServer;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-// Test server infrastructure
-
 type TestServer = TestHttpServer;
-
-// Test endpoints
 
 async fn test_endpoint() -> &'static str {
     "Hello, World!"
@@ -285,8 +281,6 @@ async fn key_with_params_endpoint(
     }
 }
 
-// Fixtures
-
 #[kithara::fixture]
 fn test_router() -> Router {
     let counter = RequestCounter::new();
@@ -330,8 +324,6 @@ async fn test_server(test_router: Router) -> TestServer {
 fn http_client() -> HttpClient {
     HttpClient::new(NetOptions::default())
 }
-
-// Helper functions for testing
 
 async fn test_get_bytes_success(client: &HttpClient, url: Url) -> Result<Bytes, NetError> {
     client.get_bytes(url, None).await
@@ -387,8 +379,6 @@ async fn test_get_range_success(
 async fn test_head_success(client: &HttpClient, url: Url) -> Result<Headers, NetError> {
     client.head(url, None).await
 }
-
-// Parameterized tests
 
 #[kithara::test(
     tokio,
@@ -459,7 +449,6 @@ async fn test_get_range_success_cases(
     assert_eq!(result.unwrap(), expected_data);
 }
 
-// Error handling tests - simplified to handle HttpError variant
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(5)),
@@ -482,7 +471,6 @@ async fn test_http_errors(
     assert!(result.is_err());
     let error = result.err().unwrap();
 
-    // Check if it's an HTTP error (either NetError::Http or NetError::HttpError)
     let is_http_error = match &error {
         NetError::Http(_) => true,
         NetError::HttpError { status, .. } => {
@@ -532,7 +520,6 @@ async fn test_headers_variants(#[future] test_server: TestServer, http_client: H
     assert_eq!(data, Bytes::from("Headers received"));
 }
 
-// Fix timeout tests - use appropriate timeouts
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(10)),
@@ -612,17 +599,14 @@ async fn test_range_on_non_range_supporting_server(
     assert_eq!(collected, b"Full response ignoring range");
 }
 
-// Fix invalid URL test - use shorter timeout and expect connection error
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(1)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn test_invalid_url(http_client: HttpClient) {
-    // Use a URL that should fail quickly (non-routable IP)
     let url = Url::parse("http://192.0.2.1:9999/invalid").unwrap();
 
-    // Use a very short timeout for this test
     let client = http_client.with_timeout(Duration::from_millis(100));
 
     let result = client.get_bytes(url, None).await;
@@ -630,8 +614,6 @@ async fn test_invalid_url(http_client: HttpClient) {
     assert!(result.is_err(), "Should fail for invalid URL");
     let error = result.err().unwrap();
 
-    // Accept either timeout or any HTTP error for a non-routable address —
-    // the point is that the request fails, not the exact error wording.
     let is_acceptable_error = matches!(&error, NetError::Timeout | NetError::Http(_));
 
     assert!(

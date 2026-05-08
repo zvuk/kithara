@@ -98,8 +98,6 @@ impl Source for MemorySource {
 /// Backwards-compatible alias for `MemorySource::without_len`.
 pub type UnknownLenSource = MemorySource;
 
-// StreamType markers for testing Read+Seek behavior with Stream<T>.
-
 /// `StreamType` using `MemorySource` (known length).
 pub struct MemStream;
 

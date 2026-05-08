@@ -1,6 +1,3 @@
-// `unsafe_code` is permitted only in `probes::usdt_wire` to host the
-// inline-asm USDT provider expansion; the rest of this crate stays
-// `unsafe`-free.
 #![allow(
     clippy::unwrap_used,
     reason = "test utility crate — unwraps are acceptable"

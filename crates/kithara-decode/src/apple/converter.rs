@@ -40,7 +40,6 @@ pub(crate) fn prime_info_from_converter(
     )]
     let mut size = size_of::<AudioConverterPrimeInfo>() as UInt32;
     // SAFETY: `converter` is a valid handle (caller-checked); `info` is a
-    // valid mutable repr(C) struct living on this stack frame.
     let status = unsafe {
         AudioConverterGetProperty(
             converter,
@@ -139,10 +138,6 @@ impl ConverterInputState {
         let len = data.len() as UInt32;
         self.packet_ptr = data.as_ptr();
         self.packet_len = len;
-        // `mStartOffset` here is the offset of the packet WITHIN the
-        // `mData` buffer fed to `AudioConverter`. Since `mData` already
-        // points at the packet body, this must stay zero; non-zero
-        // values cause the converter to read past the buffer.
         self.packet_desc = AudioStreamPacketDescription {
             mStartOffset: 0,
             mVariableFramesInPacket: description.mVariableFramesInPacket,
@@ -161,7 +156,6 @@ pub(crate) extern "C" fn converter_input_callback(
     user_data: *mut c_void,
 ) -> OSStatus {
     // SAFETY: `user_data` was set to a valid `ConverterInputState` pointer
-    // by `AppleDecoder::run_converter`; the state outlives the callback.
     let state = unsafe { &mut *(user_data as *mut ConverterInputState) };
 
     if !state.has_packet {
@@ -173,9 +167,6 @@ pub(crate) extern "C" fn converter_input_callback(
     }
 
     // SAFETY: `io_data`, `io_num_packets` are valid pointers supplied by
-    // AudioConverter. `packet_ptr` is either owned by the
-    // `PacketReader`'s internal buffer (AudioFile) or by an `Fmp4Reader`
-    // buffer; both stay alive for the duration of this call.
     unsafe {
         (*io_data).mBuffers[0].mDataByteSize = state.packet_len;
         (*io_data).mBuffers[0].mData = state.packet_ptr as *mut c_void;

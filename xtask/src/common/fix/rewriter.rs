@@ -126,7 +126,6 @@ mod tests {
 
     #[test]
     fn multiple_disjoint_edits_apply_in_source_order() {
-        // Insert order is reversed on purpose to verify sorting.
         let mut r = SourceRewriter::new("a b c d");
         r.replace(4..5, "X");
         r.replace(0..1, "Y");
@@ -173,9 +172,6 @@ mod tests {
     #[test]
     fn inverted_range_is_rejected() {
         let mut r = SourceRewriter::new("abc");
-        // Construct the inverted range via Range { start, end } so the literal
-        // `2..1` doesn't trigger clippy::reversed_empty_ranges — the test exercises
-        // the runtime validation path inside SourceRewriter.
         let inverted = Range { start: 2, end: 1 };
         r.replace(inverted, "x");
         assert!(matches!(
@@ -186,7 +182,6 @@ mod tests {
 
     #[test]
     fn adjacent_edits_at_same_byte_are_allowed() {
-        // Two edits ending and starting at the same byte do not overlap.
         let mut r = SourceRewriter::new("abcdef");
         r.replace(0..3, "X");
         r.replace(3..6, "Y");
@@ -195,9 +190,6 @@ mod tests {
 
     #[test]
     fn idempotency_via_no_op() {
-        // Running `finish()` on no edits, then feeding the result through a
-        // fresh rewriter with no edits, gives the same output. Mirrors the
-        // I2 invariant for the autofix engine.
         let r = SourceRewriter::new("stable").finish().unwrap();
         let r2 = SourceRewriter::new(&r).finish().unwrap();
         assert_eq!(r, r2);

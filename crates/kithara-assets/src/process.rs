@@ -125,14 +125,6 @@ impl ReadinessGate {
         /// CPU on tight polling.
         const COND_WAIT_MS: u64 = 100;
         loop {
-            // Bounded wake-up so a missed notify (or a status change
-            // that does not flow through `mark_ready`) cannot strand
-            // a reader. 100 ms keeps perceived latency under the
-            // 250 ms playback engine tick budget. The result is read
-            // out of the guard, which is dropped at the end of the
-            // block so `should_abort()` (which may take the inner
-            // resource's locks) cannot deadlock against a producer
-            // that wants the gate's own mutex.
             let ready = {
                 let guard = self.processed.lock_sync();
                 if *guard {
@@ -233,8 +225,6 @@ where
             return Ok(final_len);
         };
 
-        // Clone context so the process function can mutate it between chunks
-        // (e.g., AES-CBC IV chaining: each chunk updates IV to last ciphertext block).
         let mut ctx = ctx.clone();
 
         let mut input_buf = self.pool.get_with(|b| b.resize(Consts::CHUNK_SIZE, 0));
@@ -244,9 +234,6 @@ where
         let mut write_offset = 0u64;
 
         while read_offset < final_len {
-            // remaining_u64 is bounded by `Consts::CHUNK_SIZE_U64` (64 KiB)
-            // after the min, which always fits in usize on supported targets — so
-            // the narrow conversion is safe by construction.
             let remaining_u64 = (final_len - read_offset).min(Consts::CHUNK_SIZE_U64);
             let to_read = usize::try_from(remaining_u64).map_err(|err| {
                 StorageError::Failed(format!(
@@ -283,8 +270,6 @@ where
     Ctx: Clone + Send + Sync + Debug + 'static,
 {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        // Process on commit (once) if ctx is present.
-        // Use the actual processed length (may differ due to padding removal).
         let needs_processing = self.ctx.is_some() && !self.readiness.is_ready();
         let actual_len = if needs_processing {
             if let Some(len) = final_len
@@ -299,9 +284,6 @@ where
         };
 
         let inner_result = self.inner.commit(actual_len);
-        // Mark readiness only after the inner commit succeeds — a
-        // failed inner commit must not unblock waiters that would
-        // then race against a half-written file.
         if inner_result.is_ok() && needs_processing {
             self.readiness.mark_ready();
         }
@@ -313,14 +295,6 @@ where
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        // Reactivation reopens the inner resource for fresh writes (LRU
-        // slot reuse). Flip the gate to Pending **before** touching
-        // `inner.reactivate` so `is_readable()` cannot lie during the
-        // window where the inner has been reopened but the next commit
-        // has not yet rerun the processor — otherwise a concurrent
-        // reader sees `processed = true` while the inner is mid-truncate
-        // and reads half-overwritten bytes. The flag is restored to
-        // Ready by the next successful commit.
         if self.ctx.is_some() {
             self.readiness.mark_pending();
         }
@@ -336,18 +310,9 @@ where
 
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         let outcome = self.inner.wait_range(range)?;
-        // No active processor → bytes-on-disk readiness *is* readiness.
-        // Forward the inner outcome unchanged. Same for `Eof` /
-        // `Interrupted`: those terminal/control variants do not depend
-        // on processing.
         if self.ctx.is_none() || outcome != WaitOutcome::Ready {
             return Ok(outcome);
         }
-        // Active processor: inner reports Ready as soon as bytes hit
-        // disk via write_at, but those bytes are still encrypted
-        // until commit() runs process_and_write. Block on the
-        // readiness gate so the caller cannot race past processing
-        // into a NotReadable read.
         let aborted = !self.readiness.wait_until_ready(&|| self.inner_terminal());
         if aborted {
             return Ok(WaitOutcome::Interrupted);
@@ -484,7 +449,6 @@ mod tests {
 
         let res = Resource::open(cancel, MmapOptions::new(path)).unwrap();
         res.write_at(0, content).unwrap();
-        // Don't commit here - let the test control when commit happens
         (res, dir)
     }
 
@@ -507,21 +471,17 @@ mod tests {
         let (resource, _dir) = mock_resource(b"test content");
         let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
 
-        // Before commit - no processing
         assert_eq!(call_count.load(Ordering::SeqCst), 0);
 
-        // Commit triggers processing
         processed
             .commit(Some(b"test content".len() as u64))
             .unwrap();
         assert!(call_count.load(Ordering::SeqCst) > 0);
 
-        // Read processed data
         let mut buf = vec![0u8; 12];
         let n = processed.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 12);
 
-        // Verify XOR was applied
         let expected: Vec<u8> = b"test content".iter().map(|b| b ^ 0x42).collect();
         assert_eq!(buf, expected);
     }
@@ -536,12 +496,10 @@ mod tests {
         let (resource, _dir) = mock_resource(content);
         let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
 
-        // First commit
         processed.commit(Some(len)).unwrap();
         let count_after_first = call_count.load(Ordering::SeqCst);
         assert!(count_after_first > 0);
 
-        // Second commit - should not process again
         processed.commit(Some(len)).unwrap();
         assert_eq!(call_count.load(Ordering::SeqCst), count_after_first);
     }
@@ -557,12 +515,10 @@ mod tests {
 
         processed.commit(Some(100)).unwrap();
 
-        // Read middle portion
         let mut buf = vec![0u8; 20];
         let n = processed.read_at(40, &mut buf).unwrap();
         assert_eq!(n, 20);
 
-        // Verify XOR
         let expected: Vec<u8> = (40..60).map(|b: u8| b ^ 0xFF).collect();
         assert_eq!(buf, expected);
     }
@@ -573,7 +529,6 @@ mod tests {
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
 
         let (resource, _dir) = mock_resource(b"test content");
-        // ctx = None -> no processing
         let processed: ProcessedResource<MmapResource, ()> =
             ProcessedResource::new(resource, None, process_fn, test_pool());
 
@@ -581,10 +536,8 @@ mod tests {
             .commit(Some(b"test content".len() as u64))
             .unwrap();
 
-        // Should NOT have called the process function
         assert_eq!(call_count.load(Ordering::SeqCst), 0);
 
-        // Data should be unchanged
         let mut buf = vec![0u8; 12];
         let n = processed.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 12);
@@ -667,8 +620,6 @@ mod tests {
         let key = ResourceKey::new("segment.m4s");
         let ctx = DrmCtx { xor_key: 0x42 };
 
-        // Writer acquires with ctx and streams some bytes but does NOT commit.
-        // This parks a ProcessedResource with ctx=Some, processed=false in the cache.
         let writer = store
             .acquire_resource_with_ctx(&key, Some(ctx.clone()))
             .expect("BUG: acquire with ctx must succeed");
@@ -677,15 +628,6 @@ mod tests {
             .write_at(0, payload)
             .expect("BUG: writer must be able to stream bytes before commit");
 
-        // Reader asks for the same key without ctx.  Under the old
-        // behaviour, the cache's ctx=None fall-through returned the
-        // writer's uncommitted ProcessedResource entry, so a subsequent
-        // read surfaced the "processed resource is not readable before
-        // commit" guard as a hard error. Acceptable correct behaviours:
-        //   1) `open_resource` fails cleanly (NotFound / recoverable Err),
-        //      which the reader converts to `ReadOutcome::Retry`.
-        //   2) `open_resource` succeeds and the read does NOT expose the
-        //      pre-commit guard.
         match store.open_resource(&key) {
             Err(err) => {
                 let msg = err.to_string();
@@ -693,7 +635,6 @@ mod tests {
                     !msg.contains("processed resource is not readable before commit"),
                     "open_resource (ctx=None) leaked the pre-commit guard: {msg}"
                 );
-                // Clean NotFound / recoverable Err is acceptable.
             }
             Ok(reader) => {
                 let mut buf = vec![0u8; payload.len()];
@@ -738,7 +679,6 @@ mod tests {
             "test payloads must have equal length",
         );
 
-        // First wave: download + commit — process_and_write decrypts.
         let (resource, _dir) = mock_resource(&encrypted_first);
         let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
 
@@ -754,8 +694,6 @@ mod tests {
             ResourceStatus::Committed { .. }
         ));
 
-        // Simulate LRU cache re-use: `CachedAssets` calls `reactivate()`
-        // on a cache hit so the resource becomes writable again.
         processed
             .reactivate()
             .expect("BUG: reactivate after commit must succeed");
@@ -764,11 +702,6 @@ mod tests {
             "reactivate must clear committed state"
         );
 
-        // Second wave: downloader writes fresh encrypted bytes over the
-        // reactivated slot and commits again. commit() must rerun
-        // process_and_write — otherwise the reader ends up staring at
-        // ciphertext and the decoder stalls, which is exactly the
-        // symptom in `live_ephemeral_small_cache_playback_drm`.
         processed
             .write_at(0, &encrypted_second)
             .expect("BUG: re-write encrypted bytes");
@@ -783,9 +716,6 @@ mod tests {
              small-cache stall)"
         );
 
-        // And the on-disk bytes must be the decrypted plaintext — the
-        // reader's path in `HlsSource::read_from_entry` expects clear
-        // bytes after commit.
         let mut out = vec![0u8; encrypted_second.len()];
         processed
             .read_at(0, &mut out)
@@ -862,8 +792,6 @@ mod tests {
             xor_key: u8,
         }
 
-        // AES-128-CBC is modelled as XOR here — the bug is about the
-        // processed flag bookkeeping, not about cipher correctness.
         let process_fn: ProcessChunkFn<DrmCtx> = Arc::new(
             |input: &[u8], output: &mut [u8], ctx: &mut DrmCtx, _is_last: bool| {
                 for (i, &b) in input.iter().enumerate() {
@@ -885,7 +813,6 @@ mod tests {
         let plaintext = b"hello drm world";
         let ciphertext: Vec<u8> = plaintext.iter().map(|b| b ^ 0x42).collect();
 
-        // Writer A: acquire + write ciphertext + commit.
         {
             let a = store
                 .acquire_resource_with_ctx(&key, Some(ctx.clone()))
@@ -895,15 +822,12 @@ mod tests {
                 .expect("BUG: writer A commit");
         }
 
-        // Sanity: availability + a plain open_resource see the
-        // committed plaintext at this point.
         assert!(
             store.contains_range(&key, 0..ciphertext.len() as u64),
             "availability must advertise the committed range before \
              the writer B reactivate"
         );
 
-        // Reader holds a clone over the committed DRM entry.
         let reader = store
             .open_resource(&key)
             .expect("BUG: reader open_resource after commit");
@@ -920,40 +844,16 @@ mod tests {
              reactivate race"
         );
 
-        // Writer B: `acquire_resource_with_ctx(key, Some(ctx))` with
-        // the same ctx. The `CachingAssets` cache is still holding
-        // the committed entry from writer A, so this hits the
-        // cache-hit branch and calls `res.reactivate()` on the shared
-        // `ProcessedResource`. That flips `processed` to `false`.
         let _writer_b = store
             .acquire_resource_with_ctx(&key, Some(ctx.clone()))
             .expect("BUG: writer B reacquire");
 
-        // Availability still advertises the committed range — the
-        // LRU displace did not fire, so `on_invalidated` did not run
-        // and `availability.remove(key)` was never called.
         assert!(
             store.contains_range(&key, 0..ciphertext.len() as u64),
             "availability must still advertise the range after a \
              cache-hit reactivate (no LRU displace occurred)"
         );
 
-        // Reader proceeds with its read_at. Under the current
-        // behaviour this triggers the pre-commit guard and returns
-        // `StorageError::Failed("processed resource is not readable
-        // before commit")`. That hard error is what the HLS source
-        // path converts into a `StreamError::Source(..)`, poisoning
-        // the decoder FSM and producing the DRM small-cache flake.
-        //
-        // Acceptable correct behaviours:
-        //   (a) read_at succeeds with the already-committed plaintext
-        //       bytes (preferred — the reader has a snapshot Arc and
-        //       writer B has not yet overwritten), OR
-        //   (b) read_at returns a NotFound-style error that the HLS
-        //       reader classifies as Retry.
-        //
-        // Unacceptable: read_at returns `StorageError::Failed` whose
-        // message contains "not readable before commit".
         let mut buf = vec![0u8; ciphertext.len()];
         match reader.read_at(0, &mut buf) {
             Ok(n) => {
@@ -1021,7 +921,6 @@ mod tests {
             buf
         });
 
-        // Give the reader long enough to enter the gate's wait loop.
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(
             call_count.load(Ordering::SeqCst),
@@ -1048,9 +947,6 @@ mod tests {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
 
-        // Build a resource with an explicit cancel token we can fire
-        // from the test thread; the standard `mock_resource` helper
-        // immediately drops its token, which would race the assert.
         let dir = tempdir().unwrap();
         let path = dir.path().join("cancel.bin");
         let cancel = CancellationToken::new();

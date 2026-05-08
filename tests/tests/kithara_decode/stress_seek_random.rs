@@ -34,7 +34,6 @@ async fn stress_random_seek_read_synthetic_wav() {
     const SAMPLE_COUNT: usize = (SawWav::DEFAULT.sample_rate as f64 * DURATION_SECS) as usize;
     const SEEK_ITERATIONS: usize = 1000;
 
-    // Step 1: Create synthetic WAV
     let wav_data = create_test_wav(SAMPLE_COUNT, 44100, 2);
     let wav_size_mb = wav_data.len() as f64 / 1_000_000.0;
     info!(
@@ -51,9 +50,6 @@ async fn stress_random_seek_read_synthetic_wav() {
     )
     .expect("write WAV data");
 
-    // Step 2: Create Audio pipeline (mock decoder = real decoder on synthetic data)
-    // Isolated cache dir — auto-deleted on drop, keeps the shared app
-    // cache at `env::temp_dir()/kithara` untouched.
     let cache = TestTempDir::new();
     let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()))
         .with_store(StoreOptions::new(cache.path()));
@@ -62,7 +58,6 @@ async fn stress_random_seek_read_synthetic_wav() {
         .await
         .expect("create audio pipeline");
 
-    // Step 3: Query duration
     let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();
     info!(total_secs, "Stream duration");
@@ -79,19 +74,15 @@ async fn stress_random_seek_read_synthetic_wav() {
         "Audio spec"
     );
 
-    // Step 4: Compute optimal chunk size
-    // ~0.5% of total duration, clamped to [0.05s, 0.5s].
     let chunk_duration_secs = (total_secs * 0.005).clamp(0.05, 0.5);
     let chunk_samples =
         (chunk_duration_secs * f64::from(spec.sample_rate) * f64::from(spec.channels)) as usize;
     info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
-    // Steps 5-7: Run seek+read loop in blocking thread
     let result = spawn_blocking(move || {
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
         let mut buf = vec![0.0f32; chunk_samples];
 
-        // Step 5: Generate 1000 random seek positions > 0, < duration - chunk
         let max_seek_secs = total_secs - chunk_duration_secs;
         assert!(max_seek_secs > 0.0, "stream too short for chunk size");
 
@@ -104,7 +95,6 @@ async fn stress_random_seek_read_synthetic_wav() {
             max_seek_secs, "Generated seek positions"
         );
 
-        // Step 6: Iterate seek + read + verify
         let mut successful_reads = 0u64;
         let mut total_samples_read = 0u64;
         let mut channel_mismatches = 0u64;
@@ -113,12 +103,10 @@ async fn stress_random_seek_read_synthetic_wav() {
         for (i, &pos_secs) in seek_positions.iter().enumerate() {
             let position = Duration::from_secs_f64(pos_secs);
 
-            // Seek
             audio.seek(position).unwrap_or_else(|e| {
                 panic!("seek #{i} to {pos_secs:.4}s failed: {e}");
             });
 
-            // Read
             let read_count = |outcome: Result<ReadOutcome, _>| -> usize {
                 match outcome {
                     Ok(ReadOutcome::Frames { count, .. }) => count.get(),
@@ -128,8 +116,6 @@ async fn stress_random_seek_read_synthetic_wav() {
             };
             let mut n = read_count(audio.read(&mut buf));
             if n == 0 {
-                // Under concurrent load, decoder may transiently report EOF after seek.
-                // Retry once: re-seek to the same position and re-read.
                 audio.seek(position).unwrap_or_else(|e| {
                     panic!("re-seek #{i} to {pos_secs:.4}s failed: {e}");
                 });
@@ -147,7 +133,6 @@ async fn stress_random_seek_read_synthetic_wav() {
                 }
             }
 
-            // Verify: all samples finite and in [-1.0, 1.0]
             for (j, &sample) in buf[..n].iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -155,7 +140,6 @@ async fn stress_random_seek_read_synthetic_wav() {
                 );
             }
 
-            // Verify: L and R channels match (both generated from same sine value)
             let channels = spec.channels as usize;
             if channels == 2 {
                 let frames = n / channels;
@@ -208,7 +192,6 @@ async fn stress_random_seek_read_synthetic_wav() {
             "L/R channel data diverged {channel_mismatches} times — data corruption"
         );
 
-        // Step 7: Final seek near end → read all → verify EOF
         let final_seek_secs = total_secs - chunk_duration_secs;
         info!(final_seek_secs, "Final seek near end");
 

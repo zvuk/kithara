@@ -52,7 +52,6 @@ where
             let mut val = T::default();
             init(&mut val);
             let bytes = val.byte_size();
-            // Stop if adding this buffer would exceed budget.
             if self.0.request_budget(bytes).is_err() {
                 break;
             }

@@ -170,10 +170,10 @@ fn full_box(kind: [u8; 4], version: u8, body: &[u8]) -> Vec<u8> {
 
 fn mvhd_v0(movie_timescale: u32) -> Vec<u8> {
     let mut body = Vec::new();
-    body.extend_from_slice(&0u32.to_be_bytes()); // creation_time
-    body.extend_from_slice(&0u32.to_be_bytes()); // modification_time
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&0u32.to_be_bytes());
     body.extend_from_slice(&movie_timescale.to_be_bytes());
-    body.extend_from_slice(&0u32.to_be_bytes()); // duration
+    body.extend_from_slice(&0u32.to_be_bytes());
     full_box(*b"mvhd", 0, &body)
 }
 
@@ -192,7 +192,7 @@ fn mdhd_v0(media_timescale: u32, media_duration: u32) -> Vec<u8> {
     body.extend_from_slice(&0u32.to_be_bytes());
     body.extend_from_slice(&media_timescale.to_be_bytes());
     body.extend_from_slice(&media_duration.to_be_bytes());
-    body.extend_from_slice(&0u32.to_be_bytes()); // language + pre_defined
+    body.extend_from_slice(&0u32.to_be_bytes());
     full_box(*b"mdhd", 0, &body)
 }
 
@@ -211,8 +211,8 @@ fn elst_v0_one_entry(segment_duration: u32, media_time: i32) -> Vec<u8> {
     body.extend_from_slice(&1u32.to_be_bytes());
     body.extend_from_slice(&segment_duration.to_be_bytes());
     body.extend_from_slice(&media_time.to_be_bytes());
-    body.extend_from_slice(&1u16.to_be_bytes()); // media_rate_integer
-    body.extend_from_slice(&0u16.to_be_bytes()); // media_rate_fraction
+    body.extend_from_slice(&1u16.to_be_bytes());
+    body.extend_from_slice(&0u16.to_be_bytes());
     full_box(*b"elst", 0, &body)
 }
 
@@ -227,13 +227,13 @@ fn elst_v1_one_entry(segment_duration: u64, media_time: i64) -> Vec<u8> {
 }
 
 fn audio_sample_entry(codec: [u8; 4], sample_rate: u32) -> Vec<u8> {
-    let mut sample_entry = vec![0; 6]; // reserved
-    sample_entry.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
-    sample_entry.extend_from_slice(&[0; 8]); // reserved
-    sample_entry.extend_from_slice(&2u16.to_be_bytes()); // channelcount
-    sample_entry.extend_from_slice(&16u16.to_be_bytes()); // samplesize
-    sample_entry.extend_from_slice(&0u16.to_be_bytes()); // pre_defined
-    sample_entry.extend_from_slice(&0u16.to_be_bytes()); // reserved
+    let mut sample_entry = vec![0; 6];
+    sample_entry.extend_from_slice(&1u16.to_be_bytes());
+    sample_entry.extend_from_slice(&[0; 8]);
+    sample_entry.extend_from_slice(&2u16.to_be_bytes());
+    sample_entry.extend_from_slice(&16u16.to_be_bytes());
+    sample_entry.extend_from_slice(&0u16.to_be_bytes());
+    sample_entry.extend_from_slice(&0u16.to_be_bytes());
     sample_entry.extend_from_slice(&(sample_rate << 16).to_be_bytes());
     atom(codec, &sample_entry)
 }
@@ -249,13 +249,13 @@ fn stsd(sample_rate: u32, codec: [u8; 4]) -> Vec<u8> {
 fn data_box(data_type: u32, value: &[u8]) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&data_type.to_be_bytes());
-    body.extend_from_slice(&0u32.to_be_bytes()); // locale
+    body.extend_from_slice(&0u32.to_be_bytes());
     body.extend_from_slice(value);
     atom(*b"data", &body)
 }
 
 fn freeform_text_box(kind: [u8; 4], text: &str) -> Vec<u8> {
-    let mut body = vec![0, 0, 0, 1]; // version + flags
+    let mut body = vec![0, 0, 0, 1];
     body.extend_from_slice(text.as_bytes());
     atom(kind, &body)
 }
@@ -312,7 +312,6 @@ fn make_itunsmpb_mp4(text: &str) -> Vec<u8> {
 /// iTunSMPB freeform tag inside.
 fn make_quicktime_meta_mp4(text: &str) -> Vec<u8> {
     let ilst = atom(*b"ilst", &freeform_itunsmpb(text));
-    // QuickTime meta has no FullBox prefix.
     let meta = atom(*b"meta", &ilst);
 
     let mut moov = Vec::new();
@@ -445,9 +444,6 @@ fn emits_typed_itunsmpb_from_freeform_tag() {
 
 #[kithara::test]
 fn skips_non_itunsmpb_freeform_without_reading_data() {
-    // A `----` whose name is not "iTunSMPB" must not call on_itunsmpb,
-    // and must not consume the data-box payload (we just sanity-check the
-    // visitor here; payload-skip is enforced by the parser's contract).
     let mut freeform = Vec::new();
     freeform.extend_from_slice(&freeform_text_box(*b"mean", "com.apple.iTunes"));
     freeform.extend_from_slice(&freeform_text_box(*b"name", "OTHER"));
@@ -469,8 +465,6 @@ fn skips_non_itunsmpb_freeform_without_reading_data() {
 
 #[kithara::test]
 fn ignores_standard_ilst_items_including_cover_art() {
-    // Build an `ilst` containing a fake covr (with a chunky payload) plus
-    // a freeform iTunSMPB. Only the freeform tag should reach the visitor.
     let cover_payload = vec![0xFFu8; 1024];
     let cover = atom(*b"covr", &data_box(13, &cover_payload));
     let title = atom([0xa9, b'n', b'a', b'm'], &data_box(1, b"Title"));
@@ -503,7 +497,6 @@ fn ignores_standard_ilst_items_including_cover_art() {
 
 #[kithara::test]
 fn visitor_break_stops_scan_at_track_end() {
-    // Two trak boxes; the visitor signals Break after the first one.
     let trak1 = atom(*b"trak", &atom(*b"mdia", &mdhd_v0(48_000, 96_000)));
     let trak2 = atom(*b"trak", &atom(*b"mdia", &mdhd_v0(44_100, 132_300)));
 
@@ -555,16 +548,11 @@ fn scan_restores_reader_position() {
     let mut visitor = RecordingVisitor::default();
     scan_mp4(&mut reader, &mut visitor).expect("BUG: scan");
 
-    // Position 3 is mid-`ftyp`-style header — the scan must not have moved
-    // the cursor for the caller, regardless of what it read internally.
     assert_eq!(reader.stream_position().expect("BUG: position"), 3);
 }
 
 #[kithara::test]
 fn scan_uses_current_reader_position() {
-    // Place a junk prefix in front of a real moov, then position the
-    // reader past the prefix. The scan must work from that point and not
-    // rewind the reader behind the caller's back.
     let mut bytes = b"junkjunk".to_vec();
     bytes.extend_from_slice(&make_track_mp4());
 
@@ -588,8 +576,6 @@ fn scan_does_not_seek_to_end() {
 #[kithara::test]
 fn top_level_size_zero_terminates_scan_without_error() {
     let mut file = atom(*b"ftyp", b"isom");
-    // Header that says "size = 0", meaning extends to end of file. With
-    // moov before this marker, scanning should still succeed.
     file.extend_from_slice(&make_track_mp4());
     file.extend_from_slice(&[0, 0, 0, 0, b'm', b'd', b'a', b't']);
 
@@ -601,8 +587,6 @@ fn top_level_size_zero_terminates_scan_without_error() {
 #[kithara::test]
 fn rejects_child_box_extending_past_parent() {
     let mut file = atom(*b"ftyp", b"isom");
-    // moov size 24 (8 header + 16 payload). Inside, declare an mvhd of
-    // size 128 — well past the parent's end. The scanner must reject this.
     let mut moov_payload = Vec::new();
     moov_payload.extend_from_slice(&128u32.to_be_bytes());
     moov_payload.extend_from_slice(b"mvhd");
@@ -618,7 +602,7 @@ fn rejects_child_box_extending_past_parent() {
 #[kithara::test]
 fn rejects_box_smaller_than_header() {
     let mut file = atom(*b"ftyp", b"isom");
-    file.extend_from_slice(&4u32.to_be_bytes()); // size=4, smaller than 8-byte header
+    file.extend_from_slice(&4u32.to_be_bytes());
     file.extend_from_slice(b"junk");
 
     let mut reader = Cursor::new(file);
@@ -629,8 +613,8 @@ fn rejects_box_smaller_than_header() {
 
 #[kithara::test]
 fn parse_mvhd_timescale_handles_versions_and_truncation() {
-    let mut v0 = vec![0, 0, 0, 0]; // version + flags
-    v0.extend_from_slice(&[0; 8]); // creation + modification
+    let mut v0 = vec![0, 0, 0, 0];
+    v0.extend_from_slice(&[0; 8]);
     v0.extend_from_slice(&44_100u32.to_be_bytes());
     assert_eq!(parse_mvhd_timescale(&v0), Some(44_100));
 
@@ -676,8 +660,8 @@ fn parse_mdhd_handles_versions_and_truncation() {
 
 #[kithara::test]
 fn parse_data_box_strips_version_byte_from_type_code() {
-    let mut payload = vec![0x01, 0x00, 0x00, 0x0d]; // version=1, type=13 (JPEG)
-    payload.extend_from_slice(&0u32.to_be_bytes()); // locale
+    let mut payload = vec![0x01, 0x00, 0x00, 0x0d];
+    payload.extend_from_slice(&0u32.to_be_bytes());
     payload.extend_from_slice(b"\xff\xd8\xff");
 
     let (data_type, value) = parse_data_box(&payload).expect("BUG: data box");
@@ -694,7 +678,7 @@ fn parse_data_box_returns_none_for_short_payload() {
 
 #[kithara::test]
 fn rejects_unsupported_elst_version() {
-    let mut payload = vec![3, 0, 0, 0]; // version 3
+    let mut payload = vec![3, 0, 0, 0];
     payload.extend_from_slice(&1u32.to_be_bytes());
     payload.extend_from_slice(&[0; 12]);
 

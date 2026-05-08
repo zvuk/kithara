@@ -72,8 +72,6 @@ impl Stream for ByteStream {
     type Item = Result<Bytes, NetError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // ByteStream is Unpin (Headers is Unpin, Pin<Box<_>> is Unpin),
-        // so we can safely access fields through get_mut().
         self.get_mut().inner.as_mut().poll_next(cx)
     }
 }

@@ -31,16 +31,12 @@ const AES_KEY_LEN: usize = 16;
 /// Resolved DRM decryption inputs for a segment.
 type DecryptInputs<'a> = (&'a Arc<KeyManager>, [u8; AES_KEY_LEN], Url);
 
-// Public segment-data types
-
 /// Segment metadata (data is on disk, not in memory).
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     pub url: Url,
     pub len: u64,
 }
-
-// SegmentLoader
 
 /// HLS segment loader.
 ///
@@ -49,9 +45,6 @@ pub struct SegmentMeta {
 /// media playlists through a shared [`PlaylistCache`].
 #[derive(Clone)]
 pub struct SegmentLoader {
-    // Init segment deduplication: first caller downloads, others wait
-    // on OnceCell. `DashMap` provides fine-grained locking so parallel
-    // variants do not serialize on a single `RwLock`.
     init_segments: Arc<DashMap<usize, Arc<OnceCell<SegmentMeta>>>>,
     backend: AssetStore<DecryptContext>,
     headers: Option<Headers>,
@@ -177,7 +170,6 @@ impl SegmentLoader {
 
         let (init_len, _was_cached) = self.start_fetch(&init_url, decrypt_ctx).await?;
 
-        // Pin init segment so the ephemeral LRU never evicts it.
         let init_key = ResourceKey::from_url(&init_url);
         if let Ok(res) = self.backend.open_resource(&init_key) {
             let _pinned = res.retain();
@@ -217,8 +209,6 @@ impl SegmentLoader {
             .or_insert_with(|| Arc::new(OnceCell::new()))
             .clone();
 
-        // Ephemeral: cached init metadata may outlive the actual resource
-        // (evicted from LRU). Verify and re-fetch if needed.
         if self.backend.is_ephemeral()
             && let Some(meta) = cell.get()
             && !self.backend.has_resource(&ResourceKey::from_url(&meta.url))

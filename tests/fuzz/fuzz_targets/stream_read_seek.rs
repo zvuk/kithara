@@ -177,7 +177,7 @@ fuzz_target!(|input: Input| {
     });
 
     let timeline = Timeline::new();
-    let _ = timeline.clone(); // preserve variable name for possible future assertions
+    let _ = timeline.clone();
     let source = ScriptSource {
         timeline,
         data: input.data,

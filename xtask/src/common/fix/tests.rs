@@ -98,8 +98,6 @@ fn engine_reverse_three_fields_preserves_comments() {
     let blocks = expand_blocks(src, 0..src.len(), &[span_a, span_b, span_c]).unwrap();
     assert_eq!(blocks.len(), 3);
 
-    // Reverse positions: block[0] gets text of block[2], block[2] gets
-    // text of block[0]. block[1] stays.
     let texts: Vec<String> = blocks
         .iter()
         .map(|b| src[b.bytes.clone()].to_string())
@@ -109,13 +107,11 @@ fn engine_reverse_three_fields_preserves_comments() {
     rw.replace(blocks[2].bytes.clone(), texts[0].clone());
     let after = rw.finish().unwrap();
 
-    // I1: comment multiset preserved.
     assert_eq!(
         comment_multiset(src),
         comment_multiset(&after),
         "I1 violated: comment multiset changed\nbefore: {src}\nafter: {after}"
     );
-    // Every distinguishing comment still present.
     assert!(after.contains("// tail-a"), "tail-a comment lost: {after}");
     assert!(
         after.contains("// outer-b"),

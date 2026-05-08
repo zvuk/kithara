@@ -184,8 +184,6 @@ pub struct Audio<S> {
     preloaded: bool,
 }
 
-// Public API for cpal/rodio compatibility
-
 impl<S> Audio<S> {
     /// Probe buffer size in bytes for initial stream detection.
     const PROBE_BUFFER_SIZE: usize = 1024;
@@ -258,7 +256,6 @@ impl<S> Audio<S> {
         self.current_chunk = Some(chunk);
         self.current_chunk_consumed_frames = 0;
 
-        // Transition to Playing on first chunk received.
         if matches!(
             self.consumer_phase,
             ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
@@ -396,9 +393,6 @@ impl<S> Audio<S> {
                 let chunk_total_frames = u64::from(chunk.meta.frames);
                 let consumed_frames_in_chunk = self.current_chunk_consumed_frames;
                 if consumed_frames_in_chunk >= chunk_total_frames {
-                    // Defensive: a stale chunk slipped through the
-                    // epoch validator. Drop and pull a fresh one;
-                    // `fill_buffer` resets the local counter.
                     self.current_chunk = None;
                     if !self.fill_buffer() {
                         break;
@@ -409,8 +403,6 @@ impl<S> Audio<S> {
                 let space_frames = ((buf.len() - written) as u64) / channels.max(1);
                 let take_frames = remaining_frames.min(space_frames);
                 if take_frames == 0 {
-                    // No room in buf for even one frame — return what
-                    // we have; caller calls again with fresh buf.
                     break;
                 }
 
@@ -427,23 +419,10 @@ impl<S> Audio<S> {
                 self.current_chunk_consumed_frames = consumed_total;
 
                 if final_segment {
-                    // Final slice of this chunk: full timeline commit
-                    // (committed_position_ns + committed_frame_end +
-                    // last_sample_rate) using the decoder-anchored
-                    // end_timestamp.
                     self.timeline
                         .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
-                    self.current_chunk = None; // auto-recycles via Drop
+                    self.current_chunk = None;
                 } else {
-                    // Intra-chunk slice: only update the UI
-                    // `committed_position_ns` so the player ticks. We
-                    // keep `committed_frame_end` pinned at the chunk
-                    // start until the chunk fully drains — avoids
-                    // 3 atomic stores per slice in the audio hot
-                    // path. Linear interpolation between the
-                    // decoder's `meta.timestamp` and `meta.end_timestamp`
-                    // is drift-free (every advance re-anchors to the
-                    // decoder's own values, no accumulation).
                     let total_frames = chunk_total_frames.max(1);
                     let start_ns =
                         u64::try_from(chunk.meta.timestamp.as_nanos()).unwrap_or(u64::MAX);
@@ -463,17 +442,12 @@ impl<S> Audio<S> {
                 break;
             }
 
-            // Need more data - fetch next chunk
             if !self.fill_buffer() {
                 break;
             }
         }
 
         if let Some(count) = NonZeroUsize::new(written) {
-            // Contract validation: `Frames { count }` must report a
-            // count within the caller's buffer capacity — `count`
-            // counts samples actually written, never more than the
-            // buffer length.
             debug_assert!(
                 count.get() <= buf.len(),
                 "Audio::read Frames contract violated: count={c} > buf.len()={b}",
@@ -483,7 +457,6 @@ impl<S> Audio<S> {
             self.emit_post_seek_output_commit(last_output_meta);
             self.emit_playback_progress();
             let position = self.position();
-            // Position must stay within the known duration window.
             debug_assert!(
                 self.timeline
                     .total_duration()
@@ -494,11 +467,6 @@ impl<S> Audio<S> {
             return Ok(ReadOutcome::Frames { count, position });
         }
 
-        // `written == 0` — map terminal states:
-        //   - AtEof (no buffered chunk): natural EOF
-        //   - Failed: decoder/channel failure
-        //   - SeekPending: consumer drained, waiting for producer to ack
-        //   - everything else: alive but PCM ringbuf empty (buffering)
         let position = self.position();
         match self.consumer_phase {
             ConsumerPhase::AtEof => Ok(ReadOutcome::Eof { position }),
@@ -609,43 +577,28 @@ impl<S> Audio<S> {
     /// `read()` / `next_chunk()`).
     #[kithara_hang_detector::hang_watchdog]
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        // 1. Atomic write to Timeline — FLUSH_START
-        // `initiate_seek` also publishes the seek-preempt latch the
-        // audio worker reads on every `step_track`.
         let epoch = self.timeline.initiate_seek(position);
         self.timeline.mark_pending_seek_epoch(epoch);
-        // 2. Update local consumer state
         self.validator.epoch = epoch;
         self.current_chunk = None;
         self.current_chunk_consumed_frames = 0;
         self.consumer_phase = ConsumerPhase::SeekPending { epoch };
 
-        // 3. Drain stale chunks from pcm channel to unblock worker
         while self.pcm_rx.try_pop().is_some() {
             hang_tick!();
         }
 
-        // 4. Wake blocked wait_range() calls for instant seek response
         if let Some(ref notify) = self.notify_waiting {
             notify();
         }
 
-        // 5. Wake the shared worker for instant seek response
         if let Some(ref worker) = self.worker {
             worker.wake();
         }
 
-        // Keep preloaded flag unchanged.  Resetting to false switches
-        // Audio::read() to blocking recv, which parks the audio callback
-        // thread on every empty ringbuf poll — causing persistent crossfade
-        // glitches.  The preloaded flag is a one-way latch: once preload()
-        // sets it to true, it stays true for the lifetime of this Audio.
-
         trace!(?position, epoch, "seek initiated via Timeline");
         match self.timeline.total_duration() {
             Some(duration) if position >= duration => {
-                // Contract validation: PastEof must always carry a
-                // target at or beyond duration.
                 debug_assert!(
                     position >= duration,
                     "Audio::seek PastEof contract: target={position:?} < duration={duration:?}",
@@ -655,17 +608,7 @@ impl<S> Audio<S> {
                     target: position,
                 })
             }
-            // Audio-level seek dispatches asynchronously through the
-            // worker; the producer commits the actual landing later.
-            // We surface the requested target as both `target` and
-            // `landed_at` because we have no better authoritative
-            // value at this point — a more accurate `landed_at` is
-            // observed by the caller via the producer's commit hook
-            // (e.g. `commit_seek_landing`) once the seek lands.
             _ => {
-                // Contract validation: a `Landed` outcome must report
-                // landed_at within the known duration window when
-                // duration is known.
                 debug_assert!(
                     self.timeline
                         .total_duration()
@@ -774,16 +717,9 @@ where
             gapless_mode: config_gapless_mode,
             cancel: config_cancel,
         } = config;
-        // Subsystem fallback: in production the consumer crate
-        // populates `config.cancel` via `prepare_config` so the
-        // unwrap_or never fires. Test/standalone callers omit it and
-        // get a fresh orphan, which is fine — see
-        // `kithara-play/README.md` "Cancel Hierarchy".
         let cancel = config_cancel.unwrap_or_default();
 
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
-        // from_parts fallback safety net — caller injects byte_pool via AudioConfig
-        // ast-grep-ignore: perf.no-global-pool-accessor
         let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
         let stream = Self::create_stream_with_probe(stream_config, byte_pool.clone()).await?;
 
@@ -797,8 +733,6 @@ where
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
         let stream_ctx = shared_stream.build_stream_context();
 
-        // from_parts fallback safety net — caller injects pcm_pool via AudioConfig
-        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),
@@ -865,7 +799,6 @@ where
         let reader_wake = Arc::new(ThreadWake::new());
         let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, Arc::clone(&reader_wake));
 
-        // Get or create worker — standalone mode when no worker provided.
         let (worker, is_standalone) =
             config_worker.map_or_else(|| (AudioWorkerHandle::new(), true), |w| (w, false));
 
@@ -928,10 +861,6 @@ where
         let factory_pool = pool.clone();
         let factory_byte_pool = byte_pool.clone();
         Box::new(move |stream, info, base_offset| {
-            // Compute byte_len from current stream length minus base_offset.
-            // Must be recomputed on every recreation — variant switches change
-            // the effective total, so a stale value from the previous variant
-            // would cause Symphonia to compute corrupted seek deltas.
             let byte_len = stream
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
@@ -1058,8 +987,6 @@ where
         byte_pool: &kithara_bufpool::BytePool,
     ) -> Result<Stream<T>, DecodeError> {
         let mut probe_buf = byte_pool.get_with(|b| b.resize(Self::PROBE_BUFFER_SIZE, 0));
-        // Best-effort sniff: probe failures fall through; the
-        // subsequent seek-to-0 surfaces any underlying I/O error.
         if let Err(e) = stream.read(&mut probe_buf) {
             tracing::debug!(?e, "probe_stream_blocking: probe read failed");
         }
@@ -1141,7 +1068,6 @@ impl<S> Drop for Audio<S> {
     }
 }
 
-// PcmReader implementation for Audio
 impl<S: Send> PcmReader for Audio<S> {
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.abr_handle.clone()
@@ -1160,12 +1086,7 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        // Public PcmReader API never blocks. Flip the preload latch on first
-        // call so `recv_valid_chunk` takes the non-blocking path instead of
-        // `recv_outcome_blocking`'s spin loop. Mirrors the contract documented
-        // on `Audio::seek` (preloaded is a one-way latch).
         self.preloaded = true;
-        // Reuse preloaded chunk if any, else pull from the channel.
         let chunk = if let Some(c) = self.current_chunk.take() {
             c
         } else if let Some(c) = self.recv_valid_chunk() {
@@ -1189,7 +1110,6 @@ impl<S: Send> PcmReader for Audio<S> {
         };
         self.spec = chunk.spec();
 
-        // Transition to Playing on first chunk (same as fill_buffer)
         if matches!(
             self.consumer_phase,
             ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
@@ -1243,18 +1163,11 @@ impl<S: Send> PcmReader for Audio<S> {
             }
             ReadOutcome::Frames { count, position } => {
                 let actual_frames = count.get() / channels;
-                // Contract validation: per-channel frame count must
-                // never exceed the per-channel buffer length.
                 debug_assert!(
                     actual_frames <= frames,
                     "Audio::read_planar Frames contract: actual_frames={actual_frames} \
                      > per-channel buf frames={frames}",
                 );
-                // SIMD deinterleave via the same crate the resampler uses
-                // (~14 profiler samples on the apple sentinel come from
-                // its inner kernels). Replaces a manual nested
-                // per-frame×per-channel loop whose strided writes defeated
-                // L1 locality.
                 let num_channels =
                     NonZeroUsize::new(channels).expect("channels checked non-zero above");
                 deinterleave_variable(&interleaved, num_channels, output, 0..actual_frames);
@@ -1324,8 +1237,6 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
@@ -1368,7 +1279,6 @@ mod tests {
         assert!(matches!(audio.recv_outcome(), RecvOutcome::Empty));
     }
 
-    // Helper that returns (Audio, data_tx) so tests can push fetches.
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
         let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
 
@@ -1384,13 +1294,11 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_notify: Arc::new(Notify::new()),
-            preloaded: true, // non-blocking for tests
+            preloaded: true,
             notify_waiting: None,
             track_id: None,
             worker: None,
@@ -1408,8 +1316,6 @@ mod tests {
         chunk.pcm.extend_from_slice(samples);
         chunk
     }
-
-    // ConsumerPhase transition tests
 
     #[kithara::test]
     fn consumer_phase_starts_buffering() {
@@ -1442,11 +1348,9 @@ mod tests {
     fn consumer_phase_seek_pending_to_playing_on_chunk() {
         let (mut audio, mut tx) = audio_with_channel();
 
-        // Seek sets SeekPending
         audio.seek(Duration::from_secs(5)).ok();
         let epoch = audio.validator.epoch;
 
-        // Push chunk with matching epoch
         let chunk = make_chunk(&[0.1, 0.2]);
         let fetch = Fetch::new(chunk, false, epoch);
         tx.try_push(fetch).ok();
@@ -1462,7 +1366,6 @@ mod tests {
         let fetch = Fetch::new(PcmChunk::default(), true, 0);
         tx.try_push(fetch).ok();
 
-        // recv_valid_chunk should set AtEof
         let result = audio.recv_valid_chunk();
         assert!(result.is_none());
         assert_eq!(audio.consumer_phase, ConsumerPhase::AtEof);
@@ -1476,16 +1379,11 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
         audio.cancel = Some(cancel);
-        // preloaded=false to trigger blocking recv which checks cancel
         audio.preloaded = false;
 
         let result = audio.recv_valid_chunk();
         assert!(result.is_none());
         assert_eq!(audio.consumer_phase, ConsumerPhase::Failed);
-        // `Failed` is terminal for the consumer's read loop but is NOT
-        // a natural EOF — `Audio::read` surfaces it as `Err`, not
-        // `Ok(ReadOutcome::Eof)`, so player layers do not finalise the
-        // track on a transient channel close.
         let mut buf = [0.0f32; 16];
         assert!(matches!(audio.read(&mut buf), Err(DecodeError::Io(_))));
     }
@@ -1495,29 +1393,12 @@ mod tests {
         let (mut audio, _tx) = audio_with_channel();
         audio.consumer_phase = ConsumerPhase::AtEof;
 
-        // read() returns Eof immediately, not a hang.
         let mut buf = [0.0f32; 16];
         assert!(matches!(audio.read(&mut buf), Ok(ReadOutcome::Eof { .. })));
     }
 
-    // Red test: `process_fetch` conflates the two kinds of terminal
-    // markers that arrive on the pcm channel:
-    //   - natural EOF: producer saw `TrackStep::Eof`, pushed
-    //     `Fetch::new(default, true, epoch)`
-    //   - transient failure: producer saw `TrackStep::Failed`
-    //     (SourceCancelled / RecreateFailed), pushed the *same* shape:
-    //     `Fetch::new(default, true, epoch)`
-    //
-    // Both land in `process_fetch`, which only looks at `fetch.is_eof()`
-    // and writes `ConsumerPhase::AtEof`. The consumer then cannot tell
-    // "clip finished, finalize track" from "post-seek decoder hiccup,
-    // retry soon". The fix requires a richer wire marker (e.g. a
-    // `FetchKind { Data | NaturalEof | Failure }` field) and a
-    // `process_fetch` that writes `AtEof` only for `NaturalEof` and
-    // `Failed` (or a recoverable state) for `Failure`.
     #[kithara::test]
     fn process_fetch_must_distinguish_failure_from_natural_eof() {
-        // Scenario A: natural EOF → AtEof.
         let (mut audio_eof, mut tx_eof) = audio_with_channel();
         tx_eof
             .try_push(Fetch::new(PcmChunk::default(), true, 0))
@@ -1525,10 +1406,6 @@ mod tests {
         let _ = audio_eof.recv_valid_chunk();
         assert_eq!(audio_eof.consumer_phase, ConsumerPhase::AtEof);
 
-        // Scenario B: transient failure — producer publishes a
-        // `FetchKind::Failure` marker via `Fetch::failure`. The
-        // consumer must land in a non-natural-eof state so the
-        // pipeline can recover instead of finalising the track.
         let (mut audio_failure, mut tx_failure) = audio_with_channel();
         tx_failure
             .try_push(Fetch::failure(PcmChunk::default(), 0))

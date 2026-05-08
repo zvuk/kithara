@@ -120,8 +120,6 @@ pub struct AtomicChunked<R: ResourceExt> {
 
 impl<R: ResourceExt> std::fmt::Debug for AtomicChunked<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // MutexGuard::clone() is via the inner type — `.cloned()` would require an iterator of references
-        // ast-grep-ignore: perf.prefer-cloned
         let tmp = self.tmp_path.try_lock().map(|g| g.clone());
         f.debug_struct("AtomicChunked")
             .field("canonical_path", &self.canonical_path)
@@ -165,8 +163,6 @@ impl<R: ResourceExt> AtomicChunked<R> {
                 "AtomicChunked: cannot derive tmp path from {canonical_path:?}"
             ))
         })?;
-        // Wipe a stale temp file from a previous crashed run before
-        // we mmap on top of it.
         let _ = fs::remove_file(&tmp_path);
         let inner = factory(&tmp_path, OpenIntent::Fresh)?;
         Ok(Self {
@@ -193,18 +189,10 @@ impl<R: ResourceExt> AtomicChunked<R> {
 
 impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        // Step 1: finalize the inner on the tmp file. After this
-        // call the inner is Committed and its mmap is RO on the tmp
-        // inode.
         self.inner_clone().commit(final_len)?;
 
-        // Step 2: pull the tmp path. Take() so a subsequent Drop /
-        // fail does not try to remove a file we are about to rename.
         let tmp = self.tmp_path.lock_sync().take();
         if let Some(tmp) = tmp {
-            // Step 3: durably flush payload + metadata to disk.
-            // `sync_data` requires write access on Linux (per stdlib
-            // docs); use `write(true)` for portability.
             let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
                 StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
             })?;
@@ -212,10 +200,6 @@ impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
                 StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
             })?;
             drop(f);
-            // Step 4: atomic rename. POSIX guarantees this is atomic
-            // at the directory-entry level: any reader doing
-            // open(canonical) sees either the old (no) file or the
-            // newly committed bytes.
             fs::rename(&tmp, &self.canonical_path).map_err(|e| {
                 StorageError::Failed(format!(
                     "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
@@ -223,12 +207,6 @@ impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
                 ))
             })?;
 
-            // Step 5: reopen inner on the canonical path. The previous
-            // inner's mmap was bound to the renamed inode (still
-            // valid for reads), but its `path()` was the now-gone tmp
-            // path. Reopening on canonical eliminates that staleness:
-            // every internal fs op of the inner (truncate, reopen,
-            // metadata) targets a file that actually exists.
             if let Some(factory) = self.factory.as_ref() {
                 let new_inner = Arc::new(factory(&self.canonical_path, OpenIntent::Reopen)?);
                 *self.inner.lock_sync() = new_inner;
@@ -257,10 +235,6 @@ impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
     }
 
     fn path(&self) -> Option<&Path> {
-        // User-facing canonical path. Slow-path lookups
-        // (`fs::metadata`, external scanners) see this name —
-        // overridden because `inner.path()` would still return the
-        // tmp path during the pre-commit window.
         Some(&self.canonical_path)
     }
 
@@ -277,10 +251,6 @@ impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
     }
 
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        // Don't hold the outer mutex across this potentially
-        // blocking call — clone the inner Arc and release the lock.
-        // Inner has its own Condvar for blocking-wake; the outer
-        // mutex is purely for swapping the inner on commit.
         self.inner_clone().wait_range(range)
     }
 

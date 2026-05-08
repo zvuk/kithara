@@ -201,7 +201,16 @@ fn default_fn_density_min_body_lines() -> usize {
 
 fn default_allowed_inline_markers() -> Vec<String> {
     [
-        "SAFETY:", "TODO:", "FIXME:", "XXX:", "NOTE:", "WHY:", "HACK:", "kithara:",
+        "SAFETY:",
+        "TODO:",
+        "FIXME:",
+        "XXX:",
+        "NOTE:",
+        "WHY:",
+        "HACK:",
+        "kithara:",
+        "ast-grep-ignore:",
+        "xtask-lint-ignore:",
     ]
     .iter()
     .map(|s| (*s).to_string())

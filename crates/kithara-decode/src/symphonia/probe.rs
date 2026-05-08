@@ -137,9 +137,6 @@ fn create_reader_for_container(
 ) -> DecodeResult<Box<dyn FormatReader>> {
     match container {
         ContainerFormat::Mp4 => {
-            // Standard MP4 requires probing even if we know the container,
-            // because IsoMp4Reader::try_new is optimized for fMP4 and
-            // may fail on standard MP4 if moov is not where it expects.
             let mut hint = Hint::new();
             hint.with_extension("mp4");
             let meta_opts = MetadataOptions::default();

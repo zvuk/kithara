@@ -64,7 +64,6 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     );
 
     let result = spawn_blocking(move || {
-        // Phase 1: dense seek burst with immediate probe reads.
         let mut rng = Xorshift64::new(0xA11C_EE55_D00D_BA5E);
         let max_seek = total_bytes - Consts::PROBE_SIZE as u64;
         let mut probe = [0u8; Consts::PROBE_SIZE];
@@ -85,7 +84,6 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
             );
         }
 
-        // Phase 2: sequential tail read must stay contiguous and exact.
         let tail_start = total_bytes / 3;
         let actual = stream
             .seek(SeekFrom::Start(tail_start))

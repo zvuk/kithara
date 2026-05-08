@@ -103,12 +103,10 @@ async fn run_drm_seek_resume_cycle(
     .expect("audio creation");
     let _ = audio.preload();
 
-    // Warmup chunks so the DRM pipeline is fully live before we seek.
     for w in 0..4 {
         next_chunk_or_timeout(&mut audio, &format!("iter_{iter_idx}_warmup_{w}")).await;
     }
 
-    // Reproduce the seek sequence from the real test.
     for (seek_idx, &seek_secs) in Consts::SEEK_TARGETS_SECS.iter().enumerate() {
         audio
             .seek(Duration::from_secs_f64(seek_secs))
@@ -144,14 +142,9 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     let server = TestServerHelper::new().await;
     let shared_worker = AudioWorkerHandle::new();
 
-    // Shared Downloader across iterations — its Registry + HTTP pool are
-    // amortised. Any per-iteration growth is from per-session resources
-    // (HlsPeer, HlsScheduler, keys, decoder state) that did not release.
     let downloader =
         Downloader::new(DownloaderConfig::default().with_cancel(CancellationToken::new()));
 
-    // Warm-up iteration: exclude first-time tokio pool / thread spawn growth
-    // from the baseline.
     run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;
     sleep(Duration::from_millis(Consts::SETTLE_MS)).await;
 
@@ -170,15 +163,11 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
         );
     }
 
-    // Give the Downloader run-loop a few more ticks to observe the final
-    // peer-cancel and unregister the last HlsPeer.
     sleep(Duration::from_millis(500)).await;
 
     let threads_after = active_named_thread_count();
     let growth = threads_after.saturating_sub(threads_baseline);
 
-    // We allow ≤1 drift for tokio-internal pool adjustments. Real DRM
-    // seek leaks grow ≥1 per iteration.
     assert!(
         growth <= 1,
         "DRM seek cycle leaked kithara threads: growth={} over {} iterations \

@@ -51,9 +51,6 @@ async fn t4_seek_freezes_abr(
 ) {
     let recorder = probe_capture::install();
     let server = TestServerHelper::new().await;
-    // Inject a slow-network rule on the start_variant so the
-    // throughput estimator would WANT to downswitch mid-seek if the
-    // freeze contract is broken.
     let created = server
         .create_hls(
             wave_fixture_4_variants().delay_rules(
@@ -101,10 +98,6 @@ async fn t4_seek_freezes_abr(
          pre_seek_target {pre_seek_target:?}"
     );
 
-    // Seek into the second half of the track so the resumed playhead
-    // is far enough from any variant_from cache pre-roll. Anchoring on
-    // SEGMENTS_PER_VARIANT × SEGMENT_DURATION_SECS centres the seek
-    // target inside the fixture regardless of fixture length tweaks.
     let seek_target = Duration::from_secs_f64(
         Consts::SEGMENT_DURATION_SECS * (Consts::SEGMENTS_PER_VARIANT as f64) * 0.5,
     );
@@ -113,9 +106,6 @@ async fn t4_seek_freezes_abr(
         .seek(seek_target)
         .expect("T4: seek must not fail on a healthy fixture");
 
-    // Drain Pending until the FIRST post-seek chunk arrives. We never
-    // call `set_mode` here — ABR is left to the controller, which
-    // SHOULD stay frozen for the duration of the seek window.
     let resume_deadline = Instant::now() + Duration::from_secs(15);
     let mut resume_at: Option<Instant> = None;
     while Instant::now() < resume_deadline {
@@ -140,7 +130,6 @@ async fn t4_seek_freezes_abr(
         )
     });
 
-    // A6: zero ABR commits inside the seek window.
     let commits_during_seek: Vec<_> = recorder
         .events_with_probe("record_abr_variant_committed")
         .into_iter()

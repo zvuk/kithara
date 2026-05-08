@@ -95,9 +95,6 @@ fn pair_always_equal(a: &str, b: &str, sites: &[&LiteralSite]) -> Option<String>
         if av != bv {
             return None;
         }
-        // Suppress the trivial `X { a, b }` shorthand: each field gets its
-        // own variable name as expression. That's not a duplicate — it's
-        // syntax sugar.
         if av == a || av == b {
             return None;
         }
@@ -129,11 +126,6 @@ mod tests {
 
     #[test]
     fn task_id_equals_seek_epoch_pattern_flagged() {
-        // The actual SeekLifecycleFields anti-pattern: at every call site,
-        // `task_id` is whatever value `seek_epoch` is. The values differ
-        // between call sites (`epoch` vs `current_epoch`), so
-        // `field_always_constant` won't catch it — but per-site equality
-        // does.
         let src = r#"
             pub(crate) struct E { task_id: u64, seek_epoch: u64, kind: u32 }
             fn a(epoch: u64) -> E { E { task_id: epoch, seek_epoch: epoch, kind: 1 } }
@@ -149,9 +141,6 @@ mod tests {
 
     #[test]
     fn shorthand_a_equals_b_not_flagged() {
-        // `X { a, b }` desugars to `X { a: a, b: b }`. Our filter must skip
-        // this — neither field's value is "the same as the other"; they're
-        // each their own variable.
         let src = r#"
             pub(crate) struct E { a: u32, b: u32, kind: u32 }
             fn x(a: u32, b: u32) -> E { E { a, b, kind: 1 } }
@@ -169,7 +158,6 @@ mod tests {
             fn b(epoch: u64) -> E { E { x: 3, y: 3, kind: 2 } }
             fn c(epoch: u64) -> E { E { x: 5, y: 5, kind: 3 } }
         "#;
-        // x and y are equal in sites b and c, but not in site a — clean.
         assert_eq!(count(src, 3), 0);
     }
 
@@ -192,8 +180,6 @@ mod tests {
             fn b(e: u32) -> E { E { x: e, y: e, kind: 2 } }
             fn c(base: E) -> E { E { x: 0, y: 0, ..base } }
         "#;
-        // Third site spreads `..base` so we ignore it; first two are below
-        // the threshold.
         assert_eq!(count(src, 3), 0);
     }
 
@@ -210,7 +196,6 @@ mod tests {
 
     #[test]
     fn three_field_chain_flags_each_pair() {
-        // Three fields all equal at every site → 3 pairs flagged.
         let src = r#"
             pub(crate) struct E { x: u32, y: u32, z: u32 }
             fn a(e: u32) -> E { E { x: e, y: e, z: e } }

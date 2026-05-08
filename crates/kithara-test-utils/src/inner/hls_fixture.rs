@@ -46,9 +46,6 @@ impl TestServer {
 
     #[must_use]
     pub fn url(&self, path: &str) -> Url {
-        // Aliases that don't fit the simple variant-prefix pattern: master
-        // playlists per fixture, the legacy "/video/480p/playlist.m3u8"
-        // alias, the encrypted-only key path, and the helper passthrough.
         if let Some(url) = match path {
             "/master.m3u8" => Some(self.plain.master_url()),
             "/master-init.m3u8" => Some(self.init.master_url()),
@@ -66,8 +63,6 @@ impl TestServer {
         } {
             return url;
         }
-        // Plain fixture prefixes — segment paths, init paths, and the
-        // bare media playlist `/vN.m3u8`.
         if let Some(url) = route_segment_path(&self.plain, path, "/seg/", ".bin") {
             return url;
         }
@@ -325,21 +320,18 @@ impl HlsTestServer {
         if path == "/key.bin" {
             return self.created.key_url();
         }
-        // Variant playlist lives under `/playlist/v...` (rather than the
-        // bare `/vN.m3u8` other servers use).
         if let Some(variant_part) = path
             .strip_prefix("/playlist/v")
             .and_then(|s| s.strip_suffix(".m3u8"))
         {
             let variant: usize = variant_part
                 .parse()
-                .unwrap_or_else(|_| panic!("invalid HlsTestServer playlist path `{path}`"));
+                .expect("invalid HlsTestServer playlist path");
             return self.created.media_url(variant);
         }
         if let Some(url) = route_segment_path(&self.created, path, "/seg/", ".bin") {
             return url;
         }
-        // Init segments live at `/init/vX_init.bin`.
         if let Some(url) = route_init_path(&self.created, path, "/init/", "_init.bin") {
             return url;
         }

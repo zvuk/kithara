@@ -102,8 +102,6 @@ async fn next_chunk_with_timeout(
     }
 }
 
-// Stress Test
-
 #[kithara::test(
     tokio,
     native,
@@ -114,7 +112,6 @@ async fn next_chunk_with_timeout(
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {
-    // Generate WAV data for two variants
     let init_segment = Arc::new(create_wav_header(
         Consts::D.sample_rate,
         Consts::D.channels,
@@ -155,7 +152,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         "Generated WAV data for two variants"
     );
 
-    // Spawn HLS server
     let segment_duration = Consts::D.segment_size as f64
         / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
@@ -180,14 +176,11 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     let url = server.url("/master.m3u8");
     info!(%url, "HLS server ready with 2 variants");
 
-    // Create Audio<Stream<Hls>> with Auto ABR starting on V0
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        // Ephemeral mode auto-evicts MemResources from LRU cache.
-        // 2 variants × Consts::SEGMENT_COUNT segments + headroom.
         store.cache_capacity =
             Some(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"));
         store.is_ephemeral = true;
@@ -213,7 +206,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     audio.preload().expect("preload must succeed");
 
-    // Phase 1: Warmup + ABR switch detection
     info!("Phase 1: waiting for ABR switch (ascending -> descending) via chunks...");
 
     let warmup_start = Instant::now();
@@ -274,7 +266,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         }
     }
 
-    // Phase 2: Post-switch sequential read — frame_offset continuity
     info!(
         "Phase 2: verifying {} post-switch chunks...",
         Consts::POST_SWITCH_CHUNKS
@@ -299,7 +290,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         let frames = chunk.frames();
         let meta = &chunk.meta;
 
-        // Integrity: all samples finite and in [-1, 1]
         for (j, &sample) in chunk.pcm.iter().enumerate() {
             assert!(
                 sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -309,7 +299,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             );
         }
 
-        // Intra-chunk continuity (allow 1 break for decoder handoff)
         let breaks = intra_chunk_breaks(&chunk);
         assert!(
             breaks <= 1,
@@ -318,7 +307,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             format_meta(meta, chunk.pcm.len()),
         );
 
-        // Direction: must be descending after ABR switch
         let dir = detect_chunk_direction(&chunk);
         assert_eq!(
             dir,
@@ -328,7 +316,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             format_meta(meta, chunk.pcm.len()),
         );
 
-        // Frame offset continuity between chunks
         if let (Some(prev_off), Some(prev_f)) = (prev_frame_offset, prev_frames) {
             let expected_offset = prev_off + prev_f as u64;
             if meta.frame_offset != expected_offset {
@@ -359,11 +346,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         Consts::POST_SWITCH_CHUNKS
     );
 
-    // We don't assert on frame_offset continuity in phase 2 because
-    // the first few chunks after ABR switch may have a gap due to decoder recreation.
-    // We track it for diagnostics.
-
-    // Phase 3: Random seeks — 200 iterations, 5 chunks each
     info!(
         "Phase 3: {} random seek + {} chunk reads...",
         Consts::SEEK_ITERATIONS,
@@ -405,7 +387,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             )
             .await
             else {
-                // EOF after seek near end is acceptable.
                 break;
             };
 
@@ -413,7 +394,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             let frames = chunk.frames();
             let meta = chunk.meta;
 
-            // Integrity: all samples finite and in [-1, 1]
             for (j, &sample) in chunk.pcm.iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -423,7 +403,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 );
             }
 
-            // Intra-chunk saw-tooth continuity
             let breaks = intra_chunk_breaks(&chunk);
             if breaks > 0 {
                 intra_breaks += breaks as u64;
@@ -439,7 +418,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 }
             }
 
-            // Direction after ABR switch should be descending
             let dir = detect_chunk_direction(&chunk);
             if dir != Direction::Descending && dir != Direction::Unknown {
                 direction_errors += 1;
@@ -455,7 +433,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 }
             }
 
-            // Inter-chunk frame_offset continuity (within the same seek sequence)
             if let Some((prev_meta, prev_f)) = prev_chunk_meta {
                 let expected_offset = prev_meta.frame_offset + prev_f as u64;
                 if meta.frame_offset != expected_offset {
@@ -476,14 +453,11 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 }
             }
 
-            // Inter-chunk saw-tooth sample continuity:
-            // last sample of prev chunk → first sample of curr chunk
-            // must follow ascending or descending pattern.
             if let Some(prev_last) = prev_last_sample
                 && channels > 0
                 && !chunk.pcm.is_empty()
             {
-                let curr_first = chunk.pcm[0]; // first sample (L channel)
+                let curr_first = chunk.pcm[0];
                 let prev_phase = phase_from_f32(prev_last);
                 let curr_phase = phase_from_f32(curr_first);
                 let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
@@ -512,7 +486,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 }
             }
 
-            // Track last L-channel sample for inter-chunk check
             if channels > 0 && frames > 0 {
                 prev_last_sample = Some(chunk.pcm[(frames - 1) * channels]);
             }
@@ -562,10 +535,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         direction_errors, 0,
         "{direction_errors} direction errors (expected descending after ABR switch)"
     );
-    // Note: inter_chunk_breaks (frame_offset) are logged but not asserted — frame_offset
-    // gaps between chunks after seek can occur due to decoder restart semantics.
 
-    // Phase 4: EOF
     info!("Phase 4: seek near end + drain to EOF...");
 
     let final_seek_secs = (total_secs - 0.1).max(0.0);
@@ -599,9 +569,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             );
         }
     }
-
-    // Loop exits on None from next_chunk_with_timeout, which corresponds to
-    // `ChunkOutcome::Eof` — so EOF is already confirmed by the break above.
 
     info!(
         remaining_chunks,

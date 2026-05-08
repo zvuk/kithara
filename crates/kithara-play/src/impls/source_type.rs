@@ -100,11 +100,8 @@ mod tests {
 
     #[kithara::test]
     fn detect_invalid_relative_path() {
-        // Relative paths should not reach here (caught by ResourceConfig::new),
-        // but verify graceful handling via the Path variant
         let src = ResourceSrc::Path(PathBuf::from("relative/path.mp3"));
         let result = SourceType::detect(&src);
-        // With file feature enabled, it's accepted as LocalFile
         #[cfg(feature = "file")]
         assert_eq!(
             source_tag(&result.expect("BUG: relative path must map to local")),

@@ -117,7 +117,7 @@ pub(super) fn codec_from_container(container: ContainerFormat) -> Option<AudioCo
         ContainerFormat::Ogg => Some(AudioCodec::Vorbis),
         ContainerFormat::Wav => Some(AudioCodec::Pcm),
         ContainerFormat::Caf => Some(AudioCodec::Alac),
-        ContainerFormat::Mkv => None, // Could be anything
+        ContainerFormat::Mkv => None,
     }
 }
 

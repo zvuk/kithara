@@ -59,8 +59,6 @@ pub(crate) fn run(args: &VizArgs) -> Result<()> {
     }
 }
 
-// --- hierarchy --------------------------------------------------------------
-
 fn run_hierarchy(args: &HierarchyArgs) -> Result<()> {
     let workspace_root = workspace_root()?;
     for krate in select_crates(&workspace_root, args.krate.as_deref())? {
@@ -143,8 +141,6 @@ fn list_pub_items(items: &[Item]) -> Vec<String> {
     out.sort();
     out
 }
-
-// --- arc-map ----------------------------------------------------------------
 
 fn run_arc_map(args: &ArcMapArgs) -> Result<()> {
     let workspace_root = workspace_root()?;
@@ -328,8 +324,6 @@ impl<'ast> Visit<'ast> for ArcCallVisitor<'_> {
         syn::visit::visit_expr_call(self, c);
     }
 }
-
-// --- shared infra -----------------------------------------------------------
 
 struct CrateLoc {
     name: String,

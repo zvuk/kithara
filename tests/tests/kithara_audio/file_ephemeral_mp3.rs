@@ -136,9 +136,7 @@ async fn throttled_mp3_endpoint(req: Request) -> Response {
 fn app() -> Router {
     Router::new()
         .route("/test.mp3", get(mp3_endpoint).head(mp3_endpoint))
-        // Same MP3 data served at extensionless path (like zvuk /track/streamhq?id=NNN).
         .route("/track/stream", get(mp3_endpoint).head(mp3_endpoint))
-        // Throttled: Content-Length correct but body arrives in small chunks.
         .route(
             "/slow/stream",
             get(throttled_mp3_endpoint).head(throttled_mp3_endpoint),
@@ -178,7 +176,6 @@ async fn audio_file_mp3_decodes_with_duration(
         .await
         .unwrap_or_else(|e| panic!("probe failed for path={path} hint={hint:?}: {e}"));
 
-    // Duration must be close to 187s.
     let duration = audio.duration();
     assert!(
         duration.is_some(),
@@ -191,7 +188,6 @@ async fn audio_file_mp3_decodes_with_duration(
         Consts::TEST_MP3_DURATION_SECS
     );
 
-    // Decode at least 2 seconds of real PCM.
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
@@ -250,7 +246,6 @@ async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Op
         .await
         .unwrap_or_else(|e| panic!("creation failed for path={path} hint={hint:?}: {e}"));
 
-    // Check duration BEFORE any read/decode — this is what the GUI shows.
     let duration = audio.duration();
     assert!(
         duration.is_some(),

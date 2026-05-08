@@ -145,8 +145,6 @@ async fn hls_seek_middle_repeated_seeks_stress(
     let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
     player.load_and_fadein(resource, "t0");
 
-    // One initial warmup; subsequent iterations inherit the running
-    // decoder/timeline state — that's the point of the stress wrapper.
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
         &mut player,
@@ -165,10 +163,6 @@ async fn hls_seek_middle_repeated_seeks_stress(
         let target = Consts::SEEK_TARGETS[(iter as usize) % Consts::SEEK_TARGETS.len()];
         let pos_before = player.position();
         player.seek(target, u64::from(1 + iter));
-        // After seek, wait for position to actually advance past
-        // `target + MIN_POSITION_ADVANCE` — that's the assertion
-        // below. Seek-jump alone (position landing at `target`) does
-        // not count as progress.
         let post_target = target + Consts::MIN_POSITION_ADVANCE_POST_SEEK_SECS;
         render_until_position(
             &mut player,

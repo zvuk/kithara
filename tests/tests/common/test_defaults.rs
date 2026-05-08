@@ -12,9 +12,6 @@
 //! Packing constants into structs eliminates per-file `#[cfg]` gates and
 //! provides a discoverable location for test configuration.
 
-// Shared test fixture: items below are used by some test binaries but not all.
-// `cargo build --all-targets` flags them as dead per-binary.
-
 use std::sync::Arc;
 
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
@@ -95,8 +92,6 @@ impl SawWav {
 pub(crate) struct Consts;
 
 impl Consts {
-    // --- Audio format (mirror of `SawWav::DEFAULT`) -----------------------
-
     /// Default sample rate for generated WAV / expected streams.
     pub(crate) const SAMPLE_RATE: u32 = SawWav::DEFAULT.sample_rate;
     /// Default channel count.
@@ -104,14 +99,10 @@ impl Consts {
     /// Default packaged HLS segment size (bytes).
     pub(crate) const SEGMENT_SIZE: usize = SawWav::DEFAULT.segment_size;
 
-    // --- Embedded MP3 fixture --------------------------------------------
-
     /// Bytes of the `assets/test.mp3` fixture.
     pub(crate) const TEST_MP3_BYTES: &'static [u8] = EmbeddedAudio::TEST_MP3_BYTES;
     /// Nominal duration of [`Self::TEST_MP3_BYTES`] in seconds.
     pub(crate) const TEST_MP3_DURATION_SECS: f64 = EmbeddedAudio::MP3_EXPECTED_DURATION_SECS;
-
-    // --- Common test budgets ---------------------------------------------
 
     /// Default soft read timeout for resource/decoder integration tests.
     pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(5);

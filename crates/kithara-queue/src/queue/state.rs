@@ -140,10 +140,6 @@ impl Queue {
         let QueueConfig {
             player,
             max_concurrent_loads,
-            // prefetch_duration plumbing through PlayerConfig lands in
-            // P12/P13 alongside the player_track prefetch hook; for now
-            // QueueConfig surfaces the knob so callers can set it,
-            // ready to be threaded once the player accepts it.
             prefetch_duration: _,
             #[cfg(any(test, feature = "test-utils"))]
             should_autoplay,
@@ -158,10 +154,6 @@ impl Queue {
             };
             Arc::new(PlayerImpl::new(config))
         });
-        // Queue owns auto-advance via `tick`/`drain_player_events`; suppress
-        // the player's built-in linear advance so a single EOF does not
-        // race-promote the next track twice (player.select_item +
-        // queue.advance_to_next both fire, leaving inconsistent state).
         player.set_auto_advance_enabled(false);
         let bus = player.bus().clone();
         let tracks = Arc::new(Tracks::new(bus.clone()));
@@ -263,10 +255,6 @@ impl Queue {
 
 impl Drop for Queue {
     fn drop(&mut self) {
-        // Cascade shutdown: cancel the queue master so any
-        // queue-owned `PlayerImpl` (and through it the audio worker,
-        // Downloader, AssetStore, HlsPeer) observe the pulse before
-        // structural Arc teardown unwinds.
         self.cancel.cancel();
     }
 }

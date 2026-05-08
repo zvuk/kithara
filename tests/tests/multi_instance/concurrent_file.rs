@@ -32,7 +32,7 @@ async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File
 /// encoder padding, so we check that they are within 1% of the mean.
 fn assert_consistent_counts(results: &[(usize, u64)]) {
     let mean = results.iter().map(|(_, t)| *t).sum::<u64>() / results.len() as u64;
-    let tolerance = mean / 100; // 1%
+    let tolerance = mean / 100;
     for (id, total) in results {
         assert!(
             total.abs_diff(mean) <= tolerance,

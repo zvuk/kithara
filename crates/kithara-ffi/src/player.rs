@@ -136,10 +136,6 @@ impl PeakBitrate {
         if cap >= U64_MAX_AS_F64 {
             return Some(u64::MAX);
         }
-        // `cap` is non-negative and below `U64_MAX_AS_F64` here; the
-        // `as u64` cast is sign-loss- and truncation-safe for any
-        // realistic bitrate (the only loss is sub-bit/s precision,
-        // which the ABR controller does not consume).
         #[cfg_attr(
             all(),
             expect(
@@ -246,11 +242,6 @@ impl AudioPlayer {
     /// The callback is invoked synchronously with `true` if the seek
     /// command was accepted, `false` otherwise (matches `AVPlayer`
     /// semantics).
-    // UniFFI's `Lift` trait is implemented for owned `Arc<T>` only — the FFI
-    // ABI cannot marshal `&Arc<T>` across the bridge. The `cfg_attr(all(), …)`
-    // form keeps the lint tracking visible to clippy while staying outside the
-    // `rust.no-lint-suppression` ast-grep pattern. FFI bindings are the
-    // canonical exception named in the rule's own message.
     #[cfg_attr(
         all(),
         expect(
@@ -276,11 +267,6 @@ impl AudioPlayer {
     ///
     /// Returns [`FfiError::InvalidArgument`] if `after` is not currently
     /// in the queue, or if the item's URL is malformed.
-    // UniFFI's `Lift` trait is implemented for owned `Arc<T>` only — the FFI
-    // ABI cannot marshal `&Arc<T>` across the bridge. The `cfg_attr(all(), …)`
-    // form keeps the lint tracking visible to clippy while staying outside the
-    // `rust.no-lint-suppression` ast-grep pattern. FFI bindings are the
-    // canonical exception named in the rule's own message.
     #[cfg_attr(
         all(),
         expect(
@@ -354,10 +340,6 @@ impl AudioPlayer {
     }
 
     pub fn item_count(&self) -> u32 {
-        // A queue with more than u32::MAX items is an invariant violation,
-        // not a real state. Log it loudly and report 0 across FFI: the UI
-        // sees "no items" instead of ~4G items (which would blow up any
-        // iteration), and the trace points to where the invariant broke.
         let len = self.queue.len();
         u32::try_from(len).unwrap_or_else(|_| {
             tracing::error!(queue_len = len, "BUG: queue length exceeds u32::MAX");
@@ -371,11 +353,6 @@ impl AudioPlayer {
     ///
     /// Returns [`FfiError::InvalidArgument`] if `index` is out of range
     /// or the item's URL is malformed.
-    // UniFFI's `Lift` trait is implemented for owned `Arc<T>` only — the FFI
-    // ABI cannot marshal `&Arc<T>` across the bridge. The `cfg_attr(all(), …)`
-    // form keeps the lint tracking visible to clippy while staying outside the
-    // `rust.no-lint-suppression` ast-grep pattern. FFI bindings are the
-    // canonical exception named in the rule's own message.
     #[cfg_attr(
         all(),
         expect(
@@ -526,13 +503,7 @@ impl AudioPlayer {
         self.queue.set_muted(muted);
     }
 
-    // MARK: - EQ
-
     pub fn eq_band_count(&self) -> u32 {
-        // EQ band count is bounded by construction (a few dozen at most).
-        // A `try_from` failure is an invariant violation, not a real state:
-        // log it and report 0 ("EQ unavailable") across FFI rather than
-        // surfacing ~4G bands the UI would crash trying to render.
         let n = self.queue.eq_band_count();
         u32::try_from(n).unwrap_or_else(|_| {
             tracing::error!(eq_band_count = n, "BUG: EQ band count exceeds u32::MAX");
@@ -563,9 +534,6 @@ impl AudioPlayer {
     /// Return a snapshot of the player's current state.
     #[must_use]
     pub fn snapshot(&self) -> FfiPlayerSnapshot {
-        // `Queue::position_seconds` returns the cached, transient-zero-filtered
-        // value updated on every `tick()`; the live engine value would flash
-        // back to 0.0 on pause/resume.
         FfiPlayerSnapshot {
             status: FfiPlayerStatus::from(self.queue.status()),
             current_time: self.queue.position_seconds(),
@@ -774,9 +742,6 @@ impl AudioPlayer {
 
 impl Drop for AudioPlayer {
     fn drop(&mut self) {
-        // Cascade shutdown to player subsystems before structural Arc
-        // teardown. The master was constructed in `AudioPlayer::new`
-        // and propagated into `PlayerConfig.cancel`.
         self.cancel.cancel();
     }
 }

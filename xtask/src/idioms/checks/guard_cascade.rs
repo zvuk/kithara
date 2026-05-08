@@ -232,8 +232,6 @@ fn is_terminator_expr(cfg: &GuardCascadeConfig, e: &Expr) -> bool {
 mod tests {
     use super::*;
 
-    // Walk the parsed file the same way the production visitor does so
-    // that nested blocks are evaluated, not just the top-level.
     struct V<'a> {
         cfg: &'a GuardCascadeConfig,
         out: &'a mut Vec<Violation>,
@@ -259,8 +257,6 @@ mod tests {
 
     #[test]
     fn cascade_heterogeneous_flagged() {
-        // The shape of `AbrState::decide()` before the refactor: 5 consecutive
-        // guards each returning a distinct value. Real CPU-prediction problem.
         let n = count_violations(
             r#"{
                 if locked { return 1; }
@@ -276,8 +272,6 @@ mod tests {
 
     #[test]
     fn cascade_homogeneous_flagged() {
-        // The shape of `AbrController::check_incoherence()` before extraction:
-        // 4 consecutive guards all using `return;`. Cosmetic cascade.
         let n = count_violations(
             r#"{
                 let Some(entry) = peer_entry else { return; };
@@ -292,9 +286,6 @@ mod tests {
 
     #[test]
     fn parallel_compute_match_clean() {
-        // The refactored `decide()` shape: 5 plain `let` computations followed
-        // by ONE tuple-match. Pure `let`s are not guards; the match itself is
-        // a single Stmt — not a cascade.
         let n = count_violations(
             r#"{
                 let locked = compute_locked();
@@ -319,9 +310,6 @@ mod tests {
 
     #[test]
     fn option_resolver_clean() {
-        // The refactored homogeneous shape: ONE `let-else` calling a resolver.
-        // `?`-chains live inside the resolver and are not detected as guards
-        // by this lint, so the resolver body is also clean.
         let n = count_violations(
             r#"{
                 let Some(ctx) = self.resolve_ctx(peer_id) else { return; };
@@ -333,7 +321,6 @@ mod tests {
 
     #[test]
     fn two_guards_below_threshold_clean() {
-        // Sanity: default `warn_streak` is 3. Two guards is not yet a cascade.
         let n = count_violations(
             r#"{
                 if a { return 1; }

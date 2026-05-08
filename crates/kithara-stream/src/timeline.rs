@@ -84,7 +84,6 @@ pub struct Timeline {
     last_sample_rate: Arc<AtomicU64>,
     pending_seek_epoch: Arc<AtomicU64>,
 
-    // Seek coordinator fields (GStreamer FLUSH_START/STOP pattern)
     seek_epoch: Arc<AtomicU64>,
 
     seek_target_ns: Arc<AtomicU64>,
@@ -232,13 +231,7 @@ impl Timeline {
             return;
         }
         // NOTE: we do NOT clear seek_target_ns here.
-        // A concurrent initiate_seek() may have already written a new target;
-        // clearing it would lose that target. Stale targets are harmless
-        // because apply_pending_seek() always gates on seek_epoch.
         self.remove_flags_with(TimelineFlags::FLUSHING, Ordering::SeqCst);
-        // Double-check: if a newer seek arrived while we were clearing,
-        // its initiate_seek may have already set FLUSHING=true which we
-        // just cleared. Re-set FLUSHING to avoid losing the seek.
         if self.seek_epoch.load(Ordering::SeqCst) != epoch {
             self.insert_flags_with(TimelineFlags::FLUSHING, Ordering::SeqCst);
         }
@@ -281,22 +274,8 @@ impl Timeline {
         let epoch = self.seek_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.seek_target_ns.store(nanos, Ordering::Release);
         // NOTE: do NOT pre-set `committed_position` to `target` here.
-        // The decoder is the single source of truth for playback
-        // position; the first chunk it emits after the seek lands
-        // updates `committed_position` via [`advance_committed_chunk`]
-        // using its own `frame_offset + frames`. Setting it here
-        // creates a race where the timeline shows `target` while the
-        // decoder is still mid-seek, and the next decoded chunk's
-        // frames push `committed_position` past `total_duration`
-        // (the textbook overshoot panic).
         self.insert_flags_with(TimelineFlags::SEEK_PENDING, Ordering::Release);
-        // FLUSHING must be observed AFTER the seek target is published so
-        // readers that see FLUSHING=true also see the updated target.
         self.insert_flags_with(TimelineFlags::FLUSHING, Ordering::Release);
-        // Hot-path latches: each worker swaps its own to false on every
-        // tick, falling through cheaply when no seek is pending. Both
-        // are Released here AFTER the target/flag stores so that the
-        // workers' Acquire-swap synchronises with all of them.
         self.seek_preempt_latch.store(true, Ordering::Release);
         self.decoder_node_seek_latch.store(true, Ordering::Release);
         epoch
@@ -481,16 +460,6 @@ impl Timeline {
         if sr == 0 {
             return;
         }
-        // Trust the decoder's own end-position arithmetic — it owns the
-        // frame counter and any container-side rounding. Frame-based
-        // decoders (MP3, AAC) emit fixed-size frames; the last frame
-        // may extend a few ms past the rounded `total_duration`. We
-        // clamp `committed_position_ns` to `total_duration_ns` so the
-        // UI never shows a position past the end, but we don't treat
-        // boundary-crossing chunks as an error — the clamp is the
-        // contract. Real bugs (decoder reporting a chunk that *starts*
-        // past EOF) are caught earlier in
-        // `commit_decoder_seek_outcome`.
         let duration_ns = self.total_duration_ns.load(Ordering::Acquire);
         let cap = if duration_ns == Self::NO_DURATION {
             u64::MAX
@@ -501,14 +470,6 @@ impl Timeline {
             .store(pos.end_position_ns.min(cap), Ordering::Release);
         self.committed_frame_end.store(end_frame, Ordering::Release);
         self.last_sample_rate.store(sr, Ordering::Release);
-        // Note: `byte_position` is the **producer-side cursor** owned by
-        // `Stream::try_read` / `Stream::seek`. Decoders' chunk-side
-        // `source_byte_offset` lags behind it (stream has already read
-        // ahead) and writing it back here would rewind the stream
-        // cursor, causing AudioFile to re-read stale bytes and surface
-        // `dta?`. The decoder's per-chunk byte info lives only on
-        // `PcmMeta::source_byte_offset` for downstream consumers; the
-        // stream cursor stays untouched.
     }
 }
 
@@ -556,9 +517,6 @@ mod tests {
         assert!(tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(10)));
         assert_eq!(tl.seek_epoch(), 1);
-        // `committed_position` is NOT pre-set to the seek target — the
-        // first chunk the decoder emits after the seek lands updates
-        // it via [`advance_committed_chunk`].
         assert_eq!(tl.committed_position(), initial_committed);
     }
 
@@ -568,8 +526,6 @@ mod tests {
         let epoch = tl.initiate_seek(Duration::from_secs(5));
         tl.complete_seek(epoch);
         assert!(!tl.is_flushing());
-        // seek_target is intentionally NOT cleared — stale targets are
-        // harmless because consumers gate on seek_epoch.
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(5)));
     }
 
@@ -601,9 +557,7 @@ mod tests {
     fn complete_seek_does_not_clobber_concurrent_target() {
         let tl = Timeline::new();
         let epoch1 = tl.initiate_seek(Duration::from_secs(5));
-        // Simulate concurrent initiate_seek before complete_seek runs
         let _epoch2 = tl.initiate_seek(Duration::from_secs(15));
-        // complete_seek with stale epoch must not touch seek_target
         tl.complete_seek(epoch1);
         assert!(tl.is_flushing());
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(15)));
@@ -631,10 +585,8 @@ mod tests {
         let tl = Timeline::new();
         let epoch1 = tl.initiate_seek(Duration::from_secs(5));
         let epoch2 = tl.initiate_seek(Duration::from_secs(10));
-        // Stale epoch should not clear seek_pending
         tl.clear_seek_pending(epoch1);
         assert!(tl.is_seek_pending());
-        // Current epoch clears it
         tl.clear_seek_pending(epoch2);
         assert!(!tl.is_seek_pending());
     }
@@ -645,7 +597,6 @@ mod tests {
         let epoch = tl.initiate_seek(Duration::from_secs(5));
         tl.clear_seek_pending(epoch);
         assert!(!tl.is_seek_pending());
-        // New seek re-sets seek_pending
         let _epoch2 = tl.initiate_seek(Duration::from_secs(10));
         assert!(tl.is_seek_pending());
     }
@@ -654,7 +605,6 @@ mod tests {
     fn complete_seek_does_not_clear_seek_pending() {
         let tl = Timeline::new();
         let epoch = tl.initiate_seek(Duration::from_secs(5));
-        // complete_seek clears flushing but NOT seek_pending
         tl.complete_seek(epoch);
         assert!(!tl.is_flushing());
         assert!(tl.is_seek_pending());
@@ -667,8 +617,6 @@ mod tests {
         let _epoch = tl.initiate_seek(Duration::from_secs(5));
         assert!(clone.is_seek_pending());
     }
-
-    // bitflags migration tests
 
     #[kithara::test]
     fn set_eof_toggles_flag_without_affecting_others() {
@@ -684,8 +632,6 @@ mod tests {
 
     #[kithara::test]
     fn flag_triple_matrix_matches_bitflags_snapshot() {
-        // Drive all 2^3 combinations of {flushing, seek_pending, eof} via
-        // the public API and confirm flags_snapshot_with() reports them.
         for mask in 0u8..8 {
             let tl = Timeline::new();
             let want_flushing = mask & 1 != 0;
@@ -732,16 +678,9 @@ mod tests {
 
     #[kithara::test]
     fn complete_seek_double_check_re_raises_flushing_when_newer_seek_interleaves() {
-        // Simulate the race: complete_seek runs for epoch1; between
-        // clearing FLUSHING and the double-check, a newer initiate_seek
-        // fires and bumps the epoch. The double-check must observe the
-        // epoch mismatch and re-set FLUSHING.
         let tl = Timeline::new();
         let epoch1 = tl.initiate_seek(Duration::from_secs(1));
 
-        // Simulate the interleave by hand: clear FLUSHING as
-        // complete_seek's first store would, then bump the epoch via
-        // initiate_seek before re-entering complete_seek.
         tl.remove_flags_with(TimelineFlags::FLUSHING, Ordering::SeqCst);
         let _epoch2 = tl.initiate_seek(Duration::from_secs(2));
         tl.complete_seek(epoch1);
@@ -754,15 +693,11 @@ mod tests {
 
     #[kithara::test]
     fn concurrent_flag_toggles_preserve_independent_semantics() {
-        // Four threads toggle disjoint flags in a tight loop. Asserts no
-        // thread's operation clobbers another flag — the OR/AND-based
-        // primitives compose correctly.
         const ITER: usize = 50_000;
 
         let tl = Timeline::new();
         let barrier = Arc::new(Barrier::new(3));
 
-        // Thread A: flips EOF on/off.
         let tl_a = tl.clone();
         let barrier_a = Arc::clone(&barrier);
         let a = thread::spawn(move || {
@@ -772,7 +707,6 @@ mod tests {
             }
         });
 
-        // Thread B: repeatedly sets/clears SEEK_PENDING via public API.
         let tl_b = tl.clone();
         let barrier_b = Arc::clone(&barrier);
         let b = thread::spawn(move || {
@@ -784,7 +718,6 @@ mod tests {
             }
         });
 
-        // Thread C: observes snapshots without crashing.
         let tl_c = tl.clone();
         let barrier_c = Arc::clone(&barrier);
         let c = thread::spawn(move || {
@@ -805,9 +738,6 @@ mod tests {
             .join()
             .expect("BUG: spawned thread C must not panic in this test");
 
-        // Final invariant: after all writers finish, EOF reflects the
-        // last A iteration (ITER-1 ⇒ odd ⇒ false); FLUSHING/SEEK_PENDING
-        // fully cleared by B's last complete_seek + clear_seek_pending.
         assert!(!tl.is_eof(), "EOF must match the last deterministic write");
         assert!(!tl.is_flushing(), "FLUSHING must be fully cleared");
         assert!(
@@ -815,8 +745,6 @@ mod tests {
             "SEEK_PENDING must be fully cleared after last clear"
         );
     }
-
-    // PLAYING flag tests (Task 4)
 
     #[kithara::test]
     fn playing_defaults_to_false() {
@@ -847,9 +775,6 @@ mod tests {
 
     #[kithara::test]
     fn playing_is_orthogonal_to_other_flags() {
-        // Test all 8 combinations of {flushing, seek_pending, eof} paired
-        // with PLAYING=0 and PLAYING=1. Assert PLAYING mirror the writer
-        // and the other flags are untouched by set_playing.
         for mask in 0u8..8 {
             for &initial_playing in &[false, true] {
                 let tl = Timeline::new();
@@ -886,8 +811,6 @@ mod tests {
                     "mask {mask:#05b} play={initial_playing} eof"
                 );
 
-                // Now toggle PLAYING and assert the other three flags
-                // remain exactly as set.
                 tl.set_playing(!initial_playing);
                 assert_eq!(tl.is_playing(), !initial_playing);
                 assert_eq!(tl.is_flushing(), want_flushing);

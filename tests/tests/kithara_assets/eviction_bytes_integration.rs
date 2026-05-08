@@ -65,7 +65,6 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
 ) {
     let dir = temp_dir.path().to_path_buf();
 
-    // Asset A
     {
         let store_a = asset_store_with_root_and_limit(
             &temp_dir,
@@ -81,10 +80,8 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             .unwrap();
     }
 
-    // Wait for async unpinning to complete
     sleep(Duration::from_millis(50)).await;
 
-    // Asset B
     {
         let store_b = asset_store_with_root_and_limit(
             &temp_dir,
@@ -100,10 +97,8 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             .unwrap();
     }
 
-    // Wait for async unpinning to complete
     sleep(Duration::from_millis(50)).await;
 
-    // Asset C: triggers eviction
     {
         let store_c = asset_store_with_root_and_limit(
             &temp_dir,
@@ -117,10 +112,8 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         res_c.write_all(b"C").unwrap();
     }
 
-    // Wait for async eviction callback to complete
     sleep(Duration::from_millis(100)).await;
 
-    // Expect A evicted (oldest) to satisfy max_bytes.
     let asset_a_path = dir.join(asset_a_name).join("media/a.bin");
     assert!(
         !asset_a_path.exists(),
@@ -129,7 +122,6 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         asset_a_path
     );
 
-    // Check that asset B and C still exist
     let asset_b_path = dir.join(asset_b_name).join("media/b.bin");
     assert!(
         asset_b_path.exists(),
@@ -152,9 +144,9 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case(100, 150)] // Exactly at limit + overflow
-#[case(50, 120)] // Well below limit
-#[case(200, 50)] // Over limit with small new asset
+#[case(100, 150)]
+#[case(50, 120)]
+#[case(200, 50)]
 fn eviction_corner_cases_different_byte_limits(
     #[case] max_bytes: usize,
     #[case] new_asset_size: usize,
@@ -164,7 +156,6 @@ fn eviction_corner_cases_different_byte_limits(
     let cancel = cancel_token;
     let dir = temp_dir.path().to_path_buf();
 
-    // Create assets that approach the limit
     let asset_sizes = [max_bytes / 3, max_bytes / 3];
     let asset_names = vec!["asset-corner-1", "asset-corner-2"];
 
@@ -182,7 +173,6 @@ fn eviction_corner_cases_different_byte_limits(
             .unwrap();
     }
 
-    // Create a new asset and account its bytes
     {
         let store = asset_store_with_root_and_limit(
             &temp_dir,
@@ -197,7 +187,6 @@ fn eviction_corner_cases_different_byte_limits(
             .unwrap();
     }
 
-    // Trigger eviction by creating another asset_root.
     {
         let store = asset_store_with_root_and_limit(
             &temp_dir,
@@ -215,18 +204,15 @@ fn eviction_corner_cases_different_byte_limits(
         "asset-probe (newly created) must exist"
     );
 
-    // Eviction behavior: when over limit, oldest assets are evicted until the limit is satisfied.
     // NOTE: asset-trigger is NOT protected - only asset-probe (the newly created asset) is protected.
     let total_old_size: usize = asset_sizes.iter().sum();
     if total_old_size + new_asset_size > max_bytes {
-        // When over limit, eviction should free enough space by removing oldest assets.
         let mut evicted_count = 0;
         for name in &asset_names {
             if !exists_asset_dir(&dir, name) {
                 evicted_count += 1;
             }
         }
-        // Also check if trigger was evicted (it may be needed to satisfy the limit).
         if !exists_asset_dir(&dir, "asset-trigger") {
             evicted_count += 1;
         }
@@ -239,7 +225,6 @@ fn eviction_corner_cases_different_byte_limits(
             max_bytes
         );
     } else {
-        // Under limit - all assets should remain.
         for name in &asset_names {
             assert!(
                 exists_asset_dir(&dir, name),

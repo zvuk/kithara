@@ -1,14 +1,4 @@
 #![forbid(unsafe_code)]
-// `clippy::missing_errors_doc` reports against ~50 public Result-returning
-// methods in this crate. Documenting each `# Errors` section is tracked as a
-// follow-up rather than a one-shot diff bomb; the silencer stays at the
-// crate root meanwhile, wrapped in `cfg_attr(all(), …)` so it remains
-// unconditional but is intentionally outside the `rust.no-lint-suppression`
-// ast-grep pattern (which only matches a bare `#![allow(…)]`).
-//
-// `clippy::ignored_unit_patterns` only fires under test/test-utils builds
-// where unimock generates `let () = ...` patterns; under default builds the
-// lint is dormant.
 #![cfg_attr(all(), allow(clippy::missing_errors_doc))]
 
 #[cfg(all(target_arch = "wasm32", not(feature = "backend-web-audio")))]
@@ -42,9 +32,8 @@ pub use error::PlayError;
 pub use events::{
     DjEvent, EngineEvent, InterruptionKind, ItemEvent, PlayerEvent, RouteChangeReason, SessionEvent,
 };
-// Concrete implementations
-pub use impls::config::{ResourceConfig, ResourceSrc};
 pub use impls::{
+    config::{ResourceConfig, ResourceSrc},
     engine::{EngineConfig, EngineImpl},
     player::{PlayerConfig, PlayerImpl},
     player_node::PlayerNode,

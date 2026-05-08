@@ -22,7 +22,6 @@ fn track_name_at(state: &Kithara, index: usize) -> String {
 }
 
 fn handle_next(state: &mut Kithara) {
-    // Next button → crossfade, matching auto-advance feel.
     if state.queue.advance_to_next(Transition::Crossfade).is_some() {
         if let Some(idx) = state.queue.current_index() {
             state.current_track_index = Some(idx);
@@ -35,7 +34,6 @@ fn handle_next(state: &mut Kithara) {
 }
 
 fn handle_prev(state: &mut Kithara) {
-    // Prev button → crossfade, symmetric with Next.
     if state
         .queue
         .return_to_previous(Transition::Crossfade)
@@ -50,8 +48,6 @@ fn handle_prev(state: &mut Kithara) {
 }
 
 fn handle_select_track(state: &mut Kithara, idx: usize) {
-    // First click highlights, second click on the same row plays.
-    // Matches file-browser UX: click = focus, double-click = open.
     if state.selected_track_index != Some(idx) {
         state.selected_track_index = Some(idx);
     } else if let Some(id) = track_id_at(state, idx) {
@@ -67,7 +63,6 @@ fn handle_select_track(state: &mut Kithara, idx: usize) {
 }
 
 fn handle_delete_track(state: &mut Kithara) {
-    // Prefer the highlighted row; fall back to the playing one.
     let target_idx = state.selected_track_index.or(state.current_track_index);
     if let Some(idx) = target_idx
         && let Some(id) = track_id_at(state, idx)
@@ -75,8 +70,6 @@ fn handle_delete_track(state: &mut Kithara) {
         match state.queue.remove(id) {
             Ok(()) => {
                 state.selected_track_index = None;
-                // Queue::remove auto-advances if we removed the
-                // current track, or pauses on empty queue.
             }
             Err(e) => error!(index = idx, error = %e, "remove failed"),
         }
@@ -98,10 +91,8 @@ fn handle_tick(state: &mut Kithara) {
     let _ = state.queue.tick();
     state.blink_counter = state.blink_counter.wrapping_add(1);
 
-    // Refresh track snapshot for view rendering.
     state.tracks_snapshot = state.queue.tracks();
 
-    // Sync variant label and ABR variants from background listener.
     if let Ok(label) = state.shared_variant_label.lock()
         && *label != state.variant_label
     {
@@ -113,7 +104,6 @@ fn handle_tick(state: &mut Kithara) {
         state.abr_variants.clone_from(&sv);
     }
 
-    // Sync playback state.
     state.playing = state.queue.is_playing();
     if let Some(idx) = state.queue.current_index() {
         state.current_track_index = Some(idx);

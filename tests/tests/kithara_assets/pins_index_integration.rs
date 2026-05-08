@@ -63,7 +63,6 @@ fn pins_index_bad_state_returns_default(
             assert!(!path.exists(), "pins.bin must not exist initially");
         }
         Some(bytes) => {
-            // Write a corrupted blob directly on disk to simulate index damage.
             fs::create_dir_all(dir.join("_index")).unwrap();
             fs::write(&path, bytes).unwrap();
             assert!(path.exists(), "pins.bin must exist for this test");
@@ -99,7 +98,6 @@ fn pins_index_roundtrip_store_then_load(
 
     idx.store(&pins).unwrap();
 
-    // A second instance reading the same underlying resource should see the persisted set.
     let idx2 = PinsIndex::open(&base, &BytePool::default()).unwrap();
     let loaded = idx2.load().unwrap();
 
@@ -146,25 +144,21 @@ fn pins_index_concurrent_updates_handled_correctly(
     let _dir = temp_dir.path();
     let base = disk_asset_store;
 
-    // Create first index and store some pins
     let idx1 = PinsIndex::open(&base, &BytePool::default()).unwrap();
     let pins1: HashSet<String> = (0..asset_count)
         .map(|i| format!("asset-{}", i + 1))
         .collect();
     idx1.store(&pins1).unwrap();
 
-    // Create second index and load (should see first pins)
     let idx2 = PinsIndex::open(&base, &BytePool::default()).unwrap();
     let loaded1 = idx2.load().unwrap();
     assert_eq!(loaded1, pins1);
 
-    // Update with second index
     let pins2: HashSet<String> = (0..asset_count)
         .map(|i| format!("asset-updated-{}", i + 1))
         .collect();
     idx2.store(&pins2).unwrap();
 
-    // A fresh open should see updated pins
     let idx3 = PinsIndex::open(&base, &BytePool::default()).unwrap();
     let loaded2 = idx3.load().unwrap();
     assert_eq!(loaded2, pins2);
@@ -183,19 +177,14 @@ fn pins_index_empty_set_stores_and_loads_correctly(
 
     let idx = PinsIndex::open(&base, &BytePool::default()).unwrap();
 
-    // Store empty set
     let empty_pins = HashSet::new();
     idx.store(&empty_pins).unwrap();
 
-    // Load should return empty set
     let loaded = idx.load().unwrap();
     assert!(
         loaded.is_empty(),
         "empty pins set should roundtrip correctly"
     );
-
-    // File format is an implementation detail (binary via postcard)
-    // No need to verify internal structure
 }
 
 #[kithara::test(
@@ -207,7 +196,6 @@ fn pins_index_persists_across_store_instances(temp_dir: kithara_test_utils::Test
     let dir = temp_dir.path();
     let cancel = CancellationToken::new();
 
-    // Create first store and write pins
     let base1 = DiskAssetStore::new(dir, "test-asset", cancel.clone(), &BytePool::default());
     let idx1 = PinsIndex::open(&base1, &BytePool::default()).unwrap();
 
@@ -217,7 +205,6 @@ fn pins_index_persists_across_store_instances(temp_dir: kithara_test_utils::Test
 
     idx1.store(&pins).unwrap();
 
-    // Create completely new store instance (simulating restart)
     let base2 = DiskAssetStore::new(dir, "test-asset", cancel, &BytePool::default());
     let idx2 = PinsIndex::open(&base2, &BytePool::default()).unwrap();
 

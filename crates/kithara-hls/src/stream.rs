@@ -82,14 +82,9 @@ impl StreamType for Hls {
         let invalidation_target = Arc::new(StdMutex::new(None));
         let backend = build_asset_store(&config, &asset_root, cancel.clone(), &invalidation_target);
 
-        // Resolve the byte pool once at the top of the HLS pipeline.
-        // Caller-supplied pool flows through to PlaylistCache, KeyManager,
-        // size_estimation and (transitively) atomic_fetch helpers.
         let byte_pool = config
             .pool
             .clone()
-            // Hls::create fallback safety net — caller must inject pool via HlsConfig::pool
-            // ast-grep-ignore: perf.no-global-pool-accessor
             .unwrap_or_else(|| kithara_bufpool::BytePool::default().clone());
 
         let timeline = Timeline::new();
@@ -137,10 +132,6 @@ impl StreamType for Hls {
             &media_playlists,
         ));
 
-        // Build the variant list and hand it to the peer's ABR state.
-        // Populate per-segment durations so `HlsPeer::progress` can map
-        // `reader_segment` / `committed_segment` back into playback time
-        // for the ABR controller's buffer-ahead gate.
         hls_peer.set_abr_variants(build_abr_variants(&master.variants, &media_playlists));
         let initial_variant = hls_peer
             .abr()
@@ -161,8 +152,6 @@ impl StreamType for Hls {
         )
         .await;
 
-        // `VariantsRegistered` is now emitted by the shared `AbrController`
-        // as `AbrEvent::VariantsRegistered` once the bus is attached.
         let _ = initial_variant;
         let _ = variant_info_from_master;
 

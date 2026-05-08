@@ -414,7 +414,6 @@ pub fn expected_byte_at_test_pattern(
     segment_size: usize,
 ) -> u8 {
     if offset < init_len {
-        // Caller must handle init region separately (data depends on InitMode).
         return 0;
     }
 

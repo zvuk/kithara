@@ -135,8 +135,6 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
         return Vec::new();
     }
 
-    // Band counts are small integers (≤ ~30 in practice); the trait-mediated
-    // narrowing keeps the conversion explicit without an `as`-cast.
     let count_f32: f32 = count.as_();
     let q_factor = Consts::Q_SCALE_FACTOR * (count_f32 / Consts::Q_REFERENCE_BANDS).sqrt();
 
@@ -353,7 +351,6 @@ impl IsolatorEq {
     #[must_use]
     pub fn new(bands: &[EqBandConfig], sample_rate: u32) -> Self {
         use num_traits::cast::AsPrimitive;
-        // Audio sample rates (≤ 192_000) fit losslessly in f32 mantissa (24-bit).
         let sr: f32 = sample_rate.as_();
         let n = bands.len();
         let xover_count = n.saturating_sub(1);
@@ -376,8 +373,6 @@ impl IsolatorEq {
             .map(|&f| LR4::new(biquad_coeffs(Type::HighPass, f, sr)))
             .collect();
 
-        // Build flattened allpass array. Band k needs allpasses at
-        // crossover frequencies k+1 .. N-2 (LR-4 LP+HP = 2nd-order allpass).
         let mut ap_filters = Vec::new();
         let mut ap_offsets = Vec::with_capacity(n + 1);
         for band in 0..n {
@@ -478,10 +473,6 @@ impl IsolatorEq {
             self.refresh_fastpath_cache();
         }
 
-        // Fast paths skip the LR-4 + allpass chain when the result is
-        // trivially known. Filter state freezes while a fast path is active
-        // and is rehydrated from a ring buffer on exit, so resuming filter
-        // work doesn't jump from zero-state (see rehydrate_filter_state).
         if self.cached_silence_active {
             self.record_bypass_input(input);
             self.was_in_fastpath = true;
@@ -505,16 +496,12 @@ impl IsolatorEq {
             return clamp_sample(input * self.gains[0].current_linear);
         }
 
-        // Split via LP/HP chain: each crossover peels off a band via LP,
-        // and the HP output feeds the next crossover.
         let mut hp = input;
         for i in 0..n - 1 {
             self.lp_scratch[i] = self.lps[i].process(hp);
             hp = self.hps[i].process(hp);
         }
 
-        // Accumulate: each LP band runs through its allpass compensation,
-        // then is scaled by the band gain.
         let mut output = 0.0;
         for i in 0..n - 1 {
             let mut band = self.lp_scratch[i];
@@ -525,7 +512,6 @@ impl IsolatorEq {
             }
             output += band * self.gains[i].current_linear;
         }
-        // Last band is the final HP remainder.
         output += hp * self.gains[n - 1].current_linear;
 
         clamp_sample(output)
@@ -616,7 +602,6 @@ impl IsolatorEq {
     /// Re-initialise for a new sample rate (e.g. after stream change).
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
         use num_traits::cast::AsPrimitive;
-        // Audio sample rates fit losslessly in f32 mantissa (24-bit).
         self.sample_rate = sample_rate.as_();
         self.smooth_coeff = compute_smooth_coeff(self.sample_rate);
         self.rebuild_filters();
@@ -724,8 +709,6 @@ mod tests {
                 spec,
                 ..Default::default()
             },
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().attach(pcm),
         )
     }
@@ -822,7 +805,6 @@ mod tests {
         };
         let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
 
-        // Process enough audio for the crossover filters to settle.
         let warmup = vec![0.0f32; 4096];
         let _ = eq.process(test_chunk(spec, warmup));
 
@@ -837,13 +819,11 @@ mod tests {
         let output = eq.process(chunk).unwrap();
         let out = &output.pcm[..];
 
-        // Skip transient, measure steady-state RMS.
         let steady = &out[4096..];
         let output_rms: f32 =
             (steady.iter().map(|s| s * s).sum::<f32>() / steady.len() as f32).sqrt();
         let gain = output_rms / input_rms;
 
-        // At unity gains the crossover is an allpass (magnitude 1).
         assert!(
             (gain - 1.0).abs() < 0.05,
             "Unity gain should preserve magnitude, got gain={gain:.4}"
@@ -1058,14 +1038,12 @@ mod tests {
         };
         let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
 
-        // Warmup
         let warmup: Vec<f32> = (0..4096)
             .map(|i| (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin())
             .collect();
         let chunk = test_chunk(spec, warmup);
         let _ = eq.process(chunk);
 
-        // Abrupt gain change
         eq.set_gain(0, MAX_GAIN_DB);
 
         let signal: Vec<f32> = (0..4096)

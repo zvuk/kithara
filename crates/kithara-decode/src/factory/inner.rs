@@ -277,9 +277,6 @@ fn create_apple(
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
-    // Apple HW only owns the segment-aware fMP4 path. Anything else
-    // (file MP3, raw FLAC, WAV, etc.) falls through to the Symphonia
-    // path — the same software stack that owns non-Apple platforms.
     #[cfg(feature = "symphonia")]
     return create_symphonia(source, codec, container, config);
     #[cfg(not(feature = "symphonia"))]
@@ -313,10 +310,6 @@ fn create_android(
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
-    // Android HW only owns the segment-aware fMP4 path. Everything else
-    // falls through to the Symphonia path. (`feature = "android"`
-    // implies `feature = "symphonia"` in the workspace lock; we don't
-    // build an Android target without Symphonia.)
     create_symphonia(source, codec, container, config)
 }
 
@@ -387,11 +380,6 @@ fn create_file_symphonia_universal(
         "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>"
     );
 
-    // Probe codec-native gapless metadata before the format reader
-    // consumes the bytes. Symphonia 0.6.0-alpha.1 keeps `elst`/`iTunSMPB`
-    // (AAC) and the LAME tag (MP3) inside the codec readers and never
-    // surfaces them through `track.codec_params`, so the factory carries
-    // the trim counts across the demuxer boundary itself.
     let probed_gapless = if config.gapless {
         let _ = source.seek(SeekFrom::Start(0));
         let info = probe_codec_gapless(codec, &mut *source);
@@ -414,10 +402,6 @@ fn create_file_symphonia_universal(
         gapless: config.gapless,
         ..Default::default()
     };
-    // PCM / ADPCM tracks need the concrete bit-depth & endianness that
-    // `TrackInfo::codec` does not carry — feed the registry the demuxer's
-    // native `AudioCodecParameters` directly. Other codecs go through the
-    // generic [`SymphoniaCodec::open`] path keyed off [`TrackInfo`].
     let codec_impl = if SymphoniaCodec::supports(codec) {
         SymphoniaCodec::open_with_config(demuxer.track_info(), &symphonia_config)?
     } else {
@@ -426,8 +410,6 @@ fn create_file_symphonia_universal(
     let pool = config
         .pcm_pool
         .clone()
-        // fallback safety net — caller injects pcm_pool via DecoderConfig
-        // ast-grep-ignore: perf.no-global-pool-accessor
         .unwrap_or_else(|| PcmPool::default().clone());
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -505,8 +487,6 @@ where
     let pool = config
         .pcm_pool
         .clone()
-        // fallback safety net — caller injects pcm_pool via DecoderConfig
-        // ast-grep-ignore: perf.no-global-pool-accessor
         .unwrap_or_else(|| PcmPool::default().clone());
     let decoder = ComposedDecoder::new(
         demuxer,

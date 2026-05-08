@@ -31,9 +31,6 @@ struct EncodeTarget {
 
 impl EncodeTarget {
     fn from_request(request: &BytesEncodeRequest<'_>) -> EncodeResult<Self> {
-        // Caller-supplied bit rate overrides the codec default; both
-        // are `Option<...>` of the same type. Bind locals + eager
-        // `.or(...)` keeps the call site flat.
         let explicit = request.bit_rate;
         let codec_default = request.target.default_bit_rate();
         let bit_rate = explicit.or(codec_default);

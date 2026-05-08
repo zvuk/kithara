@@ -13,8 +13,6 @@ pub(crate) fn configure_resource(config: &mut ResourceConfig, store: &StoreOptio
     if let Some(ref dir) = store.cache_dir {
         config.store.cache_dir = PathBuf::from(dir);
     }
-    // Dev-mode `insecure = true` is applied on the shared `Downloader` in
-    // `AudioPlayer::new`, not here — `ResourceConfig` has no `net` field.
 }
 
 #[cfg(test)]

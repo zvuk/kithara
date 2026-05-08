@@ -9,18 +9,14 @@ pub struct UniqueBinaryCipher {
 }
 
 impl UniqueBinaryCipher {
-    // Keystream extraction parameters. `decrypt` reads the high byte of the
-    // 64-bit state via `to_be_bytes()[0]` and the low 3 bits via this mask.
-    const ROTATION_MASK: u8 = 7; // 3-bit rotation amount
-    // Splitmix64 constants (Steele, Lea & Moler, 2014).
-    const SPLITMIX_INCREMENT: u64 = 0x9e3779b97f4a7c15; // golden-ratio derived
+    const ROTATION_MASK: u8 = 7;
+    const SPLITMIX_INCREMENT: u64 = 0x9e3779b97f4a7c15;
     const SPLITMIX_MIX1: u64 = 0xbf58476d1ce4e5b9;
     const SPLITMIX_MIX2: u64 = 0x94d049bb133111eb;
     const SPLITMIX_SHIFT1: u32 = 30;
 
     const SPLITMIX_SHIFT2: u32 = 27;
     const SPLITMIX_SHIFT3: u32 = 31;
-    // Xorshift64* constants (Marsaglia, 2003; Vigna star variant).
     const XORSHIFT_SHIFT_A: u32 = 12;
     const XORSHIFT_SHIFT_B: u32 = 25;
 
@@ -42,8 +38,6 @@ impl UniqueBinaryCipher {
 
         for (i, &b) in data.iter().enumerate() {
             state = Self::xorshift64_star(state ^ i as u64);
-            // Extract the top byte (KEYSTREAM_SHIFT == 56) and the low rotation
-            // bits without an `as u8` truncation cast.
             let keystream_byte = state.to_be_bytes()[0];
             let rot = state.to_le_bytes()[0] & Self::ROTATION_MASK;
 

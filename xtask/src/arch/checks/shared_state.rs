@@ -140,7 +140,6 @@ fn strip_string_literals(code: &str) -> String {
                 out.push('"');
                 while let Some(next) = chars.next() {
                     if next == '\\' {
-                        // Escaped char: blank both the slash and the next char (if any).
                         out.push(' ');
                         if chars.next().is_some() {
                             out.push(' ');

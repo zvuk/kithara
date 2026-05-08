@@ -84,47 +84,29 @@ impl<R: ResourceExt> Atomic<R> {
         if let Some(path) = self.inner.path() {
             let path = path.to_path_buf();
 
-            // Parent directory for temp file (same filesystem = rename is atomic).
             let parent = path.parent().ok_or_else(|| {
                 crate::StorageError::Failed("atomic write: no parent dir".to_string())
             })?;
             let _ = fs::create_dir_all(parent);
 
-            // 1. Create unique temp file via `tempfile` crate.
             let mut tmp = NamedTempFile::new_in(parent)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write tmpfile: {e}")))?;
 
-            // 2. Write data to temp file.
             Write::write_all(&mut tmp, data)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
-            // 3. Optional durability fence: `sync_data` forces the
-            //    payload pages to physical disk before rename.
-            //    POSIX guarantees rename atomicity, but not data
-            //    durability of the renamed file's contents — without
-            //    this fence a power loss between rename and the
-            //    kernel's lazy flush leaves a torn file under `path`.
             if durable {
                 tmp.as_file()
                     .sync_data()
                     .map_err(|e| crate::StorageError::Failed(format!("atomic sync_data: {e}")))?;
             }
 
-            // 4. Atomic rename (POSIX guarantees atomicity).
-            //    `persist()` does `rename(tmp, target)` and disarms the
-            //    auto-delete on drop.
             tmp.persist(&path)
                 .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;
 
-            // 5. Re-open by path — sees new data after rename.
-            //    commit() drops the old mmap (now stale) and opens the
-            //    renamed file as read-only.
             return self.inner.commit(Some(data.len() as u64));
         }
 
-        // In-memory or wasm32: reactivate committed resources before overwrite.
-        // Durability is meaningless without a filesystem; both paths fall
-        // through to the same passthrough.
         let _ = durable;
         self.inner.reactivate()?;
         self.inner.write_all(data)

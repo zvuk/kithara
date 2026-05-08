@@ -59,14 +59,7 @@ impl Consts {
     const PLAYBACK_BUDGET_SECS: u64 = 12;
     const WARMUP_CHUNKS: usize = 4;
     const NEXT_CHUNK_TIMEOUT: Duration = Duration::from_millis(3_000);
-    // Slow the reader so downloads race ahead and LRU evicts the reader's
-    // live segment. Each chunk ≈ 20 ms of audio; a 30 ms sleep per chunk
-    // means the downloader finishes well before the reader exits seg 0.
     const READER_SLEEP_MS: u64 = 30;
-    // Expected lower bound. With 12s budget and 30ms/chunk rate-limit, a
-    // healthy pipeline yields ~400 chunks. The hot-refetch loop collapses
-    // this to near-zero because every completed fetch evicts the reader's
-    // live window before it can be read.
     const MIN_PROGRESS_CHUNKS: usize = 100;
 }
 
@@ -81,8 +74,6 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    // Tighter than production (cap=4) to force the race deterministically
-    // without needing CPU contention to surface it.
     let store = StoreOptions::new(temp_dir.path())
         .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(1).expect("nonzero"));
@@ -96,7 +87,6 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
         .expect("audio creation");
     let _ = audio.preload();
 
-    // Warmup: read a few chunks so byte_position advances past seg 0.
     info!("warmup: reading {} chunks", Consts::WARMUP_CHUNKS);
     let mut chunks_read = 0usize;
     let warmup_deadline = Instant::now() + Duration::from_secs(10);
@@ -124,9 +114,6 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     }
     info!(chunks_read, "warmup done");
 
-    // Drain for Consts::PLAYBACK_BUDGET_SECS. With the hot-refetch bug, the reader
-    // stalls or crawls as soon as its current segment is evicted by a
-    // parallel re-fetch of a behind-reader segment.
     let deadline = Instant::now() + Duration::from_secs(Consts::PLAYBACK_BUDGET_SECS);
     let mut drained = 0usize;
     let mut stall_at: Option<Duration> = None;
@@ -141,7 +128,6 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
                 Ok(ChunkOutcome::Chunk(_)) => {
                     drained += 1;
                     got_chunk = true;
-                    // Rate-limit the reader.
                     sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
                     break;
                 }

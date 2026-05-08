@@ -45,7 +45,7 @@ impl Check for SingleImplSize {
                 let start = span.start().line;
                 let end = span.end().line;
                 if start == 0 || end < start {
-                    continue; // span info unavailable — skip silently
+                    continue;
                 }
                 let lines = end - start + 1;
                 let label = describe_impl(im);

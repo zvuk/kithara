@@ -97,7 +97,6 @@ impl DecoderNode {
             return;
         }
 
-        // Drop any chunk parked from the previous epoch — it is stale now.
         let _ = self.outlet.take_pending();
         self.runtime = DecoderRuntime {
             seek_epoch: current,
@@ -118,15 +117,10 @@ impl Node for DecoderNode {
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();
 
-        // Drain any item parked in the outlet's overflow slot before producing
-        // more. If the ring is still saturated, we cannot push anything new
-        // this tick.
         if !self.outlet.flush() {
             return TickResult::Waiting;
         }
 
-        // If we had pending chunks that just got flushed to the ring,
-        // we might now meet the preload condition.
         if self.runtime.chunks_sent >= self.preload_chunks && !self.runtime.preloaded {
             self.complete_preload();
         }
@@ -134,7 +128,6 @@ impl Node for DecoderNode {
         match self.source.step_track() {
             TrackStep::Produced(fetch) => {
                 self.runtime.eof_sent = false;
-                // Outlet was just drained → try_push is infallible here.
                 let _ = self.outlet.try_push(fetch);
                 self.mark_preload_progress();
                 TickResult::Progress
@@ -155,9 +148,6 @@ impl Node for DecoderNode {
             TrackStep::Eof => {
                 let epoch = self.source.timeline().seek_epoch();
                 let marker = Fetch::new(PcmChunk::default(), true, epoch);
-                // We just called `flush()` above, so the overflow slot is guaranteed to be empty.
-                // However, we handle the `Err` case defensively to prevent silent EOF drops
-                // if the internal FSM or port contracts change in the future.
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
                     self.runtime.eof_sent = true;
@@ -171,12 +161,8 @@ impl Node for DecoderNode {
             TrackStep::Failed => {
                 let epoch = self.source.timeline().seek_epoch();
                 let marker = Fetch::failure(PcmChunk::default(), epoch);
-                // We just called `flush()` above, so the overflow slot is guaranteed to be empty.
                 if let Ok(()) = self.outlet.try_push(marker) {
                     self.complete_preload();
-                    // If the failure marker only landed in the overflow slot,
-                    // we need at least one more tick to flush it before the
-                    // node may be retired.
                     if self.outlet.has_pending() {
                         TickResult::Progress
                     } else {
@@ -229,7 +215,6 @@ mod tests {
         let notify = Arc::new(Notify::new());
         let (mut outlet, _inlet) = connect::<Fetch<PcmChunk>>(1, None);
 
-        // Fill the ring buffer and the overflow slot
         outlet
             .try_push(Fetch::new(PcmChunk::default(), false, 0))
             .unwrap();
@@ -250,40 +235,16 @@ mod tests {
 
         let mut node = test_node(source, outlet, notify);
 
-        // Tick 1: flush fails, returns Waiting
         assert_eq!(node.tick(), TickResult::Waiting);
         assert!(!node.runtime.eof_sent);
 
-        // Drain the inlet so flush can succeed
         let _ = node.outlet.take_pending();
 
-        // Tick 2: flush succeeds (overflow is empty). Now step_track returns Eof.
-        // It pushes the EOF marker.
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.runtime.eof_sent);
-        assert!(node.outlet.has_pending()); // EOF marker is now in overflow
+        assert!(node.outlet.has_pending());
     }
 
-    // Red test — pins the broken contract at the root of Bug B.
-    //
-    // The producer has two semantically distinct terminal states:
-    //   - `TrackStep::Eof`    → natural end of clip, finalize the track
-    //   - `TrackStep::Failed` → decoder/source error, transient in seek
-    //                           recovery; caller may want to retry, wait,
-    //                           or surface a user-visible error
-    //
-    // But on the wire the producer squeezes both into the same marker:
-    // `Fetch::new(PcmChunk::default(), is_eof=true, epoch)`. The consumer
-    // (`Audio::process_fetch`) sees only `fetch.is_eof()` — it cannot
-    // tell the two apart. This cascades into `ConsumerPhase::AtEof` (or
-    // `Failed`, both terminal for `is_eof()`), then into
-    // `PlayerResource::read → Err("eof") → PlayerTrack::Finished`, and
-    // the track arena goes empty mid-clip.
-    //
-    // The correct contract: the marker itself must carry the kind
-    // (`Data | NaturalEof | Failure`) so the consumer can choose
-    // different behavior — e.g. keep the track alive on Failure and
-    // flip only on NaturalEof.
     #[kithara::test]
     fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
         use std::fmt::Debug;
@@ -308,7 +269,6 @@ mod tests {
 
         let notify = Arc::new(Notify::new());
 
-        // Scenario A: natural EOF.
         let (eof_outlet, mut eof_inlet) = connect::<Fetch<PcmChunk>>(1, None);
         let eof_timeline = Timeline::new();
         let eof_source = Box::new(Unimock::new((
@@ -323,8 +283,6 @@ mod tests {
         assert_eq!(eof_node.tick(), TickResult::Progress);
         let eof_kind = drain_marker_kind(&mut eof_node.outlet, &mut eof_inlet);
 
-        // Scenario B: transient failure (e.g. SourceCancelled or
-        // RecreateFailed during seek recovery).
         let (failed_outlet, mut failed_inlet) = connect::<Fetch<PcmChunk>>(1, None);
         let failed_timeline = Timeline::new();
         let failed_source = Box::new(Unimock::new((
@@ -354,7 +312,6 @@ mod tests {
         let notify = Arc::new(Notify::new());
         let (mut outlet, mut inlet) = connect::<Fetch<PcmChunk>>(1, None);
 
-        // Fill the ring buffer so the next push goes to overflow
         outlet
             .try_push(Fetch::new(PcmChunk::default(), false, 0))
             .unwrap();
@@ -380,23 +337,16 @@ mod tests {
 
         let mut node = test_node(source, outlet, notify.clone());
 
-        // Tick 1: flush succeeds (overflow was empty). step_track produces chunk.
-        // Chunk goes to overflow because ring is full.
-        // chunks_sent becomes 1, but has_pending is true, so preloaded stays false.
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.runtime.chunks_sent, 1);
         assert!(!node.runtime.preloaded);
 
-        // Tick 2: flush fails (ring still full, overflow has chunk).
         assert_eq!(node.tick(), TickResult::Waiting);
         assert!(!node.runtime.preloaded);
 
-        // Consumer reads from ring
         let _ = inlet.try_pop();
 
-        // Tick 3: flush succeeds (moves chunk from overflow to ring).
-        // Now chunks_sent >= 1 and !has_pending, so complete_preload is called!
-        assert_eq!(node.tick(), TickResult::Waiting); // step_track returns Blocked
+        assert_eq!(node.tick(), TickResult::Waiting);
         assert!(node.runtime.preloaded);
     }
 }

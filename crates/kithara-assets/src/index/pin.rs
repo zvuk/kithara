@@ -169,7 +169,7 @@ impl PinsIndex {
             let mut pins = self.inner.pins.lock_sync();
             let next = pins.get(asset_root).map(|c| NonZeroU32::new(c.get() - 1));
             match next {
-                None => false, // not pinned: no-op
+                None => false,
                 Some(Some(decremented)) => {
                     pins.insert(asset_root.to_string(), decremented);
                     false
@@ -298,9 +298,6 @@ fn read_pins(
         }
     };
 
-    // Hydrating from disk: every persisted pin starts at refcount 1. The disk
-    // format only records the pinned set (not refcounts) — fresh leases will
-    // re-increment as they take their guards.
     let pinned = archived
         .pinned
         .iter()
@@ -346,8 +343,6 @@ mod tests {
         let idx = PinsIndex::with_persist_at(
             path.clone(),
             CancellationToken::new(),
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             &BytePool::default(),
         );
         assert!(idx.snapshot().is_empty());
@@ -364,8 +359,6 @@ mod tests {
         let idx = PinsIndex::with_persist_at(
             path.clone(),
             CancellationToken::new(),
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             &BytePool::default(),
         );
 
@@ -379,7 +372,6 @@ mod tests {
         assert!(idx.contains("asset_a"));
         assert_eq!(idx.snapshot().len(), 2);
 
-        // asset_a refcount is 2; the first remove only decrements.
         assert!(
             !idx.remove("asset_a").unwrap(),
             "decrement-only remove must not signal a 1→0 transition"
@@ -388,10 +380,8 @@ mod tests {
             idx.contains("asset_a"),
             "still pinned by remaining refcount"
         );
-        // The second remove crosses 1→0.
         assert!(idx.remove("asset_a").unwrap());
         assert!(!idx.contains("asset_a"));
-        // Removing an already-unpinned root is a no-op.
         assert!(!idx.remove("asset_a").unwrap());
         assert!(idx.contains("asset_b"));
     }
@@ -403,12 +393,9 @@ mod tests {
         let idx = PinsIndex::with_persist_at(
             path.clone(),
             CancellationToken::new(),
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             &BytePool::default(),
         );
 
-        // 5 adds: only the first crosses 0→1.
         let mut transitions_in = 0;
         for _ in 0..5 {
             if idx.add("hot_asset").unwrap() {
@@ -418,7 +405,6 @@ mod tests {
         assert_eq!(transitions_in, 1, "only the 0→1 transition counts");
         assert!(idx.contains("hot_asset"));
 
-        // 4 removes: refcount 5→1, no transition.
         let mut transitions_out = 0;
         for _ in 0..4 {
             if idx.remove("hot_asset").unwrap() {
@@ -428,30 +414,22 @@ mod tests {
         assert_eq!(transitions_out, 0, "intermediate decrements stay in-memory");
         assert!(idx.contains("hot_asset"), "refcount=1 keeps the pin alive");
 
-        // Final remove crosses 1→0.
         assert!(idx.remove("hot_asset").unwrap());
         assert!(!idx.contains("hot_asset"));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn concurrent_leases_keep_pin_alive() {
-        // Models the HLS pattern where multiple resources of the same
-        // asset_root are leased concurrently. Dropping one lease must
-        // not unpin the asset while others are still alive.
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        // test fixture
-        // ast-grep-ignore: perf.no-global-pool-accessor
         let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), &BytePool::default());
 
-        idx.add("playlist").unwrap(); // resource 1
-        idx.add("playlist").unwrap(); // resource 2
+        idx.add("playlist").unwrap();
+        idx.add("playlist").unwrap();
 
-        // Drop resource 1 → refcount 2→1, asset still pinned by resource 2.
         assert!(!idx.remove("playlist").unwrap());
         assert!(idx.contains("playlist"));
 
-        // Drop resource 2 → refcount 1→0, finally unpinned.
         assert!(idx.remove("playlist").unwrap());
         assert!(!idx.contains("playlist"));
     }
@@ -465,8 +443,6 @@ mod tests {
             let idx = PinsIndex::with_persist_at(
                 path.clone(),
                 CancellationToken::new(),
-                // test fixture
-                // ast-grep-ignore: perf.no-global-pool-accessor
                 &BytePool::default(),
             );
             idx.add("persistent_asset").unwrap();
@@ -476,8 +452,6 @@ mod tests {
             let idx = PinsIndex::with_persist_at(
                 path.clone(),
                 CancellationToken::new(),
-                // test fixture
-                // ast-grep-ignore: perf.no-global-pool-accessor
                 &BytePool::default(),
             );
             assert!(idx.contains("persistent_asset"));
@@ -491,8 +465,6 @@ mod tests {
         let path = temp_dir.path().join("invalid.bin");
         fs::write(&path, b"not valid rkyv data").unwrap();
 
-        // test fixture
-        // ast-grep-ignore: perf.no-global-pool-accessor
         let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), &BytePool::default());
         assert!(idx.snapshot().is_empty());
     }
@@ -502,15 +474,12 @@ mod tests {
         let idx = PinsIndex::ephemeral();
         assert!(idx.add("asset").unwrap());
         assert!(idx.contains("asset"));
-        // No assertion on disk — there is no disk.
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn clone_shares_state() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        // test fixture
-        // ast-grep-ignore: perf.no-global-pool-accessor
         let idx = PinsIndex::with_persist_at(path, CancellationToken::new(), &BytePool::default());
         let idx2 = idx.clone();
 

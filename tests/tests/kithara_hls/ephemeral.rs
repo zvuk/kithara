@@ -107,7 +107,6 @@ async fn ephemeral_pipeline_no_disk_writes() {
     const SEGMENT_COUNT: usize = 3;
     const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
 
-    // Generate saw-tooth WAV
     let wav_data = create_wav_exact_bytes(
         signal::Sawtooth,
         SawWav::DEFAULT.sample_rate,
@@ -116,7 +115,6 @@ async fn ephemeral_pipeline_no_disk_writes() {
     );
     info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
 
-    // Spawn HLS server
     let segment_duration = SawWav::DEFAULT.segment_size as f64
         / (f64::from(SawWav::DEFAULT.sample_rate) * f64::from(SawWav::DEFAULT.channels) * 2.0);
     let server = HlsTestServer::new(HlsTestServerConfig {
@@ -132,7 +130,6 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
-    // Create an Audio pipeline with ephemeral=true
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()).with_is_ephemeral(true))
         .with_cancel(cancel)
@@ -144,7 +141,6 @@ async fn ephemeral_pipeline_no_disk_writes() {
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
-    // Read samples in blocking thread
     let temp_path = temp_dir.path().to_path_buf();
     let result = spawn_blocking(move || {
         let mut buf = vec![0.0f32; 4096];
@@ -159,7 +155,6 @@ async fn ephemeral_pipeline_no_disk_writes() {
             };
             total_samples += n;
 
-            // Verify sample integrity
             for &s in &buf[..n] {
                 assert!(
                     s.is_finite() && (-1.0..=1.0).contains(&s),
@@ -171,7 +166,6 @@ async fn ephemeral_pipeline_no_disk_writes() {
         assert!(total_samples > 0, "must read some audio samples");
         info!(total_samples, "Read audio samples");
 
-        // Verify NO files on disk — proves MemDriver, not MmapDriver
         let file_count = count_files(&temp_path);
         assert_eq!(
             file_count, 0,

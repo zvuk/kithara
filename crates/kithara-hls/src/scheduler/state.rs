@@ -129,9 +129,6 @@ impl HlsScheduler {
             stream_index.set_layout_variant(initial_variant);
         }
         let segments = Arc::new(Mutex::new(stream_index));
-        // Segment-based throttle: only for ephemeral backends where LRU eviction
-        // destroys data. Disk backends don't need this — files survive eviction.
-        // Each fMP4 segment uses up to SLOTS_PER_SEGMENT LRU slots (init + media).
         let look_ahead_segments = if backend.is_ephemeral() {
             const SLOTS_PER_SEGMENT: usize = 2;
             let cache_cap = config.store.effective_cache_capacity().get();
@@ -247,8 +244,6 @@ impl HlsScheduler {
 
     pub(crate) fn publish_download_error(&self, context: &str, error: &HlsError) {
         debug!(?error, context, "hls downloader error");
-        // Network errors are reported through `DownloaderEvent::RequestFailed`
-        // — do not duplicate them on `HlsEvent::Error`.
         let public = match error {
             HlsError::Net(_) => return,
             HlsError::PlaylistParse(msg) => PublicHlsError::Playlist(format!("{context}: {msg}")),
@@ -315,21 +310,12 @@ impl HlsScheduler {
     ) {
         let previous_variant = self.layout_variant();
 
-        // ABR lifecycle is owned by `make_abr_decision` — it acquires the
-        // lock the first time it observes `is_seek_pending()` and releases
-        // it the first time the pending flag clears. Reset no longer adds
-        // its own lock: doing so double-counts the refcount and leaks a
-        // permanent lock after seek completes.
-
         self.runtime.active_seek_epoch = seek_epoch;
         self.coord.timeline().set_eof(false);
         self.coord
             .had_midstream_switch
             .store(false, Ordering::Release);
         self.reset_cursor(segment_index);
-        // Drop stale entries — the prior epoch's FetchCmds are cancelled
-        // by the epoch cancel token, so none of them will fire on_complete
-        // in the new epoch.
         self.runtime.in_flight_segments.clear();
 
         self.runtime.force_init_for_seek = self

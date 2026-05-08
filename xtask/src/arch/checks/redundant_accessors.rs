@@ -105,9 +105,6 @@ impl Check for RedundantAccessors {
             expose_methods: cfg.expose_methods.clone(),
         };
 
-        // Step 1: parse every file in scope and own the AST so impl blocks
-        // collected from different files outlive the per-file loop. All
-        // detectors operate on the union, not on per-file slivers.
         let mut parsed: Vec<(String, syn::File)> = Vec::new();
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let Ok(file) = parse_file(&path) else {
@@ -119,9 +116,6 @@ impl Check for RedundantAccessors {
             parsed.push((rel, file));
         }
 
-        // Step 2: aggregate impl sites + pub fields across all files, keyed
-        // by type ident. Pre-existing P1/P2/P3 limitation about cross-module
-        // ident collisions stands — name resolution would be required.
         let mut sites_by_type: BTreeMap<String, Vec<ImplSite<'_>>> = BTreeMap::new();
         let mut pub_fields_by_type: PubFieldsByType = BTreeMap::new();
         for (rel, file) in &parsed {
@@ -161,7 +155,6 @@ impl Check for RedundantAccessors {
             }
         }
 
-        // Step 3: run detectors over the workspace-wide slice of each type.
         let mut violations = Vec::new();
         for (target_type, sites) in &sites_by_type {
             analyze_target_type(
@@ -188,8 +181,6 @@ fn analyze_target_type(
     pub_fields_by_type: &PubFieldsByType,
     out: &mut Vec<Violation>,
 ) {
-    // Carry per-method origin (file_rel + mod_prefix) so violation keys
-    // stay precise across the cross-file aggregation.
     let mut methods: Vec<MethodEntry<'_>> = Vec::new();
     let mut delegate_sites: Vec<(String, &str)> = Vec::new();
     for site in sites {
@@ -263,10 +254,6 @@ fn scan_to_self_field(tokens: proc_macro2::TokenStream, out: &mut Vec<String>) {
         let TokenTree::Ident(field) = &window[3] else {
             continue;
         };
-        // Reject chained paths like `to self.inner.player` — the `inner`
-        // field is not the delegate target, the leaf is. Pairing the leaf
-        // with an `inner()` accessor would also be wrong, so we just skip
-        // the whole chain.
         if let Some(TokenTree::Punct(next)) = toks.get(i + 4)
             && next.as_char() == '.'
         {
@@ -584,9 +571,6 @@ mod tests {
 
     #[test]
     fn p4_flags_accessor_paired_with_delegate_cross_file() {
-        // Real-world shape: Queue's accessor lives in `access.rs`, the
-        // `delegate!` block lives in `passthrough.rs`. A per-file pass
-        // would miss this — the cross-file aggregation must catch it.
         let v = run_p4(&[
             (
                 "crates/x/src/access.rs",
@@ -711,9 +695,6 @@ mod tests {
 
     #[test]
     fn p4_silent_for_non_delegate_macro_with_to_self_tokens() {
-        // A non-`delegate` macro that happens to contain `to self.x` tokens
-        // must not trigger P4 — we only scan macros whose path tail is
-        // `delegate`.
         let v = run_p4(&[(
             "test.rs",
             r#"

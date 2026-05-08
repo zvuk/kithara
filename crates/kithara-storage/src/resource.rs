@@ -157,7 +157,6 @@ pub trait ResourceExt: Send + Sync + 'static {
     /// Returns error if the resource is cancelled, failed, or the read fails.
     fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
         let Some(len) = self.len() else {
-            // Probe via read_at to detect error state (cancelled/failed).
             let mut probe = [0u8; 1];
             let _ = self.read_at(0, &mut probe)?;
             return Ok(0);
@@ -166,9 +165,7 @@ pub trait ResourceExt: Send + Sync + 'static {
             buf.clear();
             return Ok(0);
         }
-        // u64→usize conversion-clamp: resource length fits in addressable memory
-        // by construction; ceiling on the (impossible) overflow keeps the cast lossless.
-        let len_usize = usize::try_from(len).unwrap_or(usize::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
+        let len_usize = usize::try_from(len).unwrap_or(usize::MAX);
         buf.resize(len_usize, 0);
         let n = self.read_at(0, buf)?;
         buf.truncate(n);

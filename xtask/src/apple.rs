@@ -42,7 +42,6 @@ pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
 }
 
 fn run_build(profile: crate::BuildProfile) -> Result<()> {
-    // 1. Check cargo-swift is installed.
     match Command::new("cargo")
         .args(["swift", "--help"])
         .stdout(Stdio::null())
@@ -53,7 +52,6 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
         _ => bail!("cargo-swift not found. Install with: cargo install cargo-swift"),
     }
 
-    // 2. Resolve workspace paths.
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
@@ -61,7 +59,6 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     let crate_dir = root.join("crates/kithara-ffi");
     let apple_dir = root.join("apple");
 
-    // 3. Run cargo swift package.
     println!("==> Building KitharaFFI with cargo-swift");
 
     let mut cmd = Command::new("cargo");
@@ -79,7 +76,6 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
         "-y",
     ]);
     cmd.current_dir(&crate_dir);
-    // Match the deployment target declared in project.yml / Package.swift.
     cmd.env("IPHONEOS_DEPLOYMENT_TARGET", "16.0");
 
     let status = cmd.status().context("failed to run cargo swift package")?;
@@ -87,7 +83,6 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
         bail!("cargo swift package failed");
     }
 
-    // 4. Copy outputs to apple/.
     println!("==> Copying outputs to apple/");
 
     let xcf_src = crate_dir.join("KitharaFFI/KitharaFFIInternal.xcframework");
@@ -95,21 +90,18 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     let swift_src = crate_dir.join("KitharaFFI/Sources/KitharaFFI/KitharaFFI.swift");
     let swift_dst = apple_dir.join("Sources/KitharaFFI/KitharaFFI.swift");
 
-    // Remove old xcframework if present, then copy recursively.
     if xcf_dst.exists() {
         fs::remove_dir_all(&xcf_dst).with_context(|| format!("remove {}", xcf_dst.display()))?;
     }
     copy_dir_all(&xcf_src, &xcf_dst)
         .with_context(|| format!("copy {} -> {}", xcf_src.display(), xcf_dst.display()))?;
 
-    // Copy generated Swift bindings.
     if let Some(parent) = swift_dst.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::copy(&swift_src, &swift_dst)
         .with_context(|| format!("copy {} -> {}", swift_src.display(), swift_dst.display()))?;
 
-    // 5. Print summary.
     println!("==> Done!");
     println!("==> XCFramework: {}", xcf_dst.display());
     println!("==> Swift bindings: {}", swift_dst.display());

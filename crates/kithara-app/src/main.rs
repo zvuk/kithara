@@ -1,4 +1,3 @@
-// Binary needs at least one frontend — `lib-only` alone is not enough.
 #[cfg(not(any(feature = "tui", feature = "gui")))]
 compile_error!("`kithara` binary requires at least one of `tui` or `gui` feature");
 
@@ -94,7 +93,6 @@ fn init_tracing_for_mode(mode: Mode) -> AppResult<()> {
 
 #[cfg(not(feature = "tui"))]
 fn init_tracing_for_mode(_mode: Mode) -> AppResult<()> {
-    // GUI-only: simple tracing init without CRLF writer.
     gui::init_tracing()
 }
 
@@ -104,24 +102,14 @@ fn main() -> AppResult {
     let args = Args::parse();
     let mode = resolve_mode(args.mode);
 
-    // One Downloader for the whole app — shared HTTP pool and
-    // ambient-runtime aware, so every track created through
-    // `sources::build_source` reuses it. TLS posture goes through
-    // `NetOptions` on the Downloader; `ResourceConfig` has no `net`.
     let mut net = NetOptions::default();
     net.is_insecure = args.insecure;
     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
-    // One FlushHub for the whole app — every track's `AssetStore`
-    // shares this hub. Worker is opt-in: see
-    // `FlushHub::with_worker(...)` if a future build wants debounced
-    // background flushes; the no-worker default keeps the existing
-    // sync-flush-per-mutation behaviour.
     let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default()); // kithara:cancel:owner
     let config = AppConfig::new(downloader, flush_hub)
         .with_tracks(args.tracks)
         .with_should_accept_invalid_certs(args.insecure);
 
-    // Initialize tracing based on mode (cfg-gated dispatch in the helper).
     init_tracing_for_mode(mode)?;
 
     let player_config = PlayerConfig::default()
@@ -130,9 +118,6 @@ fn main() -> AppResult {
     let player = Arc::new(PlayerImpl::new(player_config));
     let queue_config = QueueConfig::default().with_player(player);
 
-    // Queue is constructed here, but `queue.set_tracks` is deferred to each
-    // frontend's runtime context — `Loader::spawn_load` requires a running
-    // tokio runtime.
     let queue = Arc::new(Queue::new(queue_config));
 
     match mode {

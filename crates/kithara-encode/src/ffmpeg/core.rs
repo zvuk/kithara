@@ -104,8 +104,3 @@ pub(crate) fn build_direct_filter(
 
     Ok(graph)
 }
-
-// `collect_encoded_packets` and `normalize_timestamp` were intended as
-// shared helpers from PR #56 but each codec (aac.rs / flac.rs) keeps a
-// local copy with codec-specific tweaks; consolidating them is left for
-// a follow-up. The helpers are deleted here to keep clippy quiet.

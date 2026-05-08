@@ -14,8 +14,6 @@ fn test_config() -> DecoderConfig {
     DecoderConfig::default()
 }
 
-// Fixtures
-
 #[kithara::fixture]
 fn audio() -> EmbeddedAudio {
     EmbeddedAudio::get()
@@ -32,8 +30,6 @@ fn mp3_media_info() -> MediaInfo {
         .with_codec(AudioCodec::Mp3)
         .with_container(ContainerFormat::MpegAudio)
 }
-
-// Basic Decode Tests
 
 #[kithara::test]
 #[case::wav(true, "wav")]
@@ -76,8 +72,6 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
     assert!(chunk_count > 0, "Should have at least one chunk");
 }
 
-// MediaInfo Creation Tests
-
 #[kithara::test]
 #[case::wav(true)]
 #[case::mp3(false)]
@@ -104,13 +98,10 @@ fn from_media_info(
     assert!(outcome.is_chunk());
 }
 
-// Spec Tests
-
 /// Acceptable spec for a probed `test.{wav,mp3}` fixture.
 fn assert_spec(spec: &kithara::decode::PcmSpec, ext: &str) {
     match ext {
         "wav" => {
-            // Our test WAV is 44.1kHz stereo
             assert_eq!(spec.sample_rate, 44100);
             assert_eq!(spec.channels, 2);
         }
@@ -141,34 +132,26 @@ fn spec_properties(audio: EmbeddedAudio, #[case] ext: &str) {
     assert_spec(&decoder.spec(), ext);
 }
 
-// Error Handling Tests
-
 #[kithara::test]
 #[case::invalid(vec![0u8; 100])]
 #[case::empty(vec![])]
 fn invalid_data_fails(#[case] data: Vec<u8>) {
     let reader = Cursor::new(data);
-    // Try to create as WAV - should fail with invalid data
     let result = DecoderFactory::create_with_probe(reader, Some("wav"), &test_config());
     assert!(result.is_err());
 }
 
 #[kithara::test]
 fn truncated_data_handles_gracefully(audio: EmbeddedAudio) {
-    // Take only first 1000 bytes of WAV (truncated)
     let truncated: Vec<u8> = audio.wav().iter().take(1000).copied().collect();
     let reader = Cursor::new(truncated);
 
-    // Should be able to create decoder (header is intact)
     let decoder_result = DecoderFactory::create_with_probe(reader, Some("wav"), &test_config());
 
-    // Either fails to create or decodes partial data
     if let Ok(mut decoder) = decoder_result {
         let _ = decoder.next_chunk();
     }
 }
-
-// Chunk Properties Tests
 
 #[kithara::test]
 fn chunk_has_valid_samples(audio: EmbeddedAudio) {
@@ -180,7 +163,6 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
 
     let chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
 
-    // Samples should be f32 values in reasonable range
     for sample in chunk.pcm.iter() {
         assert!(
             sample.is_finite(),
@@ -194,7 +176,6 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
         );
     }
 
-    // Sample count should be multiple of channels
     assert_eq!(
         chunk.pcm.len() % spec.channels as usize,
         0,
@@ -216,10 +197,8 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         chunk_count += 1;
 
-        // Each chunk should have samples multiple of channels
         assert_eq!(chunk.pcm.len() % spec.channels as usize, 0);
 
-        // Skip first few chunks - they can have different sizes during init
         if chunk_count > 3
             && let Some(prev) = prev_len
         {
@@ -240,8 +219,6 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     }
 }
 
-// Decode Consistency Tests
-
 #[kithara::test]
 fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
@@ -252,7 +229,6 @@ fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let first_chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
     let second_chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
 
-    // Chunks should be different (unless file is very short)
     if first_chunk.pcm.len() > 10 && second_chunk.pcm.len() > 10 {
         let differs = first_chunk
             .pcm

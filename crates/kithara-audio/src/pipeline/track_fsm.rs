@@ -10,8 +10,6 @@ use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};
 
 use crate::pipeline::{fetch::Fetch, seek_location::SeekLocation};
 
-// TrackState — worker-side FSM
-
 /// Explicit state machine for a single audio track in the worker thread.
 ///
 /// Each variant carries exactly the context needed for that phase.
@@ -225,8 +223,6 @@ pub(crate) enum ConsumerPhase {
     Failed,
 }
 
-// TrackState methods
-
 impl TrackState {
     /// Returns `true` for terminal states that will never transition.
     ///
@@ -295,16 +291,12 @@ fn apply_seek_location(mode: SeekMode) -> SeekLocation {
     }
 }
 
-// ConsumerPhase methods
-
 impl ConsumerPhase {
     /// Returns `true` for terminal states.
     pub(crate) fn is_terminal(self) -> bool {
         matches!(self, Self::AtEof | Self::Failed)
     }
 }
-
-// SourcePhase to WaitingReason mapping
 
 /// Map a `SourcePhase` to an optional `WaitingReason`.
 ///
@@ -319,8 +311,6 @@ pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
         _ => None,
     }
 }
-
-// Tests
 
 #[cfg(test)]
 mod tests {
@@ -372,7 +362,6 @@ mod tests {
                 anchor_offset: None,
                 skip: None,
             }),
-            // AtEof is NOT terminal — seek-after-EOF is valid
             TrackState::AtEof,
         ];
         for state in &non_terminal {
@@ -383,7 +372,6 @@ mod tests {
             );
         }
 
-        // Only Failed is truly terminal
         assert!(TrackState::Failed(TrackFailure::SourceCancelled).is_terminal());
     }
 
@@ -504,7 +492,6 @@ mod tests {
 
     #[kithara::test]
     fn at_eof_allows_seek_transition() {
-        // AtEof is not terminal — seek-after-EOF must work
         let state = TrackState::AtEof;
         assert!(!state.is_terminal());
         assert_eq!(state.phase_tag(), TrackPhaseTag::AtEof);
@@ -522,7 +509,6 @@ mod tests {
         };
         let anchor = SourceSeekAnchor::new(4096, Duration::from_secs(10)).with_variant_index(1);
 
-        // States without a byte target collapse to CurrentPosition.
         assert_eq!(
             TrackState::Decoding.seek_location(),
             SeekLocation::CurrentPosition,
@@ -540,7 +526,6 @@ mod tests {
             SeekLocation::CurrentPosition,
         );
 
-        // ApplyingSeek forwards the resolved byte target.
         assert_eq!(
             TrackState::ApplyingSeek(ApplySeekState {
                 mode: SeekMode::Anchor(anchor),
@@ -568,7 +553,6 @@ mod tests {
             SeekLocation::CurrentPosition,
         );
 
-        // RecreatingDecoder carries its offset.
         let recreate = RecreateState {
             attempt: 0,
             cause: RecreateCause::VariantSwitch,
@@ -581,12 +565,6 @@ mod tests {
             SeekLocation::from_recreate_offset(12_345),
         );
 
-        // AwaitingResume: anchor_offset wins when present, else
-        // CurrentPosition. The anchor case is the one that previously
-        // fell back to `shared_stream.position()` via
-        // `WaitContext::Playback` after a DRM-safety compromise —
-        // exposing it via SeekLocation lets the demand path target the
-        // real anchor byte.
         assert_eq!(
             TrackState::AwaitingResume(ResumeState {
                 recover_attempts: 0,
@@ -608,7 +586,6 @@ mod tests {
             SeekLocation::CurrentPosition,
         );
 
-        // WaitingForSource dispatches on WaitContext.
         assert_eq!(
             TrackState::WaitingForSource {
                 context: WaitContext::Playback,

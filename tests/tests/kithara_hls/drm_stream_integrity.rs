@@ -137,7 +137,6 @@ fn scan_boxes(
     timeout(Duration::from_secs(45)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
-// path × label × ephemeral × abr_variant
 #[case::hls_disk_v0("hls/master.m3u8", "HLS-disk-v0", false, 0)]
 #[case::hls_disk_v3("hls/master.m3u8", "HLS-disk-v3", false, 3)]
 #[case::hls_eph_v0("hls/master.m3u8", "HLS-eph-v0", true, 0)]
@@ -146,7 +145,6 @@ fn scan_boxes(
 #[case::drm_disk_v3("drm/master.m3u8", "DRM-disk-v3", false, 3)]
 #[case::drm_eph_v0("drm/master.m3u8", "DRM-eph-v0", true, 0)]
 #[case::drm_eph_v3("drm/master.m3u8", "DRM-eph-v3", true, 3)]
-// Auto cases: start on v0, ABR will switch up
 #[case::hls_disk_auto("hls/master.m3u8", "HLS-disk-auto", false, 99)]
 #[case::hls_eph_auto("hls/master.m3u8", "HLS-eph-auto", true, 99)]
 #[case::drm_disk_auto("drm/master.m3u8", "DRM-disk-auto", false, 99)]
@@ -187,7 +185,6 @@ async fn drm_stream_byte_integrity(
     let result = spawn_blocking(move || {
         let label = &label;
 
-        // Phase 1: Read to EOF, clearing variant fence on each VariantChangeError.
         info!("[{label}] Phase 1: reading to EOF");
         let mut buf = vec![0u8; 65536];
         let mut total_read = 0u64;
@@ -226,12 +223,10 @@ async fn drm_stream_byte_integrity(
         let stream_len = stream.len().unwrap_or(0);
         info!("[{label}] Phase 1 done: total_read={total_read} stream_len={stream_len}");
 
-        // Phase 2: Seek to beginning and scan fMP4 box structure.
         stream.clear_variant_fence();
         info!("[{label}] Phase 2: scanning fMP4 from pos 0");
         let (boxes, last_end) = scan_boxes(&mut stream, 0, stream_len.max(total_read), label);
 
-        // Verify contiguity.
         let mut expected_pos = 0u64;
         for (i, (offset, size, tag)) in boxes.iter().enumerate() {
             if *offset != expected_pos {
@@ -253,7 +248,6 @@ async fn drm_stream_byte_integrity(
             boxes.len()
         );
 
-        // Phase 3: Assertions.
         assert!(
             boxes.len() >= 4,
             "[{label}] Expected at least 4 fMP4 boxes, found {}",
@@ -261,8 +255,6 @@ async fn drm_stream_byte_integrity(
         );
         assert_eq!(moof_count, mdat_count, "[{label}] moof/mdat count mismatch");
 
-        // total_read should match stream_len (what we actually read == declared total).
-        // Allow small delta for DRM padding reconciliation timing.
         let read_vs_len = (total_read as i64) - (stream_len as i64);
         debug!("[{label}] total_read - stream_len = {read_vs_len}");
         assert!(
@@ -279,11 +271,6 @@ async fn drm_stream_byte_integrity(
              stream_len={stream_len} delta={read_vs_len} saw_eof={saw_eof}"
         );
 
-        // fMP4 box coverage should match total_read.
-        // last_end = where the last box SAYS it ends (based on box size headers).
-        // total_read = how many bytes we actually read.
-        // If last_end > total_read → mdat sizes extend past what we read (BAD: possible encrypted size leak).
-        // If last_end < total_read → boxes don't cover all data (gap at tail).
         let coverage_delta = (last_end as i64) - (total_read as i64);
         debug!("[{label}] box coverage delta (last_end - total_read) = {coverage_delta}");
 

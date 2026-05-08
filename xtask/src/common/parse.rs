@@ -241,9 +241,7 @@ pub(crate) fn extract_passthrough_with(
 
 fn block_tail_expr(b: &Block) -> Option<&Expr> {
     match b.stmts.last()? {
-        // tail expression without semicolon
         Stmt::Expr(e, None) => Some(e),
-        // explicit `return X;`
         Stmt::Expr(Expr::Return(r), _) => r.expr.as_deref(),
         _ => None,
     }
@@ -251,7 +249,6 @@ fn block_tail_expr(b: &Block) -> Option<&Expr> {
 
 fn expr_to_passthrough(e: &Expr, opts: &PassthroughOpts) -> Option<AccessPath> {
     match e {
-        // &self.a.b...
         Expr::Reference(r) => {
             let kind = if r.mutability.is_some() {
                 AccessKind::RefMut
@@ -261,8 +258,6 @@ fn expr_to_passthrough(e: &Expr, opts: &PassthroughOpts) -> Option<AccessPath> {
             let fields = self_chain(&r.expr)?;
             Some(AccessPath { kind, fields })
         }
-        // self.a.b.<method>() — both `.clone()` and the configurable expose-list
-        // (`as_ref`, `lock`, `borrow`, `read`, ...).
         Expr::MethodCall(mc) if mc.args.is_empty() => {
             let receiver_fields = self_chain(&mc.receiver)?;
             let m = mc.method.to_string();
@@ -286,11 +281,9 @@ fn expr_to_passthrough(e: &Expr, opts: &PassthroughOpts) -> Option<AccessPath> {
                 None
             }
         }
-        // Free-function calls of two flavours, single-arg only.
         Expr::Call(call) if call.args.len() == 1 => {
             let callee_path = path_string(call.func.as_ref())?;
             let arg = call.args.first()?;
-            // 1) `<X>::clone(&self.field)` — Arc/Rc/Box/T::clone.
             if ends_with_segment(&callee_path, "clone") {
                 let Expr::Reference(r) = arg else { return None };
                 let fields = self_chain(&r.expr)?;
@@ -299,7 +292,6 @@ fn expr_to_passthrough(e: &Expr, opts: &PassthroughOpts) -> Option<AccessPath> {
                     fields,
                 });
             }
-            // 2) Wrapper ctor: `Some(...)`, `Box::new(...)`, `Cow::Borrowed(...)`.
             if opts
                 .wrapper_ctors
                 .iter()
@@ -309,9 +301,7 @@ fn expr_to_passthrough(e: &Expr, opts: &PassthroughOpts) -> Option<AccessPath> {
             }
             None
         }
-        // `&self.x as &dyn T` — cast preserves the path.
         Expr::Cast(c) => expr_to_passthrough(&c.expr, opts),
-        // Direct return of a self-chain (Move).
         Expr::Field(_) | Expr::Path(_) => {
             let fields = self_chain(e)?;
             Some(AccessPath {
@@ -319,7 +309,6 @@ fn expr_to_passthrough(e: &Expr, opts: &PassthroughOpts) -> Option<AccessPath> {
                 fields,
             })
         }
-        // Block / explicit return / parens — unwrap and recurse.
         Expr::Block(b) => block_tail_expr(&b.block).and_then(|x| expr_to_passthrough(x, opts)),
         Expr::Return(r) => r.expr.as_deref().and_then(|x| expr_to_passthrough(x, opts)),
         Expr::Paren(p) => expr_to_passthrough(&p.expr, opts),

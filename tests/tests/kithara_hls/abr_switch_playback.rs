@@ -145,8 +145,6 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
         .expect("create audio");
     let _ = audio.preload();
 
-    // Read for 15 seconds. If ABR switch hangs the worker,
-    // HangDetector (3s) will panic before the 30s test timeout.
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut buf = vec![0f32; 4096];
     let mut total_samples = 0u64;
@@ -376,19 +374,13 @@ async fn stream_continues_after_seek(
 
     let mut buf = vec![0f32; 4096];
 
-    // Phase 1: Read for 3s (warmup)
     let warmup = Instant::now() + Duration::from_secs(3);
     while Instant::now() < warmup {
         let _ = audio.read(&mut buf);
         sleep(Duration::from_millis(5)).await;
     }
 
-    // Phase 2: Seek to ~7s, ~13s, ~18s, ~24s (like app3.log)
-    //
-    // Read a limited number of samples after each seek — NOT a wall-time
-    // deadline — because the decoder decodes faster than real-time and
-    // would otherwise reach EOF within each 3-second window.
-    let samples_per_seek: u64 = 48000 * 2; // ~1 second of stereo 48 kHz
+    let samples_per_seek: u64 = 48000 * 2;
     for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
         audio
             .seek(Duration::from_secs_f64(target_secs))
@@ -414,8 +406,6 @@ async fn stream_continues_after_seek(
         );
     }
 
-    // Phase 3: Continue reading after last seek — must not hang.
-    // Read another ~1s of audio to confirm playback continues.
     let mut post_seek_samples = 0u64;
     let deadline = Instant::now() + Duration::from_secs(5);
     while post_seek_samples < samples_per_seek && Instant::now() < deadline {
@@ -517,15 +507,12 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
 
     let mut buf = vec![0f32; 4096];
 
-    // Phase 1: Warmup — read a few seconds so ABR can switch variant.
     let warmup = Instant::now() + Duration::from_secs(3);
     while Instant::now() < warmup {
         let _ = audio.read(&mut buf);
         sleep(Duration::from_millis(5)).await;
     }
 
-    // Phase 2: Random seeks — same pattern as the stress test.
-    // Each seek must produce at least some samples within 5s.
     let seek_targets = [
         50.0, 120.0, 5.0, 80.0, 150.0, 30.0, 100.0, 60.0, 140.0, 20.0, 90.0, 10.0, 70.0, 130.0,
         40.0, 110.0,
@@ -581,14 +568,12 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
 
     let mut buf = vec![0f32; 4096];
 
-    // Phase 1: Read for 3s (warmup)
     let warmup = Instant::now() + Duration::from_secs(3);
     while Instant::now() < warmup {
         let _ = audio.read(&mut buf);
         sleep(Duration::from_millis(5)).await;
     }
 
-    // Phase 2: Seek to ~7s, ~13s, ~18s, ~24s (same as HLS/DRM tests)
     let samples_per_seek: u64 = 48000 * 2;
     for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
         audio
@@ -615,7 +600,6 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         );
     }
 
-    // Phase 3: Continue reading after last seek — must not hang
     let mut post_seek_samples = 0u64;
     let deadline = Instant::now() + Duration::from_secs(5);
     while post_seek_samples < samples_per_seek && Instant::now() < deadline {
@@ -665,7 +649,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .expect("audio creation");
     let _ = audio.preload();
 
-    // Helper: read one chunk with timeout.
     async fn next_chunk(audio: &mut Audio<Stream<Hls>>, timeout_ms: u64) -> Option<PcmChunk> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         loop {
@@ -683,7 +666,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         }
     }
 
-    // Phase 1: warmup — read chunks until variant changes from initial (0).
     info!("Phase 1: warmup until ABR switches from variant 0");
     let mut initial_variant = None;
     let warmup_deadline = Instant::now() + Duration::from_secs(10);
@@ -700,9 +682,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
             break;
         }
     }
-    // Read a few post-switch chunks to confirm the variant stabilized.
-    // After ABR switch the decoder may be recreated, causing a brief gap
-    // in chunk production. Use a longer timeout and retry to survive it.
     let mut current_variant = None;
     for _ in 0..3 {
         if let Some(chunk) = next_chunk(&mut audio, 1_000).await {
@@ -713,9 +692,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         }
     }
     if current_variant.is_none() || current_variant == initial_variant {
-        // ABR did not switch during warmup — asset server throughput is
-        // too uniform for ABR to trigger a variant change. Skip the
-        // seek-freeze assertion since there is nothing to freeze.
         info!(
             ?initial_variant,
             ?current_variant,
@@ -725,7 +701,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     }
     info!(?current_variant, "Pre-seek variant established");
 
-    // Phase 2: seek — variant must stay the same.
     let variant_before_seek = current_variant;
     audio
         .seek(Duration::from_secs(50))
@@ -743,7 +718,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         "ABR must NOT switch variant during seek"
     );
 
-    // Phase 3: resume playback — ABR must still function.
     info!("Phase 3: verify ABR still works post-seek");
     let resume_deadline = Instant::now() + Duration::from_secs(8);
     let mut resume_chunks = 0u32;

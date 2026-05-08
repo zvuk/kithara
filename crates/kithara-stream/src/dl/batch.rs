@@ -163,7 +163,6 @@ impl BatchGroup {
                     deliver_cancelled_with_event(entry.cmd, &entry.peer_cancel);
                     continue;
                 }
-                // Wait until under capacity before spawning.
                 while inner.inflight.load(Ordering::Relaxed) >= inner.max_concurrent {
                     task::yield_now().await;
                 }
@@ -321,10 +320,8 @@ fn bandwidth_bps(bytes: u64, duration: Duration) -> u64 {
     /// Bits per byte × milliseconds-per-second-power-of-ten conversion
     /// for the bps formula `bytes * 8 * 1000 / duration_ms`.
     const BITS_TIMES_MS_PER_SEC: u64 = 8_000;
-    // u128→u64 conversion-clamp: a fetch lasting > 2^64 ms (≈580M years)
-    // is impossible; ceiling here keeps the cast lossless.
     let ms = u64::try_from(duration.as_millis())
-        .unwrap_or(u64::MAX) // ast-grep-ignore: rust.no-sentinel-fallback
+        .unwrap_or(u64::MAX)
         .max(1);
     bytes.saturating_mul(BITS_TIMES_MS_PER_SEC) / ms
 }
@@ -468,18 +465,9 @@ fn publish_failure_or_cancel(
 pub(super) fn deliver_cancelled_with_event(internal: InternalCmd, peer_cancel: &CancellationToken) {
     let request_id = internal.request_id;
     let bus = internal.bus.clone();
-    // Reuse the same classifier; `epoch_cancel` lives on the cmd until
-    // it's torn apart in `deliver_cancelled` below.
     let epoch_cancel = internal.cmd.cancel.clone();
     let placeholder_inner = CancellationToken::new(); // kithara:cancel:owner
-    let reason = classify_cancel(
-        peer_cancel,
-        epoch_cancel.as_ref(),
-        // Without an inner-cancel reference here we treat "no
-        // peer or epoch" as `BeforeStart` — same outcome the
-        // classifier would land on.
-        &placeholder_inner,
-    );
+    let reason = classify_cancel(peer_cancel, epoch_cancel.as_ref(), &placeholder_inner);
     abort_request(bus.as_ref(), request_id, reason, 0, false);
     deliver_cancelled(internal.response, internal.cmd);
 }

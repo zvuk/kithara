@@ -17,12 +17,8 @@ use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-// Test Data Helpers
-
 /// Segment size in bytes (test fixture pads to 200KB).
 const SEGMENT_SIZE: u64 = 200_000;
-
-// Stream<Hls> Seek + Read Tests
 
 #[kithara::test(
     tokio,
@@ -30,9 +26,9 @@ const SEGMENT_SIZE: u64 = 200_000;
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case(0, b"V0-SEG-0:")] // Start of segment 0
-#[case(200_000, b"V0-SEG-1:")] // Start of segment 1
-#[case(400_000, b"V0-SEG-2:")] // Start of segment 2
+#[case(0, b"V0-SEG-0:")]
+#[case(200_000, b"V0-SEG-1:")]
+#[case(400_000, b"V0-SEG-2:")]
 async fn hls_stream_seek_to_segment_start(
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
@@ -75,22 +71,16 @@ async fn hls_stream_seek_current(temp_dir: TestTempDir, cancel_token: Cancellati
         .await;
 
     spawn_blocking(move || {
-        // Read first 10 bytes
         let mut buf = [0u8; 10];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 10);
 
-        // Seek forward to position 29 (offset 3 within segment 0 prefix)
-        // Position 29 is at byte 29 of segment 0 (still within the 0xFF padding)
         let pos = stream.seek(SeekFrom::Current(19)).unwrap();
         assert_eq!(pos, 29);
 
-        // Position 29 is still in segment 0 (200KB per segment)
-        // At byte 29 we're past "V0-SEG-0:TEST_SEGMENT_DATA" (26 bytes), so we read 0xFF padding
         let mut buf = [0u8; 6];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 6);
-        // After the 26-byte prefix, rest is 0xFF padding
         assert_eq!(&buf, &[0xFF; 6]);
     })
     .await
@@ -110,25 +100,21 @@ async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, cancel_token: Cancella
         .await;
 
     spawn_blocking(move || {
-        // Read from start
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 9);
         assert_eq!(&buf, b"V0-SEG-0:");
 
-        // Seek back to start
         stream.seek(SeekFrom::Start(0)).unwrap();
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 9);
         assert_eq!(&buf, b"V0-SEG-0:", "After seek to 0, should read segment 0");
 
-        // Seek forward some amount within segment 0
         stream.seek(SeekFrom::Start(100)).unwrap();
         let mut buf = [0u8; 6];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 6);
-        // At position 100, we're past the 26-byte prefix, so we read 0xFF padding
         assert_eq!(&buf, &[0xFF; 6], "Position 100 should be padding bytes");
     })
     .await
@@ -151,9 +137,8 @@ async fn hls_stream_read_all_then_seek_back(
         .await;
 
     spawn_blocking(move || {
-        // Read all data
         let mut all_data = Vec::new();
-        let mut buf = [0u8; 64 * 1024]; // 64KB buffer for efficiency
+        let mut buf = [0u8; 64 * 1024];
         loop {
             let n = stream.read(&mut buf).unwrap();
             if n == 0 {
@@ -162,20 +147,17 @@ async fn hls_stream_read_all_then_seek_back(
             all_data.extend_from_slice(&buf[..n]);
         }
 
-        // Should read substantial amount (at least 500KB for 3 segments)
         assert!(
             all_data.len() > 500_000,
             "Should read substantial data, got {} bytes",
             all_data.len()
         );
 
-        // Verify first segment starts with expected prefix
         assert!(
             all_data.starts_with(b"V0-SEG-0:"),
             "Data should start with V0-SEG-0:"
         );
 
-        // Seek back to start and verify
         stream.seek(SeekFrom::Start(0)).unwrap();
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
@@ -189,8 +171,6 @@ async fn hls_stream_read_all_then_seek_back(
     .unwrap();
 }
 
-// ABR considerations
-
 #[kithara::test(
     tokio,
     native,
@@ -202,19 +182,16 @@ async fn hls_with_manual_abr_uses_fixed_variant(
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
-    // Use variant 1 instead of 0
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
         .build(&server, temp_dir.path(), cancel_token)
         .await;
 
     spawn_blocking(move || {
-        // Read first segment prefix
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 9);
 
-        // Should be variant 1 data
         assert_eq!(&buf, b"V1-SEG-0:");
     })
     .await
@@ -240,23 +217,17 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
         .await;
 
     spawn_blocking(move || {
-        // Test seeking within segment 0 and verifying data
-        // Segment 0 starts with "V0-SEG-0:TEST_SEGMENT_DATA" (26 bytes) then 0xFF padding
-
-        // Read from start
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 9);
         assert_eq!(&buf, b"V0-SEG-0:", "Start should be segment 0 prefix");
 
-        // Seek to position 100 (within padding) and verify
         stream.seek(SeekFrom::Start(100)).unwrap();
         let mut buf = [0u8; 10];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 10);
         assert_eq!(&buf, &[0xFF; 10], "Position 100 should be padding");
 
-        // Seek back to start and verify again
         stream.seek(SeekFrom::Start(0)).unwrap();
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
@@ -299,7 +270,6 @@ async fn hls_seek_different_variants_return_different_data(
         .await;
 
     spawn_blocking(move || {
-        // Read initial data from both variants
         let mut buf_v0 = [0u8; 9];
         let mut buf_v1 = [0u8; 9];
         let n0 = stream_v0.read(&mut buf_v0).unwrap();
@@ -314,7 +284,6 @@ async fn hls_seek_different_variants_return_different_data(
             "Different variants should have different data"
         );
 
-        // Seek and verify both return their respective variant data
         stream_v0.seek(SeekFrom::Start(0)).unwrap();
         stream_v1.seek(SeekFrom::Start(0)).unwrap();
 

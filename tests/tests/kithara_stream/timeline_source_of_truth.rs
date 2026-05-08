@@ -138,20 +138,17 @@ fn read_must_succeed_while_flushing() {
         .block_on(Stream::<TimelineStream>::new(config))
         .expect("stream");
 
-    // Simulate FLUSH_START — flushing is now true
     let _epoch = timeline.initiate_seek(Duration::from_secs(10));
     assert!(
         timeline.is_flushing(),
         "flushing must be set after initiate_seek"
     );
 
-    // Decoder seeks to byte offset 100 (inside apply_pending_seek)
     let pos = stream
         .seek(SeekFrom::Start(100))
         .expect("seek must succeed while flushing");
     assert_eq!(pos, 100);
 
-    // Decoder reads data at the new position — must NOT return Interrupted
     let mut buf = [0u8; 4];
     let n = stream
         .read(&mut buf)

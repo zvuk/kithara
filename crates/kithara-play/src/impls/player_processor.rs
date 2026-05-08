@@ -254,10 +254,8 @@ impl PlayerNodeProcessor {
         if let TrackTransition::FadeIn(ref nt) = transition {
             new_track = Some(Arc::clone(nt));
 
-            // Clear pending transitions from previous requests
             self.tracks_transitions.clear();
 
-            // Find current leading track for automatic fade-out
             let maybe_old = self.tracks.iter_keys().find_map(|(key, idx)| {
                 self.tracks
                     .get_by_index(*idx)
@@ -276,7 +274,6 @@ impl PlayerNodeProcessor {
 
         self.tracks_transitions.push_back(transition);
 
-        // Process the transition queue
         self.tracks_transitions.retain(|transition| {
             let track_src = match transition {
                 TrackTransition::FadeIn(src) | TrackTransition::FadeOut(src) => Arc::clone(src),
@@ -284,10 +281,6 @@ impl PlayerNodeProcessor {
             if let Some(track) = self.tracks.get_mut(&track_src) {
                 match transition {
                     TrackTransition::FadeIn(_) => {
-                        // Only seek if the track has progressed past the start.
-                        // Seeking to 0 on a freshly loaded track triggers
-                        // set_seek_epoch → clear() which wipes the segment index
-                        // and races with in-flight ABR downloads (WASM HLS bug).
                         if track.position() > Self::FADE_IN_SEEK_THRESHOLD {
                             track.seek(0.0);
                         }
@@ -297,12 +290,11 @@ impl PlayerNodeProcessor {
                         track.fade_out();
                     }
                 }
-                return false; // Applied, remove from queue
+                return false;
             }
-            true // Track not found, keep in queue for retry
+            true
         });
 
-        // Notify about track change
         if old_track.is_some()
             && let Some(new_src) = new_track
         {
@@ -494,13 +486,7 @@ impl PlayerNodeProcessor {
             TrackReadOutcome::Full {
                 position, duration, ..
             } => Some((position, duration)),
-            TrackReadOutcome::Partial { duration, .. } => {
-                // Partial means the read crossed natural EOF: position
-                // sits at the visible end of the track, which is exactly
-                // the trimmed `duration` snapshot the resource just
-                // reported. Reuse that value rather than re-locking.
-                Some((duration, duration))
-            }
+            TrackReadOutcome::Partial { duration, .. } => Some((duration, duration)),
             TrackReadOutcome::Eof => None,
         }
     }
@@ -528,12 +514,10 @@ impl PlayerNodeProcessor {
             return (false, None);
         }
 
-        // Clear main output buffers
         for ch_buffer in buffers.outputs.iter_mut() {
             ch_buffer[..frames].fill(0.0);
         }
 
-        // Resize scratch buffers
         for buf in &mut self.scratch_bufs {
             let cap = buf.capacity();
             if cap < frames {
@@ -542,7 +526,6 @@ impl PlayerNodeProcessor {
             buf.resize(frames, 0.0);
         }
 
-        // Split into read_bufs and mix_bufs
         let (left, right) = self.scratch_bufs.split_at_mut(Self::MIN_STEREO);
         let (read_buf0, read_buf1) = left.split_at_mut(1);
         let (mix_buf0, mix_buf1) = right.split_at_mut(1);
@@ -577,7 +560,6 @@ impl PlayerNodeProcessor {
                 continue;
             }
 
-            // Clear mix_bufs (wet signal) before each logical render pass.
             for ch_buffer in &mut mix_bufs {
                 ch_buffer.fill(0.0);
             }
@@ -656,7 +638,6 @@ impl PlayerNodeProcessor {
                 }
             }
 
-            // Additively mix into main output
             for (out_ch, mix_ch) in buffers.outputs.iter_mut().zip(mix_bufs.iter()) {
                 for (out_sample, &mix_sample) in out_ch.iter_mut().zip(mix_ch.iter()).take(frames) {
                     *out_sample += mix_sample;
@@ -698,20 +679,15 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             .process_count
             .fetch_add(1, Ordering::Relaxed);
 
-        // 1. Drain commands
         self.drain_commands();
 
-        // 2. Cleanup finished tracks
         self.cleanup_finished_tracks();
 
-        // 3. Get current playing state
         let is_playing = self.shared_state.playing.load(Ordering::SeqCst);
 
-        // 4. Render audio
         let (playback_started, leading_outcome_pos_dur) =
             self.render_audio(&mut buffers, info.frames, is_playing);
 
-        // 5. Update position/duration from the leading track's outcome.
         self.update_position_duration(leading_outcome_pos_dur);
 
         if playback_started {
@@ -728,7 +704,6 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             .sample_rate
             .store(new_sr.get(), Ordering::Relaxed);
 
-        // Update host_sample_rate for all active tracks
         for (_, track) in self.tracks.iter() {
             if let Ok(resource) = track.resource().try_lock() {
                 resource.set_host_sample_rate(new_sr);
@@ -1062,9 +1037,6 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             seek_log.clone()
         };
-        // FadeIn skips seek(0.0) because position is already at 0.
-        // Only the last seek epoch passes → 30000ms.
-        // Seeks with stale epochs (1, 2) are dropped.
         assert_eq!(recorded_seeks, [30000]);
         assert_eq!(shared_state.seek_epoch.load(Ordering::SeqCst), third);
     }

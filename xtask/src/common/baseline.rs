@@ -99,7 +99,6 @@ impl Baseline {
 
     /// Compare observations against this baseline.
     pub(crate) fn diff<'a>(&self, observed: &'a [Violation]) -> RatchetDiff<'a> {
-        // observed counts by (check, key)
         let mut observed_counts: BTreeMap<(&str, &str), u64> = BTreeMap::new();
         for v in observed {
             *observed_counts
@@ -111,7 +110,6 @@ impl Baseline {
         let mut new_violations: Vec<&'a Violation> = Vec::new();
         let mut improvements: Vec<Improvement> = Vec::new();
 
-        // first pass: compare observed against baseline
         for v in observed {
             let baseline_count = self
                 .checks
@@ -124,13 +122,11 @@ impl Baseline {
                 if v.severity == Severity::Deny {
                     new_violations.push(v);
                 }
-                // warn-level violations are tolerated when not baselined.
             } else if observed_count > baseline_count {
                 regressions.push(v);
             }
         }
 
-        // second pass: keys in baseline that disappeared or shrank
         for (check, keys) in &self.checks {
             for (key, &recorded) in keys {
                 let observed_count = observed_counts
@@ -148,7 +144,6 @@ impl Baseline {
             }
         }
 
-        // dedup regressions/new (a violation may have been pushed once per occurrence)
         regressions.sort_by_key(|v| (v.check, v.key.as_str()));
         regressions.dedup_by(|a, b| a.check == b.check && a.key == b.key);
         new_violations.sort_by_key(|v| (v.check, v.key.as_str()));

@@ -144,7 +144,6 @@ async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
     let sample_rate = spec.sample_rate as usize;
     let mut buf = vec![0.0f32; 4096];
 
-    // Warmup.
     let mut warmup = 0usize;
     for _ in 0..20 {
         let n = read_with_yield(&mut audio, &mut buf).await;
@@ -155,7 +154,6 @@ async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
     }
     assert!(warmup > 0, "warmup must read some data");
 
-    // Seek to middle and read ~5s.
     let duration_secs = audio
         .duration()
         .unwrap_or(Duration::from_secs(60))
@@ -185,13 +183,12 @@ async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
         "expected at least ~3s playback before near-start seek"
     );
 
-    // Seek near start and inspect early PCM window.
     let near_start = Duration::from_secs_f64(0.2);
     audio
         .seek(near_start)
         .expect("seek near start must succeed");
 
-    let inspect_frames = (sample_rate * 35) / 100; // ~350ms
+    let inspect_frames = (sample_rate * 35) / 100;
     let mut inspected = 0usize;
     let mut discontinuities = 0usize;
     let mut backward_jumps = 0usize;
@@ -283,13 +280,6 @@ async fn yield_ms(ms: u32) {
     TimeoutFuture::new(ms).await;
 }
 
-// ── Saw-tooth verification helpers ──
-//
-// The fixture server serves a deterministic saw-tooth
-// WAV signal with period 65536 frames. Each frame encodes its position as an i16
-// value, allowing content-based seek verification: after seek(T), the decoded
-// phase must match the expected phase for time T.
-
 #[kithara::test(
     wasm,
     serial,
@@ -329,7 +319,6 @@ async fn stress_read_samples_integrity() {
         total_samples += n;
         let frames = n / channels;
 
-        // Level 1: Integrity — samples finite, in [-1.0, 1.0]
         for (i, &sample) in buf[..n].iter().enumerate() {
             assert!(
                 sample.is_finite(),
@@ -341,7 +330,6 @@ async fn stress_read_samples_integrity() {
             );
         }
 
-        // Level 1b: L == R (stereo saw-tooth has identical channels)
         if channels == 2 {
             for f in 0..frames {
                 let l = buf[f * 2];
@@ -355,8 +343,6 @@ async fn stress_read_samples_integrity() {
             }
         }
 
-        // Level 2: Continuity — consecutive frames follow saw-tooth pattern
-        // Inter-chunk: last frame of prev chunk → first frame of this chunk
         if let Some(prev_phase) = prev_last_phase {
             let first_phase = phase_from_f32(buf[0]);
             let expected = (prev_phase + 1) % SAW_PERIOD;
@@ -371,7 +357,6 @@ async fn stress_read_samples_integrity() {
             }
         }
 
-        // Intra-chunk: every pair of adjacent frames
         if frames >= 2 {
             for f in 1..frames {
                 let prev = phase_from_f32(buf[(f - 1) * channels]);
@@ -393,7 +378,6 @@ async fn stress_read_samples_integrity() {
             }
         }
 
-        // Track last phase for inter-chunk continuity
         if frames > 0 {
             prev_last_phase = Some(phase_from_f32(buf[(frames - 1) * channels]));
         }
@@ -430,7 +414,6 @@ async fn stress_seek_and_read() {
 
     let mut audio = create_pipeline().await;
 
-    // Read some data first to ensure pipeline is warm.
     let mut buf = vec![0.0f32; 4096];
     let mut warmup = 0;
     for _ in 0..20 {
@@ -446,7 +429,6 @@ async fn stress_seek_and_read() {
     let duration = audio.duration().unwrap_or(Duration::from_secs(30));
     let duration_secs = duration.as_secs_f64();
 
-    // Perform seeks to various positions and verify data integrity after each.
     let seek_positions = [0.1, 0.5, 0.25, 0.75, 0.0, 0.9, 0.3, 0.6, 0.15, 0.85];
     let spec = audio.spec();
     let channels = spec.channels as usize;
@@ -464,7 +446,6 @@ async fn stress_seek_and_read() {
             continue;
         }
 
-        // Read after seek and verify integrity.
         let mut post_seek_samples = 0;
         let mut position_checked = false;
         for _ in 0..10 {
@@ -475,7 +456,6 @@ async fn stress_seek_and_read() {
             let frames = n / channels;
             post_seek_samples += n;
 
-            // Level 1: Integrity
             for &sample in &buf[..n] {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -483,7 +463,6 @@ async fn stress_seek_and_read() {
                 );
             }
 
-            // Level 1b: L == R
             if channels == 2 {
                 for f in 0..frames {
                     let l = buf[f * 2];
@@ -494,7 +473,6 @@ async fn stress_seek_and_read() {
                 }
             }
 
-            // Level 2: Intra-chunk continuity
             if frames >= 2 {
                 for f in 1..frames {
                     let prev = phase_from_f32(buf[(f - 1) * channels]);
@@ -505,8 +483,6 @@ async fn stress_seek_and_read() {
                 }
             }
 
-            // Level 3: Position — first read after seek must match expected phase.
-            // Tolerance: 1200 frames (~27ms) for decoder packet boundary alignment.
             if !position_checked && frames > 0 {
                 let expected_frame = (pos_secs * spec.sample_rate as f64).round() as usize;
                 let expected_phase = expected_frame % SAW_PERIOD;
@@ -578,7 +554,6 @@ async fn stress_rapid_seeks_must_not_stall() {
 
     let mut buf = vec![0.0f32; 4096];
 
-    // Phase 1: Warmup
     let mut warmup_samples = 0usize;
     for _ in 0..20 {
         let n = read_with_yield(&mut audio, &mut buf).await;
@@ -595,7 +570,6 @@ async fn stress_rapid_seeks_must_not_stall() {
     let max_seek = duration_secs - 0.5;
     info!(duration_secs, max_seek, "Duration known");
 
-    // Phase 2: 1000 rapid random seeks
     const SEEK_COUNT: usize = 1000;
     let sample_rate = audio.spec().sample_rate;
     let channels = audio.spec().channels as usize;
@@ -607,7 +581,6 @@ async fn stress_rapid_seeks_must_not_stall() {
     let mut total_samples = 0u64;
 
     for i in 0..SEEK_COUNT {
-        // Mix: 10% near start, 10% near end, 80% random
         let r = rng.next_f64();
         let pos_secs = if r < 0.1 {
             rng.range_f64(0.0, 1.0_f64.min(max_seek))
@@ -626,7 +599,6 @@ async fn stress_rapid_seeks_must_not_stall() {
             continue;
         }
 
-        // Must produce data within 200 yields (2s at 10ms each)
         let n = read_with_yield_limit(&mut audio, &mut buf, 200).await;
         if n == 0 && !audio.is_eof() {
             dead_seeks += 1;
@@ -641,7 +613,6 @@ async fn stress_rapid_seeks_must_not_stall() {
             continue;
         }
 
-        // Integrity check
         for &sample in &buf[..n] {
             if !sample.is_finite() || !(-1.0..=1.0).contains(&sample) {
                 integrity_errors += 1;
@@ -649,8 +620,6 @@ async fn stress_rapid_seeks_must_not_stall() {
             }
         }
 
-        // Position check: decoded phase must match expected phase for seek target.
-        // Tolerance: 1200 frames (~27ms) for packet boundary alignment.
         let frames = n / channels;
         if frames > 0 {
             let expected_frame = (pos_secs * sample_rate as f64).round() as usize;
@@ -677,7 +646,6 @@ async fn stress_rapid_seeks_must_not_stall() {
             );
         }
 
-        // Yield every 50 iterations to keep event loop responsive
         if i % 50 == 49 {
             yield_ms(1).await;
         }
@@ -692,7 +660,7 @@ async fn stress_rapid_seeks_must_not_stall() {
         "Phase 2 complete: {SEEK_COUNT} seeks"
     );
 
-    let max_dead = (SEEK_COUNT as u64) / 100; // 1% threshold
+    let max_dead = (SEEK_COUNT as u64) / 100;
     assert!(
         dead_seeks <= max_dead,
         "pipeline stalled {dead_seeks}/{SEEK_COUNT} times \
@@ -703,7 +671,6 @@ async fn stress_rapid_seeks_must_not_stall() {
         "samples outside [-1,1] or not finite — data corruption"
     );
 
-    // Soft threshold: at most 5% position mismatches
     let max_mismatches = (SEEK_COUNT as u64) / 20;
     assert!(
         position_mismatches <= max_mismatches,
@@ -737,7 +704,6 @@ async fn stress_seek_to_zero_after_pressure() {
     let mut audio = create_pipeline().await;
     let mut buf = vec![0.0f32; 4096];
 
-    // Phase 1: Warmup
     let mut warmup = 0usize;
     for _ in 0..20 {
         let n = read_with_yield(&mut audio, &mut buf).await;
@@ -753,12 +719,10 @@ async fn stress_seek_to_zero_after_pressure() {
     let max_seek = duration_secs - 0.5;
     info!(warmup, duration_secs, "Warmup done");
 
-    // Phase 2: Stress — 500 random seeks
     let mut rng = Xorshift64::new(0xABCD_EF01_2345_6789);
     for i in 0..500 {
         let pos = rng.range_f64(0.001, max_seek);
         let _ = audio.seek(Duration::from_secs_f64(pos));
-        // Read a small amount — don't care about result, just exercise the pipeline
         let _ = read_with_yield_limit(&mut audio, &mut buf, 50).await;
 
         if i % 100 == 99 {
@@ -767,7 +731,6 @@ async fn stress_seek_to_zero_after_pressure() {
     }
     info!("Stress phase done: 500 seeks");
 
-    // Phase 3: Seek to 0
     let channels = audio.spec().channels as usize;
     let sample_rate = audio.spec().sample_rate;
     audio
@@ -780,7 +743,6 @@ async fn stress_seek_to_zero_after_pressure() {
         "Seeked to 0, position reported"
     );
 
-    // Phase 4: Read from beginning and verify
     let mut total_from_zero = 0usize;
     let mut chunks_from_zero = 0usize;
     let target_chunks = 50;
@@ -807,14 +769,12 @@ async fn stress_seek_to_zero_after_pressure() {
             continue;
         }
 
-        // Reset stall timer on each successful post-seek chunk.
         stall_deadline = Instant::now() + Duration::from_secs(5);
 
         chunks_from_zero += 1;
         total_from_zero += n;
         let frames = n / channels;
 
-        // Every sample must be valid
         for (j, &sample) in buf[..n].iter().enumerate() {
             assert!(
                 sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -823,11 +783,8 @@ async fn stress_seek_to_zero_after_pressure() {
             );
         }
 
-        // Position check: first decoded sample after seek(0) must have phase near 0.
-        // Phase 0 = frame 0 of the saw-tooth.  Tolerance: 1200 frames.
         if !position_checked && frames > 0 {
             let actual_phase = phase_from_f32(buf[0]);
-            // Expected phase for position 0 = 0
             let dist = phase_distance(actual_phase, 0);
             info!(
                 actual_phase,
@@ -841,7 +798,6 @@ async fn stress_seek_to_zero_after_pressure() {
             position_checked = true;
         }
 
-        // Continuity: inter-chunk
         if let Some(prev_phase) = prev_last_phase {
             let first_phase = phase_from_f32(buf[0]);
             if first_phase != (prev_phase + 1) % SAW_PERIOD {
@@ -849,7 +805,6 @@ async fn stress_seek_to_zero_after_pressure() {
             }
         }
 
-        // Continuity: intra-chunk
         if frames >= 2 {
             for f in 1..frames {
                 let prev = phase_from_f32(buf[(f - 1) * channels]);
@@ -925,7 +880,6 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
         .seek(Duration::from_secs_f64(middle_secs))
         .expect("seek to middle must succeed");
 
-    // Emulate "listen ~5s from middle".
     let mut played_frames = 0usize;
     let target_frames = sample_rate * 5;
     for _ in 0..600 {
@@ -1022,7 +976,6 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
     let channels = spec.channels as usize;
     let mut buf = vec![0.0f32; 4096];
 
-    // Warmup.
     let mut warmup = 0usize;
     for _ in 0..20 {
         let n = read_with_yield(&mut audio, &mut buf).await;
@@ -1033,10 +986,8 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
     }
     assert!(warmup > 0, "warmup must read some data");
 
-    // Drain old events before seek scenario.
     while events_rx.try_recv().is_ok() {}
 
-    // Seek to middle and "play" a few seconds first.
     let duration_secs = audio
         .duration()
         .unwrap_or(Duration::from_secs(60))
@@ -1066,7 +1017,6 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
         "expected at least ~3s playback before test seek"
     );
 
-    // Drain events again to isolate one seek window.
     while events_rx.try_recv().is_ok() {}
 
     let near_start_secs = 0.2_f64;
@@ -1096,7 +1046,6 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
                     if target_seek_epoch == Some(seek_epoch) {
                         seek_complete_for_target += 1;
                         seek_complete_seen = true;
-                        // Keep only post-seek-complete playback progress.
                         playback_positions.clear();
                     }
                 }

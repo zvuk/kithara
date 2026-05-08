@@ -314,8 +314,6 @@ impl From<kithara_events::TrackStatus> for FfiTrackStatus {
             TS::Failed(reason) => Self::Failed { reason },
             TS::Consumed => Self::Consumed,
             TS::Cancelled => Self::Cancelled,
-            // `TrackStatus` is `#[non_exhaustive]`; fall back to `Pending`
-            // for `Pending` itself + any future variants.
             _ => Self::Pending,
         }
     }

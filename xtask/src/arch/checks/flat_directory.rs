@@ -23,7 +23,6 @@ impl Check for FlatDirectory {
         let cfg = &ctx.config.thresholds.flat_directory;
         let ignore = compile_globs(&cfg.ignore_globs);
 
-        // group rs files by parent dir, excluding mod.rs
         let mut by_dir: BTreeMap<PathBuf, usize> = BTreeMap::new();
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let rel = relative_to(ctx.workspace_root, &path);

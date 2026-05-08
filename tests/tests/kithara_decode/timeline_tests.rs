@@ -18,18 +18,15 @@ fn test_progressive_file_timeline_monotonic() {
     while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         let meta = chunk.meta;
 
-        // Ensure the spec is correct
         assert_eq!(meta.spec.sample_rate, 44100);
         assert_eq!(meta.spec.channels, 2);
 
-        // Frame offset continuous (no gaps)
         assert_eq!(
             meta.frame_offset, prev_frame_end,
             "frame_offset gap at chunk {chunk_count}: expected {prev_frame_end}, got {}",
             meta.frame_offset
         );
 
-        // Timestamp matches frame_offset / sample_rate
         let expected_ts =
             Duration::from_secs_f64(meta.frame_offset as f64 / f64::from(meta.spec.sample_rate));
         let diff = meta.timestamp.abs_diff(expected_ts);
@@ -38,11 +35,9 @@ fn test_progressive_file_timeline_monotonic() {
             "timestamp drift: {diff:?}"
         );
 
-        // Progressive file: no segment/variant
         assert_eq!(meta.segment_index, None);
         assert_eq!(meta.variant_index, None);
 
-        // Epoch stays 0
         assert_eq!(meta.epoch, 0);
 
         prev_frame_end = meta.frame_offset + chunk.frames() as u64;
@@ -60,18 +55,15 @@ fn test_progressive_file_seek_resets_frame_offset() {
     let mut decoder =
         DecoderFactory::create_with_probe(reader, Some("wav"), &DecoderConfig::default()).unwrap();
 
-    // Read a few chunks
     for _ in 0..3 {
         let _ = decoder.next_chunk();
     }
 
-    // Seek to 0.5s
     decoder.seek(Duration::from_millis(500)).unwrap();
 
     let chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
     let expected_frame = (0.5 * 44100.0) as u64;
 
-    // frame_offset should be approximately at the seek position
     let diff = (chunk.meta.frame_offset as i64 - expected_frame as i64).unsigned_abs();
     assert!(
         diff < 2048,
@@ -80,8 +72,6 @@ fn test_progressive_file_seek_resets_frame_offset() {
         expected_frame
     );
 }
-
-// HLS timeline tests — native-only (uses custom_data which is not supported on WASM fixture server)
 
 #[cfg(not(target_arch = "wasm32"))]
 mod hls_timeline {
@@ -107,9 +97,8 @@ mod hls_timeline {
     )]
     async fn test_hls_timeline_segment_tracking() {
         const SEGMENT_COUNT: usize = 10;
-        const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size; // 2 MB
+        const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
 
-        // Generate WAV data served as HLS segments
         let wav_data = create_wav_exact_bytes(
             signal::Sawtooth,
             SawWav::DEFAULT.sample_rate,
@@ -138,7 +127,6 @@ mod hls_timeline {
             .with_cancel(cancel)
             .with_initial_abr_mode(AbrMode::Manual(0));
 
-        // Create an HLS stream and build StreamContext before moving stream to decoder
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
         let stream_ctx = Hls::build_stream_context(stream.source(), stream.timeline());
 
@@ -147,7 +135,6 @@ mod hls_timeline {
             .with_stream_ctx(stream_ctx)
             .with_hint("wav".to_string());
 
-        // Decode in blocking thread (Stream<Hls> is sync Read+Seek)
         let result = tokio::task::spawn_blocking(move || {
             let mut decoder =
                 DecoderFactory::create_from_media_info(stream, &wav_info, &decoder_config).unwrap();

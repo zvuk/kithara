@@ -147,8 +147,6 @@ fn check_impl(
 ) {
     for item in &impl_block.items {
         if let ImplItem::Fn(method) = item {
-            // Convert the impl method into a free-fn-style view for
-            // the analyser by reusing the same body / sig logic.
             let synth = ItemFn {
                 attrs: method.attrs.clone(),
                 vis: method.vis.clone(),
@@ -254,7 +252,6 @@ fn analyse_body(stmts: &[Stmt], param: &str) -> Option<Usage> {
                 analyse_expr_stmt(expr, param, &mut usage);
             }
             Stmt::Item(_) => {}
-            // Stmt::Macro: opaque body — be conservative.
             Stmt::Macro(_) => {
                 if stmt_touches_param_anywhere(stmt, param) {
                     usage.disqualified = true;
@@ -288,7 +285,6 @@ impl Usage {
 fn analyse_local(local: &Local, param: &str, usage: &mut Usage) {
     let Some(init) = &local.init else { return };
     if init.diverge.is_some() {
-        // `let-else` with a non-trivial divergence is too rich to qualify.
         usage.disqualified = true;
         return;
     }
@@ -300,7 +296,6 @@ fn analyse_expr_stmt(expr: &Expr, param: &str, usage: &mut Usage) {
         Expr::If(if_expr) => analyse_if(if_expr, param, usage),
         Expr::Assign(assign) => analyse_assign(assign, param, usage),
         Expr::Path(_) => {}
-        // Tail expression — typically the constructed value `cfg`.
         Expr::MethodCall(_) | Expr::Call(_) => record_passthrough_uses(expr, param, usage),
         _ => {
             if expr_touches_param_anywhere(expr, param) {
@@ -311,8 +306,6 @@ fn analyse_expr_stmt(expr: &Expr, param: &str, usage: &mut Usage) {
 }
 
 fn analyse_if(if_expr: &syn::ExprIf, param: &str, usage: &mut Usage) {
-    // We accept `if let Some(x) = param.field { <single setter that uses x>; }`
-    // and nothing else.
     let Expr::Let(let_expr) = &*if_expr.cond else {
         if expr_touches_param_anywhere(&Expr::If(if_expr.clone()), param) {
             usage.disqualified = true;
@@ -339,7 +332,6 @@ fn analyse_if(if_expr: &syn::ExprIf, param: &str, usage: &mut Usage) {
 }
 
 fn analyse_assign(assign: &syn::ExprAssign, param: &str, usage: &mut Usage) {
-    // `cfg.X = inputs.X;` qualifies; anything richer disqualifies.
     let Some(field) = expr_param_field(&assign.right, param) else {
         if expr_touches_param_anywhere(&assign.right, param) {
             usage.disqualified = true;
@@ -378,7 +370,6 @@ fn walk_passthrough(expr: &Expr, param: &str, counts: &mut HashMap<String, usize
             if !walk_passthrough(&mc.receiver, param, counts) {
                 return false;
             }
-            // Whitelist trivial adapters that take no `param` arg.
             let is_trivial = matches!(
                 mc.method.to_string().as_str(),
                 "clone" | "into" | "to_string" | "to_owned" | "as_ref" | "as_str"
@@ -386,8 +377,6 @@ fn walk_passthrough(expr: &Expr, param: &str, counts: &mut HashMap<String, usize
             if is_trivial {
                 return true;
             }
-            // For other method calls, every argument must either be
-            // `param.<field>` (one only) or completely free of `param`.
             let mut field_args = 0usize;
             for arg in &mc.args {
                 if let Some(f) = expr_param_field(arg, param) {
@@ -415,18 +404,15 @@ fn walk_passthrough(expr: &Expr, param: &str, counts: &mut HashMap<String, usize
             field_args <= 1
         }
         Expr::Field(field) => {
-            // Bare `inputs.X` as an expression: counts as one passthrough use.
             if let Some(f) = expr_param_field(expr, param) {
                 *counts.entry(f).or_default() += 1;
                 return true;
             }
-            // `inputs.X.something` — keep walking the base.
             walk_passthrough(&field.base, param, counts)
         }
         Expr::Path(_) => true,
         Expr::Reference(r) => walk_passthrough(&r.expr, param, counts),
         Expr::Paren(p) => walk_passthrough(&p.expr, param, counts),
-        // Anything else that touches `param` is too rich.
         other => !expr_touches_param_anywhere(other, param),
     }
 }
@@ -453,7 +439,6 @@ fn expr_param_field(expr: &Expr, param: &str) -> Option<String> {
             _ => None,
         },
         Expr::Call(call) => {
-            // `Some(param.X)` / `Arc::clone(&param.X)` shapes — single-arg only.
             if call.args.len() != 1 {
                 return None;
             }
@@ -541,9 +526,6 @@ fn block_is_single_setter_using(b: &syn::Block, bound: &str) -> bool {
     let expr = match first {
         Stmt::Expr(e, _) => e,
         Stmt::Local(local) => {
-            // `cfg = cfg.with_x(bound);` is also written as
-            // `let cfg = cfg.with_x(bound);` in some codebases — treat
-            // the assignment-shaped expression below.
             let Some(init) = &local.init else {
                 return false;
             };
@@ -601,9 +583,6 @@ mod tests {
 
     #[test]
     fn flags_field_by_field_passthrough() {
-        // The exact shape we wrote in `kithara-audio/src/audio.rs` —
-        // every field shows up exactly once as a setter argument or
-        // a guarded setter.
         let src = r#"
             struct Inputs {
                 a: u32,
@@ -629,8 +608,6 @@ mod tests {
 
     #[test]
     fn does_not_flag_with_real_logic() {
-        // The function uses two fields together — cannot be inlined
-        // without losing semantics.
         let src = r#"
             struct Inputs {
                 a: u32,
@@ -647,7 +624,6 @@ mod tests {
 
     #[test]
     fn does_not_flag_below_threshold() {
-        // Three fields is below the default min_passthrough_fields = 4.
         let src = r#"
             struct Inputs {
                 a: u32,
@@ -666,8 +642,6 @@ mod tests {
 
     #[test]
     fn does_not_flag_unknown_struct() {
-        // The parameter type isn't declared in the same file (no
-        // matching struct ident); we don't flag without certainty.
         let src = r#"
             fn build(inputs: ExternalInputs) -> Target {
                 Target::default()
@@ -682,7 +656,6 @@ mod tests {
 
     #[test]
     fn flags_associated_method() {
-        // The same pattern tucked inside an `impl` block.
         let src = r#"
             struct Inputs {
                 a: u32,

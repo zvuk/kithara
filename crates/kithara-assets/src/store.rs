@@ -232,7 +232,6 @@ impl AssetStoreBuilder<()> {
     /// Builder with defaults (no `root_dir`/`asset_root`/evict/cancel/process set).
     #[must_use]
     pub fn new() -> Self {
-        // Default pass-through process_fn for () - just copies input to output
         let dummy_process: ProcessChunkFn<()> =
             Arc::new(|input, output, _ctx: &mut (), _is_last| {
                 output[..input.len()].copy_from_slice(input);
@@ -343,32 +342,18 @@ where
             .process_fn
             .expect("BUG: process_fn is required for AssetStoreBuilder");
 
-        // AssetStoreBuilder fallback safety net — caller must inject pool via with_pool
-        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
 
-        // FlushHub coordinates flushes for all three on-disk indexes.
-        // Either reuse a caller-supplied hub (shared across stores) or
-        // create one without a worker (every mutation flushes
-        // synchronously, matching the historical inline-flush
-        // behaviour).
         let hub = self
             .flush_hub
             .clone()
             .unwrap_or_else(|| FlushHub::new(cancel.clone(), FlushPolicy::default()));
 
-        // Disk-backed pins/lru indexes shared across the decorator
-        // stack: `LeaseAssets` mutates pins on resource lifecycle,
-        // `EvictAssets` reads pins / mutates lru on touch & eviction,
-        // `DiskAssetDeleter` invalidates both on full-asset removal.
-        // All three see the same in-memory state through Arc-cloned
-        // `PinsIndex` / `LruIndex` handles.
         let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
         let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
         pins.attach_to(&hub);
         lru.attach_to(&hub);
 
-        // Single canonical deleter — see [`crate::deleter`].
         let deleter: Arc<dyn crate::deleter::AssetDeleter> =
             Arc::new(crate::disk_store::DiskAssetDeleter::new(
                 root_dir.clone(),
@@ -377,10 +362,6 @@ where
                 lru.clone(),
             ));
 
-        // Enable disk persistence on the aggregate before constructing
-        // the store: hydrates from any existing `_index/availability.bin`
-        // and caches the persist resource for later flushes through the
-        // FlushHub.
         if let Some(path) = lazy_index_path(&root_dir, "availability.bin") {
             availability.enable_persistence(path, cancel.clone());
         }
@@ -413,7 +394,7 @@ where
         let cached = Arc::new(CachedAssets::new(processing, capacity, self.on_invalidated));
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
             Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
-        let _ = pool; // pool is consumed by ProcessingAssets and CachedAssets above
+        let _ = pool;
         let chain = LeaseAssets::with_byte_recorder(cached, cancel, byte_recorder, pins);
         (chain, base)
     }
@@ -432,15 +413,9 @@ where
         let process_fn = self
             .process_fn
             .expect("BUG: process_fn is required for AssetStoreBuilder");
-        // AssetStoreBuilder fallback safety net — caller must inject pool via with_pool
-        // ast-grep-ignore: perf.no-global-pool-accessor
         let pool = self.pool.unwrap_or_else(|| BytePool::default().clone());
 
         let asset_root_clone = asset_root.clone();
-        // Symmetric to the disk builder: single deleter shared by
-        // `MemAssetStore`, `EvictAssets`, and `LeaseAssets`. Mem
-        // backend uses ephemeral pins/lru indexes — disk persistence
-        // makes no sense without a backing file. See [`crate::deleter`].
         let hub = self
             .flush_hub
             .clone()
@@ -673,7 +648,6 @@ mod tests {
         let file_path = dir.path().join("test.bin");
         fs::write(&file_path, b"data").unwrap();
 
-        // Empty asset_root → capabilities lack CACHE/EVICT/LEASE
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(None)
@@ -869,7 +843,6 @@ mod tests {
             .ephemeral(true)
             .build();
 
-        // Open 4 resources — all fit within cache capacity of 5.
         let keys: Vec<ResourceKey> = (0..4)
             .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
             .collect();
@@ -880,7 +853,6 @@ mod tests {
             res.commit(Some(4)).unwrap();
         }
 
-        // All resources are still in the LRU — re-opening returns the same handle.
         let reopened = backend.open_resource(&keys[0]).unwrap();
         assert_eq!(
             reopened.len(),
@@ -897,8 +869,6 @@ mod tests {
             .ephemeral(true)
             .build();
 
-        // Open 4 resources — first is evicted from LRU (capacity=3).
-        // MemAssetStore is stateless, so evicted data is gone.
         let keys: Vec<ResourceKey> = (0..4)
             .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
             .collect();
@@ -909,7 +879,6 @@ mod tests {
             res.commit(Some(4)).unwrap();
         }
 
-        // First resource was evicted from LRU — re-opening now reports Missing.
         assert!(
             backend.open_resource(&keys[0]).is_err(),
             "evicted resource should be gone in ephemeral mode"
@@ -985,8 +954,6 @@ mod tests {
 
         let target = ResourceKey::new("v0_15.m4s");
 
-        // Phase 1 — committed writer. AvailabilityIndex receives
-        // `final_len = 4` via the MmapDriver commit observer.
         {
             let writer = store.acquire_resource(&target).unwrap();
             writer.write_at(0, b"data").unwrap();
@@ -996,20 +963,11 @@ mod tests {
         let path = dir.path().join("seg_root").join("v0_15.m4s");
         assert!(path.exists(), "file must exist after commit");
 
-        // Phase 2 — exact production drop path. Acquire the resource
-        // again (cache returns the committed clone), reactivate it
-        // (MmapDriver: Committed → Active, mmap.rs:289-305), then
-        // drop without a fresh commit. `LeaseResource::drop` sees
-        // `status == Active`, drop_token strong count == 1, and runs
-        // `RemoveFn` (lease.rs:391) → `inner.remove_resource(key)` →
-        // DiskStore deletes the file. Availability is never told.
         {
             let writer2 = store.acquire_resource(&target).unwrap();
             writer2.reactivate().expect("BUG: reactivate committed");
         }
 
-        // Post-condition: file is gone from disk, but the index never
-        // received `availability.remove`.
         assert!(
             !path.exists(),
             "LeaseResource::drop must have removed the file via inner.remove_resource — \
@@ -1073,8 +1031,6 @@ mod tests {
         let key_a = ResourceKey::new("v0_15.m4s");
         let key_b = ResourceKey::new("v0_16.m4s");
 
-        // Commit two resources under the same asset_root. Availability
-        // observer records `final_len` for both via MmapDriver::commit.
         for (key, payload) in [(&key_a, &b"aaaa"[..]), (&key_b, &b"bbbbb"[..])] {
             let writer = store.acquire_resource(key).unwrap();
             writer.write_at(0, payload).unwrap();
@@ -1088,10 +1044,6 @@ mod tests {
         assert!(path_a.exists());
         assert!(path_b.exists());
 
-        // `AssetStore::delete_asset` removes the entire `asset_root`
-        // directory through `delete_asset_dir` (`fs::remove_dir_all`).
-        // Files under it disappear, but the per-resource availability
-        // map under `asset_root` is never cleared.
         store.delete_asset().unwrap();
 
         assert!(!path_a.exists(), "delete_asset must remove file A");

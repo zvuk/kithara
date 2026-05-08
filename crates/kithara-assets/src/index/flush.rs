@@ -203,11 +203,7 @@ impl FlushHub {
             s.pending = false;
             s.op_count = 0;
         }
-        // `flush_now` is the explicit-checkpoint path — caller wants
-        // post-return durability, so route through `flush_durable`
-        // (sync_data + atomic rename). The background worker uses the
-        // cheaper non-durable variant.
-        self.flush_dirty(/* durable */ true)
+        self.flush_dirty(true)
     }
 
     /// Whether a background worker is attached.
@@ -237,16 +233,12 @@ impl FlushHub {
 
     fn run(self: Arc<Self>) {
         loop {
-            // 1. Wait for a pending signal or cancellation.
             let mut guard = self.state.lock_sync();
             while !guard.pending {
                 if self.cancel.is_cancelled() {
                     drop(guard);
                     let _g = self.flush_lock.lock_sync();
-                    // Worker path: cheap, non-durable flush. Hot path coalescing
-                    // doesn't pay the sync_data fence — that's reserved for the
-                    // explicit `flush_now` (= `checkpoint()`) caller.
-                    let _ = self.flush_dirty(/* durable */ false);
+                    let _ = self.flush_dirty(false);
                     return;
                 }
                 let deadline = Instant::now() + self.policy.poll_interval;
@@ -255,10 +247,6 @@ impl FlushHub {
             }
             drop(guard);
 
-            // 2. Debounce window. Wait on the condvar so additional
-            //    signals can either wake us early when the force-flush
-            //    threshold is reached or extend coalescing within the
-            //    same window. Cancellation also breaks out early.
             let debounce_deadline = Instant::now() + self.policy.debounce;
             loop {
                 let guard = self.state.lock_sync();
@@ -268,10 +256,7 @@ impl FlushHub {
                 if self.cancel.is_cancelled() {
                     drop(guard);
                     let _g = self.flush_lock.lock_sync();
-                    // Worker path: cheap, non-durable flush. Hot path coalescing
-                    // doesn't pay the sync_data fence — that's reserved for the
-                    // explicit `flush_now` (= `checkpoint()`) caller.
-                    let _ = self.flush_dirty(/* durable */ false);
+                    let _ = self.flush_dirty(false);
                     return;
                 }
                 if Instant::now() >= debounce_deadline {
@@ -280,17 +265,13 @@ impl FlushHub {
                 let (_next, _) = self.cv.wait_sync_timeout(guard, debounce_deadline);
             }
 
-            // 3. Reset counters and flush under flush_lock.
             {
                 let mut guard = self.state.lock_sync();
                 guard.pending = false;
                 guard.op_count = 0;
             }
             let _g = self.flush_lock.lock_sync();
-            // Worker path: cheap, non-durable flush. Hot path coalescing
-            // doesn't pay the sync_data fence — that's reserved for the
-            // explicit `flush_now` (= `checkpoint()`) caller.
-            let _ = self.flush_dirty(/* durable */ false);
+            let _ = self.flush_dirty(false);
         }
     }
 
@@ -328,9 +309,6 @@ impl FlushHub {
 
 impl std::fmt::Debug for FlushHub {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Internal locks/handles intentionally elided — they don't
-        // round-trip through `Debug` and would either deadlock or
-        // poison the formatter under contention.
         f.debug_struct("FlushHub")
             .field("policy", &self.policy)
             .field("has_worker", &self.has_worker())
@@ -363,11 +341,6 @@ pub(crate) fn signal_or_flush_sync(
         h.signal();
         return Ok(());
     }
-    // No worker — flush THIS source only. Do NOT call `hub.flush_now()`:
-    // that would flush every dirty source registered with the hub and
-    // break per-source durability semantics (e.g. Availability is
-    // explicit-checkpoint only — its observer marks dirty but must not
-    // be persisted by an unrelated Pins/LRU mutation).
     source.flush()
 }
 
@@ -455,7 +428,6 @@ mod tests {
         let src = CountingSource::new("src");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
-        // Manually mark dirty without going through signal_or_flush_sync.
         src.dirty.store(true, Ordering::Release);
         hub.flush_now().unwrap();
         assert_eq!(
@@ -480,8 +452,6 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(2)))]
     fn signal_or_flush_sync_uses_non_durable_variant() {
-        // The hot mutator path takes the cheap variant — durability is
-        // reserved for `flush_now` (= explicit `checkpoint()`).
         let hub = FlushHub::new(CancellationToken::new(), fast_policy());
         let src = CountingSource::new("src");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
@@ -505,8 +475,6 @@ mod tests {
             signal_or_flush_sync(Some(&hub), &*src).unwrap();
         }
 
-        // Wait long enough for the debounce to elapse and the worker
-        // to drain the pending flag.
         let deadline = Instant::now() + Duration::from_secs(2);
         while src.flush_count() == 0 && Instant::now() < deadline {
             sleep(Duration::from_millis(10));
@@ -521,7 +489,6 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn force_every_n_ops_bypasses_debounce() {
-        // Long debounce + small force threshold → force kicks in.
         let policy = FlushPolicy {
             debounce: Duration::from_secs(10),
             force_every_n_ops: NonZeroUsize::new(4).unwrap(),
@@ -553,8 +520,6 @@ mod tests {
         let src = CountingSource::new("final");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
-        // Mark dirty without signalling — cancellation must still
-        // drain it via the final-flush path.
         src.dirty.store(true, Ordering::Release);
         cancel.cancel();
 
@@ -573,7 +538,6 @@ mod tests {
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
         drop(src);
 
-        // flush_now retains alive sources only; no panic, no flush.
         hub.flush_now().unwrap();
 
         let remaining = hub.sources.lock_sync().len();

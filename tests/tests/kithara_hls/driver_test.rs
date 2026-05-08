@@ -58,7 +58,6 @@ async fn test_driver_seek_after_playlist_finished(
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     spawn_blocking(move || {
-        // Read ALL data until EOF
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];
         loop {
@@ -69,18 +68,15 @@ async fn test_driver_seek_after_playlist_finished(
             all_data.extend_from_slice(&buf[..n]);
         }
 
-        // Verify all 3 segments loaded (200KB each = 600KB total)
         assert!(
             all_data.len() >= 600_000,
             "Should read all 3 segments (~600KB), got {} bytes",
             all_data.len()
         );
 
-        // CRITICAL: Seek to segment 1 AFTER playlist finished and EOF reached
         let pos = stream.seek(SeekFrom::Start(200_000)).unwrap();
         assert_eq!(pos, 200_000);
 
-        // Read and verify segment 1 data
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 9);
@@ -113,7 +109,7 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
         false,
-        Duration::from_secs(2), // Slow segment0 to potentially trigger ABR
+        Duration::from_secs(2),
     )
     .await;
 
@@ -130,7 +126,6 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    // Track variant switches in background
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let switches_clone = variant_switches.clone();
 
@@ -147,28 +142,22 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
         }
     });
 
-    // Give ABR time to start downloading
     sleep(Duration::from_millis(100)).await;
 
     spawn_blocking(move || {
-        // Read some data forward
         let mut first_read = vec![0u8; 50_000];
         let n1 = stream.read(&mut first_read).unwrap();
         assert!(n1 > 0, "Should read initial data");
 
-        // Save first bytes for comparison
         let initial_prefix = first_read[..n1.min(9)].to_vec();
 
-        // Seek backward to start
         let pos = stream.seek(SeekFrom::Start(0)).unwrap();
         assert_eq!(pos, 0, "Seek should return to position 0");
 
-        // Read from beginning again
         let mut second_read = vec![0u8; 1000];
         let n2 = stream.read(&mut second_read).unwrap();
         assert!(n2 > 0, "Should read data after seeking to beginning");
 
-        // Verify first bytes match (same data at position 0)
         let check_len = n2.min(initial_prefix.len());
         assert_eq!(
             &initial_prefix[..check_len],
@@ -179,7 +168,6 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
     .await
     .unwrap();
 
-    // Log variant switches for debugging
     let switches = variant_switches.lock().unwrap();
     info!("Variant switches detected: {:?}", *switches);
 }

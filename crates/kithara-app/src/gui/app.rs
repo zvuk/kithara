@@ -35,7 +35,6 @@ pub(crate) struct Kithara {
     pub(crate) shared_variant_label: Arc<Mutex<String>>,
 
     pub(crate) palette: gui::GuiPalette,
-    // Track info.
     pub(crate) current_track_index: Option<usize>,
     /// Row highlighted by a single click — second click on same row
     /// commits playback. `None` when nothing is focused.
@@ -48,29 +47,23 @@ pub(crate) struct Kithara {
     pub(crate) track_name: String,
     pub(crate) variant_label: String,
 
-    // UI state.
     pub(crate) active_tab: Tab,
 
     pub(crate) abr_variants: Vec<(usize, String)>,
 
-    // EQ band gains in dB (one per band from eq_layout).
     pub(crate) eq_bands: Vec<f32>,
 
     pub(crate) tracks_snapshot: Vec<TrackEntry>,
     pub(crate) abr_mode_is_auto: bool,
     pub(crate) is_seeking: bool,
-    // Playback state (synced from player on each tick).
     pub(crate) playing: bool,
     pub(crate) repeat_enabled: bool,
     pub(crate) shuffle_enabled: bool,
-    // Crossfade duration in seconds.
     pub(crate) crossfade: f32,
     pub(crate) duration: f32,
     pub(crate) position: f32,
 
-    // Seek state.
     pub(crate) seek_position: f32,
-    // Playback rate.
     pub(crate) selected_rate: f32,
     pub(crate) volume: f32,
     pub(crate) blink_counter: u8,
@@ -83,8 +76,6 @@ impl Kithara {
         palette: gui::GuiPalette,
         config: &crate::config::AppConfig,
     ) -> (Self, Task<Message>) {
-        // Feed tracks from inside iced's tokio runtime — `Loader::spawn_load`
-        // uses `tokio::spawn`, which requires a running reactor.
         queue.set_tracks(crate::sources::build_sources(config));
 
         let volume = queue.volume();
@@ -140,7 +131,6 @@ impl Kithara {
     /// interval scales with playback state to save CPU while idle — see
     /// [`subscription_config`] for rationale.
     pub(crate) fn subscription(&self) -> Subscription<Message> {
-        // Tick subscription + optional keyboard listener.
         const SUBSCRIPTION_CAPACITY: usize = 2;
         let cfg = subscription_config(self.playing);
         let mut subs = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
@@ -224,7 +214,6 @@ fn start_variant_listener(
                     }
                 }
                 Ok(Event::Queue(QueueEvent::CurrentTrackChanged { .. })) => {
-                    // Reset variant cache — a new track may have its own variants.
                     variants.clear();
                     if let Ok(mut l) = variant_label.lock() {
                         l.clear();

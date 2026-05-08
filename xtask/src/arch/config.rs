@@ -27,8 +27,6 @@ impl ArchConfig {
     }
 }
 
-// --- direction.toml --------------------------------------------------------
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DirectionConfig {
@@ -46,8 +44,6 @@ pub(crate) struct Layer {
     pub(crate) crates: Vec<String>,
 }
 
-// --- canonical-types.toml --------------------------------------------------
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CanonicalTypesConfig {
@@ -62,8 +58,6 @@ pub(crate) struct CanonicalType {
     pub(crate) name: String,
     pub(crate) owner: String,
 }
-
-// --- thresholds.toml -------------------------------------------------------
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -758,7 +752,6 @@ fn default_mutable_handle_types() -> Vec<String> {
 
 fn default_writer_methods() -> Vec<String> {
     [
-        // Atomic*
         "store",
         "swap",
         "fetch_add",
@@ -772,18 +765,15 @@ fn default_writer_methods() -> Vec<String> {
         "fetch_nand",
         "compare_exchange",
         "compare_exchange_weak",
-        // Cell / RefCell / OnceCell
         "set",
         "replace",
         "replace_with",
         "take",
         "swap",
-        // Mutex / RwLock writers (callers do *guard = X manually so plain assignment also caught)
         "write",
         "send",
         "send_replace",
         "send_modify",
-        // Notify
         "notify_one",
         "notify_all",
         "notify_waiters",
@@ -820,8 +810,6 @@ impl Default for MixedEntitiesThreshold {
     }
 }
 
-// --- module-layers.toml ----------------------------------------------------
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModuleLayersConfig {
@@ -844,8 +832,6 @@ pub(crate) struct ModuleLayer {
     pub(crate) name: String,
     pub(crate) paths: Vec<String>,
 }
-
-// --- helpers ---------------------------------------------------------------
 
 fn load_optional<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     if !path.exists() {

@@ -82,7 +82,6 @@ fn locate_suite_light() -> PathBuf {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        // `suite_light-<hash>` without a file extension is the test bin.
         if name.starts_with("suite_light-")
             && !name.contains('.')
             && entry.file_type().map(|t| t.is_file()).unwrap_or(false)
@@ -111,9 +110,6 @@ fn spawn_and_measure_leak_gap() -> Duration {
         .spawn()
         .expect("spawn suite_light");
 
-    // Read stdout to completion.  Whichever pipe closes last marks "test
-    // body said it's done"; for a passing trivial test that's effectively
-    // immediately after the `test result: ok.` line is flushed.
     let mut out = child.stdout.take().expect("stdout piped");
     let mut err = child.stderr.take().expect("stderr piped");
     let stderr_handle = std::thread::spawn(move || {
@@ -144,12 +140,6 @@ fn red_env_guard_no_leak_in_isolation() {
 
 #[kithara_test(native)]
 fn red_env_guard_no_leak_under_env_lock_contention() {
-    // Reproduce LEAK conditions: many in-parent workers hammer the
-    // `env_mutation_lock` while the child subprocess runs its own env test.
-    // Because the lock is process-local, the child has its own copy — so
-    // this tests the *OS-level* shutdown overhead under sustained CPU
-    // pressure from our own threads, which is what happens under
-    // `just test` where 8+ subprocesses contend with each other for CPU.
     const CONTENDERS: usize = 32;
 
     let stop = Arc::new(AtomicU64::new(0));
@@ -158,7 +148,6 @@ fn red_env_guard_no_leak_under_env_lock_contention() {
         let stop = Arc::clone(&stop);
         workers.push(std::thread::spawn(move || {
             while stop.load(Ordering::Relaxed) == 0 {
-                // CPU-burn to contend with the child subprocess.
                 let deadline = Instant::now() + Duration::from_micros(200);
                 while Instant::now() < deadline {
                     std::hint::spin_loop();
@@ -168,7 +157,6 @@ fn red_env_guard_no_leak_under_env_lock_contention() {
         }));
     }
 
-    // Let contention warm up.
     std::thread::sleep(Duration::from_millis(50));
 
     let gap = spawn_and_measure_leak_gap();

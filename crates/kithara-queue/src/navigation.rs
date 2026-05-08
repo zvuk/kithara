@@ -69,12 +69,6 @@ impl NavigationState {
             match self.repeat_mode {
                 RepeatMode::All => 0,
                 RepeatMode::Off | RepeatMode::One => {
-                    // Park the cursor past the last item so callers that
-                    // read `current_index` after `next() == None` see a
-                    // stopped queue. Without this, the `track_switch_race`
-                    // observer keeps reading the last-played slot via
-                    // `Queue::current()` and never exits the post-fast
-                    // window early.
                     self.current_index = None;
                     return None;
                 }
@@ -167,8 +161,8 @@ mod tests {
     fn select_dedupes_adjacent_history() {
         let mut nav = NavigationState::new();
         nav.select(1);
-        nav.select(1); // same
-        nav.select(1); // same
+        nav.select(1);
+        nav.select(1);
         assert!(nav.history.is_empty());
     }
 
@@ -191,7 +185,7 @@ mod tests {
         assert_eq!(nav.next(3), Some(0));
         assert_eq!(nav.next(3), Some(1));
         assert_eq!(nav.next(3), Some(2));
-        assert_eq!(nav.next(3), Some(0)); // wrap
+        assert_eq!(nav.next(3), Some(0));
     }
 
     #[kithara::test]

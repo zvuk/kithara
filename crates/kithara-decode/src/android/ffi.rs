@@ -233,8 +233,6 @@ pub(crate) fn current_api_level() -> Option<u32> {
 
 #[cfg(not(target_os = "android"))]
 pub(crate) fn current_api_level() -> Option<u32> {
-    // Host builds still compile Android capability logic and its tests, but
-    // they must never claim that MediaCodec is available at runtime.
     None
 }
 
@@ -266,8 +264,6 @@ mod tests {
         assert_eq!(KEY_CHANNEL_COUNT.to_str().ok(), Some("channel-count"));
         assert_eq!(KEY_DURATION_US.to_str().ok(), Some("durationUs"));
         assert_eq!(KEY_PCM_ENCODING.to_str().ok(), Some("pcm-encoding"));
-        // mirrors `MIN_HARDWARE_API_LEVEL` defined inside
-        // `api_level_allows_hardware`.
         const MIN_HARDWARE_API_LEVEL: u32 = 28;
         assert!(api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL)));
         assert!(!api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL - 1)));

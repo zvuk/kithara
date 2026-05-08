@@ -60,8 +60,6 @@ impl OfflinePlayer {
         let player_node = PlayerNode::with_channel(
             cmd_rx,
             Arc::clone(&shared_state),
-            // OfflinePlayer test-utils fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             kithara_bufpool::PcmPool::default().clone(),
         );
         let node_id = ctx.add_node(player_node, None);
@@ -87,8 +85,6 @@ impl OfflinePlayer {
         let pr = PlayerResource::new(
             resource,
             Arc::clone(&src),
-            // OfflinePlayer test-utils fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             &kithara_bufpool::PcmPool::default(),
         );
         self.cmd_tx

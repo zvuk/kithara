@@ -176,11 +176,6 @@ impl PlayerImpl {
 
         let bus = config.bus.clone().unwrap_or_default();
 
-        // Resolve master once. If the consumer crate (Queue / App / FFI)
-        // supplied a master via PlayerConfig.cancel, the unwrap_or is a
-        // no-op and the parent master flows through; otherwise we
-        // construct a fresh one. Pass it down to the engine so the
-        // shared audio worker shutdown joins this hierarchy.
         let cancel = config.cancel.clone().unwrap_or_default(); // kithara:cancel:owner
         config.cancel = Some(cancel.clone());
 
@@ -230,9 +225,6 @@ impl PlayerImpl {
         bus: EventBus,
         engine: EngineImpl,
     ) -> Self {
-        // Master is already resolved by `new` / `with_engine` (the
-        // canonical entry points). At this point `config.cancel` is
-        // always `Some(master)`; the unwrap is defensive only.
         let cancel = config
             .cancel
             .clone()
@@ -250,7 +242,7 @@ impl PlayerImpl {
             playback_rate_shared: Arc::new(AtomicF32::new(config.default_rate)),
             pending_next: Mutex::new(None),
             auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
-            rate: AtomicF32::new(0.0), // starts paused
+            rate: AtomicF32::new(0.0),
             status: Mutex::new(PlayerStatus::Unknown),
             volume: AtomicF32::new(1.0),
             cancel,
@@ -384,7 +376,6 @@ impl PlayerImpl {
             return None;
         }
         let removed = items.remove(index);
-        // Adjust current_index if needed
         let current = self.current_index.load(Ordering::Relaxed);
         if index < current {
             self.current_index
@@ -411,7 +402,6 @@ impl PlayerImpl {
         self.rate.store(rate, Ordering::Relaxed);
         self.playback_rate_shared.store(rate, Ordering::Relaxed);
 
-        // Start engine and allocate slot if needed.
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
             return;
@@ -421,7 +411,6 @@ impl PlayerImpl {
             return;
         }
 
-        // Load current resource into slot and start playback.
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
         self.load_current_item();
@@ -762,8 +751,6 @@ impl PlayerImpl {
 
     fn handle_handover_requested(&self) {
         if self.crossfade_duration() <= 0.0 {
-            // cf=0: arena handover at EOF does it; main thread finalises
-            // bookkeeping in the EOF branch of `dispatch_notification`.
             return;
         }
         self.bus.publish(PlayerEvent::HandoverRequested);
@@ -873,8 +860,6 @@ impl PlayerImpl {
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(crossfade_seconds));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
 
-        // `arm_next` already took `items[index]`; reloading would be a
-        // silent no-op. Promote the armed slot instead.
         let armed_for_index = self
             .pending_next
             .lock_sync()
@@ -1193,10 +1178,6 @@ fn player_event_from_notification(notification: PlayerNotification) -> Option<Pl
 
 impl Drop for PlayerImpl {
     fn drop(&mut self) {
-        // Fire master pulse before structural Arc teardown so subsystems
-        // (Downloader, HlsPeer, Audio worker, AssetStore) observe the
-        // cancel pulse promptly. Each per-track child token is derived
-        // from `self.cancel` via prepare_config().
         self.cancel.cancel();
     }
 }
@@ -1289,8 +1270,6 @@ mod tests {
         let observer = track_cancel.child_token();
         assert!(!observer.is_cancelled());
 
-        // Cancelling the parent (without dropping the player) must
-        // propagate to the per-track child — confirms parent-flow.
         parent_master.cancel();
         assert!(observer.is_cancelled());
         player.worker().shutdown();
@@ -1329,7 +1308,6 @@ mod tests {
     #[kithara::test]
     fn player_pause_sets_rate_zero() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        // Don't call play() (requires audio hardware); just test pause logic.
         player.rate.store(1.0, Ordering::Relaxed);
         player.pause();
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
@@ -1374,11 +1352,9 @@ mod tests {
     #[kithara::test]
     fn player_prefetch_duration() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        // Default from PlayerConfig.
         assert!((player.prefetch_duration() - 3.5).abs() < f32::EPSILON);
         player.set_prefetch_duration(8.0);
         assert!((player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
-        // Negative values clamp to zero.
         player.set_prefetch_duration(-1.0);
         assert!((player.prefetch_duration() - 0.0).abs() < f32::EPSILON);
     }
@@ -1387,7 +1363,6 @@ mod tests {
     fn player_events_subscribe() {
         let player = PlayerImpl::new(PlayerConfig::default());
         let mut rx = player.subscribe();
-        // Trigger an event without requiring audio hardware.
         player.set_volume(0.5);
         let event = rx.try_recv();
         assert!(event.is_ok());
@@ -1431,9 +1406,7 @@ mod tests {
     #[kithara::test]
     fn player_default_rate_getter_setter() {
         let player = PlayerImpl::new(PlayerConfig::default());
-        // Default rate from config is 1.0
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
-        // Change at runtime
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
     }
@@ -1494,7 +1467,6 @@ mod tests {
     fn player_exposes_worker() {
         let player = PlayerImpl::new(PlayerConfig::default());
         let _w = player.worker();
-        // Worker should be accessible and clonable.
         let _w2 = player.worker().clone();
     }
 

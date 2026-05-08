@@ -94,10 +94,6 @@ async fn t8_natural_eof_complete_playback(
 
     let mut audio = open_audio(&url, store, AbrMode::Manual(variant), backend, 3).await;
 
-    // Read until the decoder reports EOF or the deadline elapses.
-    // The fixture is `SEGMENTS_PER_VARIANT * SEGMENT_DURATION_SECS`
-    // seconds of audio (24 s by default); the deadline is generous to
-    // absorb cold-start without exceeding the test wall-time budget.
     let deadline = Instant::now() + Duration::from_secs(45);
     let mut total_frames: u64 = 0;
     let mut saw_eof = false;
@@ -132,12 +128,6 @@ async fn t8_natural_eof_complete_playback(
         "T8: decoder did not reach natural EOF before deadline"
     );
 
-    // The fixture renders exactly `packets_per_segment · frame_samples
-    // · SEGMENTS_PER_VARIANT` PCM frames per variant. Decoder output
-    // may differ by at most one encoder frame (`frame_samples`) due to
-    // AAC encoder priming / EditList interpretation — that is part of
-    // the codec's structure, not a bug. Anything larger is lost or
-    // duplicated audio.
     let codec = variant_codec(variant);
     let expected = expected_frames_per_variant(codec);
     let frame_samples = encoder_frame_samples(codec) as i64;
@@ -149,13 +139,6 @@ async fn t8_natural_eof_complete_playback(
          got {total_frames} (drift {drift}). Backend = {backend:?}, variant = {variant}."
     );
 
-    // No ABR commit and no midstream switch are expected on the
-    // baseline path. `record_abr_variant_committed` only fires for
-    // controller-driven transitions through `AbrController::tick` ⇒
-    // `decision.did_change`; the seed `set_initial_abr_mode(Manual(_))`
-    // bypasses that path, so the probe count is exactly zero. Any
-    // non-zero count here means the controller spuriously transitioned
-    // a variant during a no-set_mode test — a contract violation.
     let abr_commits = recorder.events_with_probe("record_abr_variant_committed");
     assert_exact_count(abr_commits.len(), 0, "T8 abr_variant_committed count");
     let midstream = recorder.events_with_probe("record_midstream_switch_committed");

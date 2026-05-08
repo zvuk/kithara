@@ -20,7 +20,6 @@ fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
     let pcm = pool.get_with(|b| {
         b.clear();
         b.resize(samples, 0.0);
-        // Fill with sine wave
         for i in 0..samples {
             b[i] = (i as f32 * 0.01).sin() * 0.5;
         }

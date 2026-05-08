@@ -180,8 +180,6 @@ impl Queue {
         let Some(t) = self.player.position_seconds() else {
             return;
         };
-        // Engine briefly reports 0.0 on pause/resume; keep the last
-        // sane value so slider bindings don't flash back to the start.
         if t == 0.0
             && self
                 .read_cached_position()
@@ -241,11 +239,6 @@ mod tests {
         Some(TrackId(0)),
         true
     )]
-    // cf=0: production replaced the END_PROXIMITY_SECONDS pre-arm window
-    // with sample-accurate handover via the audio thread's
-    // `TrackPlaybackStopped` notification (PR #64). The pre-arm path
-    // returns `false` for cf=0 across all positions; the next-track
-    // promotion happens through the player processor instead.
     #[case::crossfade_zero_at_tail_no_pre_arm(161.9, 162.0, 0.0, TrackId(1), None, false)]
     #[case::crossfade_zero_quiet_middle(161.0, 162.0, 0.0, TrackId(1), None, false)]
     #[case::zero_position_rejected(0.0, 162.0, 5.0, TrackId(1), None, false)]

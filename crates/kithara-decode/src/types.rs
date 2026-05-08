@@ -148,8 +148,6 @@ impl Clone for PcmChunk {
     /// Each clone gets its own [`PcmBuf`] from the global pool,
     /// so both original and clone recycle independently on drop.
     fn clone(&self) -> Self {
-        // Clone trait — no pool parameter
-        // ast-grep-ignore: perf.no-global-pool-accessor
         let mut new_pcm = PcmPool::default().get();
         new_pcm.extend_from_slice(&self.pcm);
         Self {
@@ -204,20 +202,16 @@ mod tests {
                 spec,
                 ..Default::default()
             },
-            // test fixture: top-level singleton acceptable
-            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().attach(pcm),
         )
     }
-
-    // PcmSpec Tests
 
     #[kithara::test]
     #[case(44100, 2, "44100 Hz, 2 channels")]
     #[case(48000, 1, "48000 Hz, 1 channels")]
     #[case(96000, 6, "96000 Hz, 6 channels")]
     #[case(192000, 8, "192000 Hz, 8 channels")]
-    #[case(0, 0, "0 Hz, 0 channels")] // Edge case
+    #[case(0, 0, "0 Hz, 0 channels")]
     fn test_pcm_spec_display(
         #[case] sample_rate: u32,
         #[case] channels: u16,
@@ -284,11 +278,9 @@ mod tests {
             channels,
             sample_rate,
         };
-        let copied = spec; // Copy, not move
+        let copied = spec;
         assert_eq!(spec, copied);
     }
-
-    // PcmMeta Tests
 
     #[kithara::test]
     fn test_pcm_meta_default() {
@@ -359,8 +351,6 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    // PcmChunk Tests
-
     #[kithara::test]
     fn test_pcm_chunk_new() {
         let spec = PcmSpec {
@@ -375,11 +365,11 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case(vec![0.0, 1.0, 2.0, 3.0], 2, 2)] // 4 samples, 2 channels = 2 frames
-    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 2, 3)] // 6 samples, 2 channels = 3 frames
-    #[case(vec![0.0], 1, 1)] // 1 sample, 1 channel = 1 frame
-    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 6, 1)] // 6 samples, 6 channels = 1 frame
-    #[case(vec![], 2, 0)] // Empty PCM = 0 frames
+    #[case(vec![0.0, 1.0, 2.0, 3.0], 2, 2)]
+    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 2, 3)]
+    #[case(vec![0.0], 1, 1)]
+    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 6, 1)]
+    #[case(vec![], 2, 0)]
     fn test_frames_calculation(
         #[case] pcm: Vec<f32>,
         #[case] channels: u16,

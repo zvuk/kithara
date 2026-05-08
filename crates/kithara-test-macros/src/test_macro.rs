@@ -57,7 +57,6 @@ impl TestArgs {
         Self::check_exclusive(self.is_selenium, "selenium", self.is_wasm_only, "wasm")?;
         Self::check_exclusive(self.is_selenium, "selenium", self.is_browser, "browser")?;
 
-        // selenium implies native + tokio + serial + multi_thread
         if self.is_selenium {
             self.is_native_only = true;
             self.is_tokio = true;
@@ -240,8 +239,6 @@ fn make_preamble(params: &[ParamInfo], case_values: Option<&[Expr]>) -> TokenStr
     for p in params {
         let name = &p.name;
         let ty = &p.ty;
-        // Strip leading `_` from fixture name to find the actual function.
-        // e.g. `_temp_dir: TestTempDir` calls `temp_dir()`.
         let fn_name = {
             let s = name.to_string();
             let trimmed = s.trim_start_matches('_');
@@ -262,7 +259,6 @@ fn make_preamble(params: &[ParamInfo], case_values: Option<&[Expr]>) -> TokenStr
                 }
             }
             ParamKind::Future => {
-                // Async fixture: call function, don't await (user does `.await` in body)
                 stmts.push(quote! { let #mutability #name = #fn_name(); });
             }
             ParamKind::Fixture => {
@@ -405,8 +401,6 @@ fn wrap_with_timeout(
     let fn_name_str = fn_name.to_string();
 
     if is_async {
-        // WASM-only cooperative timeout (native async+timeout uses
-        // emit_async_timeout_test for manual runtime control).
         quote! {
             {
                 let __timeout_dur: ::std::time::Duration = #dur;
@@ -442,7 +436,6 @@ fn wrap_with_timeout(
                             )
                         }
                         Err(::std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                            // Test body panicked — propagate the original panic.
                             match handle.join() {
                                 Err(payload) => ::std::panic::resume_unwind(payload),
                                 Ok(_) => unreachable!(),
@@ -522,7 +515,6 @@ fn emit_async_timeout_test(
         }
     };
 
-    // Brace the body so it can be used as `async { #braced }` safely.
     let braced = quote! { { #body } };
     let inner_body = if !args.soft_fail_patterns.is_empty() {
         wrap_with_soft_fail(&braced, fn_name, true, &args.soft_fail_patterns)
@@ -545,10 +537,6 @@ fn emit_async_timeout_test(
 
             let __timeout_dur: ::std::time::Duration = #dur;
 
-            // Hard-timeout watchdog — runs OUTSIDE the tokio runtime on a
-            // plain OS thread.  A Drop guard cancels it when the function
-            // exits (including after runtime.shutdown_timeout).  If even
-            // shutdown_timeout hangs, the watchdog fires and aborts.
             let __done = ::std::sync::Arc::new(
                 ::std::sync::atomic::AtomicBool::new(false),
             );
@@ -594,7 +582,6 @@ fn emit_async_timeout_test(
                 })
             );
 
-            // Force-shutdown the runtime: never block on zombie blocking threads.
             __rt.shutdown_timeout(::std::time::Duration::from_millis(100));
 
             match __result {
@@ -619,8 +606,6 @@ fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
         .map(|(key, value)| (key.clone(), Some(value.clone())))
         .collect();
 
-    // When NO_PROXY is requested, clear inherited proxy vars unless explicitly
-    // overridden in the macro args.
     if env_vars
         .iter()
         .any(|(key, _)| key.eq_ignore_ascii_case("NO_PROXY"))
@@ -794,9 +779,6 @@ fn emit_one_test(
     let full = quote! { #tracing_init #preamble #(#body_stmts)* };
     let serial_attr = make_serial_attr(args);
 
-    // Async + timeout on native: use manual runtime for clean shutdown.
-    // This avoids #[tokio::test]'s Runtime::drop hanging on zombie
-    // spawn_blocking threads after a timeout fires.
     if is_async && args.timeout.is_some() {
         let mut output = emit_async_timeout_test(
             fn_name,
@@ -807,7 +789,6 @@ fn emit_one_test(
             args,
             &serial_attr,
         );
-        // WASM side: async function with cooperative timeout
         let wasm_timeout = wrap_with_timeout(&full, &args.timeout, true, fn_name);
         let wasm_wrapped = finalize_body(&wasm_timeout, args, fn_name, true);
         output.extend(quote! {
@@ -819,7 +800,6 @@ fn emit_one_test(
         return output;
     }
 
-    // Async WITHOUT timeout: manual runtime (simple block_on, no watchdog).
     if is_async {
         let mut output = emit_async_runtime_test(
             fn_name,
@@ -830,7 +810,6 @@ fn emit_one_test(
             args,
             &serial_attr,
         );
-        // WASM side: plain async function
         let braced = quote! { { #full } };
         let wasm_wrapped = finalize_body(&braced, args, fn_name, true);
         output.extend(quote! {
@@ -842,7 +821,6 @@ fn emit_one_test(
         return output;
     }
 
-    // Sync tests: dual-platform attrs (#[test] + #[wasm_bindgen_test])
     let with_timeout = wrap_with_timeout(&full, &args.timeout, false, fn_name);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
 
@@ -874,7 +852,6 @@ fn emit_browser_test(
 
     output.extend(make_dedicated_worker_config());
 
-    // WASM side: always async, with tokio::ensure_thread_pool init
     let wasm_body = quote! {
         #tracing_init
         kithara_platform::tokio::ensure_thread_pool().await;
@@ -890,12 +867,10 @@ fn emit_browser_test(
         #vis async fn #fn_name() #ret_type #wasm_wrapped
     });
 
-    // Native side (only for dual-platform: native+browser or tokio+browser)
     if !browser_only {
         let native_is_async = is_async || args.is_tokio;
         let native_body = quote! { #tracing_init #preamble #(#body_stmts)* };
 
-        // Async + timeout: use manual runtime (same reason as emit_one_test)
         if native_is_async && args.timeout.is_some() {
             output.extend(emit_async_timeout_test(
                 fn_name,
@@ -907,7 +882,6 @@ fn emit_browser_test(
                 &serial_attr,
             ));
         } else if native_is_async {
-            // Async without timeout: manual runtime
             output.extend(emit_async_runtime_test(
                 fn_name,
                 vis,
@@ -918,7 +892,6 @@ fn emit_browser_test(
                 &serial_attr,
             ));
         } else {
-            // Sync native test
             let native_with_timeout =
                 wrap_with_timeout(&native_body, &args.timeout, false, fn_name);
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);

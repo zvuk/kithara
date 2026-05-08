@@ -93,9 +93,6 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
     player.load_and_fadein(resource, "t0");
 
-    // Warm up decoder so seek runs against a live decoder, not a cold
-    // boot — matches the prod scenario where the user has been listening
-    // and then drags the playhead.
     render_burst(
         &mut player,
         blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
@@ -106,20 +103,14 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
         pos_before > 0.2,
         "decoder never produced PCM before the seek (pos={pos_before:.3}s)"
     );
-    // Drain `TrackLoaded` / `TrackPlaybackStarted` from the warmup so the
-    // post-seek probe only sees post-seek terminal events.
     let _ = player.take_notification_kinds();
 
-    // Issue the unsatisfiable seek.
     player.seek(Consts::SEEK_TARGET_SECS, 1);
     eprintln!(
         "[red] seek issued target={:.1}s (past 12 s fixture duration)",
         Consts::SEEK_TARGET_SECS
     );
 
-    // Observation window: long enough for any reasonable bounded recovery
-    // (≤ 5 attempts × ~200 ms decoder rebuild) but short enough that an
-    // unbounded loop is decisively distinguishable.
     render_burst(
         &mut player,
         blocks_for_seconds(Consts::POST_SEEK_RENDER_SECS),
@@ -130,10 +121,6 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     let kinds = player.take_notification_kinds();
     eprintln!("[red] post-seek position={pos_after:.3}s notifications={kinds:?}");
 
-    // Pass condition: the FSM reached a terminal state for this track —
-    // either failed (TrackError) or hit natural EOF (TrackPlaybackStopped).
-    // Both are valid outcomes for an unsatisfiable seek; the bug is the
-    // *third* outcome — silent recreate-loop with no notification at all.
     let terminal = kinds
         .iter()
         .any(|k| matches!(k, NotificationKind::PlaybackStopped));

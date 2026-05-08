@@ -54,9 +54,6 @@ fn perf_abr_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenari
         | PerfScenario::ControllerCreation
         | PerfScenario::PureDecision
         | PerfScenario::EstimatorHotLoop => {
-            // Stubbed: the new AbrController exposes `record_bandwidth`
-            // rather than `push_sample` + `decide`. Replace with a
-            // perf-coherent driver when restoring this coverage.
             hotpath::measure_block!("abr_create", {
                 for _ in 0..100 {
                     let _controller = AbrController::new(AbrSettings::default());

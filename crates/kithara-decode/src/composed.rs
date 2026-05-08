@@ -161,11 +161,6 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
 
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
-            // `Frame<'_>` borrows into `self.demuxer`'s internal state
-            // (Symphonia `Packet`, fmp4 segment buffer). We carefully
-            // touch only disjoint fields (`self.pool`, `self.codec`,
-            // `self.pending_seek_target`) directly while the frame is
-            // alive — going through `&mut self` methods would conflict.
             let frame = match self.demuxer.next_frame()? {
                 DemuxOutcome::Frame(frame) => frame,
                 DemuxOutcome::Pending(reason) => {
@@ -173,8 +168,6 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 }
                 DemuxOutcome::Eof => return Ok(DecoderChunkOutcome::Eof),
             };
-            // Inline `skip_frame_for_pending_target` to keep the demuxer
-            // borrow live alongside the codec call below.
             if let Some(target) = self.pending_seek_target {
                 let frame_end = frame.pts.saturating_add(frame.duration);
                 if frame_end <= target {
@@ -189,8 +182,6 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             }
             let pts = frame.pts;
             let source_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
-            // `frame.data` borrow ends here — NLL releases the demuxer
-            // borrow so `build_chunk(&mut self, ...)` can run.
             let chunk = self.build_chunk(buf, frames, pts, source_bytes);
             return Ok(DecoderChunkOutcome::Chunk(chunk));
         }
@@ -203,12 +194,6 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 landed_byte,
             } => {
                 self.codec.flush()?;
-                // The audio pipeline's timeline anchors at this report;
-                // surface the *requested* target when the demuxer
-                // snapped backward (e.g. HLS segment start) so the user
-                // sees the position they asked for, while
-                // `pending_seek_target` makes sure the first emitted
-                // chunk's PTS lands at-or-past the target.
                 let reported_landed_at = pos.max(landed_at);
                 self.pending_seek_target = (landed_at < pos).then_some(pos);
                 self.frame_offset = frame_offset_for(reported_landed_at, self.spec.sample_rate);
@@ -334,8 +319,6 @@ mod smoke_tests {
         let mut decoder = ComposedDecoder::new(
             demuxer,
             codec,
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().clone(),
             0,
             None,
@@ -372,8 +355,6 @@ mod smoke_tests {
         let mut decoder = ComposedDecoder::new(
             demuxer,
             codec,
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().clone(),
             0,
             None,
@@ -606,8 +587,6 @@ mod hook_tests {
         ComposedDecoder::new(
             demuxer,
             codec,
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().clone(),
             0,
             None,
@@ -697,11 +676,7 @@ mod pool_budget_tests {
 
     #[kithara::test]
     fn codec_warm_pool_does_not_grow_alloc_misses() {
-        // 32 max buffers split across 8 shards = 4 per shard. Single-test
-        // thread routes to one shard, so warm-up size of 4 fits.
         let pool = PcmPool::new(32, 8192);
-        // Pre-warm: pull 4 buffers, grow each to the per-call sample budget,
-        // then drop them so they recycle into the pool with right capacity.
         for _ in 0..4 {
             let mut buf = pool.get();
             buf.ensure_len(2048).unwrap();
@@ -721,7 +696,6 @@ mod pool_budget_tests {
                 .decode_frame(&[], Duration::ZERO, &mut buf)
                 .expect("BUG: decode_frame");
             assert_eq!(frames, 1024);
-            // buf drops, returning to pool.
         }
 
         assert_eq!(

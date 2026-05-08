@@ -96,9 +96,7 @@ async fn abr_auto_switch_during_playback(
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        // V0 = 5 Mbps (high, delayed), V1 = 1 Mbps (low, fast).
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        // V0 segments 3+ delayed 500ms → throughput ~3.2 Mbps < 5 Mbps → down-switch.
         delay_rules: vec![DelayRule {
             variant: Some(0),
             segment_gte: Some(3),
@@ -114,8 +112,6 @@ async fn abr_auto_switch_during_playback(
 
     let cancel = CancellationToken::new();
 
-    // Shared event bus: subscribe BEFORE Audio::new so we don't miss
-    // fast ABR switches that happen during stream creation.
     let bus = EventBus::new(32);
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
@@ -151,7 +147,6 @@ async fn abr_auto_switch_during_playback(
         .await
         .expect("create Audio<Stream<Hls>>");
 
-    // Read audio until EOF or timeout
     let result = spawn_blocking(move || {
         let mut buf = vec![0.0f32; 4096];
         let mut total_samples = 0u64;

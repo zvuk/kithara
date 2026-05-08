@@ -168,15 +168,12 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
             };
 
             let codec = codecs_str.map(|c| {
-                // Parse audio codec from CODECS string
-                // CODECS can contain multiple codecs separated by comma (e.g., "avc1.42c00d,mp4a.40.2")
                 let audio_codec = c
                     .split(',')
                     .map(str::trim)
                     .map(|codec| codec.trim_matches('"'))
                     .find_map(AudioCodec::from_hls_codec);
 
-                // Determine container format from URI extension
                 let container = detect_container_from_uri(&uri);
 
                 CodecInfo {
@@ -234,9 +231,6 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
 
     let media_sequence = hls_media.media_sequence as u64;
 
-    // First segment-level encryption key, used as a fallback when an
-    // `#EXT-X-MAP` tag is not directly associated with one in the parsed
-    // tree.
     let init_key_fallback: Option<KeyInfo> = hls_media
         .segments
         .values()
@@ -270,9 +264,6 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
 
     let init_segment = hls_media.segments.iter().next().and_then(|(_, seg)| {
         seg.map.as_ref().map(|m| {
-            // hls_m3u8 may not associate #EXT-X-KEY with #EXT-X-MAP tags.
-            // Fall back to the first segment-level key (the effective key
-            // at the point where the MAP tag appears).
             let map_key: Option<SegmentKey> = m
                 .keys()
                 .first()
@@ -291,7 +282,6 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
         })
     });
 
-    // Detect container from init segment or first segment URI
     let detected_container = init_segment
         .as_ref()
         .and_then(|init| detect_container_from_uri(&init.uri))
@@ -383,8 +373,6 @@ video.m3u8";
 audio_flac.m3u8";
     }
 
-    // Test Cases
-
     #[kithara::test]
     fn test_variant_id_creation() {
         assert_eq!(VariantId(42).0, 42);
@@ -457,7 +445,6 @@ audio_flac.m3u8";
         assert!(result.is_err(), "Should fail to parse invalid playlist");
 
         if let Err(HlsError::PlaylistParse(_)) = result {
-            // Expected error type
         } else {
             panic!("Expected PlaylistParse error, got: {:?}", result);
         }

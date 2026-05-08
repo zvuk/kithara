@@ -160,10 +160,6 @@ async fn build_resource(
     case::android(DecoderBackend::Android, AbrMode::Auto(None))
 )]
 async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] abr: AbrMode) {
-    // One TestServerHelper for the whole test — fixture HLS state is
-    // immutable, so reusing it across iterations matches the silvercomet
-    // setup (CDN serves the same playlist regardless of iteration) while
-    // each iteration still builds a fresh Downloader + cache + player.
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
         .variant_count(3)

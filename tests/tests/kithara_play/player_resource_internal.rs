@@ -232,20 +232,16 @@ async fn seek_clears_buffered_samples() {
     let resource = Resource::from_reader(reader, None);
     let mut pr = PlayerResource::new(resource, Arc::from("position.mp3"), &PcmPool::default());
 
-    // Read 128 frames; scratch holds samples reflecting frame indices 0..N.
     let mut left = vec![0.0f32; 128];
     let mut right = vec![0.0f32; 128];
     {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
         let _ = pr.read(&mut output, 0..128);
     }
-    // Pre-seek samples encode early frame indices.
     assert!(left[0] < 1024.0, "pre-seek sample should be near frame 0");
 
-    // Seek to 0.5s (frame 22050).
     pr.seek(0.5);
 
-    // Post-seek read must reflect new position, NOT cached pre-seek samples.
     let mut left2 = vec![0.0f32; 128];
     let mut right2 = vec![0.0f32; 128];
     let mut output2: Vec<&mut [f32]> = vec![&mut left2, &mut right2];

@@ -132,15 +132,6 @@ impl SymphoniaCodec {
         let registry: &CodecRegistry = symphonia::default::get_codecs();
         let mut opts = AudioDecoderOptions::default();
         opts.gapless = config.gapless;
-        // Container/encoder-probed `track.gapless` (set by the factory's
-        // `probe_codec_gapless` from MP4 `udta`/`elst` for AAC,
-        // Xing/Info+LAME for MP3) is used verbatim — the probed leading
-        // already contains the encoder priming, so no extra fold here.
-        // When no container metadata was probed, the `pipeline::gapless`
-        // stage applies `GaplessMode::CodecPriming` independently using
-        // `codec_priming_frames(codec)` as a fallback; the codec layer
-        // itself reports `None` to keep the two paths from
-        // double-trimming.
         let track_gapless = track.gapless;
         let decoder = registry
             .make_audio_decoder(&params, &opts)
@@ -150,11 +141,6 @@ impl SymphoniaCodec {
             channels: track.channels,
             sample_rate: track.sample_rate,
         };
-        // Carry container-level gapless info (when the demuxer surfaced
-        // `iTunSMPB` / `elst`) into `DecoderTrackInfo` so downstream
-        // gapless trim picks it up. Codecs whose priming Symphonia
-        // strips internally (Vorbis/Opus via `AudioDecoderOptions::gapless`)
-        // leave `track.gapless` as `None` and report nothing here.
         Ok(Self {
             decoder,
             spec,

@@ -44,11 +44,6 @@ impl HlsSegmentView {
         variant: usize,
         segment_index: usize,
     ) -> Option<SegmentDescriptor> {
-        // Prefer the actually-committed byte range from `StreamIndex`:
-        // after `reconcile_segment_size` (DRM decryption, post-HEAD
-        // size correction) the playlist's estimated `segment_sizes`
-        // may underreport, leaving the playlist-derived byte range
-        // truncated mid-`mdat`. The committed range is always exact.
         let committed_range = self
             .segments
             .lock_sync()
@@ -135,8 +130,6 @@ impl HlsSegmentView {
     pub(crate) fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         let variant = self.current_variant();
         let (segment_index, _, _) = self.playlist_state.find_seek_point_for_time(variant, t)?;
-        // Already routed through `descriptor_for_segment` so the
-        // committed-range preference applies here too.
         self.descriptor_for_segment(variant, segment_index)
     }
 
@@ -225,11 +218,8 @@ mod tests {
 
     #[kithara::test]
     fn segment_at_time_maps_target_to_correct_descriptor() {
-        // 4 segments, init=50, media=[100,100,100,100]
-        // segment_sizes=[150,100,100,100], offsets=[0,150,250,350], total=450
         let view = build_view(4, 50, &[100, 100, 100, 100]);
 
-        // Seek mid-segment-2: 8s..12s, byte range [250..350)
         let desc = view
             .segment_at_time(Duration::from_millis(8_500))
             .expect("segment");
@@ -244,7 +234,6 @@ mod tests {
     fn segment_at_time_for_last_segment_uses_total_variant_size() {
         let view = build_view(4, 50, &[100, 100, 100, 100]);
 
-        // Seek into segment 3: 12s..16s, byte range [350..450)
         let desc = view
             .segment_at_time(Duration::from_millis(13_000))
             .expect("last segment");
@@ -256,7 +245,6 @@ mod tests {
     fn segment_at_time_clamps_to_tail_when_target_past_end() {
         let view = build_view(4, 50, &[100, 100, 100, 100]);
 
-        // Past end of track — `find_seek_point_for_time` clamps to last segment.
         let desc = view
             .segment_at_time(Duration::from_secs(999))
             .expect("clamped");
@@ -267,7 +255,6 @@ mod tests {
     fn segment_after_byte_advances_when_offset_is_mid_segment() {
         let view = build_view(4, 50, &[100, 100, 100, 100]);
 
-        // 200 is mid-segment-1 ([150..250)) — sequential play wants segment 2.
         let desc = view.segment_after_byte(200).expect("segment");
         assert_eq!(desc.segment_index, 2);
         assert_eq!(desc.byte_range, 250..350);
@@ -277,7 +264,6 @@ mod tests {
     fn segment_after_byte_returns_aligned_segment_when_at_boundary() {
         let view = build_view(4, 50, &[100, 100, 100, 100]);
 
-        // 250 is exactly the start of segment 2 — return segment 2.
         let desc = view.segment_after_byte(250).expect("segment");
         assert_eq!(desc.segment_index, 2);
     }

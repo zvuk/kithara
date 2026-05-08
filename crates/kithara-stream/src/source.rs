@@ -424,8 +424,6 @@ mod tests {
 
     #[kithara::test]
     fn test_source_trait_object_safety() {
-        // Source is not object-safe due to associated types,
-        // but we can verify it compiles with concrete types
         fn _accepts_source<S: Source>(_s: S) {}
     }
 
@@ -462,7 +460,6 @@ mod tests {
             }
         }
         let source = ReadySource::default();
-        // Default phase() delegates to phase_at(0..1) since timeline position is 0.
         assert_eq!(source.phase(), SourcePhase::Ready);
     }
 }

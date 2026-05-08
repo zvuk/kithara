@@ -36,8 +36,6 @@ impl Consts {
     const LEAK_TOLERANCE_MB: usize = 5;
 }
 
-// Test 1: RSS budget
-
 /// Multi-run RSS measurement: peak RSS delta must stay within budget.
 #[kithara::test(
     native,
@@ -109,7 +107,6 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             samples.len(),
         );
 
-        // Cleanup between runs
         drop(server);
     }
 
@@ -132,8 +129,6 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         Consts::RSS_BUDGET_MB
     );
 }
-
-// Test 2: No RSS leak
 
 /// RSS should stabilize after warmup — no sustained growth.
 #[kithara::test(
@@ -176,7 +171,6 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
 
             let elapsed = start.elapsed();
 
-            // Capture RSS at warmup boundary
             if warmup_rss.is_none()
                 && elapsed >= Duration::from_secs(Consts::LEAK_WARMUP_SECS)
                 && let Some(stats) = memory_stats()
@@ -184,7 +178,6 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
                 warmup_rss = Some(stats.physical_mem);
             }
 
-            // Continuously update final RSS
             if let Some(stats) = memory_stats() {
                 final_rss = stats.physical_mem;
             }

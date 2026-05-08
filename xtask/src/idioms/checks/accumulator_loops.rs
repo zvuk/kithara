@@ -242,8 +242,6 @@ impl<'ast> Visit<'ast> for JumpFinder {
         self.found = true;
     }
 
-    // Don't descend into nested closures/loops — their internal jumps are scoped
-    // to themselves and don't affect the outer for-loop's control flow.
     fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
     fn visit_expr_for_loop(&mut self, _: &'ast ExprForLoop) {}
     fn visit_expr_loop(&mut self, _: &'ast syn::ExprLoop) {}

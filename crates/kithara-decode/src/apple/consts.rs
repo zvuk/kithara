@@ -21,19 +21,19 @@ impl Consts {
     pub(crate) const FLAC_COOKIE_PREFIX_LEN: usize = 8;
     /// Size of the FLAC STREAMINFO metadata block body (fixed by spec).
     pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
-    pub(crate) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d_6763; // 'dmgc'
-    pub(crate) const kAudioConverterErr_NoDataNow: OSStatus = 0x2164_6174; // '!dat'
+    pub(crate) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d_6763;
+    pub(crate) const kAudioConverterErr_NoDataNow: OSStatus = 0x2164_6174;
     /// `'prim'` — codec-reported `AudioConverterPrimeInfo` (encoder
     /// priming + trailing padding in PCM frames). Available after the
     /// converter has consumed at least one input packet.
-    pub(crate) const kAudioConverterPrimeInfo: u32 = 0x7072_696d; // 'prim'
-    pub(crate) const kAudioFormatFLAC: AudioFormatID = 0x666c_6163; // 'flac'
+    pub(crate) const kAudioConverterPrimeInfo: u32 = 0x7072_696d;
+    pub(crate) const kAudioFormatFLAC: AudioFormatID = 0x666c_6163;
     pub(crate) const kAudioFormatFlagIsFloat: AudioFormatFlags = 1 << 0;
     pub(crate) const kAudioFormatFlagIsPacked: AudioFormatFlags = 1 << 3;
     pub(crate) const kAudioFormatFlagsNativeFloatPacked: AudioFormatFlags =
         Self::kAudioFormatFlagIsFloat | Self::kAudioFormatFlagIsPacked;
-    pub(crate) const kAudioFormatLinearPCM: AudioFormatID = 0x6c70_636d; // 'lpcm'
-    pub(crate) const kAudioFormatMPEG4AAC: AudioFormatID = 0x6161_6320; // 'aac '
+    pub(crate) const kAudioFormatLinearPCM: AudioFormatID = 0x6c70_636d;
+    pub(crate) const kAudioFormatMPEG4AAC: AudioFormatID = 0x6161_6320;
     pub(crate) const noErr: OSStatus = 0;
 }
 
@@ -60,7 +60,6 @@ mod tests {
     #[kithara::test]
     fn test_os_status_to_string() {
         assert_eq!(os_status_to_string(Consts::noErr), "noErr");
-        // 'wht?' = 0x7768743f
         assert!(os_status_to_string(0x7768_743f).contains("wht?"));
     }
 }

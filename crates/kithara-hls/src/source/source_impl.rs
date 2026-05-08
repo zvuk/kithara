@@ -24,10 +24,6 @@ use super::{
 use crate::{HlsError, coord::SegmentRequest, ids::VariantIndex, playlist::PlaylistAccess};
 
 fn wait_range_hang_timeout(timeout: Option<Duration>) -> Duration {
-    // Hang-detector budget: when a caller waits unboundedly (`None`),
-    // the watchdog still has to pick a finite ceiling — use the floor
-    // alone so the detector never gates a legitimately-slow source
-    // smaller than that floor.
     timeout.map_or(WAIT_RANGE_HANG_TIMEOUT_FLOOR, |t| {
         t.max(WAIT_RANGE_HANG_TIMEOUT_FLOOR)
     })
@@ -141,15 +137,6 @@ impl Source for HlsSource {
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         let current_variant = self.coord.variant_index();
 
-        // Do NOT change layout_variant here — this method is called from
-        // detect_format_change() while the old decoder is still reading.
-        // Switching layout now would make the old decoder read from the
-        // wrong variant's byte map, corrupting Symphonia's moof table.
-        //
-        // Layout change happens later in commit_variant_layout(), called
-        // from step_recreating_decoder() right before building the new
-        // decoder.
-
         if let Some(range) = self.init_segment_range_for_variant(current_variant).range {
             return Some(range);
         }
@@ -162,7 +149,6 @@ impl Source for HlsSource {
                 .filter(|s| s.data.is_some())
                 .map(|seg_ref| seg_ref.variant)
                 .or_else(|| {
-                    // Fallback: last committed segment
                     let max = segments.max_end_offset();
                     if max > 0 {
                         segments
@@ -180,9 +166,6 @@ impl Source for HlsSource {
             return Some(range);
         }
 
-        // After seek flush, no segments may be loaded yet.
-        // Fall back to metadata for the first logical segment in the
-        // current applied layout rather than variant segment 0.
         let layout_floor = self.segments.lock_sync().layout_floor_segment();
         if let Some((variant, segment_index)) = layout_floor {
             return self.metadata_range_for_segment(variant, segment_index);
@@ -214,21 +197,6 @@ impl Source for HlsSource {
             .lock_sync()
             .variant_segments(hinted_variant)
             .is_some_and(|vs| !vs.is_empty());
-        // The resolved reader variant (from `current_loaded_segment_key`
-        // — either the segment covering `byte_position`, or, at EOF, the
-        // last committed segment of the layout) ALWAYS wins over the ABR
-        // hint. Previously a `variant_fence.is_some() && has_hinted_variant`
-        // branch preferred the ABR-hinted variant at EOF, which made
-        // `detect_format_change()` interpret the ABR cursor moving past
-        // the reader as a real format boundary. The decoder would then
-        // call `format_change_segment_range()`, seek to byte 0 of the
-        // new variant, and re-read the entire track — once per ABR flip.
-        // With multiple variants fully committed on the disk/mmap
-        // backend this caused 3× over-reads (see
-        // media_info_at_eof_reports_layout_variant_not_hinted and the
-        // stress_seek_lifecycle_with_zero_reset_mmap failure). The ABR
-        // hint should only decide the variant when there is no reader
-        // context at all.
         let variant = match reader_variant {
             Some(reader) => reader,
             None if has_hinted_variant => hinted_variant,
@@ -237,8 +205,6 @@ impl Source for HlsSource {
         };
         let codec = self.playlist_state.variant_codec(variant);
         let container = self.playlist_state.variant_container(variant);
-        // Saturating clamp: a variant index beyond u32::MAX cannot exist for
-        // any real master playlist; capping is the truthful "past end" signal.
         let variant_u32 = u32::try_from(variant).unwrap_or(u32::MAX);
         Some(MediaInfo::new(codec, container).with_variant_index(variant_u32))
     }
@@ -289,10 +255,6 @@ impl Source for HlsSource {
         if self.range_ready_from_segments(&segments, &range) {
             return SourcePhase::Ready;
         }
-        // ABR variant transition stall: decoder reads from layout_variant, but
-        // the downloader switched to a different variant. If range_start is past
-        // all committed data for layout_variant, data will never arrive.
-        // Report Ready so read_at can detect VariantChange.
         if range.start >= segments.max_end_offset() && segments.max_end_offset() > 0 {
             let abr_variant = self.coord.variant_index();
             if abr_variant != segments.layout_variant() {
@@ -326,10 +288,6 @@ impl Source for HlsSource {
                 return Ok(ReadOutcome::Eof);
             }
 
-            // ABR variant transition stall detection:
-            // Decoder reads from layout_variant's byte map, but data will never
-            // arrive if the downloader switched to a different variant.
-            // Signal VariantChange so the FSM recreates the decoder.
             let layout_variant = self.segments.lock_sync().layout_variant();
             let abr_variant = self.coord.variant_index();
             if abr_variant != layout_variant {
@@ -358,7 +316,6 @@ impl Source for HlsSource {
             });
         }
 
-        // Variant fence: auto-detect on first read, block cross-variant reads.
         if self.variant_fence.is_none() {
             self.variant_fence = Some(seg.variant);
         }
@@ -376,16 +333,12 @@ impl Source for HlsSource {
             .read_from_entry(&seg, offset, buf)
             .map_err(|e| StreamError::Source(e.into()))?
         else {
-            // Resource evicted. Push an on-demand request so the downloader
-            // re-fetches this segment even when it's at the tail (Idle state).
             let seek_epoch = self.coord.timeline().seek_epoch();
             self.push_segment_request(seg.variant, seg.segment_index, seek_epoch);
             return Ok(ReadOutcome::Pending(PendingReason::Retry));
         };
 
         let Some(count) = NonZeroUsize::new(bytes) else {
-            // Source produced zero bytes for an existing segment — treat as
-            // a transient retry so the FSM re-walks the wait/read loop.
             return Ok(ReadOutcome::Pending(PendingReason::Retry));
         };
 
@@ -398,10 +351,6 @@ impl Source for HlsSource {
 
         self.reader_segment
             .store(seg.segment_index, Ordering::Release);
-
-        // Reader-side events (`HlsEvent::SegmentReadStart`/`Complete`/
-        // `ReadProgress`) are fired by `HlsReaderHooks` from the
-        // decoder layer — see `kithara-hls/src/source/reader_hooks.rs`.
 
         Ok(ReadOutcome::Bytes(count))
     }
@@ -417,9 +366,6 @@ impl Source for HlsSource {
 
     #[kithara_hang_detector::hang_watchdog]
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {
-        // Non-destructive: does NOT clear StreamIndex or download_position.
-        // seek_time_anchor → classify_seek → apply_seek_plan handles that
-        // conditionally based on SeekLayout (Preserve vs Reset).
         self.coord
             .had_midstream_switch
             .store(false, Ordering::Release);
@@ -437,8 +383,6 @@ impl Source for HlsSource {
             self.coord.timeline().byte_position_handle(),
             self.coord.timeline().seek_epoch_handle(),
         );
-        // constructing into kithara_stream::SharedHooks (cross-crate public type fixes std::sync::Mutex)
-        // ast-grep-ignore: arch.no-std-sync-mutex
         Some(Arc::new(std::sync::Mutex::new(hooks)))
     }
 
@@ -462,7 +406,6 @@ impl Source for HlsSource {
                 return Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()));
             }
 
-            // Phase 1: check state under segments lock.
             let seek_epoch;
             let range_ready;
             let cancelled;
@@ -475,18 +418,6 @@ impl Source for HlsSource {
                 seek_epoch = self.coord.timeline().seek_epoch();
                 match wait_seek_epoch {
                     Some(epoch) if epoch != seek_epoch => {
-                        // A `wait_range` initiated under a prior epoch
-                        // is semantically void once the timeline has
-                        // advanced — the caller (decoder) will issue a
-                        // fresh `wait_range` at its post-seek offset.
-                        // Falling through here re-enqueues the stale
-                        // `range.start` under the new epoch and feeds
-                        // the scheduler a stream of legitimate-looking
-                        // prefix demands (the HLS seek-skip bug). The
-                        // gate must NOT depend on `is_seek_pending` —
-                        // that flag stays set until the decoder
-                        // recreates, but the I/O contract only cares
-                        // about the epoch identity.
                         let pending = self.coord.timeline().is_seek_pending();
                         record_wait_range_epoch_advance(epoch, seek_epoch, pending, range.start);
                         return Ok(WaitOutcome::Interrupted);
@@ -519,9 +450,8 @@ impl Source for HlsSource {
                         "wait_range: not ready"
                     );
                 }
-            } // segments lock dropped
+            }
 
-            // Phase 2: early returns (no lock held).
             if range_ready {
                 hang_reset!();
                 self.coord
@@ -552,10 +482,6 @@ impl Source for HlsSource {
                 return Ok(WaitOutcome::Eof);
             }
 
-            // Phase 3: demand push every iteration (no lock held).
-            // queue_segment_request_for_offset resolves the correct
-            // variant (layout) and segment via committed data or
-            // playlist metadata. DemandSlot::submit is idempotent.
             if !self.queue_segment_request_for_offset(range.start, seek_epoch) {
                 trace!(
                     range_start = range.start,
@@ -563,7 +489,6 @@ impl Source for HlsSource {
                 );
             }
 
-            // Phase 4: condvar wait (re-lock).
             {
                 let segments = self.segments.lock_sync();
                 hang_tick!();
@@ -619,12 +544,6 @@ impl HlsSource {
             });
         }
         self.coord.condvar.notify_all();
-        // Trigger queue rebuild with the correct byte_position.
-        // At this point the decoder has already seeked and updated
-        // byte_position. Without this, the queue stays stale from
-        // the initial seek-epoch rebuild (which ran before
-        // byte_position was updated) — see queue test
-        // `seek_flow_stale_plan_no_recovery_path`.
         self.coord.reader_advanced.notify_one();
 
         if previous_hint != segment_index {
@@ -667,14 +586,6 @@ impl HlsSource {
         })
     }
 
-    // `apply_seek_plan(...)` already established the authoritative layout
-    // for this seek. Rewriting `variant_map` again at the landed offset
-    // collapses mixed auto-switch layouts during replay from the prefix.
-    //
-    // When the landed offset can't be mapped (e.g. DRM padding removal
-    // shrinks the size map below the decoder's byte position), fall back
-    // to the anchor's authoritative (variant, segment_index) so the
-    // reader can resume.
     fn resolve_landed_segment(
         &self,
         anchor: Option<SourceSeekAnchor>,

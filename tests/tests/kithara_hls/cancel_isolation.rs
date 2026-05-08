@@ -127,7 +127,6 @@ async fn media_handler(State(state): State<ServerState>) -> Response {
 }
 
 async fn segment_handler(State(state): State<ServerState>, Path(name): Path<String>) -> Response {
-    // Parse "v0_{N}.bin"
     let idx_str = name
         .strip_prefix("v0_")
         .and_then(|s| s.strip_suffix(".bin"));
@@ -143,7 +142,6 @@ async fn segment_handler(State(state): State<ServerState>, Path(name): Path<Stri
     state.segment_hits[idx].fetch_add(1, Ordering::Relaxed);
 
     if idx == Consts::HTML_SEGMENT_INDEX {
-        // CDN soft-error page: 200 OK with text/html body.
         let html = "<html><body>503 Backend Error</body></html>";
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -153,9 +151,6 @@ async fn segment_handler(State(state): State<ServerState>, Path(name): Path<Stri
         return (StatusCode::OK, headers, html.to_string()).into_response();
     }
 
-    // Valid binary body. Bytes are arbitrary — Symphonia will not be able to
-    // decode them, but the FETCH path completes and `on_complete` fires Ok.
-    // The test asserts behaviour at the HTTP layer, not at the decoder.
     let body = vec![0xABu8; Consts::SEGMENT_SIZE];
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "video/mp2t".parse().unwrap());
@@ -208,34 +203,22 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
         .with_store(store)
         .with_cancel(cancel.clone());
 
-    // Stream creation parses master + media playlists. Both return valid
-    // bodies, so this must succeed.
     let stream = Stream::<Hls>::new(config)
         .await
         .expect("HLS stream creation must succeed with valid playlists");
 
-    // Drive sibling fetches by walking the byte map. Each segment is
-    // Consts::SEGMENT_SIZE bytes; reading at offset N*Consts::SEGMENT_SIZE forces the
-    // scheduler to demand-load segment N. Use the synchronous `Read +
-    // Seek` impl on a blocking thread to avoid blocking the runtime.
     let mut stream = stream;
     let hits_for_blocking = Arc::clone(&state.segment_hits);
     let _ = task::spawn_blocking(move || {
         let mut buf = vec![0u8; 4096];
         let deadline = Instant::now() + Duration::from_secs(8);
         for seg in 0..Consts::NUM_SEGMENTS {
-            // Skip the html-bodied segment from the seek list — its bytes
-            // are not media and Symphonia would reject them. The server
-            // still records a hit when the scheduler first attempts the
-            // segment (before any decoder is involved).
             if seg == Consts::HTML_SEGMENT_INDEX {
                 continue;
             }
             let offset = (seg * Consts::SEGMENT_SIZE) as u64;
             let _ = stream.seek(SeekFrom::Start(offset));
             let _ = stream.read(&mut buf);
-            // Spin until the server records a hit (or the deadline passes)
-            // to make the test deterministic.
             while hits_for_blocking[seg].load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -245,7 +228,6 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
 
     cancel.cancel();
 
-    // Sanity: master + media playlists were fetched.
     assert!(
         state.master_hits.load(Ordering::Relaxed) >= 1,
         "master playlist must have been fetched at least once",
@@ -255,12 +237,6 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
         "media playlist must have been fetched at least once",
     );
 
-    // Core invariant: every non-html segment URL was requested at least
-    // once. If the html response on segment {Consts::HTML_SEGMENT_INDEX} cascaded
-    // cancellation across the peer / epoch tokens, the post-html siblings
-    // (4, 5) would never reach the network — their counters would stay at
-    // zero. The pre-html siblings (0, 1, 2) are below the cursor at the
-    // time of the html response and so are an independent control sample.
     let snapshot: Vec<usize> = state
         .segment_hits
         .iter()
@@ -285,8 +261,6 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
         html_idx = Consts::HTML_SEGMENT_INDEX,
     );
 
-    // The html-bodied segment was hit at least once: the scheduler tried
-    // to fetch it (good — confirms the validator path is exercised).
     assert!(
         state.segment_hits[Consts::HTML_SEGMENT_INDEX].load(Ordering::Relaxed) >= 1,
         "rigged html segment was never requested — test fixture broken",

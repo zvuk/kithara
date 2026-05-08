@@ -168,12 +168,6 @@ impl Scope {
         if out.is_empty() {
             return vec![wide_flag.into()];
         }
-        // `--no-deps` keeps clippy focused on the target crate(s).
-        // Without it, dead-code in a dependency (e.g. items behind a
-        // non-default feature like kithara-hls's `internal`) surfaces
-        // as errors during a per-crate audit. Workspace clippy stays in
-        // `just lint-fast`. fmt does not accept `--no-deps`, so the
-        // suffix is added only for clippy via the `wide_flag` shape.
         if wide_flag == "--workspace" {
             out.push("--no-deps".into());
         }
@@ -242,9 +236,6 @@ impl Scope {
         if self.is_empty() {
             return true;
         }
-        // Some baseline keys are not paths (e.g., `direction` uses
-        // `from_crate -> to_crate`). For non-path keys, fall back to
-        // matching by crate name appearing in the key.
         self.crates
             .iter()
             .any(|c| key.starts_with(&format!("crates/{c}/")) || key.contains(c.as_str()))
@@ -400,7 +391,6 @@ mod tests {
             vec!["crates/kithara-abr/src".into()],
         );
         let flags = s.flags_for(Tool::Orphans);
-        // expect exactly one "--package kithara-abr" pair
         assert_eq!(flags, vec!["--package", "kithara-abr"]);
     }
 

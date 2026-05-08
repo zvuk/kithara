@@ -103,13 +103,9 @@ async fn handle_select_track(player: &Arc<PlayerImpl>, url: &str) -> Result<(), 
     clog!("[WORKER] select_track: url={url}");
 
     let mut config = ResourceConfig::new(url).map_err(|e| format!("invalid URL: {e}"))?;
-    // WASM always uses ephemeral storage. Increase LRU cache capacity for
-    // smoother seek and ABR transitions (default 5 is too small for HLS with
-    // segment throttle).
     if config.store.cache_capacity.is_none() {
         config.store.cache_capacity = NonZeroUsize::new(WASM_CACHE_CAPACITY);
     }
-    // Share the engine's audio worker so all tracks decode on the same thread.
     config = config.with_worker(player.worker().clone());
 
     let mut resource = Resource::new(config)

@@ -158,7 +158,6 @@ mod tests {
 
     use super::*;
 
-    // Headers tests
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::empty_headers(Headers::new(), true)]
     #[case::headers_with_values({
@@ -220,7 +219,6 @@ mod tests {
         assert!(headers.is_empty());
     }
 
-    // RangeSpec tests
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::full_range(0, Some(100), "bytes=0-100")]
     #[case::open_ended(50, None, "bytes=50-")]
@@ -282,7 +280,6 @@ mod tests {
         assert_eq!(range1.end, range2.end);
     }
 
-    // RetryPolicy tests
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_retry_policy_default() {
         let policy = RetryPolicy::default();
@@ -315,8 +312,8 @@ mod tests {
     #[case(3, Duration::from_millis(400))]
     #[case(4, Duration::from_millis(800))]
     #[case(5, Duration::from_millis(1600))]
-    #[case(10, Duration::from_secs(5))] // Capped at max_delay
-    #[case(20, Duration::from_secs(5))] // Capped at max_delay
+    #[case(10, Duration::from_secs(5))]
+    #[case(20, Duration::from_secs(5))]
     async fn test_retry_policy_delay_for_attempt_default(
         #[case] attempt: u32,
         #[case] expected_delay: Duration,
@@ -355,14 +352,14 @@ mod tests {
         Duration::from_millis(200),
         3,
         Duration::from_millis(200)
-    )] // Capped
+    )]
     #[case(
         1,
         Duration::from_millis(50),
         Duration::from_millis(200),
         4,
         Duration::from_millis(200)
-    )] // Capped
+    )]
     async fn test_retry_policy_delay_for_attempt_custom(
         #[case] max_retries: u32,
         #[case] base_delay: Duration,
@@ -397,10 +394,9 @@ mod tests {
         assert_eq!(policy1.max_delay, policy2.max_delay);
     }
 
-    // Edge cases for RangeSpec
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::start_equals_end(10, Some(10), "bytes=10-10")]
-    #[case::start_greater_than_end(20, Some(10), "bytes=20-10")] // This is valid per spec
+    #[case::start_greater_than_end(20, Some(10), "bytes=20-10")]
     #[case::max_values(u64::MAX, Some(u64::MAX), &format!("bytes={}-{}", u64::MAX, u64::MAX))]
     async fn test_range_spec_edge_cases(
         #[case] start: u64,
@@ -411,7 +407,6 @@ mod tests {
         assert_eq!(range.to_header_value(), expected_header);
     }
 
-    // Edge cases for RetryPolicy
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::zero_max_retries(0, Duration::from_millis(100), Duration::from_secs(1))]
     #[case::large_max_retries(100, Duration::from_millis(10), Duration::from_secs(10))]
@@ -424,39 +419,31 @@ mod tests {
     ) {
         let policy = RetryPolicy::new(max_retries, base_delay, max_delay);
 
-        // Test delay calculation for edge cases
         for attempt in 0..=5 {
             let delay = policy.delay_for_attempt(attempt);
 
-            // Delay should never be negative
             assert!(delay >= Duration::ZERO);
 
-            // Delay should be capped at max_delay
             assert!(delay <= max_delay);
 
-            // For zero base_delay, all delays should be zero (except attempt 0 which is always zero)
             if base_delay == Duration::ZERO {
                 assert_eq!(delay, Duration::ZERO);
             }
         }
     }
 
-    // Test that large attempt numbers don't cause overflow
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case(10)]
     #[case(20)]
     async fn test_retry_policy_large_attempts(#[case] attempt: u32) {
         let policy = RetryPolicy::default();
 
-        // This should not panic
         let delay = policy.delay_for_attempt(attempt);
 
-        // Delay should be capped at max_delay
         assert!(delay <= policy.max_delay);
         assert!(delay >= Duration::ZERO);
     }
 
-    // Test Headers with special characters
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::with_spaces("X-Custom Header", "value with spaces")]
     #[case::with_unicode("X-Emoji", "🎉")]
@@ -469,14 +456,12 @@ mod tests {
         assert_eq!(headers.get(key), Some(value));
     }
 
-    // Test Headers case sensitivity
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_headers_case_sensitive() {
         let mut headers = Headers::new();
         headers.insert("Content-Type", "application/json");
         headers.insert("content-type", "text/plain");
 
-        // Should be case-sensitive
         assert_eq!(headers.get("Content-Type"), Some("application/json"));
         assert_eq!(headers.get("content-type"), Some("text/plain"));
         assert_ne!(headers.get("Content-Type"), headers.get("content-type"));

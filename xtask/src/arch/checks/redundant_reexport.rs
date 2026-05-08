@@ -210,9 +210,7 @@ fn walk_use_tree(tree: &UseTree, prefix: &mut Vec<String>, out: &mut Vec<(String
             full.push(r.ident.to_string());
             out.push((full.join("::"), r.rename.to_string()));
         }
-        UseTree::Glob(_) => {
-            // skip — globs are intentional facade pattern, not a single-target dup
-        }
+        UseTree::Glob(_) => {}
     }
 }
 
@@ -267,8 +265,6 @@ fn emit_r1(
         if exempt.contains(leaf) {
             continue;
         }
-        // Re-exporting std/core types from multiple wrapper modules is a
-        // common facade pattern, not a duplication.
         if target.starts_with("std::") || target.starts_with("core::") {
             continue;
         }
@@ -303,11 +299,6 @@ fn emit_r2(
     exempt: &BTreeSet<&str>,
     out: &mut Vec<Violation>,
 ) {
-    // For R2 we only flag types that are pub-use'd from an *alternative*
-    // mountpoint (not the lib.rs root). Root-level re-exports are the natural
-    // canonical name; pairing them with an associated-type surface is fine.
-    // The redundancy appears when the same type is *also* mounted under
-    // `pub mod foo` (e.g. `internal`, `ffi`, ...) — that adds a second name.
     let mut alt_mountpoint_idents: BTreeSet<String> = BTreeSet::new();
     for sites in info.pub_uses.values() {
         for s in sites {
@@ -321,11 +312,9 @@ fn emit_r2(
         if exempt.contains(rec.alias_ident.as_str()) {
             continue;
         }
-        // Only flag if the alias names a local crate type.
         if !info.pub_local_types.contains(&rec.alias_ident) {
             continue;
         }
-        // The aliased type also has an alt-mountpoint pub-use → second canonical path.
         if !alt_mountpoint_idents.contains(&rec.alias_ident) {
             continue;
         }

@@ -91,10 +91,6 @@ impl DownloaderInner {
         let raw = self
             .next_request_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        // Safety: `next_request_id` is initialised at 1, fetch_add returns
-        // the prior value and then increments — so `raw` is always >= 1
-        // and never zero in practice. We also guard with a `max(1)` to
-        // satisfy the NonZeroU64 invariant defensively.
         let nz = std::num::NonZeroU64::new(raw.max(1))
             .expect("BUG: next_request_id starts at 1; fetch_add never yields 0");
         kithara_events::RequestId::new(nz)
@@ -114,13 +110,6 @@ impl Downloader {
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        // Per-chunk inactivity timeout in the BodyStream wrapper —
-        // semantically the Downloader-layer mirror of reqwest's
-        // `inactivity_timeout`. Both are idle gates between consecutive
-        // bytes of the response body; sharing one source of truth
-        // (`inactivity_timeout`) keeps the two layers consistent and
-        // independent from `total_timeout` (which caps the whole
-        // request lifetime, not idleness).
         let chunk_timeout = config.net.inactivity_timeout;
         let soft_timeout = config.soft_timeout;
         let runtime = config.runtime;
@@ -179,7 +168,6 @@ impl Downloader {
         let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::new(None));
 
-        // `Peer: Abr` enables the upcast (stable trait-upcasting, Rust 1.86+).
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
         let abr_handle = self.inner.abr.register(&abr_peer);
         let peer_id = abr_handle.peer_id();

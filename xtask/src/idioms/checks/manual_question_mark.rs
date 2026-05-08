@@ -218,7 +218,6 @@ fn match_option(some: &Arm, none: &Arm) -> Option<Pattern> {
 
 fn arm_body_expr(arm: &Arm) -> &Expr {
     match &*arm.body {
-        // Strip a single layer of block to support `Ok(v) => { v }`.
         Expr::Block(b) if b.block.stmts.len() == 1 => match &b.block.stmts[0] {
             syn::Stmt::Expr(e, _) => e,
             _ => &arm.body,
@@ -242,7 +241,7 @@ fn pattern_single_binding<'a>(pat: &'a Pat, ctor: &str) -> Option<&'a syn::Ident
             if !path_ends_with(path, ctor) {
                 return None;
             }
-            return None; // struct-style patterns out of scope for now
+            return None;
         }
         _ => return None,
     };
@@ -426,7 +425,6 @@ mod tests {
 
     #[test]
     fn legitimate_transform_not_flagged() {
-        // Success arm transforms via outside computation — `?` would change semantics.
         let n = count_in(
             "fn f(r: Result<i32, ()>) -> i32 { match r { Ok(v) => v + 100, Err(_) => 0 } }",
         );

@@ -143,12 +143,6 @@ impl Demuxer for Fmp4SegmentDemuxer {
                 FillStatus::Pending(reason) => return Ok(DemuxOutcome::Pending(reason)),
             }
 
-            // First scope: take a mutable cursor borrow only long enough
-            // to advance `next_index`. Releasing it here lets us either
-            // null out `self.cursor` (when finished) or re-borrow the
-            // cursor immutably for the data slice — without the slice
-            // borrow holding a phantom `&mut self.cursor` alive across
-            // `self.cursor = None`.
             let frame_meta = {
                 let cursor = self
                     .cursor
@@ -197,13 +191,6 @@ impl Demuxer for Fmp4SegmentDemuxer {
         }
         self.next_byte = desc.byte_range.end;
         let landed_byte = desc.byte_range.start;
-        // Return the segment's *actual* start time, not the requested
-        // target. ComposedDecoder compares `landed_at < pos` and arms
-        // its per-frame `pending_seek_target` skip when they differ —
-        // that skip lets `seek(target)` land precisely at `target`
-        // even though the segment we mounted starts earlier. Clamping
-        // landed_at upward here would defeat the skip and emit pre-target
-        // frames (regression: hls_seek_middle_lands_under_*).
         let landed_at = desc.decode_time;
         self.cursor = Some(SegmentCursor {
             read: SegmentReadState::new(desc.byte_range),

@@ -35,7 +35,6 @@ fn manual_switch_wins_over_in_flight_auto_decisions() {
     let state = AbrState::new(variants.clone(), AbrMode::Auto(Some(0)));
 
     let now = Instant::now();
-    // Simulate a high-bandwidth auto up-switch cycle.
     let view = AbrView {
         estimate_bps: Some(20_000_000),
         buffer_ahead: None,
@@ -44,14 +43,10 @@ fn manual_switch_wins_over_in_flight_auto_decisions() {
         settings: &settings,
     };
     let d = state.decide(&view, now);
-    // Apply partially: simulate "in-flight" segment for variant d.target.
     assert!(d.did_change);
 
-    // Before the controller can apply, the user flips to Manual(0).
     state.set_mode(AbrMode::Manual(0)).unwrap();
 
-    // Even when applying the stale auto decision, the next decision
-    // immediately returns Manual(0) per the manual-override gate.
     state.apply(&d, now + StdDuration::from_millis(1));
     let d2 = state.decide(&view, now + StdDuration::from_millis(2));
     state.apply(&d2, now + StdDuration::from_millis(3));
@@ -65,8 +60,6 @@ fn manual_switch_wins_over_in_flight_auto_decisions() {
 
 #[kithara::test]
 fn variants_snapshot_is_stable_for_decide() {
-    // If set_variants races with decide, each `decide` call reads a
-    // consistent snapshot and does not panic on invalid indexing.
     let state = Arc::new(AbrState::new(
         variants_for(&[300_000, 900_000, 3_000_000]),
         AbrMode::Auto(Some(0)),

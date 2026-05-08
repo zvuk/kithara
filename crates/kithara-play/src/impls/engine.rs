@@ -156,14 +156,7 @@ impl EngineImpl {
         let resolved_pool = config
             .pcm_pool
             .clone()
-            // EngineImpl fallback — caller injects pcm_pool via EngineConfig
-            // ast-grep-ignore: perf.no-global-pool-accessor
             .unwrap_or_else(|| PcmPool::default().clone());
-        // Worker shutdown is a child of the engine cancel (which itself
-        // is the player master after `PlayerImpl::new` populates
-        // `EngineConfig.cancel`). Test/standalone callers omit the
-        // field — `unwrap_or_default` then yields a fresh orphan, OK
-        // outside the production path.
         let worker_cancel = config.cancel.clone().unwrap_or_default().child_token();
 
         Self {
@@ -281,8 +274,6 @@ impl EngineImpl {
 
 impl Drop for EngineImpl {
     fn drop(&mut self) {
-        // Unregister player first — detaches the graph so the audio thread
-        // stops reading from PlayerResources before the worker is killed.
         let player_id = *self.player_id.lock_sync();
         if let Some(player_id) = player_id
             && let Err(err) = self.session.unregister_player(player_id)
@@ -490,7 +481,6 @@ mod tests {
     #[kithara::test]
     fn engine_creates_worker() {
         let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
-        // Worker accessor should return a valid handle.
         let _w = engine.worker();
     }
 
@@ -499,7 +489,6 @@ mod tests {
         let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
         let w1 = engine.worker().clone();
         let w2 = engine.worker().clone();
-        // Both clones should be usable (same underlying worker).
         w1.wake();
         w2.wake();
     }
@@ -509,7 +498,6 @@ mod tests {
         let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
         let worker_clone = engine.worker().clone();
         drop(engine);
-        // Worker should be shut down — wake() is harmless on a dead worker.
         worker_clone.wake();
     }
 }

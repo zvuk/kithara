@@ -72,7 +72,6 @@ impl Check for ModuleFanOut {
                     collect_use_targets(&u.tree, 0, &module_path, &mut neighbours);
                 }
             }
-            // file's own children are not "fan-out"
             for child in &module_path {
                 neighbours.remove(child);
             }
@@ -156,8 +155,6 @@ fn collect_use_targets(
                         let anchor = &module_path[..parent_depth];
                         collect_after_anchor(cur, anchor, out);
                     }
-                    // `self::X` resolves to a child of this module; external
-                    // crates / std / core are not intra-crate. Both ignored.
                     _ => {}
                 }
             } else {
@@ -182,10 +179,6 @@ fn collect_after_anchor(tree: &UseTree, anchor: &[String], out: &mut BTreeSet<St
         UseTree::Path(p) => {
             let mut full = anchor.to_vec();
             full.push(p.ident.to_string());
-            // Prefix all components with the depth-anchor so that
-            // `super::super::a::b` reports `<gp>::a` not just `a`.
-            // But the *neighbour* concept is "the next module hop", so the
-            // simplest stable key is the full resolved prefix joined.
             out.insert(full.join("::"));
         }
         UseTree::Group(g) => {

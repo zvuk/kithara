@@ -219,7 +219,6 @@ mod tests {
 
     #[kithara::test]
     fn create_wav_matches_first_samples() {
-        // 2 stereo frames → 44 + 8 = 52 bytes; frame 0 at [44], frame 1 at [48].
         let pcm = SignalPcm::new(signal::Sawtooth, 44100, 2, Finite::new(2));
         let wav = create_wav_from_signal(pcm);
         assert_eq!(&wav[0..4], b"RIFF");

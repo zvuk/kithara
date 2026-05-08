@@ -33,14 +33,14 @@ where
     /// Try to return a buffer to this shard.
     pub(super) fn try_put(&mut self, mut value: T) -> bool {
         if self.buffers.len() >= self.max_buffers {
-            return false; // Shard full, drop the buffer
+            return false;
         }
 
         if value.reuse(self.trim_capacity) {
             self.buffers.push(value);
             true
         } else {
-            false // Capacity dropped to zero, don't reuse
+            false
         }
     }
 }

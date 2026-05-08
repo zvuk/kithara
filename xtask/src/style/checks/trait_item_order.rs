@@ -567,8 +567,6 @@ trait Foo {
         let (out, skipped) = run_fix(src);
         assert!(skipped.is_empty(), "skipped: {skipped:?}");
         assert_eq!(comment_multiset(src), comment_multiset(&out));
-        // The comment for alpha must end up above `fn alpha`, BEFORE the
-        // zebra comment.
         let alpha_note = out.find("// inline note for alpha").unwrap();
         let alpha_fn = out.find("fn alpha").unwrap();
         let zebra_note = out.find("// inline note for zebra").unwrap();

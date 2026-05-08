@@ -86,7 +86,6 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
     );
     let handle = controller.register(&peer).with_bus(bus);
 
-    // Feed high bandwidth to force an up-switch.
     for _ in 0..30 {
         controller.record_bandwidth(
             handle.peer_id(),
@@ -96,7 +95,6 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
         );
     }
 
-    // Advance the reader so incoherence does not trigger.
     let reader_bg = Arc::clone(&reader);
     let committed_bg = Arc::clone(&committed);
     let ticker = kithara_platform::tokio::task::spawn(async move {
@@ -107,7 +105,6 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
         }
     });
 
-    // Give the controller watchdog enough wall-clock to fire if it would.
     let deadline = kithara_platform::tokio::time::Instant::now() + StdDuration::from_millis(600);
 
     let mut saw_incoherence = AtomicBool::new(false);

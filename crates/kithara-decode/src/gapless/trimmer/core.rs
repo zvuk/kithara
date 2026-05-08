@@ -117,8 +117,6 @@ struct FadeInState {
 
 impl FadeInState {
     fn for_sample_rate(sample_rate: u32) -> Self {
-        // sample_rate * ms / 1000, rounded up to at least one frame
-        // so a misconfigured 0 Hz spec still produces a valid fade.
         let total_frames =
             u64::from(sample_rate.max(1)).saturating_mul(Consts::FADE_IN_DURATION_MS) / 1000;
         let total_frames = u16::try_from(total_frames.clamp(1, 65_535)).unwrap_or(u16::MAX);
@@ -145,16 +143,11 @@ impl FadeInState {
             return;
         }
         let channels = usize::from(chunk.spec().channels.max(1));
-        // Number of frames in this chunk that still need shaping —
-        // anything past `total_frames - applied_frames` is at full
-        // amplitude already.
         let remaining = self.total_frames.saturating_sub(self.applied_frames);
         let to_shape = remaining.min(u16::try_from(frames).unwrap_or(u16::MAX));
         let total = f32::from(self.total_frames.max(1));
         let mut offset = 0;
         while offset < to_shape {
-            // Raised-cosine ramp: smooth at both endpoints, no DC step
-            // and no derivative discontinuity at the fade end.
             let frame = self.applied_frames.saturating_add(offset);
             let position = f32::from(frame) / total;
             let gain = 0.5 - 0.5 * (std::f32::consts::PI * position).cos();
@@ -219,12 +212,6 @@ impl GaplessTrimmer {
     #[must_use]
     pub fn silence_trim(params: SilenceTrimParams) -> Self {
         Self {
-            // The tail buffer must always have at least
-            // `scan_window_frames` worth of audio held back so the
-            // EOF flush has enough material to scan for trailing
-            // silence. Even when `trim_trailing == false` we keep the
-            // hold-back for code uniformity — the cost is bounded by
-            // `scan_window_frames`.
             trailing_frames: params.scan_window_frames,
             mode: GaplessMode::Heuristic(Box::new(HeuristicState::new(params))),
             tail_buffer: TailBuffer::new(),
@@ -321,8 +308,6 @@ fn push_heuristic(
     chunk: PcmChunk,
 ) -> GaplessOutput {
     if !state.leading_enabled {
-        // Past the leading scan: stream goes straight through the tail
-        // buffer (with fade-in if one is pending from a successful trim).
         return forward_post_leading(
             state,
             tail_buffer,
@@ -337,13 +322,6 @@ fn push_heuristic(
         .saturating_add(chunk_frames(&chunk));
     state.leading_buffer.push(chunk);
 
-    // Try to find the silence/content boundary in everything we've
-    // buffered so far. `find_leading_trim_frames` returns:
-    //   - Some(n) — we found the first non-silent frame at offset n,
-    //     and n meets `min_trim_frames`. Drain the buffer trimming n
-    //     frames and arm the fade-in.
-    //   - None — either the boundary hasn't been seen yet (keep
-    //     buffering) or the candidate was below `min_trim_frames`.
     if let Some(trim_frames) = find_leading_trim_frames(
         &state.leading_buffer,
         &state.params,
@@ -362,8 +340,6 @@ fn push_heuristic(
         );
     }
 
-    // Bail out once we've buffered the whole scan window. We saw no
-    // clear silence-to-content boundary, so we leave the audio alone.
     if state.leading_buffered_frames >= state.params.scan_window_frames {
         state.leading_enabled = false;
         return drain_leading_buffer(state, tail_buffer, tail_buffered_frames, trailing_frames, 0);
@@ -392,9 +368,6 @@ fn flush_heuristic(
 ) -> GaplessOutput {
     let mut ready = GaplessOutput::new();
 
-    // EOF before the leading scan finished: do one more pass on what
-    // we have. If we still don't see the boundary, give up and emit
-    // everything (drain with trim_frames=0).
     if state.leading_enabled {
         let trim_frames = find_leading_trim_frames(
             &state.leading_buffer,
@@ -417,20 +390,11 @@ fn flush_heuristic(
 
     if state.trim_trailing {
         let silent_suffix = trailing_silent_frames(tail_buffer, state.silence_threshold_amp);
-        // Three guards on the trailing trim:
-        //   1. silent_suffix > 0 — there's something to drop;
-        //   2. < total buffered  — never wipe the entire buffer (an
-        //      all-silent track stays as it is, same as the leading
-        //      side);
-        //   3. >= min_trim_frames — protects intentional micro-decay.
         if silent_suffix > 0
             && silent_suffix < *tail_buffered_frames
             && silent_suffix >= state.params.min_trim_frames
         {
             trim_tail_frames(tail_buffer, tail_buffered_frames, silent_suffix);
-            // Mask any sub-sample boundary mismatch the window-RMS
-            // search might leave at the new EOF. The fade-out is
-            // symmetric to the leading fade-in.
             let sample_rate = tail_buffer
                 .last()
                 .map_or(0, |chunk| chunk.spec().sample_rate);
@@ -458,7 +422,6 @@ fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
     let total_frames = total_frames.max(1);
 
     let mut frames_remaining = total_frames;
-    // Reverse iteration so chunks closest to EOF are shaped first.
     for chunk in tail_buffer.iter_mut().rev() {
         if frames_remaining == 0 {
             break;
@@ -471,18 +434,13 @@ fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
         }
         let first_to_shape = chunk_total_frames.saturating_sub(to_shape);
         let already_shaped_after_this = total_frames.saturating_sub(frames_remaining);
-        // Frame counts are bounded by audio chunk sizes (≤ ~1s at 192 kHz);
-        // routing through `AsPrimitive` documents the intentional narrow.
         let denom: f32 = total_frames.saturating_sub(1).max(1).as_();
 
         for chunk_local_frame in first_to_shape..chunk_total_frames {
-            // Distance from the very last buffered frame (0 = EOF).
             let distance_from_end = chunk_total_frames
                 .saturating_sub(1)
                 .saturating_sub(chunk_local_frame)
                 .saturating_add(already_shaped_after_this);
-            // Position inside the fade window: 0 at the start (gain≈1)
-            // up to total_frames-1 at EOF (gain≈0).
             let frame_in_fade = total_frames
                 .saturating_sub(1)
                 .saturating_sub(distance_from_end);
@@ -501,9 +459,6 @@ fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
 }
 
 fn arm_fade_in(state: &mut HeuristicState) {
-    // Pull the sample rate from any chunk currently buffered. The
-    // leading buffer always has at least one chunk when we get here
-    // (the trim only succeeds after at least one push).
     let sample_rate = state
         .leading_buffer
         .first()
@@ -547,10 +502,6 @@ fn drain_leading_buffer(
     let mut buffer = std::mem::take(&mut state.leading_buffer);
     state.leading_buffered_frames = 0;
 
-    // Walk the buffered chunks and drop `trim_frames` total leading
-    // frames, possibly across multiple chunks. Apply the fade-in to
-    // surviving frames before they hit the tail buffer — fading them
-    // here keeps the buffer ordering stable.
     let mut remaining_trim = trim_frames;
     for mut chunk in buffer.drain(..) {
         if remaining_trim > 0 {
@@ -600,7 +551,6 @@ fn can_release_front(
         return false;
     };
 
-    // Keep enough buffered tail frames so `flush()` can trim EOF padding later.
     tail_buffered_frames.saturating_sub(chunk_frames(front)) >= trailing_frames
 }
 
@@ -664,9 +614,6 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
     let mut window_sum_abs = 0.0_f64;
     let mut window_count: u64 = 0;
 
-    // Channel count and window-frame counts are bounded (≤ 32 channels;
-    // window ≤ 1s of audio); routing through `AsPrimitive` documents
-    // the intentional narrow without an inline lint suppression.
     for chunk in tail_buffer.iter().rev() {
         let chunk_total_frames = chunk_frames(chunk);
         let samples = chunk.samples();
@@ -700,8 +647,6 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
         }
     }
 
-    // Final partial window at the start of the buffer: count it only
-    // if it is still below the floor on its own.
     if window_count > 0 {
         let window_count_f64: f64 = window_count.as_();
         let mean_abs = window_sum_abs / window_count_f64;
@@ -796,16 +741,10 @@ fn trim_chunk_start(chunk: &mut PcmChunk, trim_frames: usize) {
     let channels = usize::from(spec.channels.max(1));
     let trim_samples = trim_frames.saturating_mul(channels);
     let len = chunk.pcm.len();
-    // This is an in-place shift, not a new allocation, but it still copies the
-    // retained PCM tail when the leading trim boundary lands inside this chunk.
     chunk.pcm.copy_within(trim_samples..len, 0);
     chunk.pcm.truncate(len.saturating_sub(trim_samples));
     chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(trim_frames as u64);
-    // Keep the size hint aligned with the new PCM length so downstream
-    // consumers reading `meta.frames` (audio worker copy loop) don't run
-    // off the end of the truncated buffer.
     chunk.meta.frames = u32::try_from(chunk.pcm.len() / channels.max(1)).unwrap_or(u32::MAX);
-    // Leading trim changes the logical start time seen downstream.
     chunk.meta.timestamp = chunk
         .meta
         .timestamp
@@ -816,7 +755,6 @@ fn trim_chunk_end(chunk: &mut PcmChunk, trim_frames: u64) {
     let channels = usize::from(chunk.spec().channels.max(1));
     let keep_frames = usize_from_u64_saturating(chunk_frames(chunk).saturating_sub(trim_frames));
     let keep_samples = keep_frames.saturating_mul(channels);
-    // EOF trim can cut only the final chunk; earlier chunks stay frame-aligned as-is.
     chunk.pcm.truncate(keep_samples);
     chunk.meta.frames = u32::try_from(keep_frames).unwrap_or(u32::MAX);
 }

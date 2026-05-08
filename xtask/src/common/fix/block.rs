@@ -79,11 +79,6 @@ pub(crate) fn expand_blocks(
     let mut blocks: Vec<BlockRange> = Vec::with_capacity(item_spans.len());
 
     for (i, span) in item_spans.iter().enumerate() {
-        // Trailing trivia is computed first because the *next* item's
-        // leading expansion uses this item's trailing-end as a hard
-        // lower bound. Doing it the other way round (or reusing the
-        // bare item span) would let two neighbours both claim the
-        // same comment, producing overlapping blocks.
         let upper = if i + 1 < item_spans.len() {
             item_spans[i + 1].start
         } else {
@@ -98,11 +93,6 @@ pub(crate) fn expand_blocks(
         });
     }
 
-    // Detect overlap between adjacent expanded blocks. Should not
-    // happen with the lower-bound discipline above, but real-world
-    // code can still trip pathological cases (e.g. spans of attributes
-    // on inherent impls reaching past the syn-reported start of the
-    // next item). Surface the case rather than producing broken edits.
     for pair in blocks.windows(2) {
         if pair[0].bytes.end > pair[1].bytes.start {
             return Err(ExpansionError::OverlappingBlocks {
@@ -112,8 +102,6 @@ pub(crate) fn expand_blocks(
         }
     }
 
-    // Detect floating comments in the gaps that did not get absorbed by
-    // either neighbour's expansion.
     for i in 0..blocks.len() {
         let gap_start = if i == 0 {
             scope_bytes.start
@@ -138,24 +126,18 @@ fn expand_leading(src: &str, item_start: usize, lower_bound: usize) -> usize {
     let mut cursor = item_start;
 
     loop {
-        // Skip whitespace (incl. exactly one newline) immediately before cursor.
         let after_ws = skip_whitespace_back(bytes, cursor, lower_bound);
         if after_ws == cursor {
             return cursor;
         }
         let newlines = count_newlines(&bytes[after_ws..cursor]);
         if newlines > 1 {
-            // Blank line ⇒ trivia boundary; do not absorb.
             return cursor;
         }
 
         let line = preceding_line(bytes, after_ws, lower_bound);
         let line_text = std::str::from_utf8(&bytes[line.start..line.end]).unwrap_or("");
         let trimmed = line_text.trim_start();
-        // `///` and `//!` are doc-comments — syntactically attributes, so
-        // they live inside the item's span if the caller passed a complete
-        // span. Refuse to absorb them: doing so would either duplicate
-        // them (bad) or hide a caller bug (worse).
         if trimmed.starts_with("///") || trimmed.starts_with("//!") {
             return cursor;
         }
@@ -181,17 +163,12 @@ fn expand_trailing(src: &str, item_end: usize, upper_bound: usize) -> usize {
     cursor = skip_inline_whitespace(bytes, cursor, upper_bound);
 
     if cursor + 1 < upper_bound && bytes[cursor] == b'/' && bytes[cursor + 1] == b'/' {
-        // Inline line-comment: absorb up to (but not including) the newline.
         let mut c = cursor + 2;
         while c < upper_bound && bytes[c] != b'\n' {
             c += 1;
         }
         cursor = c;
     } else if cursor + 1 < upper_bound && bytes[cursor] == b'/' && bytes[cursor + 1] == b'*' {
-        // Inline block comment: absorb until the closing `*/`, but only if
-        // that closing tag is on the same line as the item end (otherwise
-        // the comment leaks across lines and probably belongs to whatever
-        // follows it, not this item).
         let mut c = cursor + 2;
         let mut closed_inline = false;
         while c + 1 < upper_bound {
@@ -223,7 +200,6 @@ fn check_no_floating_comment(src: &str, gap: Range<usize>) -> Result<(), Expansi
         let trimmed = line_text.trim_start();
         let starts_comment = trimmed.starts_with("//") || trimmed.starts_with("/*");
         if starts_comment {
-            // Compute the 1-based line number relative to the entire source.
             let line_no = src[..line_start_byte]
                 .bytes()
                 .filter(|b| *b == b'\n')
@@ -273,8 +249,6 @@ fn count_newlines(bytes: &[u8]) -> usize {
 /// Range of the line that contains byte position `pos` (or the line ending
 /// at `pos` if `pos` sits at a newline). Bounded by `lower`.
 fn preceding_line(bytes: &[u8], pos: usize, lower: usize) -> Range<usize> {
-    // pos points just past the last whitespace; scan backwards to find the
-    // start of the line containing pos-1, and forward to find its end.
     let mut start = pos;
     while start > lower && bytes[start - 1] != b'\n' {
         start -= 1;
@@ -284,7 +258,7 @@ fn preceding_line(bytes: &[u8], pos: usize, lower: usize) -> Range<usize> {
         end += 1;
     }
     if end < bytes.len() {
-        end += 1; // include the newline
+        end += 1;
     }
     start..end
 }
@@ -349,8 +323,6 @@ mod tests {
 
     #[test]
     fn doc_comment_already_in_item_span_is_left_alone() {
-        // `///` doc comments are syntactically attributes; if the caller passes
-        // an item span that includes them, expand_leading just returns it.
         let input = "    <<    /// docs\n    a: u32>>,\n    <<b: u32>>,\n";
         let (src, blocks) = run(input).unwrap();
         assert_eq!(blocks.len(), 2);
@@ -374,7 +346,6 @@ mod tests {
 
     #[test]
     fn outer_line_comment_with_blank_line_is_floating() {
-        // Comment is separated from `a` by a blank line ⇒ floating ⇒ error.
         let input = "    // floating\n\n    <<a: u32>>,\n    <<b: u32>>,\n";
         let err = run(input).unwrap_err();
         assert!(
@@ -443,7 +414,6 @@ mod tests {
 
     #[test]
     fn item_span_outside_src_is_error() {
-        // 0..100 cannot exist in a 5-byte source.
         let span = 0..100;
         let err = expand_blocks("hello", 0..5, std::slice::from_ref(&span)).unwrap_err();
         assert!(matches!(err, ExpansionError::SpanOutOfRange { .. }));
@@ -458,7 +428,6 @@ mod tests {
 
     #[test]
     fn idempotent_expansion() {
-        // Running expansion twice on the same input gives the same result.
         let input = "    // hint\n    <<a: u32>>, // tail\n    <<b: u32>>,\n";
         let (src, blocks_a) = run(input).unwrap();
         let (_, blocks_b) = run(input).unwrap();
@@ -468,10 +437,6 @@ mod tests {
 
     #[test]
     fn blocks_cover_disjoint_ranges() {
-        // Both items use plain outer line comments (// not ///). Doc
-        // comments belong to the item span itself; passing a marker that
-        // excludes a leading /// is a caller bug and will be rejected as
-        // a floating comment (covered separately).
         let input = "    // a-doc\n    <<a: u32>>,\n    // b-doc\n    <<b: u32>>,\n";
         let (_, blocks) = run(input).unwrap();
         assert!(blocks[0].bytes.end <= blocks[1].bytes.start);
@@ -479,9 +444,6 @@ mod tests {
 
     #[test]
     fn doc_comment_outside_item_span_is_floating_error() {
-        // If the caller hands us an item span that does not include the
-        // attached `///`, we refuse to magically absorb it — the expansion
-        // detects it as a floating comment.
         let input = "    /// b-doc\n    <<b: u32>>,\n";
         let err = run(input).unwrap_err();
         assert!(matches!(err, ExpansionError::FloatingComment { .. }));

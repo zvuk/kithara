@@ -110,7 +110,6 @@ fn try_byte_range(
 ) -> Option<VariantSizeMap> {
     let (_, playlist) = media_playlists.get(variant)?;
 
-    // All segments must have byte_range_len for this strategy to work.
     let all_have_range = playlist
         .segments
         .iter()
@@ -121,7 +120,7 @@ fn try_byte_range(
         return None;
     }
 
-    let init_size = playlist.init_segment.as_ref().map_or(0, |_init| 0); // Init size unknown from byte range alone.
+    let init_size = playlist.init_segment.as_ref().map_or(0, |_init| 0);
 
     let mut offsets = Vec::with_capacity(num_segments);
     let mut segment_sizes = Vec::with_capacity(num_segments);
@@ -157,7 +156,6 @@ fn try_init_bitrate(
     let init_meta = loader.get_init_segment_cached(variant)?;
     let init_len = init_meta.len;
 
-    // Read init segment bytes from cache.
     loader.read_init_bytes(variant, buf)?;
     let avg_bitrate = extract_avg_bitrate(buf)?;
 
@@ -169,9 +167,6 @@ fn try_init_bitrate(
 
     for (i, seg) in playlist.segments.iter().take(num_segments).enumerate() {
         let duration_secs = seg.duration.as_secs_f64();
-        // bitrate × duration / 8 is always non-negative for valid input;
-        // saturating-clamp via `to_u64()` covers the (impossible) overflow
-        // path without an `as` cast.
         let media_len = num_traits::cast::ToPrimitive::to_u64(
             &(f64::from(avg_bitrate) / BITS_PER_BYTE * duration_secs),
         )

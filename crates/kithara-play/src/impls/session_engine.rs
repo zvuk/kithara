@@ -519,7 +519,6 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
                 return client.clone();
             }
 
-            // If the remote channel exists, we are on a Worker thread.
             let is_local = wasm_worker_bridge::TX.lock_sync().is_none();
 
             if is_local {
@@ -529,11 +528,6 @@ pub(crate) fn session_client() -> Arc<SessionClient> {
                         *state = Some(SessionState::new(start_stream_web_audio));
                     }
                 });
-                // Pre-warm BRIDGE_PLAYER_STATE: access the thread-local so
-                // that TLS destructor registration (which allocates via
-                // dlmalloc) happens now — before any Worker is spawned.
-                // Without this, the first access during tick_and_poll_remote()
-                // can deadlock with a Worker holding the dlmalloc spin lock.
                 BRIDGE_PLAYER_STATE.with(|_| {});
             }
 
@@ -590,13 +584,11 @@ pub(crate) fn tick_and_poll_remote() {
             return;
         };
 
-        // 1. Drain remote commands from Workers.
         let rx_guard = wasm_worker_bridge::RX.lock_sync();
 
         if let Some(ref rx) = *rx_guard {
             while let Ok(msg) = rx.try_recv() {
                 let reply = run_cmd(state, msg.cmd);
-                // Capture shared player state for bridge position reads.
                 if let Reply::SlotAllocated(_, _, ref shared, _) = reply {
                     BRIDGE_PLAYER_STATE.with(|ps| {
                         *ps.borrow_mut() = Some(Arc::clone(shared));
@@ -607,7 +599,6 @@ pub(crate) fn tick_and_poll_remote() {
         }
         drop(rx_guard);
 
-        // 2. Update firewheel graph (tick).
         if let Some(ref mut ctx) = state.ctx {
             if let Err(err) = ctx.update() {
                 warn!("session graph update in tick failed: {err:?}");

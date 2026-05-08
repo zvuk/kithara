@@ -45,7 +45,6 @@ pub fn loader_pair(cancel: &CancellationToken) -> (AssetStore<DecryptContext>, A
     let cache = PlaylistCache::new(
         backend.clone(),
         handle.clone(),
-        // ast-grep-ignore: perf.no-global-pool-accessor
         kithara_bufpool::BytePool::default(),
     );
     let loader = Arc::new(SegmentLoader::new(handle, backend.clone(), None, cache));

@@ -161,7 +161,6 @@ async fn t1_phase_continuity_wave(
         )
     });
 
-    // -------- A10: frame_offset contiguity --------
     for window in chunks.windows(2) {
         let prev = &window[0];
         let next = &window[1];
@@ -182,7 +181,6 @@ async fn t1_phase_continuity_wave(
         );
     }
 
-    // -------- A9: no double-decode --------
     for (idx, chunk) in chunks.iter().enumerate().skip(first_to) {
         assert_ne!(
             chunk.meta.variant_index,
@@ -199,9 +197,6 @@ async fn t1_phase_continuity_wave(
         );
     }
 
-    // -------- A1: phase continuity --------
-    // Calibrate the static decoder phase offset on the LAST pre-switch chunk
-    // (closest to the seam; minimises drift accumulation).
     let pre_chunk = &chunks[first_to.checked_sub(1).expect(
         "T1: cannot calibrate phase — no pre-switch chunk before the first variant_to chunk",
     )];

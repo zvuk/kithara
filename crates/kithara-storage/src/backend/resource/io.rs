@@ -29,9 +29,7 @@ impl<D: DriverIo> Resource<D> {
             return Ok(0);
         }
 
-        // u64→usize conversion-clamp: resource bytes fit in addressable memory,
-        // saturating ceiling on the (otherwise impossible) overflow keeps the cast lossless.
-        let available = usize::try_from(effective_len - offset).unwrap_or(usize::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
+        let available = usize::try_from(effective_len - offset).unwrap_or(usize::MAX);
         let to_read = buf.len().min(available);
 
         self.inner
@@ -61,24 +59,18 @@ impl<D: DriverIo> Resource<D> {
 
         self.inner.driver.write_at(offset, data, committed)?;
 
-        // Notify fast-path (mmap: push to lock-free queue).
         let range = offset..end;
         self.inner.driver.notify_write(&range);
 
-        // Update common state and wake waiters.
         {
             let mut state = self.inner.state.lock_sync();
             state.available.insert(range.clone());
 
-            // Invalidate evicted ranges for ring buffer drivers.
             if let Some(window) = self.inner.driver.valid_window() {
                 if window.start > 0 {
                     state.available.remove(0..window.start);
                 }
-                // Also evict data above window end (backward seek case).
-                // For ring buffers, data outside the valid window is overwritten.
-                // No final_len yet → upper bound is open-ended; saturate at u64::MAX.
-                let upper = state.final_len.unwrap_or(u64::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
+                let upper = state.final_len.unwrap_or(u64::MAX);
                 if window.end < upper {
                     state.available.remove(window.end..upper);
                 }
@@ -86,9 +78,6 @@ impl<D: DriverIo> Resource<D> {
         }
         self.inner.condvar.notify_all();
 
-        // Observer fires outside the state lock — implementations are
-        // free to take their own locks without deadlocking against
-        // `wait_range` waiters on the same resource.
         if let Some(observer) = self.inner.observer.as_ref() {
             observer.on_write(range);
         }

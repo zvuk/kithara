@@ -165,9 +165,6 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .map(|p| server.url(p).as_str().to_string())
         .collect();
 
-    // `temp` is the shared `temp_dir` fixture — dropped (auto-deleted)
-    // at the end of this function, so the shared app cache at
-    // `env::temp_dir()/kithara` stays untouched.
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(DownloaderConfig::default());
 
@@ -176,9 +173,6 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
-    // Background tick driver — production uses the UI loop for this; in
-    // tests we spawn a dedicated task so `Queue::tick` runs continuously
-    // and the seek watchdog can observe progress (or lack thereof).
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::spawn(async move {
         loop {
@@ -218,9 +212,6 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .await
         .expect("selected track never played past 1s");
 
-    // Seek into the middle of the (uncached) track. Test fixture has
-    // 3 segments × 4s = 12s total, so 6.0s lands in segment 1 which
-    // the decoder has not necessarily fetched yet.
     let seek_target = 6.0;
     assert!(
         seek_target > pos_before_seek + 2.0,
@@ -228,13 +219,6 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     );
     queue.seek(seek_target).expect("seek accepted by player");
 
-    // Give the queue watchdog a generous observation window. If the
-    // HLS pipeline hangs, the watchdog panics with a state dump and
-    // this `await` panics inside `Queue::tick` on the spawned task —
-    // but tokio surfaces it on the join below.
-    //
-    // Poll position progress here too, so that a successful seek
-    // exits the test quickly instead of waiting for the full window.
     let observation_deadline = Instant::now() + Duration::from_secs(15);
     let mut confirmed = false;
     while Instant::now() < observation_deadline {
@@ -244,14 +228,12 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
             confirmed = true;
             break;
         }
-        // Surface tick-task panic if it happened.
         if tick_handle.is_finished() {
             break;
         }
         sleep(Duration::from_millis(100)).await;
     }
 
-    // If the tick task crashed (watchdog panic), propagate it.
     if tick_handle.is_finished() {
         match tick_handle.await {
             Ok(()) => panic!("tick task exited unexpectedly without panic"),
@@ -316,11 +298,6 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     install_tracing();
 
     let helper = TestServerHelper::new().await;
-    // 20 segments × 4s each = 80s total. Seek at 40s lands in segment
-    // 10, far past the head-of-line segments the initial play would
-    // pre-fetch. With the 150ms per-segment delay the scheduler has
-    // to actually drive the new fetch before the watchdog's 5s budget
-    // expires.
     let builder = HlsFixtureBuilder::new()
         .variant_count(1)
         .segments_per_variant(20)
@@ -337,10 +314,6 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
         .expect("create long HLS fixture");
     let master = created.master_url();
 
-    // Mirror the production pattern: one shared `Downloader` across every
-    // track (see `kithara-app/src/sources.rs:21`). If the hang is caused
-    // by shared HTTP pool / runtime contention, this is where it would
-    // show up.
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
     let track_source = |url: &str| -> TrackSource {
         let mut cfg = ResourceConfig::new(url)
@@ -413,16 +386,11 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
         .segment_duration_secs(4.0)
         .variant_bandwidths(vec![1_800_000, 800_000, 300_000])
         .packaged_audio_aac_lc(44_100, 2)
-        // Slow the mid variant to nudge the ABR controller between
-        // variants during the warm-up window.
         .push_delay_rule(DelayRule {
             variant: Some(1),
             delay_ms: 250,
             ..DelayRule::default()
         })
-        // Every variant has a small baseline delay so cold-cache
-        // fetches are not instantaneous — otherwise the seek may
-        // complete before the watchdog can observe the hang.
         .push_delay_rule(DelayRule {
             delay_ms: 80,
             ..DelayRule::default()
@@ -461,8 +429,6 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
         .expect("track never played past 2s");
     eprintln!("[multi-variant-cold] pre-seek pos={pos_before:.3}s");
 
-    // Target far ahead (80s of a 120s track). With cold cache + ABR
-    // this is where silvercomet reproduces the hang in production.
     let seek_target = 80.0;
     queue.seek(seek_target).expect("seek accepted");
     eprintln!("[multi-variant-cold] seek issued target={seek_target:.1}s");

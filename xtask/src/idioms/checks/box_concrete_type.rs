@@ -124,11 +124,9 @@ fn is_box_new_concrete(c: &ExprCall) -> bool {
     let Expr::Path(ExprPath { path, qself, .. }) = &*c.func else {
         return false;
     };
-    // `<dyn Trait as Box<...>>::new` carries a qualified self — opt out.
     if qself.is_some() {
         return false;
     }
-    // Match `Box::new` (with or without leading `::std::boxed::`).
     let segs: Vec<&syn::PathSegment> = path.segments.iter().collect();
     if segs.len() < 2 {
         return false;
@@ -138,7 +136,6 @@ fn is_box_new_concrete(c: &ExprCall) -> bool {
     if last.ident != "new" || parent.ident != "Box" {
         return false;
     }
-    // `Box::<dyn Trait>::new(...)` — turbofish gives the trait object explicitly.
     if let PathArguments::AngleBracketed(args) = &parent.arguments {
         for arg in &args.args {
             if let GenericArgument::Type(Type::TraitObject(_)) = arg {
@@ -181,8 +178,6 @@ mod tests {
 
     #[test]
     fn box_with_function_call_not_flagged() {
-        // `Box::new(f())` returns whatever `f` produces — could be a trait
-        // object after coercion. Heuristic-only check skips this.
         let src = "fn f() -> i32 { 1 } fn g() { let _ = Box::new(f()); }";
         assert_eq!(count_in(src), 0);
     }
@@ -201,8 +196,6 @@ mod tests {
 
     #[test]
     fn nested_box_inside_struct_flagged() {
-        // The outer `Box::new` is on a struct literal; the inner is on a
-        // primitive — both are skipped except the struct-literal one.
         let src =
             "struct S { inner: Box<i32> } fn f() { let _ = Box::new(S { inner: Box::new(0) }); }";
         assert_eq!(count_in(src), 1);

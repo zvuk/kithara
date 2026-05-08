@@ -175,11 +175,9 @@ impl Registry {
         let mut to_remove: Vec<Index> = Vec::new();
         let mut stats = PollStats::default();
 
-        // Register the global fetch_waker so we wake when inflight drops.
         inner.fetch_waker.register(cx.waker());
 
         for (idx, entry) in &mut self.peers {
-            // Drain imperative commands from PeerHandle::execute/batch.
             while let Poll::Ready(Some(mut cmd)) = entry.cmd_rx.poll_recv(cx) {
                 let peer_prio = entry.peer.priority();
                 let slot = slot_index(peer_prio, cmd.priority);
@@ -201,7 +199,6 @@ impl Registry {
                 stats.drained_cmds += 1;
             }
 
-            // Skip peer_done or global capacity reached.
             if entry.peer_done {
                 continue;
             }
@@ -209,17 +206,12 @@ impl Registry {
                 continue;
             }
 
-            // Poll peer's proactive stream.
             match entry.peer.poll_next(cx) {
                 Poll::Ready(Some(batch)) => {
                     let peer_prio = entry.peer.priority();
                     let bus = entry.bus.lock_sync_read().clone();
                     let batch_had_cmds = !batch.is_empty();
                     for cmd in batch {
-                        // Clone (not take) so the original epoch_cancel
-                        // stays in `cmd.cancel` for later
-                        // `CancelReason::EpochCancel` discrimination in
-                        // `deliver`.
                         let epoch_cancel = cmd.cancel.clone();
                         let cancel = match epoch_cancel {
                             Some(epoch) => CancelGroup::new(vec![entry.peer_cancel.clone(), epoch]),
@@ -264,12 +256,6 @@ impl Registry {
             }
         }
 
-        // Remove dead peers. `peer_cancel` is the handle's own cancel
-        // token — it fires from `PeerInner::Drop`, so observing
-        // `is_cancelled()` here is sufficient. The previous gate
-        // required `peer_done && peer_cancel.is_cancelled()`, but
-        // peers with indefinite streams (e.g. `HlsPeer::poll_next`
-        // never returns `Ready(None)`) would never meet it and leaked.
         for (idx, entry) in &self.peers {
             if entry.peer_cancel.is_cancelled() {
                 to_remove.push(idx);
@@ -346,10 +332,7 @@ impl Registry {
         let inflight_enter = inner.inflight.load(Ordering::Relaxed);
         let mut aggregate = PollStats::default();
 
-        // Wait until at least one slot has work.
         poll_fn(|cx| {
-            // Drain registrations inside the poll loop so new peers
-            // wake poll_fn without interrupting batch execution.
             while let Poll::Ready(Some(entry)) = register_rx.poll_recv(cx) {
                 self.add(entry);
             }
@@ -366,7 +349,6 @@ impl Registry {
 
         let mut dispatched: usize = 0;
 
-        // 1. Urgent: drain slots [0],[1].
         let urgent_batch = {
             let [s0, s1, _, _] = &mut self.slots;
             BatchGroup::from_iter(s0.drain(..).chain(s1.drain(..)))
@@ -381,7 +363,6 @@ impl Registry {
             );
         }
 
-        // 2. Demand: drain slots [2],[3].
         if !inner.demand_throttle.is_zero() {
             let preempted_by_urgent = tokio::select! {
                 () = tokio::time::sleep(inner.demand_throttle) => false,
@@ -455,25 +436,22 @@ mod classify_progress_tests {
         }
     }
 
-    // Idle: no inflight either side, no peer activity, no dispatch.
     #[kithara::test]
     #[case(0, 0)]
-    #[case(0, 0)] // exact duplicate — documents invariance under repeat
+    #[case(0, 0)]
     fn idle_when_no_work_anywhere(#[case] inflight_enter: usize, #[case] inflight_exit: usize) {
         let out = classify_progress(inflight_enter, inflight_exit, stats(0, 0), 0);
         assert_eq!(out, FetchProgress::Idle);
     }
 
-    // Advanced: any one of drained_cmds / peer_batches / dispatched
-    // non-zero flips the outcome to Advanced even with zero inflight.
     #[kithara::test]
-    #[case(1, 0, 0)] // drained a cmd
-    #[case(0, 1, 0)] // peer yielded a batch
-    #[case(0, 0, 1)] // dispatched a fetch
-    #[case(3, 0, 0)] // multiple drains
-    #[case(0, 2, 0)] // multiple batches
-    #[case(0, 0, 5)] // multiple dispatches
-    #[case(2, 3, 4)] // all three
+    #[case(1, 0, 0)]
+    #[case(0, 1, 0)]
+    #[case(0, 0, 1)]
+    #[case(3, 0, 0)]
+    #[case(0, 2, 0)]
+    #[case(0, 0, 5)]
+    #[case(2, 3, 4)]
     fn advanced_when_any_activity_counter_positive(
         #[case] drained: usize,
         #[case] batches: usize,
@@ -483,8 +461,6 @@ mod classify_progress_tests {
         assert_eq!(out, FetchProgress::Advanced);
     }
 
-    // Advanced: inflight strictly decreasing means a fetch completed
-    // this tick — that IS progress regardless of counters.
     #[kithara::test]
     #[case(1, 0)]
     #[case(5, 4)]
@@ -498,17 +474,10 @@ mod classify_progress_tests {
         assert_eq!(out, FetchProgress::Advanced);
     }
 
-    // Stalled: pending work (inflight > 0) at exit, no advancement
-    // signals, and inflight did not decrease.
     #[kithara::test]
-    #[case(1, 1)] // single stuck fetch
-    #[case(5, 5)] // five stuck
-    #[case(0, 3)] // new fetches spawned but didn't dispatch; can't happen
-    // in practice but classifier must still reflect "there's
-    // work we didn't count" — here inflight_exit > 0 && no
-    // advancement counters → Stalled, which is correct:
-    // someone OTHER than this tick bumped inflight; we can't
-    // claim advance.
+    #[case(1, 1)]
+    #[case(5, 5)]
+    #[case(0, 3)]
     fn stalled_when_inflight_stuck_and_no_counters(
         #[case] inflight_enter: usize,
         #[case] inflight_exit: usize,
@@ -517,13 +486,11 @@ mod classify_progress_tests {
         assert_eq!(out, FetchProgress::Stalled);
     }
 
-    // Advancement beats inflight_exit>0: even with pending fetches, a
-    // positive activity counter means the tick made progress.
     #[kithara::test]
-    #[case(5, 5, 1, 0, 0)] // drained during stuck inflight
-    #[case(5, 5, 0, 1, 0)] // batch emitted during stuck inflight
-    #[case(5, 5, 0, 0, 1)] // new fetch dispatched on top of stuck ones
-    #[case(5, 6, 0, 0, 1)] // dispatched: inflight went up but advance counted
+    #[case(5, 5, 1, 0, 0)]
+    #[case(5, 5, 0, 1, 0)]
+    #[case(5, 5, 0, 0, 1)]
+    #[case(5, 6, 0, 0, 1)]
     fn advanced_dominates_stalled_when_both_signals_present(
         #[case] inflight_enter: usize,
         #[case] inflight_exit: usize,
@@ -540,8 +507,6 @@ mod classify_progress_tests {
         assert_eq!(out, FetchProgress::Advanced);
     }
 
-    // Boundary: if inflight_enter > inflight_exit but also counters are
-    // zero, the inflight-decrement alone is sufficient for Advanced.
     #[kithara::test]
     fn inflight_decrement_alone_yields_advanced() {
         assert_eq!(
@@ -550,8 +515,6 @@ mod classify_progress_tests {
         );
     }
 
-    // Boundary: inflight_enter == inflight_exit == 0, any single
-    // counter positive → Advanced (not Idle).
     #[kithara::test]
     fn single_counter_wins_over_empty_inflight() {
         assert_eq!(

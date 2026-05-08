@@ -35,12 +35,7 @@ pub fn yield_now() {
 
 #[cfg(target_arch = "wasm32")]
 #[inline]
-pub fn yield_now() {
-    // No-op on WASM: Web Workers are preemptively scheduled by the OS,
-    // and backpressure via ringbuf already throttles the decode loop.
-    // The original `Atomics.wait(0.001ms)` FFI call on every decode
-    // frame added unnecessary latency causing audio stuttering.
-}
+pub fn yield_now() {}
 
 /// Returns `true` when running inside a Web Worker.
 #[cfg(target_arch = "wasm32")]
@@ -207,9 +202,6 @@ where
     WasmThreadBuilder::new()
         .shim_name(SHIM_NAME.to_owned())
         .spawn(move || {
-            // Each WASM Worker has its own module instance with separate globals.
-            // Install panic hook on every thread so panics produce readable
-            // messages instead of bare `RuntimeError: unreachable`.
             console_error_panic_hook::set_once();
             f()
         })

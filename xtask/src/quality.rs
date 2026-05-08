@@ -35,10 +35,6 @@ pub(crate) enum QualityCommand {
     UnimockCheck,
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 fn workspace_root() -> Result<PathBuf> {
     let metadata = MetadataCommand::new().exec()?;
     Ok(metadata.workspace_root.into_std_path_buf())
@@ -98,10 +94,6 @@ fn count_rs_files_in(dir: &Path) -> Result<usize> {
     Ok(files.len())
 }
 
-// ---------------------------------------------------------------------------
-// Dispatch
-// ---------------------------------------------------------------------------
-
 pub(crate) fn run(cmd: QualityCommand) -> Result<()> {
     match cmd {
         QualityCommand::Report {
@@ -123,10 +115,6 @@ pub(crate) fn run(cmd: QualityCommand) -> Result<()> {
         QualityCommand::UnimockCheck => run_unimock_check(),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Subcommand 1: report
-// ---------------------------------------------------------------------------
 
 fn gate_status(value: usize, threshold: Option<usize>, is_max: bool) -> String {
     threshold.map_or_else(
@@ -170,7 +158,6 @@ fn run_report(
     let bench_targets = count_bench_rs_files(&[&crates_dir, &tests_dir])?;
     let local_http_servers = count_pattern(&test_files, &re_tcp_listener)?;
 
-    // Gate checks
     let mut gate_errors: Vec<String> = Vec::new();
 
     if let Some(min) = min_unimock_traits
@@ -257,10 +244,6 @@ fn run_report(
 
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Subcommand 2: rstest-audit
-// ---------------------------------------------------------------------------
 
 fn run_rstest_audit() -> Result<()> {
     let root = workspace_root()?;
@@ -362,10 +345,6 @@ fn run_rstest_audit() -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Subcommand 3: trait-mock-audit
-// ---------------------------------------------------------------------------
-
 struct TraitFileInfo {
     rel_path: String,
     trait_count: usize,
@@ -465,10 +444,6 @@ fn run_trait_mock_audit() -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Subcommand 4: trait-mock-exceptions
-// ---------------------------------------------------------------------------
-
 fn run_trait_mock_exceptions() -> Result<()> {
     let root = workspace_root()?;
     let target_dir = root.join("target");
@@ -527,17 +502,12 @@ fn run_trait_mock_exceptions() -> Result<()> {
         for path in &actual_missing {
             println!("  - {path}");
         }
-        // Do not return bail!() here to make it a warning.
     } else {
         println!("OK: all trait files have unimock.");
     }
 
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Subcommand 5: unimock-check
-// ---------------------------------------------------------------------------
 
 fn run_unimock_check() -> Result<()> {
     let root = workspace_root()?;

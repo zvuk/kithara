@@ -85,12 +85,6 @@ pub(crate) fn run(args: &OrphansArgs) -> Result<()> {
         }
         all_non_excluded()?
     } else {
-        // Honour `Consts::EXCLUDED_PACKAGES` even on explicit `--package`
-        // requests: those crates have heavy `#[cfg(target_*)]` gating
-        // that produces false positives in `cargo modules orphans` when
-        // run from a non-matching target. Validating them needs a
-        // target-specific build (`just wasm check`, `cargo check
-        // --target ...`).
         let mut kept = Vec::new();
         let mut skipped = Vec::new();
         for pkg in &args.packages {

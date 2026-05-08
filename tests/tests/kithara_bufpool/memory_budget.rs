@@ -1,14 +1,11 @@
 use kithara_bufpool::{BudgetExhausted, ByteBudget, Pool, SharedPool};
 use kithara_test_utils::kithara;
 
-// Tier 1: Pool-native memory budget tests
-
 #[kithara::test]
 fn test_byte_budget_enforced() {
-    let budget = 64 * 1024; // 64 KB
+    let budget = 64 * 1024;
     let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(64, 0, ByteBudget(budget));
 
-    // Use ensure_len which respects byte budget (unlike get_with/resize)
     let mut successes = 0;
     let mut failures = 0;
     let mut bufs = Vec::new();
@@ -26,14 +23,12 @@ fn test_byte_budget_enforced() {
         }
     }
 
-    // Budget should block some allocations
     assert!(
         failures > 0,
         "some ensure_len calls should fail due to budget"
     );
     assert!(successes > 0, "some ensure_len calls should succeed");
 
-    // allocated_bytes should stay within budget + one buffer margin
     let margin = 4096 * 2;
     assert!(
         pool.allocated_bytes() <= budget + margin,
@@ -51,10 +46,8 @@ fn test_reuse_rate_after_warmup() {
     let pool = SharedPool::<4, Vec<f32>>::new(128, 200_000);
     pool.pre_warm(16, |v| v.resize(4096, 0.0));
 
-    // Run 100 get/drop cycles
     for _ in 0..100 {
         let _buf = pool.get();
-        // buf returned to pool on drop
     }
 
     let stats = pool.stats();
@@ -63,10 +56,7 @@ fn test_reuse_rate_after_warmup() {
 
     assert!(total > 0, "should have some operations recorded",);
 
-    // Pre-warm fills home shards, so reuse rate should be very high.
-    // Note: 16 pre_warm gets cause 16 alloc_misses, then 100 cycles should mostly hit.
-    // We check only the 100-cycle portion by subtracting the warmup misses.
-    let warmup_misses = 16u64; // pre_warm internally does get() which counts as miss
+    let warmup_misses = 16u64;
     let effective_misses = stats.alloc_misses.saturating_sub(warmup_misses);
     let effective_total = reuse + effective_misses;
 
@@ -87,7 +77,6 @@ fn test_reuse_rate_after_warmup() {
 fn test_no_unbounded_growth() {
     let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(64, 0, ByteBudget(1024 * 1024));
 
-    // Bursty pattern: allocate 20 buffers, drop all, repeat 10 times
     for _ in 0..10 {
         let bufs: Vec<_> = (0..20)
             .map(|_| pool.get_with(|v| v.resize(4096, 0)))
@@ -97,7 +86,6 @@ fn test_no_unbounded_growth() {
 
     let bytes_after = pool.allocated_bytes();
 
-    // One more burst
     for _ in 0..10 {
         let bufs: Vec<_> = (0..20)
             .map(|_| pool.get_with(|v| v.resize(4096, 0)))
@@ -107,9 +95,8 @@ fn test_no_unbounded_growth() {
 
     let bytes_final = pool.allocated_bytes();
 
-    // Memory should stabilize — not grow more than 10% between the two measurement points
     let growth = bytes_final.saturating_sub(bytes_after);
-    let threshold = bytes_after / 10 + 4096; // 10% + one buffer slack
+    let threshold = bytes_after / 10 + 4096;
     assert!(
         growth <= threshold,
         "memory should stabilize: after={bytes_after}, final={bytes_final}, growth={growth}, threshold={threshold}",
@@ -121,11 +108,9 @@ fn test_pcm_pool_budget_stable() {
     let pool =
         SharedPool::<8, Vec<f32>>::with_byte_budget(128, 200_000, ByteBudget(2 * 1024 * 1024));
 
-    // Simulate PCM workflow: get buffer, ensure_len, use, drop
     for _ in 0..50 {
         let mut buf = pool.get();
-        let _ = buf.ensure_len(4096); // 4096 * 4 = 16KB per buffer
-        // use the buffer
+        let _ = buf.ensure_len(4096);
         if buf.len() >= 4096 {
             buf[0] = 1.0;
             buf[4095] = 1.0;
@@ -142,11 +127,9 @@ fn test_pcm_pool_budget_stable() {
 
 #[kithara::test]
 fn test_put_drops_when_shard_full() {
-    // 4 shards, 4 max_buffers total => 1 per shard
     let pool = Pool::<4, Vec<u8>>::new(4, 1024);
     let shard = pool.shard_index_of();
 
-    // Force-put 5 buffers into one shard — at least 4 should be dropped
     for _ in 0..5 {
         let buf = Vec::with_capacity(64);
         pool.put(buf, shard);

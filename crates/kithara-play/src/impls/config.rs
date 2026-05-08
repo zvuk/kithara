@@ -334,7 +334,6 @@ impl ResourceConfig {
         let mut config = AudioConfig::<kithara_file::File>::new(file_config);
         config.cancel = cancel_for_audio;
 
-        // Apply audio settings from ResourceConfig.
         if let Some(h) = self.hint {
             config = config.with_hint(h);
         } else if let Some(ext) = hint {
@@ -388,9 +387,6 @@ impl ResourceConfig {
         hls_config = hls_config.with_initial_abr_mode(self.initial_abr_mode);
 
         // NOTE: `preferred_peak_bitrate` per-track cap now lives on the
-        // `PeerHandle::abr().set_max_bandwidth_bps(...)` path. Wiring it
-        // requires access to the registered handle, which is built inside
-        // `Hls::create` — deferred to Commit 3.
 
         if let Some(bytes) = self.look_ahead_bytes {
             hls_config = hls_config.with_look_ahead_bytes(bytes);
@@ -418,7 +414,6 @@ impl ResourceConfig {
         let mut config = AudioConfig::<kithara_hls::Hls>::new(hls_config);
         config.cancel = cancel_for_audio;
 
-        // Apply audio settings from ResourceConfig.
         if let Some(h) = self.hint {
             config = config.with_hint(h);
         }
@@ -609,11 +604,6 @@ mod tests {
     #[cfg(feature = "hls")]
     #[kithara::test]
     fn config_bitrate_propagates_to_hls_abr() {
-        // `preferred_peak_bitrate` → per-track cap wiring lives on the
-        // `PeerHandle::abr().set_max_bandwidth_bps(...)` path which is
-        // established inside `Hls::create`. The old `HlsConfig::abr`
-        // field has been removed, so this test now only verifies that
-        // `into_hls_config()` accepts the bitrate without panicking.
         let config = ResourceConfig::new("https://example.com/live.m3u8")
             .unwrap()
             .with_preferred_peak_bitrate(512_000.0);
@@ -663,7 +653,6 @@ mod tests {
     #[cfg(feature = "file")]
     #[kithara::test]
     fn file_hint_none_for_url_without_extension() {
-        // URL path has no file extension — hint must be None, not garbage.
         let config =
             ResourceConfig::new("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
         let audio_config = config.into_file_config();

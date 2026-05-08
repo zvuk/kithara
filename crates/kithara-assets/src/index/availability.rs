@@ -448,12 +448,6 @@ impl AvailabilityObserver for ScopedAvailabilityObserver {
 
     fn on_write(&self, range: Range<u64>) {
         self.index.record_write(&self.asset_root, &self.key, range);
-        // `record_write` already set `dirty`. Don't run a sync flush
-        // here — Availability follows an "explicit checkpoint only"
-        // contract by default (matches the legacy `spawn_auto_flush`
-        // behaviour: no runtime → no auto-flush). When a worker is
-        // attached, ping it so the dirty bit becomes a debounced
-        // background flush.
         if let Some(hub) = self.index.inner.hub.get() {
             hub.signal();
         }

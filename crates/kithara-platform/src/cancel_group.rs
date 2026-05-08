@@ -60,8 +60,6 @@ impl CancelGroup {
     }
 }
 
-// From
-
 impl From<CancellationToken> for CancelGroup {
     fn from(token: CancellationToken) -> Self {
         Self::new(vec![token])
@@ -74,8 +72,6 @@ impl From<Vec<CancellationToken>> for CancelGroup {
     }
 }
 
-// BitOr: group | group
-
 impl BitOr for CancelGroup {
     type Output = Self;
 
@@ -86,8 +82,6 @@ impl BitOr for CancelGroup {
     }
 }
 
-// BitOr: group | token
-
 impl BitOr<CancellationToken> for CancelGroup {
     type Output = Self;
 
@@ -97,8 +91,6 @@ impl BitOr<CancellationToken> for CancelGroup {
         Self::new(tokens)
     }
 }
-
-// BitOr: token | group
 
 impl BitOr<CancelGroup> for CancellationToken {
     type Output = CancelGroup;
@@ -119,8 +111,6 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::CancelGroup;
-
-    // Helpers
 
     #[derive(Clone, Debug)]
     enum Src {
@@ -179,8 +169,6 @@ mod tests {
         }
     }
 
-    // Sync parametrized tests
-
     macro_rules! sync_cancel_tests {
         ($($name:ident: $spec:expr, $action:expr, $expected:expr;)*) => {
             $(
@@ -220,8 +208,6 @@ mod tests {
         mixed_with_pre_cancelled:
             [Src::Fresh, Src::ChildOf(0), Src::PreCancelled], Act::None, true;
     }
-
-    // Async parametrized tests
 
     macro_rules! async_cancel_tests {
         ($($name:ident: $spec:expr, $action:expr;)*) => {
@@ -263,8 +249,6 @@ mod tests {
             [Src::ChildOf(0), Src::ChildOf(1)], Act::Parent(1);
     }
 
-    // Edge cases
-
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn cancelled_resolves_immediately_when_pre_cancelled() {
         let tok = CancellationToken::new();
@@ -302,8 +286,6 @@ mod tests {
         assert!(group.is_cancelled());
         assert!(cloned.is_cancelled());
     }
-
-    // BitOr composition tests
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn token_bitor_token() {

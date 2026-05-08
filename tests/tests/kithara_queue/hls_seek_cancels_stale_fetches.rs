@@ -80,7 +80,6 @@ impl Consts {
 }
 
 fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
-    // /stream/{spec}/seg/v{variant}_{segment}.m4s
     let after = url.split("/seg/v").nth(1)?;
     let stem = after.split(".m4s").next()?;
     let mut parts = stem.split('_');
@@ -184,19 +183,6 @@ struct PostSeekObservation {
     target_started_wait: Option<Duration>,
 }
 
-// `#[ignore]`d pending the synthetic prefixed-source adapter (Phase 3.5):
-// the fixture uses `include_sidx(false)` to model fmp4 streams that omit
-// the top-level segment index. Without `sidx`, Symphonia's
-// `format_reader.seek` walks the moof fragment chain linearly, issuing
-// `read_at` for every prefix segment before reaching the target. The
-// scheduler-side fixes that landed alongside this test (cursor floor
-// protection, wait_range epoch-advance Interrupted, process_demand
-// flushing-gate refinement) cannot eliminate those prefix demands —
-// they originate inside the decoder. The structural fix is to recreate
-// the decoder with a synthetic source that prepends the init segment to
-// the target moof so format_reader's first read lands on the target,
-// avoiding the chain walk entirely. Tracked separately from the
-// scheduler-side WIP this test was originally written to pin.
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -204,14 +190,6 @@ struct PostSeekObservation {
     case::apple(DecoderBackend::Apple)
 )]
 async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
-    // Install probe recorder BEFORE any Downloader is created. Captures
-    // USDT-paired tracing events from `kithara-stream` and `kithara-hls`
-    // (target = "kithara_stream_probe" / "kithara_hls_probe", any
-    // `*_probe` suffix is matched by `probe_capture::ProbeLayer`).
-    // Defense-in-depth: the four EventBus assertions below can each be
-    // silenced by a `broadcast:: Lagged`, but probes fire at the
-    // decision itself and cannot be dropped by the bus. `#[serial]`
-    // keeps a single test in the process-wide recorder window.
     let probe_recorder = probe_capture::install();
 
     let helper = TestServerHelper::new().await;
@@ -220,8 +198,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let temp = temp_dir();
     let (queue, player, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    // Subscribe BEFORE creating the track so we capture every event
-    // from the very first `RequestEnqueued`.
     let mut rx = player.bus().subscribe();
 
     let mut cfg = ResourceConfig::new(url.as_str()).expect("ResourceConfig::new");
@@ -239,9 +215,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
     sleep(Duration::from_millis(Consts::WARMUP_MS)).await;
 
-    // Phase A: drain pre-seek events to clear backlog and snapshot
-    // which `RequestId`s were enqueued before seek_at — the post-seek
-    // observation needs to identify "new epoch" requests.
     let mut pre_seek_enqueued: HashSet<RequestId> = HashSet::new();
     loop {
         match rx.try_recv() {
@@ -249,35 +222,22 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
                 pre_seek_enqueued.insert(request_id);
             }
             Ok(_) => {}
-            // Lagged means we dropped a backlog window; the channel is
-            // still live, so continue draining instead of bailing out.
             Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
             Err(_) => break,
         }
     }
 
-    // Phase B: seek instant.
     let duration = queue.duration_seconds().expect("duration");
     let target_seconds = (duration - 0.5).max(0.0);
 
-    // Nominal target segment from the test fixture (50 segments × 4s).
-    // The actual landed segment is read out of the `ReaderSeek` event
-    // below; this is just a sanity bound for assert A.
     let nominal_target_segment = Consts::SEGMENT_COUNT.saturating_sub(1);
 
     let seek_at = Instant::now();
     queue.seek(target_seconds).expect("seek");
 
-    // Phase C: collect post-seek events.
     let observation = observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued).await;
 
     tick_handle.abort();
-
-    // ── PROBE-LEVEL PRE-ASSERTIONS ─────────────────────────────────
-    // Run probe assertions FIRST so a downstream EventBus panic does
-    // not hide the lower-layer signal. Probes observe scheduler
-    // decisions directly; EventBus events can be dropped when the
-    // broadcast subscriber lags.
 
     let probe_events = probe_recorder.snapshot();
     let total_probes = probe_events.len();
@@ -287,9 +247,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
          feature not enabled in test build, or probe sites missing"
     );
 
-    // PROBE-A: `seek_epoch_reset` fires after seek_at. If this assertion
-    //          fails, the scheduler never observed a new seek epoch —
-    //          the bug is upstream of the FetchCmd-emit logic.
     let post_seek_resets: Vec<_> = probe_events
         .iter()
         .filter(|e| e.at >= seek_at)
@@ -306,10 +263,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         .max()
         .expect("seek_epoch field present on seek_epoch_reset probe");
 
-    // PROBE-B (mirror of EventBus assert C, immune to broadcast Lagged):
-    //          NO `fetch_cmd_emitted` for prefix segments in the new
-    //          epoch. The scheduler must NOT walk through prefix
-    //          segments after the seek demand resets the cursor.
     let post_seek_prefix_emissions: Vec<_> = probe_events
         .iter()
         .filter(|e| e.at >= seek_at)
@@ -336,10 +289,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
             .collect::<Vec<_>>(),
     );
 
-    // PROBE-C: target segment's FetchCmd was actually emitted in the
-    //          new epoch. Together with PROBE-B, this asserts the
-    //          scheduler emits exactly the right thing — not just
-    //          "nothing wrong" but "the right call did fire".
     let target_emissions: Vec<_> = probe_events
         .iter()
         .filter(|e| e.at >= seek_at)
@@ -359,10 +308,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
          scheduler did not emit a FetchCmd for the seek target"
     );
 
-    // ── EVENTBUS ASSERTIONS (existing contract, kept verbatim) ──────
-
-    // Ассерт A: ReaderSeek прилетел и landed near the target segment.
-    //           Подтверждает что декодер реально дёрнул Seek::seek.
     let Some(Event::Hls(HlsEvent::ReaderSeek {
         to_offset,
         segment_index,
@@ -387,10 +332,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         nominal_target_segment.saturating_sub(Consts::WARMUP_TOLERANCE),
     );
 
-    // Ассерт B (главный сигнал бага): первый SegmentReadStart после
-    //          seek_at имеет segment_index >= target. На сломанном коде
-    //          reader идёт в prefix (segment_index = 0..3) и ассерт
-    //          падает.
     let Some(Event::Hls(HlsEvent::SegmentReadStart {
         segment_index: first_seg,
         ..
@@ -410,9 +351,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
          were already in flight when the seek fired"
     );
 
-    // Ассерт C: hard cap на post-seek prefix-RequestEnqueued. Только то
-    //           что уже в полёте может завершиться; никаких новых
-    //           prefix-fetch'ей.
     assert!(
         observation.prefix_enqueued_after_seek.len() <= Consts::MAX_CONCURRENT,
         "[bug, {backend:?}] {} new prefix RequestEnqueued events after seek \
@@ -421,7 +359,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
         Consts::MAX_CONCURRENT,
     );
 
-    // Ассерт D: target started promptly. Slot pressure indicator.
     let wait = observation.target_started_wait.unwrap_or_else(|| {
         panic!(
             "[{backend:?}] no RequestStarted observed for any post-seek \
@@ -470,9 +407,6 @@ async fn observe_post_seek(
                     if !pre_seek_enqueued.contains(request_id) {
                         new_epoch_enqueued.insert(*request_id);
                         enqueue_url.insert(*request_id, url.to_string());
-                        // Hard cap (assert C): if this enqueued request
-                        // is for a prefix segment relative to target,
-                        // record it.
                         if let (Some(target), Some((_v, seg_idx))) =
                             (target_segment, parse_segment_url(url.as_str()))
                             && seg_idx + Consts::WARMUP_TOLERANCE < target
@@ -492,8 +426,6 @@ async fn observe_post_seek(
                 }
                 _ => {}
             },
-            // RecvError::Lagged is a recoverable backlog drop; only stop
-            // observing on RecvError::Closed (true channel teardown).
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
             Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
             Err(_) => continue,

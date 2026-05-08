@@ -36,7 +36,6 @@
 
 #![forbid(unsafe_code)]
 
-// Internal modules
 mod audio;
 pub mod effects;
 #[cfg(any(test, feature = "test-utils"))]
@@ -50,7 +49,6 @@ pub(crate) mod worker;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_helpers;
 
-// Public API exports
 pub use audio::Audio;
 pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands};
 pub use pipeline::{

@@ -99,9 +99,6 @@ fn partial_decoder_seek_past_available_bytes_errors() {
             .expect("partial mp3 decoder");
     let duration = decoder.duration().expect("duration known");
 
-    // Target 80 % into the true track — comfortably inside the duration
-    // Symphonia reports, but well past the 6 % of bytes the decoder can
-    // actually read.
     let target_nanos = duration.as_nanos() * u128::from(Consts::TARGET_FRACTION_NUM)
         / u128::from(Consts::TARGET_FRACTION_DEN);
     let target = Duration::from_nanos(u64::try_from(target_nanos).expect("fits u64"));

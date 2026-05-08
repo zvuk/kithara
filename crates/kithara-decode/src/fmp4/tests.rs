@@ -104,15 +104,12 @@ fn build_test_layout(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
     let init = read_fixture("init-slq-a1.mp4");
     let init_len = init.len() as u64;
 
-    // EXTINF for the test fixture is ~6s per segment.
     let segment_duration_secs = 6u64;
 
     let mut blob = init.clone();
     let mut descs = Vec::new();
     let mut byte_cursor = init_len;
     for i in 1..=num_segments {
-        // xtask-lint-ignore: loop_allocation
-        // Test fixture loader: cold path, allocation cost dwarfed by file I/O.
         let seg_bytes = read_fixture(&format!("segment-{i}-slq-a1.m4s"));
         let len = seg_bytes.len() as u64;
         let start = byte_cursor;
@@ -173,8 +170,6 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
     let (blob, segmented) = build_test_layout(1);
     let (mut decoder, _, _) = make_decoder(blob, segmented);
 
-    // First non-empty chunk should appear within a few iterations
-    // (Symphonia AAC may emit a zero-frame priming chunk).
     let mut got_chunk = None;
     for _ in 0..16 {
         match decoder.next_chunk().expect("BUG: decode") {
@@ -197,13 +192,9 @@ fn seek_reads_only_init_and_target_segment() {
     let (blob, segmented) = build_test_layout(5);
     let (mut decoder, reads, record) = make_decoder(blob, segmented.clone());
 
-    // Init was already loaded during decoder construction; clear the
-    // history and start recording from this point on so the asserts
-    // measure only post-seek reads.
     reads.lock().expect("BUG: clear").clear();
     record.store(true, Ordering::Release);
 
-    // Seek into segment 3 (decode_time = 18s).
     let target = Duration::from_secs(18);
     let outcome = decoder.seek(target).expect("BUG: seek");
     let DecoderSeekOutcome::Landed {
@@ -219,7 +210,6 @@ fn seek_reads_only_init_and_target_segment() {
     let segment_3 = &segmented.segments[3];
     assert_eq!(landed_byte, segment_3.byte_range.start);
 
-    // Pull one chunk to force the segment to actually be loaded.
     for _ in 0..16 {
         match decoder.next_chunk().expect("BUG: decode after seek") {
             DecoderChunkOutcome::Chunk(_) | DecoderChunkOutcome::Eof => break,
@@ -228,8 +218,6 @@ fn seek_reads_only_init_and_target_segment() {
     }
     record.store(false, Ordering::Release);
 
-    // All recorded reads must be inside segment 3's byte range —
-    // never inside segment 0/1/2's ranges.
     let reads_snapshot = reads.lock().expect("BUG: reads lock").clone();
     let target_range = segment_3.byte_range.clone();
     for r in &reads_snapshot {

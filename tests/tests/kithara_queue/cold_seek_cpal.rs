@@ -114,9 +114,6 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let net = NetOptions::default().with_is_insecure(true);
     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
 
-    // Real cpal backend, default `PlayerImpl` — matches the GUI demo
-    // exactly. Any prod-only behaviour (cpal render callback timing,
-    // default device properties) is in scope.
     let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
@@ -151,28 +148,16 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     queue.select(id, Transition::None).expect("select");
     queue.play();
 
-    // Long warm-up: real CDN + TLS + AES-decrypt on HLS key fetch
-    // means the first few seconds of PCM may arrive after measurable
-    // delay. We need to be past the initial fetched-ahead segments
-    // before issuing the seek.
     let pos_before = wait_for_position_at_least(&queue, 2.0, Duration::from_secs(45))
         .await
         .expect("silvercomet track never played past 2s");
     eprintln!("[silvercomet] pre-seek pos={pos_before:.3}s");
 
-    // Seek to the middle of the track. We don't know the exact
-    // duration until Loaded, but silvercomet's test track is ~4 min,
-    // so 120s is a solid "middle of an uncached range".
     let duration = queue.duration_seconds().unwrap_or(240.0);
     let seek_target = duration * 0.5;
     eprintln!("[silvercomet] duration={duration:.1}s, seeking to {seek_target:.1}s (50%)");
     queue.seek(seek_target).expect("seek accepted");
 
-    // Observe for 90 s — well past the 5 s seek-watchdog budget in
-    // `Queue::tick`, so if the pipeline is truly frozen the watchdog
-    // panics first and we surface it via `tick_handle`. 90 s is also
-    // long enough to witness a "forever-frozen" state rather than a
-    // slow recovery.
     let observation_deadline = Instant::now() + Duration::from_secs(90);
     let mut confirmed = false;
     let mut last_pos_log = Instant::now();
@@ -210,11 +195,6 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         queue.position_seconds(),
     );
 
-    // Backward seek: reproduce the user-reported hang when seeking from
-    // a late position (~107s) back to ~60s. The GUI crash showed the
-    // seek watchdog firing with seek_target ~60s while position stayed
-    // at 107s — this regression path was invisible to the forward-only
-    // assertion above.
     let backward_target = duration * 0.25;
     eprintln!(
         "[silvercomet] backward seek: from {:?} to {backward_target:.1}s (25%)",

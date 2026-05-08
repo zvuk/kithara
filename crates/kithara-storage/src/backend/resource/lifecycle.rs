@@ -17,10 +17,8 @@ impl<D: DriverIo> Resource<D> {
     pub(super) fn commit_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.check_health()?;
 
-        // Driver-specific commit first (may fail).
         self.inner.driver.commit(final_len)?;
 
-        // Update common state only on success.
         {
             let mut state = self.inner.state.lock_sync();
             state.committed = true;
@@ -29,8 +27,6 @@ impl<D: DriverIo> Resource<D> {
                 && len > 0
             {
                 state.available.insert(0..len);
-                // For ring buffer drivers, only data in the valid window is
-                // actually available. Remove evicted ranges.
                 if let Some(window) = self.inner.driver.valid_window() {
                     if window.start > 0 {
                         state.available.remove(0..window.start);
@@ -43,8 +39,6 @@ impl<D: DriverIo> Resource<D> {
         }
         self.inner.condvar.notify_all();
 
-        // Observer fires outside the state lock and only when the
-        // caller supplied a final length — `commit(None)` is silent.
         if let Some(len) = final_len
             && let Some(observer) = self.inner.observer.as_ref()
         {
@@ -96,15 +90,12 @@ impl<D: DriverIo> Resource<D> {
     pub(super) fn reactivate_inner(&self) -> StorageResult<()> {
         self.check_health()?;
 
-        // Driver-specific reactivation first (may fail).
         self.inner.driver.reactivate()?;
 
-        // Update common state only on success.
         {
             let mut state = self.inner.state.lock_sync();
             state.committed = false;
             state.final_len = None;
-            // Keep available data as-is — existing bytes remain readable.
         }
         self.inner.condvar.notify_all();
         Ok(())
@@ -113,21 +104,12 @@ impl<D: DriverIo> Resource<D> {
     pub(super) fn status_inner(&self) -> ResourceStatus {
         let state = self.inner.state.lock_sync();
         if let Some(ref reason) = state.failed {
-            // `Failed` keeps priority over `Cancelled` — a data error
-            // is more informative than a routine shutdown signal.
             ResourceStatus::Failed(reason.clone())
         } else if state.committed {
-            // `Committed` keeps priority too: bytes are still
-            // readable for observers that opened a fresh handle on
-            // top of an already-committed file.
             ResourceStatus::Committed {
                 final_len: state.final_len,
             }
         } else if self.inner.cancel.is_cancelled() {
-            // Token-fired before the data lifecycle progressed.
-            // Surface as `Cancelled` so blocking observers (e.g.
-            // `kithara_assets::ProcessedResource`'s readiness gate)
-            // can wake immediately instead of polling on a watchdog.
             ResourceStatus::Cancelled
         } else {
             ResourceStatus::Active

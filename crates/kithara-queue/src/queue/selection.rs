@@ -19,28 +19,9 @@ impl Queue {
     /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).
     pub fn advance_to_next(&self, transition: Transition) -> Option<TrackId> {
         let len = self.len();
-        // `TrackStatus::Cancelled` slots stay populated in the queue
-        // but their resource was never planted (load was overridden
-        // by a later explicit select), so auto-advance must not flip
-        // `current()` onto them. Loop until we find a playable slot
-        // or run off the end of the queue. An explicit
-        // [`Self::select`] of a Cancelled track is honoured via the
-        // `Cancelled | Consumed | Failed` branch in `select`.
         loop {
             let Some(idx) = self.lock_navigation_mut().next(len) else {
                 self.bus.publish(QueueEvent::QueueEnded);
-                // Don't drive `Player::pause()` here: it would issue
-                // `SetPaused(true)` and stop the audio thread mid-render,
-                // cutting off tail samples that the seek-near-EOF stress
-                // path relies on to advance position to the natural end.
-                // `cleanup_finished_tracks` flips `state.playing` to
-                // `false` once the arena drains, so `is_playing()` still
-                // reaches `false` for the queue_pauses_player_when_last_track_ends
-                // contract. `navigation::next` parks `current_index` to
-                // `None` on `RepeatMode::Off` exhaustion so
-                // `Queue::current()` reports a stopped queue without
-                // touching `player.current_index` (which auto_advance
-                // tests assert sticks at the last-played slot).
                 return None;
             };
             let Some((id, status)) = self
@@ -153,29 +134,12 @@ impl Queue {
                 .ok_or(QueueError::UnknownTrackId(id))?
         };
 
-        // Idempotency: selecting the track that's already loaded & active
-        // is a no-op. Autoplay in `spawn_apply_after_load` issues an
-        // implicit select; an explicit user select on the same track must
-        // not re-issue LoadTrack — that wipes the decoder timeline and
-        // resets position to zero mid-playback. We check `player.current_index`
-        // (updated synchronously inside `select_item_with_crossfade`) rather
-        // than `navigation.current_index` (which `advance_to_next` moves
-        // before calling select, so it would mistakenly match).
-        // `rate > 0` distinguishes "player holds this slot" from the
-        // default `current_index = 0` on a fresh, never-selected player;
-        // `select_item_with_crossfade` with `autoplay=true` sets `rate`
-        // synchronously, while `is_playing()` depends on the processor
-        // draining `SetPaused(false)` — racy.
         if self.player.current_index() == index && self.player.rate() > 0.0 {
             return Ok(());
         }
 
         match status {
             TrackStatus::Loaded => {
-                // Cancel any other in-flight pending — otherwise its
-                // spawn_apply_after_load completion would still plant
-                // its resource and `select_item_with_crossfade` it,
-                // barging in over the track the user just selected.
                 self.cancel_stale_pending(id);
                 let was_playing = self.player.is_playing();
                 let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
@@ -187,8 +151,6 @@ impl Queue {
                         duration_seconds: crossfade,
                     });
                 }
-                // Engine took items[index] inside select_item — if user
-                // re-selects the same track later, we must reload.
                 self.set_status(id, TrackStatus::Consumed);
                 Ok(())
             }
@@ -197,9 +159,6 @@ impl Queue {
                 Ok(())
             }
             TrackStatus::Cancelled | TrackStatus::Consumed | TrackStatus::Failed(_) => {
-                // Test path: if a respawn resource was pre-supplied via
-                // `supply_test_resource_for_respawn`, plant it directly
-                // and select synchronously — bypasses the real loader.
                 if let Some(result) = self.try_replant_test_resource(id, index, transition) {
                     return result;
                 }
@@ -236,14 +195,6 @@ impl Queue {
                 }
             };
 
-            // Bug B (barge-in): if a later `select` overrode this
-            // load's `pending_select`, the previous track was marked
-            // `TrackStatus::Cancelled` synchronously by
-            // `override_pending_select`. Skip `replace_item` so the
-            // slot stays empty and auto-advance falls through; the
-            // status remains `Cancelled` so an explicit user
-            // `select(id)` still re-engages via the
-            // `Cancelled | Consumed | Failed` branch in `select`.
             let was_cancelled = tracks
                 .lock()
                 .iter()

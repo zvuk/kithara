@@ -65,10 +65,6 @@ pub(crate) struct AppleCodec {
 }
 
 // SAFETY: `AudioConverterRef` is an opaque CoreAudio handle. Apple's
-// docs guarantee thread-safety for `AudioConverterFillComplexBuffer`
-// when serialised through one converter; we hold `&mut self` for every
-// call, so no concurrent access. The boxed `ConverterInputState` keeps
-// a stable pointer for the input callback.
 unsafe impl Send for AppleCodec {}
 
 impl AppleCodec {
@@ -100,20 +96,11 @@ impl AppleCodec {
             let gapless = prime_info.and_then(gapless_info_from_prime_info);
             log_gapless_prime_info("init", prime_info, gapless);
             codec.last_prime_info = prime_info;
-            // Container-level gapless (MP4 `iTunSMPB` / `elst`) takes
-            // priority over codec-only PrimeInfo when both are present:
-            // the container value is authoritative because it survives
-            // re-encoding and matches what the original encoder wrote
-            // (PrimeInfo only reports the decoder's own filter delay).
-            // Falls back to PrimeInfo when the demuxer carried nothing.
             let resolved = track.gapless.or(gapless);
             codec.track_info = DecoderTrackInfo {
                 gapless: resolved,
                 ..DecoderTrackInfo::default()
             };
-            // Skip the post-first-chunk refresh when init already
-            // produced trim numbers — AAC will repopulate identically
-            // and a duplicate log line is just noise.
             codec.prime_info_refresh_pending = resolved.is_none();
         }
         Ok(codec)
@@ -139,7 +126,6 @@ impl AppleCodec {
 
         let mut converter: AudioConverterRef = ptr::null_mut();
         // SAFETY: input/output formats are valid stack values; `converter`
-        // is a writable out-pointer.
         let status = unsafe { AudioConverterNew(&input_format, &output_format, &mut converter) };
         if status != Consts::noErr {
             return Err(DecodeError::Backend(Box::new(std::io::Error::other(
@@ -153,7 +139,6 @@ impl AppleCodec {
                 reason = "magic cookie length fits in u32 for valid configs"
             )]
             // SAFETY: `converter` was just successfully created above and
-            // is owned by us; `cookie` is a readable byte slice.
             let status = unsafe {
                 AudioConverterSetProperty(
                     converter,
@@ -162,9 +147,6 @@ impl AppleCodec {
                     cookie.as_ptr() as *const c_void,
                 )
             };
-            // AAC AudioConverter rejects DecompressionMagicCookie with
-            // 'NoDataNow' — it doesn't consume a cookie, ESDS metadata
-            // arrives through the ASBD path. Log + continue.
             if status != Consts::noErr {
                 tracing::warn!(
                     status,
@@ -216,7 +198,6 @@ impl Drop for AppleCodec {
     fn drop(&mut self) {
         if !self.converter.is_null() {
             // SAFETY: `self.converter` was constructed by `AudioConverterNew`
-            // and is owned exclusively by `self`.
             let _ = unsafe { AudioConverterDispose(self.converter) };
         }
     }
@@ -268,8 +249,6 @@ impl FrameCodec for AppleCodec {
         let input_ptr = self.input_state.as_mut() as *mut ConverterInputState as *mut c_void;
 
         // SAFETY: `self.converter` is live; `input_ptr` points at a live
-        // `ConverterInputState` owned by `self`; `buffer_list` is a
-        // valid output buffer pointing into `out` for the FFI's lifetime.
         let status = unsafe {
             AudioConverterFillComplexBuffer(
                 self.converter,
@@ -281,9 +260,6 @@ impl FrameCodec for AppleCodec {
             )
         };
 
-        // The callback returns `kAudioConverterErr_NoDataNow` after it
-        // hands the single staged packet to AudioConverter — that's the
-        // expected steady state for one-frame-in / N-frames-out drain.
         if status != Consts::noErr
             && status != Consts::kAudioConverterErr_NoDataNow
             && output_packets == 0
@@ -299,10 +275,6 @@ impl FrameCodec for AppleCodec {
         let frames = output_packets;
         let samples_len = frames as usize * channels;
         out.truncate(samples_len);
-        // AudioConverter publishes `kAudioConverterPrimeInfo` only
-        // after consuming the first input packet on AAC. We refresh
-        // here so the captured `GaplessInfo` is visible by the time
-        // the universal decoder reads `track_info` upstream.
         self.refresh_gapless_after_first_chunk();
         Ok(frames)
     }
@@ -350,7 +322,6 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
                 mChannelsPerFrame: u32::from(track.channels),
                 ..Default::default()
             };
-            // AAC magic cookie = AudioSpecificConfig bytes verbatim.
             let cookie = (!track.extra_data.is_empty()).then(|| track.extra_data.clone());
             Ok(AppleInputFormat {
                 asbd,
@@ -367,18 +338,13 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
                 )));
             }
             let streaminfo = &track.extra_data[..Consts::FLAC_STREAMINFO_LEN];
-            // max_block_size = u16 BE at bytes [2..4] of STREAMINFO.
             let max_block = u32::from(u16::from_be_bytes([streaminfo[2], streaminfo[3]]))
                 .max(Consts::AAC_FRAMES_PER_PACKET);
 
-            // Apple's FLAC decoder expects the magic cookie in native-FLAC
-            // header form: "fLaC" + METADATA_BLOCK_HEADER + STREAMINFO.
-            // Symphonia / our fmp4 demuxer surface only the STREAMINFO
-            // body, so we rebuild the prefix here.
             let mut cookie =
                 Vec::with_capacity(Consts::FLAC_COOKIE_PREFIX_LEN + Consts::FLAC_STREAMINFO_LEN);
             cookie.extend_from_slice(b"fLaC");
-            cookie.push(0x80); // last=1, type=0 (STREAMINFO)
+            cookie.push(0x80);
             cookie.push(0x00);
             cookie.push(0x00);
             #[expect(

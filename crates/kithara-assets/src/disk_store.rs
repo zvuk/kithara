@@ -79,11 +79,6 @@ impl DiskAssetDeleter {
 
 impl AssetDeleter for DiskAssetDeleter {
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
-        // Asset-level removal: FS + every index that ties state to
-        // this asset_root must be cleared. We attempt **all** of
-        // them even on partial failure so the index that did manage
-        // to update isn't left out of sync; the first error wins
-        // for the return value.
         let fs_result = delete_asset_dir(&self.root_dir, asset_root).map_err(AssetsError::from);
         self.availability.clear_root(asset_root);
         let pins_result = self.pins.remove(asset_root).map(|_| ());
@@ -105,9 +100,6 @@ impl AssetDeleter for DiskAssetDeleter {
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
         };
-        // Resource-level removal only invalidates the per-resource
-        // entry in `AvailabilityIndex`. Pins/LRU are per-asset_root,
-        // so they are untouched by a single-resource removal.
         self.availability.remove(asset_root, key);
         result
     }
@@ -128,10 +120,6 @@ impl DiskAssetStore {
     ) -> Self {
         let root_dir = root_dir.into();
         let availability = AvailabilityIndex::new();
-        // Standalone construction (tests, ad-hoc callers): ephemeral
-        // indexes carry no on-disk state and need no pool. The
-        // production builder uses disk-backed instances shared with
-        // `LeaseAssets` and `EvictAssets`.
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         let deleter: Arc<dyn AssetDeleter> = Arc::new(DiskAssetDeleter::new(
@@ -180,16 +168,7 @@ impl DiskAssetStore {
     ) -> AssetsResult<AtomicChunked<MmapResource>> {
         let observer = self.scoped_observer(key);
         let cancel = self.cancel.clone();
-        // Factory is `Fn + Send + Sync + 'static`: called twice — once
-        // here on the temp path, and again from `AtomicChunked::commit`
-        // on the canonical path after the atomic rename — so the
-        // closure captures by move and remains usable after.
         let chunked = AtomicChunked::open(path, move |target, intent| {
-            // Fresh open at tmp path: ReadWrite so writers can fill
-            // the segment. Reopen at canonical post-rename: ReadOnly
-            // so the resource reports `Committed` status (otherwise
-            // `LeaseResource::drop` would mistake it for an
-            // abandoned writer and delete the just-renamed file).
             let mode = match intent {
                 OpenIntent::Fresh => OpenMode::ReadWrite,
                 OpenIntent::Reopen => OpenMode::ReadOnly,
@@ -223,13 +202,6 @@ impl DiskAssetStore {
             MmapOptions::new(path).with_mode(mode),
             Some(self.scoped_observer(key)),
         )?;
-        // Seed aggregate from the driver's initial state for files
-        // already committed on disk. `MmapDriver::open` populates
-        // `available = 0..file_len` for existing files, so a caller
-        // that never goes through `write_at` / `commit` (e.g. a
-        // pre-existing packaged fixture) would otherwise be invisible
-        // to `AssetStore::contains_range`. Closes landmine L2 for
-        // everything that flows through this open path.
         if let ResourceStatus::Committed {
             final_len: Some(len),
         } = resource.status()
@@ -312,9 +284,6 @@ impl Assets for DiskAssetStore {
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
-        // Absolute keys (local files) and re-opens of existing
-        // canonical files: passthrough mode (read-only / already
-        // durable).
         if key.is_absolute() || (path.exists() && path.metadata().is_ok_and(|m| m.len() > 0)) {
             let mode = if key.is_absolute() {
                 OpenMode::ReadOnly
@@ -324,10 +293,6 @@ impl Assets for DiskAssetStore {
             let mmap = self.open_storage_resource(key, path, mode)?;
             return Ok(mmap.into());
         }
-        // Fresh segment write: wrap with `AtomicChunked` so writes
-        // land at `<canonical>.tmp` and are atomic-renamed on
-        // commit. Slow-path observers of the canonical path see
-        // either no file or fully durable bytes — never partial.
         let chunked = self.open_atomic_chunked_resource(key, path)?;
         Ok(StorageResource::from(chunked))
     }
@@ -338,7 +303,6 @@ impl Assets for DiskAssetStore {
 
     fn capabilities(&self) -> Capabilities {
         if self.asset_root.is_empty() {
-            // Local-file mode: absolute keys only, no decorators.
             Capabilities::PROCESSING
         } else {
             Capabilities::all()
@@ -349,10 +313,6 @@ impl Assets for DiskAssetStore {
         if self.cancel.is_cancelled() {
             return Err(StorageError::Cancelled.into());
         }
-        // Delegate to the canonical deleter — physical FS removal and
-        // AvailabilityIndex invalidation happen atomically inside.
-        // No other path is allowed to call `delete_asset_dir` or
-        // `availability.clear_root` directly. See [`crate::deleter`].
         self.deleter.delete_asset(&self.asset_root)
     }
 
@@ -375,14 +335,11 @@ impl Assets for DiskAssetStore {
         if !path.exists() {
             return Err(IoError::new(ErrorKind::NotFound, "resource missing").into());
         }
-        // Re-open of an already-committed resource: passthrough mode
-        // (no atomicity needed — bytes are durable on disk).
         let mmap = self.open_storage_resource(key, path, OpenMode::ReadOnly)?;
         Ok(mmap.into())
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        // Single canonical removal channel, see `delete_asset` above.
         self.deleter.remove_resource(&self.asset_root, key)
     }
 

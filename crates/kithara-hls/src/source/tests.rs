@@ -305,14 +305,12 @@ fn seek_resolves_in_layout_variant_not_abr_target() {
     );
     push_segment(&source.segments, 0, 0, 0, SEG0_LEN);
 
-    // ABR wants variant 1, but layout is variant 0
     pin_variant(&source.coord.abr_state, 1);
 
     let anchor = source
         .resolve_seek_anchor(Duration::from_millis(SEEK_MS))
         .expect("anchor resolution");
 
-    // Anchor must use layout variant (0), NOT ABR target (1)
     assert_eq!(
         anchor.variant_index,
         Some(0),
@@ -355,14 +353,12 @@ fn seek_within_layout_variant_preserves_segments() {
     const SEG2_OFFSET: u64 = SEG_SIZE * 2;
     const MID_SEG_OFFSET: u64 = SEG_SIZE * 2 + SEG_SIZE / 2;
     let source = build_test_source_with_segments(NUM_VARIANTS, NUM_SEGS);
-    // Commit segments to layout variant (0)
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
     push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
     push_segment(&source.segments, 0, SEG2_INDEX, SEG2_OFFSET, SEG_SIZE);
 
     source.coord.timeline().set_byte_position(MID_SEG_OFFSET);
 
-    // Seek to variant 0 (same as layout_variant) → Preserve
     let anchor = make_anchor(0, 0, 0);
     let layout = source.classify_seek(&anchor);
     assert!(
@@ -400,7 +396,6 @@ fn resolve_current_variant_uses_layout_variant() {
     let source = build_test_source_with_segments(NUM_VARIANTS, 1);
     pin_variant(&source.coord.abr_state, 1);
 
-    // resolve_current_variant uses layout_variant, not ABR
     assert_eq!(
         source.resolve_current_variant(),
         0,
@@ -420,13 +415,9 @@ fn seek_anchor_uses_layout_variant_not_abr_target() {
         0,
         &[SEG_SIZE, SEG_SIZE, SEG_SIZE, SEG_SIZE],
     );
-    // Layout variant has the target segment committed, so the anchor
-    // must stay on layout (no need to pivot to ABR) — this is the
-    // "in-place seek" happy path.
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
     push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
     push_segment(&source.segments, 0, 2, 2 * SEG_SIZE, SEG_SIZE);
-    // ABR wants variant 1, but seek must use layout_variant (0)
     pin_variant(&source.coord.abr_state, 1);
 
     let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(SEEK_MS))
@@ -466,27 +457,23 @@ fn abr_does_not_affect_any_seek_state() {
     push_segment(&source.segments, 0, 0, 0, V0_SEG_SIZE);
     push_segment(&source.segments, 0, 1, V0_SEG_SIZE, V0_SEG_SIZE);
 
-    // ABR switches to variant 1 mid-stream
     pin_variant(&source.coord.abr_state, 1);
     source
         .coord
         .had_midstream_switch
         .store(true, Ordering::Release);
 
-    // Seek resolves in layout_variant (0), ignoring ABR
     let anchor = source
         .resolve_seek_anchor(Duration::from_millis(SEEK_MS))
         .expect("anchor");
     assert_eq!(anchor.variant_index, Some(0), "anchor ignores ABR");
 
-    // classify_seek returns Preserve (same layout variant)
     let layout = source.classify_seek(&anchor);
     assert!(
         matches!(layout, SeekLayout::Preserve),
         "seek within layout_variant is always Preserve"
     );
 
-    // apply_seek_plan does not change layout_variant
     source.apply_seek_plan(&anchor, &layout);
     assert_eq!(
         source.segments.lock_sync().layout_variant(),
@@ -494,7 +481,6 @@ fn abr_does_not_affect_any_seek_state() {
         "layout_variant unchanged after seek"
     );
 
-    // demand routing uses layout_variant (0), not ABR (1)
     assert_eq!(
         source.resolve_current_variant(),
         0,
@@ -510,7 +496,6 @@ fn commit_seek_landing_uses_layout_variant_for_invalidated_segment() {
     set_variant_size_map(source.playlist_state.as_ref(), 0, &[SEG_SIZE, SEG_SIZE]);
     set_variant_size_map(source.playlist_state.as_ref(), 1, &[SEG_SIZE, SEG_SIZE]);
 
-    // Layout variant = 0, commit and evict segment 0
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
     push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
 
@@ -519,13 +504,11 @@ fn commit_seek_landing_uses_layout_variant_for_invalidated_segment() {
     );
     assert!(source.segments.lock_sync().remove_resource(&evicted));
 
-    // ABR wants variant 1, but layout is still variant 0
     pin_variant(&source.coord.abr_state, 1);
     source.coord.timeline().set_byte_position(0);
 
     source.commit_seek_landing(Some(make_anchor(0, 0, 0)));
 
-    // Recovery must target layout variant (0), not ABR target (1)
     assert_eq!(
         source.variant_fence,
         Some(0),
@@ -637,7 +620,6 @@ fn queue_segment_request_uses_layout_variant_for_invalidated_segment() {
     set_variant_size_map(source.playlist_state.as_ref(), 0, &[SEG_SIZE, SEG_SIZE]);
     set_variant_size_map(source.playlist_state.as_ref(), 1, &[SEG_SIZE, SEG_SIZE]);
 
-    // Layout variant = 0, commit and evict segment 0
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
     push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
 
@@ -647,7 +629,6 @@ fn queue_segment_request_uses_layout_variant_for_invalidated_segment() {
     let removed = source.segments.lock_sync().remove_resource(&evicted);
     assert!(removed);
 
-    // ABR wants variant 1, but layout is still variant 0
     pin_variant(&source.coord.abr_state, 1);
 
     assert!(
@@ -709,18 +690,11 @@ fn wait_range_reissues_request_after_pending_request_is_cleared() {
 
 #[kithara::test]
 fn wait_range_returns_err_after_segment_marked_permanently_failed() {
-    // B1 contract: when scheduler marks a segment as permanently failed
-    // (e.g. KeyProcessing because of stale auth), wait_range that targets
-    // a byte inside that segment must return Err quickly — no condvar
-    // hang waiting for bytes that will never commit.
     const SEG_SIZE: u64 = 100;
     const TIMEOUT_MS: u64 = 2_000;
     const FAIL_DELAY_MS: u64 = 50;
     let mut source = build_source_with_size_map(&[SEG_SIZE]);
     source.coord.stopped.store(false, Ordering::Release);
-    // Populate the variant byte map so `find_failed_at_offset(0)` resolves
-    // segment 0; `build_source_with_size_map` only sets the size map on
-    // `PlaylistState`.
     source
         .segments
         .lock_sync()
@@ -872,7 +846,6 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
     const INIT_LEN: u64 = 25;
     const MEDIA_LEN: u64 = 75;
     const BUS_CAPACITY: usize = 16;
-    // Need 3 segments so StreamIndex variant_map covers segment 1
     let cancel = CancellationToken::new();
     let variant = make_variant_state_with_segments(0, NUM_SEGS);
     let playlist_state = Arc::new(PlaylistState::new(vec![variant]));
@@ -919,9 +892,6 @@ fn format_change_segment_range_prefers_metadata_for_stale_init_segment_offset() 
         },
     );
 
-    // Segment 1 has init but segment 0 is not committed yet.
-    // Must return segment 0's metadata range (0..seg_size) so the decoder
-    // starts at offset 0 and sees the full stream.
     assert_eq!(source.format_change_segment_range(), Some(0..SEG_SIZE));
 }
 
@@ -930,8 +900,6 @@ fn format_change_segment_range_uses_layout_floor_when_no_segments_are_loaded() {
     const SEG_SIZE: u64 = 100;
     let source = build_source_with_size_map(&[SEG_SIZE, SEG_SIZE, SEG_SIZE, SEG_SIZE]);
 
-    // With per-variant byte maps, layout_floor is always segment 0.
-    // No segments committed → fallback to metadata for segment 0.
     assert_eq!(
         source.format_change_segment_range(),
         Some(0..SEG_SIZE),
@@ -1259,8 +1227,6 @@ fn read_at_disk_reopened_segments_return_committed_bytes_after_eviction() {
     }
 }
 
-// Source::phase() trait method tests
-
 /// Build source for phase tests — resets `stopped` flag that
 /// `HlsScheduler::drop` sets when the downloader half is discarded.
 fn build_phase_test_source(num_variants: usize) -> HlsSource {
@@ -1276,7 +1242,6 @@ fn hls_phase_ready_when_range_ready() {
     let source = build_phase_test_source(1);
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
 
-    // Write actual resource data so ephemeral backend reports it as present.
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
     let res = &source.backend.acquire_resource(&key).unwrap();
     res.write_at(
@@ -1360,15 +1325,12 @@ fn hls_phase_waiting_when_no_data() {
     assert_eq!(source.phase_at(0..RANGE_END), SourcePhase::Waiting);
 }
 
-// Source::phase() parameterless override tests
-
 #[kithara::test]
 fn hls_phase_parameterless_ready_when_segment_loaded() {
     const SEG_SIZE: u64 = 100;
     let source = build_phase_test_source(1);
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
 
-    // Write actual resource data so ephemeral backend reports it as present.
     let key = ResourceKey::from_url(&"https://example.com/seg-0-0.m4s".parse::<Url>().unwrap());
     let res = &source.backend.acquire_resource(&key).unwrap();
     res.write_at(
@@ -1414,7 +1376,6 @@ fn queue_segment_request_resolves_offset_to_segment() {
     source.coord.stopped.store(false, Ordering::Release);
     set_variant_size_map(source.playlist_state.as_ref(), 0, &[SEG_SIZE, SEG_SIZE]);
 
-    // Offset query_offset should resolve to segment 0, variant 0.
     let queued = source.queue_segment_request_for_offset(QUERY_OFFSET, 0);
     assert!(queued, "must queue a segment request for a valid offset");
 
@@ -1446,26 +1407,17 @@ fn red_test_drm_sw_commit_seek_landing_enqueues_request_when_offset_past_total()
     const LANDED_OFFSET: u64 = 397;
     let mut source = build_test_source_with_segments(1, NUM_SEGS);
 
-    // DRM padding shrinks each segment: size_map totals s0+s1+s2+s3 bytes.
     set_variant_size_map(source.playlist_state.as_ref(), 0, &[S0, S1, S2, S3]);
 
-    // Anchor says seek target was anchor_segment at anchor_offset.
     let anchor = make_anchor(0, ANCHOR_SEGMENT, ANCHOR_OFFSET);
     source.apply_seek_plan(&anchor, &SeekLayout::Preserve);
 
-    // Decoder lands at byte_position = landed_offset — past size_map.total.
-    // Mirrors the production log: `landed_offset=27229732` with
-    // find_segment_at_offset returning None because the FLAC size_map
-    // shrank below that offset after DRM padding removal.
     source.coord.timeline().set_byte_position(LANDED_OFFSET);
 
-    // Pre-condition: no segment requests are queued.
     assert_eq!(source.coord.take_segment_request(), None);
 
     source.commit_seek_landing(Some(anchor));
 
-    // Either a concrete demand or a variant fence MUST be produced so
-    // the reader has a recovery path. Today: both are empty → hang.
     let has_request = source.coord.take_segment_request().is_some();
     let has_fence = source.variant_fence.is_some();
     assert!(
@@ -1498,7 +1450,6 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
     let media_key = ResourceKey::from_url(&media_url);
     let payload = vec![0xABu8; PAYLOAD_SIZE];
 
-    // Step 1: acquire with DRM ctx, write, COMMIT → readable committed resource.
     {
         let res = source
             .backend
@@ -1518,23 +1469,15 @@ fn read_at_serves_data_when_committed_drm_resource_is_reacquired() {
         },
     );
 
-    // Sanity: first read succeeds against the committed resource.
     let mut buf = vec![0u8; READ_SIZE];
     let first = source.read_at(0, &mut buf).expect("first read_at");
     assert_eq!(first, nz_bytes(READ_SIZE));
 
-    // Step 2: simulate scheduler-driven re-fetch — a second DRM acquire
-    // on the same key. Cache-hit branch must recognise the cached entry
-    // is Committed and return a clone WITHOUT reactivating.
     let _fresh = source
         .backend
         .acquire_resource_with_ctx(&media_key, Some(DecryptContext::default()))
         .expect("reacquire of committed DRM resource");
 
-    // Step 3: the reader's next read_at. The committed resource is still
-    // readable, so `Data(read_size)` is the correct outcome. The old contract
-    // (Retry) documented the bug itself — with `processed=false` flipped
-    // by `reactivate()` the reader had to be told to try again.
     let mut buf2 = vec![0u8; READ_SIZE];
     let outcome = source
         .read_at(0, &mut buf2)
@@ -1571,20 +1514,14 @@ fn seek_anchor_falls_back_to_abr_when_layout_variant_has_no_target_segment() {
     const NUM_VARIANTS: usize = 2;
     const NUM_SEGS: usize = 6;
     const SEG_SIZE: u64 = 100;
-    // Segments are 4 s each; 18 s lands squarely inside segment 4.
     const SEEK_MS: u64 = 18_000;
     let source = build_test_source_with_segments(NUM_VARIANTS, NUM_SEGS);
     set_variant_size_map(source.playlist_state.as_ref(), 0, &[SEG_SIZE; NUM_SEGS]);
     set_variant_size_map(source.playlist_state.as_ref(), 1, &[SEG_SIZE; NUM_SEGS]);
 
-    // Layout (variant 0) only captured the pre-switch prefix — segments
-    // 0 and 1. Segment 4 (the seek target) is NOT present here.
     push_segment(&source.segments, 0, 0, 0, SEG_SIZE);
     push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
 
-    // ABR has since picked variant 1 and the peer is fetching it — even
-    // if variant 1 has no committed segments yet, its forward fetch is
-    // what will actually arrive at the anchor offset.
     pin_variant(&source.coord.abr_state, 1);
     assert_eq!(
         source.segments.lock_sync().layout_variant(),
@@ -1605,10 +1542,6 @@ fn seek_anchor_falls_back_to_abr_when_layout_variant_has_no_target_segment() {
          never arrive"
     );
 
-    // Regression guard on the segment index too — if the fallback
-    // resolved the time-to-segment lookup against the wrong variant,
-    // it would land on a different segment than what the peer is
-    // fetching.
     assert_eq!(
         anchor.segment_index,
         Some(4),
@@ -1656,7 +1589,6 @@ fn cross_variant_seek_same_codec_requires_reset() {
     set_variant_size_map(source.playlist_state.as_ref(), 1, &[V0_SEG_SIZE; NUM_SEGS]);
     set_variant_size_map(source.playlist_state.as_ref(), 2, &[V2_SEG_SIZE; NUM_SEGS]);
 
-    // Reader sits inside variant 0's first segment → current layout = 0.
     push_segment(&source.segments, 0, 0, 0, V0_SEG_SIZE);
     source.coord.timeline().set_byte_position(READER_POS);
     assert_eq!(
@@ -1665,17 +1597,12 @@ fn cross_variant_seek_same_codec_requires_reset() {
         "precondition: reader is in variant 0's byte space"
     );
 
-    // All three variants share the (None) codec — the production equivalent
-    // is three AAC variants, which is what silvercomet serves.
     assert!(
         source.can_cross_variant_without_reset(0, 2),
         "precondition: variants 0 and 2 share a codec, so the old \
          Preserve policy would kick in"
     );
 
-    // Anchor points at variant 2 (fallback after ABR up-switch stranded
-    // the layout's target segment) and carries an offset in variant 2's
-    // byte space.
     let anchor = make_anchor(2, TARGET_SEG_INDEX, TARGET_OFFSET);
 
     let layout = source.classify_seek(&anchor);
@@ -1691,23 +1618,6 @@ fn cross_variant_seek_same_codec_requires_reset() {
 #[kithara::test]
 #[serial_test::serial]
 fn wait_range_returns_interrupted_when_seek_epoch_advances_mid_wait() {
-    // Pins the HLS seek-skip root cause: while a stale `wait_range`
-    // sits in its condvar wait under epoch=N, audio FSM bumps the
-    // timeline to epoch=N+1 (initiate_seek) and the decoder clears
-    // FLUSHING (complete_seek) before it has actually applied the
-    // seek — so SEEK_PENDING is still true. The next iteration sees
-    // epoch != wait_seek_epoch with SEEK_PENDING=true and must NOT
-    // fall through into Phase 3, which would re-enqueue the stale
-    // range_start under the new epoch and feed the scheduler a stream
-    // of legitimate-looking prefix demands.
-    //
-    // The test pins the contract on three independent levels:
-    //   1. Return value of `wait_range` is `Interrupted`.
-    //   2. Probe `wait_range_epoch_advance` fires with prev_epoch=0,
-    //      seek_epoch=new_epoch — proving the early-return branch ran.
-    //   3. Probe `queue_resolved_segment_request` does NOT fire with
-    //      seek_epoch=new_epoch — proving Phase 3 demand-push under
-    //      the new epoch never executed.
     const SEG_SIZE: u64 = 100;
     const NUM_SEGS: usize = 4;
     const WAKE_DELAY_MS: u64 = 30;
@@ -1720,12 +1630,9 @@ fn wait_range_returns_interrupted_when_seek_epoch_advances_mid_wait() {
     let coord = Arc::clone(&source.coord);
     let join = thread::spawn(move || {
         thread::sleep(StdDuration::from_millis(WAKE_DELAY_MS));
-        // Bump seek_epoch (FLUSHING + SEEK_PENDING).
         let new_epoch = coord
             .timeline()
             .initiate_seek(Duration::from_millis(SEEK_TARGET_MS));
-        // Mimic the decoder: clear FLUSHING, but leave SEEK_PENDING
-        // set (decoder has not yet repositioned).
         coord.timeline().complete_seek(new_epoch);
         coord.condvar.notify_all();
         new_epoch
@@ -1745,8 +1652,6 @@ fn wait_range_returns_interrupted_when_seek_epoch_advances_mid_wait() {
          {result:?}"
     );
 
-    // Probe assertion #1: epoch-advance branch executed with the
-    // expected (prev_epoch=0, seek_epoch=1) pair.
     let advances = recorder.events_with_probe("record_wait_range_epoch_advance");
     let matched_advance = advances
         .iter()
@@ -1757,11 +1662,6 @@ fn wait_range_returns_interrupted_when_seek_epoch_advances_mid_wait() {
          seek_epoch={new_epoch} — captured: {advances:?}"
     );
 
-    // Probe assertion #2: no demand was enqueued under the NEW epoch.
-    // Phase 3 of `wait_range` runs `queue_resolved_segment_request` —
-    // the bug let it execute after the epoch advanced. Under the fix
-    // the loop returns Interrupted before Phase 3 ever runs, so no
-    // probe with seek_epoch=new_epoch must appear.
     let resolved = recorder.events_with_probe("queue_resolved_segment_request");
     let stale_under_new_epoch: Vec<_> = resolved
         .iter()

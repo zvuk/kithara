@@ -61,10 +61,6 @@ impl Check for CancelHierarchy {
             if rel_str.starts_with("tests/") || rel_str.contains("/tests/") {
                 continue;
             }
-            // Conventional `tests.rs` modules under `src/` are test
-            // scaffolding (hosted via `#[cfg(test)] mod tests;` in the
-            // parent module). Skip them by filename so callers don't
-            // need to mark every fixture token.
             if rel.file_name().and_then(|f| f.to_str()) == Some("tests.rs") {
                 continue;
             }
@@ -173,7 +169,6 @@ fn item_attrs(item: &Item) -> &[Attribute] {
 
 fn attrs_indicate_test(attrs: &[Attribute]) -> bool {
     for attr in attrs {
-        // `#[cfg(test)]`, `#[cfg(any(test, feature = "..."))]`, …
         if attr.path().is_ident("cfg") {
             let mut found = false;
             let _ = attr.parse_nested_meta(|meta| {
@@ -185,7 +180,6 @@ fn attrs_indicate_test(attrs: &[Attribute]) -> bool {
             if found {
                 return true;
             }
-            // Fallback: tokenise the attribute and look for `test` ident.
             let s = quote_str(&attr.meta);
             if attr_token_contains_test(&s) {
                 return true;
@@ -216,8 +210,6 @@ fn quote_str(meta: &Meta) -> String {
 }
 
 fn attr_token_contains_test(s: &str) -> bool {
-    // Heuristic: split on any non-ident char and look for the `test`
-    // word. Avoids matching `tests` substrings inside identifiers.
     s.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .any(|tok| tok == "test")
 }
@@ -287,7 +279,7 @@ fn strip_line_comment(line: &str) -> &str {
 fn crate_is_exempt(rel: &std::path::Path, exempt: &BTreeSet<&str>) -> bool {
     let mut comps = rel.components();
     if comps.next().and_then(|c| c.as_os_str().to_str()) != Some("crates") {
-        return true; // outside crates/ — not a lib (e.g. xtask, apps)
+        return true;
     }
     let Some(crate_name) = comps
         .next()

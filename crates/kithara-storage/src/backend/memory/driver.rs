@@ -115,7 +115,6 @@ impl MemResource {
     /// Panics if `MemDriver::open` fails (should never happen with default options).
     #[must_use]
     pub fn new(cancel: CancellationToken) -> Self {
-        // MemDriver::open with default opts never fails.
         Self::open(cancel, MemOptions::default())
             .expect("BUG: MemDriver::open with default options is infallible")
     }

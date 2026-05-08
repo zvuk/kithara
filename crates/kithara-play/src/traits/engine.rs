@@ -11,15 +11,11 @@ mod kithara {
 
 #[kithara::mock(api = EngineMock)]
 pub trait Engine: MaybeSend + MaybeSync + 'static {
-    // -- lifecycle --
-
     fn start(&self) -> Result<(), PlayError>;
 
     fn stop(&self) -> Result<(), PlayError>;
 
     fn is_running(&self) -> bool;
-
-    // -- arena slot management --
 
     fn allocate_slot(&self) -> Result<SlotId, PlayError>;
 
@@ -31,8 +27,6 @@ pub trait Engine: MaybeSend + MaybeSync + 'static {
 
     fn max_slots(&self) -> usize;
 
-    // -- master output --
-
     fn master_volume(&self) -> f32;
 
     fn set_master_volume(&self, volume: f32);
@@ -41,16 +35,12 @@ pub trait Engine: MaybeSend + MaybeSync + 'static {
 
     fn master_channels(&self) -> u16;
 
-    // -- crossfade (convenience delegation) --
-
     fn crossfade(&self, from: SlotId, to: SlotId, config: CrossfadeConfig)
     -> Result<(), PlayError>;
 
     fn cancel_crossfade(&self) -> Result<(), PlayError>;
 
     fn is_crossfading(&self) -> bool;
-
-    // -- events --
 
     fn subscribe(&self) -> EventReceiver;
 }

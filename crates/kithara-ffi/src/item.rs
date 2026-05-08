@@ -103,8 +103,6 @@ impl AudioPlayerItem {
             .take(UUID_HEX_PREFIX_LEN)
             .collect();
         let raw = u64::from_str_radix(&hex, 16).unwrap_or(0);
-        // Reinterpret without changing bit pattern. Sign is opaque per
-        // the doc-comment above.
         raw as i64
     }
 
@@ -148,8 +146,6 @@ impl AudioPlayerItem {
     /// answer to the iOS protocol's `func load() -> Observable<…>`:
     /// it surfaces the cached state once the metadata layer has caught
     /// up.
-    // UniFFI's `Lift` trait is implemented for owned `Arc<T>` only — the
-    // FFI ABI cannot marshal `&Arc<T>` across the bridge.
     #[cfg_attr(
         all(),
         expect(
@@ -177,9 +173,6 @@ impl AudioPlayerItem {
     /// Whether the item is playable at `progress` (seconds) given the
     /// caller-supplied buffered `ranges`. Live streams are reported
     /// playable unconditionally.
-    // UniFFI's marshalling expects owned `Vec<T>` across the FFI ABI;
-    // the slice optimisation `clippy` proposes is not representable in
-    // the bridge.
     #[cfg_attr(
         all(),
         expect(
@@ -337,7 +330,7 @@ mod tests {
         }];
         assert!(item.is_playable(0.0, ranges.clone()));
         assert!(item.is_playable(15.0, ranges.clone()));
-        assert!(!item.is_playable(30.0, ranges.clone())); // exclusive end
+        assert!(!item.is_playable(30.0, ranges.clone()));
         assert!(!item.is_playable(45.0, ranges));
     }
 }

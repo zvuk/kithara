@@ -68,10 +68,7 @@ struct SchedulerInner<N> {
 
 impl<N> SchedulerInner<N> {
     fn shutdown(&self) {
-        if self.cmd_tx.send_sync(SchedulerCmd::Shutdown).is_err() {
-            // Scheduler thread already exited / channel closed — cancel
-            // and wake remain idempotent guarantees for any clones.
-        }
+        let _ = self.cmd_tx.send_sync(SchedulerCmd::Shutdown);
         self.cancel.cancel();
         self.wake.wake();
     }

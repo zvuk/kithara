@@ -44,13 +44,6 @@ pub(super) async fn run_full_download(
     let resp = match peer.execute(cmd).await {
         Ok(r) => r,
         Err(e) => {
-            // The Downloader emits `RequestFailed` only for the
-            // `Streaming` response target. `peer.execute` uses the
-            // `Channel` target, so the network-level error never lands
-            // on the bus from the Downloader side. Mirror it here as a
-            // file-side error so subscribers of the file stream's bus
-            // (UI, the html-error-cleanup test) still see a terminal
-            // signal.
             let msg = e.to_string();
             inner.fail_and_evict(&msg);
             inner.source.bus.publish(FileEvent::Error {
@@ -60,10 +53,8 @@ pub(super) async fn run_full_download(
         }
     };
 
-    // Process response headers.
     let expected_len = process_response_headers(&inner, &resp.headers);
 
-    // Stream body to resource.
     let result = stream_body_to_resource(
         resp.body,
         &inner.asset.res,
@@ -84,16 +75,11 @@ pub(super) async fn run_full_download(
         }
         Err(StreamBodyError::Net(e, written)) => {
             debug!("stream error during full download: {e}");
-            // Only tear down the pre-allocated mmap when nothing was
-            // persisted — any written bytes are still useful to the
-            // reader and must not be discarded.
             if written == 0 {
                 inner.fail_and_evict(&e.to_string());
             } else {
                 inner.set_phase(FilePhase::Complete);
             }
-            // The network-level error is already in
-            // `DownloaderEvent::RequestFailed` — no `FileEvent::Error`.
         }
         Err(StreamBodyError::Cancelled) => {}
         Ok(bytes_written) => {
@@ -104,10 +90,6 @@ pub(super) async fn run_full_download(
 
 /// Extract content-length and content-type from response headers.
 fn process_response_headers(inner: &Arc<FileInner>, headers: &Headers) -> Option<u64> {
-    // HTTP header names are case-insensitive per RFC 7230 §3.2 but the
-    // underlying `Headers::get` is a case-sensitive map lookup, so probe
-    // both common cases. Eager `.or(...)` keeps the call site flat (no
-    // closure-based fallback chain).
     let cl_lower = headers.get("content-length");
     let cl_title = headers.get("Content-Length");
     let expected_len = cl_lower.or(cl_title).and_then(|v| v.parse::<u64>().ok());
@@ -177,9 +159,6 @@ fn commit_full_download(inner: &Arc<FileInner>, bytes_written: u64, expected_len
         }
         let _ = inner.source.coord.take_range_request();
         inner.set_phase(FilePhase::Complete);
-        // Download completion is in `DownloaderEvent::RequestCompleted`;
-        // reader-side `FileEvent::EndOfStream` fires when the reader
-        // actually hits EOF.
     } else {
         inner.set_phase(FilePhase::Complete);
         debug!(
@@ -233,8 +212,6 @@ async fn run_range_download(inner: Arc<FileInner>, peer: PeerHandle, range: Rang
     let resp = match peer.execute(cmd).await {
         Ok(r) => r,
         Err(e) => {
-            // Network failure is in `DownloaderEvent::RequestFailed`;
-            // mirror only the local resource teardown.
             if !matches!(inner.asset.res.status(), ResourceStatus::Committed { .. }) {
                 inner.asset.res.fail(e.to_string());
             }
@@ -255,9 +232,6 @@ async fn run_range_download(inner: Arc<FileInner>, peer: PeerHandle, range: Rang
                         inner.source.coord.set_download_pos(written);
                     }
                     Err(e) => {
-                        // If the resource was committed (full download finished
-                        // while this range request was in flight), silently
-                        // succeed — data is already available.
                         if !matches!(inner.asset.res.status(), ResourceStatus::Committed { .. }) {
                             debug!(?e, "range write error");
                             return;

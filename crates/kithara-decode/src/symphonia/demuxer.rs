@@ -182,8 +182,6 @@ impl Demuxer for SymphoniaDemuxer {
     }
 
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
-        // Drop the previous packet first so the new one is the only
-        // borrow source the returned `Frame<'_>` ties into.
         self.current_packet = None;
         loop {
             let packet = match self.format_reader.next_packet() {
@@ -283,10 +281,6 @@ fn build_track_info(track: &Track, codec_params: &AudioCodecParameters) -> Decod
         extra_data,
         channels,
         sample_rate,
-        // Symphonia's own track API does not surface container-level
-        // gapless info. The MP4 udta probe runs at factory level
-        // through `SymphoniaCodec::probe_track_info`; codec-internal
-        // `AudioDecoderOptions::gapless` covers Vorbis/Opus.
         gapless: None,
     })
 }
@@ -320,10 +314,6 @@ fn map_codec_id(id: AudioCodecId) -> AudioCodec {
         CODEC_ID_VORBIS => AudioCodec::Vorbis,
         other if is_pcm_codec_id(other) => AudioCodec::Pcm,
         other if is_adpcm_codec_id(other) => AudioCodec::Adpcm,
-        // Unknown codec id — surface as PCM so the demuxer still
-        // produces a `TrackInfo`. The codec wiring path uses
-        // `native_params()` and will reject unsupported ids during
-        // `make_audio_decoder`, surfacing the real registry error.
         _ => AudioCodec::Pcm,
     }
 }

@@ -72,10 +72,6 @@ pub(crate) fn reply_promise(request_id: u32) -> Result<Promise, JsValue> {
         let bc_ref = bc.clone();
         let closure = Closure::wrap(Box::new(move |ev: MessageEvent| {
             let data = ev.data();
-            // request_id originates from `next_request_id()` (u32) and is
-            // round-tripped through JS `Number` (f64). `to_u32()` returns
-            // None for NaN, negative, or out-of-range — those replies fail
-            // the equality check below and are dropped.
             let rid = get_f64(&data, "request_id")
                 .and_then(|v| v.to_u32())
                 .unwrap_or(0);

@@ -26,20 +26,14 @@ impl DriverIo for MmapDriver {
 
         if let Some(len) = final_len {
             if len > 0 {
-                // Check if truncation is needed before dropping the mmap.
                 let needs_truncate = matches!(
                     &*mmap_guard,
                     MmapState::Active(mmap) if len < mmap.len()
                 );
 
-                // Drop old mmap first — avoids SIGBUS from resizing a stale
-                // mmap (e.g. after atomic write-rename replaces the backing file).
                 *mmap_guard = MmapState::Empty;
 
                 if needs_truncate {
-                    // Truncate file to final size via ftruncate (no mmap involved).
-                    // After atomic rename, the file already has the correct size
-                    // so this branch is skipped.
                     let file_len = fs::metadata(&self.path).map_or(0, |m| m.len());
                     if file_len > len {
                         let f = OpenOptions::new()
@@ -130,16 +124,6 @@ impl DriverIo for MmapDriver {
         let end = offset + data.len() as u64;
         let mut mmap_guard = self.mmap.lock_sync();
 
-        // Handle writes when common state is committed.
-        //
-        // The `committed` flag is a hint from common state — the driver decides
-        // whether the underlying storage can accept writes.
-        //
-        // - `Committed` + `ReadWrite`: reopen as rw (index files rewritten in place).
-        // - `Active` + any mode: already writable, allow the write.
-        // - `Empty` + non-ReadOnly: no backing data to protect, fall through to
-        //   creation logic below (handles zero-length commit → resume write).
-        // - Otherwise: reject (use `reactivate()` to resume writing).
         if committed {
             match (&*mmap_guard, self.mode) {
                 (MmapState::Committed(_), OpenMode::ReadWrite) => {
@@ -148,9 +132,7 @@ impl DriverIo for MmapDriver {
                     *mmap_guard = MmapState::Active(rw);
                 }
                 (MmapState::Active(_), _)
-                | (MmapState::Empty, OpenMode::Auto | OpenMode::ReadWrite) => {
-                    // Already active or zero-length committed — ok to proceed.
-                }
+                | (MmapState::Empty, OpenMode::Auto | OpenMode::ReadWrite) => {}
                 _ => {
                     return Err(StorageError::Failed(
                         "cannot write to committed resource".to_string(),

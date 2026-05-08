@@ -115,9 +115,6 @@ impl Mp4Visitor for GaplessProbe {
             leading_frames: info.leading_frames,
             trailing_frames: info.trailing_frames,
         });
-        // We only get here if no `elst` produced gapless yet — the iTunes
-        // freeform tag lives in `udta/meta`, which sits after `trak` boxes in
-        // a normal `moov`. Stop the scan now so we don't keep walking.
         ControlFlow::Break(())
     }
 }
@@ -316,8 +313,6 @@ mod tests {
 
     #[kithara::test]
     fn elst_takes_priority_over_itunsmpb() {
-        // elst yields leading=2112 trailing=1920; iTunSMPB encodes a different
-        // pair. The probe must commit to the elst-derived value.
         let ilst = atom(
             *b"ilst",
             &freeform_itunsmpb(" 00000000 00000010 00000020 0000000000000000"),

@@ -67,11 +67,6 @@ pub(crate) fn run(args: &SimilarityArgs) -> Result<()> {
     let roots = if args.paths.is_empty() {
         default_roots()?
     } else {
-        // Drop any explicitly-passed path that points into an excluded
-        // crate so per-crate audit (`just audit kithara-test-utils`)
-        // honours the same exclusion as the workspace default scan.
-        // Without this filter, `Consts::EXCLUDED_CRATES` only applies
-        // to the workspace-wide run.
         args.paths
             .iter()
             .filter(|p| !path_is_in_excluded_crate(p))

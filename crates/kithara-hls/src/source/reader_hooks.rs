@@ -130,17 +130,10 @@ impl DecoderHooks for HlsReaderHooks {
             return;
         }
         let cursor = self.byte_cursor.load(Ordering::Relaxed);
-        // First chunk after construction is the only signal we have
-        // for the seek-with-recreate path — make sure subscribers
-        // see a `ReaderSeek` before any segment-level event.
         self.publish_initial_seek(cursor);
         let delta = cursor.saturating_sub(self.last_cursor);
         self.last_cursor = cursor;
 
-        // Cursor sample for the segment-resolve query: `cursor - 1`
-        // because cursor sits *past* the last byte read; subtracting
-        // one keeps us inside the just-read segment when we land on
-        // an exact boundary.
         let resolve_at = cursor.saturating_sub(1);
         let current = self.resolve(resolve_at);
 
@@ -177,10 +170,6 @@ impl DecoderHooks for HlsReaderHooks {
     }
 
     fn on_seek(&mut self, signal: ReaderSeekSignal) {
-        // Whether or not the inner decoder produced a `Landed`
-        // outcome, this hook instance is no longer fresh: silence
-        // any pending construction-time `ReaderSeek` so we don't
-        // double-publish.
         self.initial_seek_published = true;
         let ReaderSeekSignal::Landed { landed_byte } = signal else {
             return;
@@ -190,8 +179,6 @@ impl DecoderHooks for HlsReaderHooks {
         };
 
         let from = self.last_cursor;
-        // After a seek the next chunk starts a new "segment session" —
-        // wipe the running counter so `SegmentReadStart` fires fresh.
         self.state = None;
         self.last_cursor = to;
 

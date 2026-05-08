@@ -2,8 +2,6 @@
 #[path = "../common/offline_player_harness.rs"]
 mod offline_player_harness;
 
-// cold_seek_cpal содержит только silvercomet+cpal #[ignore]-кейс,
-// подключается через suite_e2e #[path].
 mod auto_advance;
 mod cold_seek_middle;
 mod cpal_cold_seek_synthetic;

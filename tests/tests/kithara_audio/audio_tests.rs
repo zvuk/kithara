@@ -182,20 +182,17 @@ async fn test_audio_is_eof() {
 
 #[kithara::test(tokio)]
 async fn test_audio_seek() {
-    let (_cache, _tmp, config) = test_wav_config(44100); // 1 second
+    let (_cache, _tmp, config) = test_wav_config(44100);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
 
-    // Read some data
     let mut buf = [0.0f32; 256];
     let _ = audio.read(&mut buf);
 
-    // Seek to beginning
     let result = audio.seek(Duration::from_secs(0));
     assert!(result.is_ok());
 
-    // Should be able to read again
     assert!(matches!(
         audio.read(&mut buf),
         Ok(ReadOutcome::Frames { .. })
@@ -244,7 +241,6 @@ async fn test_seek_emits_matching_playback_progress() {
     let mut events = audio.event_bus().subscribe();
     let mut buf = [0.0f32; 256];
 
-    // Epoch comes from Timeline now, not from caller.
     audio.seek(Duration::from_secs_f64(2.5)).unwrap();
     let expected_epoch = seek_epoch(&audio);
     let _ = audio.read(&mut buf);
@@ -271,7 +267,6 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
         .unwrap();
 
     let mut events = audio.event_bus().subscribe();
-    // Epoch comes from Timeline now, not from caller.
     audio.seek(Duration::from_secs_f64(1.5)).unwrap();
     let expected_epoch = seek_epoch(&audio);
 

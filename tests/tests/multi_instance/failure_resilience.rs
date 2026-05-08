@@ -172,7 +172,6 @@ async fn run_failure_resilience(healthy_count: usize, cancelled_count: usize) {
         handles.push(spawn_instance(i, &wav_data, None).await);
     }
 
-    // Stagger cancellation slightly to make it more realistic.
     for (offset, i) in (healthy_count..(healthy_count + cancelled_count)).enumerate() {
         let delay_ms = 200 + offset as u64 * 100;
         handles.push(spawn_instance(i, &wav_data, Some(delay_ms)).await);
@@ -185,7 +184,6 @@ async fn run_failure_resilience(healthy_count: usize, cancelled_count: usize) {
 
     info!(?results, "all instances done");
 
-    // Healthy instances must have completed with data.
     for r in results.iter().filter(|r| r.healthy) {
         assert!(
             r.total_samples > 0,

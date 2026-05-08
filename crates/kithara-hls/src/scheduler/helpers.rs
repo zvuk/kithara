@@ -34,11 +34,8 @@ pub(crate) fn first_missing_segment(
     let start = start_segment.min(num_segments);
     (start..num_segments).find(|&segment_index| {
         if ephemeral {
-            // Ephemeral: invalidated = data gone, treat as missing.
             !state.is_segment_loaded(variant, segment_index)
         } else {
-            // Disk: invalidated segments still have data on disk,
-            // only truly absent segments are missing.
             !state.has_stored_segment(variant, segment_index)
         }
     })

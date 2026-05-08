@@ -13,11 +13,6 @@ impl HlsScheduler {
         init_url: Option<url::Url>,
         _duration: std::time::Duration,
     ) {
-        // Bandwidth recording happens automatically in the Downloader
-        // after each fetch completes. Download-fact events live in
-        // `DownloaderEvent`; this layer only mutates HLS-side
-        // bookkeeping (committed segment count, virtual-stream length).
-
         let actual_init_len = if init_len == 0 {
             let segments = self.segments.lock_sync();
             segments
@@ -30,7 +25,6 @@ impl HlsScheduler {
         let media_len = media.len;
         let actual_size = actual_init_len + media_len;
 
-        // Log HEAD-estimated vs actual sizes for diagnostics.
         let expected_size = self
             .playlist_state
             .segment_size(variant, seg_idx)
@@ -95,11 +89,6 @@ impl HlsScheduler {
 
         let old_variant = self.download_variant;
         let num_segments = self.num_segments(old_variant).unwrap_or(0);
-        // Clamp by reader position: on an ephemeral LRU, "missing" segments
-        // behind the reader are evictions by design — re-fetching them only
-        // evicts the live window the reader is currently reading, driving
-        // a hot loop. See `rewind_to_first_missing_segment` for the tail-state
-        // variant of this clamp.
         let reader_floor = self.reader_segment_floor();
         let cursor_pos = {
             let state = self.segments.lock_sync();

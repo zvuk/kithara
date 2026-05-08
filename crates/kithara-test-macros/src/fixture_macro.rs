@@ -12,12 +12,10 @@ use syn::{FnArg, ItemFn, Pat, parse_macro_input};
 pub(crate) fn expand(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as ItemFn);
 
-    // No params → pass through unchanged
     if func.sig.inputs.is_empty() {
         return quote! { #func }.into();
     }
 
-    // Has params → transform to zero-arg, resolving deps internally
     let vis = &func.vis;
     let fn_name = &func.sig.ident;
     let ret_type = &func.sig.output;
@@ -37,7 +35,6 @@ pub(crate) fn expand(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let name = &pi.ident;
             let ty = &pt.ty;
             let mutability = &pi.mutability;
-            // Strip leading `_` to find the actual fixture function name.
             let dep_fn = {
                 let s = name.to_string();
                 let trimmed = s.trim_start_matches('_');

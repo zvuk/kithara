@@ -43,11 +43,6 @@ fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
     Client::builder()
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
         .danger_accept_invalid_certs(options.is_insecure)
-        // reqwest's `read_timeout` is documented as "applied for each
-        // read operation" — i.e. inactivity between reads, not a total
-        // deadline. Maps directly to our `NetOptions::inactivity_timeout`.
-        // The Downloader-layer `BodyStream` wrapper enforces the same
-        // notion at the chunk level downstream of reqwest.
         .read_timeout(options.inactivity_timeout)
         .build()
 }
@@ -247,8 +242,6 @@ impl Net for HttpClient {
             out.insert(name, v);
         }
 
-        // For range GET responses, derive content-length from Content-Range.
-        // Format: "bytes 0-0/12345678" → total = 12345678.
         if out.get("content-length").is_none() {
             let total_from_range = out
                 .get("content-range")

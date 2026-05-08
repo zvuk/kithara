@@ -5,9 +5,6 @@
 //! suites — the logic is identical up to the underlying `StreamType`, so we
 //! generalize instead of duplicating.
 
-// Shared test fixture: items below are used by some test binaries but not all.
-// `cargo build --all-targets` flags them as dead per-binary.
-
 use kithara::{
     audio::{Audio, ReadOutcome},
     stream::{Stream, StreamType},
@@ -29,9 +26,6 @@ pub(crate) fn read_to_eof<S: StreamType>(audio: &mut Audio<Stream<S>>) -> u64 {
     loop {
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Pending { .. }) => {
-                // Alive but no data this tick — on native this shouldn't
-                // stall indefinitely since the underlying source is
-                // fully buffered. Break to avoid a tight loop.
                 break;
             }
             Ok(ReadOutcome::Frames { count, .. }) => {

@@ -19,7 +19,7 @@ use re_mp4::{BoxHeader, BoxType, FourCC, MoofBox, Mp4, ReadBox, StsdBoxContent};
 
 use crate::error::{DecodeError, DecodeResult};
 
-const FOURCC_FLAC: u32 = 0x664c_6143; // "fLaC"
+const FOURCC_FLAC: u32 = 0x664c_6143;
 
 /// Codec-specific decoder config bytes carried in the init segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,8 +74,6 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
     let mp4 =
         Mp4::read_bytes(bytes).map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}")))?;
 
-    // Find the audio track. fMP4 init segments for HLS audio carry a
-    // single trak; we still iterate defensively.
     let track_box = mp4
         .moov
         .traks
@@ -155,7 +153,6 @@ fn build_aac_asc(mp4a: &re_mp4::Mp4aBox) -> DecodeResult<Vec<u8>> {
         return Err(DecodeError::InvalidData("invalid AAC profile=0".into()));
     }
 
-    // Standard 2-byte ASC (profile <= 31, freq_index <= 14).
     if profile <= 31 && freq_index <= 14 {
         let byte0 = (profile << 3) | (freq_index >> 1);
         let byte1 = ((freq_index & 0x01) << 7) | (chan_conf << 3);
@@ -170,12 +167,11 @@ fn build_aac_asc(mp4a: &re_mp4::Mp4aBox) -> DecodeResult<Vec<u8>> {
 /// Locate `fLaC` sample entry inside the init bytes and read its
 /// associated `dfLa` box payload (FLAC STREAMINFO).
 fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
-    const FOURCC_DFLA: u32 = 0x6466_4c61; // "dfLa"
+    const FOURCC_DFLA: u32 = 0x6466_4c61;
 
     let mut cursor = Cursor::new(bytes);
     let total = bytes.len() as u64;
 
-    // Walk to moov → trak → mdia → minf → stbl → stsd → fLaC.
     descend_into(&mut cursor, total, BoxType::MoovBox)?;
     let moov_end = cursor.position() + read_box_size(&mut cursor)? - 8;
     descend_into(&mut cursor, moov_end, BoxType::TrakBox)?;
@@ -190,12 +186,10 @@ fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
     let stsd_size = read_box_size(&mut cursor)?;
     let stsd_end = cursor.position() + stsd_size - 8;
 
-    // stsd FullBox header (4) + entry_count (4).
     cursor
         .seek(SeekFrom::Current(8))
         .map_err(|e| DecodeError::InvalidData(format!("seek past stsd header: {e}")))?;
 
-    // First sample entry header — should be `fLaC`.
     let entry_start = cursor.position();
     let (entry_type, entry_size) = read_header(&mut cursor)?;
     if u32::from(entry_type) != FOURCC_FLAC {
@@ -206,9 +200,6 @@ fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
     }
     let entry_end = entry_start + entry_size;
 
-    // SoundSampleEntry: 6 reserved + 2 data_reference_index +
-    // 8 reserved + 2 channel_count + 2 sample_size + 4 reserved +
-    // 4 sample_rate (16.16 fixed).
     cursor
         .seek(SeekFrom::Current(8))
         .map_err(|e| DecodeError::InvalidData(format!("seek past sample entry header: {e}")))?;
@@ -220,18 +211,10 @@ fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
     let sample_rate_raw = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
     let sample_rate = sample_rate_raw >> 16;
 
-    // Walk children of the fLaC sample entry until we find dfLa.
     while cursor.position() < entry_end {
         let inner_start = cursor.position();
         let (inner_type, inner_size) = read_header(&mut cursor)?;
         if u32::from(inner_type) == FOURCC_DFLA {
-            // dfLa layout per ISO 14496-12 + FLAC-in-ISOBMFF spec:
-            //   8 bytes: box header (size + 'dfLa')
-            //   4 bytes: FullBox version+flags
-            //   4 bytes: METADATA_BLOCK_HEADER (block type 0 + length 34)
-            //  34 bytes: STREAMINFO body
-            // Symphonia's FLAC decoder takes `extra_data` = STREAMINFO
-            // body (34 bytes), without the metadata block header.
             cursor
                 .seek(SeekFrom::Current(4 + 4))
                 .map_err(|e| DecodeError::InvalidData(format!("seek past dfLa header: {e}")))?;
@@ -276,10 +259,6 @@ fn read_header(cursor: &mut Cursor<&[u8]>) -> DecodeResult<(BoxType, u64)> {
 }
 
 fn read_box_size(cursor: &mut Cursor<&[u8]>) -> DecodeResult<u64> {
-    // Caller has already stepped *past* the 8-byte header during a
-    // previous `read_header`; we want the size of the *next* box. The
-    // helper rewinds, reads, then leaves the cursor positioned right
-    // after the header (8 bytes consumed) so descend_into can resume.
     let pos = cursor.position();
     let (_, size) = read_header(cursor)?;
     let _ = pos;
@@ -309,11 +288,6 @@ pub(crate) fn parse_segment_frames(
         if box_type == BoxType::MoofBox {
             let moof = MoofBox::read_box(&mut cursor, size)
                 .map_err(|e| DecodeError::InvalidData(format!("re_mp4: {e}")))?;
-            // Position cursor at the byte right after the moof. The
-            // very next box in HLS segments is mdat carrying sample
-            // data — `tfhd::base_data_offset` is rare; the typical
-            // shape uses `default_base_is_moof + trun.data_offset`
-            // counted relative to the moof start.
             cursor
                 .seek(SeekFrom::Start(box_end))
                 .map_err(|e| DecodeError::InvalidData(format!("seek after moof: {e}")))?;
@@ -326,7 +300,6 @@ pub(crate) fn parse_segment_frames(
                 )));
             }
             let mdat_payload_start = cursor.position();
-            // Fast-forward past the mdat payload for the next loop iteration.
             cursor
                 .seek(SeekFrom::Start(mdat_start + mdat_size))
                 .map_err(|e| DecodeError::InvalidData(format!("seek past mdat: {e}")))?;
@@ -342,7 +315,6 @@ pub(crate) fn parse_segment_frames(
             continue;
         }
 
-        // styp / sidx / free / etc.: skip.
         cursor
             .seek(SeekFrom::Start(box_end))
             .map_err(|e| DecodeError::InvalidData(format!("skip top-level box: {e}")))?;
@@ -359,13 +331,6 @@ fn collect_frames(
     segment_bytes: &[u8],
     out: &mut Vec<Fmp4Frame>,
 ) -> DecodeResult<()> {
-    // Single-track fMP4: prefer the traf whose tfhd.track_id matches the
-    // init segment's canonical track_id; fall back to the first traf when
-    // the segment's tfhd reports a divergent id. Real-world HLS fragments
-    // (e.g. silvercomet) sometimes ship inconsistent track ids while still
-    // carrying the only audio track in their first traf — degraded-mode
-    // playback over a strict error keeps these streams playable.
-    // ast-grep-ignore: rust.no-fallback-or-else-fn
     let traf = moof
         .trafs
         .iter()
@@ -379,9 +344,6 @@ fn collect_frames(
 
     for trun in &traf.truns {
         let data_offset_i32 = trun.data_offset.unwrap_or(0);
-        // base = moof_start when default_base_is_moof; otherwise it's
-        // the explicit tfhd.base_data_offset, falling back to moof
-        // start (the modal HLS shape).
         let base = if default_base_is_moof {
             moof_start
         } else {
@@ -398,9 +360,6 @@ fn collect_frames(
             let size = sample_size_for(trun, tfhd, sample_idx)?;
             let duration = sample_duration_for(trun, tfhd, sample_idx);
 
-            // xtask-lint-ignore: loop_allocation
-            // Cold error path: `format!` only runs when byte_cursor exceeds usize::MAX,
-            // which never happens on the byte sizes fmp4 segments report.
             let start = usize::try_from(byte_cursor).map_err(|_| {
                 DecodeError::InvalidData(format!("frame offset overflows usize: {byte_cursor}"))
             })?;
@@ -408,9 +367,6 @@ fn collect_frames(
                 .checked_add(size as usize)
                 .ok_or_else(|| DecodeError::InvalidData("sample byte range overflow".into()))?;
             if end > segment_bytes.len() {
-                // xtask-lint-ignore: loop_allocation
-                // Cold error path: `format!` only runs when the sample byte range
-                // overflows the segment, which is a malformed-input guard.
                 return Err(DecodeError::InvalidData(format!(
                     "sample byte range {start}..{end} past segment end {}",
                     segment_bytes.len()
@@ -483,7 +439,6 @@ mod tests {
             "ASC length unexpected: {} bytes",
             asc.len()
         );
-        // ASC byte0 high 5 bits = audio object type. AAC-LC = 2.
         let aot = asc[0] >> 3;
         assert_eq!(aot, 2, "expected AAC-LC AOT=2, got {aot}");
     }
@@ -494,9 +449,6 @@ mod tests {
         let init = parse_init(&bytes).expect("BUG: parse FLAC init");
         assert_eq!(init.codec, AudioCodec::Flac);
         assert!(matches!(init.config, CodecConfig::Flac(_)));
-        // STREAMINFO body is exactly 34 bytes per RFC 9639. Symphonia's
-        // FLAC decoder takes the body without the 4-byte metadata block
-        // header.
         let len = init.config.as_bytes().len();
         assert_eq!(len, 34, "STREAMINFO body must be 34 bytes");
     }
@@ -513,7 +465,6 @@ mod tests {
             frames.len()
         );
 
-        // Decode time strictly monotonic across consecutive frames.
         for pair in frames.windows(2) {
             let (a, b) = (&pair[0], &pair[1]);
             assert!(
@@ -523,7 +474,6 @@ mod tests {
                 b.decode_time
             );
         }
-        // Each frame's byte range must lie inside the segment buffer.
         for f in &frames {
             assert!(
                 f.offset + f.size <= seg_bytes.len(),
@@ -546,7 +496,6 @@ mod tests {
         let total_seconds =
             Duration::from_nanos(total_ticks * 1_000_000_000 / u64::from(init.timescale))
                 .as_secs_f64();
-        // Test fixture segments are ~6s (allow small drift for last-frame trim).
         assert!(
             total_seconds > 5.0 && total_seconds < 7.0,
             "segment duration off: {total_seconds}s (timescale={})",

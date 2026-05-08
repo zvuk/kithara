@@ -179,8 +179,6 @@ impl FrameCodec for AndroidCodec {
                     .map_err(AndroidBackendError::into_decode_error)?;
             }
             None => {
-                // Codec backpressure — caller will retry the frame on the
-                // next pump. ComposedDecoder loops on zero-frame returns.
                 out.clear();
                 return Ok(0);
             }
@@ -242,7 +240,6 @@ fn build_format(
     track: &TrackInfo,
 ) -> Result<OwnedFormat, AndroidBackendError> {
     // SAFETY: AMediaFormat_new returns a freshly allocated AMediaFormat
-    // we own; non-null on success.
     let raw = NonNull::new(unsafe { ffi::AMediaFormat_new() })
         .ok_or_else(|| AndroidBackendError::operation("media-format-new", "returned null"))?;
     let mut format = OwnedFormat::from_raw(raw);
@@ -271,8 +268,6 @@ fn build_format(
             format!("channels={channels}"),
         ));
     }
-    // Non-fatal: codec may negotiate a different output PCM encoding via
-    // OUTPUT_FORMAT_CHANGED later.
     let _ = format.set_i32(KEY_PCM_ENCODING, PCM_ENCODING_16BIT);
 
     if !track.extra_data.is_empty() {

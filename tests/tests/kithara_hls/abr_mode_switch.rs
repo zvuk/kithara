@@ -75,7 +75,6 @@ struct SegmentRecord {
 }
 
 fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
-    // /stream/{spec}/seg/v{variant}_{segment}.m4s
     let segs_marker = "/seg/v";
     let after = url.split(segs_marker).nth(1)?;
     let stem = after.split(".m4s").next()?;
@@ -110,10 +109,6 @@ impl EventCollector {
             loop {
                 let ev = match rx.recv().await {
                     Ok(ev) => ev,
-                    // `Lagged` only signals a dropped backlog window — the
-                    // channel is still live. Continue draining so we don't
-                    // miss the (rare, low-volume) `AbrEvent::VariantApplied`
-                    // that this collector keys off of.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
@@ -173,8 +168,6 @@ impl EventCollector {
                 cached: !net.contains(&(v, s)),
             });
         }
-        // Network fetches that the reader never reached — also include
-        // them so per-variant-fetch counts stay correct.
         for (v, s) in net {
             if seen.insert((v, s)) {
                 out.push(SegmentRecord {
@@ -285,13 +278,11 @@ async fn vod_manual_switch_affects_future_segments() {
     assert!(total > 0, "expected audio output");
     assert!(switches > 0, "ABR must switch at least once");
 
-    // Early segments should be V0, later ones V1 (after downswitch).
     let first_v0 = segments.iter().any(|s| s.variant == 0);
     let has_v1 = segments.iter().any(|s| s.variant == 1);
     assert!(first_v0, "should have V0 segments at start");
     assert!(has_v1, "should have V1 segments after downswitch");
 
-    // V1 segments should appear AFTER V0 segments (monotonic switch).
     let last_v0_idx = segments
         .iter()
         .filter(|s| s.variant == 0)
@@ -330,7 +321,6 @@ async fn multi_track_shared_abr_with_cache() {
     let pcm_data = Arc::new(create_pcm_segments(segment_count));
     let seg_dur = segment_duration_secs();
 
-    // Two servers simulate two different tracks.
     let make_server = |bw: Vec<u64>| {
         let pcm = Arc::clone(&pcm_data);
         let init = Arc::clone(&init_segment);
@@ -359,7 +349,6 @@ async fn multi_track_shared_abr_with_cache() {
     let temp_dir = TestTempDir::new();
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
 
-    // Step 1: Track 1, Auto mode → downloads V0
     info!("=== Step 1: Track 1 Auto ===");
     let bus1 = EventBus::new(8192);
     let collector1 = EventCollector::new(&bus1);
@@ -387,14 +376,12 @@ async fn multi_track_shared_abr_with_cache() {
     );
     assert!(t1_samples > 0, "Track 1 must produce samples");
 
-    // Track 1 should download V0 (auto picks highest with no delays).
     let t1_v0_count = t1_segs.iter().filter(|s| s.variant == 0).count();
     assert!(
         t1_v0_count > 0,
         "Track 1 Auto should download V0 segments, got none"
     );
 
-    // Step 2: Switch to Manual(1) and load Track 2
     info!("=== Step 2: Manual(1) → Track 2 ===");
 
     let bus2 = EventBus::new(8192);
@@ -423,15 +410,12 @@ async fn multi_track_shared_abr_with_cache() {
     );
     assert!(t2_samples > 0, "Track 2 must produce samples");
 
-    // Track 2 must download V1 segments (Manual(1) active).
     let t2_v1_count = t2_segs.iter().filter(|s| s.variant == 1).count();
     assert!(
         t2_v1_count > 0,
         "Track 2 with Manual(1) should download V1 segments. Got: {:?}",
         t2_segs.iter().map(|s| s.variant).collect::<Vec<_>>()
     );
-
-    // Step 3: Replay Track 1 with Manual(0) → uses cache from step 1
 
     let bus3 = EventBus::new(8192);
     let collector3 = EventCollector::new(&bus3);
@@ -456,7 +440,6 @@ async fn multi_track_shared_abr_with_cache() {
     let t3_segs = collector3.segments();
     assert!(t3_samples > 0, "Track 1 replay must produce samples");
 
-    // Replay with Manual(0) should serve V0 segments from cache.
     let t3_v0_cached = t3_segs
         .iter()
         .filter(|s| s.variant == 0 && s.cached)
@@ -509,7 +492,6 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        // V0 segments 5+ delayed -> forces ABR downswitch to V1
         delay_rules: vec![DelayRule {
             variant: Some(0),
             segment_gte: Some(5),
@@ -548,26 +530,11 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 
     let segments = collector.segments();
 
-    // Count unique network fetches (excluding cache hits), deduplicated by
-    // (variant, segment_index) so we count distinct segment downloads.
     let mut unique_fetches = HashSet::new();
     for s in segments.iter().filter(|s| !s.cached) {
         unique_fetches.insert((s.variant, s.segment_index));
     }
 
-    // After ABR switch, the full-layout-switch architecture means V1 needs
-    // all segments (demand-driven). V0 may also complete its in-flight batch
-    // downloads. The cursor-advance fix (Bug A) prevents V1 batch plans from
-    // starting at segment 0, but demand-driven fetches still download V1
-    // segments that the decoder requests.
-    //
-    // The original bug caused cursor reset to 0, which made V1 batch-plan
-    // all segments from 0 CONCURRENTLY with V0 downloads. With the fix,
-    // V1 batch plans start from the cursor position (past V0 coverage),
-    // reducing concurrent bandwidth waste.
-    //
-    // Validate: total unique fetches <= 2 * segment_count (one set per
-    // variant, no duplicate re-plans within the same variant).
     let max_total_fetches = 2 * segment_count;
     assert!(
         unique_fetches.len() <= max_total_fetches,
@@ -577,7 +544,6 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         unique_fetches.len(),
     );
 
-    // Verify ABR actually switched: V1 must have some segments.
     let v1_fetches = unique_fetches.iter().filter(|(v, _)| *v == 1).count();
     assert!(
         v1_fetches > 0,

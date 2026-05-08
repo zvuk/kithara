@@ -139,8 +139,6 @@ impl<'ast> Visit<'ast> for CloneCounter {
                 .iter()
                 .map(|s| s.ident.to_string())
                 .collect();
-            // Recognises `Arc::clone(&x)`, `Rc::clone(&x)`, and the fully
-            // qualified `std::sync::Arc::clone(&x)` / `std::rc::Rc::clone(&x)`.
             let n = segs.len();
             if n >= 2 && segs[n - 1] == "clone" && (segs[n - 2] == "Arc" || segs[n - 2] == "Rc") {
                 self.count += 1;

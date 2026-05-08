@@ -95,7 +95,6 @@ fn open_wipes_stale_tmp_from_previous_run() {
     let dir = TempDir::new().unwrap();
     let canonical = dir.path().join("survivor.bin");
     let stale_tmp = make_tmp_path(&canonical).unwrap();
-    // Simulate a crashed previous writer that left orphan bytes.
     fs::write(&stale_tmp, b"stale-from-previous-process").unwrap();
 
     let cancel = CancellationToken::new();
@@ -122,10 +121,6 @@ fn open_wipes_stale_tmp_from_previous_run() {
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn read_after_commit_returns_payload_via_decorator() {
-    // Smoke: write chunks, commit, then read back THROUGH the
-    // decorator (not direct fs::read). Pins that the inner mmap
-    // remains usable after the rename — reads must surface the
-    // committed payload exactly.
     let dir = TempDir::new().unwrap();
     let (res, _, _) = open_chunked(&dir, "post-commit-read.bin");
     res.write_at(0, b"chunk-1-").unwrap();
@@ -137,8 +132,6 @@ fn read_after_commit_returns_payload_via_decorator() {
     assert_eq!(n, 16, "post-commit read must return all bytes");
     assert_eq!(&buf, b"chunk-1-chunk-2!");
 
-    // Read of the tail (last byte) — exact same condition Apple's
-    // probe hits in the failing integration test.
     let mut tail = [0u8; 1];
     let n = res.read_at(15, &mut tail).unwrap();
     assert_eq!(n, 1);
@@ -158,8 +151,6 @@ fn read_during_writes_observes_inner_state() {
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn passthrough_for_memory_inner_has_no_tmp() {
-    // For mem-backed inners (no filesystem), the decorator
-    // delegates straight through and never creates a tmp file.
     let mem = crate::MemResource::new(CancellationToken::new());
     let res = AtomicChunked::passthrough(mem, PathBuf::from("virtual"));
     res.write_at(0, b"in-mem").unwrap();
@@ -167,6 +158,5 @@ fn passthrough_for_memory_inner_has_no_tmp() {
     let mut buf = [0u8; 6];
     res.read_at(0, &mut buf).unwrap();
     assert_eq!(&buf, b"in-mem");
-    // path() reports canonical; nothing on disk.
     assert_eq!(res.path(), Some(Path::new("virtual")));
 }

@@ -166,7 +166,6 @@ impl PlayerTrack {
             item_id,
             src,
         };
-        // Push initial ServiceClass::Warm for the Preloading state.
         track.update_service_class(TrackState::Preloading);
         track
     }
@@ -215,7 +214,7 @@ impl PlayerTrack {
                     let frames_until_eof = guard.frames_until_eof();
                     drop(guard);
                     TrackReadOutcome::Full {
-                        position: 0.0, // overwritten below from served_frames
+                        position: 0.0,
                         duration,
                         frames_until_eof,
                     }
@@ -328,9 +327,6 @@ impl PlayerTrack {
         if self.state == TrackState::Finished {
             return;
         }
-        // EOF backstop: emit a single handover trigger if the crossfade
-        // window never fired earlier. Mark the prefetch channel as used
-        // too so we never emit a stale preload event after EOF.
         self.notified_prefetch_requested = true;
         self.emit_handover_requested(notification_tx);
         self.set_state(TrackState::Finished);
@@ -367,12 +363,6 @@ impl PlayerTrack {
         let block_seconds = block_frames_f32 / sr_f32;
         let fade_threshold = self.fade_duration + block_seconds;
         let prefetch_threshold = self.prefetch_duration.max(self.fade_duration) + block_seconds;
-        // Both triggers are emitted independently. `PrefetchRequested` is a
-        // contract precondition for `HandoverRequested`: consumers arm the
-        // next slot on prefetch and commit on handover. Suppressing prefetch
-        // when the windows coincide leaves the consumer without an armed
-        // slot and the handover becomes a no-op. Per-cycle dedup is enforced
-        // inside `emit_*` via `notified_*` flags.
 
         if let Some(frames_until_eof) = frames_until_eof {
             let frames_f32: f32 = frames_until_eof.as_();
@@ -541,9 +531,6 @@ impl PlayerTrack {
             resource.seek(seconds);
         }
         let sample_rate = self.sample_rate.max(1);
-        // Saturating clamp: negative inputs already pinned to 0 above; the
-        // overflow path (target so far in the future the result exceeds u64)
-        // hits `u64::MAX` and the timeline reports terminal-end semantics.
         let frames =
             num_traits::cast::ToPrimitive::to_u64(&(seconds.max(0.0) * f64::from(sample_rate)))
                 .unwrap_or(u64::MAX);
@@ -604,7 +591,6 @@ impl PlayerTrack {
             smooth_seconds: fade_duration,
             settle_epsilon: DEFAULT_SETTLE_EPSILON,
         };
-        // Preserve audible/inaudible state
         let target_mix = if self.state.is_leading() {
             Mix::FULLY_DRY
         } else {

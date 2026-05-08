@@ -38,13 +38,11 @@ impl Consts {
     const NUM_SEGMENTS: usize = 3;
 
     /// HEAD-based total across all segments (no init segments in this test).
-    const HEAD_TOTAL: u64 = (Self::HEAD_REPORTED_SIZE * Self::NUM_SEGMENTS) as u64; // 597_600
+    const HEAD_TOTAL: u64 = (Self::HEAD_REPORTED_SIZE * Self::NUM_SEGMENTS) as u64;
 
     /// Actual total bytes that will be downloaded and cached.
-    const ACTUAL_TOTAL: u64 = (Self::ACTUAL_SEGMENT_SIZE * Self::NUM_SEGMENTS) as u64; // 600_000
+    const ACTUAL_TOTAL: u64 = (Self::ACTUAL_SEGMENT_SIZE * Self::NUM_SEGMENTS) as u64;
 }
-
-// Tests
 
 /// Seek to a position between HEAD-reported total and actual total must succeed.
 ///
@@ -82,7 +80,6 @@ async fn seek_beyond_head_total_within_actual_total(
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     spawn_blocking(move || {
-        // Step 1: Read all data sequentially (downloads all 3 segments).
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];
         loop {
@@ -93,7 +90,6 @@ async fn seek_beyond_head_total_within_actual_total(
             all_data.extend_from_slice(&buf[..n]);
         }
 
-        // Verify we got more data than HEAD reported.
         assert!(
             all_data.len() as u64 > Consts::HEAD_TOTAL,
             "Read {} bytes, expected more than HEAD total {}",
@@ -101,10 +97,7 @@ async fn seek_beyond_head_total_within_actual_total(
             Consts::HEAD_TOTAL,
         );
 
-        // Step 2: Seek to a position between HEAD total and actual total.
-        // This position is valid (data exists) but would be rejected
-        // if expected_total_length only reflects HEAD Content-Lengths.
-        let seek_target = Consts::HEAD_TOTAL + 1; // 597_601
+        let seek_target = Consts::HEAD_TOTAL + 1;
         let result = stream.seek(SeekFrom::Start(seek_target));
 
         assert!(
@@ -116,13 +109,10 @@ async fn seek_beyond_head_total_within_actual_total(
             result.err(),
         );
 
-        // Step 3: Verify we can read at that position.
         let mut buf = [0u8; 16];
         let n = stream.read(&mut buf).unwrap();
         assert!(n > 0, "Should read data after seek to {}", seek_target);
 
-        // Step 4: The data at this position should be 0xFF padding
-        // (we're past the segment prefix but within the segment).
         assert_eq!(&buf[..n], &vec![0xFF; n][..], "Expected padding bytes");
     })
     .await

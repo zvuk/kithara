@@ -186,10 +186,6 @@ fn collect_functions(file: &syn::File, rel: &str, registry: &mut HashMap<String,
 }
 
 fn walk_impl(rel: &str, item: &ItemImpl, registry: &mut HashMap<String, Vec<FnInfo>>) {
-    // For trait impls, treat methods as public iff the trait itself is
-    // visible to other crates — we approximate by always treating
-    // `impl Trait for Type` methods as public; for inherent impls,
-    // each method's own visibility decides.
     let trait_impl = item.trait_.is_some();
     for impl_item in &item.items {
         if let ImplItem::Fn(method) = impl_item {
@@ -202,8 +198,6 @@ fn walk_impl(rel: &str, item: &ItemImpl, registry: &mut HashMap<String, Vec<FnIn
                 &method.block.stmts,
             );
             registry.entry(info.name.clone()).or_default().push(info);
-            // Recurse into nested mods inside method bodies — rare but
-            // keeps coverage exhaustive.
             for stmt in &method.block.stmts {
                 if let Stmt::Item(Item::Mod(m)) = stmt
                     && let Some((_, items)) = &m.content
@@ -266,8 +260,6 @@ impl<'ast> Visit<'ast> for BodyCounter {
     }
 
     fn visit_expr_match(&mut self, node: &'ast ExprMatch) {
-        // Each arm beyond the first is one extra prediction site; first
-        // arm is the "default fall-through".
         let arms = node.arms.len();
         if arms > 1 {
             self.own_branches += arms - 1;
@@ -286,8 +278,6 @@ impl<'ast> Visit<'ast> for BodyCounter {
     }
 
     fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
-        // `loop` itself has no condition, but typically contains `break`
-        // sites. Count one for the loop edge.
         self.own_branches += 1;
         visit::visit_expr_loop(self, node);
     }
@@ -305,7 +295,6 @@ impl<'ast> Visit<'ast> for BodyCounter {
     }
 
     fn visit_local(&mut self, node: &'ast Local) {
-        // `let-else` introduces a divergent branch.
         if let Some(init) = &node.init
             && init.diverge.is_some()
         {
@@ -350,7 +339,6 @@ mod tests {
                 if a { 1 } else if b { 2 } else { 3 };
             }"#,
         );
-        // outer if + else-if branch
         assert_eq!(n, 2);
     }
 
@@ -376,7 +364,6 @@ mod tests {
                 if x && y { run()?; }
             }"#,
         );
-        // let-else (1) + && (1) + outer if (1) + ?-operator (1)
         assert_eq!(n, 4);
     }
 

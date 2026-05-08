@@ -32,11 +32,6 @@ impl HlsScheduler {
         }
         self.runtime.sent_init_for_variant.insert(variant);
 
-        // Cached-segment "completion" announcement was a download-fact
-        // dupe of `DownloaderEvent::RequestCompleted` and is no longer
-        // emitted from this layer. Reader-side `SegmentReadStart`/
-        // `SegmentReadComplete` come from `source_impl::read_at` once
-        // the reader actually crosses the segment boundary.
         let _ = cached_count;
         let _ = self.runtime.announced_cached_count.entry(variant);
     }
@@ -58,21 +53,6 @@ impl HlsScheduler {
     }
 
     pub(crate) fn populate_cached_segments_if_needed(&mut self, variant: usize) -> (usize, u64) {
-        // Steady-state short-circuit: once the disk scan has discovered
-        // every committed segment for this variant, re-scanning is a no-op
-        // that re-commits identical `SegmentData` and fires
-        // `coord.condvar.notify_all()` — which wakes the audio worker, which
-        // re-polls, which calls this again. That feedback loop is what
-        // makes `live_stress_real_stream_seek_read_cache_drm_mmap` exceed
-        // its 60s budget under stress.
-        //
-        // The tracker is only meaningful for non-ephemeral backends:
-        // ephemeral stores short-circuit `populate_cached_segments`
-        // directly (no durable cache to scan). For non-ephemeral backends
-        // there is no LRU eviction, so a previously-populated count
-        // cannot become stale — fresh segments only ever push the count
-        // forward, and the live-playlist case (`num_segments` grows)
-        // re-enters the slow path because `prev_count < num_segments`.
         if self.backend.is_ephemeral() {
             return (0, 0);
         }

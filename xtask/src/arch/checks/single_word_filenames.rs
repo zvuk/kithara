@@ -98,7 +98,6 @@ mod tests {
 
     #[test]
     fn leading_underscore_does_not_count() {
-        // `_internal.rs` is one word, not two
         assert_eq!(word_count("_internal.rs"), 1);
     }
 

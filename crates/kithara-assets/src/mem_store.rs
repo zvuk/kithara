@@ -80,8 +80,6 @@ impl AssetDeleter for MemAssetDeleter {
             self.active_resources.clear();
         }
         self.availability.clear_root(asset_root);
-        // Best-effort cleanup of every index — first error wins
-        // (same contract as `DiskAssetDeleter::delete_asset`).
         let pins_result = self.pins.remove(asset_root).map(|_| ());
         let lru_result = self.lru.remove(asset_root);
         pins_result.and(lru_result)
@@ -142,8 +140,6 @@ impl MemAssetStore {
         let asset_root = asset_root.into();
         let active_resources = Arc::new(DashMap::new());
         let _ = pool;
-        // Standalone construction: ephemeral indexes (no on-disk
-        // backing). Production builder uses shared instances.
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         let deleter: Arc<dyn AssetDeleter> = Arc::new(MemAssetDeleter::new(
@@ -237,7 +233,6 @@ impl Assets for MemAssetStore {
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
-        // Single canonical removal channel — see [`crate::deleter`].
         self.deleter.delete_asset(&self.asset_root)
     }
 

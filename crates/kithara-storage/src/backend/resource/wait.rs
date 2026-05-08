@@ -20,8 +20,6 @@ use crate::{
 impl<D: DriverIo> Resource<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn wait_range_inner(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        // Condvar wait spin timeout in milliseconds. Local because no other
-        // function in this crate consumes it.
         const WAIT_SPIN_TIMEOUT_MS: u64 = 50;
 
         if range.start > range.end {
@@ -59,22 +57,13 @@ impl<D: DriverIo> Resource<D> {
                 if range.start >= final_len {
                     return Ok(WaitOutcome::Eof);
                 }
-                // Clamp range to file size: readers may request beyond
-                // EOF (e.g., Symphonia probing). Data within 0..final_len
-                // is what matters.
                 let clamped = range.start..range.end.min(final_len);
                 if range_covered_by(&state.available, &clamped) {
                     return Ok(WaitOutcome::Ready);
                 }
-                // For non-ring-buffer drivers, committed means all data
-                // is available (range_covered_by above may fail if
-                // available wasn't populated, but the data is on disk).
                 if self.inner.driver.valid_window().is_none() {
                     return Ok(WaitOutcome::Ready);
                 }
-                // Ring buffer with evicted data: fall through to
-                // spin-wait. The on-demand mechanism re-downloads
-                // needed data and notifies the condvar.
             }
 
             debug!(

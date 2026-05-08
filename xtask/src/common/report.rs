@@ -43,7 +43,6 @@ pub(crate) fn print_check_block<I, L>(
 {
     let (icon, color) = severity_glyphs(severity);
     let bar_len = RULE_BAR.chars().count();
-    // Width budget: visible text only — emoji is 2 columns, separator is 1.
     let visible_left = icon.chars().count().max(1) + 1 + name.chars().count();
     let pad = bar_len.saturating_sub(visible_left + summary.chars().count() + 2);
     let dots = ".".repeat(pad.max(2));

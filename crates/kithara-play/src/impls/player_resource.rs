@@ -97,7 +97,6 @@ impl PlayerResource {
         let frames_to_read = range.end - range.start;
         let mut eof_reached = self.fill_scratch(frames_to_read);
 
-        // Copy from scratch buffers to output
         if self.write_len > 0 {
             let frames_to_write = frames_to_read.min(self.write_len);
             let tail_size = self.write_len - frames_to_write;
@@ -109,7 +108,6 @@ impl PlayerResource {
                     .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
             }
 
-            // Shift remaining data to front
             if tail_size > 0 {
                 self.channel_buffers[0]
                     .copy_within(frames_to_write..frames_to_write + tail_size, 0);
@@ -137,10 +135,6 @@ impl PlayerResource {
         } else if eof_reached {
             ReadOutcome::Eof
         } else {
-            // Reader returned 0 frames but is not at EOF (e.g. async seek
-            // in progress). Zero-fill output so the audio thread outputs
-            // silence instead of replaying stale samples from a previous
-            // process() cycle.
             let range_len = range.len();
             for ch in output.iter_mut() {
                 ch[..range_len].fill(0.0);

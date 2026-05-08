@@ -12,11 +12,6 @@
 //! capture path takes whatever channel/rate the decoder produces and
 //! writes it as-is.
 
-// jni 0.22 deprecated `Env::get_string` in favour of `JString::mutf8_chars`
-// + `JString::to_string`, but in this version the replacement method
-// `JString::to_string(&self, &mut Env)` is not actually exposed — Rust's
-// inherent `ToString::to_string(&self)` wins the method lookup. The
-// deprecated path still works and is the only supported API here.
 #![allow(deprecated)]
 
 use std::{
@@ -47,8 +42,6 @@ impl Consts {
     const FMT_ERR_DEFAULT_CFG: jlong = -2;
     const FMT_ERR_NO_DEVICE: jlong = -1;
     const FMT_ERR_SUPPORTED_CFGS: jlong = -3;
-    // Default cpal sample format codes surfaced by `nativeProbeAndroidAudio`.
-    // Mirrored in `Kithara.Test.SampleFormat` (Kotlin).
     const FMT_F32: jlong = 0;
 
     const FMT_F64: jlong = 9;
@@ -63,14 +56,12 @@ impl Consts {
     const FMT_U8: jlong = 6;
     const RC_AUDIO_BUILD: jlong = 3;
     const RC_HEADER_REWRITE: jlong = 6;
-    // Result codes returned by `nativeRunOfflineCapture`.
     const RC_OK: jlong = 0;
     const RC_OUTPUT_OPEN: jlong = 4;
 
     const RC_OUTPUT_WRITE: jlong = 5;
     const RC_RUNTIME_BUILD: jlong = 2;
     const RC_STRING_READ: jlong = 1;
-    // WAV output parameters for `nativeRunOfflineCapture`.
     const SAMPLE_RATE: u32 = 44_100;
     const WAV_FMT_CHUNK_SIZE: u32 = 16;
     const WAV_FORMAT_IEEE_FLOAT: u16 = 3;
@@ -181,8 +172,6 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
     let block_budget = Duration::from_secs_f64(
         f64::from(Consts::BLOCK_FRAMES as u32) / f64::from(Consts::SAMPLE_RATE),
     );
-    // Interleaved stereo scratch buffer (LRLR…). PcmReader::read writes
-    // exactly `Consts::BLOCK_FRAMES * Consts::CHANNELS` samples.
     let mut samples = vec![0.0f32; Consts::BLOCK_FRAMES * channels];
     let mut byte_buf = Vec::with_capacity(samples.len() * 4);
     let mut rendered_frames = 0usize;
@@ -194,7 +183,6 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         let frames_written = match outcome {
             Ok(ReadOutcome::Frames { count, .. }) => count.get(),
             Ok(ReadOutcome::Pending { .. }) => {
-                // Decoder hasn't filled the ring buffer yet — yield and retry.
                 sleep(Duration::from_millis(5)).await;
                 continue;
             }
@@ -216,9 +204,6 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         }
 
         rendered_frames += frames_written;
-        // Pace decode to real-time so the worker thread (separate from
-        // this async task) keeps the ring buffer fed. Without throttling
-        // we outrun the producer and hit `Pending` repeatedly.
         if let Some(remaining) = block_budget.checked_sub(tick.elapsed()) {
             sleep(remaining).await;
         }

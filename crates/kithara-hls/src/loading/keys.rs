@@ -170,7 +170,6 @@ impl KeyManager {
     ) -> HlsResult<Bytes> {
         let rule = self.key_registry.as_ref().and_then(|r| r.find(url));
         if rule.is_none() {
-            // Plain (non-DRM) key: disk-cache the raw bytes as before.
             let headers = self.merged_headers(None);
             let rel_path = rel_path_from_url(url);
             return fetch_atomic_body(
@@ -185,8 +184,6 @@ impl KeyManager {
             .await;
         }
 
-        // Memoized DRM path: serve decrypted bytes from in-memory map when
-        // already fetched in this session.
         if let Some(cached) = self
             .decrypted_keys
             .lock()
@@ -206,8 +203,6 @@ impl KeyManager {
         }
         let headers = self.merged_headers(rule.headers.as_ref());
 
-        // Network fetch — no disk cache. The response is encrypted with
-        // a fresh per-session seed, so cross-session caching is unsafe.
         let cmd = FetchCmd::get(fetch_url).headers(headers);
         let resp = self.downloader.execute(cmd).await.map_err(HlsError::from)?;
         let raw_key = resp.body.collect().await.map_err(HlsError::from)?;

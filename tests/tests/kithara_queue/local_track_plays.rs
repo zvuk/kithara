@@ -279,12 +279,10 @@ async fn local_track_plays_end_to_end(
 
     let track_id = queue.append(source);
 
-    // (a) load
     wait_for_loader_done(&queue, track_id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("load fail [{label}]: {e}"));
 
-    // (b) play + monotonic progress
     queue.select(track_id, Transition::None).expect("select");
     wait_for_position_at_least(&queue, 0.5, Duration::from_secs(15))
         .await
@@ -292,7 +290,6 @@ async fn local_track_plays_end_to_end(
     let progress = sample_positions(&queue, 5, Duration::from_millis(200)).await;
     assert_monotonic_nondecreasing(&progress, &label);
 
-    // (c) deterministic seek × 3 random
     let duration = queue
         .duration_seconds()
         .expect("duration known after Loaded");
@@ -312,7 +309,6 @@ async fn local_track_plays_end_to_end(
         );
     }
 
-    // (d) position consistency (offline backend best-effort realtime)
     let start_pos = queue.position_seconds().unwrap_or(0.0);
     sleep(Duration::from_secs(2)).await;
     let end_pos = queue.position_seconds().unwrap_or(0.0);
@@ -409,7 +405,6 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         })
         .collect();
 
-    // (1) First track starts
     queue
         .select(ids[0], Transition::None)
         .expect("select first");
@@ -420,7 +415,6 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .expect("first track position");
 
-    // (2) Pause / resume — position must hold then advance.
     let before_pause = queue.position_seconds().unwrap_or(0.0);
     queue.pause();
     sleep(Duration::from_secs(2)).await;
@@ -441,7 +435,6 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         "resume didn't advance position: {during_pause:.2} → {after_resume:.2}"
     );
 
-    // (3) Seek mid-track
     let duration_0 = queue.duration_seconds().expect("duration for first track");
     let seek_target = duration_0 * 0.4;
     queue.seek(seek_target).expect("seek");
@@ -449,7 +442,6 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .expect("seek landed near target");
 
-    // (4) Manual crossfade to track 1
     wait_for_loader_done(&queue, ids[1], Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
@@ -476,7 +468,6 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     .await
     .expect("CurrentTrackChanged to track 1 after crossfade");
 
-    // (5..N-1) Auto-advance through remaining tracks
     let mut per_track: Vec<(String, Result<(), String>)> = Vec::new();
     for i in 1..urls.len() {
         let url = urls[i].clone();
@@ -512,7 +503,6 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         per_track.push((url.to_string(), result));
     }
 
-    // (N) Last track → seek near end → QueueEnded
     let last_result: Result<(), String> = async {
         let dur = queue
             .duration_seconds()

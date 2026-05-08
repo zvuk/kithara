@@ -33,7 +33,6 @@ fn stress_seeks_preserve_timeline_integrity() {
     let mut successful_seeks = 0u64;
 
     for i in 0..SEEK_ITERATIONS {
-        // Seek to random position (0.01s .. total - 0.5s)
         let max_seek = (total_secs - 0.5).max(0.1);
         let seek_secs = rng.range_f64(0.01, max_seek);
         let seek_pos = Duration::from_secs_f64(seek_secs);
@@ -44,7 +43,6 @@ fn stress_seeks_preserve_timeline_integrity() {
 
         let expected_frame = (seek_secs * f64::from(SawWav::DEFAULT.sample_rate)) as u64;
 
-        // Read a burst of chunks and verify consistency
         let mut prev_frame_end: Option<u64> = None;
 
         for j in 0..CHUNKS_PER_BURST {
@@ -57,11 +55,9 @@ fn stress_seeks_preserve_timeline_integrity() {
 
             let meta = chunk.meta;
 
-            // Spec correct
             assert_eq!(meta.spec.sample_rate, SawWav::DEFAULT.sample_rate);
             assert_eq!(meta.spec.channels, 2);
 
-            // First chunk after seek: frame_offset should approximate seek target
             if j == 0 {
                 let diff = (meta.frame_offset as i64 - expected_frame as i64).unsigned_abs();
                 assert!(
@@ -73,7 +69,6 @@ fn stress_seeks_preserve_timeline_integrity() {
                 );
             }
 
-            // Timestamp matches frame_offset / sample_rate
             let expected_ts = Duration::from_secs_f64(
                 meta.frame_offset as f64 / f64::from(meta.spec.sample_rate),
             );
@@ -83,7 +78,6 @@ fn stress_seeks_preserve_timeline_integrity() {
                 "seek #{i}, burst #{j}: timestamp drift {ts_diff:?}"
             );
 
-            // Continuity within burst (no gaps)
             if let Some(prev_end) = prev_frame_end {
                 assert_eq!(
                     meta.frame_offset, prev_end,
@@ -92,7 +86,6 @@ fn stress_seeks_preserve_timeline_integrity() {
                 );
             }
 
-            // Progressive: no segment/variant
             assert_eq!(meta.segment_index, None);
             assert_eq!(meta.variant_index, None);
             assert_eq!(meta.epoch, 0);

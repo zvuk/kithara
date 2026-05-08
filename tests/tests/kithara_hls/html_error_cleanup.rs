@@ -184,8 +184,6 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
     let result = Stream::<Hls>::new(config).await;
     assert!(result.is_err(), "{fail_msg}");
 
-    // Give LeaseResource::Drop + cache cleanup a chance to run. In practice
-    // Drop is synchronous, so this is conservatively generous.
     sleep(Duration::from_millis(200)).await;
 
     let leftover = collect_cache_files(temp_dir.path());
@@ -225,9 +223,6 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
 
     let _ = Stream::<Hls>::new(config).await;
 
-    // Hold the stream wrapper (even though it failed) and watch hit counts
-    // over a few seconds. Any retry storm would show up as a monotonically
-    // growing counter.
     let start_hits = state.master_hits.load(Ordering::Relaxed);
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
@@ -240,8 +235,6 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
         "retry storm detected: {start_hits} → {end_hits} over 3 s",
     );
 
-    // Upper bound on the total count as a sanity check — an unbounded retry
-    // loop would blow past this.
     assert!(
         end_hits <= 10,
         "excessive master_hits={end_hits} from a single Stream::new attempt",

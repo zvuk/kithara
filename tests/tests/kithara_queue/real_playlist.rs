@@ -33,8 +33,6 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-// shared test context
-
 /// Per-process singleton: one offline audio session, one Downloader,
 /// one Queue. `#[case]` tests inside this file share it, so init cost
 /// (network TLS context, audio graph) is paid once.
@@ -83,18 +81,11 @@ async fn shared_test_ctx() -> &'static TestCtx {
                 FlushPolicy::default(),
             );
             let config = AppConfig::new(downloader, flush_hub);
-            // Wire a per-process auto-render offline session into the
-            // shared player so real-playlist scenarios never reach the
-            // cpal hardware.
             let player = Arc::new(PlayerImpl::new(
                 PlayerConfig::default().with_session(OfflineSession::arc_auto()),
             ));
             let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
-            // Background tick driver: Queue::tick updates cached
-            // position, drains engine events, and arms crossfade. In
-            // prod it's called from the UI loop; in tests we spawn a
-            // tokio task that outlives the whole test binary.
             let queue_for_tick = Arc::clone(&queue);
             tokio::spawn(async move {
                 loop {
@@ -112,8 +103,6 @@ async fn shared_test_ctx() -> &'static TestCtx {
         .await
 }
 
-// event/position helpers
-
 async fn wait_for_status(
     rx: &mut EventReceiver,
     queue: &Queue,
@@ -122,9 +111,6 @@ async fn wait_for_status(
     deadline: Duration,
 ) -> Result<(), String> {
     use kithara_platform::tokio::sync::broadcast::error::RecvError;
-    // Snapshot first — the target-status event may have fired already
-    // (broadcast channels don't replay to late subscribers, so loader
-    // events that happened before `recv` is awaited are lost otherwise).
     if let Some(entry) = queue.track(track_id) {
         if entry.status == target {
             return Ok(());
@@ -137,7 +123,7 @@ async fn wait_for_status(
         loop {
             let ev = match rx.recv().await {
                 Ok(ev) => ev,
-                Err(RecvError::Lagged(_)) => continue, // skip dropped events on broadcast overflow
+                Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return Err("event stream closed".to_string()),
             };
             if let Event::Queue(QueueEvent::TrackStatusChanged { id, status }) = ev
@@ -228,14 +214,11 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     }
 }
 
-// per-track parametrized smoke
-
 /// For each URL in the production playlist: load → play → seek ×3
 /// random → position consistency. Isolates track-specific regressions
 /// (DRM 403, MP3 seek-near-end hang, position drift).
 #[kithara::test(tokio)]
-#[ignore] // real network
-// silvercomet MP3
+#[ignore]
 #[case::silvercomet_mp3_symphonia(
     "https://stream.silvercomet.top/track.mp3",
     42,
@@ -260,8 +243,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-// silvercomet HLS — параметризовано по ABR режиму (auto / locked_low / locked_high).
-// `locked_*` закрепляют вариант; если locked_* PASS и auto FAIL — виноват ABR flip во время seek.
 #[case::silvercomet_hls_symphonia_auto(
     "https://stream.silvercomet.top/hls/master.m3u8",
     42,
@@ -316,7 +297,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-// silvercomet DRM — параметризовано по ABR (auto / locked_low / locked_high).
 #[case::silvercomet_drm_symphonia_auto(
     "https://stream.silvercomet.top/drm/master.m3u8",
     42,
@@ -371,7 +351,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-// zvuk HQ 1
 #[case::zvuk_hq_1_symphonia(
     "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
     42,
@@ -396,7 +375,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-// zvuk HQ 2
 #[case::zvuk_hq_2_symphonia(
     "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
     42,
@@ -421,7 +399,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-// zvuk HQ 3
 #[case::zvuk_hq_3_symphonia(
     "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
     42,
@@ -446,7 +423,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-// zvuk DRM 1
 #[case::zvuk_drm_1_symphonia(
     "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8",
     42,
@@ -471,7 +447,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-// zvuk HLS 1
 #[case::zvuk_hls_1_symphonia(
     "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
     42,
@@ -496,7 +471,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-// zvuk DRM 2
 #[case::zvuk_drm_2_symphonia(
     "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
     42,
@@ -521,7 +495,6 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-// zvuk HLS 2
 #[case::zvuk_hls_2_symphonia(
     "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
     42,
@@ -557,7 +530,6 @@ async fn track_plays_end_to_end(
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx.queue.append(source);
 
-    // (a) Load
     wait_for_status(
         &mut rx,
         &ctx.queue,
@@ -568,8 +540,6 @@ async fn track_plays_end_to_end(
     .await
     .unwrap_or_else(|e| panic!("load fail [{url}]: {e}"));
 
-    // (b) Play + monotonic progress. Position must advance steadily,
-    // never regress, after the decoder gets past its warm-up.
     ctx.queue
         .select(track_id, Transition::None)
         .expect("select");
@@ -579,7 +549,6 @@ async fn track_plays_end_to_end(
     let progress = sample_positions(&ctx.queue, 5, Duration::from_millis(200)).await;
     assert_monotonic_nondecreasing(&progress, url);
 
-    // (c) Seed-deterministic seek × 3 random
     let duration = ctx
         .queue
         .duration_seconds()
@@ -591,13 +560,6 @@ async fn track_plays_end_to_end(
         wait_for_position_near(&ctx.queue, target, 1.0, Duration::from_secs(5))
             .await
             .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail [{url}]: {e}"));
-        // Hang detection: decoder must advance by ≥0.5s over next 2s.
-        // OfflineBackend is not strictly realtime-capped — ratio floats
-        // roughly in 0.85–1.2× realtime depending on host CPU load. On
-        // real-network MP3 a single post-seek fetch can stall the decoder
-        // for up to 1.5s of wall clock; the 0.5s floor catches full
-        // decoder stalls (>75% starved) without flaking on transient
-        // network latency.
         let before = ctx.queue.position_seconds().unwrap_or(0.0);
         sleep(Duration::from_secs(2)).await;
         let after = ctx.queue.position_seconds().unwrap_or(0.0);
@@ -607,13 +569,6 @@ async fn track_plays_end_to_end(
         );
     }
 
-    // (d) Position consistency — OfflineBackend drives the firewheel
-    // graph via best-effort `park_timeout`, so audio gain over a wall-
-    // clock sleep lands around realtime with jitter: observed 0.95–1.2×
-    // wall on a quiet host, depending on decoder cost. Lower bound 0.9s
-    // catches silent stalls; upper bound 2.5s catches position-ahead
-    // bugs (PTS double-counting, slider-ahead, sample-rate mismatch)
-    // while tolerating the non-strict pacing.
     let start_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     sleep(Duration::from_secs(2)).await;
     let end_pos = ctx.queue.position_seconds().unwrap_or(0.0);
@@ -627,8 +582,6 @@ async fn track_plays_end_to_end(
 
     ctx.queue.remove(track_id).expect("remove");
 }
-
-// scenario: whole-playlist behaviour
 
 async fn wait_for_queue_event<F>(
     rx: &mut EventReceiver,
@@ -660,7 +613,7 @@ where
 /// so DRM regressions surface as a list instead of killing the whole
 /// test at the first bad entry.
 #[kithara::test(tokio)]
-#[ignore] // real network + ~3-5 min wallclock
+#[ignore]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -672,7 +625,6 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     let urls: Vec<&'static str> = AppConfig::DEFAULT_TRACKS.to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
 
-    // Short crossfade so transitions don't dominate wall-clock.
     ctx.queue.set_crossfade_duration(2.0);
 
     let mut rx = ctx.queue.subscribe();
@@ -684,7 +636,6 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         })
         .collect();
 
-    // (1) First track starts
     ctx.queue
         .select(ids[0], Transition::None)
         .expect("select first");
@@ -701,7 +652,6 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .expect("first track position");
 
-    // (2) Pause/resume — position must not reset to 0
     let before_pause = ctx.queue.position_seconds().unwrap_or(0.0);
     ctx.queue.pause();
     sleep(Duration::from_secs(2)).await;
@@ -722,7 +672,6 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         "resume didn't advance position: {during_pause:.2} → {after_resume:.2}"
     );
 
-    // (3) Seek mid-track
     let duration_0 = ctx
         .queue
         .duration_seconds()
@@ -733,10 +682,6 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .expect("seek landed near target");
 
-    // (4) Manual crossfade to track 1
-    // Ensure the next track is Loaded before advance so Queue can
-    // actually emit CrossfadeStarted (otherwise select queues a
-    // pending and the event fires only after load finishes).
     wait_for_status(
         &mut rx,
         &ctx.queue,
@@ -769,7 +714,6 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     .await
     .expect("CurrentTrackChanged to track 1 after crossfade");
 
-    // (5..=N-1) Auto-advance through remaining tracks
     let mut per_track: Vec<(String, Result<(), String>)> = Vec::new();
     for i in 1..urls.len() {
         let url = urls[i];
@@ -812,7 +756,6 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         per_track.push((url.to_string(), result));
     }
 
-    // (N) Last track → seek near end → QueueEnded
     let last_result: Result<(), String> = async {
         let dur = ctx
             .queue
@@ -832,7 +775,6 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     }
     .await;
 
-    // Report: collect per-track failures
     let mut fails: Vec<String> = per_track
         .iter()
         .filter_map(|(u, r)| r.as_ref().err().map(|e| format!("  - {u}: {e}")))

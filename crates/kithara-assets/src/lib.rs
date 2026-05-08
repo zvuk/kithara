@@ -49,7 +49,6 @@ mod state;
 mod store;
 mod unified;
 
-// Public API - used by other crates
 pub use base::Assets;
 pub use cache::{CachedAssets, CachedResource};
 #[cfg(not(target_arch = "wasm32"))]

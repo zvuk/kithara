@@ -200,10 +200,6 @@ async fn player_advance_emits_event() {
 
 #[kithara::test(tokio)]
 async fn player_play_without_audio_hardware_logs_warning() {
-    // Inject an offline dispatcher so engine start does not poke real
-    // audio hardware. The original assertion (`engine.start()` warns and
-    // recovers when cpal device is missing) only makes sense for the
-    // cpal path — see `engine_cpal_tests.rs` for the e2e variant.
     let player = PlayerImpl::new(PlayerConfig::default().with_session(OfflineSession::arc_auto()));
     player.insert(make_resource(1.0), None, None);
     player.play();

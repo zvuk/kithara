@@ -32,8 +32,6 @@ fn make_source(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> File
     FileSource::local(res, coord, bus, backend, key, CancellationToken::new())
 }
 
-// FileCoord
-
 #[kithara::test]
 fn test_file_coord_initial_state() {
     let coord = FileCoord::new(Timeline::new());
@@ -57,8 +55,6 @@ fn test_file_coord_set_and_get_positions(#[case] value: u64, #[case] read_pos: b
         assert_eq!(coord.read_pos(), 0);
     }
 }
-
-// Demand slot
 
 #[kithara::test]
 fn file_coord_range_request_starts_empty() {
@@ -93,8 +89,6 @@ fn file_coord_total_bytes_roundtrip() {
     coord.set_total_bytes(None);
     assert_eq!(coord.total_bytes(), None);
 }
-
-// FileSource
 
 fn create_committed_resource(data: &[u8]) -> AssetResource {
     let store = AssetStoreBuilder::new()
@@ -141,12 +135,6 @@ fn test_file_source_read_at() {
     assert_eq!(&buf2[..7], b"world f");
     assert_eq!(coord.read_pos(), 0);
 }
-
-// Test removed: `FileSource::read_at` no longer emits
-// `FileEvent::ReadProgress` directly. The contract moved into the
-// decoder layer — `FileReaderHooks` (one event per `next_chunk`) —
-// after the `DecoderHooks` refactor. The behaviour is exercised
-// end-to-end through the integration suite.
 
 #[kithara::test]
 fn test_file_source_len() {

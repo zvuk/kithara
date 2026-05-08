@@ -65,9 +65,6 @@ impl Consts {
     const ITERATIONS: usize = 10;
 }
 
-// HLS-only: the user's hang reproduces on HLS tracks — dropping MP3/DRM
-// keeps the test focused on the actual failure path and shortens the
-// wall-clock cost from ~3 min to ~1 min per 10-iteration run.
 const SILVERCOMET_URLS: &[&str] = &["https://stream.silvercomet.top/hls/master.m3u8"];
 
 /// Outcome of rendering one measurement window.
@@ -153,10 +150,6 @@ async fn build_resource(
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
-    // Wait for the first decoded PCM chunk so `OfflinePlayer::render` sees
-    // audio on the very first block after `load_and_fadein`. Without this
-    // preload the 3 s measurement window is dominated by cold-start
-    // silence and can't distinguish "loading" from "hanged".
     tokio::time::timeout(Duration::from_secs(15), resource.preload())
         .await
         .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"))
@@ -216,17 +209,7 @@ fn rms(samples: &[f32]) -> f32 {
     (sum_sq / n).sqrt()
 }
 
-// `multi_thread` is required: the test body enters a synchronous
-// `render_and_collect` loop (with `thread::sleep` between blocks) for each
-// 3 s measurement window. On a `current_thread` runtime the Downloader
-// tokio task cannot run while the main thread is inside that sync loop, so
-// post-seek fetches for the new target segment never progress and the
-// decoder observes a full window of silence even when the HLS logic itself
-// is correct.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
-// Параметризовано по ABR режиму: auto / locked_low / locked_high.
-// Если locked_* PASS а auto FAIL — виноват ABR flip во время seek
-// (cross-variant seek → init сегмент нового варианта не готов вовремя).
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::Manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::Manual(2))]
@@ -251,10 +234,6 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
 ) {
-    // Pipe kithara_* trace output to /tmp/silvercomet-trace.log so failures
-    // surface the FSM seek transitions and HLS peer fetches that a nextest
-    // capture typically loses after the panic. `try_init()` keeps the test
-    // re-runnable — a second init would otherwise panic.
     let trace_log = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -273,11 +252,6 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
         .with_ansi(false)
         .try_init();
 
-    // One OfflinePlayer per iteration — gives each iteration a fresh
-    // FirewheelCtx, PlayerNode state, and shared atomics. No global
-    // session_client involvement, so this test doesn't need
-    // `init_offline_backend` (and therefore doesn't race with any
-    // other test that might be using the global offline session).
     let window_blocks = blocks_for_seconds(Consts::PLAY_WINDOW_SECS);
     let warmup_blocks = blocks_for_seconds(Consts::WARMUP_SECS);
     let mut next_seek_epoch = 1u64;
@@ -298,10 +272,6 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             eprintln!("[iter {iter}][t{track_idx}] resource built, load_and_fadein");
             player.load_and_fadein(resource, &format!("{iter_label}|t{track_idx}"));
 
-            // Warmup: absorb cold-start latency (decoder spin-up, first
-            // segment fetch) so the measurement window starts with audio
-            // already flowing. Without this the initial-play silence run
-            // is dominated by load latency, not by any stall.
             eprintln!("[iter {iter}][t{track_idx}] warmup ({warmup_blocks} blocks)");
             let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples);
             eprintln!(
@@ -309,13 +279,6 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
                 player.position()
             );
 
-            // (a) Measurement window — 3 s of continuous audio. A hang
-            // here means the track never produced chunks even after the
-            // warmup ran out. Validated by:
-            //  - silent-block fraction (phantom clicks between silences
-            //    push this up),
-            //  - per-window RMS (confirms the samples actually carry
-            //    signal, not just occasional zero-crossing clicks).
             let initial = render_and_collect(&mut player, window_blocks, &mut iteration_samples);
             let initial_samples = &iteration_samples[initial.window_start_sample..];
             let initial_rms = rms(initial_samples);
@@ -348,21 +311,12 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
                 Consts::MIN_WINDOW_RMS,
             );
 
-            // (b) Seek to +30 s past the pre-seek position. We don't know
-            // exact duration, but silvercomet tracks are long enough that
-            // the target always lands in undownloaded segments and forces
-            // the post-seek FSM through `WaitingForSource` → `ApplySeek`.
             let seek_target = player.position() + 30.0;
             let seek_epoch = next_seek_epoch;
             next_seek_epoch += 1;
             eprintln!("[iter {iter}][t{track_idx}] seek to {seek_target:.2}s epoch={seek_epoch}");
             player.seek(seek_target, seek_epoch);
 
-            // (c) Play ~3 s after the seek. This is the window that
-            // reproduces the user-reported hang: if playback freezes
-            // post-seek, the window RMS collapses to near-zero even
-            // though occasional decoder click-chunks may keep
-            // `silent_blocks` below the legacy consecutive threshold.
             let after = render_and_collect(&mut player, window_blocks, &mut iteration_samples);
             let after_samples = &iteration_samples[after.window_start_sample..];
             let after_rms = rms(after_samples);
@@ -394,7 +348,6 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
             );
         }
 
-        // Dump the full iteration's output for post-mortem inspection.
         let wav_path =
             std::env::temp_dir().join(format!("kithara_silvercomet_seek_iter_{iter}.wav"));
         write_wav_f32(
@@ -413,10 +366,7 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
 
         drop(player);
         drop(downloader);
-        // temp_dir::TestTempDir drops here → cache wiped before the next
-        // iteration's Resource::new builds its Downloader + Stream.
         drop(temp);
-        // Arc::strong_count(&()) unused; keeps iter_label alive until now.
         let _ = iter_label;
     }
 }
@@ -442,7 +392,6 @@ mod unit_tests {
     #[test]
     fn blocks_for_three_seconds_matches_expected() {
         let blocks = blocks_for_seconds(3.0);
-        // 3 s × 44100 / 512 = 258.4 → ceil 259
         assert_eq!(blocks, 259);
     }
 }

@@ -34,14 +34,12 @@ mod types;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 
-// Platform-specific backends. Gated once here; no internal cfg attrs.
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
 
 pub use error::{DecodeError, DecodeResult, ErrorClass};
-// Factory for runtime selection
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
 pub use gapless::{
     GaplessInfo, GaplessMode, GaplessOutput, GaplessTrimmer, SilenceTrimParams,
@@ -51,5 +49,4 @@ pub use pcm_time::{duration_for_frames, frames_for_duration};
 pub use traits::{
     Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
 };
-// Core types
 pub use types::{DecoderTrackInfo, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};

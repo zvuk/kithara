@@ -151,7 +151,6 @@ fn resolve_publish_order() -> Result<Vec<String>> {
 
     let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
 
-    // Collect publishable workspace packages and their workspace dependencies.
     let mut graph: HashMap<String, Vec<String>> = HashMap::new();
     let mut all_publishable: HashSet<String> = HashSet::new();
 
@@ -160,7 +159,6 @@ fn resolve_publish_order() -> Result<Vec<String>> {
             continue;
         }
 
-        // `publish` field: None means "publish anywhere", Some([]) means "publish = false".
         if matches!(&pkg.publish, Some(registries) if registries.is_empty()) {
             continue;
         }
@@ -169,7 +167,6 @@ fn resolve_publish_order() -> Result<Vec<String>> {
         graph.insert(pkg.name.to_string(), Vec::new());
     }
 
-    // Second pass: collect only publishable workspace dependencies.
     for pkg in &metadata.packages {
         let name = pkg.name.to_string();
         if !all_publishable.contains(&name) {
@@ -263,7 +260,6 @@ mod tests {
         let order = resolve_publish_order().unwrap();
         assert!(!order.is_empty(), "should find publishable crates");
 
-        // kithara-platform should come before kithara (facade depends on platform).
         let platform_pos = order.iter().position(|n| n == "kithara-platform");
         let facade_pos = order.iter().position(|n| n == "kithara");
         if let (Some(p), Some(f)) = (platform_pos, facade_pos) {

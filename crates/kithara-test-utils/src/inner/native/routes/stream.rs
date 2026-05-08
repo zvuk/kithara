@@ -127,8 +127,6 @@ async fn serve_media_segment(
             {
                 return inject_error(rule);
             }
-            // GET respects per-segment latency simulation; HEAD is metadata-only
-            // and always returns immediately.
             if matches!(method, SegmentMethod::Get) {
                 let delay_ms = fixture.segment_delay_ms(variant, segment);
                 if delay_ms > 0 {

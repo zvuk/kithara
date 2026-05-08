@@ -104,7 +104,7 @@ fn is_main_or_bin(rel: &std::path::Path) -> bool {
 fn crate_is_exempt(rel: &std::path::Path, exempt: &BTreeSet<&str>) -> bool {
     let mut comps = rel.components();
     if comps.next().and_then(|c| c.as_os_str().to_str()) != Some("crates") {
-        return true; // outside crates/ — not a lib
+        return true;
     }
     let Some(crate_name) = comps
         .next()

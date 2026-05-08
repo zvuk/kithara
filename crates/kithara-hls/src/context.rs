@@ -88,9 +88,7 @@ mod tests {
     fn test_hls_stream_context_reads_atomics() {
         let timeline = Timeline::new();
         timeline.set_byte_position(1000);
-        // Create StreamIndex with 4 variants and 20 segments
         let segments = Arc::new(Mutex::new(StreamIndex::new(4, 20)));
-        // Set variant_map so segment 5 belongs to variant 2
         segments.lock_sync().set_layout_variant(2);
         segments.lock_sync().commit_segment(
             2,
@@ -107,12 +105,10 @@ mod tests {
         let ctx = HlsStreamContext::new(timeline.clone(), Arc::clone(&segments), Arc::clone(&abr));
 
         assert_eq!(ctx.byte_offset(), 1000);
-        // segment_index uses segment_position (set before byte_position advances)
         timeline.set_segment_position(100);
         assert_eq!(ctx.segment_index(), Some(5));
         assert_eq!(ctx.variant_index(), Some(2));
 
-        // Atomics update: add another segment at variant 3
         segments.lock_sync().set_layout_variant(3);
         segments.lock_sync().commit_segment(
             3,
@@ -126,7 +122,6 @@ mod tests {
         );
         pin_variant(&abr, 3);
 
-        // Variant 3 segment 10 covers byte range 0..200
         timeline.set_segment_position(100);
         assert_eq!(ctx.segment_index(), Some(10));
         assert_eq!(ctx.variant_index(), Some(3));
@@ -149,8 +144,6 @@ mod tests {
         let abr = fresh_abr(0);
         let ctx = HlsStreamContext::new(timeline.clone(), Arc::clone(&segments), Arc::clone(&abr));
 
-        // byte_position has advanced past segment 0's end (as Stream::read does),
-        // but segment_position still points inside segment 0
         timeline.set_byte_position(200);
         timeline.set_segment_position(150);
         assert_eq!(ctx.segment_index(), Some(0));

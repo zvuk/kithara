@@ -86,8 +86,6 @@ impl ResourceKey {
 pub fn asset_root_for_url(url: &Url, name: Option<&str>) -> String {
     const HASH_PREFIX_LEN: usize = 16;
 
-    // Use canonical form for consistent hashing.
-    // Fall back to raw URL if canonicalization fails (e.g., file:// URLs).
     let canonical = canonicalize_for_asset(url).unwrap_or_else(|_| url.as_str().to_string());
 
     let mut hasher = Sha256::new();
@@ -116,7 +114,6 @@ pub(crate) fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
     /// Default HTTP port.
     const DEFAULT_HTTP_PORT: u16 = 80;
 
-    // Validate that URL has required components for asset identification
     if url.scheme().is_empty() {
         return Err(AssetsError::MissingComponent("scheme".to_string()));
     }
@@ -126,11 +123,9 @@ pub(crate) fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
 
     let mut canonical = url.clone();
 
-    // Remove fragment and query
     canonical.set_fragment(None);
     canonical.set_query(None);
 
-    // Normalize scheme and host to lowercase
     let scheme = canonical.scheme();
     let scheme_lower = scheme.to_lowercase();
     if scheme != scheme_lower {
@@ -144,7 +139,6 @@ pub(crate) fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
         }
     }
 
-    // Remove default ports
     match (canonical.scheme(), canonical.port()) {
         ("https", Some(DEFAULT_HTTPS_PORT)) | ("http", Some(DEFAULT_HTTP_PORT)) => {
             let _ = canonical.set_port(None);
@@ -248,7 +242,6 @@ mod tests {
         let url = Url::parse(url_str).unwrap();
         let root = asset_root_for_url(&url, None);
 
-        // Should return a non-empty hex string
         assert!(!root.is_empty());
         assert!(root.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -331,11 +324,9 @@ mod tests {
 
     #[kithara::test]
     fn test_asset_root_query_differs_but_name_distinguishes() {
-        // URLs that differ only in query params — canonicalization strips them.
         let url1 = Url::parse("https://cdn.example.com/stream?track_id=123&token=abc").unwrap();
         let url2 = Url::parse("https://cdn.example.com/stream?track_id=456&token=def").unwrap();
 
-        // Without name: same root (the bug scenario).
         let root1_no_name = asset_root_for_url(&url1, None);
         let root2_no_name = asset_root_for_url(&url2, None);
         assert_eq!(
@@ -343,7 +334,6 @@ mod tests {
             "without name, query-only differences produce same root"
         );
 
-        // With distinct names: different roots (the fix).
         let root1_named = asset_root_for_url(&url1, Some("track_123"));
         let root2_named = asset_root_for_url(&url2, Some("track_456"));
         assert_ne!(
@@ -360,7 +350,6 @@ mod tests {
         #[case] description: &str,
     ) {
         if url_str.is_empty() {
-            // Empty string cannot be parsed as URL
             return;
         }
 

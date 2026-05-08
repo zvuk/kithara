@@ -42,8 +42,6 @@ pub enum StorageResource {
 #[cfg(not(target_arch = "wasm32"))]
 impl From<MmapResource> for StorageResource {
     fn from(r: MmapResource) -> Self {
-        // `MmapResource::path()` is always `Some` (file-backed). Use
-        // it as the canonical path for the passthrough decorator.
         let path = r.path().map(Path::to_path_buf).unwrap_or_default();
         Self::Mmap(Arc::new(AtomicChunked::passthrough(r, path)))
     }
@@ -58,11 +56,6 @@ impl From<AtomicChunked<MmapResource>> for StorageResource {
 
 impl From<MemResource> for StorageResource {
     fn from(r: MemResource) -> Self {
-        // Memory inners have no filesystem path. The passthrough
-        // canonical path is meaningful only when `path()` is queried,
-        // and for mem we want it to remain `None`. Use an empty
-        // PathBuf as placeholder; `StorageResource::path()` overrides
-        // for the Mem variant to return `None` regardless.
         Self::Mem(Arc::new(AtomicChunked::passthrough(r, PathBuf::default())))
     }
 }
@@ -112,8 +105,6 @@ impl ResourceExt for StorageResource {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.path(),
-            // Memory inners have no filesystem path; the passthrough
-            // wrapper carries an empty placeholder we never expose.
             Self::Mem(_) => None,
         }
     }

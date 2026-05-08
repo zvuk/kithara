@@ -46,7 +46,7 @@ fn test_decoder_config_custom() {
 /// `create_with_backend::<B>` generic dispatch.
 #[kithara::test]
 fn test_symphonia_propagates_probe_error_without_fallback() {
-    let _ = create_test_wav; // reserved for future positive-path coverage
+    let _ = create_test_wav;
     let _ = (
         IoError::other("force keep import"),
         AudioCodec::Pcm,

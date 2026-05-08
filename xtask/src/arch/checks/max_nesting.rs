@@ -71,7 +71,6 @@ fn depth_under_src(rel: &Path) -> Option<usize> {
         && matches!(src, Component::Normal(n) if n == "src")
     {
         let remaining: Vec<_> = comps.collect();
-        // remaining = [...dirs, file.rs]; depth = dirs.len() = remaining.len() - 1
         return Some(remaining.len().saturating_sub(1));
     }
     None

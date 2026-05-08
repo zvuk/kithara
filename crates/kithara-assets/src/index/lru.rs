@@ -446,7 +446,6 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn update_bytes_does_not_change_eviction_order() {
-        // touch(A), touch(B), update_bytes(A) — eviction must still pick A first.
         let lru = LruIndex::ephemeral();
         lru.touch("A", Some(100)).unwrap();
         lru.touch("B", Some(200)).unwrap();
@@ -487,7 +486,6 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn update_bytes_keeps_clock_unchanged() {
-        // Direct LruState assertion — clock must stay frozen across update_bytes.
         let mut state = LruState::default();
         state.touch("A", Some(10));
         state.touch("B", Some(20));

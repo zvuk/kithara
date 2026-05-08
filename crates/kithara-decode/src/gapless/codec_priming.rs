@@ -51,9 +51,6 @@ mod tests {
 
     #[kithara::test]
     fn aac_priming_is_already_in_container_encoder_delay() {
-        // Mainstream AAC encoders fold the native 1024-frame priming
-        // into the container's declared `encoder_delay`; adding it
-        // again here would double-count the trim.
         assert_eq!(codec_priming_frames(AudioCodec::AacLc), 0);
         assert_eq!(codec_priming_frames(AudioCodec::AacHe), 0);
         assert_eq!(codec_priming_frames(AudioCodec::AacHeV2), 0);

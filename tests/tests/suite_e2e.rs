@@ -23,13 +23,6 @@ mod common;
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;
 
-// engine_tests / resource_regressions содержат большинство не-ignored
-// тестов и наши local_* зеркала — подключаются в suite_light через
-// kithara_play/mod.rs. Здесь не дублируем.
-//
-// silvercomet_seek_hang / cold_seek_cpal / real_playlist оставлены здесь
-// как именованный entry-point для `just test-e2e` — все их кейсы
-// `#[ignore]`'d, и `--run-ignored all` поднимает их.
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play {
     #[path = "../kithara_play/engine_cpal_tests.rs"]

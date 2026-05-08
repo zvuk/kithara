@@ -80,8 +80,6 @@ impl ResamplerQuality {
                 oversampling_factor: Self::OVERSAMPLING_HIGH,
                 window: WindowFunction::BlackmanHarris2,
             },
-            // Normal, Fast and Maximum share the same default sinc params.
-            // Fast and Maximum don't use sinc — unreachable from normal flow.
             Self::Normal | Self::Fast | Self::Maximum => SincInterpolationParameters {
                 sinc_len: Self::SINC_LEN_NORMAL,
                 f_cutoff: Self::SINC_CUTOFF,
@@ -217,7 +215,6 @@ pub struct ResamplerProcessor {
     quality: ResamplerQuality,
     /// Accumulated input buffer (planar format).
     input_buffer: SmallVec<[Vec<f32>; 8]>,
-    // Reusable temporary buffers
     temp_deinterleave: SmallVec<[Vec<f32>; 8]>,
     temp_input_slice: SmallVec<[Vec<f32>; 8]>,
     temp_output_all: SmallVec<[Vec<f32>; 8]>,
@@ -267,8 +264,6 @@ impl ResamplerProcessor {
             input_buffer: smallvec_new_vecs(channels),
             output_spec,
             playback_rate: params.playback_rate,
-            // ResamplerProcessor::new fallback — caller injects pool via ResamplerParams
-            // ast-grep-ignore: perf.no-global-pool-accessor
             pool: params.pool.unwrap_or_else(|| PcmPool::default().clone()),
             quality: params.quality,
             resampler: None,
@@ -307,12 +302,10 @@ impl ResamplerProcessor {
             self.temp_deinterleave.resize_with(self.channels, Vec::new);
         }
 
-        // Resize each channel buffer to needed size (reuses existing capacity)
         for buf in &mut self.temp_deinterleave[..self.channels] {
             buf.resize(frames, 0.0);
         }
 
-        // Use fast_interleave (SIMD-optimized) to deinterleave
         let num_channels = NonZeroUsize::new(self.channels).expect("channels must be > 0");
         deinterleave_variable(
             interleaved,
@@ -321,7 +314,6 @@ impl ResamplerProcessor {
             0..frames,
         );
 
-        // Append deinterleaved data to existing input buffers
         for ch in 0..self.channels {
             self.input_buffer[ch].extend_from_slice(&self.temp_deinterleave[ch][..frames]);
         }
@@ -333,9 +325,6 @@ impl ResamplerProcessor {
             buf.clear();
         }
 
-        // f64 frame count → usize: saturating clamp via num-traits keeps the
-        // intent explicit (output buffer is sized for at most `usize::MAX`
-        // frames; anything past that is the same "use the full buffer" signal).
         let frames_f64 =
             (num_traits::cast::AsPrimitive::<f64>::as_(buffered) * self.current_ratio).ceil();
         let actual_output_frames =
@@ -354,12 +343,6 @@ impl ResamplerProcessor {
         }
 
         let interleaved = self.interleave(&self.temp_output_all);
-        // Carry the input chunk's `timestamp` / `end_timestamp` /
-        // segment / variant / epoch / source-byte info forward; only
-        // the output spec, frame count and frame_offset are
-        // resampler-local. Source-byte attribution stays attached so
-        // it is not double-counted: the decoder already credits each
-        // input chunk once.
         let mut meta = self.last_input_meta.unwrap_or_default();
         meta.spec = self.output_spec;
         let frame_count = interleaved
@@ -480,12 +463,6 @@ impl ResamplerProcessor {
         }
 
         let interleaved = self.interleave(&self.temp_output_all);
-        // Carry the input chunk's `timestamp` / `end_timestamp` /
-        // segment / variant / epoch / source-byte info forward; only
-        // the output spec, frame count and frame_offset are
-        // resampler-local. Source-byte attribution stays attached so
-        // it is not double-counted: the decoder already credits each
-        // input chunk once.
         let mut meta = self.last_input_meta.unwrap_or_default();
         meta.spec = self.output_spec;
         let frame_count = interleaved
@@ -543,15 +520,12 @@ impl ResamplerProcessor {
         let frames = planar[0].len();
         let total = frames * self.channels;
 
-        // Get buffer from pool — returned as PooledOwned for auto-recycling.
-        // PcmPool has unlimited budget so ensure_len never fails in practice.
         let mut result = self.pool.get();
         if let Err(_e) = result.ensure_len(total) {
             tracing::warn!("PCM pool budget exhausted during resampling");
             return self.pool.get();
         }
 
-        // Use fast_interleave (SIMD-optimized)
         let num_channels = NonZeroUsize::new(self.channels).expect("channels must be > 0");
         interleave_variable(planar, 0..frames, &mut result[..], num_channels);
 
@@ -639,9 +613,6 @@ impl ResamplerProcessor {
     fn resample(&mut self, chunk: &PcmChunk) -> Option<PcmChunk> {
         self.resampler.as_ref()?;
 
-        // Capture the input chunk's meta so the next resampled output
-        // carries the decoder's authoritative `timestamp` /
-        // `end_timestamp` instead of `Default::default()`.
         self.last_input_meta = Some(chunk.meta);
         self.append_to_buffer(&chunk.pcm);
 
@@ -720,9 +691,6 @@ impl ResamplerProcessor {
             return false;
         };
 
-        // rubato 1.0.1 panics with ramp=true on both sinc (neon) and poly
-        // backends. Use instant transition; chunk boundary (~93ms) provides
-        // sufficient smoothness for playback rate changes.
         match resampler.set_resample_ratio(new_ratio, false) {
             Ok(()) => {
                 debug!(
@@ -864,10 +832,6 @@ impl AudioEffect for ResamplerProcessor {
         for buf in &mut self.input_buffer {
             buf.clear();
         }
-        // Drop the rubato resampler so internal filter state (taps, phase,
-        // buffered samples) from the old audio doesn't bleed into the new
-        // stream.  `update_resampler_if_needed()` will create a fresh
-        // instance on the next `process()` call.
         self.resampler = None;
     }
 }
@@ -885,8 +849,6 @@ mod tests {
                 spec,
                 ..Default::default()
             },
-            // test fixture
-            // ast-grep-ignore: perf.no-global-pool-accessor
             PcmPool::default().attach(pcm),
         )
     }
@@ -962,7 +924,6 @@ mod tests {
         let mut processor = ResamplerProcessor::new(params(host_sr.clone(), 44100, 2));
         assert!(processor.is_passthrough());
 
-        // Change host sample rate dynamically
         host_sr.store(48000, Ordering::Relaxed);
 
         let chunk = test_chunk(
@@ -1025,7 +986,6 @@ mod tests {
         let _ = processor.process(chunk1);
         assert_eq!(processor.source_rate, 48000);
 
-        // Source rate changed (e.g. ABR switch) — resampler should update dynamically
         let chunk2 = test_chunk(
             PcmSpec {
                 channels: 2,
@@ -1035,7 +995,6 @@ mod tests {
         );
         let _ = processor.process(chunk2);
         assert_eq!(processor.source_rate, 44100);
-        // Resampler should now be in passthrough (44100 → 44100)
         assert!(processor.is_passthrough());
     }
 
@@ -1084,23 +1043,19 @@ mod tests {
             vec![0.1, 0.2, 0.3, 0.4],
         );
 
-        // Test through AudioEffect trait
         let result = AudioEffect::process(&mut processor, chunk);
         assert!(result.is_some());
 
-        // Test reset
         AudioEffect::reset(&mut processor);
         assert!(processor.input_buffer[0].is_empty());
     }
-
-    // Playback rate tests
 
     #[kithara::test]
     fn test_playback_rate_2x_halves_output() {
         let rate = Arc::new(AtomicF32::new(2.0));
         let mut processor =
             ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
-        assert!(!processor.is_passthrough()); // rate!=1.0 → active
+        assert!(!processor.is_passthrough());
         let chunk = test_chunk(
             PcmSpec {
                 channels: 2,
@@ -1111,7 +1066,6 @@ mod tests {
         let result = processor.process(chunk);
         assert!(result.is_some());
         let output_frames = result.unwrap().frames();
-        // 2x speed → ~half output frames (input: 8192 frames → ~4096 output)
         assert!(output_frames < 5000, "Expected ~4096, got {output_frames}");
     }
 
@@ -1131,7 +1085,6 @@ mod tests {
         let result = processor.process(chunk);
         assert!(result.is_some());
         let output_frames = result.unwrap().frames();
-        // 0.5x speed → ~double output frames (input: 8192 frames → ~16384 output)
         assert!(
             output_frames > 12000,
             "Expected ~16384, got {output_frames}"
@@ -1143,7 +1096,7 @@ mod tests {
         let rate = Arc::new(AtomicF32::new(1.0));
         let processor =
             ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
-        assert!(processor.is_passthrough()); // rate=1.0 + source==host → passthrough
+        assert!(processor.is_passthrough());
     }
 
     #[kithara::test]
@@ -1165,10 +1118,8 @@ mod tests {
             vec![0.1; 16384],
         );
         let _ = processor.process(chunk);
-        assert!(!processor.is_passthrough()); // should activate
+        assert!(!processor.is_passthrough());
     }
-
-    // Quality-specific tests
 
     #[kithara::test]
     #[case::fast(ResamplerQuality::Fast)]

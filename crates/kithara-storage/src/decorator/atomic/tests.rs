@@ -64,7 +64,6 @@ fn mmap_tmp_file_cleaned_up() {
 
     atomic.write_all(b"data").unwrap();
 
-    // No tmp files should remain (they have unique suffixes like index.tmp.0).
     let tmp_files: Vec<_> = fs::read_dir(dir.path())
         .unwrap()
         .filter_map(Result::ok)

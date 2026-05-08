@@ -146,9 +146,6 @@ fn fix_field_block<'src>(
         return Ok(());
     }
 
-    // If any pair of adjacent fields carries different #[cfg(...)] gates,
-    // reordering can change semantics under different feature configs.
-    // Skip the whole block.
     if has_heterogeneous_cfg(fields) {
         return Err("fields have heterogeneous `#[cfg(...)]` attributes".to_string());
     }
@@ -187,8 +184,6 @@ fn fix_field_block<'src>(
         Err(other) => return Err(format!("engine error: {other:?}")),
     };
 
-    // Same trailing-comma rule as struct_init_order: refuse if the last
-    // field has none, since the swap would stitch items together.
     let last = blocks.last().expect("non-empty");
     if !src[last.item_bytes.end..last.bytes.end].contains(',') {
         return Err("last field has no trailing comma".to_string());

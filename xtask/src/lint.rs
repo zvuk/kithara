@@ -59,8 +59,6 @@ pub(crate) fn run(args: &LintArgs) -> Result<()> {
 
 fn run_all(crates: &[String], paths: &[PathBuf], fix: bool, allow_dirty: bool) -> Result<()> {
     let mut failures: Vec<&'static str> = Vec::new();
-    // Mirror the clap `default_value` for `config_dir`; `Default::default()`
-    // on `PathBuf` yields "" which silently bypasses config loading.
     let arch_args = arch::ArchArgs {
         config_dir: ".config/arch".into(),
         crates: crates.to_vec(),

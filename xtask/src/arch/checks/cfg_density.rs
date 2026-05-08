@@ -103,7 +103,6 @@ fn count_cfg_attributes(source: &str) -> usize {
 
 fn is_exempt_crate(rel: &std::path::Path, exempt: &[&str]) -> bool {
     let mut components = rel.components();
-    // Expected path shape: crates/<crate-name>/...
     if components.next().and_then(|c| c.as_os_str().to_str()) != Some("crates") {
         return false;
     }

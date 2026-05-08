@@ -16,7 +16,6 @@ mod decrypt {
 
     fn encrypt_aes128_cbc(plaintext: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
         let encryptor = Encryptor::<Aes128>::new(key.into(), iv.into());
-        // Allocate buffer: plaintext + up to one full padding block
         let padded_len = plaintext.len() + (AES_BLOCK_SIZE - plaintext.len() % AES_BLOCK_SIZE);
         let mut buf = vec![0u8; padded_len];
         buf[..plaintext.len()].copy_from_slice(plaintext);
@@ -75,7 +74,7 @@ mod decrypt {
     #[kithara::test]
     fn test_unaligned_input_fails() {
         let mut ctx = DecryptContext::new([0u8; 16], [0u8; 16]);
-        let input = [0u8; 15]; // Not aligned to 16
+        let input = [0u8; 15];
         let mut output = [0u8; 15];
         let result = aes128_cbc_process_chunk(&input, &mut output, &mut ctx, false);
         assert!(result.is_err());

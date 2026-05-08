@@ -124,8 +124,6 @@ impl LoopVisitor<'_> {
 
 impl<'ast> Visit<'ast> for LoopVisitor<'_> {
     fn visit_expr_for_loop(&mut self, e: &'ast ExprForLoop) {
-        // Walk the iterator expression *outside* the loop scope (it
-        // runs once, before iteration), then descend into the body.
         self.visit_expr(&e.expr);
         self.inside_loop += 1;
         self.visit_block(&e.body);
@@ -192,7 +190,6 @@ fn call_path_message(c: &ExprCall) -> Option<&'static str> {
     let Expr::Path(ExprPath { path, .. }) = &*c.func else {
         return None;
     };
-    // Match on the *trailing two* segments — `Vec::new()` or `std::vec::Vec::new()`.
     let segs: Vec<&syn::Ident> = path.segments.iter().map(|s| &s.ident).collect();
     if segs.len() < 2 {
         return None;
@@ -200,7 +197,6 @@ fn call_path_message(c: &ExprCall) -> Option<&'static str> {
     let last = segs[segs.len() - 1];
     let parent = segs[segs.len() - 2];
 
-    // `Vec::with_capacity(LITERAL)` is allowed.
     if parent == "Vec" && last == "with_capacity" {
         let allowed = c
             .args
@@ -365,8 +361,6 @@ mod tests {
 
     #[test]
     fn iterator_closure_not_flagged_yet() {
-        // This initial check intentionally does not descend into iterator
-        // closures; that's covered by a follow-up extension.
         let n = count_in(
             r#"fn f() { let _: Vec<String> = (0..10).map(|i| format!("x-{}", i)).collect(); }"#,
         );

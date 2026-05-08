@@ -25,9 +25,9 @@ use crate::common::{
 struct Consts;
 impl Consts {
     #[cfg(not(target_arch = "wasm32"))]
-    const SEGMENT_COUNT: usize = 10; // Smaller than stress test — enough for concurrency check.
+    const SEGMENT_COUNT: usize = 10;
     #[cfg(target_arch = "wasm32")]
-    const SEGMENT_COUNT: usize = 4; // Keep fixture session payload small in browser-runner tests.
+    const SEGMENT_COUNT: usize = 4;
 }
 
 /// Create an HLS server; `abr_variants == 1` → single variant, otherwise ABR.
@@ -76,7 +76,6 @@ async fn run_concurrent_hls(n: usize, abr: AbrMode, variants: usize) {
 
     let mut handles = Vec::new();
     for i in 0..n {
-        // Each instance needs its own server (binds a random port) and cache dir.
         let server = create_hls_server(Arc::clone(&wav_data), variants).await;
         let temp = TestTempDir::new();
         let audio = create_hls_audio(&server, temp.path(), abr).await;

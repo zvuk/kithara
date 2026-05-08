@@ -284,13 +284,6 @@ async fn create_gapless_hls_resource(
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for seamless queue fixture");
-    // Force the first decoded chunk to land in the resource's internal buffer
-    // before we hand it to the player. Without this, the audio thread races the
-    // HLS downloader/decoder for the first ~50–500 ms of playback and feeds
-    // silence to the mixer, which kills crossfade energy and creates an audible
-    // gap at the join. The contract under test is queue auto-advance — not
-    // first-chunk preroll — so paying that latency up front mirrors what real
-    // callers do via the public `Resource::preload()` API.
     resource.preload().await;
     resource
 }
@@ -328,8 +321,6 @@ async fn render_until_second_item_end(
                 }),
         );
 
-        // Two `ItemDidPlayToEnd` deliveries marks the second (terminal)
-        // item finishing.
         if count_item_end(&events) >= 2 {
             for _ in 0..POST_ROLL_BLOCKS {
                 let block = harness.render(BLOCK_FRAMES as usize);

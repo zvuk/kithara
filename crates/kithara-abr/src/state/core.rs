@@ -58,9 +58,6 @@ impl AbrState {
     pub fn apply(&self, d: &AbrDecision, now: Instant) {
         if cfg!(debug_assertions) {
             let variants = self.variants.lock_sync();
-            // Only enforce membership once variants have been populated.
-            // Early-init scenarios (peer created before master playlist parse)
-            // legitimately apply a variant while the list is still empty.
             if !variants.is_empty() {
                 let ok = variants
                     .iter()
@@ -104,13 +101,11 @@ impl AbrState {
     }
 
     fn instant_to_nanos(&self, instant: Instant) -> u64 {
-        // u128→u64 conversion-clamp: an Instant past 2^64 ns (~584 years)
-        // is unreachable in practice; ceiling here keeps the cast lossless.
         let nanos = instant
             .saturating_duration_since(self.reference_instant)
             .as_nanos()
             .to_u64()
-            .unwrap_or(u64::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
+            .unwrap_or(u64::MAX);
         nanos.max(1)
     }
 

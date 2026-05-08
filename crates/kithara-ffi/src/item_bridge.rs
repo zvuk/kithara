@@ -33,8 +33,6 @@ impl ItemEventBridge {
     fn buffered_seconds_from_event(event: &Event, duration_seconds: Option<f64>) -> Option<f64> {
         let duration_seconds = duration_seconds?;
         match event {
-            // Bytes consumed by the reader. Reader-side proxy for
-            // "the player has data up to this point". Not sink-truth.
             Event::File(FileEvent::ReadProgress {
                 position,
                 total: Some(total),
@@ -74,10 +72,6 @@ impl ItemEventBridge {
                 .is_none_or(|current| (current - buffered).abs() > Self::UPDATE_THRESHOLD)
         {
             *last_buffered = Some(buffered);
-            // Surface the buffered window as a single contiguous range
-            // [0, buffered). Future work: surface non-contiguous ranges
-            // when the underlying loader exposes per-segment loaded
-            // intervals.
             let ranges = if buffered > 0.0 {
                 vec![FfiTimeRange {
                     start_seconds: 0.0,
@@ -112,10 +106,6 @@ impl ItemEventBridge {
                 variants: v,
                 initial,
             }) => {
-                // Variant indices > u32::MAX are an invariant violation
-                // (real HLS playlists carry tens of variants). Drop them
-                // from the FFI list with a loud trace instead of forging a
-                // ceiling that the UI cannot map back to anything real.
                 let ffi_variants: Vec<crate::types::FfiVariant> = v
                     .iter()
                     .filter_map(|vi| {
@@ -137,8 +127,6 @@ impl ItemEventBridge {
                 observer.on_event(FfiItemEvent::VariantsDiscovered {
                     variants: ffi_variants,
                 });
-                // Synthesize initial VariantApplied so the UI immediately
-                // knows the current quality without waiting for an ABR change.
                 let Ok(initial_u32) = u32::try_from(*initial) else {
                     tracing::error!(
                         idx = *initial,

@@ -99,17 +99,6 @@ pub fn init_tracing(filter: EnvFilter) {
     {
         use tracing_subscriber::Layer as _;
 
-        // Compose fmt + probe layers BEFORE calling try_init: a
-        // separate `set_global_default` for the probe layer would
-        // race the fmt layer's init (`try_init` succeeds for whoever
-        // wins, the loser gets a `SetGlobalDefault` error and probe
-        // capture is silently dropped). Stacking them in one
-        // subscriber guarantees both layers are active.
-        //
-        // The `EnvFilter` is attached to the fmt layer only — probe
-        // events (target ends with `_probe`, e.g. `"kithara_hls_probe"`) are emitted at
-        // TRACE level, which the default fmt filter ("warn") would
-        // otherwise drop before they reach our probe layer.
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_test_writer()
             .with_filter(filter);

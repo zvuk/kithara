@@ -25,7 +25,6 @@ fn pool_thread_worker(pool: Arc<PcmPool>, thread_id: usize, iterations: usize) {
         let buf = pool.get_with(|b| {
             b.clear();
             b.resize(2048, 0.0);
-            // Simulate work
             for j in 0..2048 {
                 b[j] = (thread_id * iterations + i + j) as f32 * 0.001;
             }
@@ -109,7 +108,6 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
             println!("{:=<60}\n", "");
         }
         PerfScenario::Scalability => {
-            // hotpath allows only one FunctionsGuard alive at a time.
             drop(_guard);
             let thread_counts = [1, 2, 4, 8, 16];
             let iterations_per_thread = 1000;

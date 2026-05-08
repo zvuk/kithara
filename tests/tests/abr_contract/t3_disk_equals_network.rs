@@ -113,14 +113,8 @@ async fn run_case(
          variant_to (expected ≥ {required_chunks})"
     );
 
-    // Drop the audio pipeline so the asset store flushes pending
-    // writes to disk before we walk the filesystem.
     drop(audio);
 
-    // Network-side ground truth: every (variant, seg) the scheduler
-    // emitted a media-segment fetch for. Init fetches are excluded
-    // because init segments use a different filename pattern (`vN.<ext>`)
-    // and `disk_files_per_variant` already filters by `vN_M.<ext>`.
     let emits = all_fetch_emits(&recorder);
     let mut emitted: std::collections::BTreeMap<usize, BTreeSet<usize>> =
         std::collections::BTreeMap::new();
@@ -132,8 +126,6 @@ async fn run_case(
     }
     let on_disk = disk_files_per_variant(&temp_path);
 
-    // Compare the two views variant-by-variant so failure messages
-    // identify the offending variant.
     let mut variants: BTreeSet<usize> = BTreeSet::new();
     for v in emitted.keys() {
         variants.insert(*v);

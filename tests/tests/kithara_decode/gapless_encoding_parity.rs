@@ -49,10 +49,6 @@ async fn gapless_encoding_variants_yield_matching_decoder_metadata() {
         edts_info, both_info,
         "Both must report identical GaplessInfo to a single-source fixture (elst wins)"
     );
-    // FFmpeg's AAC encoder folds the codec's native priming (1024 frames at
-    // the AAC frame size) into the track's encoder_delay before the mux
-    // writes either source. The *parity* between encodings is the contract
-    // here; the absolute value tracks the encoder, not the request.
     let expected_leading = u64::from(AAC_GAPLESS_ENCODER_DELAY)
         + u64::try_from(AAC_FRAME_SAMPLES).expect("AAC frame samples fit u64");
     assert_eq!(

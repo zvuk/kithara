@@ -164,7 +164,6 @@ fn inspect_fn(fn_name: &str, block: &Block, idx: &mut WorkspaceStructIndex) {
 fn leading_destructure_name(pat: &Pat) -> Option<String> {
     match pat {
         Pat::Struct(ps) => ps.path.segments.last().map(|s| s.ident.to_string()),
-        // Strip a leading `&`/`mut` so `let &X { .. } = ctx;` is also caught.
         Pat::Reference(r) => leading_destructure_name(&r.pat),
         _ => None,
     }
@@ -237,7 +236,6 @@ impl<'ast> Visit<'ast> for LiteralVisitor<'_> {
     }
 
     fn visit_expr_struct(&mut self, n: &'ast ExprStruct) {
-        // Reached only when this literal is NOT a direct call argument.
         self.record_arg(n, None);
         for f in &n.fields {
             self.visit_expr(&f.expr);

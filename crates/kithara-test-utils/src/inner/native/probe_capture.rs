@@ -184,10 +184,6 @@ impl Visit for ProbeVisitor {
     }
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         let formatted = format!("{value:?}");
-        // Probe args/fields are recorded with `?value` (Debug) by the
-        // `#[kithara::probe]` macro. For numeric types Debug renders as
-        // a plain integer (`1234`); store those in `numeric` so tests can
-        // call `event.u64(field)` regardless of the underlying type.
         if let Ok(parsed) = formatted.parse::<u64>() {
             self.numeric.insert(field.name().to_string(), parsed);
         } else if let Ok(parsed) = formatted.parse::<i64>() {

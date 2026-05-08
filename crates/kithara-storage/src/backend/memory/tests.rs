@@ -179,13 +179,11 @@ fn test_reactivate() {
     assert_eq!(res.status(), ResourceStatus::Active);
     assert_eq!(res.len(), None);
 
-    // Old data still readable.
     let mut buf = [0u8; 5];
     let n = res.read_at(0, &mut buf).unwrap();
     assert_eq!(n, 5);
     assert_eq!(&buf, b"hello");
 
-    // Can write new data.
     res.write_at(5, b" world").unwrap();
     res.commit(Some(11)).unwrap();
 
@@ -209,16 +207,13 @@ fn test_write_rejected_after_commit() {
 fn test_sparse_write() {
     let res = create_resource();
 
-    // Write at offset 100
     res.write_at(100, b"sparse").unwrap();
 
-    // Range 0..100 is not available
     let mut buf = [0u8; 6];
     let n = res.read_at(100, &mut buf).unwrap();
     assert_eq!(n, 6);
     assert_eq!(&buf, b"sparse");
 
-    // Zeros before the data
     let mut zero_buf = [0xFFu8; 4];
     let n = res.read_at(0, &mut zero_buf).unwrap();
     assert_eq!(n, 4);
@@ -227,7 +222,6 @@ fn test_sparse_write() {
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_growable_write_beyond_initial_capacity() {
-    // Start with a small capacity hint, then write beyond it.
     let res = MemResource::open(
         CancellationToken::new(),
         MemOptions {
@@ -237,7 +231,6 @@ fn test_growable_write_beyond_initial_capacity() {
     )
     .unwrap();
 
-    // Write 128 bytes — beyond the 64-byte initial capacity.
     let data = vec![0xAB; 128];
     res.write_at(0, &data).unwrap();
 
@@ -251,7 +244,6 @@ fn test_growable_write_beyond_initial_capacity() {
 fn test_growable_sparse_write() {
     let res = create_resource();
 
-    // Write at a large offset — buffer auto-extends.
     res.write_at(1000, b"far away").unwrap();
 
     let mut buf = [0u8; 8];
@@ -259,7 +251,6 @@ fn test_growable_sparse_write() {
     assert_eq!(n, 8);
     assert_eq!(&buf, b"far away");
 
-    // Earlier offsets are zero-filled.
     let mut zero_buf = [0xFFu8; 4];
     let n = res.read_at(0, &mut zero_buf).unwrap();
     assert_eq!(n, 4);
@@ -270,7 +261,6 @@ fn test_growable_sparse_write() {
 fn test_growable_multiple_writes_extend() {
     let res = create_resource();
 
-    // Sequential writes that extend the buffer.
     res.write_at(0, b"aaa").unwrap();
     res.write_at(3, b"bbb").unwrap();
     res.write_at(6, b"ccc").unwrap();
@@ -283,7 +273,6 @@ fn test_growable_multiple_writes_extend() {
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_from_bytes_readable() {
-    // from_bytes creates a committed resource — the data should be readable.
     let data = b"hello growable buffer world";
     let res = MemResource::from_bytes(data, CancellationToken::new());
 
@@ -297,14 +286,10 @@ fn test_from_bytes_readable() {
 fn test_backward_write_does_not_lose_data() {
     let res = create_resource();
 
-    // Write forward.
     res.write_at(0, &[0xAA; 100]).unwrap();
-    // Write at a later offset.
     res.write_at(200, &[0xBB; 100]).unwrap();
-    // Write backward — should NOT evict earlier data.
     res.write_at(50, &[0xCC; 50]).unwrap();
 
-    // All three regions should be readable.
     let mut buf = [0u8; 10];
     let n = res.read_at(0, &mut buf).unwrap();
     assert_eq!(n, 10);

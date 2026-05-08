@@ -105,7 +105,6 @@ struct LiveStats {
 }
 
 fn parse_segment_url(url: &str) -> Option<(usize, usize)> {
-    // /stream/{spec}/seg/v{variant}_{segment}.m4s
     let segs_marker = "/seg/v";
     let after = url.split(segs_marker).nth(1)?;
     let stem = after.split(".m4s").next()?;
@@ -731,8 +730,6 @@ async fn live_stress_real_stream_seek_read_cache(
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
         store.is_ephemeral = true;
-        // Large enough for most seeks to hit cache, small enough for
-        // eviction to exercise the Retry / re-download path.
         store.cache_capacity = Some(NonZeroUsize::new(24).expect("nonzero"));
     }
 
@@ -1120,7 +1117,6 @@ async fn live_ephemeral_small_cache_seek_stress(
         .expect("audio creation");
     let _ = audio.preload();
 
-    // Warmup: read a few chunks so the stream is initialized
     info!(%path, label, "Warmup: reading initial chunks");
     for i in 0..Consts::browser_usize(
         Consts::SMALL_CACHE_WARMUP_CHUNKS,
@@ -1163,7 +1159,6 @@ async fn live_ephemeral_small_cache_seek_stress(
         let _ = audio.preload();
         seeks_done += 1;
 
-        // Read a few chunks after each seek
         for chunk_idx in 0..chunks_per_seek {
             let stage = format!("seek_{seek_idx}_chunk_{chunk_idx}");
             let Some(_chunk) =

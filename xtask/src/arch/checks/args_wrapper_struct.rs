@@ -212,8 +212,6 @@ mod tests {
 
     #[test]
     fn used_outside_call_argument_clean() {
-        // Built once as an argument, once as a `let` binding — second use means
-        // it's not single-purpose.
         let src = r#"
             pub(crate) struct Ctx { a: u32, b: u32, c: u32, d: u32, e: u32 }
             pub(crate) fn consume(args: Ctx) -> u32 {
@@ -230,8 +228,6 @@ mod tests {
 
     #[test]
     fn reference_argument_position_flagged() {
-        // `&X { ... }` is still single-purpose argument context — the `&` is a
-        // transparent wrapper, not real semantic content.
         let src = r#"
             pub(crate) struct Ctx { a: u32, b: u32, c: u32, d: u32, e: u32 }
             pub(crate) fn consume(ctx: &Ctx) -> u32 {

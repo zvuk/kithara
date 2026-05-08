@@ -64,8 +64,6 @@ fn shared_hub_gcs_dropped_store_indexes() {
         .build();
     assert_eq!(hub.live_source_count(), INDEXES_PER_DISK_STORE * 2);
 
-    // Touch each store so the indexes have something dirty: this also
-    // exercises that flushes through a shared hub work for either store.
     let _res_a = store_a
         .acquire_resource(&ResourceKey::new("seg.bin"))
         .unwrap();
@@ -73,9 +71,6 @@ fn shared_hub_gcs_dropped_store_indexes() {
         .acquire_resource(&ResourceKey::new("seg.bin"))
         .unwrap();
 
-    // Destroy track A end-to-end: drop the resource lease first, then
-    // the store. After both are dropped the registry must shed the
-    // three Weaks belonging to store A.
     drop(_res_a);
     drop(store_a);
 
@@ -85,7 +80,6 @@ fn shared_hub_gcs_dropped_store_indexes() {
         "dropping store A must GC its three indexes from the hub"
     );
 
-    // Surviving store still flushes through the same hub.
     drop(_res_b);
     hub.flush_now()
         .expect("flush_now must succeed for the surviving store");
@@ -100,8 +94,6 @@ fn shared_hub_gcs_dropped_store_indexes() {
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn shared_hub_flush_now_persists_every_store() {
-    // Mutations on multiple stores attached to the same hub must all
-    // reach disk through a single explicit `flush_now()` call.
     let dir = tempdir().unwrap();
     let hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
 
@@ -126,13 +118,11 @@ fn shared_hub_flush_now_persists_every_store() {
     drop(res_a);
     drop(res_b);
 
-    // Sanity: availability is checkpoint-only, so it has not landed yet.
     let avail_a = dir.path().join("a/_index/availability.bin");
     let avail_b = dir.path().join("b/_index/availability.bin");
     assert!(!avail_a.exists(), "availability is checkpoint-only");
     assert!(!avail_b.exists(), "availability is checkpoint-only");
 
-    // Single flush_now serves both stores.
     hub.flush_now().expect("hub.flush_now must succeed");
 
     assert!(

@@ -1,7 +1,3 @@
-// `deny` (not `forbid`) so the `probes` module can locally
-// `#[allow(unsafe_code)]` for the inline asm emitted by `usdt::provider!`
-// when the `usdt-probes` feature is enabled. Production code outside
-// that module remains unsafe-free.
 #![deny(unsafe_code)]
 
 //! HLS (HTTP Live Streaming) VOD implementation.
@@ -22,7 +18,6 @@
 //! let stream = Stream::<Hls>::new(config).await?;
 //! ```
 
-// Public modules
 pub mod config;
 pub mod error;
 
@@ -40,8 +35,6 @@ mod stream_index;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
-
-// Public API re-exports
 
 pub use config::{HlsConfig, KeyOptions};
 pub use context::HlsStreamContext;

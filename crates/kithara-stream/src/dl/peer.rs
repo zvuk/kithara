@@ -181,7 +181,6 @@ impl PeerHandle {
             receivers.push(Some(resp_rx));
         }
 
-        // Await all responses concurrently, preserving array order.
         join_all(receivers.into_iter().map(|rx| async move {
             match rx {
                 Some(resp_rx) => resp_rx.await.unwrap_or(Err(NetError::Cancelled)),
@@ -268,10 +267,6 @@ impl PeerHandle {
     #[must_use]
     pub fn with_bus(self, bus: EventBus) -> Self {
         *self.inner.bus.lock_sync_write() = Some(bus.clone());
-        // AbrHandle::with_bus consumes the handle, but AbrHandle is
-        // Clone-able and backed by Arc — we clone to keep the peer-bound
-        // handle in place while the trait call chains through to the
-        // peer's shared bus cell.
         let _ = self.inner.abr.clone().with_bus(bus);
         self
     }

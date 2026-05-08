@@ -107,7 +107,6 @@ impl AudioCodec {
     pub fn from_hls_codec(codec: &str) -> Option<Self> {
         let codec_lower = codec.to_lowercase();
 
-        // Check longer prefixes first to avoid false matches
         if codec_lower.starts_with("mp4a.40.29") {
             Some(Self::AacHeV2)
         } else if codec_lower.starts_with("mp4a.40.34") {
@@ -251,10 +250,10 @@ mod tests {
     }
 
     #[kithara::test(wasm)]
-    #[case(1)] // Mono
-    #[case(2)] // Stereo
-    #[case(6)] // 5.1 surround
-    #[case(8)] // 7.1 surround
+    #[case(1)]
+    #[case(2)]
+    #[case(6)]
+    #[case(8)]
     fn test_media_info_with_channels(#[case] channels: u16) {
         let info = MediaInfo::default().with_channels(channels);
         assert_eq!(info.container, None);

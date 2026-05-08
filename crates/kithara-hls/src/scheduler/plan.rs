@@ -51,9 +51,6 @@ impl HlsScheduler {
             return true;
         }
 
-        // ABR variant done, but reader is still on the old layout variant.
-        // Clamp the scan by reader position so we don't backfill segments
-        // the reader has already passed (see `rewind_to_first_missing_segment`).
         let layout_num = self.num_segments(layout).unwrap_or(0);
         let scan_start = self.reader_segment_floor();
         let layout_gap = {
@@ -93,9 +90,6 @@ impl HlsScheduler {
             return false;
         }
 
-        // Always check for invalidated/missing segments at tail — not just
-        // after midstream switches. LRU eviction or DRM re-processing can
-        // invalidate committed segments behind the cursor.
         let rewind_variant = if self.coord.had_midstream_switch.load(Ordering::Acquire) {
             self.rewind_reference_variant(variant)
         } else {
@@ -192,10 +186,6 @@ impl HlsScheduler {
     }
 
     fn rewind_to_first_missing_segment(&mut self, variant: usize, num_segments: usize) -> bool {
-        // Clamp gap scan by reader position: segments strictly behind the
-        // reader will not be replayed, and in ephemeral LRU stores those
-        // "missing" slots are evictions by design — re-fetching them only
-        // evicts the tail segments the reader is currently reading.
         let scan_start = self
             .gap_scan_start_segment()
             .max(self.reader_segment_floor());
@@ -231,11 +221,6 @@ impl HlsScheduler {
         is_midstream_switch: bool,
         old_variant: Option<usize>,
     ) -> bool {
-        // If the old variant already has this segment loaded with
-        // available resources, skip the download — the reader will
-        // demand the correct variant's data on-demand when it needs it.
-        // Do NOT copy old-variant SegmentData (wrong media_url) into
-        // the new variant's StreamIndex.
         if let Some(old_var) = old_variant {
             let old_loaded = {
                 let segments = self.segments.lock_sync();
@@ -276,9 +261,6 @@ impl HlsScheduler {
             return false;
         }
 
-        // Don't skip if we are intentionally downloading this variant
-        // (e.g., layout gap-fill sets download_variant to the layout
-        // variant even though ABR moved on).
         if self.download_variant == variant {
             return false;
         }

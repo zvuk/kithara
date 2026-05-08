@@ -2,31 +2,16 @@ use tracing_log::LogTracer;
 use tracing_wasm::WASMLayerConfigBuilder;
 use wasm_bindgen::prelude::wasm_bindgen;
 
-// Set up panic hook and tracing. Called automatically during WASM module
-// initialisation (`initSync`). On Worker threads, skip all setup: the main
-// thread already installed the global subscriber and panic hook, and
-// allocating here would race with the main thread's dlmalloc spin lock,
-// corrupting the shared WASM heap.
-// `#[wasm_bindgen(start)]` exports this fn to the JS module loader; the
-// `pub` is only reachable via wasm-bindgen, so the unreachable_pub silencer
-// is scoped to the wasm target where the export exists.
 #[cfg_attr(target_family = "wasm", allow(unreachable_pub))]
 #[wasm_bindgen(start)]
 pub fn setup() {
-    // Always install panic hook — even on Workers — so panics are visible.
     console_error_panic_hook::set_once();
 
-    // Skip tracing setup on Workers: the main thread already installed the
-    // global subscriber, and allocating the tracing layer here would race
-    // with the main thread's dlmalloc spin lock.
     if web_sys::window().is_none() {
         return;
     }
 
     let _ = LogTracer::init();
-    // Disable `report_logs_in_timings` — the subscriber is shared via
-    // shared memory with the AudioWorklet, where `performance.mark()`
-    // is not available and would crash the audio thread.
     let config = WASMLayerConfigBuilder::new()
         .set_report_logs_in_timings(false)
         .build();

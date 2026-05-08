@@ -86,12 +86,10 @@ impl Frontend for GuiFrontend {
     }
 
     fn shutdown(&mut self) -> Result<(), FrontendError> {
-        // iced handles cleanup internally.
         Ok(())
     }
 
     fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
-        // iced handles window setup internally.
         Ok(())
     }
 }

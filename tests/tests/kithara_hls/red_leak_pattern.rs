@@ -74,10 +74,6 @@ impl Abr for ImmortalPeer {}
 
 impl Peer for ImmortalPeer {
     fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
-        // Never finish: just like HlsPeer. We deliberately do not
-        // register the waker here — poll_peers will keep checking us
-        // on every tick because other peers / registrations may wake
-        // the poll_fn, which is exactly what happens in HLS.
         Poll::Pending
     }
 }
@@ -103,19 +99,14 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
     let handle = downloader.register(peer_dyn.clone());
     drop(peer_dyn);
 
-    // Baseline: our local `peer` Arc + the one stored in Registry = 2.
     assert!(
         Arc::strong_count(&peer) >= 2,
         "expected at least 2 strong refs (local + registry), got {}",
         Arc::strong_count(&peer)
     );
 
-    // Drop the handle. This fires `PeerInner::cancel` (a cancel token
-    // separate from Registry's peer_cancel). The Registry's poll_peers
-    // never observes this cancel, so the peer entry is not removed.
     drop(handle);
 
-    // Give the Downloader loop plenty of time to unregister.
     for _ in 0..20 {
         sleep(Duration::from_millis(50)).await;
         if Arc::strong_count(&peer) == 1 {
@@ -130,7 +121,6 @@ async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn Std
         final_refs
     );
 
-    // Clean up by cancelling the whole Downloader.
     cancel.cancel();
     Ok(())
 }
@@ -157,7 +147,6 @@ async fn red_hls_source_drop_leaks_peer(
     let downloader =
         Downloader::new(DownloaderConfig::default().with_cancel(CancellationToken::new()));
 
-    // Warm up so the baseline excludes first-time tokio worker growth.
     {
         let stream = Stream::<Hls>::new(
             HlsConfig::new(url.clone())
@@ -189,8 +178,6 @@ async fn red_hls_source_drop_leaks_peer(
     let threads_after = live_thread_count();
     let growth = threads_after.saturating_sub(threads_baseline);
 
-    // If each HlsPeer's waker-forwarding task + registry entry linger,
-    // we leak per iteration. We allow <2 threads of drift as normal.
     assert!(
         growth < 2,
         "OS thread count grew by {} over {} iterations (baseline={}, after={}). \

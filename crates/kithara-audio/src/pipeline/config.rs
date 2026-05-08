@@ -224,7 +224,6 @@ mod tests {
             None,
             vec![Box::new(PassthroughEffect)],
         );
-        // Resampler + 1 custom effect
         assert_eq!(effects.len(), 2);
     }
 }

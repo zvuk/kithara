@@ -55,8 +55,6 @@ impl DriverIo for MemDriver {
         state.len
     }
 
-    // valid_window() returns None (default) — no eviction, all data retained.
-
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         if committed {
@@ -72,7 +70,6 @@ impl DriverIo for MemDriver {
             StorageError::Failed(format!("memory write: end {end} does not fit usize: {err}"))
         })?;
 
-        // Grow buffer if write extends beyond current allocation.
         if end_usize > state.buf.len() {
             state
                 .buf

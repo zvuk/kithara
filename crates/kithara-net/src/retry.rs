@@ -188,8 +188,6 @@ mod tests {
         retry_net(mock, RetryPolicy::default())
     }
 
-    // DefaultRetryPolicy Tests
-
     #[kithara::test]
     fn test_default_retry_policy_new() {
         let policy = RetryPolicy::default();
@@ -240,8 +238,6 @@ mod tests {
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.delay_for_attempt(attempt), expected);
     }
-
-    // RetryNet Tests - get_bytes
 
     #[kithara::test(tokio)]
     async fn test_retry_net_get_bytes_success_first_try() {
@@ -309,8 +305,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // RetryNet Tests - stream
-
     #[kithara::test(tokio)]
     async fn test_retry_net_stream_success() {
         let mock = Unimock::new(
@@ -346,8 +340,6 @@ mod tests {
 
         assert!(result.is_ok());
     }
-
-    // RetryNet Tests - get_range
 
     #[kithara::test(tokio)]
     async fn test_retry_net_get_range_success() {
@@ -387,8 +379,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // RetryNet Tests - head
-
     #[kithara::test(tokio)]
     async fn test_retry_net_head_success() {
         let mock = Unimock::new(
@@ -424,8 +414,6 @@ mod tests {
 
         assert!(result.is_ok());
     }
-
-    // RetryPolicyTrait Tests
 
     #[kithara::test]
     fn test_retry_policy_trait_max_attempts() {
@@ -468,7 +456,6 @@ mod tests {
         let url = test_url();
         let handle = tokio::spawn(async move { retry_net.get_bytes(url, None).await });
 
-        // Give the first attempt time to fail and enter the retry sleep
         sleep(Duration::from_millis(50)).await;
         cancel.cancel();
 

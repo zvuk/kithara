@@ -63,7 +63,6 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return (count.get(), retry, false),
             Ok(ReadOutcome::Pending { .. }) => {
-                // Give background worker some time to fill the buffer
                 thread::sleep(Duration::from_millis(1));
             }
             Ok(ReadOutcome::Eof { .. }) => return (0, retry, true),
@@ -218,7 +217,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
         let mut buf = vec![0.0f32; chunk_samples];
         let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
 
-        // Phase 1: Warmup until ABR switch
         info!("Phase 1: warmup - reading until ABR switch");
         let mut initial_direction = Direction::Unknown;
         let mut switch_detected = false;
@@ -252,7 +250,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
             warn!("ABR switch not detected during warmup - continuing anyway");
         }
 
-        // Phase 2: 2000 rapid random seeks
         info!("Phase 2: {} rapid random seeks", Consts::STRESS_SEEK_ITERATIONS);
         let max_seek_secs = total_secs - 0.1;
         let mut dead_seeks = 0u64;
@@ -262,8 +259,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
         let mut channel_mismatches = 0u64;
 
         for i in 0..Consts::STRESS_SEEK_ITERATIONS {
-            // Mix of random positions: 10% chance to seek near start (< 1s),
-            // 10% chance to seek near the end (last 2s), 80% random.
             let r = rng.next_f64();
             let pos_secs = if r < 0.1 {
                 rng.range_f64(0.0, 1.0)
@@ -301,7 +296,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 continue;
             }
 
-            // Integrity check: finite, in range
             for (j, &sample) in buf[..n].iter().enumerate() {
                 if !sample.is_finite() || !(-1.0..=1.0).contains(&sample) {
                     integrity_errors += 1;
@@ -312,7 +306,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 }
             }
 
-            // L == R check
             if channels == 2 {
                 let frames = n / channels;
                 for f in 0..frames {
@@ -342,8 +335,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
             "Phase 2 complete"
         );
 
-        // Tolerate a small number of dead seeks (decoder restart race)
-        // but not more than 1% of total iterations.
         let max_dead = (Consts::STRESS_SEEK_ITERATIONS as u64) / 100;
         assert!(
             dead_seeks <= max_dead,
@@ -359,7 +350,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
             "L/R channel mismatches - data corruption"
         );
 
-        // ── Phase 3: Seek to 0 → full track read with continuity check ──
         info!("Phase 3: seek to 0 - full track integrity verification");
 
         audio.seek(Duration::ZERO).expect("seek to 0 must succeed");
@@ -370,9 +360,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
         let mut read_attempts = 0u64;
         let max_read_attempts = 100_000u64;
 
-        // Initial `false` is intentionally written before the loop sets the
-        // final value; lint cannot see the assignment in the EOF branch
-        // dominates every read.
         #[allow(unused_assignments)]
         let mut final_saw_eof = false;
         loop {
@@ -399,7 +386,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
             let frames = n / channels;
 
-            // Integrity: every sample must be finite and in range
             for (j, &sample) in buf[..n].iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -410,7 +396,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 );
             }
 
-            // L == R
             if channels == 2 {
                 for f in 0..frames {
                     let l = buf[f * 2];
@@ -424,11 +409,8 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 }
             }
 
-            // Continuity: check inter-chunk boundary (prev_phase → first frame)
             let first_phase = phase_from_f32(buf[0]);
             if let Some(pp) = prev_phase {
-                // After seek to 0, we're reading the post-ABR-switch variant
-                // (ascending or descending). Check both directions.
                 let next_asc = (pp + 1) % SawWav::SAW_PERIOD;
                 let next_desc = (pp + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
                 if first_phase != next_asc && first_phase != next_desc {
@@ -446,7 +428,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 }
             }
 
-            // Intra-chunk continuity
             for f in 1..frames {
                 let p0 = phase_from_f32(buf[(f - 1) * channels]);
                 let p1 = phase_from_f32(buf[f * channels]);
@@ -463,7 +444,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 }
             }
 
-            // Track the last phase for inter-chunk check
             let last_frame_phase = phase_from_f32(buf[(frames - 1) * channels]);
             prev_phase = Some(last_frame_phase);
 
@@ -482,7 +462,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
         let expected_frames = (Consts::SEGMENT_COUNT * Consts::D.segment_size) / (Consts::D.channels as usize * 2);
         let frame_diff = total_frames_read.abs_diff(expected_frames as u64);
-        let tolerance = (expected_frames as u64) / 50; // 2%
+        let tolerance = (expected_frames as u64) / 50;
 
         info!(
             total_frames_read,
@@ -495,8 +475,6 @@ async fn stress_seek_lifecycle_with_zero_reset(
             total_frames_read, expected_frames, tolerance
         );
 
-        // Allow a few continuity breaks at segment/decoder boundaries,
-        // but not proportional to track length.
         let max_breaks = 10u64;
         assert!(
             continuity_breaks <= max_breaks,

@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-// Re-export for convenience
 pub use kithara_decode::{DecodeError, DecodeResult};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;

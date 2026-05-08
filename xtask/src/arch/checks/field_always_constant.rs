@@ -153,10 +153,6 @@ mod tests {
 
     #[test]
     fn task_id_equals_seek_epoch_pattern_flagged_per_field() {
-        // Both `task_id` and `seek_epoch` are written as `epoch` in every
-        // site — each is independently flagged as a constant (=`epoch`).
-        // The cross-field equality is `field_always_equals_other_field`'s
-        // job, not this check's.
         let src = r#"
             pub(crate) struct E { task_id: u64, seek_epoch: u64, kind: u32 }
             fn a(epoch: u64) -> E { E { task_id: epoch, seek_epoch: epoch, kind: 1 } }
@@ -192,8 +188,6 @@ mod tests {
 
     #[test]
     fn rest_spread_sites_excluded() {
-        // The third site spreads `..base`, so `id` value is unknown there.
-        // The remaining two are below the default threshold — clean.
         let src = r#"
             pub(crate) struct E { id: u32, kind: u32 }
             fn a() -> E { E { id: 0, kind: 1 } }
@@ -216,8 +210,6 @@ mod tests {
 
     #[test]
     fn shorthand_is_no_information_skipped() {
-        // `X { a }` desugars to `X { a: a }` — every site agrees textually
-        // but the value really comes from a same-named local. Filtered out.
         let src = r#"
             pub(crate) struct E { id: u32, kind: u32 }
             fn a() -> E { let id = 0; E { id, kind: 1 } }
@@ -229,9 +221,6 @@ mod tests {
 
     #[test]
     fn trivial_default_skipped() {
-        // `T::default()` / `Default::default()` / `Vec::new()` / similar are
-        // "no per-site value" — flagging them just nags the caller to write
-        // `..Default::default()`. Filter them out.
         let src = r#"
             pub(crate) struct E { items: Vec<u32>, cfg: Cfg, kind: u32 }
             fn a() -> E { E { items: Vec::new(), cfg: Cfg::default(), kind: 1 } }

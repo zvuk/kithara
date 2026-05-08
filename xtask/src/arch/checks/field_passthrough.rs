@@ -236,8 +236,6 @@ fn emit_violations(
             }
             let mut reachable: HashSet<FieldSig> = HashSet::new();
             let mut visited: HashSet<String> = HashSet::new();
-            // Seed visited with the outer struct so cycles back into it
-            // don't pull outer's own fields into the reachable set.
             visited.insert(outer.name.clone());
             reachable_sigs(inner_struct, &by_name, &mut reachable, &mut visited, 0);
             for peer in &outer.fields {
@@ -368,8 +366,6 @@ mod tests {
 
     #[test]
     fn cycle_does_not_loop() {
-        // Cycle A → B → A; outer fields don't collide with reachable
-        // names. The detector must terminate AND produce 0 hits.
         let src = "struct A { b: Box<B>, only_a: u8 } \
                    struct B { a: Box<A>, only_b: u8 }";
         assert_eq!(count(src), 0);

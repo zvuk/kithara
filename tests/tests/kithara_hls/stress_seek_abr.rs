@@ -47,7 +47,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
     let url = server.asset(path);
     info!(label, path, "Opening real stream");
 
-    // Create audio pipeline with ABR auto (start from cheapest variant)
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_initial_abr_mode(AbrMode::Auto(Some(0)));
@@ -57,10 +56,8 @@ async fn stress_seek_during_abr_switch_real_decoder(
         .await
         .expect("audio creation");
 
-    // Subscribe to unified events for ABR switch tracking
     let mut events_rx = audio.events();
 
-    // Track ABR switches in background
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
     spawn(async move {
@@ -73,8 +70,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
         }
     });
 
-    // Phase 1: Warmup — read PCM for ~10s to let ABR switch happen
-    // Phase 2: 20s rapid seeking
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
         let start = Instant::now();
@@ -95,14 +90,12 @@ async fn stress_seek_during_abr_switch_real_decoder(
             "Warmup done"
         );
 
-        // Phase 2: 200 rapid random seeks
         info!("Phase 2: 200 rapid random seeks");
         let mut seek_count = 0u64;
         let mut samples_after_seek = 0u64;
         let mut seek_errors = 0u64;
         let mut dead_seeks = 0u64;
 
-        // Seek positions spanning the full track (0s to ~220s)
         let positions_secs: Vec<f64> = vec![
             147.0, 30.0, 200.0, 5.0, 180.0, 60.0, 210.0, 15.0, 100.0, 0.0, 170.0, 45.0, 195.0,
             80.0, 220.0, 10.0, 130.0, 25.0, 160.0, 90.0, 50.0, 110.0, 175.0, 35.0, 140.0, 70.0,
@@ -115,7 +108,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
             match audio.seek(position) {
                 Ok(_) => {
                     seek_count += 1;
-                    // Try to read some samples after seek
                     match audio.read(&mut buf) {
                         Ok(ReadOutcome::Frames { count, .. }) => {
                             samples_after_seek += count.get() as u64;
@@ -141,8 +133,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
             samples_after_seek, seek_errors, dead_seeks, "Stress test complete"
         );
 
-        // Assert: at least some seeks produced audio
-        // If ALL seeks produce 0 samples → audio is dead → bug confirmed
         assert!(
             samples_after_seek > 0,
             "Audio died after ABR switch: {} seeks, {} errors, {} dead (0 samples), \
@@ -152,7 +142,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
             dead_seeks,
         );
 
-        // Assert: zero dead seeks — with seek_pending retry, all seeks must produce audio.
         assert_eq!(
             dead_seeks, 0,
             "Dead seeks: {dead_seeks}/{seek_count}. \
@@ -198,7 +187,6 @@ async fn seek_sequence_from_log_real_stream(
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
-        // Warm up pipeline before seek sequence.
         let warmup_deadline = Instant::now() + Duration::from_secs(4);
         while Instant::now() < warmup_deadline {
             let _ = audio.read(&mut buf);

@@ -130,7 +130,6 @@ fn duration_after_create_is_consistent_across_backends() {
         .map(|b| (b, b.make_mp3().duration()))
         .collect();
 
-    // All backends should report *some* duration for a complete local file.
     for (backend, duration) in &durations {
         let d = duration.unwrap_or_else(|| {
             panic!("backend {backend:?} must report duration for a complete MP3 file")
@@ -141,7 +140,6 @@ fn duration_after_create_is_consistent_across_backends() {
         );
     }
 
-    // Cross-backend agreement within ±5% (priming/padding differences).
     let first = durations[0].1.expect("symphonia reports duration");
     for (backend, duration) in &durations[1..] {
         let other = duration.expect("backend reports duration");
@@ -174,8 +172,6 @@ fn total_frames_are_consistent_across_backends() {
 
     let first = frame_counts[0].1;
     for (backend, frames) in &frame_counts[1..] {
-        // Priming/padding differences are typically a few hundred frames; cap
-        // at 1% of the shorter stream to guard against a real truncation bug.
         let tol = first.max(*frames) / 100;
         let diff = first.abs_diff(*frames);
         assert!(
@@ -205,9 +201,6 @@ fn seek_then_first_chunk_timestamp_is_after_target() {
             .into_chunk()
             .expect("at least one chunk after a 0.5s seek");
 
-        // Apple seek is byte-estimated, so ts may land slightly before the
-        // requested target (but should still be close). Symphonia accurate
-        // seek lands at or after target.
         let ts = chunk.meta.timestamp;
         assert!(
             ts + tol >= TARGET,
@@ -230,7 +223,6 @@ fn end_of_stream_returns_none_repeatedly() {
             .is_chunk()
         {}
 
-        // Calling again should keep returning Eof without panicking.
         for _ in 0..3 {
             let next = dec.next_chunk().expect("decode after EOF");
             assert!(
@@ -243,9 +235,6 @@ fn end_of_stream_returns_none_repeatedly() {
 
 #[kithara::test]
 fn wav_pcm_round_trip_matches_signal_across_backends() {
-    // The fixture is 16-bit little-endian PCM with a deterministic sine
-    // signal. Every backend that claims to support PCM+WAV must decode it
-    // to a non-trivial f32 stream with the expected frame count and energy.
     for backend in available_backends() {
         let mut dec = backend.make_wav();
 
@@ -265,8 +254,6 @@ fn wav_pcm_round_trip_matches_signal_across_backends() {
         let channels = usize::from(spec.channels).max(1);
         let frames = samples.len() / channels;
 
-        // Allow a small priming difference; the WAV fixture is uncompressed
-        // so the decoder should return ~all frames.
         let tol = Consts::WAV_FRAMES / 200;
         let diff = Consts::WAV_FRAMES.abs_diff(frames);
         let expected = Consts::WAV_FRAMES;
@@ -286,9 +273,6 @@ fn wav_pcm_round_trip_matches_signal_across_backends() {
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 #[kithara::test]
 fn full_decode_l2_norm_matches_within_tolerance() {
-    // Relative L2-norm tolerance. Both backends decode the same compressed
-    // MP3 stream; priming/padding differences shift a few hundred samples
-    // but the overall energy should agree within a couple of percent.
     const TOL_REL: f64 = 0.02;
 
     let mut sym = Backend::Symphonia.make_mp3();

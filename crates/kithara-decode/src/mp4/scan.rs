@@ -162,9 +162,6 @@ impl<'a> Mp4Scanner<'a> {
     fn scan(mut self) -> Result<(), Mp4MetadataError> {
         while let Some(header) = next_box(self.reader, None)? {
             if header.kind == Consts::BOX_MOOV {
-                // Only one `moov` per file in the wild; nothing else upstream
-                // is interesting either. The visitor's break flow is honored
-                // inside `parse_moov`; either way we stop after `moov`.
                 let _ = self.parse_moov(header.end)?;
                 return Ok(());
             }
@@ -265,8 +262,6 @@ impl<'a> Mp4Scanner<'a> {
             _ => Ok(ControlFlow::Continue(())),
         })?;
 
-        // Always close the track even if a child callback asked us to break,
-        // so the visitor gets a chance to finalize per-track state.
         let close = self.visitor.on_track_end();
         Ok(if walk.is_break() || close.is_break() {
             ControlFlow::Break(())
@@ -362,9 +357,6 @@ impl<'a> Mp4Scanner<'a> {
         let mut name: Option<SmallVec<[u8; 32]>> = None;
         let mut data_range: Option<(u64, u64)> = None;
 
-        // We only collect inside the closure (always Continue), so the
-        // returned ControlFlow is uninteresting here — we drive the break
-        // decision ourselves below, after we know whether this tag matched.
         let _ = self.walk_children(end, |this, header| {
             match header.kind {
                 Consts::BOX_MEAN => mean = this.read_text_fullbox_child(header, "mean")?,
@@ -408,11 +400,6 @@ impl<'a> Mp4Scanner<'a> {
 /// Extract the audio sample rate from the first sample entry of an `stsd`.
 /// Returns `None` if the payload is too short or the entry slot is missing.
 fn parse_stsd_sample_rate(payload: &[u8]) -> Option<u32> {
-    // Layout: 4 bytes version+flags, 4 bytes entry_count, then nested
-    // sample-entry boxes. The first sample entry's box header is 8 bytes,
-    // so its inner payload starts at offset 16. For an AudioSampleEntry the
-    // 16.16 fixed-point sample rate sits at inner offset 24..28
-    // (8 bytes SampleEntry tail + 8 bytes reserved + 4 x 2 bytes = 24).
     let entry_payload = payload.get(16..)?;
     if entry_payload.len() < 28 {
         return None;
@@ -458,9 +445,6 @@ fn parse_elst(payload: &[u8]) -> Result<SmallVec<[Mp4EditListEntry; 1]>, Mp4Meta
                     media_time,
                 }
             }
-            // xtask-lint-ignore: loop_allocation
-            // Cold error path: ELST version is bounded to {0, 1} by the parser
-            // upstream; this arm only fires on malformed input.
             _ => return Err(invalid(format!("unsupported elst version {version}"))),
         };
         entries.push(entry);
@@ -576,8 +560,6 @@ fn next_box(
         }
         0 => match end {
             Some(limit) => (8u64, limit - start),
-            // Top-level box with size 0 means "extends to end of file"; nothing
-            // useful follows it for our scan purposes.
             None => return Ok(None),
         },
         _ => (8u64, u64::from(size32)),

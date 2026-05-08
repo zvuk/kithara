@@ -16,6 +16,8 @@ allowed_inline_markers = [
     "WHY:",
     "HACK:",
     "kithara:",
+    "ast-grep-ignore:",
+    "xtask-lint-ignore:",
 ]
 exclude_paths = [
     "**/build.rs",

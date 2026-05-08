@@ -98,9 +98,6 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] delay_ms:
     let server = PackagedTestServer::with_delay_rules(if delay_ms == 0 {
         Vec::new()
     } else {
-        // Throttle every segment from index 2 onward — the segment that
-        // contains the seek target. Earlier segments stream normally so
-        // warmup completes without stalling.
         vec![DelayRule {
             variant: None,
             segment_eq: None,
@@ -146,10 +143,6 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] delay_ms:
         Consts::SEEK_TARGET_SECS
     );
 
-    // Wall budget = server-side delay for segment 2 + slack so the
-    // pipeline can actually consume the delivered bytes after they
-    // arrive. Independent of `POST_SEEK_AUDIO_SECS` (which is the
-    // *audio-time* horizon).
     let post_seek_wall_ms =
         delay_ms.saturating_mul(Consts::MAX_FETCHES_PER_SEGMENT) + Consts::POST_SEEK_WALL_SLACK_MS;
     render_burst_paced(

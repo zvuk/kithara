@@ -186,10 +186,6 @@ async fn wait_for_current_id(
 }
 
 fn drain_event_backlog(rx: &mut EventReceiver) {
-    // `try_recv` returns `Empty` when nothing's queued, `Closed` when the
-    // bus is gone, and `Lagged(_)` after a backlog overflow.  Treat
-    // `Lagged` as "keep draining" so a busy publisher window can't strand
-    // the receiver in a partial state.  Stop on any other error.
     use tokio::sync::broadcast::error::TryRecvError;
     loop {
         match rx.try_recv() {
@@ -234,15 +230,12 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
             cfg
         };
 
-        // fast first (index 0), slow second (index 1) — auto-advance
-        // after fast natural end will reach slow's slot.
         let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(&fast_url))));
         let slow_id = queue.append(TrackSource::Config(Box::new(mk_cfg(&slow_url))));
 
         let mut rx = queue.subscribe();
         drain_event_backlog(&mut rx);
 
-        // Race window: pending_select goes slow then is stomped by fast.
         queue
             .select(slow_id, Transition::None)
             .expect("select slow");
@@ -258,16 +251,10 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
             .await
             .unwrap_or_else(|e| panic!("[iter {iter}] slow load: {e}"));
 
-        // fast must actually become current and start playing.
         wait_for_current_id(&queue, fast_id, Duration::from_secs(5))
             .await
             .unwrap_or_else(|e| panic!("[iter {iter}] fast never became current: {e}"));
 
-        // Watch the post-fast window: the bug is current flipping to
-        // slow via auto-advance after fast ends naturally. If `current`
-        // resolves to `None` (queue ended cleanly through `QueueEnded`),
-        // no barge-in can fire in this iteration — exit early so the
-        // stress matrix doesn't burn the full window per iter.
         let watch_start = std::time::Instant::now();
         let mut current_history: Vec<Option<TrackId>> = Vec::new();
         while watch_start.elapsed() < Consts::POST_FAST_OBSERVE {
@@ -284,7 +271,6 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
                 break;
             }
             if cur.is_none() && current_history.contains(&Some(fast_id)) {
-                // fast → None reached naturally, queue ended; skip remaining poll.
                 break;
             }
             sleep(Consts::POLL_INTERVAL).await;

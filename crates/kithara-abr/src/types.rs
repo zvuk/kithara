@@ -1,5 +1,3 @@
-// Local to `kithara-abr`.
-// Cross-crate vocabulary owned by `kithara-events`.
 pub use kithara_events::{
     AbrMode, AbrProgressSnapshot, AbrReason, AbrVariant, BandwidthSource, VariantDuration,
     VariantInfo,

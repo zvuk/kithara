@@ -34,7 +34,7 @@ struct Consts;
 impl Consts {
     const D: SawWav = SawWav::DEFAULT;
     const SEGMENT_COUNT: usize = 100;
-    const TOTAL_BYTES: usize = Self::SEGMENT_COUNT * Self::D.segment_size; // 20 MB
+    const TOTAL_BYTES: usize = Self::SEGMENT_COUNT * Self::D.segment_size;
     const SEEK_ITERATIONS: usize = 1000;
 
     /// Compute the expected duration in seconds for the generated WAV.
@@ -45,8 +45,6 @@ impl Consts {
         frame_count as f64 / f64::from(Self::D.sample_rate)
     }
 }
-
-// Stress Test
 
 /// 1000 random seek+read cycles with three-level PCM verification
 /// on `Audio<Stream<Hls>>` serving a 20 MB WAV.
@@ -72,7 +70,6 @@ impl Consts {
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]
 async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
-    // Step 1: Generate WAV
     let wav_data = create_wav_exact_bytes(
         signal::Sawtooth,
         Consts::D.sample_rate,
@@ -86,7 +83,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         "Generated saw-tooth WAV"
     );
 
-    // Step 2: Spawn HLS server with custom WAV data
     let segment_duration = Consts::D.segment_size as f64
         / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
     let server = HlsTestServer::new(HlsTestServerConfig {
@@ -101,14 +97,11 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     let url = server.url("/master.m3u8");
     info!(%url, segments = Consts::SEGMENT_COUNT, "HLS server ready");
 
-    // Step 3: Create Audio<Stream<Hls>>
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
-        // Ephemeral mode auto-evicts MemResources from the LRU cache.
-        // Increase capacity so all segments remain accessible for random seeks.
         store.cache_capacity =
             Some(NonZeroUsize::new(Consts::SEGMENT_COUNT + 10).expect("nonzero"));
         store.is_ephemeral = true;
@@ -125,7 +118,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
-    // Step 4: Verify duration
     let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();
     info!(total_secs, expected_dur, "Stream duration");
@@ -142,9 +134,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         "Audio spec"
     );
 
-    // Steps 5-6 in blocking thread
     let result = spawn_blocking(move || {
-        // Compute chunk size: ~50ms of audio
         let chunk_duration_secs = 0.05;
         let chunk_samples =
             (chunk_duration_secs * f64::from(spec.sample_rate) * f64::from(spec.channels)) as usize;
@@ -153,7 +143,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
         let mut buf = vec![0.0f32; chunk_samples];
 
-        // Generate 1000 random seek positions
         let max_seek_secs = total_secs - chunk_duration_secs;
         assert!(max_seek_secs > 0.0, "stream too short for chunk size");
 
@@ -166,7 +155,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
             max_seek_secs, "Generated seek positions"
         );
 
-        // Step 5: Iterate seek + read + verify
         let mut successful_reads = 0u64;
         let mut total_samples_read = 0u64;
         let mut channel_mismatches = 0u64;
@@ -178,12 +166,10 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         for (i, &pos_secs) in seek_positions.iter().enumerate() {
             let position = Duration::from_secs_f64(pos_secs);
 
-            // Seek
             audio.seek(position).unwrap_or_else(|e| {
                 panic!("seek #{i} to {pos_secs:.4}s failed: {e}");
             });
 
-            // Read
             let n = match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => count.get(),
                 Ok(ReadOutcome::Pending { .. }) => {
@@ -201,7 +187,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
 
             let frames = n / channels;
 
-            // Level 1: Integrity
             for (j, &sample) in buf[..n].iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -209,7 +194,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
                 );
             }
 
-            // L == R check
             if channels == 2 {
                 for f in 0..frames {
                     let l = buf[f * 2];
@@ -223,9 +207,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
                 }
             }
 
-            // Level 2: Continuity
-            // Consecutive frames should differ by exactly 1 step in the saw-tooth,
-            // or wrap from max to min.
             if frames >= 2 {
                 for f in 1..frames {
                     let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
@@ -248,14 +229,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
                 }
             }
 
-            // Level 3: Position
-            // First decoded sample should correspond to the seek position.
-            //
-            // Symphonia's WAV reader returns packets of 1152 frames.
-            // After seek, the first decoded packet starts from the packet
-            // boundary BEFORE the target, so the actual position can be
-            // up to 1151 frames earlier. Tolerance of 1200 covers this
-            // while still detecting gross seek errors (>27ms at 44.1 kHz).
             let expected_frame_idx = (pos_secs * f64::from(spec.sample_rate)).round() as usize;
             let expected_phase = expected_frame_idx % SawWav::SAW_PERIOD;
             let actual_phase = phase_from_f32(buf[0]);
@@ -326,7 +299,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
             "{position_errors} position mismatches (>3 tolerance) - seek landed in wrong place"
         );
 
-        // Step 6: Final seek near the end → read to EOF
         let final_seek_secs = total_secs - chunk_duration_secs;
         info!(final_seek_secs, "Final seek near end");
 
@@ -365,9 +337,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
 
         info!(remaining_samples, "Final read done - EOF confirmed");
 
-        // Step 7: Regression check - seek after EOF must resume playback.
-        // This catches false-EOF races where seek re-queues demand, but the downloader 
-        // marks EOF before demand is processed.
         let resume_positions = [0.5_f64, total_secs * 0.25, total_secs * 0.75];
         for (i, pos_secs) in resume_positions.iter().copied().enumerate() {
             audio

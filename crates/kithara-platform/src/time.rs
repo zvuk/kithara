@@ -26,10 +26,7 @@ pub use web_time::Instant;
 
 #[cfg(target_arch = "wasm32")]
 pub async fn sleep(duration: Duration) {
-    // `setTimeout` accepts a signed-i32 millisecond delay (~24.85 days);
-    // a larger `Duration` is clamped to that ceiling — without the clamp
-    // `as i32` would wrap back to a near-zero delay. Conversion-saturate.
-    let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
+    let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);
     let promise = Promise::new(&mut |resolve, _| {
         let set_timeout: Function = Reflect::get(&global(), &JsValue::from_str("setTimeout"))
             .expect("BUG: setTimeout is a standard browser global, must always exist")

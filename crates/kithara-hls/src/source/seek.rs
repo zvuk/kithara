@@ -16,9 +16,6 @@ impl HlsSource {
     ) {
         match *layout {
             SeekLayout::Preserve => {
-                // Keep segments — byte layout valid, decoder seeks in place.
-                // layout_variant stays unchanged. ABR switch (if pending) is
-                // handled after seek via format_change detection.
                 trace!(
                     seek_epoch,
                     variant,
@@ -28,11 +25,8 @@ impl HlsSource {
                 );
             }
             SeekLayout::Reset => {
-                // Switch layout variant — decoder will be recreated.
                 let mut segments = self.segments.lock_sync();
                 segments.set_layout_variant(variant);
-                // Sync expected sizes for the target variant so
-                // rebuild_variant_byte_map can reserve correct gap offsets.
                 if let Some(sizes) = self.playlist_state.segment_sizes(variant) {
                     segments.set_expected_sizes(variant, sizes);
                 }
@@ -67,16 +61,10 @@ impl HlsSource {
             "apply_seek_plan: enter"
         );
 
-        // Always: drain stale requests. The authoritative post-seek demand
-        // is issued later from `commit_seek_landing(...)` once the decoder
-        // tells us where it actually landed.
         self.coord.clear_segment_requests();
 
         self.apply_layout_plan(layout, variant, segment_index, seek_epoch, anchor);
 
-        // Do not commit reader position here. The authoritative post-seek
-        // byte position is whatever the decoder actually lands on after
-        // `decoder.seek(...)` drives the underlying `Read + Seek` stream.
         self.coord.reader_advanced.notify_one();
         self.coord.condvar.notify_all();
 
@@ -126,24 +114,6 @@ impl HlsSource {
             return Err(HlsError::SegmentNotFound("empty playlist".to_string()));
         }
 
-        // Default policy: anchor resolves in `layout_variant` so an
-        // in-place seek doesn't uselessly recreate the decoder while
-        // the layout still has the data. Fallback to `abr_variant_index`
-        // fires ONLY when the layout is *stranded* — the target segment
-        // lies strictly past the highest committed segment index in the
-        // layout variant AND ABR has already moved on. That's the
-        // silvercomet / kithara-app shape: ABR up-switched mid-playback,
-        // peer stopped fetching the old variant, user seeks into a
-        // region the peer will never deliver. Without fallback,
-        // `wait_range` hangs forever on bytes that never arrive.
-        //
-        // We deliberately do NOT fall back on LRU-evicted holes inside
-        // the layout's fetched range: peer is still actively engaged
-        // with the layout variant (ABR is a *download target hint*,
-        // not an *abandonment signal*), so the missing segment will be
-        // re-fetched by the scheduler's tail/gap logic. Falling back
-        // there would force a decoder recreation per evicted seek
-        // target and pile up latency under stress-seek workloads.
         let layout_variant = {
             let segs = self.segments.lock_sync();
             let v = segs.layout_variant();
@@ -160,12 +130,6 @@ impl HlsSource {
                 ))
             })?;
 
-        // "Stranded" is stronger than "not loaded": the layout has
-        // literally never fetched a segment at or after the target
-        // index. We use `max_stored_index` (which includes segments
-        // the LRU evicted) so that a cache miss on a previously
-        // fetched segment does NOT trip the fallback — the scheduler
-        // will re-fetch it.
         let (layout_has_target, layout_stranded) = {
             let segs = self.segments.lock_sync();
             let has_target = segs.is_segment_loaded(layout_variant, layout_segment_index);
@@ -211,8 +175,6 @@ impl HlsSource {
                 ))
             })?;
 
-        // Saturating clamp: a segment count beyond u32::MAX exceeds any
-        // realistic playlist; capping is the truthful "past end" signal.
         let segment_index = u32::try_from(segment_index).unwrap_or(u32::MAX);
         Ok(SourceSeekAnchor::new(byte_offset, segment_start)
             .with_segment_end(segment_end)

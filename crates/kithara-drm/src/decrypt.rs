@@ -49,7 +49,6 @@ pub fn aes128_cbc_process_chunk(
         return Ok(0);
     }
 
-    // AES-CBC requires input aligned to block size
     if !input.len().is_multiple_of(AES_BLOCK_SIZE) {
         return Err(format!(
             "input length {} is not aligned to AES block size {}",
@@ -58,19 +57,15 @@ pub fn aes128_cbc_process_chunk(
         ));
     }
 
-    // Save last ciphertext block BEFORE decryption — needed for CBC IV chaining.
-    // In CBC mode the IV for the next chunk is the last ciphertext block of this chunk.
     let next_iv: [u8; AES_BLOCK_SIZE] = {
         let mut iv = [0u8; AES_BLOCK_SIZE];
         iv.copy_from_slice(&input[input.len() - AES_BLOCK_SIZE..]);
         iv
     };
 
-    // Copy input to output buffer for in-place decryption
     output[..input.len()].copy_from_slice(input);
 
     if is_last {
-        // Last chunk: decrypt with PKCS7 unpadding
         let decryptor = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
         let plaintext = decryptor
             .decrypt_padded::<Pkcs7>(&mut output[..input.len()])
@@ -81,10 +76,8 @@ pub fn aes128_cbc_process_chunk(
             decrypted = written,
             "aes128_cbc: last chunk decrypted with unpadding"
         );
-        // No need to update IV for last chunk — there are no more chunks.
         Ok(written)
     } else {
-        // Intermediate chunk: decrypt without unpadding (block-by-block, same size)
         let decryptor = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
         let plaintext = decryptor
             .decrypt_padded::<NoPadding>(&mut output[..input.len()])
@@ -95,7 +88,6 @@ pub fn aes128_cbc_process_chunk(
             decrypted = written,
             "aes128_cbc: intermediate chunk decrypted"
         );
-        // Update IV for next chunk: CBC chaining requires the last ciphertext block.
         ctx.iv = next_iv;
         Ok(written)
     }

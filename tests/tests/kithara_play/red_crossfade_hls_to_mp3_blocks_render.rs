@@ -100,7 +100,6 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
-    // Build MP3 resource WITHOUT preload — matches production timing.
     let make_mp3 = |w: AudioWorkerHandle| {
         let p = local_mp3.clone();
         async move {
@@ -115,7 +114,6 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         }
     };
 
-    // Build and preload HLS resource (as in production).
     let make_hls = |w: AudioWorkerHandle, s: StoreOptions| {
         let u = hls_url.clone();
         async move {
@@ -136,14 +134,11 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         }
     };
 
-    // Try 10 iterations; fail as soon as any HLS→MP3 fade trips the budget,
-    // so a single deterministic slow render is enough evidence.
     let mut worst_slow_renders: u32 = 0;
     let mut worst_max_render: Duration = Duration::ZERO;
     let mut worst_label = String::new();
 
     for iter in 0..10 {
-        // HLS phase: play for a bit to get it producing chunks.
         let hls = make_hls(worker.clone(), store.clone()).await;
         sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(hls, &format!("red_hls_{iter}"));
@@ -155,7 +150,6 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             Consts::SR,
         );
 
-        // Crossfade HLS→MP3. This is where the render thread can block.
         let mp3 = make_mp3(worker.clone()).await;
         sleep(Duration::from_millis(200)).await;
         let before_fade = Instant::now();
@@ -179,7 +173,6 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         }
     }
 
-    // Same contract as the parent test: at most 1 slow render per window.
     assert!(
         worst_slow_renders <= 1,
         "red: HLS→MP3 crossfade exceeded render budget on {} blocks \

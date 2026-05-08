@@ -33,7 +33,6 @@ impl StreamType for File {
         let cancel = config.cancel.clone().unwrap_or_default();
         let src = config.src.clone();
 
-        // Fully synchronous — returned future is always ready.
         std::future::ready(match src {
             FileSrc::Local(path) => Self::create_local(path, config, &cancel),
             FileSrc::Remote(url) => Self::create_remote(url, config, cancel),
@@ -81,9 +80,6 @@ impl File {
         coord.set_total_bytes(len);
         let total = len.unwrap_or(0);
         coord.set_download_pos(total);
-        // Local files have nothing to "complete" — the bytes are already
-        // on disk. Reader-side `FileEvent::EndOfStream` fires when the
-        // reader hits EOF.
 
         Ok(FileSource::local(
             res,
@@ -106,9 +102,6 @@ impl File {
         config: FileConfig,
         cancel: CancellationToken,
     ) -> Result<FileSource, SourceError> {
-        // Use the explicit `config.name` if provided; otherwise the
-        // URL's query string. Bind both probes first so eager `.or(...)`
-        // avoids the closure-based fallback-chain pattern.
         let from_config = config.name.as_deref();
         let from_query = url.query();
         let name_or_query = from_config.or(from_query).filter(|s| !s.is_empty());
@@ -124,9 +117,6 @@ impl File {
             .evict_config(config.store.to_evict_config())
             .ephemeral(config.store.is_ephemeral)
             .cancel(cancel.clone());
-        if cfg!(target_arch = "wasm32") || config.store.is_ephemeral {
-            // No pre-allocation — length unknown until on_connect.
-        }
         let backend = Arc::new(backend_builder.build());
 
         let state = FileStreamState::create(
@@ -138,9 +128,8 @@ impl File {
 
         let timeline = Timeline::new();
         let coord = Arc::new(FileCoord::new(timeline));
-        coord.set_total_bytes(state.res.len()); // None for fresh resources
+        coord.set_total_bytes(state.res.len());
 
-        // Check if already fully cached.
         if matches!(state.res.status(), ResourceStatus::Committed { .. }) {
             tracing::debug!("file already cached, skipping download");
             let total = coord.total_bytes().unwrap_or(0);
@@ -156,12 +145,10 @@ impl File {
             ));
         }
 
-        // Register a peer and get a PeerHandle for HTTP requests.
         let peer_handle = downloader
             .register(Arc::new(FilePeer::new(coord.timeline())))
             .with_bus(state.bus.clone());
 
-        // Create source — spawns download tasks internally.
         let source = FileSource::remote(
             &state,
             coord,

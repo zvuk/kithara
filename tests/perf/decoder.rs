@@ -31,10 +31,11 @@ fn decoder_probe_single(wav_data: &[u8]) {
 
 #[hotpath::measure]
 fn decoder_chunk_process(decoder: &mut Box<dyn Decoder>) -> Option<usize> {
-    decoder.next_chunk().ok().flatten().map(|chunk| {
-        // F32 conversion happens inside next_chunk
-        chunk.pcm.len()
-    })
+    decoder
+        .next_chunk()
+        .ok()
+        .flatten()
+        .map(|chunk| chunk.pcm.len())
 }
 
 #[derive(Clone, Copy)]

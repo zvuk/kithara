@@ -182,8 +182,6 @@ impl<T: StreamType> Stream<T> {
     /// Returns an error if the underlying stream source cannot be created.
     pub async fn new(config: T::Config) -> Result<Self, SourceError> {
         let source = T::create(config).await?;
-        // Yield so background tasks (Downloader loop) spawned during
-        // create() get a chance to start on current-thread runtimes.
         task::yield_now().await;
         Ok(Self { source })
     }
@@ -383,10 +381,6 @@ impl<T: StreamType> Read for Stream<T> {
         match self.try_read(buf) {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
             Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
-            // `Pending(SeekPending)` rides as the typed inner of
-            // `IoError::other` so consumers of the `io::Read` surface
-            // (Symphonia chain walker in `kithara-decode`) can
-            // `downcast_ref` it without matching on strings.
             Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
                 Err(IoError::other(reason))
             }
@@ -412,11 +406,6 @@ impl<T: StreamType> Seek for Stream<T> {
             SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
                 if self.source.len().is_none() {
-                    // Wait until the source learns its length OR is
-                    // cancelled / superseded by a new seek epoch — see
-                    // [`Source::wait_range`] for the cancellation contract.
-                    // No wall-clock budget: a slow connection must not
-                    // make seek silently give up.
                     let _ = self.source.wait_range(0..1, None);
                 }
                 let Some(len) = self.source.len() else {
@@ -436,17 +425,8 @@ impl<T: StreamType> Seek for Stream<T> {
             ));
         }
 
-        // After the >=0 guard above, `new_pos` is non-negative. i64→u64
-        // conversion-clamp: a value past u64::MAX already exceeds any seekable
-        // resource, so the ceiling is the faithful "past end" signal.
-        let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
+        let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX);
 
-        // Wait for the target byte unboundedly; only `coord.cancel` (track
-        // replaced / resource dropped / shutdown) or `seek_epoch` advance
-        // (the user issued another seek) interrupts the wait. The previous
-        // 10 s wall-clock budget caused position-frozen-at-target hangs on
-        // slow connections — `red`-pinned by
-        // `hls_seek_middle_lands_under_simulated_slow_connection`.
         let _ = self
             .source
             .wait_range(new_pos..new_pos.saturating_add(1), None);

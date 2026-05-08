@@ -93,7 +93,6 @@ async fn test_resource_from_reader_position_and_duration() {
     let resource = make_resource();
     assert_eq!(resource.position(), Duration::ZERO);
     let dur = resource.duration().unwrap();
-    // 1.0 second at 44100 Hz
     assert!((dur.as_secs_f64() - 1.0).abs() < 0.001);
 }
 
@@ -114,7 +113,6 @@ async fn test_resource_from_reader_seek() {
 async fn test_resource_from_reader_reads_until_eof() {
     let mut resource = make_resource();
 
-    // Read all samples: 44100 frames * 2 channels = 88200 samples
     let mut buf = [0.0f32; 4096];
     let saw_eof = loop {
         match resource.read(&mut buf).expect("BUG: read") {
@@ -134,7 +132,6 @@ async fn test_resource_subscribe_receives_events() {
     let (resource, bus) = make_resource_with_bus();
     let mut rx = resource.subscribe();
 
-    // Publish an AudioEvent through the shared bus directly.
     let spec = mock_spec();
     let format = AudioFormat::new(spec.channels, spec.sample_rate);
     bus.publish(AudioEvent::FormatDetected { spec: format });

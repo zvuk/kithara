@@ -74,7 +74,6 @@ impl EventBus {
             self.senders[0].send(event).ok();
             return;
         }
-        // Clone for all but last, consume owned event on last send.
         for sender in &self.senders[..len - 1] {
             sender.send(event.clone()).ok();
         }
@@ -97,7 +96,6 @@ impl EventBus {
         let (tx, _) = broadcast::channel(self.registry.capacity);
         self.registry.topics.insert(id, tx.clone());
         let scope = self.scope.child(id);
-        // Cache senders: self (new) + ancestors (from parent's cache).
         let mut senders = SmallVec::with_capacity(self.senders.len() + 1);
         senders.push(tx);
         senders.extend(self.senders.iter().cloned());
@@ -121,15 +119,8 @@ impl EventBus {
 
 impl Drop for EventBus {
     fn drop(&mut self) {
-        // Only remove the topic if this is the last EventBus holding a sender
-        // for this scope. broadcast::Sender strong_count includes the one in
-        // DashMap + one per EventBus clone that has it cached. When our cached
-        // sender is the last clone besides the DashMap entry (count == 2),
-        // removing is safe. For root/ancestor senders cached by children,
-        // strong_count will be higher, so we don't remove them.
         let id = self.scope.id();
         if self.senders[0].receiver_count() == 0 {
-            // No subscribers and we are being dropped — clean up.
             self.registry.topics.remove(&id);
         }
     }
@@ -335,7 +326,6 @@ mod tests {
             child_id = child.id();
             assert!(root.registry.topics.contains_key(&child_id));
         }
-        // After drop, topic entry should be removed (no subscribers).
         assert!(!root.registry.topics.contains_key(&child_id));
     }
 }

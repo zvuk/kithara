@@ -64,10 +64,6 @@ async fn three_peers_maintain_independent_variant_indices() {
     let h1 = controller.register(&p1);
     let h2 = controller.register(&p2);
 
-    // Feed unrelated bandwidth samples; peer_id routing must isolate
-    // each peer's state. With fast settings we only verify that
-    // per-peer state does not see a variant index that doesn't exist
-    // on that peer.
     for _ in 0..10 {
         controller.record_bandwidth(
             h0.peer_id(),

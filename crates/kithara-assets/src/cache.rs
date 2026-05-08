@@ -175,8 +175,6 @@ where
             }
         }
 
-        // Grow underlying LRU storage when pinned entries push the
-        // actual count beyond `lru::LruCache::cap()`.
         if cache.len() >= cache.cap().get() {
             let grow = NonZeroUsize::new(cache.len() + 1)
                 .expect("BUG: cache overflow capacity must stay non-zero");
@@ -215,13 +213,6 @@ where
                     ResourceStatus::Failed(reason) => {
                         return Some(AssetResourceState::Failed(reason));
                     }
-                    // Cancelled folds into Active for the same reason
-                    // `AssetResourceState::From` does — a cancelled
-                    // handle still represents a live cache entry
-                    // whose partial bytes are valid for a Phase-2
-                    // reopen. The cancellation signal is consumed by
-                    // `ProcessedResource::inner_terminal` via
-                    // `ResourceStatus::Cancelled` directly.
                     ResourceStatus::Active | ResourceStatus::Cancelled => has_active = true,
                     ResourceStatus::Committed { final_len } => {
                         if committed.is_none() {
@@ -232,7 +223,6 @@ where
                 }
             }
 
-            // Promote committed entry so it survives until read_from_entry.
             if let Some(pk) = promote_key {
                 cache.promote(&pk);
             }
@@ -358,18 +348,6 @@ where
         let mut cache = self.cache.lock_sync();
 
         if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
-            // Cache-hit on an already-committed resource must NOT
-            // reactivate: reactivation flips `processed=false` /
-            // `committed=false` on the SHARED `ProcessedResource`,
-            // which poisons any concurrent reader holding a cloned Arc
-            // (reader.read_at fires "processed resource is not readable
-            // before commit" as a hard StorageError::Failed → decoder
-            // FSM → Failed). The already-committed data is exactly what
-            // the caller wants: just return a clone. See
-            // red_test_drm_small_cache_writer_reactivate_poisons_concurrent_reader.
-            //
-            // Only reactivate when the cached resource is not
-            // Committed — that's the legitimate "LRU slot reuse" case.
             let res = res.clone();
             if !matches!(res.status(), ResourceStatus::Committed { .. }) {
                 res.reactivate()?;
@@ -393,11 +371,9 @@ where
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
-        // Clear resource caches for this asset (keep index entries)
         {
             let mut cache = self.cache.lock_sync();
 
-            // Collect keys to remove (LruCache doesn't have retain())
             let keys_to_remove: Vec<CacheKey<A::Context>> = cache
                 .iter()
                 .filter_map(|(k, _)| {
@@ -412,7 +388,6 @@ where
                 })
                 .collect();
 
-            // Remove collected keys
             for key in keys_to_remove {
                 cache.pop(&key);
             }
@@ -448,16 +423,8 @@ where
             return Ok(self.wrap(key, res.clone()));
         }
 
-        if ctx.is_none() {
-            // Read-path (`open_resource`) must only reuse *committed* cache
-            // entries carrying a different context (e.g. DRM writer committed
-            // the resource with `ctx=Some(..)`; reader arrives with
-            // `ctx=None`). Falling back to any entry — including an
-            // uncommitted one still being streamed by a ctx=Some writer —
-            // would surface the `ProcessedResource` pre-commit read guard
-            // ("processed resource is not readable before commit") as a hard
-            // error in the reader path, poisoning the decoder FSM.
-            if let Some(res) =
+        if ctx.is_none()
+            && let Some(res) =
                 cache
                     .iter()
                     .find_map(|(candidate_key, entry)| match (candidate_key, entry) {
@@ -469,9 +436,8 @@ where
                         }
                         _ => None,
                     })
-            {
-                return Ok(self.wrap(key, res));
-            }
+        {
+            return Ok(self.wrap(key, res));
         }
 
         let res = self.inner.open_resource_with_ctx(key, ctx)?;
@@ -489,7 +455,6 @@ where
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        // Remove from cache (all contexts)
         {
             let mut cache = self.cache.lock_sync();
             let keys_to_remove: Vec<_> = cache
@@ -505,7 +470,6 @@ where
                 cache.pop(&cache_key);
             }
         }
-        // Also unpin when removing
         self.pinned.lock_sync().remove(key);
         self.inner.remove_resource(key)
     }
@@ -639,7 +603,6 @@ mod tests {
         let cap = NonZeroUsize::new(3).unwrap();
         let cached = make_cached(dir.path(), cap);
 
-        // Open 4 committed resources — first should be evicted from LRU (capacity 3)
         let keys: Vec<ResourceKey> = (0..4)
             .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
             .collect();
@@ -650,7 +613,6 @@ mod tests {
             res.commit(Some(4)).unwrap();
         }
 
-        // Cache should have exactly 3 entries (capacity)
         assert_eq!(cached.cache.lock_sync().len(), 3);
     }
 
@@ -664,7 +626,6 @@ mod tests {
             .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
             .collect();
 
-        // Acquire and pin the first resource via retain()
         let first = cached.acquire_resource(&keys[0]).unwrap().retain();
         first.write_at(0, b"data").unwrap();
         first.commit(Some(4)).unwrap();
@@ -675,7 +636,6 @@ mod tests {
             res.commit(Some(4)).unwrap();
         }
 
-        // Pinned key should survive: 3 normal + 1 pinned = 4
         assert_eq!(cached.cache.lock_sync().len(), 4);
         assert!(
             cached.has_resource(&keys[0]),
@@ -693,12 +653,10 @@ mod tests {
             .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
             .collect();
 
-        // Pin the first resource
         let first = cached.acquire_resource(&keys[0]).unwrap().retain();
         first.write_at(0, b"data").unwrap();
         first.commit(Some(4)).unwrap();
 
-        // Fill up to capacity + 1 pinned
         for key in &keys[1..4] {
             let res = cached.acquire_resource(key).unwrap();
             res.write_at(0, b"data").unwrap();
@@ -706,15 +664,12 @@ mod tests {
         }
         assert_eq!(cached.cache.lock_sync().len(), 4, "3 normal + 1 pinned");
 
-        // Unpin the first resource
         first.release();
 
-        // Add one more — the previously-pinned resource should now be evictable
         let res = cached.acquire_resource(&keys[4]).unwrap();
         res.write_at(0, b"data").unwrap();
         res.commit(Some(4)).unwrap();
 
-        // Cache should shrink back to base capacity
         assert_eq!(
             cached.cache.lock_sync().len(),
             3,
@@ -732,7 +687,6 @@ mod tests {
         let res1 = cached.acquire_resource(&key).unwrap();
         let res2 = cached.acquire_resource(&key).unwrap();
 
-        // Same resource path — cache hit
         assert_eq!(res1.path(), res2.path());
     }
 
@@ -766,7 +720,6 @@ mod tests {
 
         cached.delete_asset().unwrap();
 
-        // delete_asset now clears both index and resource entries
         assert_eq!(cached.cache.lock_sync().len(), 0);
     }
 
@@ -781,13 +734,10 @@ mod tests {
         res.write_at(0, b"data").unwrap();
         res.commit(Some(4)).unwrap();
 
-        // Sanity: resource exists
         assert!(cached.has_resource(&key));
 
-        // Trigger removal — clears cache + unlinks from backend
         cached.remove_resource(&key).unwrap();
 
-        // After removal: resource_state should no longer report Committed
         let state = cached.resource_state(&key).unwrap();
         assert_eq!(state, AssetResourceState::Missing);
     }
@@ -799,7 +749,6 @@ mod tests {
 
         let key = ResourceKey::new("bypass.mp3");
 
-        // Cache inactive — should still open via inner store
         assert!(cached.acquire_resource(&key).is_err());
     }
 
@@ -810,12 +759,10 @@ mod tests {
         let cached = make_cached(dir.path(), cap);
         let key = ResourceKey::new("committed.m4s");
 
-        // Write + commit
         let res = cached.acquire_resource(&key).unwrap();
         res.write_at(0, b"hello").unwrap();
         res.commit(Some(5)).unwrap();
 
-        // open_resource should find the committed entry
         let opened = cached.open_resource(&key).unwrap();
         let mut buf = [0u8; 5];
         opened.read_at(0, &mut buf).unwrap();
@@ -828,7 +775,6 @@ mod tests {
         let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None);
         let key = ResourceKey::new("seg.m4s");
 
-        // Two different contexts for same key yield separate resources
         let r1 = cached.acquire_resource_with_ctx(&key, Some(1)).unwrap();
         r1.write_at(0, b"aaa").unwrap();
         r1.commit(Some(3)).unwrap();
@@ -837,7 +783,6 @@ mod tests {
         r2.write_at(0, b"bbb").unwrap();
         r2.commit(Some(3)).unwrap();
 
-        // Reading back should return the correct resource per context
         let check1 = cached.open_resource_with_ctx(&key, Some(1)).unwrap();
         let check2 = cached.open_resource_with_ctx(&key, Some(2)).unwrap();
         let mut b1 = [0u8; 3];
@@ -854,25 +799,21 @@ mod tests {
         let cap = NonZeroUsize::new(2).unwrap();
         let cached = make_cached(dir.path(), cap);
 
-        // Resource A
         let key_a = ResourceKey::new("a.m4s");
         let a = cached.acquire_resource(&key_a).unwrap();
         a.write_at(0, b"aaaa").unwrap();
         a.commit(Some(4)).unwrap();
 
-        // Resource B
         let key_b = ResourceKey::new("b.m4s");
         let b = cached.acquire_resource(&key_b).unwrap();
         b.write_at(0, b"bbbb").unwrap();
         b.commit(Some(4)).unwrap();
 
-        // Resource C — evicts A from LRU
         let key_c = ResourceKey::new("c.m4s");
         let c = cached.acquire_resource(&key_c).unwrap();
         c.write_at(0, b"cccc").unwrap();
         c.commit(Some(4)).unwrap();
 
-        // A is evicted from LRU but its data is still on disk (DiskAssetStore)
         let a_path = dir.path().join("test_asset").join("a.m4s");
         assert!(a_path.exists(), "committed data must remain on disk");
         assert_eq!(fs::read(&a_path).unwrap(), b"aaaa");
@@ -884,12 +825,10 @@ mod tests {
         let cached = CachedAssets::new(Arc::new(store), NonZeroUsize::new(5).unwrap(), None);
         let key = ResourceKey::new("seg.m4s");
 
-        // Commit with a specific context
         let res = cached.acquire_resource_with_ctx(&key, Some(42)).unwrap();
         res.write_at(0, b"data").unwrap();
         res.commit(Some(4)).unwrap();
 
-        // Opening with None should find the committed resource
         let found = cached.open_resource(&key).unwrap();
         let mut buf = [0u8; 4];
         found.read_at(0, &mut buf).unwrap();
@@ -913,7 +852,6 @@ mod tests {
         let _res = cached.acquire_resource(&key).unwrap();
         h.join().unwrap();
 
-        // Both threads opened the same logical resource
         assert_eq!(cached.cache.lock_sync().len(), 1);
     }
 }

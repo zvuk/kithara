@@ -362,7 +362,6 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                     }
 
                     for seek_pos in Consts::HLS_SEEK_POSITIONS {
-                        // Size maps are populated via HEAD and can transiently under-report.
                         if let Some(len) = stream.len()
                             && seek_pos > len
                         {

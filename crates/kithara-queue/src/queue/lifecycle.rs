@@ -43,8 +43,6 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id, TrackSource::Uri(url));
         self.player.reserve_slots(self.len());
-        // Arm autoplay on the first registered id so the load-completion
-        // race (B finishing before A) cannot promote the wrong track.
         if self.should_autoplay {
             let _ = self.autoplay_target.compare_exchange(
                 Self::NO_ARMED_TRACK,
@@ -70,9 +68,6 @@ impl Queue {
         if let Some(index) = index {
             self.player.replace_item(index, resource);
             self.set_status(id, TrackStatus::Loaded);
-            // Honour the autoplay arm: if THIS id is the registered
-            // autoplay target and it just finished loading, select it
-            // so playback starts without an explicit `select` call.
             if self.should_autoplay
                 && self
                     .autoplay_target

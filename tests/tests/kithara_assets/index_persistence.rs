@@ -142,7 +142,6 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
     let lru = lru_path(&root);
     let availability = availability_path(&root);
 
-    // 1) Fresh store — no index files yet.
     let store = build_store(&temp_dir, asset_root);
     assert!(
         !pins.exists(),
@@ -154,9 +153,6 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
         "availability.bin must not exist before checkpoint()"
     );
 
-    // 2) Acquire a resource: this eagerly flushes both pins.bin
-    //    (through LeaseAssets::pin) and lru.bin (through
-    //    EvictAssets::touch_and_maybe_evict).
     let key_a = ResourceKey::new("segment-a.bin");
     let res_a = store.acquire_resource(&key_a).expect("acquire segment-a");
     assert!(
@@ -172,7 +168,6 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
         "availability.bin is checkpoint-only; must still be absent"
     );
 
-    // Pins payload: exactly one pin for our asset_root.
     let pinned_now = read_archived_pins_set(&pins);
     assert!(
         pinned_now.contains(&asset_root.to_string()),
@@ -180,7 +175,6 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
     );
     assert_eq!(read_archived_pins_version(&pins), 1);
 
-    // LRU payload: our asset_root must be tracked.
     let lru_keys_now = read_archived_lru_keys(&lru);
     assert!(
         lru_keys_now.contains(&asset_root.to_string()),
@@ -192,7 +186,6 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
         "lru clock must advance on first acquire (got {clock_after_first})"
     );
 
-    // 3) Write + commit. Availability is updated in memory only.
     let payload = b"integration-payload-0123456789abcdef";
     res_a.write_at(0, payload).expect("write segment-a");
     res_a
@@ -203,7 +196,6 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
         "commit() must NOT auto-persist availability.bin (explicit checkpoint contract)"
     );
 
-    // Query the in-memory aggregate to prove the observer wired up.
     let ranges_in_memory = store.available_ranges(&key_a);
     let as_vec: Vec<(u64, u64)> = ranges_in_memory.iter().map(|r| (r.start, r.end)).collect();
     assert_eq!(
@@ -212,11 +204,6 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
         "in-memory availability must reflect the committed range"
     );
 
-    // 4) Second resource for the SAME asset_root: LRU recency must NOT
-    //    re-advance — the asset is already tracked. EvictAssets dedupes
-    //    via `mark_seen`, and segment commits go through `update_bytes`
-    //    (no clock bump) so byte accounting can update without skewing
-    //    eviction order.
     let key_b = ResourceKey::new("segment-b.bin");
     let res_b = store.acquire_resource(&key_b).expect("acquire segment-b");
     let clock_after_second = read_archived_lru_clock(&lru);
@@ -228,7 +215,6 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
     res_b.write_at(0, b"b-payload").expect("write b");
     res_b.commit(Some(9)).expect("commit b");
 
-    // 5) Explicit checkpoint: now availability.bin appears.
     assert!(
         !availability.exists(),
         "sanity: still no file pre-checkpoint"
@@ -239,26 +225,20 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
         "availability.bin must exist and be non-empty after checkpoint()"
     );
 
-    // Availability payload: both committed ranges must round-trip.
     let entry_a = read_archived_availability(&availability, asset_root, "segment-a.bin");
     assert_eq!(entry_a.ranges, vec![(0, payload.len() as u64)]);
     assert_eq!(entry_a.final_len, Some(payload.len() as u64));
     let entry_b = read_archived_availability(&availability, asset_root, "segment-b.bin");
     assert_eq!(entry_b.ranges, vec![(0, 9)]);
 
-    // 6) Release resources: pins.bin must shrink back to empty.
     drop(res_a);
     drop(res_b);
-    // Let any drop-side persistence finish.
     let pinned_after_drop = read_archived_pins_set(&pins);
     assert!(
         pinned_after_drop.is_empty(),
         "after dropping the last live resource, no asset_root should remain pinned; got {pinned_after_drop:?}"
     );
 
-    // 7) Open a third time and make sure availability.bin still
-    //    reflects what we checkpointed — i.e. checkpoint is a real
-    //    snapshot, not a race-prone temporary.
     let reopened = build_store(&temp_dir, asset_root);
     let rehydrated = reopened.available_ranges(&key_a);
     let rehydrated_vec: Vec<(u64, u64)> = rehydrated.iter().map(|r| (r.start, r.end)).collect();

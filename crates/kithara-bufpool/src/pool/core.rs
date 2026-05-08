@@ -83,7 +83,6 @@ where
         let bytes = value.byte_size();
         let mut shard = self.shards[shard_idx].lock_sync();
         if !shard.try_put(value) {
-            // Shard full or buffer rejected — release tracked bytes.
             drop(shard);
             self.release_budget(bytes);
             self.stat_put_drops.fetch_add(1, Ordering::Relaxed);

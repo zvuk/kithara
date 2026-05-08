@@ -148,8 +148,6 @@ impl EventBridge {
             }
             PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
             PlayerEvent::ItemDidPlayToEnd { .. } => FfiPlayerEvent::ItemDidPlayToEnd,
-            // `PlayerEvent::CurrentItemChanged` is shadowed by
-            // `QueueEvent::CurrentTrackChanged` (carries the item id).
             _ => return None,
         })
     }
@@ -249,9 +247,6 @@ impl EventBridge {
 
             while !cancel.is_cancelled() {
                 sleep(interval);
-                // Pump engine updates and drain `ItemDidPlayToEnd` /
-                // `CurrentItemChanged` into QueueEvents for consistent
-                // handling below.
                 let _ = queue.tick();
                 queue.process_notifications();
                 let time = queue.position_seconds();

@@ -60,8 +60,6 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
     }
 }
 
-// AudioWorkerHandle — exactly 1 thread
-
 #[kithara::test(serial)]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
@@ -77,11 +75,6 @@ fn thread_budget_audio_worker_is_one_thread() {
         "AudioWorkerHandle must spawn exactly 1 thread (got delta={delta}, before={before}, after={after})"
     );
 }
-
-// Single HLS pipeline: target = 1 thread (shared worker only)
-//
-// Downloader must run as an async task on the caller's runtime,
-// not spawn a dedicated OS thread + tokio runtime.
 
 #[kithara::test(
     tokio,
@@ -116,17 +109,12 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     cancel.cancel();
     settle();
 
-    // Budget: 1 audio worker. Downloader runs as async task (0 threads).
     assert!(
         delta <= 2,
         "Single pipeline budget: ≤2 kithara threads, got delta={delta} \
          (before={before}, after={after})"
     );
 }
-
-// 3 tracks with shared worker: target = 0 extra threads
-//
-// 1 shared worker serves all tracks. Downloaders are async tasks.
 
 #[kithara::test(
     tokio,
@@ -141,11 +129,9 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let cancel = CancellationToken::new();
     let shared_worker = AudioWorkerHandle::new();
 
-    // Snapshot taken AFTER worker creation — worker thread is already counted.
     settle();
     let before = active_named_thread_count();
 
-    // Track 1: HLS
     let hls_config = HlsConfig::new(server.asset("hls/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
@@ -153,7 +139,6 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let config: AudioConfig<Hls> = AudioConfig::new(hls_config).with_worker(shared_worker.clone());
     let a1 = Audio::<Stream<Hls>>::new(config).await;
 
-    // Track 2: HLS (different variant)
     let hls_config2 = HlsConfig::new(server.asset("hls/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
@@ -161,7 +146,6 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let config: AudioConfig<Hls> = AudioConfig::new(hls_config2).with_worker(shared_worker.clone());
     let a2 = Audio::<Stream<Hls>>::new(config).await;
 
-    // Track 3: DRM
     let drm_config = HlsConfig::new(server.asset("drm/master.m3u8"))
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel.clone())
@@ -199,16 +183,12 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     shared_worker.shutdown();
     settle();
 
-    // Budget: 0 extra kithara threads. Worker already counted in `before`.
-    // Downloaders run as async tasks on the caller's runtime.
     assert_eq!(
         delta, 0,
         "3 tracks with shared worker: 0 extra kithara threads expected, got delta={delta} \
          (before={before}, after={after})"
     );
 }
-
-// Process ceiling — no leaked kithara threads when idle
 
 #[ignore = "requires isolated process-wide quiescence"]
 #[kithara::test(serial)]

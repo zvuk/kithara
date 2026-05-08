@@ -46,7 +46,6 @@ impl IntoProbeArg for &AbrDecision {
 pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> AbrDecision {
     let current = state.current_variant_index();
 
-    // Phase 1: parallel compute (pure `let`-statements, no control flow).
     let locked = state.is_locked();
     let manual_target = match state.mode() {
         AbrMode::Manual(idx) => Some(idx),
@@ -56,7 +55,6 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
     let warming = view.bytes_downloaded < view.settings.warmup_min_bytes;
     let estimate_bps = view.estimate_bps;
 
-    // Phase 2: one tuple match — replaces the heterogeneous guard cascade.
     let estimate_bps: u64 = match (locked, manual_target, cant_switch, warming, estimate_bps) {
         (true, _, _, _, _) => return decision(current, current, AbrReason::Locked),
         (_, Some(idx), _, _, _) => return decision(current, idx, AbrReason::ManualOverride),
@@ -66,7 +64,6 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
         (false, None, false, false, Some(bps)) => bps,
     };
 
-    // Phase 3: bandwidth-aware decision over `(current, estimate_bps)`.
     let max_bw = state.max_bandwidth_bps();
     let sorted = sorted_candidates(view.variants, max_bw);
     if sorted.is_empty() {
@@ -80,7 +77,6 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
         return decision(current, current, AbrReason::AlreadyOptimal);
     };
 
-    // Forced down-switch when current exceeds cap.
     if let Some(cap) = max_bw
         && current_bw > cap
         && candidate_idx != current
@@ -143,9 +139,7 @@ fn adjusted_throughput(estimate_bps: u64, safety_factor: f64) -> f64 {
 fn candidate_variant(sorted: &[(usize, u64)], adjusted_bps: f64) -> Option<(usize, u64)> {
     let best_under = sorted
         .iter()
-        // u64→f64 conversion-clamp: a failure is unreachable for any realistic
-        // bandwidth and only filters the variant out of the candidate set.
-        .filter(|(_, bw)| bw.to_f64().unwrap_or(f64::INFINITY) <= adjusted_bps) // ast-grep-ignore: rust.no-sentinel-fallback
+        .filter(|(_, bw)| bw.to_f64().unwrap_or(f64::INFINITY) <= adjusted_bps)
         .max_by_key(|(_, bw)| *bw);
     let lowest = sorted.first();
     best_under.or(lowest).map(|(idx, bw)| (*idx, *bw))
@@ -166,8 +160,7 @@ fn up_switch(ctx: SwitchContext<'_>) -> AbrDecision {
     let buffer_ok = ctx
         .buffer_ahead
         .is_none_or(|b| b >= ctx.settings.min_buffer_for_up_switch);
-    // u64→f64 conversion-clamp: failure is unreachable for any realistic bandwidth.
-    let candidate_bw_f = ctx.candidate_bw.to_f64().unwrap_or(f64::INFINITY); // ast-grep-ignore: rust.no-sentinel-fallback
+    let candidate_bw_f = ctx.candidate_bw.to_f64().unwrap_or(f64::INFINITY);
     let headroom_ok = ctx.adjusted_bps >= candidate_bw_f * ctx.settings.up_hysteresis_ratio;
     if buffer_ok && headroom_ok {
         return decision(ctx.current, ctx.candidate_idx, AbrReason::UpSwitch);
@@ -179,8 +172,7 @@ fn down_switch(ctx: SwitchContext<'_>) -> Option<AbrDecision> {
     let urgent = ctx
         .buffer_ahead
         .is_some_and(|b| b <= ctx.settings.urgent_downswitch_buffer);
-    // u64→f64 conversion-clamp: failure is unreachable for any realistic bandwidth.
-    let current_bw_f = ctx.current_bw.to_f64().unwrap_or(f64::INFINITY); // ast-grep-ignore: rust.no-sentinel-fallback
+    let current_bw_f = ctx.current_bw.to_f64().unwrap_or(f64::INFINITY);
     let margin_ok = ctx.adjusted_bps <= current_bw_f * ctx.settings.down_hysteresis_ratio;
     if urgent {
         return Some(decision(

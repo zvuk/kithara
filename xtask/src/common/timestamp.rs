@@ -54,7 +54,6 @@ mod tests {
 
     #[test]
     fn epoch_days_to_date_known_date() {
-        // 2024-01-01 is day 19723
         let (y, m, d) = epoch_days_to_date(19723);
         assert_eq!((y, m, d), (2024, 1, 1));
     }

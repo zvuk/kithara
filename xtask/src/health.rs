@@ -155,12 +155,6 @@ fn build_stages() -> Vec<Stage> {
         Stage::new("machete", "cargo", &["machete"]),
         Stage::new("deny", "cargo", &["deny", "check"]),
         // NOTE: deliberately *not* passing `--no-dev-deps`. That flag asks
-        // cargo-hack to mutate every Cargo.toml in the workspace at runtime
-        // and restore them when the stage finishes — but if the run is killed
-        // (Ctrl+C, OOM, TaskStop) the originals never get restored and the
-        // working tree is left with diffs across ~20 manifests. Keeping
-        // dev-deps in the graph costs some compile time but never corrupts
-        // the workspace.
         Stage::new(
             "hack-feature-powerset",
             "cargo",

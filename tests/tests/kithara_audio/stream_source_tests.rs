@@ -27,8 +27,6 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 
-// TestSource + TestStream
-
 struct TestSourceState {
     data: Vec<u8>,
     last_demand_range: Option<Range<u64>>,
@@ -117,7 +115,6 @@ impl Source for TestSource {
             return Ok(ReadOutcome::Eof);
         }
 
-        // Variant fence logic (mirrors HlsSource behavior).
         if !state.variant_map.is_empty() {
             let variant = state
                 .variant_map
@@ -137,7 +134,6 @@ impl Source for TestSource {
             }
         }
 
-        // Clip reads at variant boundary (mirrors HlsSource::read_from_entry()).
         let data_end = if !state.variant_map.is_empty() {
             state
                 .variant_map
@@ -253,8 +249,6 @@ impl StreamType for TestStream {
     }
 }
 
-// Helpers
-
 fn make_chunk(spec: PcmSpec, num_samples: usize) -> PcmChunk {
     PcmChunk::new(
         PcmMeta {
@@ -359,8 +353,6 @@ fn aac_fmp4_variant_info(variant_index: u32) -> MediaInfo {
         .with_variant_index(variant_index)
 }
 
-// Tests
-
 /// Test that ABR switch uses `format_change_segment_range()` to find init data.
 ///
 /// Production scenario (HLS ABR switch V0 AAC → V3 FLAC):
@@ -376,7 +368,6 @@ fn aac_fmp4_variant_info(variant_index: u32) -> MediaInfo {
 /// ftyp/moov lives, allowing decoder to be recreated correctly.
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn apply_format_change_must_use_first_new_format_segment_offset() {
-    // Use production-like offsets from the log
     const V3_SEGMENT_19_START: u64 = 964431;
     const V3_SEGMENT_20_START: u64 = 1732515;
     const V3_SEGMENT_20_END: u64 = 2476302;
@@ -386,35 +377,25 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
         Some(V3_SEGMENT_20_END),
     );
 
-    // V0 decoder: 4 chunks then EOF
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 4];
     let (v0_decoder, _) = scripted_decoder_loose(v0_spec(), v0_chunks, vec![], None);
 
-    // V3 decoder the factory will create
     let v3_chunks = vec![];
     let (v3_decoder, _) = scripted_decoder_loose(v3_spec(), v3_chunks, vec![], None);
     let (factory, factory_offsets) = make_tracking_factory(vec![v3_decoder]);
 
     let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
 
-    // Decode 1 V0 chunk
     let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof());
 
-    // Simulate: reader passed first V3 segment (964431..1732515)
-    // and is now in segment 20 (1732515..2476302).
-    // This is what happens in production: the reader reads through
-    // V3 segment 19 data before detect_format_change has a chance to run.
     {
         let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
-        // current_segment_range returns segment 20 — reader already past segment 19
         s.segment_range = Some(V3_SEGMENT_20_START..V3_SEGMENT_20_END);
-        // format_change_segment_range returns the FIRST V3 segment where init data lives
         s.format_change_range = Some(V3_SEGMENT_19_START..V3_SEGMENT_20_START);
     }
 
-    // Decode remaining V0 chunks + trigger EOF → apply_format_change
     loop {
         let fetch = fetch_next(&mut source);
         if fetch.is_eof() {
@@ -422,12 +403,9 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
         }
     }
 
-    // Verify factory was called at the correct offset
     let offsets = factory_offsets.lock_sync();
     assert_eq!(offsets.len(), 1, "Factory should have been called once");
 
-    // FIX: code now uses format_change_segment_range() which returns the FIRST segment
-    // of the new format (964431), not current_segment_range() (1732515).
     assert_eq!(
         offsets[0], V3_SEGMENT_19_START,
         "Decoder must be recreated at first V3 segment ({V3_SEGMENT_19_START}) \
@@ -466,22 +444,18 @@ fn format_change_recreates_decoder() {
 
     let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
 
-    // Decode 1 V0 chunk
     let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof());
 
-    // Trigger format change
     {
         let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.segment_range = Some(1000..2000);
     }
 
-    // Decode remaining V0 chunk — the next EOF should trigger boundary recreation
     let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof());
 
-    // V0 decoder exhausted → EOF → apply_format_change → V3 decoder
     let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof(), "Should get V3 data after format change");
     assert_eq!(fetch.data.spec(), v3_spec());
@@ -1108,9 +1082,6 @@ fn seek_anchor_same_variant_init_bearing_forces_recreate_at_init_range() {
 
     {
         let mut s = state.lock_sync();
-        // SAME variant 0: variant_changed=false, codec_changed=false.
-        // The fix relies on `container_needs_init_resync` to force the
-        // recreate path despite no variant/codec boundary.
         s.media_info = Some(aac_fmp4_variant_info(0));
         s.format_change_range = Some(INIT_RANGE_START..INIT_RANGE_END);
         s.seek_anchor = Some(
@@ -1417,8 +1388,6 @@ fn seek_anchor_failure_marks_track_failed_without_decoder_recreate() {
     let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
     apply_pending_seek(&mut source);
 
-    // Seek failure triggers decoder recreation attempt. With an empty
-    // factory the recreation also fails, leaving the track in Failed state.
     assert_eq!(track_state(&source), TrackPhaseTag::Failed);
 
     let seeks = seek_log.lock();
@@ -1701,7 +1670,6 @@ fn seek_clears_variant_fence() {
 fn seek_during_pending_format_change_retries_on_new_decoder() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
-    // V0 decoder: 3 chunks, then seek will fail
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 3];
     let (v0_decoder, _) = scripted_decoder_loose(
         v0_spec(),
@@ -1712,7 +1680,6 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
         None,
     );
 
-    // V3 decoder that factory will create — should receive retried seek
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 10];
     let (v3_decoder, logs) = scripted_decoder_loose(v3_spec(), v3_chunks, vec![], None);
     let v3_seek_log = logs.seek_log();
@@ -1728,28 +1695,22 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
         vec![],
     );
 
-    // Decode 1 V0 chunk
     let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof());
 
-    // Trigger format change (ABR switch V0→V3)
     {
         let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.segment_range = Some(1000..2000);
     }
 
-    // Decode another V0 chunk — next seek recovery should rebuild on V3 boundary
     let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof());
 
-    // Seek arrives BEFORE format change is applied.
-    // Old V0 decoder seek fails. base_offset=0.
     let seek_pos = Duration::from_secs_f64(147.48);
     let _seek_epoch = timeline(&source).initiate_seek(seek_pos);
     apply_pending_seek(&mut source);
 
-    // EXPECTED: format change was applied, V3 decoder received the seek
     assert_eq!(
         current_base_offset(&source),
         1000,
@@ -1789,21 +1750,16 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
             Some(V3_SEGMENT_20_END),
         );
 
-        // V0 decoder: produces chunks until stopped
         let v0_stop = Arc::new(AtomicBool::new(false));
         let (v0_decoder, _) = infinite_decoder_loose(v0_spec(), Arc::clone(&v0_stop));
 
-        // Factory: only succeeds at correct offset, returns None at wrong offset.
-        // Mimics production: ftyp atom only at 964431, not at 1732515.
         let factory_offsets: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
         let factory_offsets_clone = Arc::clone(&factory_offsets);
         let factory: DecoderFactory<TestStream> = Box::new(move |_stream, _info, offset| {
             factory_offsets_clone.lock_sync().push(offset);
             if offset == V3_SEGMENT_19_START {
-                // Correct offset — decoder would succeed
                 Some(infinite_decoder_loose(v3_spec(), Arc::new(AtomicBool::new(false))).0)
             } else {
-                // Wrong offset (1732515) — "missing ftyp atom" in production
                 None
             }
         });
@@ -1817,7 +1773,6 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
         let mut chunks_after_v0_stop = 0u64;
         let mut eof_after_v0_stop = 0u64;
 
-        // Cycling through various seek positions (like rapid slider scrubbing)
         let seek_positions: &[f64] = &[
             23.5, 147.48, 88.7, 5.0, 200.0, 120.0, 45.0, 180.0, 10.0, 160.0, 55.0, 95.0, 30.0,
             175.0, 65.0, 210.0, 15.0, 110.0, 70.0, 195.0,
@@ -1829,7 +1784,6 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
             epoch = timeline(&source).initiate_seek(seek_pos);
             apply_pending_seek(&mut source);
 
-            // Fetch a few chunks but don't drain (simulating rapid scrubbing)
             for _ in 0..3 {
                 let fetch = fetch_next(&mut source);
                 if v0_stopped {
@@ -1844,28 +1798,21 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
                 }
             }
 
-            // After 2s: ABR switch — media_info changes, reader past segment 19
             if !format_changed && start.elapsed() > Duration::from_secs(2) {
                 let mut s = state.lock_sync();
                 s.media_info = Some(v3_info());
                 s.segment_range = Some(V3_SEGMENT_20_START..V3_SEGMENT_20_END);
-                // format_change_segment_range returns the FIRST V3 segment where init data lives
                 s.format_change_range = Some(V3_SEGMENT_19_START..V3_SEGMENT_20_START);
                 drop(s);
                 format_changed = true;
             }
 
-            // After 4s: old decoder hits boundary → EOF (simulates read boundary)
             if format_changed && !v0_stopped && start.elapsed() > Duration::from_secs(4) {
                 v0_stop.store(true, Ordering::Release);
                 v0_stopped = true;
             }
         }
 
-        // After 20 seconds of rapid seeking with format_change_segment_range():
-        //
-        // Code uses correct offset (964431), factory succeeds,
-        // V3 decoder installed, chunks_after_v0_stop > 0.
         assert!(
             chunks_after_v0_stop > 0,
             "Audio dead after ABR switch: {eof_after_v0_stop} EOFs, \
@@ -1875,7 +1822,6 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
         );
     });
 
-    // Timeout: 30s to catch deadlocks
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if handle.is_finished() {
@@ -1905,7 +1851,6 @@ fn source_variant_fence_blocks_cross_variant_reads() {
     let source = TestSource::new(data, Some(2000));
     let state = source.state_handle();
 
-    // Set up variant map: [V0: 0..1000] [V3: 1000..2000]
     {
         let mut s = state.lock_sync();
         s.variant_map = vec![(0..1000, 0), (1000..2000, 3)];
@@ -1914,13 +1859,11 @@ fn source_variant_fence_blocks_cross_variant_reads() {
     let stream = test_stream_from_source(source);
     let mut shared = new_shared_stream(stream);
 
-    // Read from V0 region — fence auto-detects V0
     let mut buf = vec![0u8; 100];
     let n = shared.read(&mut buf).unwrap();
     assert_eq!(n, 100, "V0 read should succeed");
     assert!(buf[..n].iter().all(|&b| b == 0xAA), "Should be V0 data");
 
-    // Seek to V3 region — fence returns Err(Other) for variant change
     shared.seek(SeekFrom::Start(1000)).unwrap();
     let mut buf = vec![0u8; 100];
     let err = shared
@@ -1932,7 +1875,6 @@ fn source_variant_fence_blocks_cross_variant_reads() {
         "error should mention variant change, got: {err}"
     );
 
-    // Clear fence → read V3
     clear_variant_fence(&shared);
     shared.seek(SeekFrom::Start(1000)).unwrap();
     let mut buf = vec![0u8; 100];
@@ -1961,17 +1903,12 @@ fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
     let outcome = stream
         .try_read(&mut buf)
         .expect("seek-pending is a status, not an error");
-    // Typed `Pending(SeekPending)` distinguishes seek-induced
-    // aborts from transient backpressure (`NotReady`) — no string
-    // matching, no `ErrorKind` overload.
     use kithara_stream::{PendingReason, StreamReadOutcome};
     assert!(matches!(
         outcome,
         StreamReadOutcome::Pending(PendingReason::SeekPending)
     ));
 }
-
-// Encoded ABR switch test — verify no samples lost during decoder recreation
 
 struct Consts;
 impl Consts {
@@ -1980,8 +1917,6 @@ impl Consts {
     const V0_SAMPLE_SIZE: usize = 4;
     const V1_SAMPLE_SIZE: usize = 16;
 }
-
-// -- Byte-level encoding (what Source delivers) --
 
 fn encode_v0_sample(variant: u8, segment: u8, gsi: u16) -> [u8; 4] {
     let val: u32 = u32::from(variant) << 24 | u32::from(segment) << 16 | u32::from(gsi);
@@ -2035,8 +1970,6 @@ fn generate_encoded_stream(segments: &[(u32, u32, u64, usize)]) -> Vec<u8> {
     data
 }
 
-// -- PCM f32 bit-packing (what decoder outputs) --
-
 fn encode_pcm_sample(variant_segment: u8, sample_index: u32) -> f32 {
     let exponent = (u32::from(variant_segment) + 1) & 0xFF;
     let bits: u32 = (exponent << 23) | (sample_index & 0x7F_FFFF);
@@ -2049,8 +1982,6 @@ fn decode_pcm_sample(val: f32) -> (u8, u32) {
     let sample_index = bits & 0x7F_FFFF;
     (variant_segment, sample_index)
 }
-
-// -- EncodedDecoder --
 
 /// Decoder that reads real bytes from `OffsetReader`, validates byte-level
 /// consistency, and encodes output as PCM f32 with bit-packed metadata.
@@ -2102,7 +2033,6 @@ impl Decoder for EncodedDecoder {
             match self.read_exact_or_eof(&mut sample_buf) {
                 Ok(true) => {}
                 Ok(false) => {
-                    // EOF: return accumulated samples or Eof
                     return if pcm.is_empty() {
                         Ok(DecoderChunkOutcome::Eof)
                     } else {
@@ -2130,7 +2060,6 @@ impl Decoder for EncodedDecoder {
                 _ => panic!("unsupported sample_size {}", self.sample_size),
             };
 
-            // Validate: sequential GSI
             if let Some(expected) = self.expected_gsi {
                 assert_eq!(
                     gsi, expected,
@@ -2140,7 +2069,6 @@ impl Decoder for EncodedDecoder {
             }
             self.expected_gsi = Some(gsi + 1);
 
-            // Validate: single variant per decoder lifetime
             if let Some(expected_v) = self.expected_variant {
                 assert_eq!(
                     variant, expected_v,
@@ -2150,7 +2078,6 @@ impl Decoder for EncodedDecoder {
             }
             self.expected_variant = Some(variant);
 
-            // Encode as f32: variant_segment encodes both variant and segment
             let local_segment = segment - variant * Consts::SEGMENTS_PER_VARIANT as u32;
             let variant_segment =
                 (variant * Consts::SEGMENTS_PER_VARIANT as u32 + local_segment) as u8;
@@ -2316,7 +2243,6 @@ fn abr_switch_must_not_lose_samples() {
     let segments_per_variant = Consts::SEGMENTS_PER_VARIANT;
     let samples_per_segment = Consts::SAMPLES_PER_SEGMENT;
 
-    // Build segment descriptors: V0 (segments 0..n), V1 (segments n..2n)
     let mut segments = Vec::new();
     for seg in 0..segments_per_variant {
         let gsi = (seg * samples_per_segment) as u64;
@@ -2329,15 +2255,13 @@ fn abr_switch_must_not_lose_samples() {
     }
 
     let data = generate_encoded_stream(&segments);
-    let v0_bytes = segments_per_variant * samples_per_segment * Consts::V0_SAMPLE_SIZE; // 153600
-    let v1_bytes = segments_per_variant * samples_per_segment * Consts::V1_SAMPLE_SIZE; // 614400
-    let total_bytes = v0_bytes + v1_bytes; // 768000
+    let v0_bytes = segments_per_variant * samples_per_segment * Consts::V0_SAMPLE_SIZE;
+    let v1_bytes = segments_per_variant * samples_per_segment * Consts::V1_SAMPLE_SIZE;
+    let total_bytes = v0_bytes + v1_bytes;
     assert_eq!(data.len(), total_bytes);
 
-    // First V1 segment byte range (for format_change_range)
     let v1_first_seg_end = v0_bytes + samples_per_segment * Consts::V1_SAMPLE_SIZE;
 
-    // Setup TestSource with variant map
     let source = TestSource::new(data, Some(total_bytes as u64));
     let state = source.state_handle();
     {
@@ -2352,7 +2276,6 @@ fn abr_switch_must_not_lose_samples() {
     let stream = test_stream_from_source(source);
     let shared = new_shared_stream(stream);
 
-    // Initial decoder: V0 (4 bytes/sample)
     let v0_mono_spec = PcmSpec {
         channels: 1,
         sample_rate: 44100,
@@ -2371,7 +2294,6 @@ fn abr_switch_must_not_lose_samples() {
         ))
     };
 
-    // Factory: V1 (16 bytes/sample)
     let factory = make_encoded_factory(v1_spec(), Consts::V1_SAMPLE_SIZE);
 
     let epoch = Arc::new(AtomicU64::new(0));
@@ -2384,7 +2306,6 @@ fn abr_switch_must_not_lose_samples() {
         vec![],
     );
 
-    // Collect all PCM samples
     let mut all_pcm: Vec<f32> = Vec::new();
     loop {
         let fetch = fetch_next(&mut src);
@@ -2396,8 +2317,7 @@ fn abr_switch_must_not_lose_samples() {
         }
     }
 
-    // Verify: decode each f32 and check both axes
-    let total_samples = 2 * segments_per_variant * samples_per_segment; // 76800
+    let total_samples = 2 * segments_per_variant * samples_per_segment;
     assert_eq!(
         all_pcm.len(),
         total_samples,
@@ -2407,7 +2327,6 @@ fn abr_switch_must_not_lose_samples() {
 
     for (i, &val) in all_pcm.iter().enumerate() {
         let (variant_segment, sample_index) = decode_pcm_sample(val);
-        // variant_segment = global segment index (0..63)
         let expected_vs = (i / samples_per_segment) as u8;
         assert_eq!(
             variant_segment, expected_vs,
@@ -2439,7 +2358,6 @@ fn seek_during_active_decode_completes_without_hang() {
     let factory = make_factory(vec![]);
     let mut source = make_source(shared, decoder, factory, Some(v0_info()));
 
-    // Phase 1: decode a few chunks (active playback)
     let mut decoded_before_seek = 0;
     for _ in 0..3 {
         let fetch = fetch_next(&mut source);
@@ -2449,21 +2367,17 @@ fn seek_during_active_decode_completes_without_hang() {
     }
     assert!(decoded_before_seek > 0, "should decode chunks before seek");
 
-    // Phase 2: initiate seek via Timeline (FLUSH_START)
     let epoch = timeline(&source).initiate_seek(Duration::from_secs(5));
     assert!(timeline(&source).is_flushing(), "flushing flag must be set");
 
-    // Phase 3: apply_pending_seek (worker would call this)
     apply_pending_seek(&mut source);
 
-    // Phase 4: flushing should be cleared (FLUSH_STOP)
     assert!(
         !timeline(&source).is_flushing(),
         "flushing must be cleared after apply_pending_seek"
     );
     assert_eq!(timeline(&source).seek_epoch(), epoch, "epoch must match");
 
-    // Phase 5: subsequent decode must produce data (not stuck)
     let mut decoded_after_seek = 0;
     for _ in 0..3 {
         let fetch = fetch_next(&mut source);
@@ -2504,9 +2418,7 @@ fn rapid_seeks_via_timeline_all_complete() {
         );
         assert_eq!(timeline(&source).seek_epoch(), epoch);
 
-        // Decode a few chunks to confirm pipeline is alive
         let fetch = fetch_next(&mut source);
-        // May be EOF if decoder ran out of scripted chunks, but must not hang
         let _ = fetch;
     }
 }

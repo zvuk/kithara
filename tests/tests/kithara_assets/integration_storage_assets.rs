@@ -19,8 +19,6 @@ fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
 }
 
 fn mp3_bytes() -> Vec<u8> {
-    // Deterministic "mp3-like" payload (we don't parse mp3 here; just bytes).
-    // Big enough to exercise read/write paths.
     let mut v = Vec::with_capacity(128 * 1024);
     for i in 0..v.capacity() {
         v.push((i % 251) as u8);
@@ -83,11 +81,9 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     let dir = temp_dir.path().to_path_buf();
     let store = asset_store_with_root(&temp_dir, asset_root);
 
-    // MP3 scenario: single wrapped file inside an asset.
     let key = ResourceKey::new(rel_path);
     let payload: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
 
-    // Keep the handle alive while we check the persisted pins file.
     let res = store.acquire_resource(&key).unwrap();
 
     res.write_all(&payload).unwrap();
@@ -96,7 +92,6 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     res.read_into(&mut read_back).unwrap();
     assert_eq!(&*read_back, &payload[..]);
 
-    // Pins may be persisted; check if pins file exists
     if let Some(pinned) = read_pins_file(&dir) {
         assert!(
             pinned.iter().any(|v| v == asset_root),
@@ -251,9 +246,6 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     let dir = temp_dir.path().to_path_buf();
     let store = asset_store_with_root(&temp_dir, asset_root);
 
-    // HLS scenario: many resources under one asset_root.
-
-    // 1) playlist (atomic)
     let playlist_key = ResourceKey::new("master.m3u8");
     let playlist_bytes = b"#EXTM3U\n#EXT-X-VERSION:7\n".to_vec();
 
@@ -263,7 +255,6 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     playlist.read_into(&mut playlist_read).unwrap();
     assert_eq!(&*playlist_read, &playlist_bytes[..]);
 
-    // 2) segments (streaming, random access writes)
     let mut segments = Vec::new();
     for i in 0..segment_count.min(2) {
         let seg_key = ResourceKey::new(format!("segments/{:04}.m4s", i + 1));
@@ -273,14 +264,12 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     }
 
     if let Some((seg1, _)) = segments.first() {
-        // Write two disjoint ranges in seg1 and read back.
         let a = vec![0xAAu8; 4096];
         let b = vec![0xBBu8; 2048];
 
         seg1.write_at(0, &a).unwrap();
         seg1.write_at(8192, &b).unwrap();
 
-        // Ensure ranges become available before reading.
         seg1.wait_range(0..(a.len() as u64)).unwrap();
         seg1.wait_range(8192..(8192 + b.len() as u64)).unwrap();
 
@@ -289,19 +278,16 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     }
 
     if let Some((seg2, _)) = segments.get(1) {
-        // seg2: single contiguous write
         let c = vec![0xCCu8; 10 * 1024];
         seg2.write_at(0, &c).unwrap();
         seg2.wait_range(0..(c.len() as u64)).unwrap();
         assert_eq!(read_bytes(seg2, 0, c.len()), c);
     }
 
-    // Seal resources (optional but makes the lifecycle explicit).
     for (seg, _) in &segments {
         seg.commit(None).unwrap();
     }
 
-    // Pins may be persisted; check if pins file exists
     if let Some(pinned) = read_pins_file(&dir) {
         assert!(
             pinned.iter().any(|v| v == asset_root),
@@ -339,9 +325,9 @@ fn atomic_resource_roundtrip_with_different_paths(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-#[case(0, 4096, 4096)] // Write at beginning
-#[case(8192, 2048, 2048)] // Write at offset
-#[case(16384, 10240, 10240)] // Larger write
+#[case(0, 4096, 4096)]
+#[case(8192, 2048, 2048)]
+#[case(16384, 10240, 10240)]
 fn streaming_resource_write_read_at_different_positions(
     #[case] offset: u64,
     #[case] size: usize,
@@ -353,14 +339,11 @@ fn streaming_resource_write_read_at_different_positions(
     let key = ResourceKey::new("data.bin");
     let res = store.acquire_resource(&key).unwrap();
 
-    // Create test data
     let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
 
-    // Write at specified offset
     res.write_at(offset, &data).unwrap();
     res.wait_range(offset..(offset + size as u64)).unwrap();
 
-    // Read back
     let read_back = read_bytes(&res, offset, read_size.min(size));
     assert_eq!(read_back, &data[..read_size.min(size)]);
 
@@ -378,7 +361,6 @@ fn multiple_resources_same_asset_root_independently_accessible(
     let asset_root = "multi-resource-asset";
     let store = asset_store_with_root(&temp_dir, asset_root);
 
-    // Create multiple resources under same asset_root
     let keys: Vec<ResourceKey> = (0..resource_count)
         .map(|i| {
             let rel_path = if i % 2 == 0 {
@@ -400,7 +382,6 @@ fn multiple_resources_same_asset_root_independently_accessible(
         resources.push((res, data));
     }
 
-    // Verify each resource independently
     for (res, expected_data) in resources {
         let mut read_back = BytePool::default().get();
         res.read_into(&mut read_back).unwrap();
@@ -418,11 +399,9 @@ fn multiple_resources_same_asset_root_independently_accessible(
 fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
 
-    // Create three separate assets in the same root_dir
     let asset_roots = ["asset-alpha", "asset-beta", "asset-gamma"];
     let payloads: [&[u8]; 3] = [b"alpha data", b"beta data", b"gamma data"];
 
-    // Create stores and write data for each asset
     for (i, asset_root) in asset_roots.iter().enumerate() {
         let store = asset_store_with_root(&temp_dir, asset_root);
         let key = ResourceKey::new("data.bin");
@@ -430,7 +409,6 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
         res.write_all(payloads[i]).unwrap();
     }
 
-    // Verify all asset directories exist
     for asset_root in &asset_roots {
         let asset_path = root_path.join(asset_root);
         assert!(
@@ -440,19 +418,16 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
         );
     }
 
-    // Delete the second asset (asset-beta)
     {
         let store = asset_store_with_root(&temp_dir, "asset-beta");
         store.delete_asset().unwrap();
     }
 
-    // Verify asset-beta is deleted
     assert!(
         !root_path.join("asset-beta").exists(),
         "asset-beta directory should be deleted"
     );
 
-    // Verify asset-alpha still exists and data is intact
     assert!(
         root_path.join("asset-alpha").exists(),
         "asset-alpha directory should still exist"
@@ -466,7 +441,6 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTem
         assert_eq!(&*buf, payloads[0], "asset-alpha data should be intact");
     }
 
-    // Verify asset-gamma still exists and data is intact
     assert!(
         root_path.join("asset-gamma").exists(),
         "asset-gamma directory should still exist"
@@ -492,7 +466,6 @@ fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
 
     let asset_roots = ["seq-asset-1", "seq-asset-2", "seq-asset-3", "seq-asset-4"];
 
-    // Create all assets
     for (i, asset_root) in asset_roots.iter().enumerate() {
         let store = asset_store_with_root(&temp_dir, asset_root);
         let key = ResourceKey::new(format!("file{}.bin", i));
@@ -500,7 +473,6 @@ fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
         res.write_all(format!("content {}", i).as_bytes()).unwrap();
     }
 
-    // Verify all directories exist
     for asset_root in &asset_roots {
         assert!(
             root_path.join(asset_root).exists(),
@@ -509,22 +481,18 @@ fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
         );
     }
 
-    // Delete assets one by one and verify isolation
     for (delete_idx, asset_to_delete) in asset_roots.iter().enumerate() {
-        // Delete this asset
         {
             let store = asset_store_with_root(&temp_dir, asset_to_delete);
             store.delete_asset().unwrap();
         }
 
-        // Verify it's deleted
         assert!(
             !root_path.join(asset_to_delete).exists(),
             "{} should be deleted",
             asset_to_delete
         );
 
-        // Verify remaining assets still exist
         for (i, remaining) in asset_roots.iter().enumerate() {
             if i > delete_idx {
                 assert!(
@@ -537,7 +505,6 @@ fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
         }
     }
 
-    // All asset directories should be gone now
     for asset_root in &asset_roots {
         assert!(
             !root_path.join(asset_root).exists(),
@@ -556,7 +523,6 @@ fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
 fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
 
-    // Create one asset
     {
         let store = asset_store_with_root(&temp_dir, "existing-asset");
         let key = ResourceKey::new("data.bin");
@@ -564,14 +530,12 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_test_utils::TestTemp
         res.write_all(b"existing data").unwrap();
     }
 
-    // Delete a non-existent asset (should succeed without error)
     {
         let store = asset_store_with_root(&temp_dir, "nonexistent-asset");
         let result = store.delete_asset();
         assert!(result.is_ok(), "deleting non-existent asset should succeed");
     }
 
-    // Verify existing asset is still intact
     assert!(
         root_path.join("existing-asset").exists(),
         "existing-asset should still exist"

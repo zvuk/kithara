@@ -40,8 +40,6 @@ impl Consts {
     const WARMUP_TIMEOUT_SECS: u64 = 30;
 }
 
-// Stress Test
-
 /// ABR variant switch stress test with ascending/descending saw-tooth verification.
 ///
 /// Scenario:
@@ -57,7 +55,6 @@ impl Consts {
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
 async fn stress_seek_abr_audio() {
-    // Generate WAV data for two variants
     let init_segment = Arc::new(create_wav_header(
         Consts::D.sample_rate,
         Consts::D.channels,
@@ -98,7 +95,6 @@ async fn stress_seek_abr_audio() {
         "Generated WAV data for two variants"
     );
 
-    // Spawn HLS server
     let segment_duration = Consts::D.segment_size as f64
         / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
 
@@ -123,7 +119,6 @@ async fn stress_seek_abr_audio() {
     let url = server.url("/master.m3u8");
     info!(%url, "HLS server ready with 2 variants");
 
-    // Create Audio<Stream<Hls>> with Auto ABR starting on V0
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
@@ -145,7 +140,6 @@ async fn stress_seek_abr_audio() {
         "Audio pipeline created"
     );
 
-    // Run test phases in a blocking thread
     let result = spawn_blocking(move || {
         let channels = spec.channels as usize;
         let chunk_duration_secs = 0.05;
@@ -153,7 +147,6 @@ async fn stress_seek_abr_audio() {
             (chunk_duration_secs * f64::from(spec.sample_rate) * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];
 
-        // Phase 1: Warmup + ABR switch detection
         info!("Phase 1: waiting for ABR switch (ascending -> descending)...");
 
         let warmup_start = Instant::now();
@@ -212,7 +205,6 @@ async fn stress_seek_abr_audio() {
             }
         }
 
-        // Phase 2: Post-switch verification
         info!("Phase 2: verifying 10 post-switch chunks are descending...");
 
         let mut post_switch_ok = 0u64;
@@ -230,7 +222,6 @@ async fn stress_seek_abr_audio() {
 
             let frames = n / channels;
 
-            // Integrity
             for (j, &sample) in buf[..n].iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -241,7 +232,6 @@ async fn stress_seek_abr_audio() {
                 );
             }
 
-            // L == R
             if channels == 2 {
                 for f in 0..frames {
                     let l = buf[f * 2];
@@ -257,10 +247,6 @@ async fn stress_seek_abr_audio() {
                 }
             }
 
-            // Continuity (descending pattern).
-            // Allow up to 1 break per chunk: the old decoder may have already decoded
-            // some V1 data before the format change was detected, so when the new decoder
-            // starts from the seg4 beginning, there's a position overlap.
             if frames >= 2 {
                 let mut break_count = 0;
                 for f in 1..frames {
@@ -285,7 +271,6 @@ async fn stress_seek_abr_audio() {
                 }
             }
 
-            // Direction
             let dir = detect_direction(&buf[..n], channels);
             assert_eq!(
                 dir,
@@ -303,7 +288,6 @@ async fn stress_seek_abr_audio() {
             "Phase 2 complete: all post-switch chunks descending"
         );
 
-        // Phase 3: Random seeks
         info!(
             "Phase 3: {} random seek+read cycles...",
             Consts::SEEK_ITERATIONS
@@ -339,7 +323,6 @@ async fn stress_seek_abr_audio() {
 
             let frames = n / channels;
 
-            // Level 1: Integrity
             for (j, &sample) in buf[..n].iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -351,7 +334,6 @@ async fn stress_seek_abr_audio() {
                 );
             }
 
-            // L == R
             if channels == 2 {
                 for f in 0..frames {
                     let l = buf[f * 2];
@@ -365,7 +347,6 @@ async fn stress_seek_abr_audio() {
                 }
             }
 
-            // Level 2: Continuity (check for either ascending or descending pattern)
             if frames >= 2 {
                 for f in 1..frames {
                     let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
@@ -390,7 +371,6 @@ async fn stress_seek_abr_audio() {
                 }
             }
 
-            // Level 3: Direction (after ABR switch, must be descending = V1)
             let dir = detect_direction(&buf[..n], channels);
             if dir != Direction::Descending && dir != Direction::Unknown {
                 direction_errors += 1;
@@ -443,7 +423,6 @@ async fn stress_seek_abr_audio() {
             direction_errors
         );
 
-        // Phase 4: Final seek near end -> EOF
         info!("Phase 4: seek near end + read to EOF...");
 
         let final_seek_secs = (total_secs - chunk_duration_secs).max(0.0);

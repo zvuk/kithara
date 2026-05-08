@@ -53,10 +53,6 @@ impl<R: Seek> ReadSeekAdapter<R> {
             .is_some_and(|h| h.load(Ordering::Acquire) > 0);
         let byte_len = shared_handle.unwrap_or_else(|| Arc::new(AtomicU64::new(0)));
         let seek_enabled = Arc::new(AtomicBool::new(seek_enabled));
-        // Probe byte length from the source. Skip when a shared handle
-        // already carries a non-zero value (e.g. Content-Length from HTTP) —
-        // streaming sources may have only a fraction downloaded, so
-        // seek(End(0)) would return the buffered size, not the total.
         if !has_shared_value && let Some(len) = Self::probe_byte_len(&mut inner) {
             byte_len.store(len, Ordering::Release);
         }

@@ -101,8 +101,6 @@ pub(super) mod phase_oracle {
         if magnitude < MAGNITUDE_FLOOR {
             return None;
         }
-        // sin(theta) at the i-frame, sin(theta + π/2) = cos(theta) at
-        // the q-frame ⇒ atan2(in_phase, quadrature) recovers theta.
         let phase = f64::atan2(f64::from(i_sample), f64::from(q_sample));
         Some(phase.rem_euclid(TAU))
     }
@@ -161,13 +159,6 @@ pub(super) mod phase_oracle {
 
         #[kithara::test]
         fn expected_phase_wraps_modulo_tau() {
-            // Pick frames where 2π·440·n/sr is an exact multiple of TAU
-            // by hand: at sr=44100 there is no integer n that gives
-            // exactly k·2π (gcd issues), so we instead just assert
-            // expected_phase is always inside [0, TAU) and that two
-            // frames `n` and `n + 2sr` produce the same phase mod TAU
-            // (`2sr` adds 2 full seconds = `2·440 = 880` complete
-            // cycles).
             let p1 = expected_phase(123, Consts::SR, Consts::F);
             let p2 = expected_phase(123 + 2 * u64::from(Consts::SR), Consts::SR, Consts::F);
             let diff = phase_diff_signed(p1, p2).abs();
@@ -192,7 +183,6 @@ pub(super) mod phase_oracle {
                 measured_phase(&pcm, 2, 0, Consts::SR, Consts::F).expect("magnitude above floor");
             let expected = expected_phase(0, Consts::SR, Consts::F);
             let diff = phase_diff_signed(measured, expected).abs();
-            // atan2(0, 1) = 0 — must match expected to within float epsilon.
             assert!(
                 diff < 1e-6,
                 "no-shift phase mismatch: diff={diff} (measured={measured}, expected={expected})"
@@ -201,9 +191,6 @@ pub(super) mod phase_oracle {
 
         #[kithara::test]
         fn measured_lags_by_n_samples_reports_n() {
-            // Place the analytic source N frames LATER and ask phase_oracle
-            // to read it from the original origin — the measured phase
-            // should be smaller by ω·N·T = 2π · 440 · N / sample_rate.
             let n = Consts::N_SAMPLE_SHIFT;
             let pcm = make_sine(n, 1024, 2);
             let measured =

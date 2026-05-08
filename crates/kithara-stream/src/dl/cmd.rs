@@ -8,10 +8,6 @@ use kithara_net::{Headers, NetError, NetResult, RangeSpec};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-// `RequestMethod` and `RequestPriority` are defined in `kithara-events`
-// (next to the lifecycle events that quote them). Re-exported below
-// under the same names so `kithara_stream::dl::*` callers keep working.
-
 /// Per-command body writer. Downloader calls it for each chunk.
 pub type WriterFn = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 

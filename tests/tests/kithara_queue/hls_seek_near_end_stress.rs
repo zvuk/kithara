@@ -298,16 +298,6 @@ async fn run_one_attempt(
         };
     }
 
-    // During the post-seek render window, watch for either the track
-    // entering `TrackStatus::Failed` — `commit_seek_landing` updates
-    // `timeline.byte_position` to the target before the audio FSM
-    // emits TrackError, so a "landed" position may coincide with a
-    // typed failure that the user-side wants to see as Errored, not
-    // Hung — or the position advancing past `MIN_POST_SEEK_ADVANCE_S`
-    // (success exit). `POST_SEEK_RENDER_WALL` is the upper bound: a
-    // failed render that never advances will exhaust it before we
-    // declare `Hung`. The poll exits early on success, keeping the
-    // upper bound intact for failure diagnostics.
     let post_seek_started = std::time::Instant::now();
     let mut pos_after = queue.position_seconds().unwrap_or(0.0);
     while post_seek_started.elapsed() < Consts::POST_SEEK_RENDER_WALL {
@@ -369,10 +359,6 @@ async fn hls_seek_near_end_fresh_player_stress(
     let mut outcomes: Vec<IterOutcome> = Vec::with_capacity(Consts::FRESH_ITERATIONS as usize);
     for iter in 0..Consts::FRESH_ITERATIONS {
         let offset = Consts::NEAR_END_OFFSETS_S[(iter as usize) % Consts::NEAR_END_OFFSETS_S.len()];
-        // Hard ceiling per iteration: a hung `run_one_attempt`
-        // (e.g. position never updates because the worker died
-        // silently) cannot exceed `ITER_DEADLINE`. Surface this as
-        // an `Errored` so the panic message identifies the iter.
         let outcome = match tokio::time::timeout(
             Consts::ITER_DEADLINE,
             run_one_attempt(iter, &url, offset, backend),

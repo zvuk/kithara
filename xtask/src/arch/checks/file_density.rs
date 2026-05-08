@@ -23,7 +23,6 @@ impl Check for FileDensity {
         let mut violations = Vec::new();
 
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            // skip files that fail to parse — file_size will catch giant blobs anyway
             let Ok(file) = parse_file(&path) else {
                 continue;
             };
@@ -31,8 +30,6 @@ impl Check for FileDensity {
             if stats.fns < cfg.min_fns_to_evaluate {
                 continue;
             }
-            // Counts of items in a single file fit in u32 by orders of magnitude;
-            // propagate any imaginable overflow rather than masking with a sentinel.
             let denom = u32::try_from(stats.types.max(1))
                 .context("file_density: types count overflows u32")?;
             let numer =

@@ -8,15 +8,11 @@ mod kithara {
 
 #[kithara::mock(api = MixerMock)]
 pub trait Mixer: MaybeSend + MaybeSync + 'static {
-    // -- master bus --
-
     fn master_gain(&self) -> f32;
 
     fn set_master_gain(&self, gain: f32);
 
     fn master_peak_level(&self) -> (f32, f32);
-
-    // -- channel gain / pan --
 
     fn channel_gain(&self, slot: SlotId) -> Option<f32>;
 
@@ -26,8 +22,6 @@ pub trait Mixer: MaybeSend + MaybeSync + 'static {
 
     fn set_channel_pan(&self, slot: SlotId, pan: f32) -> Result<(), PlayError>;
 
-    // -- mute / solo --
-
     fn channel_mute(&self, slot: SlotId) -> Option<bool>;
 
     fn set_channel_mute(&self, slot: SlotId, muted: bool) -> Result<(), PlayError>;
@@ -36,11 +30,7 @@ pub trait Mixer: MaybeSend + MaybeSync + 'static {
 
     fn set_channel_solo(&self, slot: SlotId, solo: bool) -> Result<(), PlayError>;
 
-    // -- metering --
-
     fn channel_peak_level(&self, slot: SlotId) -> Option<(f32, f32)>;
-
-    // -- per-channel EQ --
 
     fn eq_band_count(&self) -> usize;
 
@@ -49,8 +39,6 @@ pub trait Mixer: MaybeSend + MaybeSync + 'static {
     fn set_eq_gain(&self, slot: SlotId, band: usize, db: f32) -> Result<(), PlayError>;
 
     fn reset_eq(&self, slot: SlotId) -> Result<(), PlayError>;
-
-    // -- crossfader (hardware-style) --
 
     fn crossfader_position(&self) -> f32;
 

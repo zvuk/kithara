@@ -23,9 +23,7 @@ impl FilePeer {
     }
 }
 
-impl Abr for FilePeer {
-    // File streams have no variants and no buffer signal — all defaults.
-}
+impl Abr for FilePeer {}
 
 impl Peer for FilePeer {
     /// `RequestPriority` reflects the audio FSM's decode-activity flag on the

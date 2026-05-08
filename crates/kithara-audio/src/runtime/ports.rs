@@ -187,16 +187,13 @@ mod tests {
 
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(out.try_push(2), Ok(()));
-        // Ring is full but overflow is empty — third push parks in overflow.
         assert_eq!(out.try_push(3), Ok(()));
         assert!(out.has_pending());
-        // Now both slots are saturated — fourth push is rejected.
         assert_eq!(out.try_push(4), Err(4));
         assert!(out.is_full());
 
         assert_eq!(inl.try_pop(), Some(1));
         assert_eq!(inl.try_pop(), Some(2));
-        // Overflow not yet drained until producer flushes.
         assert_eq!(inl.try_pop(), None);
 
         assert!(out.flush());
@@ -215,7 +212,6 @@ mod tests {
         assert!(out.has_pending());
 
         assert_eq!(inl.try_pop(), Some(1));
-        // Next push must drain the parked `2` first, then enqueue `3`.
         assert_eq!(out.try_push(3), Ok(()));
         assert!(out.has_pending());
 
@@ -232,7 +228,6 @@ mod tests {
         assert_eq!(out.try_push(2), Ok(()));
         assert!(out.has_pending());
 
-        // Ring still full → overflow stays parked.
         assert!(!out.flush());
         assert!(out.has_pending());
 
@@ -274,11 +269,9 @@ mod tests {
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(wake.count.load(Ordering::SeqCst), 1);
 
-        // Parks in overflow — consumer view of the ring is unchanged, no wake.
         assert_eq!(out.try_push(2), Ok(()));
         assert_eq!(wake.count.load(Ordering::SeqCst), 1);
 
-        // Consumer drains and producer flushes — overflow now reaches the ring.
         assert_eq!(inl.try_pop(), Some(1));
         assert!(out.flush());
         assert_eq!(wake.count.load(Ordering::SeqCst), 2);

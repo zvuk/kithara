@@ -27,8 +27,6 @@ pub struct Palette {
 }
 
 impl Palette {
-    // Kithara dark + gold palette RGB values
-
     const BG_R: u8 = 26;
     const BG_G: u8 = 26;
     const BG_B: u8 = 46;
@@ -83,8 +81,6 @@ impl Default for Palette {
     }
 }
 
-// GUI (iced) palette
-
 #[cfg(feature = "gui")]
 pub(crate) mod gui {
     use iced::Color;
@@ -123,8 +119,6 @@ pub(crate) mod gui {
         Color::from_rgb8(rgb.0, rgb.1, rgb.2)
     }
 }
-
-// TUI (ratatui) palette
 
 #[cfg(feature = "tui")]
 pub(crate) mod tui {

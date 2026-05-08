@@ -173,8 +173,3 @@ fn engine_instances_share_session_ducking() {
     EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
     assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
 }
-
-// engine_start_stop_roundtrip / engine_allocate_and_release_slot /
-// engine_arena_full_error переехали в `engine_cpal_tests.rs` и
-// параметризованы по backend (cpal | offline). cpal-вариант остаётся
-// гейтнутым через suite_e2e, offline — самодостаточный.

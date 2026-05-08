@@ -49,7 +49,6 @@ impl GaplessStage {
                 || GaplessTrimmer::silence_trim(params),
                 GaplessTrimmer::from_info,
             ),
-            // Disabled and forward-compatible variants — no trim.
             _ => GaplessTrimmer::disabled(),
         };
         Self {

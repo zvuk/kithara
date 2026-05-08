@@ -58,7 +58,7 @@ fn atomic_resource_path_method(temp_dir: TestTempDir, cancel_token: Cancellation
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 #[case("simple data", b"Hello, World!")]
 #[case("binary data", &[0x00, 0xFF, 0x80, 0x7F])]
-#[case("large data", &[0x42; 1024 * 1024])] // 1MB
+#[case("large data", &[0x42; 1024 * 1024])]
 fn atomic_resource_write_read_success(
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
@@ -78,7 +78,6 @@ fn atomic_resource_write_read_success(
 fn atomic_resource_empty_write_read(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let atomic = open_test_resource(&temp_dir, "empty.dat", cancel_token);
 
-    // write_all with empty data commits with final_len=0
     atomic.write_all(b"").expect("write should succeed");
 
     let mut buf = BytePool::default().get();
@@ -91,8 +90,8 @@ fn atomic_resource_empty_write_read(temp_dir: TestTempDir, cancel_token: Cancell
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case(true)] // file exists initially
-#[case(false)] // file doesn't exist initially
+#[case(true)]
+#[case(false)]
 fn atomic_resource_read_missing_file(
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
@@ -124,20 +123,16 @@ fn atomic_resource_cancelled_operations(
 ) {
     let atomic = open_test_resource(&temp_dir, "cancelled.dat", cancel_token_cancelled);
 
-    // write_all on cancelled resource: write_at succeeds (empty check passes first),
-    // but commit returns Cancelled
     let write_result = atomic.write_all(b"data");
     assert!(
         write_result.is_err(),
         "write_all should fail when cancelled"
     );
 
-    // read_into checks health
     let mut buf = BytePool::default().get();
     let read_result = atomic.read_into(&mut buf);
     assert!(read_result.is_err(), "read_into should fail when cancelled");
 
-    // commit checks health
     let commit_result = atomic.commit(None);
     assert!(
         matches!(commit_result, Err(StorageError::Cancelled)),
@@ -151,16 +146,13 @@ fn atomic_resource_fail_propagation(temp_dir: TestTempDir, cancel_token: Cancell
 
     atomic.fail("test failure".to_string());
 
-    // write_all should fail after resource failure
     let write_result = atomic.write_all(b"data");
     assert!(write_result.is_err(), "write_all should fail after fail()");
 
-    // read_into should fail
     let mut buf = BytePool::default().get();
     let read_result = atomic.read_into(&mut buf);
     assert!(read_result.is_err(), "read_into should fail after fail()");
 
-    // commit should fail
     let commit_result = atomic.commit(None);
     assert!(
         matches!(commit_result, Err(StorageError::Failed(_))),
@@ -186,10 +178,6 @@ async fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: 
     let result1 = handle1.await.unwrap();
     let result2 = handle2.await.unwrap();
 
-    // write_all = write_at + commit (two steps, not atomic).
-    // When one thread commits first, the other's write_at may fail
-    // because Auto mode rejects writes to a committed resource.
-    // At least one must succeed; both succeeding is also valid.
     assert!(
         result1.is_ok() || result2.is_ok(),
         "at least one concurrent write_all must succeed"

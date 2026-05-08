@@ -98,25 +98,13 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
     let cancel = CancellationToken::new();
     let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
 
-    // 1. Register and stash an internal PeerHandle clone inside the
-    //    peer itself — mirroring `HlsPeer::activate()` passing
-    //    `Arc::clone(&loader)` which transitively holds the PeerHandle.
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();
     let external_handle = downloader.register(peer_dyn);
     peer.stash_handle(external_handle.clone());
 
-    // 2. Sanity: the stashed clone alone is enough to keep the peer's
-    //    `PeerInner` alive — even without an explicit `external_handle`
-    //    still outstanding — until `teardown()` releases it.
-    //
-    //    Simulate production: the user's `HlsSource::Drop` calls
-    //    `HlsPeer::teardown()` *before* the external handle is dropped.
     peer.teardown();
 
-    // 3. Now drop the external handle. Only at this point does
-    //    `PeerInner` lose its final strong reference, fires cancel,
-    //    and the Registry releases the peer arc on its next poll.
     drop(external_handle);
 
     for _ in 0..40 {
@@ -133,7 +121,6 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
          strong_count={strong} (expected 1 — only the local test clone)."
     );
 
-    // Clean up.
     cancel.cancel();
     Ok(())
 }
@@ -158,7 +145,6 @@ async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
 
     drop(external_handle);
 
-    // Wait a reasonable window. The cycle cannot resolve without teardown.
     for _ in 0..10 {
         sleep(Duration::from_millis(50)).await;
         if Arc::strong_count(&peer) == 1 {
@@ -173,8 +159,6 @@ async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
          (cycle: Registry → Peer → stashed PeerHandle → PeerInner)."
     );
 
-    // Explicit teardown + cancel to avoid leaking into the Downloader's
-    // shutdown path on test completion.
     peer.teardown();
     cancel.cancel();
     Ok(())

@@ -64,7 +64,7 @@ impl IntoProbeArg for bool {
 
 impl IntoProbeArg for Duration {
     fn into_probe_arg(self) -> u64 {
-        u64::try_from(self.as_micros()).unwrap_or(u64::MAX) // ast-grep-ignore: rust.no-sentinel-fallback
+        u64::try_from(self.as_micros()).unwrap_or(u64::MAX)
     }
 }
 

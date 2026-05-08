@@ -151,7 +151,7 @@ fn decide_urgent_downswitch_when_buffer_low() {
     let variants = test_variants_3();
     let settings = AbrSettings {
         urgent_downswitch_buffer: Duration::from_secs(5),
-        down_hysteresis_ratio: 0.01, // high threshold — only urgent path fires
+        down_hysteresis_ratio: 0.01,
         min_switch_interval: Duration::ZERO,
         warmup_min_bytes: 0,
         ..AbrSettings::default()
@@ -267,12 +267,6 @@ fn min_switch_interval_prevents_oscillation() {
     assert_eq!(d2.reason, AbrReason::MinInterval);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// SEEK-NO-SWITCH cases (previously in
-// `tests/tests/kithara_abr_integration/seek_no_switch.rs`, moved into the
-// crate so the only public consumer of `test_variants_3` is gone).
-// ─────────────────────────────────────────────────────────────────────────
-
 /// A locked `AbrState` must never change variant, regardless of bandwidth
 /// samples. Parametrized to cover both directions:
 /// * locked-at-0 under very-high bandwidth → up-switch rejected
@@ -301,15 +295,10 @@ fn locked_state_rejects_switch(
 
 #[kithara::test(tokio)]
 async fn lock_refcount_holds_across_record_bandwidth() {
-    // Drive real `AbrController::record_bandwidth` with the peer locked
-    // to confirm the published sample does not influence the variant
-    // choice while the lock is held.
     let settings = settings_fast();
     let controller =
         AbrController::with_estimator(settings, Arc::new(ThroughputEstimator::new()) as Arc<_>);
 
-    // Register a minimal fake peer via Abr trait, locked for the whole
-    // test run.
     struct LockedPeer {
         state: Arc<AbrState>,
     }
@@ -343,10 +332,6 @@ async fn lock_refcount_holds_across_record_bandwidth() {
     assert!(!state.is_locked());
     drop(handle);
 }
-
-// ─────────────────────────────────────────────────────────────────────────
-// Property-based invariants (previously `crates/kithara-abr/tests/state.rs`)
-// ─────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug)]
 enum Op {
@@ -419,7 +404,6 @@ proptest! {
                     current_bps = Some(bps);
                 }
                 Op::SetMode(mode_op) => {
-                    // Some Manual(idx) values are in-range; others bounce.
                     let _ = state.set_mode(mode_from(mode_op));
                 }
                 Op::Lock => {
@@ -447,12 +431,8 @@ proptest! {
                 }
             }
 
-            // Invariant #1: lock count visible through the state matches
-            // our accumulator.
             prop_assert_eq!(state.lock_count(), lock_depth);
 
-            // Invariant #2 (SEEK-NO-SWITCH): while locked, the variant
-            // index does not drift.
             if lock_depth > 0 {
                 prop_assert_eq!(
                     state.current_variant_index(),
@@ -461,8 +441,6 @@ proptest! {
                 );
             }
 
-            // Invariant #3 (manual-override): if last applied mode is
-            // Manual(idx) with idx in range, a tick drives variant there.
             if let AbrMode::Manual(idx) = state.mode()
                 && idx < variants.len()
                 && lock_depth == 0

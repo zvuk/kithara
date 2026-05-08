@@ -130,19 +130,9 @@ fn try_fix_expr_struct(
         return Ok(());
     }
     if e.dot2_token.is_some() || e.rest.is_some() {
-        // `..base` rests aren't reordered; we'd need to keep them last
-        // and shuffle only the named fields, which is doable but adds
-        // surface area for marginal value — skip for now.
         return Err("contains `..base` rest".to_string());
     }
 
-    // Detect use-def conflicts: a shorthand field `x` evaluates as
-    // moving/borrowing the binding `x` from the surrounding scope. If
-    // any explicit field's expression also references `x` (e.g.
-    // `Self { spec: pcm.spec(), pcm }`), reordering shorthand to come
-    // first would move `pcm` before `pcm.spec()` runs — a compile
-    // error. Skip the literal in that case; the developer can either
-    // rewrite to fully-explicit form or live with the report.
     if has_shorthand_use_def_conflict(&e.fields) {
         return Err("shorthand field is moved before another field reads it".to_string());
     }
@@ -163,7 +153,7 @@ fn try_fix_expr_struct(
         .map(|k| k.idx)
         .eq(expected.iter().map(|k| k.idx))
     {
-        return Ok(()); // already in expected order
+        return Ok(());
     }
 
     let scope_start = e.brace_token.span.open().byte_range().end;
@@ -179,15 +169,10 @@ fn try_fix_expr_struct(
         Err(other) => return Err(format!("engine error: {other:?}")),
     };
 
-    // Require a trailing comma on the last block. If absent, swapping
-    // would either drop a comma or stitch two items together. Defer to
-    // a future cargo-fmt run that adds the trailing comma, or to a
-    // manual fix.
     let last_block_text = &src[blocks.last().expect("non-empty").bytes.clone()];
     if !last_block_text.trim_end().ends_with(',')
         && !last_block_text.trim_end().ends_with([')', '}', ']'])
     {
-        // Re-check: did expand_trailing actually pick up a comma?
         let last = blocks.last().expect("non-empty");
         if !src[last.item_bytes.end..last.bytes.end].contains(',') {
             return Err("last field has no trailing comma".to_string());
@@ -230,12 +215,7 @@ struct InitKey {
 }
 
 fn cmp_init_key(a: &InitKey, b: &InitKey) -> Ordering {
-    a.bucket
-        .cmp(&b.bucket)
-        // Stable within a bucket: keep the source-position order, so we don't
-        // collide with clippy's `inconsistent_struct_constructor` (which
-        // demands the all-shorthand case match struct definition order).
-        .then_with(|| a.idx.cmp(&b.idx))
+    a.bucket.cmp(&b.bucket).then_with(|| a.idx.cmp(&b.idx))
 }
 
 fn classify(cfg: &StructInitOrderConfig, fv: &FieldValue) -> InitKey {
@@ -350,10 +330,6 @@ struct IdentScanner<'a> {
 
 impl<'ast> Visit<'ast> for IdentScanner<'_> {
     fn visit_path(&mut self, p: &'ast syn::Path) {
-        // Match a leading single-segment ident: `foo`, `foo.bar()`,
-        // `foo[0]`, etc. all parse with `foo` as the path's first
-        // segment. Multi-segment paths like `Self::new()` or
-        // `crate::foo` cannot reference a local binding, so skip.
         if let Some(first) = p.segments.first()
             && p.leading_colon.is_none()
             && self.names.contains(&first.ident.to_string())
@@ -473,9 +449,7 @@ fn main() {
 ";
         let (out, skipped) = run_fix(src);
         assert!(skipped.is_empty(), "skipped: {skipped:?}");
-        // I1: comment multiset preserved.
         assert_eq!(comment_multiset(src), comment_multiset(&out));
-        // The comment must have followed `x` to its new position.
         let y_pos = out.find("y,").expect("y,");
         let x_pos = out.find("x: 1,").expect("x: 1,");
         let comment_pos = out.find("// doc for x").expect("comment");
@@ -487,8 +461,6 @@ fn main() {
 
     #[test]
     fn floating_comment_is_skipped() {
-        // The comments below have a blank line on BOTH sides — they're
-        // truly floating and the engine refuses to touch this scope.
         let src = "\
 fn main() {
     let _ = Foo {
@@ -511,8 +483,6 @@ fn main() {
 
     #[test]
     fn comment_attached_to_next_field_is_carried() {
-        // Blank line BEFORE the comments, but NO blank line between the
-        // comments and `y`. They glue to `y` and travel with it.
         let src = "\
 fn main() {
     let _ = Foo {
@@ -526,9 +496,7 @@ fn main() {
 ";
         let (out, skipped) = run_fix(src);
         assert!(skipped.is_empty(), "skipped: {skipped:?}");
-        // I1: comment multiset preserved.
         assert_eq!(comment_multiset(src), comment_multiset(&out));
-        // After the swap, `y` (and its comments) come first.
         let comment_pos = out.find("// glued to y").expect("comment");
         let x_pos = out.find("x: 1,").expect("x: 1,");
         assert!(comment_pos < x_pos, "comment did not travel with y:\n{out}");
@@ -536,8 +504,6 @@ fn main() {
 
     #[test]
     fn missing_trailing_comma_is_skipped() {
-        // `Foo { x: 1, y }` — no trailing comma after `y`. Skipped to
-        // avoid stitching two items together when reordering.
         let src = "fn main() { let _ = Foo { x: 1, y }; }";
         let (out, skipped) = run_fix(src);
         assert_eq!(out, src);
@@ -549,7 +515,6 @@ fn main() {
 
     #[test]
     fn idempotent_run() {
-        // Run fix twice; second run is a no-op.
         let src = "fn main() { let _ = Foo { x: 1, y, z: 2, }; }";
         let (after_first, skipped1) = run_fix(src);
         assert!(skipped1.is_empty());
@@ -560,9 +525,6 @@ fn main() {
 
     #[test]
     fn shorthand_use_def_conflict_is_skipped() {
-        // `pcm` would be moved by the shorthand field; reordering it
-        // first would break `spec: pcm.spec()` which still needs the
-        // borrow. Skipped to keep the source compiling.
         let src = "\
 fn make(pcm: Pcm) -> Self {
     Self {
@@ -581,8 +543,6 @@ fn make(pcm: Pcm) -> Self {
 
     #[test]
     fn unrelated_shorthand_still_swapped() {
-        // `value` is shorthand but no explicit field reads it; safe to
-        // pull to the front.
         let src = "\
 fn make(value: u32, label: String) -> Self {
     Self {

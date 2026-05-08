@@ -79,7 +79,6 @@ where
         if byte_delta > 0
             && let Err(e) = self.pool.request_budget(byte_delta)
         {
-            // Budget exceeded — rollback the resize.
             buf.truncate(0);
             buf.shrink_to(old_cap);
             return Err(e);

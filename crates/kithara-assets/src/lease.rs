@@ -161,10 +161,6 @@ where
     }
 
     fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard> {
-        // PinsIndex flushes immediately on every mutation; an `Err`
-        // here means the pin did not reach disk and must propagate so
-        // the caller can fail the resource open instead of silently
-        // returning a non-durable lease.
         self.pins.add(asset_root)?;
 
         let pins = self.pins.clone();
@@ -272,7 +268,6 @@ where
             live.set(AssetResourceState::from(self.inner.status()));
         }
 
-        // Record bytes if recorder is set (best-effort)
         if let Some(ref recorder) = self.byte_recorder
             && let Some(path) = self.inner.path()
             && let Ok(metadata) = fs::metadata(path)
@@ -378,15 +373,6 @@ where
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        // The `Arc<LiveResource>` upgraded out of `self.live` must NOT drop
-        // while the registry mutex is still held: `LiveResource::Drop` re-locks
-        // the same mutex, and parking_lot's `Mutex` is non-reentrant — that
-        // path self-deadlocks the calling thread, which in turn freezes the
-        // tokio runtime shutdown and trips the test-macro hard-timeout
-        // watchdog (process::abort → SIGABRT) under `just test` contention.
-        // Bind the upgrade through a separate `let` so the guard temporary
-        // is dropped at the end of this statement, before any potential
-        // Arc-drop in the body below.
         let live = self.live.lock_sync().get(key).and_then(Weak::upgrade);
         if let Some(live) = live {
             return Ok(live.snapshot());
@@ -496,10 +482,7 @@ impl<A> Drop for LeaseAssets<A>
 where
     A: Assets,
 {
-    fn drop(&mut self) {
-        // Pins are flushed eagerly on every mutation through
-        // `PinsIndex` itself; no per-clone bookkeeping needed here.
-    }
+    fn drop(&mut self) {}
 }
 
 /// RAII guard for a pin.
@@ -576,7 +559,6 @@ mod tests {
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
-        // Reopen pins.bin and snapshot its on-disk state.
         let path = dir.join("_index").join("pins.bin");
         if !path.exists() {
             return HashSet::new();
@@ -592,10 +574,8 @@ mod tests {
         let lease = make_lease(dir.path());
         let key = ResourceKey::new("audio.mp3");
 
-        // Acquire a resource — this pins `test_asset`
         let _res = lease.acquire_resource(&key).unwrap();
 
-        // Pins should be on disk immediately (eager persistence)
         let on_disk = load_persisted_pins(dir.path());
         assert!(
             on_disk.contains("test_asset"),
@@ -611,8 +591,6 @@ mod tests {
 
         let _res = lease.acquire_resource(&key).unwrap();
 
-        // Mutations through `PinsIndex::add` already flush eagerly,
-        // so an explicit flush is just a re-write of the same state.
         lease.flush_pins().unwrap();
 
         let on_disk = load_persisted_pins(dir.path());
@@ -627,13 +605,10 @@ mod tests {
         let lease = make_lease(dir.path());
         let res = lease.acquire_resource(&key).unwrap();
 
-        // Pin is persisted eagerly
         assert!(load_persisted_pins(dir.path()).contains("test_asset"));
 
-        // Drop guard (unpins test_asset, eagerly persists)
         drop(res);
 
-        // After unpin, the pin set on disk should be empty
         let on_disk = load_persisted_pins(dir.path());
         assert!(
             on_disk.is_empty(),
@@ -650,7 +625,6 @@ mod tests {
         let lease = make_lease(dir.path());
         let _res = lease.acquire_resource(&key).unwrap();
 
-        // While resource is still held, flush should persist the active pin
         lease.flush_pins().unwrap();
         let on_disk = load_persisted_pins(dir.path());
         assert!(
@@ -668,16 +642,13 @@ mod tests {
         let lease_clone = lease.clone();
         let _res = lease_clone.acquire_resource(&key).unwrap();
 
-        // Pin should be persisted eagerly, even through a clone
         assert!(
             load_persisted_pins(dir.path()).contains("test_asset"),
             "pin via clone should be persisted immediately"
         );
 
-        // Drop clone (not the last — lease still exists, plus _res holds inner clone)
         drop(lease_clone);
 
-        // Pin should still be on disk (resource handle still alive)
         assert!(
             load_persisted_pins(dir.path()).contains("test_asset"),
             "pin should remain while resource handle is alive"
@@ -694,7 +665,6 @@ mod tests {
 
         let _res = lease.open_resource(&key).unwrap();
 
-        // Pins should be empty when capability absent
         assert!(lease.pins.snapshot().is_empty(), "bypass should not pin");
     }
 
@@ -709,7 +679,6 @@ mod tests {
         let _res = lease.open_resource(&key).unwrap();
         lease.flush_pins().unwrap();
 
-        // Nothing should be persisted
         let on_disk = load_persisted_pins(dir.path());
         assert!(on_disk.is_empty(), "bypass flush should not persist");
     }
@@ -724,7 +693,6 @@ mod tests {
 
         let res = lease.open_resource(&key).unwrap();
 
-        // Resource should still be usable (read-only for absolute keys)
         let mut buf = [0u8; 4];
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 4);

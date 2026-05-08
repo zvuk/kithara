@@ -74,17 +74,13 @@ pub(super) fn bytes_per_second(bytes: u64, duration: Duration) -> f64 {
 }
 
 fn relative_delta(prev: u64, now: u64) -> f64 {
-    // Zero baseline → fan the ratio out to infinity ("definitely worth emitting").
     if prev == 0 {
         return f64::INFINITY;
     }
-    // u128/u64 → f64 conversion-clamp: an unrepresentable conversion is
-    // impossible in practice (u128::MAX ≪ f64::MAX) but if it ever happens
-    // the ratio fans out to infinity, which is the correct emit signal.
     let diff = (i128::from(prev) - i128::from(now))
         .unsigned_abs()
         .to_f64()
-        .unwrap_or(f64::INFINITY); // ast-grep-ignore: rust.no-sentinel-fallback
-    let base = prev.to_f64().unwrap_or(f64::INFINITY); // ast-grep-ignore: rust.no-sentinel-fallback
+        .unwrap_or(f64::INFINITY);
+    let base = prev.to_f64().unwrap_or(f64::INFINITY);
     diff / base
 }

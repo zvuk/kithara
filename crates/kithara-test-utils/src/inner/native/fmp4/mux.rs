@@ -200,11 +200,6 @@ fn trak_box(
 
 fn edts_box(track: &EncodedTrack, total_duration: u64) -> Option<Vec<u8>> {
     let codec = track.media_info.codec?;
-    // edts presence is gated on the *requested* trim (raw encoder_delay /
-    // trailing_delay). Native priming is an encoder-side fold that mirrors
-    // mainstream AAC encoders writing `udta` — a track with no requested
-    // trim and trivial trailing must skip edts entirely so the unit test
-    // contract `unpadded_track_with_edts_encoding_skips_edit_list` holds.
     if track.encoder_delay == 0 && track.trailing_delay == 0 {
         return None;
     }
@@ -588,9 +583,6 @@ mod tests {
         let mut track = test_track();
         track.encoder_delay = 2_112;
         track.trailing_delay = 1_920;
-        // Two extra AAC frames so total_duration covers leading+native+trailing
-        // and `valid_duration` stays positive after the AAC native-priming
-        // fold (1024 frames) the mux applies on top of `encoder_delay`.
         for pts in [4096u64, 5120u64] {
             track.access_units.push(EncodedAccessUnit {
                 bytes: vec![0, 0, 0],
@@ -678,9 +670,6 @@ mod tests {
         assert!(has_marker(init, b"name"));
         assert!(has_marker(init, b"iTunSMPB"));
         assert!(has_marker(init, b"com.apple.iTunes"));
-        // Hex-encoded encoder/trailing delays appear verbatim in the payload.
-        // Encoder-delay = requested 2112 + AAC native priming 1024 = 3136 = 0x0C40.
-        // Trailing-delay = requested 1920 = 0x780 (no fold on the trailing edge).
         assert!(has_marker(init, b"00000C40"));
         assert!(has_marker(init, b"00000780"));
     }
@@ -708,8 +697,6 @@ mod tests {
 
     #[test]
     fn unpadded_track_with_edts_encoding_skips_edit_list() {
-        // Backwards-compatible behaviour: a track with no priming/padding
-        // requires no `elst` even when `Edts` is selected.
         let packaged = mux_audio_track(&test_track(), GaplessEncoding::Edts).unwrap();
         let init = packaged.init_segment.as_slice();
 

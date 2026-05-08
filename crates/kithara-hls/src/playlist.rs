@@ -10,8 +10,6 @@ use url::Url;
 
 use crate::ids::{SegmentIndex, VariantIndex};
 
-// Types
-
 /// Per-segment parsed data (from media playlist).
 #[derive(Debug, Clone)]
 pub struct SegmentState {
@@ -54,8 +52,6 @@ pub struct VariantState {
     pub segments: Vec<SegmentState>,
 }
 
-// PlaylistState
-
 /// Holds all parsed playlist data with interior mutability for size map updates.
 pub struct PlaylistState {
     variants: Vec<RwLock<VariantState>>,
@@ -83,7 +79,6 @@ impl PlaylistState {
             .iter()
             .zip(media_playlists.iter())
             .map(|(variant, (media_url, playlist))| {
-                // Resolve codec and container from variant metadata
                 let codec = variant.codec.as_ref().and_then(|ci| ci.audio_codec);
                 let container = variant
                     .codec
@@ -91,13 +86,11 @@ impl PlaylistState {
                     .and_then(|ci| ci.container)
                     .or(playlist.detected_container);
 
-                // Resolve init segment URL
                 let init_url = playlist
                     .init_segment
                     .as_ref()
                     .and_then(|init| media_url.join(&init.uri).ok());
 
-                // Build segment states
                 let segments: Vec<SegmentState> = playlist
                     .segments
                     .iter()
@@ -164,14 +157,10 @@ impl PlaylistState {
 
         size_map.segment_sizes[segment_index] = actual_total;
 
-        // Recalculate offsets from next segment onward.
-        // offsets[0] is always 0 (first segment starts at the beginning of the virtual stream).
-        // offsets[i] = offsets[i-1] + segment_sizes[i-1]
         for i in (segment_index + 1)..size_map.offsets.len() {
             size_map.offsets[i] = size_map.offsets[i - 1] + size_map.segment_sizes[i - 1];
         }
 
-        // Recalculate total.
         let last_idx = size_map.segment_sizes.len() - 1;
         size_map.total = size_map.offsets[last_idx] + size_map.segment_sizes[last_idx];
         drop(state);
@@ -210,8 +199,6 @@ impl PlaylistState {
             .max()
     }
 }
-
-// PlaylistAccess trait
 
 /// Read-only access to parsed playlist data.
 pub(crate) trait PlaylistAccess: Send + Sync {
@@ -305,12 +292,6 @@ impl PlaylistAccess for PlaylistState {
             if size_map.offsets.is_empty() || offset >= size_map.total {
                 return None;
             }
-            // Binary search: find the last offset <= `offset`. offsets is
-            // cumulative-sorted, so we search for the rightmost index where
-            // offsets[i] <= offset. partition_point returns the index of the
-            // first element > offset; the segment containing `offset` is at
-            // pos - 1. With a 0-based model (offsets[0] = 0), pos == 0 cannot
-            // happen for valid offsets, but we guard against it anyway.
             let pos = size_map.offsets.partition_point(|&o| o <= offset);
             if pos == 0 { None } else { Some(pos - 1) }
         });
@@ -474,8 +455,6 @@ mod tests {
         Some((segment_index, byte_offset))
     }
 
-    // Test 1: basic access
-
     #[kithara::test]
     fn test_playlist_state_basic_access() {
         let state = PlaylistState::new(vec![make_variant(0, 5), make_variant(1, 3)]);
@@ -484,12 +463,9 @@ mod tests {
         assert_eq!(state.num_segments(0), Some(5));
         assert_eq!(state.num_segments(1), Some(3));
 
-        // Out of bounds
         assert_eq!(state.num_segments(2), None);
         assert_eq!(state.num_segments(99), None);
     }
-
-    // Test 2: variant info
 
     #[kithara::test]
     fn test_playlist_state_variant_info() {
@@ -501,25 +477,20 @@ mod tests {
         assert_eq!(state.variant_codec(0), Some(AudioCodec::Flac));
         assert_eq!(state.variant_container(0), Some(ContainerFormat::Fmp4));
 
-        // segment_url
         let url = state.segment_url(0, 0).unwrap();
         assert!(url.as_str().contains("segment-0.m4s"));
         let url1 = state.segment_url(0, 1).unwrap();
         assert!(url1.as_str().contains("segment-1.m4s"));
-        assert_eq!(state.segment_url(0, 2), None); // out of bounds
+        assert_eq!(state.segment_url(0, 2), None);
 
-        // init_url
         let init = state.init_url(0).unwrap();
         assert!(init.as_str().contains("init.mp4"));
 
-        // out-of-bounds variant
         assert_eq!(state.variant_codec(5), None);
         assert_eq!(state.variant_container(5), None);
         assert_eq!(state.segment_url(5, 0), None);
         assert_eq!(state.init_url(5), None);
     }
-
-    // Test 3: size map not set
 
     #[kithara::test]
     fn test_size_map_not_set() {
@@ -531,15 +502,10 @@ mod tests {
         assert_eq!(state.find_segment_at_offset(0, 0), None);
     }
 
-    // Test 4: size map set and query
-
     #[kithara::test]
     fn test_size_map_set_and_query() {
         let state = PlaylistState::new(vec![make_variant(0, 4)]);
 
-        // init=100, media_sizes=[200, 300, 400, 500]
-        // segment_sizes = [300, 300, 400, 500]
-        // offsets = [0, 300, 600, 1000], total = 1500
         let sm = make_size_map(100, &[200, 300, 400, 500]);
         state.set_size_map(0, sm);
 
@@ -575,14 +541,10 @@ mod tests {
         assert_eq!(state.find_segment_at_offset(0, offset), expected);
     }
 
-    // Test 5: reconcile segment size
-
     #[kithara::test]
     fn test_reconcile_segment_size() {
         let state = PlaylistState::new(vec![make_variant(0, 3)]);
 
-        // init=100, media_sizes=[200, 300, 400]
-        // segment_sizes = [300, 300, 400], offsets = [0, 300, 600], total = 1000
         let sm = make_size_map(100, &[200, 300, 400]);
         state.set_size_map(0, sm);
 
@@ -590,21 +552,16 @@ mod tests {
         assert_eq!(state.segment_byte_offset(0, 1), Some(300));
         assert_eq!(state.segment_byte_offset(0, 2), Some(600));
 
-        // After DRM decryption, segment 1 is actually 250 bytes (not 300).
         state.reconcile_segment_size(0, 1, 250);
 
-        // offsets recalculated: [0, 300, 550], total = 950
-        assert_eq!(state.segment_byte_offset(0, 0), Some(0)); // unchanged
-        assert_eq!(state.segment_byte_offset(0, 1), Some(300)); // unchanged
-        assert_eq!(state.segment_byte_offset(0, 2), Some(550)); // was 600
-        assert_eq!(state.total_variant_size(0), Some(950)); // was 1000
+        assert_eq!(state.segment_byte_offset(0, 0), Some(0));
+        assert_eq!(state.segment_byte_offset(0, 1), Some(300));
+        assert_eq!(state.segment_byte_offset(0, 2), Some(550));
+        assert_eq!(state.total_variant_size(0), Some(950));
 
-        // Binary search still works after reconciliation
         assert_eq!(state.find_segment_at_offset(0, 549), Some(1));
         assert_eq!(state.find_segment_at_offset(0, 550), Some(2));
     }
-
-    // Test 6: find_segment_at_offset edge cases
 
     #[kithara::test(wasm)]
     #[case::first_segment_start(0, 0, Some(0))]
@@ -625,14 +582,10 @@ mod tests {
     ) {
         let state = PlaylistState::new(vec![make_variant(0, 3)]);
 
-        // init=50, media_sizes=[100, 100, 100]
-        // segment_sizes = [150, 100, 100], offsets = [0, 150, 250], total = 350
         let sm = make_size_map(50, &[100, 100, 100]);
         state.set_size_map(0, sm);
         assert_eq!(state.find_segment_at_offset(variant, offset), expected);
     }
-
-    // Test 7: deterministic seek_point_for_time mapping
 
     #[kithara::test(wasm)]
     #[case::segment_0_start(0, (0, 0))]
@@ -647,7 +600,6 @@ mod tests {
         #[case] expected: (usize, u64),
     ) {
         let state = PlaylistState::new(vec![make_variant(0, 4)]);
-        // init=50, media=[100,100,100,100] -> segment offsets [0,150,250,350]
         state.set_size_map(0, make_size_map(50, &[100, 100, 100, 100]));
         let seek_point = seek_point_for_time(&state, 0, target_ms).expect("seek point");
         assert_eq!(seek_point, expected);
@@ -658,8 +610,6 @@ mod tests {
         let state = PlaylistState::new(vec![make_variant(0, 4)]);
         state.set_size_map(0, make_size_map(50, &[100, 100, 100, 100]));
 
-        // Total track duration is 16_000ms (4 segments * 4s).
-        // Boundary seek at exact end should clamp to the last known segment.
         let seek_point = seek_point_for_time(&state, 0, 16_000).expect("seek point");
         assert_eq!(seek_point, (3, 350));
     }
@@ -695,8 +645,6 @@ mod tests {
         let state = PlaylistState::new(vec![make_variant(0, 4)]);
         assert_eq!(state.segment_decode_range(0, index), expected);
     }
-
-    // Test 8: from_parsed builder
 
     #[kithara::test]
     fn test_from_parsed_basic() {
@@ -740,17 +688,13 @@ mod tests {
         let media_playlists = vec![(media_url, playlist)];
         let state = PlaylistState::from_parsed(&variants, &media_playlists);
 
-        // Verify variant count
         assert_eq!(state.num_variants(), 1);
 
-        // Verify segment count
         assert_eq!(state.num_segments(0), Some(2));
 
-        // Verify codec and container
         assert_eq!(state.variant_codec(0), Some(AudioCodec::AacLc));
         assert_eq!(state.variant_container(0), Some(ContainerFormat::Fmp4));
 
-        // Verify segment URLs resolved correctly
         let seg0_url = state.segment_url(0, 0).unwrap();
         assert!(
             seg0_url.as_str().contains("segment-0.m4s"),
@@ -763,14 +707,12 @@ mod tests {
             "segment URL should contain segment-1.m4s, got: {seg1_url}"
         );
 
-        // Verify init URL resolved correctly
         let init = state.init_url(0).unwrap();
         assert!(
             init.as_str().contains("init.mp4"),
             "init URL should contain init.mp4, got: {init}"
         );
 
-        // No size map yet
         assert!(!state.has_size_map(0));
     }
 }

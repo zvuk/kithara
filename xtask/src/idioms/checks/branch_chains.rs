@@ -103,12 +103,10 @@ impl ChainVisitor<'_> {
             return;
         }
 
-        // skip cfg!()-only chains (compile-time switches)
         if chain.iter().all(|c| is_cfg_macro(&c.cond)) {
             return;
         }
 
-        // if-let handling (configurable)
         let has_if_let = chain.iter().any(|c| matches!(*c.cond, Expr::Let(_)));
         if has_if_let && !self.cfg.count_if_let {
             return;
@@ -179,7 +177,6 @@ enum ChainKind {
 }
 
 fn classify_chain(chain: &[&ExprIf]) -> ChainKind {
-    // Try matches!() macro first.
     let mut matches_receivers: Vec<String> = Vec::with_capacity(chain.len());
     for c in chain {
         if let Some(rcv) = matches_macro_receiver(&c.cond) {
@@ -196,7 +193,6 @@ fn classify_chain(chain: &[&ExprIf]) -> ChainKind {
         };
     }
 
-    // Try homogeneous binary chain.
     let mut sample: Option<(String, &'static str)> = None;
     for c in chain {
         let Some((lhs, op)) = extract_binary(&c.cond) else {
@@ -222,8 +218,6 @@ fn extract_binary(cond: &Expr) -> Option<(String, &'static str)> {
         return None;
     };
     let op_str = bin_op_str(op)?;
-    // Pick the side that looks like a "subject" (path/field access) rather than
-    // a literal, so `x == 1` and `1 == x` (rare) collapse onto the same key.
     let lhs = canonical_subject(left).or_else(|| canonical_subject(right))?;
     Some((lhs, op_str))
 }
@@ -245,10 +239,6 @@ fn matches_macro_receiver(cond: &Expr) -> Option<String> {
     if !m.mac.path.is_ident("matches") {
         return None;
     }
-    // First token of `matches!(EXPR, PATTERN)` is the subject expression.
-    // Parse macro tokens as Punctuated::<Expr, Comma> via syn::parse2 — but
-    // `matches!` may carry guard `if ...`, so we parse only the receiver
-    // expression up to the first comma at the top level.
     let tokens = m.mac.tokens.clone();
     let parsed: Result<RcvAndRest, _> = syn::parse2(tokens);
     parsed
@@ -263,7 +253,6 @@ struct RcvAndRest {
 impl syn::parse::Parse for RcvAndRest {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let receiver: Expr = input.parse()?;
-        // discard remainder (pattern, guard, …)
         let _: proc_macro2::TokenStream = input.parse()?;
         Ok(Self { receiver })
     }

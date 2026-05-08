@@ -15,8 +15,6 @@ mod kithara {
 pub trait Player: MaybeSend + MaybeSync + 'static {
     type Item: crate::traits::item::PlayerItem;
 
-    // -- status --
-
     fn status(&self) -> PlayerStatus;
 
     fn error(&self) -> Option<String>;
@@ -25,13 +23,9 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
 
     fn reason_for_waiting_to_play(&self) -> Option<WaitingReason>;
 
-    // -- current item --
-
     fn current_item(&self) -> Option<&Self::Item>;
 
     fn replace_current_item(&self, item: Option<Self::Item>);
-
-    // -- transport --
 
     fn play(&self);
 
@@ -42,8 +36,6 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
     fn preroll(&self, rate: f32) -> Result<(), PlayError>;
 
     fn cancel_pending_prerolls(&self);
-
-    // -- timing --
 
     fn current_time(&self) -> MediaTime;
 
@@ -56,15 +48,11 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
         tolerance_after: MediaTime,
     );
 
-    // -- rate --
-
     fn rate(&self) -> f32;
 
     fn set_rate(&self, rate: f32);
 
     fn set_rate_with_time(&self, rate: f32, time: MediaTime, at_host_time: MediaTime);
-
-    // -- volume --
 
     fn volume(&self) -> f32;
 
@@ -74,19 +62,13 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
 
     fn set_muted(&self, muted: bool);
 
-    // -- buffering --
-
     fn automatically_waits_to_minimize_stalling(&self) -> bool;
 
     fn set_automatically_waits_to_minimize_stalling(&self, waits: bool);
 
-    // -- network --
-
     fn is_network_expensive(&self) -> bool;
 
     fn set_network_expensive(&self, expensive: bool);
-
-    // -- time observation --
 
     fn add_periodic_time_observer(
         &self,
@@ -102,11 +84,7 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
 
     fn remove_time_observer(&self, id: ObserverId);
 
-    // -- events --
-
     fn subscribe(&self) -> broadcast::Receiver<PlayerEvent>;
-
-    // -- engine integration --
 
     fn slot_id(&self) -> Option<SlotId>;
 }

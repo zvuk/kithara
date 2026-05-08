@@ -24,8 +24,6 @@ pub trait QueuePlayer: MaybeSend + MaybeSync + 'static {
 
     fn remove_all_items(&self);
 
-    // -- inherited from Player semantics --
-
     fn play(&self);
 
     fn pause(&self);

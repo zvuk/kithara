@@ -55,14 +55,9 @@ impl FileSource {
             return None;
         }
         let total_usize = usize::try_from(total).ok()?;
-        // One-shot fMP4 metadata parse — outside the realtime path,
-        // so the rule's BytePool requirement does not apply here.
         let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
         self.inner.asset.res.read_at(0, &mut buf).ok()?;
         let index = FileSegmentIndex::try_build(&buf)?;
-        // OnceLock::set fails if a concurrent caller raced us to the
-        // store — both winners observe a valid index, so the loser
-        // can ignore the rejection.
         let _ = self.inner.segment_index.set(index);
         self.inner.segment_index.get()
     }
@@ -131,14 +126,12 @@ impl FileSource {
             FilePhase::Init,
         ));
 
-        // Spawn full-file download task.
         let dl_inner = Arc::clone(&inner);
         let dl_peer = peer.clone();
         task::spawn(async move {
             run_full_download(dl_inner, dl_peer, look_ahead_bytes).await;
         });
 
-        // Spawn range-request watcher task.
         let rng_inner = Arc::clone(&inner);
         let rng_coord = Arc::clone(&coord);
         task::spawn(async move {
@@ -165,10 +158,6 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn len(&self) -> Option<u64> {
-        // `coord.total_bytes()` populates from Content-Length on connect;
-        // until then, fall back to whatever the resource layer can
-        // already report (e.g. fully cached file with a known size).
-        // Both paths return `Option<u64>` of the same physical length.
         let from_coord = self.coord.total_bytes();
         let from_res = self.inner.asset.res.len();
         from_coord.or(from_res)
@@ -225,9 +214,6 @@ impl kithara_stream::Source for FileSource {
             return Ok(ReadOutcome::Eof);
         };
 
-        // Reader-side `FileEvent::ReadProgress` is fired by
-        // `FileReaderHooks` from the decoder layer — see
-        // `kithara-file/src/session/reader.rs`.
         trace!(offset, bytes = n, "FileSource read complete");
 
         Ok(ReadOutcome::Bytes(count))
@@ -240,8 +226,6 @@ impl kithara_stream::Source for FileSource {
             self.coord.timeline().byte_position_handle(),
             self.coord.timeline().seek_epoch_handle(),
         );
-        // constructing into kithara_stream::SharedHooks (cross-crate public type fixes std::sync::Mutex)
-        // ast-grep-ignore: arch.no-std-sync-mutex
         Some(Arc::new(std::sync::Mutex::new(hooks)))
     }
 
@@ -255,10 +239,6 @@ impl kithara_stream::Source for FileSource {
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> kithara_stream::StreamResult<WaitOutcome> {
-        // The file backend's `Resource::wait_range` blocks on its own
-        // condvar / cancel signals; the source-level `timeout` is a hint
-        // that does not gate the inner wait. Both `Some` and `None`
-        // collapse to "wait until ready or cancel" here.
         let _ = timeout;
 
         match self.phase_at(range.clone()) {
@@ -272,7 +252,6 @@ impl kithara_stream::Source for FileSource {
             self.coord.set_read_pos(range.start);
         }
 
-        // Issue on-demand Range request when data is missing.
         if !self.inner.asset.res.contains_range(range.clone()) {
             debug!(
                 range_start = range.start,

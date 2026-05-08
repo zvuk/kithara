@@ -28,30 +28,25 @@ use tokio_util::sync::CancellationToken;
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
-    // Create HLS server with 3 segments per variant
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
         false,
-        Duration::from_millis(10), // minimal delay
+        Duration::from_millis(10),
     )
     .await;
 
     let url = server.url("/master.m3u8");
     let cancel_token = CancellationToken::new();
 
-    // Configure HLS - fixed variant 0 (no ABR switching for this test)
     let config = HlsConfig::new(url.clone())
         .with_cancel(cancel_token.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_initial_abr_mode(AbrMode::Manual(0));
 
-    // Open HLS stream
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    // Give HLS time to start fetching
     sleep(Duration::from_secs(2)).await;
 
-    // Read ALL bytes using std::io::Read
     let mut all_bytes = Vec::new();
     let mut read_buf = vec![0u8; 64 * 1024];
     let mut total_reads = 0;
@@ -80,7 +75,6 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
                 }
             }
 
-            // Safety: stop if we read too much (shouldn't happen)
             if all_bytes.len() > 1_000_000 {
                 panic!("Read too much data: {} bytes", all_bytes.len());
             }
@@ -97,11 +91,8 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     println!("Total bytes read: {}", all_bytes.len());
     println!("Total read operations: {}", total_reads);
 
-    // Each segment is ~200KB (9 byte header + data)
-    // 3 segments should be ~600KB total, but we accept slightly less due to buffering
-    let expected_min_bytes = 500_000; // At least 500KB for 3 segments
+    let expected_min_bytes = 500_000;
 
-    // Parse segments to count them (using binary format from AbrTestServer)
     let mut segments_found = 0;
     let mut offset = 0;
 
@@ -128,7 +119,6 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
         segments_found += 1;
         let next_offset = offset + 9 + data_len;
 
-        // Safety check: don't go past buffer
         if next_offset > all_bytes.len() {
             println!(
                 "Segment {} truncated: expected {} bytes, have {}",
@@ -149,7 +139,6 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
         all_bytes.len().saturating_sub(offset)
     );
 
-    // CRITICAL ASSERTION: Should read substantial data from all segments
     assert!(
         all_bytes.len() >= expected_min_bytes,
         "FAIL: Only read {} bytes (expected at least {}). This means HLS failed to load segments!",
@@ -157,7 +146,6 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
         expected_min_bytes
     );
 
-    // Should find at least 3 segments (even if last one is truncated)
     assert!(
         segments_found >= 3,
         "FAIL: Only found {} segments, expected at least 3. HLS stopped early!",

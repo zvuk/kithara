@@ -80,7 +80,6 @@ async fn stress_random_seek_read_hls(
         seek_iterations
     };
 
-    // Init data
     let init_data_per_variant = if with_init {
         let init_size = 1024;
         let mut init = b"V0-INIT:".to_vec();
@@ -90,7 +89,6 @@ async fn stress_random_seek_read_hls(
         None
     };
 
-    // Encryption config
     let encryption = if with_encryption {
         Some(EncryptionConfig {
             key: *b"0123456789abcdef",
@@ -100,7 +98,6 @@ async fn stress_random_seek_read_hls(
         None
     };
 
-    // Step 1: Spawn HLS server
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: segment_count,
         segment_size,
@@ -123,7 +120,6 @@ async fn stress_random_seek_read_hls(
         "HLS server ready"
     );
 
-    // Step 2: Create Stream<Hls>
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
@@ -134,12 +130,9 @@ async fn stress_random_seek_read_hls(
 
     let mut stream = Stream::<Hls>::new(config).await.expect("create HLS stream");
 
-    // Steps 3-7 in blocking thread
     let result = spawn_blocking(move || {
-        // Step 3: Total byte length from fixture config
         info!(total_bytes, "Stream byte length");
 
-        // Trigger initial download + verify first bytes
         let mut probe = [0u8; 64];
         let probe_deadline = Instant::now() + Duration::from_secs(5);
         let n = loop {
@@ -163,14 +156,12 @@ async fn stress_random_seek_read_hls(
         }
         stream.seek(SeekFrom::Start(0)).expect("seek back to 0");
 
-        // Step 4: Compute chunk size — ~0.5% of total, clamped [1 KB, 64 KB]
         let chunk_size = ((total_bytes as f64 * 0.005) as usize).clamp(1024, 65_536);
         info!(chunk_size, "Read chunk size");
 
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
         let mut buf = vec![0u8; chunk_size];
 
-        // Step 5: Generate random seek positions > 0, < len - chunk_size
         let max_seek = total_bytes - chunk_size as u64;
         let seek_positions: Vec<u64> = (0..seek_iterations)
             .map(|_| rng.range_u64(1, max_seek))
@@ -181,19 +172,16 @@ async fn stress_random_seek_read_hls(
             max_seek, "Generated seek positions"
         );
 
-        // Step 6: Iterate seek + read + verify
         let mut successful_reads = 0u64;
         let mut total_bytes_read = 0u64;
         let mut byte_mismatches = 0u64;
 
         for (i, &pos) in seek_positions.iter().enumerate() {
-            // Seek
             let actual_pos = stream.seek(SeekFrom::Start(pos)).unwrap_or_else(|e| {
                 panic!("seek #{i} to byte {pos} failed: {e}");
             });
             assert_eq!(actual_pos, pos, "seek #{i} position mismatch");
 
-            // Read
             let n = stream.read(&mut buf).unwrap_or_else(|e| {
                 panic!("read #{i} after seek to {pos} failed: {e}");
             });
@@ -202,10 +190,6 @@ async fn stress_random_seek_read_hls(
                 "read returned 0 after seek #{i} to byte {pos} (total_len={total_bytes})",
             );
 
-            // Verify: every byte matches expected content.
-            // For encrypted streams, PKCS7 padding removal causes segment size drift
-            // (16 bytes per segment) so byte offsets don't align with plaintext layout.
-            // We only verify read success and data availability in that case.
             if !with_encryption {
                 for (j, &byte) in buf[..n].iter().enumerate() {
                     let expected = server.expected_byte_at(0, pos + j as u64);
@@ -248,9 +232,6 @@ async fn stress_random_seek_read_hls(
             );
         }
 
-        // Step 7: Final seek near end → read all → verify EOF.
-        // For encrypted streams, PKCS7 padding drift makes the stream's byte layout
-        // differ from plaintext layout, so tail verification is skipped.
         if !with_encryption {
             let final_seek = total_bytes - chunk_size as u64;
             info!(final_seek, "Final seek near end");

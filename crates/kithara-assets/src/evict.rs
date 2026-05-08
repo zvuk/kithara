@@ -126,9 +126,6 @@ where
             tracing::debug!(asset_root = %cand, "Skipping pinned asset");
             return;
         }
-        // Single canonical removal channel: deleter clears FS,
-        // `AvailabilityIndex`, `PinsIndex`, and `LruIndex` together.
-        // See [`crate::deleter`].
         log_eviction_outcome(cand, self.deleter.delete_asset(cand));
     }
 
@@ -161,7 +158,6 @@ where
             if pinned.contains(&cand) {
                 continue;
             }
-            // Same canonical channel — deleter wipes FS and all indexes.
             let _ = self.deleter.delete_asset(&cand);
         }
     }

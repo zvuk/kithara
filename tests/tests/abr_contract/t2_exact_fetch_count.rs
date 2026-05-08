@@ -119,9 +119,6 @@ async fn run_case(
         "T2 [{label}]: warmup never reached pre_switch_target {pre_switch_target:?}"
     );
 
-    // Anchor for fetch-emit filtering: the moment the ABR controller
-    // actually committed the switch (preferred over `set_mode` wall
-    // time, which can lead the commit by a few ticks).
     let commit_at = first_abr_commit(&recorder, variant_from, variant_to).unwrap_or_else(|| {
         switch_at.unwrap_or_else(|| {
             panic!(
@@ -136,7 +133,6 @@ async fn run_case(
 
     let emits_to: Vec<FetchEmit> = fetch_emits_for(&recorder, variant_to, commit_at);
 
-    // ---------- A5: exactly one init fetch on variant_to ----------
     let init_emits: Vec<&FetchEmit> = emits_to.iter().filter(|e| e.plan_need_init).collect();
     assert_exact_count(
         init_emits.len(),
@@ -144,7 +140,6 @@ async fn run_case(
         &format!("T2 [{label}] A5: init fetches on variant_to"),
     );
 
-    // ---------- A3: zero back-fetches ----------
     let back_fetches: Vec<&FetchEmit> = emits_to
         .iter()
         .filter(|e| !e.plan_need_init && e.segment_index < playback_floor_idx)
@@ -156,7 +151,6 @@ async fn run_case(
         n = back_fetches.len(),
     );
 
-    // ---------- A4: bounded forward prefetch ----------
     let upper = playback_floor_idx + prefetch_count;
     let overreach: Vec<&FetchEmit> = emits_to
         .iter()
@@ -170,7 +164,6 @@ async fn run_case(
         n = overreach.len(),
     );
 
-    // ---------- A2: idempotent emits per (variant_to, segment_index) ----------
     let mut seg_counts: BTreeMap<usize, usize> = BTreeMap::new();
     for emit in emits_to.iter().filter(|e| !e.plan_need_init) {
         *seg_counts.entry(emit.segment_index).or_insert(0) += 1;
@@ -185,7 +178,6 @@ async fn run_case(
         "T2 [{label}] A2: scheduler emitted duplicate fetches on variant_to: {duplicates:?}"
     );
 
-    // ---------- variant_from must be quiet after commit ----------
     let from_emits = fetch_emits_for(&recorder, variant_from, commit_at);
     assert!(
         from_emits.is_empty(),

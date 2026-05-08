@@ -109,12 +109,11 @@ fn parse_header(word: u32) -> Option<FrameHeader> {
     let version_bits = (word >> 19) & 0x3;
     let layer_bits = (word >> 17) & 0x3;
     if layer_bits != 0b01 {
-        // Only Layer III carries Xing/Info tags.
         return None;
     }
     let samples_per_frame = match version_bits {
-        0b11 => 1152,       // MPEG-1
-        0b10 | 0b00 => 576, // MPEG-2 / MPEG-2.5
+        0b11 => 1152,
+        0b10 | 0b00 => 576,
         _ => return None,
     };
     let channel_mode = (word >> 6) & 0x3;
@@ -139,25 +138,19 @@ mod tests {
     use super::*;
 
     fn build_mpeg1_stereo_xing(enc_delay: u32, enc_padding: u32) -> Vec<u8> {
-        // MPEG-1 Layer III, 48 kHz, stereo, 128 kbps, padding=0 → 384 byte frame.
         let mut buf = vec![0u8; 384];
         buf[0] = 0xFF;
         buf[1] = 0xFB;
         buf[2] = 0x90;
         buf[3] = 0x00;
-        // 32-byte stereo side info zeros, then Xing tag at offset 4 + 32 = 36.
         let tag_off = 36;
         buf[tag_off..tag_off + 4].copy_from_slice(b"Xing");
         buf[tag_off + 4..tag_off + 8].copy_from_slice(&0x0000_000Fu32.to_be_bytes());
-        // num_frames, num_bytes, 100-byte TOC, quality.
         buf[tag_off + 8..tag_off + 12].copy_from_slice(&100u32.to_be_bytes());
         buf[tag_off + 12..tag_off + 16].copy_from_slice(&38400u32.to_be_bytes());
-        // toc 100 bytes already zeroed.
         buf[tag_off + 116..tag_off + 120].copy_from_slice(&0u32.to_be_bytes());
-        // LAME header begins at tag_off + 120.
         let lame_off = tag_off + 120;
         buf[lame_off..lame_off + 4].copy_from_slice(b"LAME");
-        // bytes 4..21 zeroed.
         let trim = (enc_delay << 12) | (enc_padding & 0xFFF);
         buf[lame_off + 21] = ((trim >> 16) & 0xFF) as u8;
         buf[lame_off + 22] = ((trim >> 8) & 0xFF) as u8;

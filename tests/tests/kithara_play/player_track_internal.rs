@@ -544,11 +544,6 @@ async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() 
 
 #[kithara::test(tokio)]
 async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
-    // Contract: PrefetchRequested always precedes HandoverRequested,
-    // even when the windows coincide. Consumers (e.g. kithara-queue)
-    // arm the next slot on prefetch and commit on handover; suppressing
-    // prefetch leaves them without an armed slot and the handover is
-    // a no-op.
     let mut track = make_track_with(10.0, None);
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.2, sample_rate);

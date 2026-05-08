@@ -19,7 +19,6 @@ pub mod test_server;
 pub mod token_store;
 pub mod wav;
 
-// Native-only group — ОДИН cfg-гейт на всю группу.
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 pub use fixtures::*;

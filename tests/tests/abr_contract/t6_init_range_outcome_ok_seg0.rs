@@ -47,7 +47,7 @@ async fn warmup_then_switch_through_all_variants(
     backend: DecoderBackend,
 ) {
     use kithara::audio::ReadOutcome;
-    let _ = backend; // kept for future per-backend tuning
+    let _ = backend;
 
     let warmup_deadline = Instant::now() + Duration::from_secs(8);
     let mut buf = vec![0.0f32; 4096];
@@ -68,10 +68,6 @@ async fn warmup_then_switch_through_all_variants(
         "T6: warmup failed to produce any samples"
     );
 
-    // Walk through every variant in turn. Each variant flip should
-    // trigger a fresh `Fmp4SegmentDemuxer::open` ⇒ a fresh
-    // `init_segment_range()` call recorded by the
-    // `record_segment_layout_init_range_call` probe.
     for variant in [
         Consts::VARIANT_AAC_LQ,
         Consts::VARIANT_AAC_MQ,

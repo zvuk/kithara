@@ -48,7 +48,6 @@ impl Check for ModuleLayers {
             };
             let crate_root = manifest_dir.as_std_path();
 
-            // compile per-layer globs (relative to crate root)
             let layers: Vec<(u32, &str, Vec<Pattern>)> = crate_cfg
                 .layers
                 .iter()
@@ -62,7 +61,6 @@ impl Check for ModuleLayers {
                 })
                 .collect();
 
-            // classify every src/**/*.rs into a layer
             let src_dir = crate_root.join("src");
             let rs_files = walk_rs_files(&src_dir)?;
             let file_layer: HashMap<PathBuf, (u32, &str)> = rs_files
@@ -145,12 +143,6 @@ fn collect_use_tree(
                 prefix.push(seg);
             }
             collect_use_tree(&p.tree, prefix, out, now_inside);
-            if !prefix.is_empty() && now_inside && tree_is_terminal(&p.tree) {
-                // already pushed via terminal branch
-            }
-            if !inside_crate {
-                // we entered via `crate::` here; pop nothing (we did not push "crate")
-            }
         }
         UseTree::Name(n) => {
             if inside_crate {
@@ -179,13 +171,6 @@ fn collect_use_tree(
     }
 }
 
-fn tree_is_terminal(t: &UseTree) -> bool {
-    matches!(
-        t,
-        UseTree::Name(_) | UseTree::Rename(_) | UseTree::Glob(_) | UseTree::Group(_)
-    )
-}
-
 /// Try to map a `crate::a::b::c` path to a `.rs` file under `<crate_root>/src/`.
 /// Tries `src/a/b/c.rs`, `src/a/b/c/mod.rs`, `src/a/b.rs` (the last segment may be an item).
 fn resolve_module_to_file(crate_root: &Path, segments: &[String]) -> Option<PathBuf> {
@@ -194,14 +179,12 @@ fn resolve_module_to_file(crate_root: &Path, segments: &[String]) -> Option<Path
     }
     let src = crate_root.join("src");
     let mut try_paths: Vec<PathBuf> = Vec::new();
-    // exact module match
     let mut exact = src.clone();
     for seg in segments {
         exact = exact.join(seg);
     }
     try_paths.push(exact.with_extension("rs"));
     try_paths.push(exact.join("mod.rs"));
-    // last segment is an item inside the parent module
     if segments.len() >= 2 {
         let mut parent = src.clone();
         for seg in &segments[..segments.len() - 1] {

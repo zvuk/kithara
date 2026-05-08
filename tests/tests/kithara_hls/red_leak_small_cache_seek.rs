@@ -101,7 +101,6 @@ fn exercise_stream_blocking(mut stream: Stream<Hls>) {
     let _ = stream.read(&mut buf[..64]);
 
     for i in 0..Consts::SEEKS_PER_STREAM {
-        // Pseudo-random positions across 3 segments (each 200_000 bytes).
         let seg = (i * 7) % 3;
         let within = ((i * 53) as u64) % Consts::PACKAGED_SEGMENT_SIZE;
         let pos = seg as u64 * Consts::PACKAGED_SEGMENT_SIZE + within;
@@ -125,8 +124,6 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
 ) -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;
 
-    // Warm up tokio worker pool + first-time allocations so they do
-    // not pollute the baseline.
     {
         let cancel = CancellationToken::new();
         let stream = build_small_cache_stream(&server, temp_dir.path(), cancel.clone()).await;
@@ -145,15 +142,11 @@ async fn red_small_cache_seek_stress_does_not_leak_threads(
         spawn_blocking(move || exercise_stream_blocking(stream))
             .await
             .expect("iteration blocking join");
-        // Drop the cancel-token owner last, matching production where
-        // user code typically owns `cancel` outside the stream.
         cancel.cancel();
         sleep(Duration::from_millis(150)).await;
         tracing::info!(iter = i, threads = live_thread_count(), "post-drop");
     }
 
-    // Mirror nextest leak-timeout: give the process up to ~300 ms
-    // to reap background tasks.
     sleep(Duration::from_millis(300)).await;
     let threads_after = live_thread_count();
     let growth = threads_after.saturating_sub(threads_baseline);

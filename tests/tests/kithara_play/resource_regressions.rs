@@ -158,7 +158,6 @@ fn test_app() -> Router {
     Router::new()
         .route("/ok.mp3", get(ok_mp3).head(ok_mp3))
         .route("/gone.mp3", get(unavailable_mp3).head(unavailable_mp3))
-        // Same MP3 served at extensionless path (like zvuk /track/streamhq?id=NNN).
         .route("/track/stream", get(ok_mp3).head(ok_mp3))
 }
 
@@ -772,7 +771,6 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
-    // First session: perform the requested warmup + teardown.
     let first_pos = match teardown {
         WarmupTeardown::Shutdown | WarmupTeardown::DropOnly => {
             warm_hls_worker(&hls_url_a, store_a, worker_a.clone(), backend).await
@@ -1068,10 +1066,8 @@ async fn stress_offline_crossfade_no_gaps() {
     let worker = AudioWorkerHandle::new();
     let mut player = OfflinePlayer::new(SR);
 
-    // Local MP3 path (simulates a disk-cached file, like production).
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
-    // Helper: create MP3 resource (NO preload — match production timing)
     let make_mp3 = |w: AudioWorkerHandle, _s: StoreOptions| {
         let p = local_mp3.clone();
         async move {
@@ -1086,7 +1082,6 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    // Helper: create and preload an HLS resource
     let make_hls = |w: AudioWorkerHandle, s: StoreOptions| {
         let u = hls_url.clone();
         async move {
@@ -1107,7 +1102,6 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    // Scenario 1: MP3 to HLS
     let mp3_1 = make_mp3(worker.clone(), store.clone()).await;
     sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(mp3_1, "mp3_1");
@@ -1118,40 +1112,32 @@ async fn stress_offline_crossfade_no_gaps() {
     player.load_and_fadein(hls_1, "hls_1");
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR);
 
-    // Scenario 2: HLS to MP3
     let mp3_2 = make_mp3(worker.clone(), store.clone()).await;
     sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(mp3_2, "mp3_2");
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR);
 
-    // Scenario 3: MP3 to MP3
     let mp3_3 = make_mp3(worker.clone(), store.clone()).await;
     sleep(Duration::from_millis(200)).await;
     player.load_and_fadein(mp3_3, "mp3_3");
     let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR);
 
-    // Report
     info!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
     for s in [&s1a, &s1b, &s2, &s3] {
         info!("  {s}");
     }
 
-    // Scenario 4: repeated HLS to MP3 (intermittent glitch)
-    // User reports: "чаще всего при переключении с hls на mp3,
-    // это длится около 2х секунд". Run multiple iterations to catch it.
     info!("\n=== Repeated HLS→MP3 crossfade (5 iterations) ===");
     let mut worst_silence = 0u32;
     let mut worst_slow = 0u32;
     let mut worst_render = Duration::ZERO;
 
     for iter in 0..5 {
-        // HLS phase
         let hls_n = make_hls(worker.clone(), store.clone()).await;
         sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(hls_n, &format!("hls_iter{iter}"));
         let _sh = render_offline_window(&mut player, 40, &format!("HLS solo #{iter}"), BLOCK, SR);
 
-        // Crossfade HLS→MP3
         let mp3_n = make_mp3(worker.clone(), store.clone()).await;
         sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(mp3_n, &format!("mp3_iter{iter}"));
@@ -1174,7 +1160,6 @@ async fn stress_offline_crossfade_no_gaps() {
          max_render={worst_render:?}"
     );
 
-    // Assertions
     let all = [&s1b, &s2, &s3];
     for s in &all {
         assert!(
@@ -1239,13 +1224,11 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let url = server.url(path);
     let store = store_options(&temp_dir, true);
 
-    // No hint — ResourceConfig must extract it from URL or pipeline must probe raw bytes.
     let config = resource_config_no_hint(&url, store, backend);
     let mut resource = Resource::new(config)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
 
-    // Duration must be close to 187s.
     let duration = resource.duration();
     assert!(
         duration.is_some(),
@@ -1258,7 +1241,6 @@ async fn resource_mp3_no_hint_decodes_with_duration(
         Consts::EXPECTED_DURATION_SECS
     );
 
-    // Decode real PCM data — at least 2 seconds.
     let (samples, position) = {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
@@ -1422,7 +1404,6 @@ async fn live_remote_resource_decodes_with_duration(
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
-    // Duration must be reported and > 30s for a real track.
     let duration = resource.duration();
     assert!(
         duration.is_some(),
@@ -1434,7 +1415,6 @@ async fn live_remote_resource_decodes_with_duration(
         "{url}: expected duration > 30s for a real track, got {dur_secs:.1}s"
     );
 
-    // Decode at least 2 seconds of real PCM.
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut samples = 0usize;
     let mut buf = [0.0f32; 4096];
@@ -1656,9 +1636,3 @@ async fn local_resource_decodes_with_duration(
         resource.position()
     );
 }
-
-// Note: the remote-only sibling `player_mp3_duration_matches_app_flow` exercises
-// `PlayerImpl::duration_seconds()`, which is updated by the running processor
-// (`player_processor::update_position_duration`). That path needs `play()` and
-// therefore a real cpal device — it can't be reproduced offline without
-// audio hardware, so we don't add a local equivalent here.

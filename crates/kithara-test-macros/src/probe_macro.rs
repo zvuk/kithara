@@ -142,9 +142,6 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         })
         .collect();
 
-    // `let _ = &arg;` is a zero-codegen no-op the compiler folds away;
-    // it suppresses unused-variable warnings on probe args when the
-    // gate is off.
     let arg_consume: Vec<TokenStream2> =
         arg_idents.iter().map(|a| quote! { let _ = &#a; }).collect();
 
@@ -161,14 +158,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let sig = &input.sig;
     let block = &input.block;
 
-    // `register_probes()` is idempotent (`OnceLock`-guarded) and a no-op
-    // when `kithara-test-utils/usdt-probes` is off. Emitting it from the
-    // macro means every probe site auto-registers on first fire — tests
-    // and external dtrace consumers don't need a separate bootstrap.
     let body = if probe_return {
-        // Wrap the body in a closure so any `return X;` becomes a return
-        // from the closure — `__probe_ret` then captures the actual final
-        // value regardless of which branch produced it.
         quote! {
             let __probe_ret = (|| #block)();
             #[cfg(any(test, feature = "test-utils"))]

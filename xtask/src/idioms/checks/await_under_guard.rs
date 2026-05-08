@@ -138,19 +138,14 @@ impl<'ast> Visit<'ast> for AwaitVisitor<'_> {
     fn visit_block(&mut self, b: &'ast syn::Block) {
         let snapshot = self.guards.len();
         self.process_block(b);
-        // Pop everything registered inside this block.
         self.guards.truncate(snapshot);
     }
 
     fn visit_expr_block(&mut self, b: &'ast ExprBlock) {
-        // `ExprBlock` wraps a `Block`; defer to `visit_block` so the
-        // single scope-management path is the same.
         self.visit_block(&b.block);
     }
 
     fn visit_expr_await(&mut self, a: &'ast ExprAwait) {
-        // First, descend so that nested awaits in the receiver get a
-        // chance to be reported in their own block scope.
         visit::visit_expr_await(self, a);
         if self.guards.is_empty() {
             return;
@@ -159,8 +154,6 @@ impl<'ast> Visit<'ast> for AwaitVisitor<'_> {
         if self.suppress.is_suppressed(s.line, ID) {
             return;
         }
-        // Report once per active guard so each held lock has its own
-        // violation key (line:col + guard binding).
         for g in self.guards.clone() {
             let key = format!("{}:{}:{}::{}", self.rel, s.line, s.column, g.binding);
             let msg = format!(
@@ -190,15 +183,12 @@ impl AwaitVisitor<'_> {
     fn process_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Local(local) => {
-                // Walk the initialiser first — recursive visits look for
-                // nested awaits (rare with locks, but possible).
                 if let Some(init) = &local.init {
                     visit::visit_expr(self, &init.expr);
                     if let Some((label, _)) = init.diverge.as_ref() {
                         let _ = label;
                     }
                 }
-                // Then register a new guard if this is `let g = recv.lock_*()`.
                 if let Some(g) = guard_from_local(local) {
                     self.guards.push(g);
                 }
@@ -275,9 +265,6 @@ fn method_call_at_tail(e: &Expr) -> Option<&ExprMethodCall> {
 }
 
 fn is_sync_lock_method(name: &str) -> bool {
-    // `lock_async`/`read_async`/`write_async` are async-aware and
-    // intentionally span `.await`. They are NOT flagged as guards
-    // because they don't carry the deadlock risk.
     matches!(
         name,
         "lock" | "lock_sync" | "read" | "write" | "upgradable_read"
