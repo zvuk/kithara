@@ -30,6 +30,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) trait_item_order: TraitItemOrderConfig,
     #[serde(default)]
     pub(crate) struct_init_order: StructInitOrderConfig,
+    #[serde(default)]
+    pub(crate) comment_hygiene: CommentHygieneConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +135,84 @@ impl Default for StructInitOrderConfig {
 
 fn default_shorthand_first() -> bool {
     true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CommentHygieneConfig {
+    /// Maximum number of consecutive lines a whitelisted inline `//` block
+    /// may span before flagging `size:inline`. Once a comment spans more
+    /// lines than this it likely belongs in a doc-block above the item or
+    /// in the crate `README.md`.
+    #[serde(default = "default_inline_max_lines")]
+    pub(crate) inline_max_lines: usize,
+    /// Maximum number of consecutive lines a `///` or `//!` doc-block may
+    /// span before flagging `size:doc`. Long contracts belong in the
+    /// owning crate `README.md` per AGENTS.md.
+    #[serde(default = "default_doc_block_max_lines")]
+    pub(crate) doc_block_max_lines: usize,
+    /// Density threshold in percent (0..=100): a fn body where the share
+    /// of non-doc inline `//` lines strictly exceeds this is flagged.
+    #[serde(default = "default_fn_density_threshold_pct")]
+    pub(crate) fn_density_threshold_pct: u32,
+    /// Functions with body shorter than this many lines are exempt from
+    /// the density check (signal would be noisy on tiny helpers).
+    #[serde(default = "default_fn_density_min_body_lines")]
+    pub(crate) fn_density_min_body_lines: usize,
+    /// Prefixes that mark an inline `//` comment as intentional and
+    /// exempt from the `category` check. Match is case-sensitive on the
+    /// trimmed comment body.
+    #[serde(default = "default_allowed_inline_markers")]
+    pub(crate) allowed_inline_markers: Vec<String>,
+    /// Workspace-relative glob patterns that opt files out of every
+    /// `comment_hygiene` sub-check.
+    #[serde(default = "default_exclude_paths")]
+    pub(crate) exclude_paths: Vec<String>,
+}
+
+impl Default for CommentHygieneConfig {
+    fn default() -> Self {
+        Self {
+            inline_max_lines: default_inline_max_lines(),
+            doc_block_max_lines: default_doc_block_max_lines(),
+            fn_density_threshold_pct: default_fn_density_threshold_pct(),
+            fn_density_min_body_lines: default_fn_density_min_body_lines(),
+            allowed_inline_markers: default_allowed_inline_markers(),
+            exclude_paths: default_exclude_paths(),
+        }
+    }
+}
+
+fn default_inline_max_lines() -> usize {
+    3
+}
+
+fn default_doc_block_max_lines() -> usize {
+    20
+}
+
+fn default_fn_density_threshold_pct() -> u32 {
+    30
+}
+
+fn default_fn_density_min_body_lines() -> usize {
+    6
+}
+
+fn default_allowed_inline_markers() -> Vec<String> {
+    [
+        "SAFETY:", "TODO:", "FIXME:", "XXX:", "NOTE:", "WHY:", "HACK:", "kithara:",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
+}
+
+fn default_exclude_paths() -> Vec<String> {
+    ["**/build.rs", "**/tests/**/fixtures/**"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 fn load_optional<T>(path: &Path) -> Result<T>
