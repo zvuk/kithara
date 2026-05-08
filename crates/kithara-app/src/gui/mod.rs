@@ -7,4 +7,4 @@ mod theme;
 mod update;
 mod view;
 
-pub use frontend::{GuiFrontend, init_tracing};
+pub use frontend::GuiFrontend;

@@ -7,7 +7,9 @@ pub mod drm;
 pub mod events;
 pub mod frontend;
 pub mod sources;
+pub mod state;
 pub mod theme;
+pub mod tracing_init;
 
 #[cfg(feature = "tui")]
 pub mod tui;

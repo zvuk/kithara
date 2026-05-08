@@ -10,16 +10,12 @@ pub(crate) enum Icon {
     Pause,
     SkipNext,
     SkipPrev,
-    Shuffle,
-    Repeat,
-    RepeatOnce,
     VolumeHigh,
     VolumeLow,
     VolumeMute,
     Playlist,
     Equalizer,
     Settings,
-    Dj,
     MusicNote,
 }
 
@@ -29,16 +25,12 @@ fn icon_bytes(icon: Icon) -> &'static [u8] {
         Icon::Pause => include_bytes!("../../assets/icons/pause.svg"),
         Icon::SkipNext => include_bytes!("../../assets/icons/skip-forward.svg"),
         Icon::SkipPrev => include_bytes!("../../assets/icons/skip-back.svg"),
-        Icon::Shuffle => include_bytes!("../../assets/icons/shuffle.svg"),
-        Icon::Repeat => include_bytes!("../../assets/icons/repeat.svg"),
-        Icon::RepeatOnce => include_bytes!("../../assets/icons/repeat-once.svg"),
         Icon::VolumeHigh => include_bytes!("../../assets/icons/speaker-high.svg"),
         Icon::VolumeLow => include_bytes!("../../assets/icons/speaker-low.svg"),
         Icon::VolumeMute => include_bytes!("../../assets/icons/speaker-x.svg"),
         Icon::Playlist => include_bytes!("../../assets/icons/playlist.svg"),
         Icon::Equalizer => include_bytes!("../../assets/icons/faders.svg"),
         Icon::Settings => include_bytes!("../../assets/icons/gear.svg"),
-        Icon::Dj => include_bytes!("../../assets/icons/disc.svg"),
         Icon::MusicNote => include_bytes!("../../assets/icons/music-note.svg"),
     }
 }

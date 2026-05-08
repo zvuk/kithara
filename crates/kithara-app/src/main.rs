@@ -19,8 +19,8 @@ use kithara_app::gui;
 #[cfg(feature = "gui")]
 use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
-use kithara_app::tui::{TuiFrontend, init_tracing as init_tui_tracing};
-use kithara_app::{config::AppConfig, frontend::Frontend};
+use kithara_app::tui::TuiFrontend;
+use kithara_app::{config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
 use kithara_queue::{Queue, QueueConfig};
 use tokio_util::sync::CancellationToken;
 
@@ -82,18 +82,13 @@ fn suppress_macos_system_logs() {
 #[cfg(not(target_os = "macos"))]
 fn suppress_macos_system_logs() {}
 
-#[cfg(feature = "tui")]
 fn init_tracing_for_mode(mode: Mode) -> AppResult<()> {
     let log_directives: &[&str] = match mode {
         Mode::Tui => &["off"],
         _ => &["info"],
     };
-    init_tui_tracing(log_directives, mode == Mode::Tui)
-}
-
-#[cfg(not(feature = "tui"))]
-fn init_tracing_for_mode(_mode: Mode) -> AppResult<()> {
-    gui::init_tracing()
+    init_tracing(log_directives, mode == Mode::Tui)?;
+    Ok(())
 }
 
 fn main() -> AppResult {

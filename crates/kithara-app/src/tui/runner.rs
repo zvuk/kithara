@@ -1,20 +1,30 @@
 use std::{sync::Arc, time::Duration};
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
-use kithara::events::{AppEvent, EngineEvent, Event, EventReceiver, PlayerEvent};
+use kithara::{
+    abr::AbrMode,
+    events::{AppEvent, Event},
+};
 use kithara_queue::{Queue, QueueEvent, TrackId, Transition};
 use tokio::{sync::broadcast::error::TryRecvError, task};
 
-use super::{dashboard::Dashboard, session::UiSession};
+use super::{
+    dashboard::{Dashboard, Tab},
+    session::UiSession,
+};
 use crate::{
     crossfade::{CrossfadeClock, ProgressLog},
-    events::{format_seconds, is_progress_event, source_note},
+    events::{format_seconds, is_progress_event},
+    state::{StateController, UiState},
     theme::tui,
 };
 
 struct Consts;
 impl Consts {
     const CONTROL_POLL_MS: u64 = 50;
+    const CROSSFADE_MAX_SECONDS: f32 = 8.0;
+    const CROSSFADE_STEP_SECONDS: f32 = 0.5;
+    const EQ_GAIN_STEP_DB: f32 = 1.0;
     const MAX_DIGIT_TRACKS: usize = 9;
     const PERCENT_SCALE: f32 = 100.0;
     const SEEK_STEP_SECONDS_F64: f64 = 5.0;
@@ -32,12 +42,10 @@ pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig
 
     queue.set_tracks(crate::sources::build_sources(config));
 
-    let event_rx = queue.subscribe();
     let bus = queue.bus().clone();
+    let controller = Arc::new(StateController::new(Arc::clone(&queue)));
 
-    let queue_for_loop = Arc::clone(&queue);
-    let mut ui_handle =
-        task::spawn_blocking(move || run_ui_loop(&queue_for_loop, event_rx, palette));
+    let mut ui_handle = task::spawn_blocking(move || run_ui_loop(&controller, &palette));
 
     let ui_finished = tokio::select! {
         result = &mut ui_handle => {
@@ -61,24 +69,29 @@ pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig
     Ok(())
 }
 
-fn run_ui_loop(
-    queue: &Queue,
-    mut event_rx: EventReceiver,
-    palette: tui::TuiPalette,
-) -> RunnerResult {
-    let mut dashboard = Dashboard::new(palette);
-    dashboard.refresh_tracks(queue);
-    let track_count = dashboard.track_count();
+fn run_ui_loop(controller: &Arc<StateController>, palette: &tui::TuiPalette) -> RunnerResult {
+    let dashboard = Dashboard::new(*palette);
 
-    let mut ui = UiSession::new(dashboard)?;
-    ui.log_line(&format!(
-        "controls: space play/pause, 1-{} select track, Left/Right seek {SEEK_STEP_SECONDS_F64:.0}s, Up/Down vol {:+.0}%",
-        track_count.min(Consts::MAX_DIGIT_TRACKS),
-        Consts::VOLUME_STEP * Consts::PERCENT_SCALE,
-        SEEK_STEP_SECONDS_F64 = Consts::SEEK_STEP_SECONDS_F64
-    ))?;
-    ui.log_line("auto-advances to next track with crossfade near end of each track")?;
-    ui.draw()?;
+    // Drain raw queue events so the user sees a live log of engine
+    // activity. Mirrored event-driven state changes are owned by the
+    // StateController; this subscriber only logs.
+    let mut event_rx = controller.queue().subscribe();
+
+    let mut state = controller.snapshot();
+    let mut ui = UiSession::new(dashboard, &state)?;
+    ui.log_line(
+        &format!(
+            "controls: space play/pause, 1-{} select track, Tab cycle tabs, ←/→ seek/adjust, ↑/↓ vol/tweak {:+.0}%",
+            Consts::MAX_DIGIT_TRACKS,
+            Consts::VOLUME_STEP * Consts::PERCENT_SCALE
+        ),
+        &state,
+    )?;
+    ui.log_line(
+        "auto-advances to next track with crossfade near end of each track",
+        &state,
+    )?;
+    ui.draw(&state)?;
 
     let mut progress_log = ProgressLog::new();
     let mut crossfade_clock: Option<CrossfadeClock> = None;
@@ -92,46 +105,44 @@ fn run_ui_loop(
                     if let Event::Queue(QueueEvent::CrossfadeStarted { duration_seconds }) = &event
                     {
                         crossfade_clock = Some(CrossfadeClock::new(*duration_seconds));
-                        ui.dashboard.set_crossfade_progress(Some(0.0));
+                        controller.mutate(|st| st.crossfade_progress = Some(0.0));
                     }
-                    if handle_event(&event, &mut ui, &mut progress_log)? {
+                    if handle_event(&event, &mut ui, &mut progress_log, &state)? {
                         break 'ui;
                     }
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Lagged(n)) => {
-                    ui.log_line(&format!("events lagged: {n}"))?;
+                    ui.log_line(&format!("events lagged: {n}"), &state)?;
                 }
                 Err(TryRecvError::Closed) => break 'ui,
             }
         }
 
-        match queue.tick() {
-            Ok(()) => {
-                tick_error_logged = false;
-            }
+        match controller.queue().tick() {
+            Ok(()) => tick_error_logged = false,
             Err(err) => {
                 if !tick_error_logged {
-                    ui.log_line(&format!("tick failed: {err}"))?;
-                    ui.dashboard.set_note(format!("tick failed: {err}"));
+                    ui.log_line(&format!("tick failed: {err}"), &state)?;
+                    controller.mutate(|st| st.status_note = Some(format!("tick failed: {err}")));
                     tick_error_logged = true;
                 }
             }
         }
 
-        ui.dashboard.refresh_tracks(queue);
-        refresh_dashboard(&mut ui.dashboard, queue);
+        controller.refresh_continuous();
 
         if let Some(clock) = crossfade_clock.as_ref() {
             let progress = clock.progress();
-            ui.dashboard.set_crossfade_progress(Some(progress));
+            controller.mutate(|st| st.crossfade_progress = Some(progress));
             if progress >= 1.0 {
                 crossfade_clock = None;
             }
         } else {
-            ui.dashboard.set_crossfade_progress(None);
+            controller.mutate(|st| st.crossfade_progress = None);
         }
 
+        let queue = controller.queue();
         let crossfade_secs = f64::from(queue.crossfade_duration());
         if let (Some(pos), Some(dur)) = (queue.position_seconds(), queue.duration_seconds())
             && dur > crossfade_secs
@@ -146,47 +157,55 @@ fn run_ui_loop(
         }
 
         if event::poll(Duration::from_millis(Consts::CONTROL_POLL_MS))? {
+            state = controller.snapshot();
             match event::read()? {
                 TermEvent::Key(key)
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                 {
-                    match handle_key(key.code, key.modifiers, queue, &mut ui.dashboard) {
-                        ControlOutcome::Continue(Some(line)) => ui.log_line(&line)?,
+                    match handle_key(key.code, key.modifiers, controller, &mut ui.dashboard) {
+                        ControlOutcome::Continue(Some(line)) => ui.log_line(&line, &state)?,
                         ControlOutcome::Continue(None) => {}
                         ControlOutcome::SwitchTrack(index) => {
-                            if let Some(id) = track_id_at(queue, index) {
-                                switch_to_id(queue, id, index, &mut ui, &mut auto_advanced_index)?;
+                            if let Some(id) = controller.queue().tracks().get(index).map(|t| t.id) {
+                                switch_to_id(
+                                    controller,
+                                    id,
+                                    index,
+                                    &mut ui,
+                                    &mut auto_advanced_index,
+                                    &state,
+                                )?;
                             }
                         }
                         ControlOutcome::DeleteCurrent => {
-                            if let Some(id) = queue.current().map(|e| e.id) {
-                                match queue.remove(id) {
+                            if let Some(id) = controller.queue().current().map(|e| e.id) {
+                                match controller.queue().remove(id) {
                                     Ok(()) => {
                                         auto_advanced_index = None;
-                                        ui.log_line(&format!("removed track {}", id.as_u64()))?;
+                                        ui.log_line(
+                                            &format!("removed track {}", id.as_u64()),
+                                            &state,
+                                        )?;
                                     }
-                                    Err(e) => ui.log_line(&format!("remove failed: {e}"))?,
+                                    Err(e) => {
+                                        ui.log_line(&format!("remove failed: {e}"), &state)?;
+                                    }
                                 }
                             }
                         }
                         ControlOutcome::Quit => break,
                     }
                 }
-                TermEvent::Resize(_, _) => {
-                    ui.on_resize()?;
-                }
+                TermEvent::Resize(_, _) => ui.on_resize(&state)?,
                 _ => {}
             }
         }
 
-        ui.draw()?;
+        state = controller.snapshot();
+        ui.draw(&state)?;
     }
 
     Ok(())
-}
-
-fn track_id_at(queue: &Queue, index: usize) -> Option<TrackId> {
-    queue.tracks().get(index).map(|e| e.id)
 }
 
 /// Returns `true` if the UI loop should exit.
@@ -194,46 +213,22 @@ fn handle_event(
     event: &Event,
     ui: &mut UiSession,
     progress_log: &mut ProgressLog,
+    state: &UiState,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     match event {
         Event::App(AppEvent::Stop) => return Ok(true),
         Event::App(AppEvent::Note(note)) => {
-            ui.dashboard.set_note(note.clone());
-            ui.log_line(note)?;
+            ui.log_line(note, state)?;
         }
         Event::Player(pe) => {
-            match pe {
-                PlayerEvent::CurrentItemChanged => {
-                    ui.dashboard.set_note("track changed");
-                }
-                PlayerEvent::RateChanged { rate } => {
-                    ui.dashboard.set_playing(*rate > 0.0);
-                    ui.dashboard.set_note(format!("rate {rate:.2}"));
-                }
-                PlayerEvent::StatusChanged { status } => {
-                    ui.dashboard.set_note(format!("status {status:?}"));
-                }
-                PlayerEvent::VolumeChanged { volume } => {
-                    ui.dashboard.set_volume(*volume);
-                    ui.dashboard
-                        .set_note(format!("volume {:.0}%", volume * Consts::PERCENT_SCALE));
-                }
-                _ => {}
-            }
-            ui.log_line(&format!("player {pe:?}"))?;
+            ui.log_line(&format!("player {pe:?}"), state)?;
         }
         Event::Engine(ee) => {
-            if let EngineEvent::MasterVolumeChanged { volume } = ee {
-                ui.dashboard.set_volume(*volume);
-            }
-            ui.log_line(&format!("engine {ee:?}"))?;
+            ui.log_line(&format!("engine {ee:?}"), state)?;
         }
         Event::Hls(_) | Event::File(_) | Event::Audio(_) => {
-            if let Some(note) = source_note("src", event) {
-                ui.dashboard.set_note(note);
-            }
             if !is_progress_event(event) || progress_log.should_emit() {
-                ui.log_line(&format!("{event:?}"))?;
+                ui.log_line(&format!("{event:?}"), state)?;
             }
         }
         _ => {}
@@ -244,36 +239,48 @@ fn handle_event(
 fn handle_key(
     key: KeyCode,
     modifiers: KeyModifiers,
-    queue: &Queue,
+    controller: &StateController,
     dashboard: &mut Dashboard,
 ) -> ControlOutcome {
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(key, KeyCode::Char('c')) {
         return ControlOutcome::Quit;
     }
+
+    if key == KeyCode::Tab {
+        dashboard.active_tab = match dashboard.active_tab {
+            Tab::Playlist => Tab::Equalizer,
+            Tab::Equalizer => Tab::Settings,
+            Tab::Settings => Tab::Playlist,
+        };
+        return ControlOutcome::Continue(None);
+    }
+
+    match dashboard.active_tab {
+        Tab::Playlist => {}
+        Tab::Equalizer => return handle_eq_key(key, controller, dashboard),
+        Tab::Settings => return handle_settings_key(key, controller, dashboard),
+    }
+
     match key {
-        KeyCode::Left => ControlOutcome::Continue(Some(apply_seek(
-            queue,
-            -Consts::SEEK_STEP_SECONDS_F64,
-            dashboard,
-        ))),
-        KeyCode::Right => ControlOutcome::Continue(Some(apply_seek(
-            queue,
-            Consts::SEEK_STEP_SECONDS_F64,
-            dashboard,
-        ))),
+        KeyCode::Left => {
+            ControlOutcome::Continue(Some(apply_seek(controller, -Consts::SEEK_STEP_SECONDS_F64)))
+        }
+        KeyCode::Right => {
+            ControlOutcome::Continue(Some(apply_seek(controller, Consts::SEEK_STEP_SECONDS_F64)))
+        }
         KeyCode::Up => {
-            apply_volume(queue, Consts::VOLUME_STEP, dashboard);
+            apply_volume(controller, Consts::VOLUME_STEP);
             ControlOutcome::Continue(None)
         }
         KeyCode::Down => {
-            apply_volume(queue, -Consts::VOLUME_STEP, dashboard);
+            apply_volume(controller, -Consts::VOLUME_STEP);
             ControlOutcome::Continue(None)
         }
         KeyCode::Char(' ') => {
-            if queue.is_playing() {
-                queue.pause();
+            if controller.queue().is_playing() {
+                controller.queue().pause();
             } else {
-                queue.play();
+                controller.queue().play();
             }
             ControlOutcome::Continue(None)
         }
@@ -287,70 +294,191 @@ fn handle_key(
     }
 }
 
-fn apply_seek(queue: &Queue, delta_seconds: f64, dashboard: &mut Dashboard) -> String {
-    let current = queue.position_seconds().unwrap_or(0.0).max(0.0);
+fn handle_eq_key(
+    key: KeyCode,
+    controller: &StateController,
+    dashboard: &mut Dashboard,
+) -> ControlOutcome {
+    match key {
+        KeyCode::Left => {
+            dashboard.selected_eq_band = dashboard.selected_eq_band.saturating_sub(1);
+            ControlOutcome::Continue(None)
+        }
+        KeyCode::Right => {
+            let max = controller.queue().eq_band_count().saturating_sub(1);
+            dashboard.selected_eq_band = dashboard.selected_eq_band.saturating_add(1).min(max);
+            ControlOutcome::Continue(None)
+        }
+        KeyCode::Up => {
+            adjust_eq(controller, dashboard, Consts::EQ_GAIN_STEP_DB);
+            ControlOutcome::Continue(None)
+        }
+        KeyCode::Down => {
+            adjust_eq(controller, dashboard, -Consts::EQ_GAIN_STEP_DB);
+            ControlOutcome::Continue(None)
+        }
+        _ => ControlOutcome::Continue(None),
+    }
+}
+
+fn adjust_eq(controller: &StateController, dashboard: &Dashboard, delta: f32) {
+    let band = dashboard.selected_eq_band;
+    let snapshot = controller.snapshot();
+    let Some(&current) = snapshot.eq_bands.get(band) else {
+        return;
+    };
+    let target = (current + delta).clamp(Dashboard::EQ_GAIN_MIN, Dashboard::EQ_GAIN_MAX);
+    if let Err(err) = controller.queue().set_eq_gain(band, target) {
+        controller.mutate(|st| st.status_note = Some(format!("eq band={band} failed: {err}")));
+        return;
+    }
+    controller.mutate(|st| {
+        if let Some(slot) = st.eq_bands.get_mut(band) {
+            *slot = target;
+        }
+    });
+}
+
+fn handle_settings_key(
+    key: KeyCode,
+    controller: &StateController,
+    dashboard: &mut Dashboard,
+) -> ControlOutcome {
+    match key {
+        KeyCode::Up => {
+            dashboard.selected_setting_row = dashboard.selected_setting_row.saturating_sub(1);
+            ControlOutcome::Continue(None)
+        }
+        KeyCode::Down => {
+            dashboard.selected_setting_row = dashboard
+                .selected_setting_row
+                .saturating_add(1)
+                .min(Dashboard::SETTINGS_ROW_COUNT.saturating_sub(1));
+            ControlOutcome::Continue(None)
+        }
+        KeyCode::Left => {
+            adjust_setting(controller, dashboard, -1);
+            ControlOutcome::Continue(None)
+        }
+        KeyCode::Right => {
+            adjust_setting(controller, dashboard, 1);
+            ControlOutcome::Continue(None)
+        }
+        _ => ControlOutcome::Continue(None),
+    }
+}
+
+fn adjust_setting(controller: &StateController, dashboard: &Dashboard, dir: i32) {
+    match dashboard.selected_setting_row {
+        0 => cycle_quality(controller, dir),
+        1 => adjust_crossfade(controller, dir),
+        _ => {}
+    }
+}
+
+fn cycle_quality(controller: &StateController, dir: i32) {
+    let snapshot = controller.snapshot();
+    if snapshot.abr_variants.is_empty() {
+        return;
+    }
+    // Position `-1` represents the synthetic "Auto" slot that sits
+    // before all variants; cycling left/right traverses Auto + every
+    // variant exactly once and clamps at the ends.
+    let current_pos: isize = if snapshot.abr_mode_is_auto {
+        -1
+    } else {
+        snapshot
+            .selected_variant
+            .and_then(|idx| {
+                snapshot
+                    .abr_variants
+                    .iter()
+                    .position(|(i, _)| *i == idx)
+                    .and_then(|p| isize::try_from(p).ok())
+            })
+            .unwrap_or(-1)
+    };
+    let last_pos = isize::try_from(snapshot.abr_variants.len() - 1).unwrap_or(isize::MAX);
+    let next_pos = (current_pos + isize::try_from(dir).unwrap_or(0)).clamp(-1, last_pos);
+    let chosen = if next_pos < 0 {
+        None
+    } else {
+        usize::try_from(next_pos)
+            .ok()
+            .and_then(|p| snapshot.abr_variants.get(p).map(|(i, _)| *i))
+    };
+
+    if let Some(handle) = controller.queue().current_abr_handle() {
+        let mode = chosen.map_or(AbrMode::Auto(None), AbrMode::Manual);
+        if let Err(err) = handle.set_mode(mode) {
+            controller.mutate(|st| st.status_note = Some(format!("abr failed: {err}")));
+            return;
+        }
+    }
+    controller.mutate(|st| {
+        st.abr_mode_is_auto = chosen.is_none();
+        st.selected_variant = chosen;
+    });
+}
+
+fn adjust_crossfade(controller: &StateController, dir: i32) {
+    let current = controller.queue().crossfade_duration();
+    let step = Consts::CROSSFADE_STEP_SECONDS * f32::from(i8::try_from(dir).unwrap_or(0));
+    let target = (current + step).clamp(0.0, Consts::CROSSFADE_MAX_SECONDS);
+    controller.queue().set_crossfade_duration(target);
+    controller.mutate(|st| st.crossfade = target);
+}
+
+fn apply_seek(controller: &StateController, delta_seconds: f64) -> String {
+    let current = controller
+        .queue()
+        .position_seconds()
+        .unwrap_or(0.0)
+        .max(0.0);
     let target = (current + delta_seconds).max(0.0);
-    match queue.seek(target) {
+    match controller.queue().seek(target) {
         Ok(_outcome) => {
-            dashboard.set_note(format!("seek {}", format_seconds(target)));
-            dashboard.set_position(Duration::from_secs_f64(target));
+            controller.mutate(|st| {
+                st.status_note = Some(format!("seek {}", format_seconds(target)));
+            });
             format!("seek target={}", format_seconds(target))
         }
         Err(err) => {
             let line = format!("seek failed target={} err={err}", format_seconds(target));
-            dashboard.set_note(line.clone());
+            controller.mutate(|st| st.status_note = Some(line.clone()));
             line
         }
     }
 }
 
-fn apply_volume(queue: &Queue, delta: f32, dashboard: &mut Dashboard) {
-    let volume = (queue.volume() + delta).clamp(0.0, 1.0);
-    queue.set_volume(volume);
-    dashboard.set_volume(volume);
-    dashboard.set_note(format!("volume {:.0}%", volume * Consts::PERCENT_SCALE));
-}
-
-fn refresh_dashboard(dashboard: &mut Dashboard, queue: &Queue) {
-    dashboard.set_playing(queue.is_playing());
-    let current = queue.current_index().unwrap_or(0);
-    dashboard.set_queue(current, queue.len());
-    dashboard.set_volume(queue.volume());
-
-    let position = queue.position_seconds();
-    if let Some(position) = position.filter(|seconds| seconds.is_finite() && *seconds >= 0.0) {
-        dashboard.set_position(Duration::from_secs_f64(position));
-    } else {
-        dashboard.set_position(Duration::ZERO);
-    }
-
-    let total = queue.duration_seconds().and_then(|seconds| {
-        if !seconds.is_finite() || seconds <= 0.0 {
-            return None;
-        }
-        Some(Duration::from_secs_f64(seconds))
+fn apply_volume(controller: &StateController, delta: f32) {
+    let volume = (controller.queue().volume() + delta).clamp(0.0, 1.0);
+    controller.queue().set_volume(volume);
+    controller.mutate(|st| {
+        st.volume = volume;
+        st.status_note = Some(format!("volume {:.0}%", volume * Consts::PERCENT_SCALE));
     });
-    dashboard.set_total(total);
 }
 
 fn switch_to_id(
-    queue: &Queue,
+    controller: &StateController,
     id: TrackId,
     index: usize,
     ui: &mut UiSession,
     auto_advanced_index: &mut Option<usize>,
+    state: &UiState,
 ) -> RunnerResult {
-    match queue.select(id, Transition::None) {
+    match controller.queue().select(id, Transition::None) {
         Ok(()) => {
             *auto_advanced_index = None;
             let note = format!("switch to #{} (immediate)", index + 1);
-            ui.dashboard.set_note(&note);
-            ui.log_line(&note)?;
+            controller.mutate(|st| st.status_note = Some(note.clone()));
+            ui.log_line(&note, state)?;
         }
         Err(e) => {
             let note = format!("switch failed: {e}");
-            ui.dashboard.set_note(&note);
-            ui.log_line(&note)?;
+            controller.mutate(|st| st.status_note = Some(note.clone()));
+            ui.log_line(&note, state)?;
         }
     }
     Ok(())

@@ -13,7 +13,7 @@ use iced::{
             Status as SliderStatus, Style as SliderStyle,
         },
         svg::{Handle as SvgHandle, Svg},
-        text, vertical_slider,
+        text, text_input, vertical_slider,
     },
 };
 use kithara_queue::TrackStatus;
@@ -67,16 +67,20 @@ impl Consts {
     const BORDER_WIDTH: f32 = 1.0;
     const CAPTION_FONT: f32 = 14.0;
     const COMPACT_SPACING: f32 = 6.0;
-    const CROSSFADE_MAX: f32 = 30.0;
+    /// Crossfade slider upper bound — mirrors the iOS reference (0…8s).
+    const CROSSFADE_MAX: f32 = 8.0;
     const CROSSFADE_STEP: f32 = 0.5;
-    const DJ_HINT_FONT: f32 = 13.0;
-    const DJ_LABEL_FONT: f32 = 13.0;
-    const DJ_SPACER_HEIGHT: f32 = 8.0;
-    const DJ_SPACING: f32 = 10.0;
     const ELEMENT_SPACING: f32 = 10.0;
     const EMPTY_PLAYLIST_FONT: f32 = 14.0;
-    const EQ_BAND_SPACING: f32 = 26.0;
-    const EQ_LABEL_FONT: f32 = 14.0;
+    /// Width of a single EQ band column — kept stable so the slider
+    /// rails stay readable. The window is allowed to grow; flex
+    /// spacers between bands absorb the extra width instead of
+    /// stretching the bands themselves.
+    const EQ_BAND_WIDTH: f32 = 28.0;
+    /// Minimum gap between bands. Anything beyond it gets soaked up by
+    /// `Space::Fill` spacers so the row reads as "evenly spread".
+    const EQ_BAND_MIN_GAP: f32 = 2.0;
+    const EQ_LABEL_FONT: f32 = 11.0;
     const EQ_MAX_DB: f32 = 6.0;
     const EQ_MIN_DB: f32 = -24.0;
     const EQ_RESET_FONT: f32 = 12.0;
@@ -85,10 +89,9 @@ impl Consts {
     const EQ_RESET_PADDING_Y: f32 = 4.0;
     const EQ_SIMPLE_LABEL_THRESHOLD: usize = 3;
 
-    const EQ_SLIDER_HEIGHT: f32 = 190.0;
-    const EQ_SPACING: f32 = 8.0;
+    const EQ_SPACING: f32 = 6.0;
     const EQ_STEP: f32 = 0.5;
-    const EQ_VALUE_FONT: f32 = 13.0;
+    const EQ_VALUE_FONT: f32 = 9.0;
 
     const EQ_ZERO_THRESHOLD: f32 = 0.05;
     const HEADING_FONT: f32 = 16.0;
@@ -114,8 +117,6 @@ impl Consts {
 
     const SECTION_PADDING: f32 = 12.0;
     const SECTION_SPACING: f32 = 12.0;
-    const SEEK_BAR_PADDING_X: f32 = 8.0;
-    const SEEK_BAR_PADDING_Y: f32 = 4.0;
     const SEEK_STEP: f32 = 0.1;
     const SETTINGS_BODY_FONT: f32 = 13.0;
     const SETTINGS_SPACING: f32 = 8.0;
@@ -132,14 +133,10 @@ impl Consts {
     const TITLE_FONT: f32 = 28.0;
     const TITLE_SPACING: f32 = 2.0;
     const TOGGLE_ICON_PADDING: f32 = 6.0;
-    const TOGGLE_ICON_SIZE: f32 = 22.0;
     const TRACK_NAME_FONT: f32 = 22.0;
     const TRANSPORT_BUTTON_SPACING: f32 = 20.0;
     const TRANSPORT_ICON_PADDING: f32 = 8.0;
     const TRANSPORT_ICON_SIZE: f32 = 30.0;
-    const TRANSPORT_PADDING_X: f32 = 8.0;
-
-    const TRANSPORT_PADDING_Y: f32 = 2.0;
 
     const UNDERLINE_HEIGHT: f32 = 2.0;
 
@@ -155,6 +152,7 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
     let content = column![
         view_header(state),
+        view_url_input(state),
         view_now_playing(state),
         view_seek(state),
         view_transport(state),
@@ -178,7 +176,7 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
         .into()
 }
 
-fn format_time(seconds: f32) -> String {
+fn format_time(seconds: f64) -> String {
     let total = seconds.max(0.0).floor().to_u32().unwrap_or(u32::MAX);
     let minutes = total / Consts::SECONDS_PER_MINUTE;
     let remaining = total % Consts::SECONDS_PER_MINUTE;
@@ -193,7 +191,11 @@ fn view_header(state: &Kithara) -> Element<'_, Message> {
     .width(Length::Fixed(Consts::LOGO_SIZE))
     .height(Length::Fixed(Consts::LOGO_SIZE));
 
-    let title_color = if state.playing { p.accent } else { p.text };
+    let title_color = if state.ui_state.playing {
+        p.accent
+    } else {
+        p.text
+    };
 
     let title = column![
         text("Kithara").size(Consts::TITLE_FONT).color(title_color),
@@ -212,12 +214,39 @@ fn view_header(state: &Kithara) -> Element<'_, Message> {
     .into()
 }
 
+fn view_url_input(state: &Kithara) -> Element<'_, Message> {
+    let p = state.palette;
+
+    let input = text_input("Audio URL", &state.url_text)
+        .on_input(Message::UrlChanged)
+        .on_submit(Message::AddUrl)
+        .padding(10);
+
+    let add_btn = button(text("Add").size(Consts::SMALL_FONT).color(p.bg))
+        .padding([8.0, 16.0])
+        .style(move |_theme, _status| button::Style {
+            background: Some(p.accent.into()),
+            text_color: p.bg,
+            border: Border::default().rounded(Consts::BORDER_RADIUS_BUTTON),
+            ..Default::default()
+        })
+        .on_press(Message::AddUrl);
+
+    container(
+        row![input, add_btn,]
+            .spacing(Consts::ELEMENT_SPACING)
+            .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .into()
+}
+
 fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let track_name = if state.track_name.trim().is_empty() {
+    let track_name = if state.ui_state.track_name.trim().is_empty() {
         "No track loaded".to_string()
     } else {
-        state.track_name.clone()
+        state.ui_state.track_name.clone()
     };
 
     let subtitle = track_subtitle(state);
@@ -233,13 +262,13 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
     ]
     .spacing(Consts::COMPACT_SPACING);
 
-    if !state.variant_label.is_empty() {
-        col = col.push(
-            text(&state.variant_label)
-                .size(Consts::CAPTION_FONT)
-                .color(p.muted),
-        );
-    }
+    let variant_text = if state.ui_state.variant_label.is_empty() {
+        " "
+    } else {
+        &state.ui_state.variant_label
+    };
+
+    col = col.push(text(variant_text).size(Consts::CAPTION_FONT).color(p.muted));
 
     container(col)
         .width(Length::Fill)
@@ -250,12 +279,12 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
 
 fn view_seek(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let duration = state.duration.max(0.0);
+    let duration = state.ui_state.duration.max(0.0);
     let slider_max = duration.max(1.0);
-    let progress = if state.is_seeking {
-        state.seek_position
+    let progress = if state.ui_state.is_seeking {
+        state.ui_state.seek_position
     } else {
-        state.position
+        state.ui_state.position
     }
     .clamp(0.0, slider_max);
 
@@ -279,13 +308,12 @@ fn view_seek(state: &Kithara) -> Element<'_, Message> {
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding([Consts::SEEK_BAR_PADDING_Y, Consts::SEEK_BAR_PADDING_X])
     .into()
 }
 
 fn view_transport(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let play_icon = if state.playing {
+    let play_icon = if state.ui_state.playing {
         Icon::Pause
     } else {
         Icon::Play
@@ -311,53 +339,18 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
     .spacing(Consts::TRANSPORT_BUTTON_SPACING)
     .align_y(Alignment::Center);
 
-    let shuffle_color = if state.shuffle_enabled {
-        p.accent
-    } else {
-        p.muted
-    };
-    let repeat_color = if state.repeat_enabled {
-        p.accent
-    } else {
-        p.muted
-    };
-    let repeat_icon = if state.repeat_enabled {
-        Icon::RepeatOnce
-    } else {
-        Icon::Repeat
-    };
-
-    let rate_buttons = view_playrate(state);
-
-    let bottom_row = row![
-        icon_button(
-            Icon::Shuffle,
-            Consts::TOGGLE_ICON_SIZE,
-            shuffle_color,
-            Consts::TOGGLE_ICON_PADDING,
-            Message::ToggleShuffle
-        ),
-        Space::new().width(Length::Fill),
-        rate_buttons,
-        Space::new().width(Length::Fill),
-        icon_button(
-            repeat_icon,
-            Consts::TOGGLE_ICON_SIZE,
-            repeat_color,
-            Consts::TOGGLE_ICON_PADDING,
-            Message::ToggleRepeat
-        ),
-    ]
-    .width(Length::Fill)
-    .align_y(Alignment::Center);
-
+    // Centered transport+rate stack. `column.align_x(Center)` only kicks in
+    // when the column has a fill width — otherwise it shrinks to its
+    // widest child and centring is a no-op. The outer container's
+    // `.center_x(Fill)` is what actually pulls the rows into the middle
+    // of the section.
     container(
-        column![transport_row, bottom_row]
+        column![transport_row, view_playrate(state)]
             .spacing(Consts::ELEMENT_SPACING)
             .align_x(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding([Consts::TRANSPORT_PADDING_Y, Consts::TRANSPORT_PADDING_X])
+    .center_x(Length::Fill)
     .into()
 }
 
@@ -366,7 +359,7 @@ fn view_playrate(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
 
     let buttons = RATES.iter().map(|&rate| {
-        let is_selected = (state.selected_rate - rate).abs() < f32::EPSILON;
+        let is_selected = (state.ui_state.selected_rate - rate).abs() < f32::EPSILON;
         let label = if rate == rate.floor() {
             let rate_u8 = rate.to_u8().unwrap_or(u8::MAX);
             format!("{rate_u8}x")
@@ -404,9 +397,9 @@ fn view_playrate(state: &Kithara) -> Element<'_, Message> {
 
 fn view_volume(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let volume_icon = if state.volume <= Consts::VOLUME_MUTE_THRESHOLD {
+    let volume_icon = if state.ui_state.volume <= Consts::VOLUME_MUTE_THRESHOLD {
         Icon::VolumeMute
-    } else if state.volume < Consts::VOLUME_LOW_THRESHOLD {
+    } else if state.ui_state.volume < Consts::VOLUME_LOW_THRESHOLD {
         Icon::VolumeLow
     } else {
         Icon::VolumeHigh
@@ -414,12 +407,12 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
 
     let volume_pct = format!(
         "{:.0}%",
-        state.volume.clamp(0.0, 1.0) * Consts::VOLUME_PERCENT_SCALE
+        state.ui_state.volume.clamp(0.0, 1.0) * Consts::VOLUME_PERCENT_SCALE
     );
 
     let slider = slider(
         0.0..=1.0,
-        state.volume.clamp(0.0, 1.0),
+        state.ui_state.volume.clamp(0.0, 1.0),
         Message::VolumeChanged,
     )
     .step(Consts::VOLUME_STEP_SIZE)
@@ -428,7 +421,17 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
 
     container(
         row![
-            volume_icon.view(Consts::VOLUME_ICON_SIZE, p.text),
+            icon_button(
+                volume_icon,
+                Consts::VOLUME_ICON_SIZE,
+                if state.ui_state.volume <= Consts::VOLUME_MUTE_THRESHOLD {
+                    p.muted
+                } else {
+                    p.accent
+                },
+                Consts::TOGGLE_ICON_PADDING,
+                Message::ToggleMute
+            ),
             slider,
             text(volume_pct).size(Consts::SMALL_FONT).color(p.muted)
         ]
@@ -436,7 +439,8 @@ fn view_volume(state: &Kithara) -> Element<'_, Message> {
         .align_y(Alignment::Center),
     )
     .width(Length::Fill)
-    .padding([Consts::TRANSPORT_PADDING_Y, Consts::TRANSPORT_PADDING_X])
+    .padding(Consts::SECTION_PADDING)
+    .style(section_style(p))
     .into()
 }
 
@@ -444,7 +448,6 @@ fn view_tabs(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
     let tabs = row![
         tab_button(state, Tab::Playlist, Icon::Playlist, "Playlist"),
-        tab_button(state, Tab::Dj, Icon::Dj, "DJ"),
         tab_button(state, Tab::Equalizer, Icon::Equalizer, "EQ"),
         tab_button(state, Tab::Settings, Icon::Settings, "Settings"),
     ]
@@ -461,7 +464,6 @@ fn view_tabs(state: &Kithara) -> Element<'_, Message> {
 fn view_tab_content(state: &Kithara) -> Element<'_, Message> {
     match state.active_tab {
         Tab::Playlist => view_playlist(state),
-        Tab::Dj => view_dj(state),
         Tab::Equalizer => view_equalizer(state),
         Tab::Settings => view_settings(state),
     }
@@ -469,7 +471,7 @@ fn view_tab_content(state: &Kithara) -> Element<'_, Message> {
 
 fn view_playlist(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    if state.tracks_snapshot.is_empty() {
+    if state.ui_state.tracks.is_empty() {
         return container(
             text("No tracks in playlist")
                 .size(Consts::EMPTY_PLAYLIST_FONT)
@@ -486,8 +488,8 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         .spacing(Consts::PLAYLIST_SPACING)
         .width(Length::Fill);
 
-    for (index, entry) in state.tracks_snapshot.iter().enumerate() {
-        let is_current = state.current_track_index == Some(index);
+    for (index, entry) in state.ui_state.tracks.iter().enumerate() {
+        let is_current = state.ui_state.current_track_index == Some(index);
         let is_selected = state.selected_track_index == Some(index);
         let is_failed = matches!(entry.status, TrackStatus::Failed(_));
         let is_slow = matches!(entry.status, TrackStatus::Slow);
@@ -545,13 +547,16 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 
 fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let band_count = state.eq_bands.len();
-    let mut bands_row = row![]
-        .spacing(Consts::EQ_BAND_SPACING)
-        .align_y(Alignment::End);
+    let band_count = state.ui_state.eq_bands.len();
+    // The bands themselves stay a fixed visual width so the slider
+    // rails read consistently at any window size; spare horizontal
+    // room is soaked up by `Space::Fill` flex spacers between every
+    // band, which means resizing the window fans the bands out
+    // instead of bloating each one.
+    let mut bands_row = row![].spacing(Consts::EQ_BAND_MIN_GAP).width(Length::Fill);
 
     for index in 0..band_count {
-        let value = state.eq_bands[index].clamp(Consts::EQ_MIN_DB, Consts::EQ_MAX_DB);
+        let value = state.ui_state.eq_bands[index].clamp(Consts::EQ_MIN_DB, Consts::EQ_MAX_DB);
         let value_color = if value.abs() < Consts::EQ_ZERO_THRESHOLD {
             p.muted
         } else {
@@ -561,44 +566,79 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
         let label = eq_band_label(index, band_count);
 
         let band = column![
-            text(format!("{value:+.1} dB"))
+            text(format!("{value:+.0}"))
                 .size(Consts::EQ_VALUE_FONT)
                 .color(value_color),
-            vertical_slider(Consts::EQ_MIN_DB..=Consts::EQ_MAX_DB, value, move |v| {
-                Message::EqBandChanged(index, v)
-            })
-            .step(Consts::EQ_STEP)
-            .height(Length::Fixed(Consts::EQ_SLIDER_HEIGHT))
-            .style(slider_style(p)),
+            container(
+                vertical_slider(Consts::EQ_MIN_DB..=Consts::EQ_MAX_DB, value, move |v| {
+                    Message::EqBandChanged(index, v)
+                })
+                .step(Consts::EQ_STEP)
+                .width(Consts::SLIDER_RAIL_WIDTH)
+                .height(Length::Fill)
+                .style(slider_style(p)),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill),
             text(label).size(Consts::EQ_LABEL_FONT).color(p.text),
-            button(text("Reset").size(Consts::EQ_RESET_FONT).color(p.muted))
-                .padding([Consts::EQ_RESET_PADDING_Y, Consts::EQ_RESET_PADDING_X])
-                .style(ghost_button_style(p))
-                .on_press(Message::EqBandReset(index))
         ]
         .spacing(Consts::EQ_SPACING)
-        .align_x(Alignment::Center);
+        .align_x(Alignment::Center)
+        .width(Length::Fixed(Consts::EQ_BAND_WIDTH))
+        .height(Length::Fill);
 
+        // Flex spacer before every band except the first — equal Fill
+        // weights split the surplus row width evenly, so the bands
+        // appear evenly spread without re-sizing their columns.
+        if index > 0 {
+            bands_row = bands_row.push(Space::new().width(Length::Fill));
+        }
         bands_row = bands_row.push(band);
     }
 
     let title = format!("{band_count}-Band Equalizer");
     container(
         column![
-            text(title).size(Consts::HEADING_FONT).color(p.text),
+            row![
+                text(title).size(Consts::HEADING_FONT).color(p.text),
+                Space::new().width(Length::Fill),
+                button(text("Reset All").size(Consts::EQ_RESET_FONT).color(p.muted))
+                    .padding([Consts::EQ_RESET_PADDING_Y, Consts::EQ_RESET_PADDING_X])
+                    .style(ghost_button_style(p))
+                    .on_press(Message::EqResetAll)
+            ]
+            .align_y(Alignment::Center),
+            // Outer container takes the remaining vertical space; the
+            // bands row inside fills it, so each band's slider stretches
+            // along with the window.
             container(bands_row)
                 .width(Length::Fill)
-                .center_x(Length::Fill)
+                .height(Length::Fill)
         ]
-        .spacing(Consts::SECTION_SPACING),
+        .spacing(Consts::SECTION_SPACING)
+        .width(Length::Fill)
+        .height(Length::Fill),
     )
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
 }
 
-/// Generate a short label for an EQ band by index.
+/// Generate a short label for an EQ band by index. Mirrors the iOS
+/// reference: a log-spaced frequency between 30 Hz and 18 kHz is
+/// rendered as `60`, `200`, `1k`, `12k`, etc.; tiny EQs (≤3 bands) get
+/// the friendlier `Low`/`Mid`/`High` triplet.
 fn eq_band_label(index: usize, total: usize) -> String {
+    /// Lower bound of the log-spaced label range, in Hz.
+    const MIN_FREQ_HZ: f32 = 30.0;
+    /// Upper bound of the log-spaced label range, in Hz.
+    const MAX_FREQ_HZ: f32 = 18_000.0;
+    /// Threshold above which the label switches to "Nk" notation.
+    const KILO_THRESHOLD_HZ: f32 = 1_000.0;
+    /// Hz per kHz, expressed as `f32` so the cast lives in one place.
+    const HZ_PER_KHZ: f32 = 1_000.0;
+
     if total <= Consts::EQ_SIMPLE_LABEL_THRESHOLD {
         return match index {
             0 => "Low".to_string(),
@@ -606,48 +646,16 @@ fn eq_band_label(index: usize, total: usize) -> String {
             _ => "Mid".to_string(),
         };
     }
-    format!("{}", index + 1)
-}
-
-fn view_dj(state: &Kithara) -> Element<'_, Message> {
-    let p = state.palette;
-    let secs = state.crossfade.clamp(0.0, Consts::CROSSFADE_MAX);
-
-    let header = row![
-        text("Crossfade").size(Consts::HEADING_FONT).color(p.text),
-        Space::new().width(Length::Fill),
-        text(format!("{secs:.1}s"))
-            .size(Consts::HEADING_FONT)
-            .color(p.accent),
-    ]
-    .align_y(Alignment::Center);
-
-    let slider = slider(0.0..=Consts::CROSSFADE_MAX, secs, Message::CrossfadeChanged)
-        .step(Consts::CROSSFADE_STEP)
-        .style(slider_style(p));
-
-    let labels = row![
-        text("Track A").size(Consts::DJ_LABEL_FONT).color(p.muted),
-        Space::new().width(Length::Fill),
-        text("Track B").size(Consts::DJ_LABEL_FONT).color(p.muted),
-    ]
-    .align_y(Alignment::Center);
-
-    container(
-        column![
-            header,
-            slider,
-            labels,
-            Space::new().height(Length::Fixed(Consts::DJ_SPACER_HEIGHT)),
-            text("Blend outgoing and incoming tracks with a smooth DJ transition.")
-                .size(Consts::DJ_HINT_FONT)
-                .color(p.muted)
-        ]
-        .spacing(Consts::DJ_SPACING),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    if total < 2 {
+        return format!("{}", index + 1);
+    }
+    let exponent = index.to_f32().unwrap_or(0.0) / (total - 1).to_f32().unwrap_or(1.0);
+    let freq = MIN_FREQ_HZ * (MAX_FREQ_HZ / MIN_FREQ_HZ).powf(exponent);
+    if freq >= KILO_THRESHOLD_HZ {
+        format!("{:.0}k", freq / HZ_PER_KHZ)
+    } else {
+        format!("{freq:.0}")
+    }
 }
 
 fn view_settings(state: &Kithara) -> Element<'_, Message> {
@@ -663,12 +671,12 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
     let mut quality_row = row![].spacing(Consts::COMPACT_SPACING);
     quality_row = quality_row.push(abr_button(
         "Auto",
-        state.abr_mode_is_auto,
+        state.ui_state.abr_mode_is_auto,
         p,
         Message::SetAbrMode(None),
     ));
-    for (idx, label) in &state.abr_variants {
-        let active = state.selected_variant == Some(*idx);
+    for (idx, label) in &state.ui_state.abr_variants {
+        let active = state.ui_state.selected_variant == Some(*idx);
         quality_row = quality_row.push(abr_button(
             label,
             active,
@@ -677,6 +685,26 @@ fn view_settings(state: &Kithara) -> Element<'_, Message> {
         ));
     }
     col = col.push(quality_row);
+
+    let secs = state.ui_state.crossfade.clamp(0.0, Consts::CROSSFADE_MAX);
+    col = col.push(Space::new().height(Length::Fixed(Consts::SECTION_SPACING)));
+    col = col.push(
+        row![
+            text("Crossfade")
+                .size(Consts::SETTINGS_BODY_FONT)
+                .color(p.text),
+            Space::new().width(Length::Fill),
+            text(format!("{secs:.1}s"))
+                .size(Consts::SETTINGS_BODY_FONT)
+                .color(p.accent),
+        ]
+        .align_y(Alignment::Center),
+    );
+
+    let cf_slider = slider(0.0..=Consts::CROSSFADE_MAX, secs, Message::CrossfadeChanged)
+        .step(Consts::CROSSFADE_STEP)
+        .style(slider_style(p));
+    col = col.push(cf_slider);
 
     container(col)
         .width(Length::Fill)
@@ -953,10 +981,10 @@ fn abr_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> Ele
 }
 
 fn track_subtitle(state: &Kithara) -> String {
-    let Some(index) = state.current_track_index else {
+    let Some(index) = state.ui_state.current_track_index else {
         return "Artist / Album unavailable".to_string();
     };
-    let Some(entry) = state.tracks_snapshot.get(index) else {
+    let Some(entry) = state.ui_state.tracks.get(index) else {
         return "Artist / Album unavailable".to_string();
     };
     let Some(url) = entry.url.as_deref() else {

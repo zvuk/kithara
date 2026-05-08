@@ -7,8 +7,6 @@ use std::{
 use tracing::metadata::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
-use super::session::TuiResult;
-
 /// A `Write` adapter that converts lone `\n` into `\r\n`.
 ///
 /// Required for tracing output in raw-mode terminals where `\n` alone
@@ -52,17 +50,19 @@ fn make_log_writer() -> CrlfWriter<io::Stderr> {
     CrlfWriter::new(io::stderr())
 }
 
-/// Initialize tracing subscriber for TUI mode.
+/// Initialize tracing subscriber for the application.
 ///
 /// Filter precedence: `RUST_LOG` env if set, otherwise the `directives`
-/// passed in. If `KITHARA_LOG_FILE` is set, output goes to that path
-/// (append mode); otherwise to stderr (wrapped with [`CrlfWriter`] when
-/// `use_crlf_writer` is true).
+/// passed in. Output goes to `KITHARA_LOG_FILE` (or `kithara.log` by default).
+/// If `use_crlf_writer` is true and it falls back to stderr, it wraps with [`CrlfWriter`].
 ///
 /// # Errors
 /// Returns an error if a tracing directive cannot be parsed or the log
 /// file cannot be opened.
-pub fn init_tracing(directives: &[&str], use_crlf_writer: bool) -> TuiResult {
+pub fn init_tracing(
+    directives: &[&str],
+    use_crlf_writer: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let filter = if let Ok(env_filter) = EnvFilter::try_from_default_env() {
         env_filter
     } else {
@@ -82,12 +82,8 @@ pub fn init_tracing(directives: &[&str], use_crlf_writer: bool) -> TuiResult {
         .with_line_number(false)
         .with_file(false);
 
-    if let Some(path) = std::env::var_os("KITHARA_LOG_FILE") {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+    let path = std::env::var_os("KITHARA_LOG_FILE").unwrap_or_else(|| "kithara.log".into());
+    if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
         builder
             .with_writer(Mutex::new(file))
             .with_ansi(false)

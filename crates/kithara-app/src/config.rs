@@ -55,7 +55,7 @@ impl AppConfig {
     /// Default crossfade duration in seconds.
     pub const DEFAULT_CROSSFADE_SECONDS: f32 = 5.0;
     /// Default number of EQ bands.
-    pub const DEFAULT_EQ_BANDS: usize = 3;
+    pub const DEFAULT_EQ_BANDS: usize = 10;
 
     pub const DEFAULT_TRACKS: &[&str] = &[
         "https://stream.silvercomet.top/track.mp3",

@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use super::dashboard::Dashboard;
+use crate::state::UiState;
 
 const CURSOR_GUARD_LINES: u16 = 2;
 
@@ -47,7 +48,7 @@ pub struct UiSession {
 impl UiSession {
     /// # Errors
     /// Returns an error if terminal raw mode or viewport setup fails.
-    pub fn new(dashboard: Dashboard) -> TuiResult<Self> {
+    pub fn new(dashboard: Dashboard, state: &UiState) -> TuiResult<Self> {
         const BOTTOM_MARGIN: u16 = 2;
         const MIN_VIEWPORT_HEIGHT: u16 = 6;
 
@@ -56,7 +57,7 @@ impl UiSession {
         let max_height = terminal_height
             .saturating_sub(BOTTOM_MARGIN)
             .max(MIN_VIEWPORT_HEIGHT);
-        let viewport_height = dashboard.height().min(max_height);
+        let viewport_height = dashboard.height(state).min(max_height);
         let backend = CrosstermBackend::new(io::stdout());
         let mut terminal = Terminal::with_options(
             backend,
@@ -71,56 +72,56 @@ impl UiSession {
             terminal,
             _raw: raw,
         };
-        session.stick_to_bottom()?;
-        session.park_cursor_above_dashboard()?;
+        session.stick_to_bottom(state)?;
+        session.park_cursor_above_dashboard(state)?;
         Ok(session)
     }
 
-    fn dashboard_height(&self) -> u16 {
-        self.dashboard.height()
+    fn dashboard_height(&self, state: &UiState) -> u16 {
+        self.dashboard.height(state)
     }
 
     /// # Errors
     /// Returns an error if terminal rendering fails.
-    pub fn draw(&mut self) -> TuiResult {
+    pub fn draw(&mut self, state: &UiState) -> TuiResult {
         self.terminal.draw(|frame: &mut Frame| {
-            self.dashboard.render(frame);
+            self.dashboard.render(frame, state);
         })?;
-        self.park_cursor_above_dashboard()?;
+        self.park_cursor_above_dashboard(state)?;
         Ok(())
     }
 
     /// # Errors
     /// Returns an error if terminal rendering fails.
-    pub fn log_line(&mut self, line: &str) -> TuiResult {
+    pub fn log_line(&mut self, line: &str, state: &UiState) -> TuiResult {
         let line = line.replace('\n', " ");
         self.terminal.insert_before(1, |buf| {
             Paragraph::new(line).render(buf.area, buf);
         })?;
-        self.park_cursor_above_dashboard()?;
+        self.park_cursor_above_dashboard(state)?;
         Ok(())
     }
 
     /// # Errors
     /// Returns an error if terminal resize handling fails.
-    pub fn on_resize(&mut self) -> TuiResult {
+    pub fn on_resize(&mut self, state: &UiState) -> TuiResult {
         self.terminal.autoresize()?;
-        self.stick_to_bottom()?;
-        self.park_cursor_above_dashboard()?;
+        self.stick_to_bottom(state)?;
+        self.park_cursor_above_dashboard(state)?;
         Ok(())
     }
 
-    fn park_cursor_above_dashboard(&mut self) -> TuiResult {
+    fn park_cursor_above_dashboard(&mut self, state: &UiState) -> TuiResult {
         let terminal_height = self.terminal.size()?.height.max(1);
-        let height = self.dashboard_height().min(terminal_height);
+        let height = self.dashboard_height(state).min(terminal_height);
         let y = terminal_height.saturating_sub(height.saturating_add(CURSOR_GUARD_LINES));
         self.terminal.set_cursor_position(Position { x: 0, y })?;
         Ok(())
     }
 
-    fn stick_to_bottom(&mut self) -> TuiResult {
+    fn stick_to_bottom(&mut self, state: &UiState) -> TuiResult {
         let terminal_height = self.terminal.size()?.height.max(1);
-        let viewport_height = self.dashboard_height().min(terminal_height);
+        let viewport_height = self.dashboard_height(state).min(terminal_height);
         let cursor_y = self.terminal.get_cursor_position()?.y;
         let target_top = terminal_height.saturating_sub(viewport_height);
         let pad = target_top.saturating_sub(cursor_y);
