@@ -16,7 +16,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
     hls::{Hls, HlsConfig},
-    net::NetOptions,
+    net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},
     stream::{
         AudioCodec, ContainerFormat, MediaInfo, Stream,
@@ -1393,7 +1393,7 @@ async fn live_remote_resource_decodes_with_duration(
     let net = NetOptions::default()
         .with_inactivity_timeout(Duration::from_secs(25))
         .with_total_timeout(Duration::from_secs(25));
-    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
+    let downloader = Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
     let mut config = ResourceConfig::new(url)
         .expect("valid URL")
         .with_store(store)

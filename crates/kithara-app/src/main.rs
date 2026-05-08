@@ -10,7 +10,7 @@ use clap::Parser;
 use kithara::{
     assets::{FlushHub, FlushPolicy},
     audio::generate_log_spaced_bands,
-    net::NetOptions,
+    net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -104,7 +104,7 @@ fn main() -> AppResult {
 
     let mut net = NetOptions::default();
     net.is_insecure = args.insecure;
-    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
+    let downloader = Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
     let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default()); // kithara:cancel:owner
     let config = AppConfig::new(downloader, flush_hub)
         .with_tracks(args.tracks)

@@ -2,7 +2,7 @@
 
 use derive_setters::Setters;
 use kithara_abr::AbrSettings;
-use kithara_net::NetOptions;
+use kithara_net::HttpClient;
 use kithara_platform::{time::Duration, tokio::runtime::Handle};
 use tokio_util::sync::CancellationToken;
 
@@ -24,8 +24,14 @@ pub struct DownloaderConfig {
     /// on the peer's bus (if any). The request itself is not aborted
     /// — it keeps running until hard timeout fires.
     pub soft_timeout: Duration,
-    /// Network options forwarded to the internal `HttpClient`.
-    pub net: NetOptions,
+    /// HTTP client used for all fetches. Cloned by the Downloader to
+    /// share the underlying `reqwest::Client` (and its connection pool)
+    /// with the caller. Pass a single shared `HttpClient` to multiple
+    /// Downloaders to share keep-alive sockets across them; this is the
+    /// production path. The default builds a fresh client from
+    /// [`NetOptions::default()`](kithara_net::NetOptions) and is only
+    /// appropriate for standalone tests.
+    pub client: HttpClient,
     /// Tokio runtime handle for the download loop.
     ///
     /// - `Some(handle)` — the loop runs as a task on this runtime.
@@ -41,7 +47,7 @@ impl Default for DownloaderConfig {
         const MAX_CONCURRENT: usize = 5;
         const SOFT_TIMEOUT_SECS: u64 = 2;
         Self {
-            net: NetOptions::default(),
+            client: HttpClient::default(),
             cancel: CancellationToken::new(), // kithara:cancel:owner
             runtime: None,
             max_concurrent: MAX_CONCURRENT,

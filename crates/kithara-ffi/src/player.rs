@@ -14,7 +14,7 @@ use kithara::{
     abr::AbrMode,
     audio::generate_log_spaced_bands,
     hls::{KeyOptions, KeyProcessorRegistry, KeyProcessorRule},
-    net::NetOptions,
+    net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -206,7 +206,7 @@ impl AudioPlayer {
         let net = default_net_options();
         let downloader = Downloader::new(
             DownloaderConfig::default()
-                .with_net(net)
+                .with_client(HttpClient::new(net))
                 .with_runtime(crate::FFI_RUNTIME.clone()),
         );
         let (key_options, player_headers) = build_initial_key_state(config.key_options);

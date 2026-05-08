@@ -71,6 +71,12 @@ pub struct HttpClient {
     options: NetOptions,
 }
 
+impl Default for HttpClient {
+    fn default() -> Self {
+        Self::new(NetOptions::default())
+    }
+}
+
 impl HttpClient {
     /// # Panics
     ///
@@ -80,6 +86,11 @@ impl HttpClient {
         let inner = build_client(&options)
             .expect("BUG: reqwest::Client::builder().build() with our defaults cannot fail");
         Self { inner, options }
+    }
+
+    #[must_use]
+    pub fn options(&self) -> &NetOptions {
+        &self.options
     }
 
     fn apply_headers(

@@ -27,7 +27,7 @@ use std::{fs::File, io::Write, path::Path};
 use kithara::{
     assets::StoreOptions,
     events::AbrMode,
-    net::NetOptions,
+    net::{HttpClient, NetOptions},
     play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -128,7 +128,7 @@ fn blocks_for_seconds(secs: f64) -> u32 {
 
 fn fresh_downloader() -> Downloader {
     let net = NetOptions::default().with_is_insecure(true);
-    Downloader::new(DownloaderConfig::default().with_net(net))
+    Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)))
 }
 
 async fn build_resource(

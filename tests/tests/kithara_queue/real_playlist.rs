@@ -23,7 +23,7 @@ use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
 use kithara_integration_tests::offline::OfflineSession;
-use kithara_net::NetOptions;
+use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
@@ -75,7 +75,8 @@ async fn shared_test_ctx() -> &'static TestCtx {
     test_statics::TEST_CTX
         .get_or_init(|| async {
             let net = NetOptions::default().with_is_insecure(true);
-            let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
+            let downloader =
+                Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
             let flush_hub = FlushHub::new(
                 tokio_util::sync::CancellationToken::new(),
                 FlushPolicy::default(),

@@ -105,12 +105,12 @@ impl Downloader {
 
     /// Create a new downloader from configuration.
     ///
-    /// Constructs the internal `HttpClient` from the supplied network options
+    /// Adopts `config.client` (a clone of the caller's [`HttpClient`])
     /// and the shared [`AbrController`] from `config.abr_settings`.
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let chunk_timeout = config.net.inactivity_timeout;
+        let chunk_timeout = config.client.options().inactivity_timeout;
         let soft_timeout = config.soft_timeout;
         let runtime = config.runtime;
         let abr = AbrController::new(config.abr_settings);
@@ -120,7 +120,7 @@ impl Downloader {
                 soft_timeout,
                 runtime,
                 abr,
-                client: HttpClient::new(config.net),
+                client: config.client,
                 cancel: config.cancel,
                 max_concurrent: config.max_concurrent,
                 demand_throttle: config.demand_throttle,

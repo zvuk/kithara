@@ -13,7 +13,7 @@ use std::{
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_net::NetOptions;
+use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
@@ -112,7 +112,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
     let net = NetOptions::default().with_is_insecure(true);
-    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
+    let downloader = Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
 
     let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));

@@ -28,7 +28,7 @@ use kithara::{
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
-    net::NetOptions,
+    net::{HttpClient, NetOptions},
     stream::{
         Stream,
         dl::{Downloader, DownloaderConfig},
@@ -334,7 +334,9 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                 let url = master_url.clone();
                 rt.block_on(async move {
                     let net = NetOptions::default().with_pool_max_idle_per_host(8);
-                    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
+                    let downloader = Downloader::new(
+                        DownloaderConfig::default().with_client(HttpClient::new(net)),
+                    );
                     let store = StoreOptions::new(temp_dir.path())
                         .with_is_ephemeral(true)
                         .with_max_bytes(200_000);
