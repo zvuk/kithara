@@ -7,44 +7,55 @@ use crate::{
     types::{ObserverId, PlayerStatus, SlotId, TimeControlStatus, WaitingReason},
 };
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = PlayerMock, type Item = unimock::Unimock;)
-)]
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
+#[kithara::mock(api = PlayerMock, type Item = unimock::Unimock;)]
 pub trait Player: MaybeSend + MaybeSync + 'static {
     type Item: crate::traits::item::PlayerItem;
 
-    // -- status --
+    fn add_boundary_time_observer(
+        &self,
+        times: Vec<MediaTime>,
+        callback: Box<dyn Fn() + Send + 'static>,
+    ) -> ObserverId;
 
-    fn status(&self) -> PlayerStatus;
+    fn add_periodic_time_observer(
+        &self,
+        interval: Duration,
+        callback: Box<dyn Fn(MediaTime) + Send + 'static>,
+    ) -> ObserverId;
 
-    fn error(&self) -> Option<String>;
+    fn automatically_waits_to_minimize_stalling(&self) -> bool;
 
-    fn time_control_status(&self) -> TimeControlStatus;
-
-    fn reason_for_waiting_to_play(&self) -> Option<WaitingReason>;
-
-    // -- current item --
+    fn cancel_pending_prerolls(&self);
 
     fn current_item(&self) -> Option<&Self::Item>;
 
-    fn replace_current_item(&self, item: Option<Self::Item>);
+    fn current_time(&self) -> MediaTime;
 
-    // -- transport --
+    fn error(&self) -> Option<String>;
 
-    fn play(&self);
+    fn is_muted(&self) -> bool;
+
+    fn is_network_expensive(&self) -> bool;
 
     fn pause(&self);
+
+    fn play(&self);
 
     fn play_immediately_at_rate(&self, rate: f32);
 
     fn preroll(&self, rate: f32) -> Result<(), PlayError>;
 
-    fn cancel_pending_prerolls(&self);
+    fn rate(&self) -> f32;
 
-    // -- timing --
+    fn reason_for_waiting_to_play(&self) -> Option<WaitingReason>;
 
-    fn current_time(&self) -> MediaTime;
+    fn remove_time_observer(&self, id: ObserverId);
+
+    fn replace_current_item(&self, item: Option<Self::Item>);
 
     fn seek(&self, to: MediaTime);
 
@@ -55,59 +66,27 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
         tolerance_after: MediaTime,
     );
 
-    // -- rate --
+    fn set_automatically_waits_to_minimize_stalling(&self, waits: bool);
 
-    fn rate(&self) -> f32;
+    fn set_muted(&self, muted: bool);
+
+    fn set_network_expensive(&self, expensive: bool);
 
     fn set_rate(&self, rate: f32);
 
     fn set_rate_with_time(&self, rate: f32, time: MediaTime, at_host_time: MediaTime);
 
-    // -- volume --
-
-    fn volume(&self) -> f32;
-
     fn set_volume(&self, volume: f32);
 
-    fn is_muted(&self) -> bool;
+    fn slot_id(&self) -> Option<SlotId>;
 
-    fn set_muted(&self, muted: bool);
-
-    // -- buffering --
-
-    fn automatically_waits_to_minimize_stalling(&self) -> bool;
-
-    fn set_automatically_waits_to_minimize_stalling(&self, waits: bool);
-
-    // -- network --
-
-    fn is_network_expensive(&self) -> bool;
-
-    fn set_network_expensive(&self, expensive: bool);
-
-    // -- time observation --
-
-    fn add_periodic_time_observer(
-        &self,
-        interval: Duration,
-        callback: Box<dyn Fn(MediaTime) + Send + 'static>,
-    ) -> ObserverId;
-
-    fn add_boundary_time_observer(
-        &self,
-        times: Vec<MediaTime>,
-        callback: Box<dyn Fn() + Send + 'static>,
-    ) -> ObserverId;
-
-    fn remove_time_observer(&self, id: ObserverId);
-
-    // -- events --
+    fn status(&self) -> PlayerStatus;
 
     fn subscribe(&self) -> broadcast::Receiver<PlayerEvent>;
 
-    // -- engine integration --
+    fn time_control_status(&self) -> TimeControlStatus;
 
-    fn slot_id(&self) -> Option<SlotId>;
+    fn volume(&self) -> f32;
 }
 
 #[cfg(test)]

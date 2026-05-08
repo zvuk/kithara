@@ -2,26 +2,67 @@
 //!
 //! Carries a decoded PCM chunk (or any `C`) from the audio source worker
 //! to the consumer with an epoch tag so stale chunks emitted before a
-//! seek can be discarded.
+//! seek can be discarded. The `kind` distinguishes normal data from the
+//! two terminal markers — natural EOF vs. transient failure — so the
+//! consumer can finalise the track only on natural EOF.
+
+/// Kind of fetch marker on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchKind {
+    /// Normal PCM payload.
+    Data,
+    /// Natural end-of-stream — the track played out to its duration.
+    NaturalEof,
+    /// Decoder / source failure. Transient during seek recovery or a
+    /// genuine unrecoverable error; never conflate with `NaturalEof`.
+    Failure,
+}
 
 /// Fetch result from a worker source.
 #[derive(Debug, Clone)]
 pub struct Fetch<C> {
-    /// The data chunk.
+    /// The data chunk (ignored for non-`Data` kinds).
     pub data: C,
-    /// Whether this is the final chunk (EOF).
-    pub is_eof: bool,
+    /// Marker kind.
+    pub kind: FetchKind,
     /// Epoch for seek invalidation (0 if unused).
     pub epoch: u64,
 }
 
 impl<C> Fetch<C> {
-    /// Create a new fetch result.
+    /// Create a fetch result from the legacy `is_eof: bool` shape.
+    ///
+    /// `is_eof = true` maps to `FetchKind::NaturalEof`; `false` to
+    /// `FetchKind::Data`. Prefer the explicit constructors below.
     pub fn new(data: C, is_eof: bool, epoch: u64) -> Self {
+        let kind = if is_eof {
+            FetchKind::NaturalEof
+        } else {
+            FetchKind::Data
+        };
+        Self { data, kind, epoch }
+    }
+
+    /// Explicit data chunk.
+    pub fn data(data: C, epoch: u64) -> Self {
         Self {
             data,
-            is_eof,
             epoch,
+            kind: FetchKind::Data,
+        }
+    }
+
+    /// Get the epoch.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Explicit failure marker (distinct from natural EOF).
+    pub fn failure(data: C, epoch: u64) -> Self {
+        Self {
+            data,
+            epoch,
+            kind: FetchKind::Failure,
         }
     }
 
@@ -30,14 +71,30 @@ impl<C> Fetch<C> {
         self.data
     }
 
-    /// Check if this is an EOF marker.
+    /// True iff this is a natural-EOF marker. Does **not** cover
+    /// `Failure` — callers must use `is_failure()` or `is_terminal()`
+    /// for the broader "end of stream for any reason" check.
     pub fn is_eof(&self) -> bool {
-        self.is_eof
+        self.kind == FetchKind::NaturalEof
     }
 
-    /// Get the epoch.
-    pub fn epoch(&self) -> u64 {
-        self.epoch
+    /// True iff this is a failure marker.
+    pub fn is_failure(&self) -> bool {
+        self.kind == FetchKind::Failure
+    }
+
+    /// True iff this is any terminal marker (natural EOF or failure).
+    pub fn is_terminal(&self) -> bool {
+        !matches!(self.kind, FetchKind::Data)
+    }
+
+    /// Explicit natural-EOF marker.
+    pub fn natural_eof(data: C, epoch: u64) -> Self {
+        Self {
+            data,
+            epoch,
+            kind: FetchKind::NaturalEof,
+        }
     }
 }
 
@@ -57,15 +114,15 @@ impl EpochValidator {
         Self { epoch: 0 }
     }
 
+    /// Check if a fetch result matches the current epoch.
+    pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
+        item.epoch == self.epoch
+    }
+
     /// Increment epoch (called on seek). Returns new epoch.
     pub fn next_epoch(&mut self) -> u64 {
         self.epoch = self.epoch.wrapping_add(1);
         self.epoch
-    }
-
-    /// Check if a fetch result matches the current epoch.
-    pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
-        item.epoch == self.epoch
     }
 }
 

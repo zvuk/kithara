@@ -13,13 +13,9 @@ use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};
 use kithara_platform::tokio::task::spawn_blocking;
 use kithara_platform::{time::sleep, tokio::task::spawn};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
-#[cfg(not(target_arch = "wasm32"))]
-use rodio::Decoder;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::info;
 use url::Url;
-
-// Test Cases
 
 /// Basic integration test for HLS playback functionality.
 /// This test verifies that:
@@ -43,11 +39,9 @@ async fn test_basic_hls_playback(
     let test_stream_url = server.url("/master.m3u8");
     info!("Starting HLS playback test with URL: {}", test_stream_url);
 
-    // Create event bus
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    // 1. Test: Open HLS source
     info!("Opening HLS source...");
     let config = HlsConfig::new(test_stream_url.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
@@ -57,7 +51,6 @@ async fn test_basic_hls_playback(
     let stream = Stream::<Hls>::new(config).await?;
     info!("HLS source opened successfully");
 
-    // Start event monitor in background
     let _events_handle = spawn(async move {
         let mut event_count = 0;
         while let Ok(ev) = events_rx.recv().await {
@@ -68,33 +61,10 @@ async fn test_basic_hls_playback(
         }
     });
 
-    // 3. Test: Create rodio decoder (this validates the stream format)
-    info!("Creating rodio decoder...");
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let decoder_result = spawn_blocking(move || Decoder::new(stream)).await;
-
-        match decoder_result {
-            Ok(_decoder) => {
-                info!("Rodio decoder created successfully");
-                Ok(())
-            }
-            Err(e) => {
-                warn!("Failed to create rodio decoder: {}", e);
-                // Test data is not valid audio, so decoder failure is expected
-                info!("Note: Rodio decoder failed, but HLS layer is functional");
-                Ok(())
-            }
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = stream;
-        sleep(Duration::from_millis(50)).await;
-        info!("HLS stream opened successfully on wasm");
-        Ok(())
-    }
+    let _ = stream;
+    sleep(Duration::from_millis(50)).await;
+    info!("HLS stream opened successfully");
+    Ok(())
 }
 
 /// Test that verifies HLS session creation without actual playback.
@@ -111,11 +81,9 @@ async fn test_hls_session_creation(
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8");
 
-    // Create event bus
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    // Test source creation
     let config = HlsConfig::new(test_stream_url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
@@ -123,14 +91,8 @@ async fn test_hls_session_creation(
 
     let _stream = Stream::<Hls>::new(config).await?;
 
-    // Spawn a task to consume events (prevent channel from filling up)
-    spawn(async move {
-        while events_rx.recv().await.is_ok() {
-            // Just consume events
-        }
-    });
+    spawn(async move { while events_rx.recv().await.is_ok() {} });
 
-    // If we got here without errors, the test passes
     Ok(())
 }
 
@@ -170,7 +132,6 @@ async fn test_hls_with_different_options(
     let server = TestServer::new().await;
     info!("Testing HLS with custom options");
 
-    // Test source creation with different options
     let _stream = HlsStreamBuilder::new()
         .build(&server, temp_dir.path(), CancellationToken::new())
         .await;
@@ -197,7 +158,6 @@ async fn test_hls_invalid_url_handling(
     let url_result = Url::parse(invalid_url);
 
     if let Ok(url) = url_result {
-        // If URL parses, try to open HLS (should fail with network error)
         let config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp_dir.path()))
             .with_cancel(cancel_token);
@@ -208,7 +168,6 @@ async fn test_hls_invalid_url_handling(
             "invalid URL should fail, got Ok for {invalid_url:?}"
         );
     } else {
-        // Invalid URL string - parse should fail
         assert!(url_result.is_err());
     }
 
@@ -235,11 +194,8 @@ async fn test_init_segment_at_stream_start(
         .build(&server, temp_dir.path(), cancel_token)
         .await;
 
-    // Wait for INIT and first segment to be loaded.
     sleep(Duration::from_millis(100)).await;
 
-    // Read from offset 0 - should get INIT data, not SEG-0.
-    // Variant is ABR-dependent, so validate init marker generically.
     let mut buf = [0u8; 32];
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -280,7 +236,6 @@ async fn test_hls_without_cache(temp_dir: TestTempDir) -> Result<(), Box<dyn Err
 
     info!("Testing HLS with limited cache");
 
-    // Test source creation with limited cache (1KB)
     let _stream = HlsStreamBuilder::new()
         .max_assets(1)
         .max_bytes(1024)

@@ -35,13 +35,32 @@ fn truncate_error_body(mut body: String) -> String {
     body
 }
 
+/// Build a `reqwest::Client` with our default configuration. Native
+/// build applies pool / TLS / read-timeout knobs; wasm32 takes the
+/// builder defaults because most options aren't supported there.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
+    Client::builder()
+        .pool_max_idle_per_host(options.pool_max_idle_per_host)
+        .danger_accept_invalid_certs(options.is_insecure)
+        .read_timeout(options.inactivity_timeout)
+        .build()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_client(_options: &NetOptions) -> reqwest::Result<Client> {
+    Client::builder().build()
+}
+
 /// Extract response headers into our [`Headers`] type.
 fn extract_headers(resp: &reqwest::Response) -> Headers {
     let mut headers = Headers::new();
-    for (name, value) in resp.headers() {
-        if let Ok(v) = value.to_str() {
-            headers.insert(name.as_str(), v);
-        }
+    let str_pairs = resp
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str(), v)));
+    for (name, value) in str_pairs {
+        headers.insert(name, value);
     }
     headers
 }
@@ -58,13 +77,8 @@ impl HttpClient {
     /// Panics if the `reqwest::Client` builder fails to build.
     #[must_use]
     pub fn new(options: NetOptions) -> Self {
-        let builder = Client::builder();
-        #[cfg(not(target_arch = "wasm32"))]
-        let builder = builder
-            .pool_max_idle_per_host(options.pool_max_idle_per_host)
-            .danger_accept_invalid_certs(options.insecure)
-            .read_timeout(options.request_timeout);
-        let inner = builder.build().expect("failed to build reqwest client");
+        let inner = build_client(&options)
+            .expect("BUG: reqwest::Client::builder().build() with our defaults cannot fail");
         Self { inner, options }
     }
 
@@ -90,13 +104,6 @@ impl HttpClient {
     /// # Errors
     ///
     /// Returns [`NetError`] on HTTP failure or network error.
-    pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream> {
-        <Self as Net>::stream(self, url, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure or network error.
     pub async fn get_range(
         &self,
         url: Url,
@@ -113,11 +120,61 @@ impl HttpClient {
         <Self as Net>::head(self, url, headers).await
     }
 
+    /// Build the metadata request used by `Net::head`. On native this
+    /// is a real `HEAD`; on wasm32 we issue a zero-byte ranged `GET`
+    /// because most CORS configs block `HEAD`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
+        self.inner.head(url)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
+        self.inner.get(url).header("Range", "bytes=0-0")
+    }
+
     /// Convert a reqwest Response to a [`ByteStream`](crate::ByteStream).
     fn response_to_stream(resp: reqwest::Response) -> crate::ByteStream {
         let headers = extract_headers(&resp);
         let stream = resp.bytes_stream().map_err(NetError::from);
         crate::ByteStream::new(headers, Box::pin(stream))
+    }
+
+    async fn send_checked(
+        &self,
+        req: reqwest::RequestBuilder,
+        headers: Option<Headers>,
+        url: Url,
+        accept_partial: bool,
+    ) -> Result<reqwest::Response, NetError> {
+        let req = Self::apply_headers(req, headers);
+        let req = if let Some(total) = self.options.total_timeout {
+            req.timeout(total)
+        } else {
+            req
+        };
+
+        let resp = req.send().await.map_err(NetError::from)?;
+        let status = resp.status();
+
+        let ok = status.is_success() || (accept_partial && status.as_u16() == HTTP_PARTIAL_CONTENT);
+        if !ok {
+            let body = truncate_error_body(resp.text().await.unwrap_or_default());
+            return Err(NetError::HttpError {
+                url,
+                status: status.as_u16(),
+                body: Some(body),
+            });
+        }
+
+        Ok(resp)
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure or network error.
+    pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream> {
+        <Self as Net>::stream(self, url, headers).await
     }
 }
 
@@ -135,47 +192,8 @@ impl Net for HttpClient {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
-        let req = Self::apply_headers(req, headers);
-        let req = req.timeout(self.options.request_timeout);
-
-        let resp = req.send().await.map_err(NetError::from)?;
-        let status = resp.status();
-
-        if !status.is_success() {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
-            return Err(NetError::HttpError {
-                url,
-                status: status.as_u16(),
-                body: Some(body),
-            });
-        }
-
+        let resp = self.send_checked(req, headers, url, false).await?;
         resp.bytes().await.map_err(NetError::from)
-    }
-
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    async fn stream(
-        &self,
-        url: Url,
-        headers: Option<Headers>,
-    ) -> Result<crate::ByteStream, NetError> {
-        let req = self.inner.get(url.clone());
-        let req = Self::apply_headers(req, headers);
-        let req = req.timeout(self.options.request_timeout);
-
-        let resp = req.send().await.map_err(NetError::from)?;
-        let status = resp.status();
-
-        if !status.is_success() {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
-            return Err(NetError::HttpError {
-                url,
-                status: status.as_u16(),
-                body: Some(body),
-            });
-        }
-
-        Ok(Self::response_to_stream(resp))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -185,48 +203,24 @@ impl Net for HttpClient {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<crate::ByteStream, NetError> {
-        let mut req = self
+        let req = self
             .inner
             .get(url.clone())
             .header("Range", range.to_header_value());
-        req = Self::apply_headers(req, headers);
-        let req = req.timeout(self.options.request_timeout);
-
-        let resp = req.send().await.map_err(NetError::from)?;
-        let status = resp.status();
-
-        if !(status.is_success() || status.as_u16() == HTTP_PARTIAL_CONTENT) {
-            let body = truncate_error_body(resp.text().await.unwrap_or_default());
-            return Err(NetError::HttpError {
-                url,
-                status: status.as_u16(),
-                body: Some(body),
-            });
-        }
-
+        let resp = self.send_checked(req, headers, url, true).await?;
         Ok(Self::response_to_stream(resp))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        // On WASM, HEAD is often blocked by CORS (servers typically allow
-        // only GET/OPTIONS). Use a zero-byte range GET instead — the 206
-        // response carries the same metadata headers.
-        #[cfg(target_arch = "wasm32")]
-        let resp = {
-            let mut req = self.inner.get(url.clone()).header("Range", "bytes=0-0");
-            req = Self::apply_headers(req, headers);
-            let req = req.timeout(self.options.request_timeout);
-            req.send().await.map_err(NetError::from)?
+        let req = self.head_request(url.clone());
+        let req = Self::apply_headers(req, headers);
+        let req = if let Some(total) = self.options.total_timeout {
+            req.timeout(total)
+        } else {
+            req
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let resp = {
-            let req = self.inner.head(url.clone());
-            let req = Self::apply_headers(req, headers);
-            let req = req.timeout(self.options.request_timeout);
-            req.send().await.map_err(NetError::from)?
-        };
+        let resp = req.send().await.map_err(NetError::from)?;
 
         let status = resp.status();
 
@@ -240,14 +234,14 @@ impl Net for HttpClient {
         }
 
         let mut out = Headers::new();
-        for (name, value) in resp.headers() {
-            if let Ok(v) = value.to_str() {
-                out.insert(name.as_str(), v);
-            }
+        let str_pairs = resp
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str(), v)));
+        for (name, v) in str_pairs {
+            out.insert(name, v);
         }
 
-        // For range GET responses, derive content-length from Content-Range.
-        // Format: "bytes 0-0/12345678" → total = 12345678.
         if out.get("content-length").is_none() {
             let total_from_range = out
                 .get("content-range")
@@ -260,5 +254,16 @@ impl Net for HttpClient {
         }
 
         Ok(out)
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    async fn stream(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+    ) -> Result<crate::ByteStream, NetError> {
+        let req = self.inner.get(url.clone());
+        let resp = self.send_checked(req, headers, url, false).await?;
+        Ok(Self::response_to_stream(resp))
     }
 }

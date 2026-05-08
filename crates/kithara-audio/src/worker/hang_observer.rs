@@ -24,7 +24,7 @@ impl SchedulerObserver for HangWatchdogObserver {
                 self.detector.reset();
             }
             SchedulerEvent::SlowTick { slot, elapsed } => {
-                tracing::warn!(
+                tracing::debug!(
                     track_id = slot,
                     elapsed_ms = elapsed.as_millis(),
                     "step_track took too long — starving other tracks"

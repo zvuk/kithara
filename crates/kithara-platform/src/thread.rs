@@ -35,12 +35,7 @@ pub fn yield_now() {
 
 #[cfg(target_arch = "wasm32")]
 #[inline]
-pub fn yield_now() {
-    // No-op on WASM: Web Workers are preemptively scheduled by the OS,
-    // and backpressure via ringbuf already throttles the decode loop.
-    // The original `Atomics.wait(0.001ms)` FFI call on every decode
-    // frame added unnecessary latency causing audio stuttering.
-}
+pub fn yield_now() {}
 
 /// Returns `true` when running inside a Web Worker.
 #[cfg(target_arch = "wasm32")]
@@ -141,6 +136,22 @@ pub fn active_named_thread_count() -> usize {
     ACTIVE_NAMED_THREADS.load(Ordering::Acquire)
 }
 
+/// Wrap `f` to bracket its execution with the named-thread counter —
+/// increments on entry (at call site, before spawn), decrements after the
+/// closure returns. Used by all [`spawn_named`] variants.
+fn counted<F, T>(f: F) -> impl FnOnce() -> T + Send + 'static
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
+    move || {
+        let result = f();
+        ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
+        result
+    }
+}
+
 /// Spawn a new named thread.
 ///
 /// Sets the OS thread name and tracks the thread in [`active_named_thread_count`].
@@ -155,15 +166,12 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
     std::thread::Builder::new()
         .name(name.into())
-        .spawn(move || {
-            let result = f();
-            ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
-            result
-        })
-        .expect("failed to spawn named thread")
+        .spawn(counted(f))
+        .expect(
+            "BUG: spawn_named must succeed; thread::Builder only fails on OS resource exhaustion",
+        )
 }
 
 /// Spawn a new named thread (WASM variant).
@@ -178,12 +186,7 @@ where
     T: Send + 'static,
 {
     let _name = name.into();
-    ACTIVE_NAMED_THREADS.fetch_add(1, Ordering::Release);
-    spawn(move || {
-        let result = f();
-        ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
-        result
-    })
+    spawn(counted(f))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -199,13 +202,10 @@ where
     WasmThreadBuilder::new()
         .shim_name(SHIM_NAME.to_owned())
         .spawn(move || {
-            // Each WASM Worker has its own module instance with separate globals.
-            // Install panic hook on every thread so panics produce readable
-            // messages instead of bare `RuntimeError: unreachable`.
             console_error_panic_hook::set_once();
             f()
         })
-        .expect("failed to spawn thread")
+        .expect("BUG: WASM Worker spawn must succeed; only fails on OS resource exhaustion")
 }
 
 /// Block the current thread for at least `duration`.
@@ -315,7 +315,8 @@ mod tests {
                 parked.unpark();
             });
             park_timeout(Duration::from_secs(1));
-            join.join().expect("wake helper thread");
+            join.join()
+                .expect("BUG: wake-helper thread joined cleanly without panicking");
             assert!(start.elapsed() < Duration::from_millis(250));
         }
     }

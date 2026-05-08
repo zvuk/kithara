@@ -473,6 +473,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
+    typealias FfiType = Int64
+    typealias SwiftType = Int64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int64, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
     typealias FfiType = Float
     typealias SwiftType = Float
@@ -593,9 +609,29 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  */
 public protocol AudioPlayerProtocol: AnyObject, Sendable {
     
+    /**
+     * Advance to the next item in the queue, no-op if already on the
+     * last item or the queue is empty. Uses [`FfiTransition::None`]
+     * for an immediate cut.
+     */
+    func advanceToNextItem() 
+    
     func crossfadeDuration()  -> Float
     
-    func defaultRate()  -> Float
+    /**
+     * Currently playing item (if any). Resolves the queue's current
+     * track id against the player's Swift-owned item registry so
+     * callers get back the same `AudioPlayerItem` instance they passed
+     * to [`insert`].
+     */
+    func currentItem()  -> AudioPlayerItem?
+    
+    /**
+     * Live playback position in seconds, or `0.0` if no item is loaded.
+     * Convenience over [`snapshot().current_time`] for hot-path UI
+     * updates.
+     */
+    func currentTime()  -> Double
     
     func eqBandCount()  -> UInt32
     
@@ -624,6 +660,14 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func pause() 
     
     func play() 
+    
+    /**
+     * Target playback speed used by `play()`. When the player is
+     * playing, the live `rate()` equals this value; on pause it falls
+     * to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`
+     * terminology.
+     */
+    func playingRate()  -> Float
     
     func rate()  -> Float
     
@@ -659,11 +703,16 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     /**
      * Seek to a position in the current item.
      *
+     * `tolerance` is currently advisory — the underlying engine uses its
+     * own seek heuristics. Passing `Some` reserves the slot for future
+     * `seek_with_tolerance` wiring without forcing callers to migrate
+     * twice; `None` preserves legacy behaviour.
+     *
      * The callback is invoked synchronously with `true` if the seek
      * command was accepted, `false` otherwise (matches `AVPlayer`
      * semantics).
      */
-    func seek(toSeconds: Double, callback: SeekCallback) 
+    func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback) 
     
     /**
      * Select an item in the queue with the given transition.
@@ -686,8 +735,6 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     
     func setCrossfadeDuration(seconds: Float) 
     
-    func setDefaultRate(rate: Float) 
-    
     /**
      * # Errors
      *
@@ -699,12 +746,64 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     
     func setObserver(observer: PlayerObserver) 
     
+    func setPlayingRate(rate: Float) 
+    
     func setVolume(volume: Float) 
+    
+    /**
+     * Register a runtime DRM key processor for every host (`"*"`).
+     *
+     * Generates a fresh 16-character alphanumeric `salt`, mirrors it
+     * into the player-wide [`SALT_HEADER`] (so it accompanies every
+     * outgoing manifest/segment/key request), and forwards it to
+     * `processor.process_key(key, salt)` on each decrypt.
+     *
+     * Items already in the queue keep their original key registry —
+     * re-call this method *before* [`insert`] for the new processor
+     * to apply.
+     */
+    func setupHlsAes(processor: FfiKeyProcessor) 
+    
+    /**
+     * Register a runtime DRM key processor with explicit rule control
+     * (custom domains, headers, salt). The rule's salt — if any — is
+     * mirrored into the player-wide header map under [`SALT_HEADER`].
+     *
+     * Items already in the queue keep their original key registry.
+     */
+    func setupHlsAesWithRule(rule: FfiKeyRule) 
+    
+    /**
+     * Player-wide auth header. Stores `auth_token` under
+     * [`AUTH_TOKEN_HEADER`]; merged into per-item HTTP headers on
+     * every subsequent [`insert`]. Pass an empty string to clear.
+     */
+    func setupNetwork(authToken: String) 
     
     /**
      * Return a snapshot of the player's current state.
      */
     func snapshot()  -> FfiPlayerSnapshot
+    
+    /**
+     * Stop playback: pause the engine, drop every queued item, and
+     * reset the current-item slot. Mirrors `AVPlayer.stop` semantics —
+     * after `stop()`, the player is ready to receive a fresh queue
+     * via [`insert`].
+     */
+    func stop() 
+    
+    /**
+     * Cap the ABR controller's choice by per-network peak bitrate
+     * limits (bits/sec). Pass `0.0` for either argument to clear that
+     * limit; with both zero the ABR considers every variant again.
+     *
+     * The effective cap is the tighter of the two non-zero limits —
+     * without an explicit network-state signal this guarantees neither
+     * limit is exceeded on either link. Caller-side network monitoring
+     * can re-call this method on connectivity changes.
+     */
+    func updatePeakBitrate(wifiBps: Double, cellularBps: Double) 
     
     func volume()  -> Float
     
@@ -773,6 +872,18 @@ public convenience init(config: FfiPlayerConfig) {
     
 
     
+    /**
+     * Advance to the next item in the queue, no-op if already on the
+     * last item or the queue is empty. Uses [`FfiTransition::None`]
+     * for an immediate cut.
+     */
+open func advanceToNextItem()  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_advance_to_next_item(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+    
 open func crossfadeDuration() -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_crossfade_duration(
@@ -781,9 +892,28 @@ open func crossfadeDuration() -> Float  {
 })
 }
     
-open func defaultRate() -> Float  {
-    return try!  FfiConverterFloat.lift(try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayer_default_rate(
+    /**
+     * Currently playing item (if any). Resolves the queue's current
+     * track id against the player's Swift-owned item registry so
+     * callers get back the same `AudioPlayerItem` instance they passed
+     * to [`insert`].
+     */
+open func currentItem() -> AudioPlayerItem?  {
+    return try!  FfiConverterOptionTypeAudioPlayerItem.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_current_item(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * Live playback position in seconds, or `0.0` if no item is loaded.
+     * Convenience over [`snapshot().current_time`] for hot-path UI
+     * updates.
+     */
+open func currentTime() -> Double  {
+    return try!  FfiConverterDouble.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_current_time(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -865,6 +995,20 @@ open func play()  {try! rustCall() {
 }
 }
     
+    /**
+     * Target playback speed used by `play()`. When the player is
+     * playing, the live `rate()` equals this value; on pause it falls
+     * to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`
+     * terminology.
+     */
+open func playingRate() -> Float  {
+    return try!  FfiConverterFloat.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_playing_rate(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
 open func rate() -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_rate(
@@ -928,14 +1072,20 @@ open func resetEq()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift
     /**
      * Seek to a position in the current item.
      *
+     * `tolerance` is currently advisory — the underlying engine uses its
+     * own seek heuristics. Passing `Some` reserves the slot for future
+     * `seek_with_tolerance` wiring without forcing callers to migrate
+     * twice; `None` preserves legacy behaviour.
+     *
      * The callback is invoked synchronously with `true` if the seek
      * command was accepted, `false` otherwise (matches `AVPlayer`
      * semantics).
      */
-open func seek(toSeconds: Double, callback: SeekCallback)  {try! rustCall() {
+open func seek(toSeconds: Double, tolerance: Double?, callback: SeekCallback)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_seek(
             self.uniffiCloneHandle(),
         FfiConverterDouble.lower(toSeconds),
+        FfiConverterOptionDouble.lower(tolerance),
         FfiConverterTypeSeekCallback_lower(callback),$0
     )
 }
@@ -981,14 +1131,6 @@ open func setCrossfadeDuration(seconds: Float)  {try! rustCall() {
 }
 }
     
-open func setDefaultRate(rate: Float)  {try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayer_set_default_rate(
-            self.uniffiCloneHandle(),
-        FfiConverterFloat.lower(rate),$0
-    )
-}
-}
-    
     /**
      * # Errors
      *
@@ -1019,10 +1161,66 @@ open func setObserver(observer: PlayerObserver)  {try! rustCall() {
 }
 }
     
+open func setPlayingRate(rate: Float)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_set_playing_rate(
+            self.uniffiCloneHandle(),
+        FfiConverterFloat.lower(rate),$0
+    )
+}
+}
+    
 open func setVolume(volume: Float)  {try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_set_volume(
             self.uniffiCloneHandle(),
         FfiConverterFloat.lower(volume),$0
+    )
+}
+}
+    
+    /**
+     * Register a runtime DRM key processor for every host (`"*"`).
+     *
+     * Generates a fresh 16-character alphanumeric `salt`, mirrors it
+     * into the player-wide [`SALT_HEADER`] (so it accompanies every
+     * outgoing manifest/segment/key request), and forwards it to
+     * `processor.process_key(key, salt)` on each decrypt.
+     *
+     * Items already in the queue keep their original key registry —
+     * re-call this method *before* [`insert`] for the new processor
+     * to apply.
+     */
+open func setupHlsAes(processor: FfiKeyProcessor)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiKeyProcessor_lower(processor),$0
+    )
+}
+}
+    
+    /**
+     * Register a runtime DRM key processor with explicit rule control
+     * (custom domains, headers, salt). The rule's salt — if any — is
+     * mirrored into the player-wide header map under [`SALT_HEADER`].
+     *
+     * Items already in the queue keep their original key registry.
+     */
+open func setupHlsAesWithRule(rule: FfiKeyRule)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_setup_hls_aes_with_rule(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiKeyRule_lower(rule),$0
+    )
+}
+}
+    
+    /**
+     * Player-wide auth header. Stores `auth_token` under
+     * [`AUTH_TOKEN_HEADER`]; merged into per-item HTTP headers on
+     * every subsequent [`insert`]. Pass an empty string to clear.
+     */
+open func setupNetwork(authToken: String)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_setup_network(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(authToken),$0
     )
 }
 }
@@ -1036,6 +1234,38 @@ open func snapshot() -> FfiPlayerSnapshot  {
             self.uniffiCloneHandle(),$0
     )
 })
+}
+    
+    /**
+     * Stop playback: pause the engine, drop every queued item, and
+     * reset the current-item slot. Mirrors `AVPlayer.stop` semantics —
+     * after `stop()`, the player is ready to receive a fresh queue
+     * via [`insert`].
+     */
+open func stop()  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_stop(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+    
+    /**
+     * Cap the ABR controller's choice by per-network peak bitrate
+     * limits (bits/sec). Pass `0.0` for either argument to clear that
+     * limit; with both zero the ABR considers every variant again.
+     *
+     * The effective cap is the tighter of the two non-zero limits —
+     * without an explicit network-state signal this guarantees neither
+     * limit is exceeded on either link. Caller-side network monitoring
+     * can re-call this method on connectivity changes.
+     */
+open func updatePeakBitrate(wifiBps: Double, cellularBps: Double)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayer_update_peak_bitrate(
+            self.uniffiCloneHandle(),
+        FfiConverterDouble.lower(wifiBps),
+        FfiConverterDouble.lower(cellularBps),$0
+    )
+}
 }
     
 open func volume() -> Float  {
@@ -1102,9 +1332,44 @@ public func FfiConverterTypeAudioPlayer_lower(_ value: AudioPlayer) -> UInt64 {
 public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
     
     /**
-     * String representation of the item's unique ID.
+     * Stable per-item identifier (`UUIDv4` string). Mirrors the iOS
+     * `AudioPlayerItemProtocol.audioId`.
      */
-    func id()  -> String
+    func audioId()  -> String
+    
+    /**
+     * Cached item duration in seconds. Defaults to `0.0` until the
+     * underlying resource emits a duration update.
+     */
+    func durationSec()  -> Double
+    
+    /**
+     * Whether this item represents a live HLS feed. The flag is set
+     * from [`FfiItemConfig::is_live_stream`] at construction; in the
+     * future this getter will also surface auto-detected live streams.
+     */
+    func isLiveStream()  -> Bool
+    
+    /**
+     * Whether the item is playable at `progress` (seconds) given the
+     * caller-supplied buffered `ranges`. Live streams are reported
+     * playable unconditionally.
+     */
+    func isPlayable(progress: Double, ranges: [FfiTimeRange])  -> Bool
+    
+    /**
+     * Resolve `callback` with the item's current load status. If the
+     * item has not yet been inserted into a queue (or has been
+     * removed), the callback fires with
+     * `FfiItemLoadResult { has_protected_content: false, is_playable: false }`.
+     *
+     * `load` does not trigger an additional fetch — `AudioPlayer::insert`
+     * already kicks off background loading. This method is the FFI
+     * answer to the iOS protocol's `func load() -> Observable<…>`:
+     * it surfaces the cached state once the metadata layer has caught
+     * up.
+     */
+    func load(callback: ItemLoadCallback) 
     
     func preferredPeakBitrate()  -> Double
     
@@ -1113,6 +1378,14 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
     func setObserver(observer: ItemObserver) 
     
     func url()  -> String
+    
+    /**
+     * 64-bit numeric form of [`Self::audio_id`]. Derived from the
+     * first 16 hex digits of the UUID — stable for the same UUID, but
+     * **not** cryptographically unique. Treat as an opaque numeric
+     * handle.
+     */
+    func uuidI64()  -> Int64
     
 }
 /**
@@ -1185,14 +1458,75 @@ public convenience init(config: FfiItemConfig) {
 
     
     /**
-     * String representation of the item's unique ID.
+     * Stable per-item identifier (`UUIDv4` string). Mirrors the iOS
+     * `AudioPlayerItemProtocol.audioId`.
      */
-open func id() -> String  {
+open func audioId() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_kithara_ffi_fn_method_audioplayeritem_id(
+    uniffi_kithara_ffi_fn_method_audioplayeritem_audio_id(
             self.uniffiCloneHandle(),$0
     )
 })
+}
+    
+    /**
+     * Cached item duration in seconds. Defaults to `0.0` until the
+     * underlying resource emits a duration update.
+     */
+open func durationSec() -> Double  {
+    return try!  FfiConverterDouble.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_duration_sec(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * Whether this item represents a live HLS feed. The flag is set
+     * from [`FfiItemConfig::is_live_stream`] at construction; in the
+     * future this getter will also surface auto-detected live streams.
+     */
+open func isLiveStream() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_is_live_stream(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * Whether the item is playable at `progress` (seconds) given the
+     * caller-supplied buffered `ranges`. Live streams are reported
+     * playable unconditionally.
+     */
+open func isPlayable(progress: Double, ranges: [FfiTimeRange]) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_is_playable(
+            self.uniffiCloneHandle(),
+        FfiConverterDouble.lower(progress),
+        FfiConverterSequenceTypeFfiTimeRange.lower(ranges),$0
+    )
+})
+}
+    
+    /**
+     * Resolve `callback` with the item's current load status. If the
+     * item has not yet been inserted into a queue (or has been
+     * removed), the callback fires with
+     * `FfiItemLoadResult { has_protected_content: false, is_playable: false }`.
+     *
+     * `load` does not trigger an additional fetch — `AudioPlayer::insert`
+     * already kicks off background loading. This method is the FFI
+     * answer to the iOS protocol's `func load() -> Observable<…>`:
+     * it surfaces the cached state once the metadata layer has caught
+     * up.
+     */
+open func load(callback: ItemLoadCallback)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_load(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeItemLoadCallback_lower(callback),$0
+    )
+}
 }
     
 open func preferredPeakBitrate() -> Double  {
@@ -1222,6 +1556,20 @@ open func setObserver(observer: ItemObserver)  {try! rustCall() {
 open func url() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayeritem_url(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * 64-bit numeric form of [`Self::audio_id`]. Derived from the
+     * first 16 hex digits of the UUID — stable for the same UUID, but
+     * **not** cryptographically unique. Treat as an opaque numeric
+     * handle.
+     */
+open func uuidI64() -> Int64  {
+    return try!  FfiConverterInt64.lift(try! rustCall() {
+    uniffi_kithara_ffi_fn_method_audioplayeritem_uuid_i64(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1291,7 +1639,7 @@ public protocol FfiCipherProtocol: AnyObject, Sendable {
      */
     func decrypt(data: Data)  -> Data
     
-    func processKey(key: Data)  -> Data
+    func processKey(key: Data, salt: String)  -> Data
     
 }
 /**
@@ -1342,6 +1690,10 @@ open class FfiCipher: FfiCipherProtocol, @unchecked Sendable {
     }
     /**
      * Create a new cipher from a key string.
+     *
+     * Takes `&str` rather than `String` — modern `UniFFI` (≥0.28) marshals
+     * `&str` across the FFI boundary by cloning on the bridge side, which
+     * keeps Rust callers free of unnecessary allocations.
      */
 public convenience init(key: String) {
     let handle =
@@ -1377,11 +1729,12 @@ open func decrypt(data: Data) -> Data  {
 })
 }
     
-open func processKey(key: Data) -> Data  {
+open func processKey(key: Data, salt: String) -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_fficipher_process_key(
             self.uniffiCloneHandle(),
-        FfiConverterData.lower(key),$0
+        FfiConverterData.lower(key),
+        FfiConverterString.lower(salt),$0
     )
 })
 }
@@ -1441,19 +1794,25 @@ public func FfiConverterTypeFfiCipher_lower(_ value: FfiCipher) -> UInt64 {
 /**
  * Callback for processing (decrypting) HLS encryption keys.
  *
- * Called for each key fetched from the server. The implementation should
- * return the decrypted key bytes.
+ * Called for each key fetched from the server. `salt` carries the value
+ * the player generated and attached to outgoing HTTP requests under
+ * [`SALT_HEADER`] — implementations that derive a per-session cipher
+ * from the salt should re-build it on every call. Implementations that
+ * hold a pre-built cipher (legacy behaviour) can ignore the argument.
  */
 public protocol FfiKeyProcessor: AnyObject, Sendable {
     
-    func processKey(key: Data)  -> Data
+    func processKey(key: Data, salt: String)  -> Data
     
 }
 /**
  * Callback for processing (decrypting) HLS encryption keys.
  *
- * Called for each key fetched from the server. The implementation should
- * return the decrypted key bytes.
+ * Called for each key fetched from the server. `salt` carries the value
+ * the player generated and attached to outgoing HTTP requests under
+ * [`SALT_HEADER`] — implementations that derive a per-session cipher
+ * from the salt should re-build it on every call. Implementations that
+ * hold a pre-built cipher (legacy behaviour) can ignore the argument.
  */
 open class FfiKeyProcessorImpl: FfiKeyProcessor, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1508,11 +1867,12 @@ open class FfiKeyProcessorImpl: FfiKeyProcessor, @unchecked Sendable {
     
 
     
-open func processKey(key: Data) -> Data  {
+open func processKey(key: Data, salt: String) -> Data  {
     return try!  FfiConverterData.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_ffikeyprocessor_process_key(
             self.uniffiCloneHandle(),
-        FfiConverterData.lower(key),$0
+        FfiConverterData.lower(key),
+        FfiConverterString.lower(salt),$0
     )
 })
 }
@@ -1549,6 +1909,7 @@ fileprivate struct UniffiCallbackInterfaceFfiKeyProcessor {
         processKey: { (
             uniffiHandle: UInt64,
             key: RustBuffer,
+            salt: RustBuffer,
             uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
@@ -1558,7 +1919,8 @@ fileprivate struct UniffiCallbackInterfaceFfiKeyProcessor {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.processKey(
-                     key: try FfiConverterData.lift(key)
+                     key: try FfiConverterData.lift(key),
+                     salt: try FfiConverterString.lift(salt)
                 )
             }
 
@@ -1630,6 +1992,198 @@ public func FfiConverterTypeFfiKeyProcessor_lift(_ handle: UInt64) throws -> Ffi
 #endif
 public func FfiConverterTypeFfiKeyProcessor_lower(_ value: FfiKeyProcessor) -> UInt64 {
     return FfiConverterTypeFfiKeyProcessor.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Callback fired when [`crate::item::AudioPlayerItem::load`] resolves.
+ */
+public protocol ItemLoadCallback: AnyObject, Sendable {
+    
+    func onComplete(result: FfiItemLoadResult) 
+    
+}
+/**
+ * Callback fired when [`crate::item::AudioPlayerItem::load`] resolves.
+ */
+open class ItemLoadCallbackImpl: ItemLoadCallback, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_kithara_ffi_fn_clone_itemloadcallback(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_kithara_ffi_fn_free_itemloadcallback(handle, $0) }
+    }
+
+    
+
+    
+open func onComplete(result: FfiItemLoadResult)  {try! rustCall() {
+    uniffi_kithara_ffi_fn_method_itemloadcallback_on_complete(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeFfiItemLoadResult_lower(result),$0
+    )
+}
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceItemLoadCallback {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceItemLoadCallback] = [UniffiVTableCallbackInterfaceItemLoadCallback(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeItemLoadCallback.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface ItemLoadCallback: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeItemLoadCallback.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface ItemLoadCallback: handle missing in uniffiClone")
+            }
+        },
+        onComplete: { (
+            uniffiHandle: UInt64,
+            result: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeItemLoadCallback.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onComplete(
+                     result: try FfiConverterTypeFfiItemLoadResult_lift(result)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )]
+}
+
+private func uniffiCallbackInitItemLoadCallback() {
+    uniffi_kithara_ffi_fn_init_callback_vtable_itemloadcallback(UniffiCallbackInterfaceItemLoadCallback.vtable)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeItemLoadCallback: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<ItemLoadCallback>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = ItemLoadCallback
+
+    public static func lift(_ handle: UInt64) throws -> ItemLoadCallback {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return ItemLoadCallbackImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: ItemLoadCallback) -> UInt64 {
+         if let rustImpl = value as? ItemLoadCallbackImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ItemLoadCallback {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: ItemLoadCallback, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeItemLoadCallback_lift(_ handle: UInt64) throws -> ItemLoadCallback {
+    return try FfiConverterTypeItemLoadCallback.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeItemLoadCallback_lower(_ value: ItemLoadCallback) -> UInt64 {
+    return FfiConverterTypeItemLoadCallback.lower(value)
 }
 
 
@@ -2222,8 +2776,9 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
  * [`crate::item::AudioPlayerItem::new`].
  */
 public struct FfiItemConfig: Equatable, Hashable {
-    public let url: String
+    public let abrMode: FfiAbrMode?
     public let headers: [String: String]?
+    public let url: String
     /**
      * Peak bitrate ceiling in bits/sec. `0.0` means no cap.
      */
@@ -2233,23 +2788,38 @@ public struct FfiItemConfig: Equatable, Hashable {
      * means no cap.
      */
     public let preferredPeakBitrateExpensive: Double
-    public let abrMode: FfiAbrMode?
+    /**
+     * Caller-declared live-stream flag. `true` means the source is a
+     * live HLS feed (radio / broadcast); the player skips end-of-stream
+     * gating and `is_playable` always returns `true` for the item.
+     * Defaults to `false`. Auto-detection from the manifest is a
+     * future improvement.
+     */
+    public let isLiveStream: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(url: String, headers: [String: String]?, 
+    public init(abrMode: FfiAbrMode?, headers: [String: String]?, url: String, 
         /**
          * Peak bitrate ceiling in bits/sec. `0.0` means no cap.
          */preferredPeakBitrate: Double, 
         /**
          * Peak bitrate ceiling on expensive networks (cellular). `0.0`
          * means no cap.
-         */preferredPeakBitrateExpensive: Double, abrMode: FfiAbrMode?) {
-        self.url = url
+         */preferredPeakBitrateExpensive: Double, 
+        /**
+         * Caller-declared live-stream flag. `true` means the source is a
+         * live HLS feed (radio / broadcast); the player skips end-of-stream
+         * gating and `is_playable` always returns `true` for the item.
+         * Defaults to `false`. Auto-detection from the manifest is a
+         * future improvement.
+         */isLiveStream: Bool) {
+        self.abrMode = abrMode
         self.headers = headers
+        self.url = url
         self.preferredPeakBitrate = preferredPeakBitrate
         self.preferredPeakBitrateExpensive = preferredPeakBitrateExpensive
-        self.abrMode = abrMode
+        self.isLiveStream = isLiveStream
     }
 
     
@@ -2268,20 +2838,22 @@ public struct FfiConverterTypeFfiItemConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemConfig {
         return
             try FfiItemConfig(
-                url: FfiConverterString.read(from: &buf), 
+                abrMode: FfiConverterOptionTypeFfiAbrMode.read(from: &buf), 
                 headers: FfiConverterOptionDictionaryStringString.read(from: &buf), 
+                url: FfiConverterString.read(from: &buf), 
                 preferredPeakBitrate: FfiConverterDouble.read(from: &buf), 
                 preferredPeakBitrateExpensive: FfiConverterDouble.read(from: &buf), 
-                abrMode: FfiConverterOptionTypeFfiAbrMode.read(from: &buf)
+                isLiveStream: FfiConverterBool.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiItemConfig, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.url, into: &buf)
+        FfiConverterOptionTypeFfiAbrMode.write(value.abrMode, into: &buf)
         FfiConverterOptionDictionaryStringString.write(value.headers, into: &buf)
+        FfiConverterString.write(value.url, into: &buf)
         FfiConverterDouble.write(value.preferredPeakBitrate, into: &buf)
         FfiConverterDouble.write(value.preferredPeakBitrateExpensive, into: &buf)
-        FfiConverterOptionTypeFfiAbrMode.write(value.abrMode, into: &buf)
+        FfiConverterBool.write(value.isLiveStream, into: &buf)
     }
 }
 
@@ -2298,6 +2870,76 @@ public func FfiConverterTypeFfiItemConfig_lift(_ buf: RustBuffer) throws -> FfiI
 #endif
 public func FfiConverterTypeFfiItemConfig_lower(_ value: FfiItemConfig) -> RustBuffer {
     return FfiConverterTypeFfiItemConfig.lower(value)
+}
+
+
+/**
+ * Outcome reported by [`crate::observer::ItemLoadCallback::on_complete`]
+ * when [`crate::item::AudioPlayerItem::load`] resolves.
+ */
+public struct FfiItemLoadResult: Equatable, Hashable {
+    /**
+     * `true` once the metadata layer recognises encrypted segments.
+     */
+    public let hasProtectedContent: Bool
+    /**
+     * `true` when the item has enough metadata to start playback.
+     */
+    public let isPlayable: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * `true` once the metadata layer recognises encrypted segments.
+         */hasProtectedContent: Bool, 
+        /**
+         * `true` when the item has enough metadata to start playback.
+         */isPlayable: Bool) {
+        self.hasProtectedContent = hasProtectedContent
+        self.isPlayable = isPlayable
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiItemLoadResult: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiItemLoadResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiItemLoadResult {
+        return
+            try FfiItemLoadResult(
+                hasProtectedContent: FfiConverterBool.read(from: &buf), 
+                isPlayable: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiItemLoadResult, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.hasProtectedContent, into: &buf)
+        FfiConverterBool.write(value.isPlayable, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemLoadResult_lift(_ buf: RustBuffer) throws -> FfiItemLoadResult {
+    return try FfiConverterTypeFfiItemLoadResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiItemLoadResult_lower(_ value: FfiItemLoadResult) -> RustBuffer {
+    return FfiConverterTypeFfiItemLoadResult.lower(value)
 }
 
 
@@ -2363,25 +3005,43 @@ public func FfiConverterTypeFfiKeyOptions_lower(_ value: FfiKeyOptions) -> RustB
  */
 public struct FfiKeyRule {
     public let processor: FfiKeyProcessor
-    /**
-     * Domain patterns — exact (`"example.com"`) or wildcard
-     * subdomain (`"*.example.com"`).
-     */
-    public let domains: [String]
     public let headers: [String: String]?
     public let queryParams: [String: String]?
+    /**
+     * Domain patterns — exact (`"example.com"`), wildcard subdomain
+     * (`"*.example.com"`), or match-any (`"*"`).
+     */
+    public let domains: [String]
+    /**
+     * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
+     * on every decrypt. `None` is treated as an empty string.
+     *
+     * `setup_hls_aes` populates this automatically with a freshly
+     * generated 16-character alphanumeric value and mirrors it into
+     * [`crate::observer::SALT_HEADER`] in the player-wide header map.
+     */
+    public let salt: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(processor: FfiKeyProcessor, 
+    public init(processor: FfiKeyProcessor, headers: [String: String]?, queryParams: [String: String]?, 
         /**
-         * Domain patterns — exact (`"example.com"`) or wildcard
-         * subdomain (`"*.example.com"`).
-         */domains: [String], headers: [String: String]?, queryParams: [String: String]?) {
+         * Domain patterns — exact (`"example.com"`), wildcard subdomain
+         * (`"*.example.com"`), or match-any (`"*"`).
+         */domains: [String], 
+        /**
+         * Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
+         * on every decrypt. `None` is treated as an empty string.
+         *
+         * `setup_hls_aes` populates this automatically with a freshly
+         * generated 16-character alphanumeric value and mirrors it into
+         * [`crate::observer::SALT_HEADER`] in the player-wide header map.
+         */salt: String?) {
         self.processor = processor
-        self.domains = domains
         self.headers = headers
         self.queryParams = queryParams
+        self.domains = domains
+        self.salt = salt
     }
 
     
@@ -2401,17 +3061,19 @@ public struct FfiConverterTypeFfiKeyRule: FfiConverterRustBuffer {
         return
             try FfiKeyRule(
                 processor: FfiConverterTypeFfiKeyProcessor.read(from: &buf), 
-                domains: FfiConverterSequenceString.read(from: &buf), 
                 headers: FfiConverterOptionDictionaryStringString.read(from: &buf), 
-                queryParams: FfiConverterOptionDictionaryStringString.read(from: &buf)
+                queryParams: FfiConverterOptionDictionaryStringString.read(from: &buf), 
+                domains: FfiConverterSequenceString.read(from: &buf), 
+                salt: FfiConverterOptionString.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiKeyRule, into buf: inout [UInt8]) {
         FfiConverterTypeFfiKeyProcessor.write(value.processor, into: &buf)
-        FfiConverterSequenceString.write(value.domains, into: &buf)
         FfiConverterOptionDictionaryStringString.write(value.headers, into: &buf)
         FfiConverterOptionDictionaryStringString.write(value.queryParams, into: &buf)
+        FfiConverterSequenceString.write(value.domains, into: &buf)
+        FfiConverterOptionString.write(value.salt, into: &buf)
     }
 }
 
@@ -2436,14 +3098,6 @@ public func FfiConverterTypeFfiKeyRule_lower(_ value: FfiKeyRule) -> RustBuffer 
  */
 public struct FfiPlayerConfig {
     /**
-     * Number of EQ bands (log-spaced). Default: 10.
-     */
-    public let eqBandCount: UInt32
-    /**
-     * How resources loaded for this player trim leading/trailing PCM.
-     */
-    public let gaplessMode: FfiGaplessMode
-    /**
      * DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
      * no DRM is needed.
      */
@@ -2452,27 +3106,27 @@ public struct FfiPlayerConfig {
      * Storage options shared by all items (cache directory, etc.).
      */
     public let store: StoreOptions
+    /**
+     * Number of EQ bands (log-spaced). Default: 10.
+     */
+    public let eqBandCount: UInt32
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(
-        /**
-         * Number of EQ bands (log-spaced). Default: 10.
-         */eqBandCount: UInt32, 
-        /**
-         * How resources loaded for this player trim leading/trailing PCM.
-         */gaplessMode: FfiGaplessMode, 
         /**
          * DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
          * no DRM is needed.
          */keyOptions: FfiKeyOptions, 
         /**
          * Storage options shared by all items (cache directory, etc.).
-         */store: StoreOptions) {
-        self.eqBandCount = eqBandCount
-        self.gaplessMode = gaplessMode
+         */store: StoreOptions, 
+        /**
+         * Number of EQ bands (log-spaced). Default: 10.
+         */eqBandCount: UInt32) {
         self.keyOptions = keyOptions
         self.store = store
+        self.eqBandCount = eqBandCount
     }
 
     
@@ -2491,18 +3145,16 @@ public struct FfiConverterTypeFfiPlayerConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiPlayerConfig {
         return
             try FfiPlayerConfig(
-                eqBandCount: FfiConverterUInt32.read(from: &buf), 
-                gaplessMode: FfiConverterTypeFfiGaplessMode.read(from: &buf), 
                 keyOptions: FfiConverterTypeFfiKeyOptions.read(from: &buf), 
-                store: FfiConverterTypeStoreOptions.read(from: &buf)
+                store: FfiConverterTypeStoreOptions.read(from: &buf), 
+                eqBandCount: FfiConverterUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiPlayerConfig, into buf: inout [UInt8]) {
-        FfiConverterUInt32.write(value.eqBandCount, into: &buf)
-        FfiConverterTypeFfiGaplessMode.write(value.gaplessMode, into: &buf)
         FfiConverterTypeFfiKeyOptions.write(value.keyOptions, into: &buf)
         FfiConverterTypeStoreOptions.write(value.store, into: &buf)
+        FfiConverterUInt32.write(value.eqBandCount, into: &buf)
     }
 }
 
@@ -2532,21 +3184,29 @@ public struct FfiPlayerSnapshot: Equatable, Hashable {
     public let status: FfiPlayerStatus
     public let currentTime: Double?
     public let duration: Double?
+    public let isMuted: Bool
+    /**
+     * Target playback speed (the value used by `play()`). Live `rate`
+     * equals this while playing and `0.0` while paused.
+     */
+    public let playingRate: Float
     public let rate: Float
-    public let defaultRate: Float
     public let volume: Float
-    public let muted: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(status: FfiPlayerStatus, currentTime: Double?, duration: Double?, rate: Float, defaultRate: Float, volume: Float, muted: Bool) {
+    public init(status: FfiPlayerStatus, currentTime: Double?, duration: Double?, isMuted: Bool, 
+        /**
+         * Target playback speed (the value used by `play()`). Live `rate`
+         * equals this while playing and `0.0` while paused.
+         */playingRate: Float, rate: Float, volume: Float) {
         self.status = status
         self.currentTime = currentTime
         self.duration = duration
+        self.isMuted = isMuted
+        self.playingRate = playingRate
         self.rate = rate
-        self.defaultRate = defaultRate
         self.volume = volume
-        self.muted = muted
     }
 
     
@@ -2568,10 +3228,10 @@ public struct FfiConverterTypeFfiPlayerSnapshot: FfiConverterRustBuffer {
                 status: FfiConverterTypeFfiPlayerStatus.read(from: &buf), 
                 currentTime: FfiConverterOptionDouble.read(from: &buf), 
                 duration: FfiConverterOptionDouble.read(from: &buf), 
+                isMuted: FfiConverterBool.read(from: &buf), 
+                playingRate: FfiConverterFloat.read(from: &buf), 
                 rate: FfiConverterFloat.read(from: &buf), 
-                defaultRate: FfiConverterFloat.read(from: &buf), 
-                volume: FfiConverterFloat.read(from: &buf), 
-                muted: FfiConverterBool.read(from: &buf)
+                volume: FfiConverterFloat.read(from: &buf)
         )
     }
 
@@ -2579,10 +3239,10 @@ public struct FfiConverterTypeFfiPlayerSnapshot: FfiConverterRustBuffer {
         FfiConverterTypeFfiPlayerStatus.write(value.status, into: &buf)
         FfiConverterOptionDouble.write(value.currentTime, into: &buf)
         FfiConverterOptionDouble.write(value.duration, into: &buf)
+        FfiConverterBool.write(value.isMuted, into: &buf)
+        FfiConverterFloat.write(value.playingRate, into: &buf)
         FfiConverterFloat.write(value.rate, into: &buf)
-        FfiConverterFloat.write(value.defaultRate, into: &buf)
         FfiConverterFloat.write(value.volume, into: &buf)
-        FfiConverterBool.write(value.muted, into: &buf)
     }
 }
 
@@ -2603,82 +3263,17 @@ public func FfiConverterTypeFfiPlayerSnapshot_lower(_ value: FfiPlayerSnapshot) 
 
 
 /**
- * FFI-friendly tunables for silence-based gapless trimming.
- */
-public struct FfiSilenceTrimParams: Equatable, Hashable {
-    public let thresholdDb: Float
-    public let minTrimFrames: UInt64
-    public let scanWindowFrames: UInt64
-    public let trimTrailing: Bool
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(thresholdDb: Float, minTrimFrames: UInt64, scanWindowFrames: UInt64, trimTrailing: Bool) {
-        self.thresholdDb = thresholdDb
-        self.minTrimFrames = minTrimFrames
-        self.scanWindowFrames = scanWindowFrames
-        self.trimTrailing = trimTrailing
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension FfiSilenceTrimParams: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiSilenceTrimParams: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSilenceTrimParams {
-        return
-            try FfiSilenceTrimParams(
-                thresholdDb: FfiConverterFloat.read(from: &buf), 
-                minTrimFrames: FfiConverterUInt64.read(from: &buf), 
-                scanWindowFrames: FfiConverterUInt64.read(from: &buf), 
-                trimTrailing: FfiConverterBool.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: FfiSilenceTrimParams, into buf: inout [UInt8]) {
-        FfiConverterFloat.write(value.thresholdDb, into: &buf)
-        FfiConverterUInt64.write(value.minTrimFrames, into: &buf)
-        FfiConverterUInt64.write(value.scanWindowFrames, into: &buf)
-        FfiConverterBool.write(value.trimTrailing, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiSilenceTrimParams_lift(_ buf: RustBuffer) throws -> FfiSilenceTrimParams {
-    return try FfiConverterTypeFfiSilenceTrimParams.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiSilenceTrimParams_lower(_ value: FfiSilenceTrimParams) -> RustBuffer {
-    return FfiConverterTypeFfiSilenceTrimParams.lower(value)
-}
-
-
-/**
  * FFI-friendly time range (seconds-based).
  */
 public struct FfiTimeRange: Equatable, Hashable {
-    public let startSeconds: Double
     public let durationSeconds: Double
+    public let startSeconds: Double
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(startSeconds: Double, durationSeconds: Double) {
-        self.startSeconds = startSeconds
+    public init(durationSeconds: Double, startSeconds: Double) {
         self.durationSeconds = durationSeconds
+        self.startSeconds = startSeconds
     }
 
     
@@ -2697,14 +3292,14 @@ public struct FfiConverterTypeFfiTimeRange: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTimeRange {
         return
             try FfiTimeRange(
-                startSeconds: FfiConverterDouble.read(from: &buf), 
-                durationSeconds: FfiConverterDouble.read(from: &buf)
+                durationSeconds: FfiConverterDouble.read(from: &buf), 
+                startSeconds: FfiConverterDouble.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiTimeRange, into buf: inout [UInt8]) {
-        FfiConverterDouble.write(value.startSeconds, into: &buf)
         FfiConverterDouble.write(value.durationSeconds, into: &buf)
+        FfiConverterDouble.write(value.startSeconds, into: &buf)
     }
 }
 
@@ -2728,16 +3323,16 @@ public func FfiConverterTypeFfiTimeRange_lower(_ value: FfiTimeRange) -> RustBuf
  * FFI-friendly HLS variant descriptor.
  */
 public struct FfiVariant: Equatable, Hashable {
+    public let name: String?
     public let index: UInt32
     public let bandwidthBps: UInt64
-    public let name: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(index: UInt32, bandwidthBps: UInt64, name: String?) {
+    public init(name: String?, index: UInt32, bandwidthBps: UInt64) {
+        self.name = name
         self.index = index
         self.bandwidthBps = bandwidthBps
-        self.name = name
     }
 
     
@@ -2756,16 +3351,16 @@ public struct FfiConverterTypeFfiVariant: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiVariant {
         return
             try FfiVariant(
+                name: FfiConverterOptionString.read(from: &buf), 
                 index: FfiConverterUInt32.read(from: &buf), 
-                bandwidthBps: FfiConverterUInt64.read(from: &buf), 
-                name: FfiConverterOptionString.read(from: &buf)
+                bandwidthBps: FfiConverterUInt64.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiVariant, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.name, into: &buf)
         FfiConverterUInt32.write(value.index, into: &buf)
         FfiConverterUInt64.write(value.bandwidthBps, into: &buf)
-        FfiConverterOptionString.write(value.name, into: &buf)
     }
 }
 
@@ -3032,93 +3627,6 @@ public func FfiConverterTypeFfiError_lower(_ value: FfiError) -> RustBuffer {
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
- * FFI-friendly mirror of [`GaplessMode`].
- */
-
-public enum FfiGaplessMode: Equatable, Hashable {
-    
-    case disabled
-    case mediaOnly
-    case codecPriming
-    case silenceTrim(params: FfiSilenceTrimParams
-    )
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension FfiGaplessMode: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiGaplessMode: FfiConverterRustBuffer {
-    typealias SwiftType = FfiGaplessMode
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiGaplessMode {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        
-        case 1: return .disabled
-        
-        case 2: return .mediaOnly
-        
-        case 3: return .codecPriming
-        
-        case 4: return .silenceTrim(params: try FfiConverterTypeFfiSilenceTrimParams.read(from: &buf)
-        )
-        
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: FfiGaplessMode, into buf: inout [UInt8]) {
-        switch value {
-        
-        
-        case .disabled:
-            writeInt(&buf, Int32(1))
-        
-        
-        case .mediaOnly:
-            writeInt(&buf, Int32(2))
-        
-        
-        case .codecPriming:
-            writeInt(&buf, Int32(3))
-        
-        
-        case let .silenceTrim(params):
-            writeInt(&buf, Int32(4))
-            FfiConverterTypeFfiSilenceTrimParams.write(params, into: &buf)
-            
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiGaplessMode_lift(_ buf: RustBuffer) throws -> FfiGaplessMode {
-    return try FfiConverterTypeFfiGaplessMode.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiGaplessMode_lower(_ value: FfiGaplessMode) -> RustBuffer {
-    return FfiConverterTypeFfiGaplessMode.lower(value)
-}
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-/**
  * Typed item event dispatched through [`ItemObserver::on_event`].
  */
 
@@ -3126,7 +3634,13 @@ public enum FfiItemEvent: Equatable, Hashable {
     
     case durationChanged(seconds: Double
     )
-    case bufferedDurationChanged(seconds: Double
+    /**
+     * Buffered byte ranges, expressed as `[start, start + duration)` in
+     * seconds. Replaces the older scalar `BufferedDurationChanged` —
+     * the total buffered time is the sum of `range.duration_seconds`.
+     * Mirrors the iOS `AudioPlayerItemProtocol.rxLoadedRanges` shape.
+     */
+    case loadedRangesChanged(ranges: [FfiTimeRange]
     )
     case statusChanged(status: FfiItemStatus
     )
@@ -3142,6 +3656,16 @@ public enum FfiItemEvent: Equatable, Hashable {
      */
     case variantApplied(variant: FfiVariant
     )
+    /**
+     * The item reached natural end-of-stream. Mirrors the iOS
+     * `AudioPlayerItemProtocol.rxDidReachEnd`.
+     */
+    case didReachEnd
+    /**
+     * Playback stalled (the player is waiting for more data).
+     * Mirrors the iOS `AudioPlayerItemProtocol.rxDidStall`.
+     */
+    case didStall
     case error(error: String
     )
 
@@ -3168,7 +3692,7 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
         case 1: return .durationChanged(seconds: try FfiConverterDouble.read(from: &buf)
         )
         
-        case 2: return .bufferedDurationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        case 2: return .loadedRangesChanged(ranges: try FfiConverterSequenceTypeFfiTimeRange.read(from: &buf)
         )
         
         case 3: return .statusChanged(status: try FfiConverterTypeFfiItemStatus.read(from: &buf)
@@ -3183,7 +3707,11 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
         case 6: return .variantApplied(variant: try FfiConverterTypeFfiVariant.read(from: &buf)
         )
         
-        case 7: return .error(error: try FfiConverterString.read(from: &buf)
+        case 7: return .didReachEnd
+        
+        case 8: return .didStall
+        
+        case 9: return .error(error: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -3199,9 +3727,9 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             FfiConverterDouble.write(seconds, into: &buf)
             
         
-        case let .bufferedDurationChanged(seconds):
+        case let .loadedRangesChanged(ranges):
             writeInt(&buf, Int32(2))
-            FfiConverterDouble.write(seconds, into: &buf)
+            FfiConverterSequenceTypeFfiTimeRange.write(ranges, into: &buf)
             
         
         case let .statusChanged(status):
@@ -3224,8 +3752,16 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             FfiConverterTypeFfiVariant.write(variant, into: &buf)
             
         
-        case let .error(error):
+        case .didReachEnd:
             writeInt(&buf, Int32(7))
+        
+        
+        case .didStall:
+            writeInt(&buf, Int32(8))
+        
+        
+        case let .error(error):
+            writeInt(&buf, Int32(9))
             FfiConverterString.write(error, into: &buf)
             
         }
@@ -3346,8 +3882,6 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     )
     case currentItemChanged(itemId: String?
     )
-    case queueItemRemoved(itemId: String
-    )
     case statusChanged(status: FfiPlayerStatus
     )
     case timeControlStatusChanged(status: FfiTimeControlStatus
@@ -3362,6 +3896,7 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     )
     case muteChanged(muted: Bool
     )
+    case itemDidPlayToEnd
     /**
      * Queue-level: the loading/playback status of an item changed.
      * `item_id` matches `AudioPlayerItem::id()`.
@@ -3413,29 +3948,28 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         case 3: return .currentItemChanged(itemId: try FfiConverterOptionString.read(from: &buf)
         )
         
-        case 4: return .queueItemRemoved(itemId: try FfiConverterString.read(from: &buf)
+        case 4: return .statusChanged(status: try FfiConverterTypeFfiPlayerStatus.read(from: &buf)
         )
         
-        case 5: return .statusChanged(status: try FfiConverterTypeFfiPlayerStatus.read(from: &buf)
+        case 5: return .timeControlStatusChanged(status: try FfiConverterTypeFfiTimeControlStatus.read(from: &buf)
         )
         
-        case 6: return .timeControlStatusChanged(status: try FfiConverterTypeFfiTimeControlStatus.read(from: &buf)
+        case 6: return .error(error: try FfiConverterString.read(from: &buf)
         )
         
-        case 7: return .error(error: try FfiConverterString.read(from: &buf)
+        case 7: return .durationChanged(seconds: try FfiConverterDouble.read(from: &buf)
         )
         
-        case 8: return .durationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        case 8: return .bufferedDurationChanged(seconds: try FfiConverterDouble.read(from: &buf)
         )
         
-        case 9: return .bufferedDurationChanged(seconds: try FfiConverterDouble.read(from: &buf)
+        case 9: return .volumeChanged(volume: try FfiConverterFloat.read(from: &buf)
         )
         
-        case 10: return .volumeChanged(volume: try FfiConverterFloat.read(from: &buf)
+        case 10: return .muteChanged(muted: try FfiConverterBool.read(from: &buf)
         )
         
-        case 11: return .muteChanged(muted: try FfiConverterBool.read(from: &buf)
-        )
+        case 11: return .itemDidPlayToEnd
         
         case 12: return .trackStatusChanged(itemId: try FfiConverterString.read(from: &buf), status: try FfiConverterTypeFfiTrackStatus.read(from: &buf)
         )
@@ -3471,45 +4005,44 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
             FfiConverterOptionString.write(itemId, into: &buf)
             
         
-        case let .queueItemRemoved(itemId):
-            writeInt(&buf, Int32(4))
-            FfiConverterString.write(itemId, into: &buf)
-            
-        
         case let .statusChanged(status):
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(4))
             FfiConverterTypeFfiPlayerStatus.write(status, into: &buf)
             
         
         case let .timeControlStatusChanged(status):
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(5))
             FfiConverterTypeFfiTimeControlStatus.write(status, into: &buf)
             
         
         case let .error(error):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(6))
             FfiConverterString.write(error, into: &buf)
             
         
         case let .durationChanged(seconds):
-            writeInt(&buf, Int32(8))
+            writeInt(&buf, Int32(7))
             FfiConverterDouble.write(seconds, into: &buf)
             
         
         case let .bufferedDurationChanged(seconds):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(8))
             FfiConverterDouble.write(seconds, into: &buf)
             
         
         case let .volumeChanged(volume):
-            writeInt(&buf, Int32(10))
+            writeInt(&buf, Int32(9))
             FfiConverterFloat.write(volume, into: &buf)
             
         
         case let .muteChanged(muted):
-            writeInt(&buf, Int32(11))
+            writeInt(&buf, Int32(10))
             FfiConverterBool.write(muted, into: &buf)
             
+        
+        case .itemDidPlayToEnd:
+            writeInt(&buf, Int32(11))
+        
         
         case let .trackStatusChanged(itemId,status):
             writeInt(&buf, Int32(12))
@@ -3710,7 +4243,8 @@ public func FfiConverterTypeFfiTimeControlStatus_lower(_ value: FfiTimeControlSt
  * FFI-friendly mirror of [`kithara_events::TrackStatus`].
  *
  * Mirrors the Queue-side track lifecycle: pending -> loading -> slow ->
- * loaded -> consumed, or `failed` on error.
+ * loaded -> consumed, or `failed` on error. `Cancelled` covers
+ * loads that were overridden by a later `select` of a different track.
  */
 
 public enum FfiTrackStatus: Equatable, Hashable {
@@ -3722,6 +4256,7 @@ public enum FfiTrackStatus: Equatable, Hashable {
     case failed(reason: String
     )
     case consumed
+    case cancelled
 
 
 
@@ -3756,6 +4291,8 @@ public struct FfiConverterTypeFfiTrackStatus: FfiConverterRustBuffer {
         
         case 6: return .consumed
         
+        case 7: return .cancelled
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -3787,6 +4324,10 @@ public struct FfiConverterTypeFfiTrackStatus: FfiConverterRustBuffer {
         
         case .consumed:
             writeInt(&buf, Int32(6))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(7))
         
         }
     }
@@ -4092,6 +4633,31 @@ fileprivate struct FfiConverterSequenceTypeFfiKeyRule: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiTimeRange: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiTimeRange]
+
+    public static func write(_ value: [FfiTimeRange], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiTimeRange.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTimeRange] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiTimeRange]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiTimeRange.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiVariant: FfiConverterRustBuffer {
     typealias SwiftType = [FfiVariant]
 
@@ -4167,10 +4733,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_fficipher_decrypt() != 15435) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 34424) {
+    if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 12570) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_id() != 43480) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_audio_id() != 52670) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_duration_sec() != 42988) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_is_live_stream() != 45724) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_is_playable() != 59998) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_load() != 277) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_preferred_peak_bitrate() != 37617) {
@@ -4185,7 +4763,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 17628) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 29170) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_uuid_i64() != 52887) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 5291) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_itemloadcallback_on_complete() != 62615) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_itemobserver_on_event() != 60649) {
@@ -4197,10 +4781,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_seekcallback_on_complete() != 9600) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 2533) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_duration() != 59535) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_default_rate() != 41174) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_current_item() != 41809) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_current_time() != 45129) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_band_count() != 24870) {
@@ -4227,6 +4817,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_play() != 63857) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_playing_rate() != 60089) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_rate() != 10476) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4242,7 +4835,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 7094) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 47471) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 38083) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_select_item() != 40175) {
@@ -4254,9 +4847,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_duration() != 49969) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_default_rate() != 11885) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 38702) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4266,16 +4856,34 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_observer() != 3831) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 13703) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 4642) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 21961) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 50801) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 7528) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 55991) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_stop() != 53300) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_update_peak_bitrate() != 29574) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 50555) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 63309) {
+    if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 53441) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 34872) {
@@ -4286,6 +4894,7 @@ private let initializationResult: InitializationResult = {
     }
 
     uniffiCallbackInitFfiKeyProcessor()
+    uniffiCallbackInitItemLoadCallback()
     uniffiCallbackInitItemObserver()
     uniffiCallbackInitPlayerObserver()
     uniffiCallbackInitSeekCallback()

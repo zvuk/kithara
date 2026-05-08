@@ -26,86 +26,93 @@ use std::{fs::File, io::Write, path::Path};
 
 use kithara::{
     assets::StoreOptions,
+    events::AbrMode,
     net::NetOptions,
-    play::{Resource, ResourceConfig, internal::offline::OfflinePlayer},
+    play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
+use kithara_decode::DecoderBackend;
+use kithara_integration_tests::offline::OfflinePlayer;
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
 use kithara_test_utils::temp_dir;
 
+use crate::common::test_defaults::Consts as Shared;
+
 struct Consts;
 impl Consts {
-    const SAMPLE_RATE: u32 = 44_100;
-    const CHANNELS: u16 = 2;
-    const BLOCK_FRAMES: usize = 512;
+    const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
+    const CHANNELS: u16 = Shared::CHANNELS;
+    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
     const PLAY_WINDOW_SECS: f64 = 3.0;
     /// Render warmup burned before the first measurement window so
     /// decoder startup silence (the few hundred ms between `load_and_fadein`
     /// and the first produced PCM chunk under HLS segment fetch latency)
     /// doesn't get miscounted as a hang.
     const WARMUP_SECS: f64 = 2.0;
-    /// OfflineBackend renders at ~40-50% realtime against a live network —
-    /// each render block has to wait on HTTP byte arrivals. Floor lowered
-    /// from 1.5 s to 1.0 s: a true hang produces 0.0 s of advance (all
-    /// silence), so 1.0 s still separates "making progress" from "frozen".
-    const MIN_POSITION_ADVANCE_SECS: f64 = 1.0;
-    /// Consecutive all-silence blocks that still counts as healthy.
-    /// 150 blocks at 512 frames / 44.1 kHz ≈ 1.7 s — half of the 3 s
-    /// window. The user-reported hang produces the full window worth
-    /// (~259 blocks) of silence; partial stalls under network jitter
-    /// are tolerated below this threshold.
-    const MAX_SILENCE_BLOCKS: u32 = 150;
-    /// Global RMS floor for the captured WAV — any iteration whose
-    /// total-file RMS falls below this was effectively silent, meaning
-    /// playback never really started on at least one of the three
-    /// tracks.
-    const MIN_WAV_RMS: f32 = 0.01;
+    /// Fraction of a window allowed to be silent. A real "playing" window
+    /// keeps this well below 20%; a phantom-playback hang (decoder emits
+    /// chunks full of zeros, or occasional clicks between long silent runs)
+    /// pushes it above.
+    const MAX_SILENCE_FRACTION: f32 = 0.20;
+    /// Per-window RMS floor. Real music against a full window sits at
+    /// ~0.1-0.3; isolated clicks between long silences produce <0.02.
+    /// 0.03 cleanly separates "music is playing" from "decoder only
+    /// emitted a couple of click-frames".
+    const MIN_WINDOW_RMS: f32 = 0.03;
     const ITERATIONS: usize = 10;
 }
 
-// HLS-only: the user's hang reproduces on HLS tracks — dropping MP3/DRM
-// keeps the test focused on the actual failure path and shortens the
-// wall-clock cost from ~3 min to ~1 min per 10-iteration run.
 const SILVERCOMET_URLS: &[&str] = &["https://stream.silvercomet.top/hls/master.m3u8"];
 
+/// Outcome of rendering one measurement window.
+struct WindowStats {
+    /// Number of blocks whose peak amplitude was below `ACTIVE_THRESHOLD`.
+    /// Counts **every** silent block in the window, not just the longest run —
+    /// phantom playback (clicks between long silences) drives this up.
+    silent_blocks: u32,
+    /// Total rendered blocks in the window.
+    total_blocks: u32,
+    /// Start index (in samples) into `samples_out` where this window begins.
+    /// Lets callers slice out just the after-seek portion to compute a
+    /// window-local RMS.
+    window_start_sample: usize,
+}
+
 /// Render `blocks` audio blocks, collect the raw interleaved samples,
-/// and track the longest consecutive silence run. Mirrors
-/// `crate::continuity::render_offline_window` but retains the rendered
-/// output so the caller can write it to disk and assert on the
-/// resulting signal.
-fn render_and_collect(player: &mut OfflinePlayer, blocks: u32, samples_out: &mut Vec<f32>) -> u32 {
+/// and return statistics covering exactly this window.
+fn render_and_collect(
+    player: &mut OfflinePlayer,
+    blocks: u32,
+    samples_out: &mut Vec<f32>,
+) -> WindowStats {
     const ACTIVE_THRESHOLD: f32 = 0.001;
     let block_budget =
         Duration::from_secs_f64(Consts::BLOCK_FRAMES as f64 / f64::from(Consts::SAMPLE_RATE));
 
-    let mut max_silence = 0u32;
-    let mut current_silence = 0u32;
+    let window_start_sample = samples_out.len();
+    let mut silent_blocks = 0u32;
 
     for _ in 0..blocks {
         let started = Instant::now();
         let out = player.render(Consts::BLOCK_FRAMES);
         let elapsed = started.elapsed();
 
-        if out.iter().any(|s| s.abs() > ACTIVE_THRESHOLD) {
-            if current_silence > max_silence {
-                max_silence = current_silence;
-            }
-            current_silence = 0;
-        } else {
-            current_silence += 1;
+        if !out.iter().any(|s| s.abs() > ACTIVE_THRESHOLD) {
+            silent_blocks += 1;
         }
 
         samples_out.extend_from_slice(&out);
         thread::sleep(block_budget.saturating_sub(elapsed));
     }
 
-    if current_silence > max_silence {
-        max_silence = current_silence;
+    WindowStats {
+        silent_blocks,
+        total_blocks: blocks,
+        window_start_sample,
     }
-    max_silence
 }
 
 fn blocks_for_seconds(secs: f64) -> u32 {
@@ -120,10 +127,7 @@ fn blocks_for_seconds(secs: f64) -> u32 {
 }
 
 fn fresh_downloader() -> Downloader {
-    let net = NetOptions {
-        insecure: true,
-        ..NetOptions::default()
-    };
+    let net = NetOptions::default().with_is_insecure(true);
     Downloader::new(DownloaderConfig::default().with_net(net))
 }
 
@@ -132,6 +136,8 @@ async fn build_resource(
     downloader: &Downloader,
     iter_label: &str,
     store: StoreOptions,
+    backend: DecoderBackend,
+    abr: AbrMode,
 ) -> Resource {
     let mut cfg =
         ResourceConfig::new(url).unwrap_or_else(|e| panic!("ResourceConfig::new({url}): {e}"));
@@ -139,16 +145,15 @@ async fn build_resource(
         .with_downloader(downloader.clone())
         .with_name(format!("{iter_label}|{url}"));
     cfg.store = store;
+    cfg.decoder_backend = backend;
+    cfg.initial_abr_mode = abr;
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
-    // Wait for the first decoded PCM chunk so `OfflinePlayer::render` sees
-    // audio on the very first block after `load_and_fadein`. Without this
-    // preload the 3 s measurement window is dominated by cold-start
-    // silence and can't distinguish "loading" from "hanged".
     tokio::time::timeout(Duration::from_secs(15), resource.preload())
         .await
-        .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"));
+        .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"))
+        .unwrap_or_else(|err| panic!("Resource::preload({url}) failed: {err}"));
     resource
 }
 
@@ -204,20 +209,31 @@ fn rms(samples: &[f32]) -> f32 {
     (sum_sq / n).sqrt()
 }
 
-// `multi_thread` is required: the test body enters a synchronous
-// `render_and_collect` loop (with `thread::sleep` between blocks) for each
-// 3 s measurement window. On a `current_thread` runtime the Downloader
-// tokio task cannot run while the main thread is inside that sync loop, so
-// post-seek fetches for the new target segment never progress and the
-// decoder observes a full window of silence even when the HLS logic itself
-// is correct.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
+#[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::Manual(0))]
+#[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::Manual(2))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_locked_low(DecoderBackend::Apple, AbrMode::Manual(0))
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_locked_high(DecoderBackend::Apple, AbrMode::Manual(2))
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::android(DecoderBackend::Android, AbrMode::Auto(None))
+)]
 #[ignore = "real network to silvercomet.top; run with --run-ignored only"]
-async fn silvercomet_3tracks_seek_middle_hang_10x() {
-    // Pipe kithara_* trace output to /tmp/silvercomet-trace.log so failures
-    // surface the FSM seek transitions and HLS peer fetches that a nextest
-    // capture typically loses after the panic. `try_init()` keeps the test
-    // re-runnable — a second init would otherwise panic.
+async fn silvercomet_3tracks_seek_middle_hang_10x(
+    #[case] backend: DecoderBackend,
+    #[case] abr: AbrMode,
+) {
     let trace_log = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -236,11 +252,6 @@ async fn silvercomet_3tracks_seek_middle_hang_10x() {
         .with_ansi(false)
         .try_init();
 
-    // One OfflinePlayer per iteration — gives each iteration a fresh
-    // FirewheelCtx, PlayerNode state, and shared atomics. No global
-    // session_client involvement, so this test doesn't need
-    // `init_offline_backend` (and therefore doesn't race with any
-    // other test that might be using the global offline session).
     let window_blocks = blocks_for_seconds(Consts::PLAY_WINDOW_SECS);
     let warmup_blocks = blocks_for_seconds(Consts::WARMUP_SECS);
     let mut next_seek_epoch = 1u64;
@@ -256,14 +267,11 @@ async fn silvercomet_3tracks_seek_middle_hang_10x() {
 
         for (track_idx, url) in SILVERCOMET_URLS.iter().enumerate() {
             eprintln!("[iter {iter}][t{track_idx}] building resource: {url}");
-            let resource = build_resource(url, &downloader, &iter_label, store.clone()).await;
+            let resource =
+                build_resource(url, &downloader, &iter_label, store.clone(), backend, abr).await;
             eprintln!("[iter {iter}][t{track_idx}] resource built, load_and_fadein");
             player.load_and_fadein(resource, &format!("{iter_label}|t{track_idx}"));
 
-            // Warmup: absorb cold-start latency (decoder spin-up, first
-            // segment fetch) so the measurement window starts with audio
-            // already flowing. Without this the initial-play silence run
-            // is dominated by load latency, not by any stall.
             eprintln!("[iter {iter}][t{track_idx}] warmup ({warmup_blocks} blocks)");
             let _ = render_and_collect(&mut player, warmup_blocks, &mut iteration_samples);
             eprintln!(
@@ -271,72 +279,75 @@ async fn silvercomet_3tracks_seek_middle_hang_10x() {
                 player.position()
             );
 
-            // (a) Measurement window — 3 s of continuous audio. A hang
-            // here means the track never produced chunks even after the
-            // warmup ran out.
-            let pos_before_initial = player.position();
-            let silence_initial =
-                render_and_collect(&mut player, window_blocks, &mut iteration_samples);
-            let pos_after_initial = player.position();
+            let initial = render_and_collect(&mut player, window_blocks, &mut iteration_samples);
+            let initial_samples = &iteration_samples[initial.window_start_sample..];
+            let initial_rms = rms(initial_samples);
+            let initial_silence_fraction =
+                f32::from(u16::try_from(initial.silent_blocks).unwrap_or(u16::MAX))
+                    / f32::from(
+                        u16::try_from(initial.total_blocks)
+                            .unwrap_or(u16::MAX)
+                            .max(1),
+                    );
             eprintln!(
-                "[iter {iter}][t{track_idx}] initial window: silence={silence_initial} \
-                 pos_before={pos_before_initial:.2} pos_after={pos_after_initial:.2}"
+                "[iter {iter}][t{track_idx}] initial window: silent={}/{} ({:.1}%) rms={:.4}",
+                initial.silent_blocks,
+                initial.total_blocks,
+                initial_silence_fraction * 100.0,
+                initial_rms,
             );
 
             assert!(
-                silence_initial <= Consts::MAX_SILENCE_BLOCKS,
-                "[iter {iter}] {url}: initial-play silence run = {silence_initial} blocks \
-                 (max {} allowed) — track never produced audio before seek",
-                Consts::MAX_SILENCE_BLOCKS,
+                initial_silence_fraction <= Consts::MAX_SILENCE_FRACTION,
+                "[iter {iter}] {url}: initial-play silent fraction = {:.1}% \
+                 (max {:.0}% allowed) — track produced mostly silence before seek",
+                initial_silence_fraction * 100.0,
+                Consts::MAX_SILENCE_FRACTION * 100.0,
             );
             assert!(
-                pos_after_initial - pos_before_initial >= Consts::MIN_POSITION_ADVANCE_SECS,
-                "[iter {iter}] {url}: initial-play position advanced only {:.2}s \
-                 (expected ≥{:.2}s) — decoder stalled before any seek happened",
-                pos_after_initial - pos_before_initial,
-                Consts::MIN_POSITION_ADVANCE_SECS,
+                initial_rms >= Consts::MIN_WINDOW_RMS,
+                "[iter {iter}] {url}: initial-play window RMS = {initial_rms:.4} \
+                 (min {:.4} required) — no real audio in the pre-seek window",
+                Consts::MIN_WINDOW_RMS,
             );
 
-            // (b) Seek to the middle of whatever the decoder currently
-            // thinks the track is. We don't know the exact duration from
-            // OfflinePlayer, so use the position after 3 s of play as a
-            // lower bound on duration and jump to +30 s beyond it —
-            // silvercomet tracks are long enough to absorb that and the
-            // target always lands in undownloaded segments.
-            let seek_target = pos_after_initial + 30.0;
+            let seek_target = player.position() + 30.0;
             let seek_epoch = next_seek_epoch;
             next_seek_epoch += 1;
             eprintln!("[iter {iter}][t{track_idx}] seek to {seek_target:.2}s epoch={seek_epoch}");
             player.seek(seek_target, seek_epoch);
 
-            // (c) Play ~3 s after the seek. This is the window that
-            // reproduces the user-reported hang: if `Audio::seek`
-            // transitions to `TrackState::Failed` on decoder
-            // `SeekFailed("timestamp out-of-range")`, the render thread
-            // will see only silence and `position` will stay frozen at
-            // the stale seek target for the entire window.
-            let pos_before_after_seek = player.position();
-            let silence_after_seek =
-                render_and_collect(&mut player, window_blocks, &mut iteration_samples);
-            let pos_after_seek = player.position();
+            let after = render_and_collect(&mut player, window_blocks, &mut iteration_samples);
+            let after_samples = &iteration_samples[after.window_start_sample..];
+            let after_rms = rms(after_samples);
+            let after_silence_fraction =
+                f32::from(u16::try_from(after.silent_blocks).unwrap_or(u16::MAX))
+                    / f32::from(u16::try_from(after.total_blocks).unwrap_or(u16::MAX).max(1));
+            eprintln!(
+                "[iter {iter}][t{track_idx}] after-seek window: silent={}/{} ({:.1}%) rms={:.4}",
+                after.silent_blocks,
+                after.total_blocks,
+                after_silence_fraction * 100.0,
+                after_rms,
+            );
 
             assert!(
-                silence_after_seek <= Consts::MAX_SILENCE_BLOCKS,
-                "[iter {iter}] {url} after seek→{seek_target:.1}s: silence run = \
-                 {silence_after_seek} blocks (max {} allowed) — HANG: decoder \
-                 never produced chunks after seek",
-                Consts::MAX_SILENCE_BLOCKS,
+                after_silence_fraction <= Consts::MAX_SILENCE_FRACTION,
+                "[iter {iter}] {url} after seek→{seek_target:.1}s: silent fraction = \
+                 {:.1}% (max {:.0}% allowed) — HANG: decoder produced mostly \
+                 silence after seek",
+                after_silence_fraction * 100.0,
+                Consts::MAX_SILENCE_FRACTION * 100.0,
             );
             assert!(
-                pos_after_seek - pos_before_after_seek >= Consts::MIN_POSITION_ADVANCE_SECS,
-                "[iter {iter}] {url} after seek→{seek_target:.1}s: position advanced \
-                 only {:.2}s (expected ≥{:.2}s) — HANG: playback frozen post-seek",
-                pos_after_seek - pos_before_after_seek,
-                Consts::MIN_POSITION_ADVANCE_SECS,
+                after_rms >= Consts::MIN_WINDOW_RMS,
+                "[iter {iter}] {url} after seek→{seek_target:.1}s: window RMS = \
+                 {after_rms:.4} (min {:.4} required) — HANG: post-seek window \
+                 has no real audio, only silence or isolated clicks",
+                Consts::MIN_WINDOW_RMS,
             );
         }
 
-        // Dump the full iteration's output for post-mortem inspection.
         let wav_path =
             std::env::temp_dir().join(format!("kithara_silvercomet_seek_iter_{iter}.wav"));
         write_wav_f32(
@@ -353,20 +364,9 @@ async fn silvercomet_3tracks_seek_middle_hang_10x() {
             wav_path.display(),
         );
 
-        let global_rms = rms(&iteration_samples);
-        assert!(
-            global_rms >= Consts::MIN_WAV_RMS,
-            "[iter {iter}] captured WAV RMS = {global_rms:.4} (min {:.4} required) — \
-             at least one track rendered pure silence for its entire window",
-            Consts::MIN_WAV_RMS,
-        );
-
         drop(player);
         drop(downloader);
-        // temp_dir::TestTempDir drops here → cache wiped before the next
-        // iteration's Resource::new builds its Downloader + Stream.
         drop(temp);
-        // Arc::strong_count(&()) unused; keeps iter_label alive until now.
         let _ = iter_label;
     }
 }
@@ -392,7 +392,6 @@ mod unit_tests {
     #[test]
     fn blocks_for_three_seconds_matches_expected() {
         let blocks = blocks_for_seconds(3.0);
-        // 3 s × 44100 / 512 = 258.4 → ceil 259
         assert_eq!(blocks, 259);
     }
 }

@@ -68,10 +68,10 @@ fn xing_partial_probe_reports_full_duration() {
     let partial = partial_slice(full);
 
     let full_decoder =
-        DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), decoder_config())
+        DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), &decoder_config())
             .expect("full mp3 decoder");
     let partial_decoder =
-        DecoderFactory::create_with_probe(Cursor::new(partial), Some("mp3"), decoder_config())
+        DecoderFactory::create_with_probe(Cursor::new(partial), Some("mp3"), &decoder_config())
             .expect("partial mp3 decoder");
 
     assert_eq!(
@@ -95,13 +95,10 @@ fn partial_decoder_seek_past_available_bytes_errors() {
     let partial = partial_slice(full);
 
     let mut decoder =
-        DecoderFactory::create_with_probe(Cursor::new(partial), Some("mp3"), decoder_config())
+        DecoderFactory::create_with_probe(Cursor::new(partial), Some("mp3"), &decoder_config())
             .expect("partial mp3 decoder");
     let duration = decoder.duration().expect("duration known");
 
-    // Target 80 % into the true track — comfortably inside the duration
-    // Symphonia reports, but well past the 6 % of bytes the decoder can
-    // actually read.
     let target_nanos = duration.as_nanos() * u128::from(Consts::TARGET_FRACTION_NUM)
         / u128::from(Consts::TARGET_FRACTION_DEN);
     let target = Duration::from_nanos(u64::try_from(target_nanos).expect("fits u64"));
@@ -127,7 +124,7 @@ fn full_decoder_seeks_to_same_target_without_error() {
     let full = track_mp3();
 
     let mut decoder =
-        DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), decoder_config())
+        DecoderFactory::create_with_probe(Cursor::new(full), Some("mp3"), &decoder_config())
             .expect("full mp3 decoder");
     let duration = decoder.duration().expect("duration known");
 

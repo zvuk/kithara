@@ -1,7 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara_decode::PcmSpec;
-use kithara_play::{PlayerConfig, Resource, internal::offline::resource_from_reader};
+use kithara_integration_tests::offline::resource_from_reader;
+use kithara_play::{PlayerConfig, Resource};
 use kithara_test_utils::kithara;
 
 use super::offline_player_harness::OfflinePlayerHarness;
@@ -20,7 +21,7 @@ fn mock_spec() -> PcmSpec {
 }
 
 fn make_resource(duration_secs: f64) -> Resource {
-    resource_from_reader(kithara_audio::mock::TestPcmReader::new(
+    resource_from_reader(kithara_integration_tests::audio_mock::TestPcmReader::new(
         mock_spec(),
         duration_secs,
     ))

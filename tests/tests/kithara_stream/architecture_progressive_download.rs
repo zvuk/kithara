@@ -48,8 +48,6 @@ fn test_progressive_download_contract_topics(#[case] topic: &str) {
     assert!(!topic.is_empty());
 }
 
-// PROBLEM 1: Resource State Ambiguity
-
 /// Current `ResourceExt` API cannot distinguish:
 /// - Partial uncommitted: 512KB downloaded, 1MB expected, still writing
 /// - Complete committed: 512KB total, fully written, committed
@@ -76,24 +74,7 @@ fn test_progressive_download_contract_topics(#[case] topic: &str) {
 /// - Reopen partial files and know expected total
 /// - Decide whether to commit or continue
 #[kithara::test]
-fn test_resource_status_should_expose_partial_state() {
-    // This test documents the DESIRED API, not current implementation
-
-    // Scenario: HTTP returns Content-Length: 1MB, stream closes at 512KB
-    // Resource should report:
-    // status() -> Active { downloaded: 512KB, expected: Some(1MB) }
-
-    // Current API only has:
-    // status() -> Active (no details)
-    // len() -> None (not committed yet)
-
-    // Problem: No way to know:
-    // - How much is downloaded
-    // - How much is expected
-    // - Whether download is stuck or still progressing
-}
-
-// PROBLEM 2: Writer::Completed Should NOT Imply Commit
+fn test_resource_status_should_expose_partial_state() {}
 
 /// Current `WriterItem::Completed` documentation says:
 /// "Download completed, resource committed."
@@ -126,20 +107,7 @@ fn test_resource_status_should_expose_partial_state() {
 /// }
 /// ```
 #[kithara::test]
-fn test_writer_completed_vs_committed_semantics() {
-    // Scenario: HTTP stream closes at 512KB, Content-Length was 1MB
-
-    // Current behavior:
-    // Writer yields Completed { total_bytes: 512KB }
-    // (Who calls commit? When?)
-
-    // Desired behavior:
-    // Writer yields StreamEnded { total_bytes: 512KB }
-    // FileDownloader checks: 512KB < 1MB → don't commit
-    // Resource stays Active { downloaded: 512KB, expected: 1MB }
-}
-
-// PROBLEM 3: Downloader Lifecycle - Sequential vs On-Demand
+fn test_writer_completed_vs_committed_semantics() {}
 
 /// Current Downloader trait:
 ///
@@ -185,21 +153,7 @@ fn test_writer_completed_vs_committed_semantics() {
 /// }
 /// ```
 #[kithara::test]
-fn test_downloader_should_support_on_demand_mode() {
-    // Scenario:
-    // 1. Sequential download: 0-512KB
-    // 2. Stream ends (512KB < 1MB)
-    // 3. User seeks to 700KB
-    // 4. Source detects range not available
-    // 5. Source requests Range: bytes=700000-
-    // 6. Downloader (still running) fetches Range
-    // 7. Reader proceeds
-
-    // Current: Downloader exits after sequential ends
-    // Desired: Downloader continues, waits for on-demand requests
-}
-
-// PROBLEM 4: Source::len() Semantics
+fn test_downloader_should_support_on_demand_mode() {}
 
 /// Current `Source::len()` returns:
 /// ```ignore
@@ -224,21 +178,7 @@ fn test_downloader_should_support_on_demand_mode() {
 /// For partial: `Source::len()` = `Some(1MB)` even though only 512KB downloaded.
 /// Decoder sees correct duration, seeks work correctly.
 #[kithara::test]
-fn test_source_len_should_return_expected_total() {
-    // Scenario: 512KB downloaded, 1MB expected
-
-    // Current:
-    // resource.len() = None (not committed)
-    // source.len() = None
-    // Decoder thinks file has no size → duration calculation fails
-
-    // Desired:
-    // resource.status() = Active { downloaded: 512KB, expected: 1MB }
-    // source.len() = Some(1MB)
-    // Decoder sees 1MB → calculates correct duration → seeks work
-}
-
-// PROBLEM 5: wait_range() For Partial Uncommitted
+fn test_source_len_should_return_expected_total() {}
 
 /// Current `wait_range()` for partial uncommitted:
 /// ```ignore
@@ -264,16 +204,7 @@ fn test_source_len_should_return_expected_total() {
 /// Or: `wait_range()` should NOT be called for ranges beyond downloaded.
 /// Instead, Source checks and requests on-demand before waiting.
 #[kithara::test]
-fn test_wait_range_should_not_deadlock_on_partial() {
-    // Scenario:
-    // 1. Resource: downloaded=512KB, expected=1MB
-    // 2. Reader seeks to 700KB
-    // 3. wait_range(700KB..710KB)
-    // 4. Current: blocks forever (sequential downloader exited)
-    // 5. Desired: returns NeedsFetch OR Source handles this before calling wait_range
-}
-
-// PROBLEM 6: On-Demand Request Mechanism
+fn test_wait_range_should_not_deadlock_on_partial() {}
 
 /// How should Source signal Downloader to fetch a range?
 ///
@@ -308,21 +239,7 @@ fn test_wait_range_should_not_deadlock_on_partial() {
 ///
 /// Better: Option A with trait method? Or accept `SharedState` as normal pattern?
 #[kithara::test]
-fn test_on_demand_request_should_be_explicit() {
-    // Scenario: Source needs range [700KB..710KB]
-
-    // Current: Source directly manipulates SharedState
-    // Pro: Works, proven in stash
-    // Con: Couples Source to specific Downloader implementation
-
-    // Alternative: Source::request_range() trait method
-    // Pro: Clean interface
-    // Con: How does Downloader receive the request? Still needs SharedState?
-
-    // Decision needed: Is SharedState pattern acceptable for trait contract?
-}
-
-// PROBLEM 7: Resuming Partial Downloads After Restart
+fn test_on_demand_request_should_be_explicit() {}
 
 /// Scenario:
 /// 1. App downloads 512KB of 1MB file
@@ -370,23 +287,7 @@ fn test_on_demand_request_should_be_explicit() {
 /// - On commit (complete): `remove(rel_path)` — committed files are complete
 /// - On reopen: `load()` → know `expected_total` for partial
 #[kithara::test]
-fn test_partial_download_resume_needs_download_index() {
-    // Scenario: App crash at 512KB of 1MB
-
-    // Current:
-    // - File exists with 512KB
-    // - Reopen: treats as committed with len=512KB
-    // - Lost information about expected 1MB
-
-    // Desired:
-    // - DownloadIndex tracks partial downloads (like PinsIndex/LruIndex)
-    // - bincode format, StorageResource, same pattern
-    // - Reopen: check DownloadIndex → know expected=1MB
-    // - Resume via Range: bytes=512000-
-    // - On commit: remove entry from DownloadIndex
-}
-
-// PROBLEM 8: HLS Segment Duration Tracking
+fn test_partial_download_resume_needs_download_index() {}
 
 /// HLS-specific problem: Time-based seek requires knowing segment durations.
 ///
@@ -426,22 +327,7 @@ fn test_partial_download_resume_needs_download_index() {
 /// }
 /// ```
 #[kithara::test]
-fn test_hls_time_seek_needs_duration_tracking() {
-    // Scenario: 10 segments, each 4 seconds
-    // User seeks to 36 seconds (segment 9)
-
-    // Current:
-    // - SegmentEntry has no duration
-    // - Can't map 36s → segment 9
-    // - Seek fails or lands in wrong segment
-
-    // Desired:
-    // - Parse #EXTINF durations
-    // - Calculate cumulative timestamps
-    // - find_segment_by_time(36s) returns segment 9
-}
-
-// PROBLEM 9: HLS ABR Variant Switch Invalidates Byte Offsets
+fn test_hls_time_seek_needs_duration_tracking() {}
 
 /// Problem: After ABR switches variants, byte offsets change.
 ///
@@ -471,23 +357,7 @@ fn test_hls_time_seek_needs_duration_tracking() {
 /// Decoder sees: segment N always at bytes N*1MB..(N+1)*1MB regardless of variant.
 /// HLS maps: virtual byte → segment index → load segment → read from `StorageResource`.
 #[kithara::test]
-fn test_hls_abr_switch_needs_virtual_byte_space() {
-    // Scenario: 3 segments variant 0, switch to variant 3, seek back
-
-    // Current:
-    // - byte_range calculated cumulatively from actual segment sizes
-    // - After variant switch, offsets become nonsensical
-    // - Seek fails: "out of range" or reads wrong data
-
-    // Desired:
-    // - Virtual byte space: segment N = bytes N*1MB..(N+1)*1MB
-    // - ABR switch doesn't change virtual offsets
-    // - Decoder seeks work correctly
-}
-
-// SUMMARY: Architectural Changes Needed
-
-// PROBLEM 10: HLS Partial Segment Committed As Complete
+fn test_hls_abr_switch_needs_virtual_byte_space() {}
 
 /// HLS uses Writer per segment (`FetchManager.start_fetch()`).
 /// Same auto-commit bug as File, but manifestation is different:
@@ -506,20 +376,7 @@ fn test_hls_abr_switch_needs_virtual_byte_space() {
 /// Fix: Same as File — Writer yields `StreamEnded`, `FetchManager` checks
 /// `total_bytes` vs expected before committing and adding to `SegmentIndex`.
 #[kithara::test]
-fn test_hls_partial_segment_should_not_be_committed() {
-    // Scenario: segment expected 200KB, network drops at 100KB
-
-    // Current:
-    // Writer auto-commits at 100KB
-    // FetchManager adds to index as complete segment
-    // Reader gets corrupt data
-
-    // Desired:
-    // Writer yields StreamEnded { total_bytes: 100KB }
-    // FetchManager checks: 100KB < expected 200KB
-    // Does NOT commit, does NOT add to SegmentIndex
-    // Retries or skips segment
-}
+fn test_hls_partial_segment_should_not_be_committed() {}
 
 /// Based on all scenarios, here are the trait changes needed:
 ///
@@ -561,7 +418,4 @@ fn test_hls_partial_segment_should_not_be_committed() {
 /// These are the contracts we need to implement.
 /// Next step: Write TDD tests at integration level that verify these contracts.
 #[kithara::test]
-fn architectural_requirements_summary() {
-    // This test exists only to document the summary above.
-    // Run `cargo test -- --nocapture` to see this documentation.
-}
+fn architectural_requirements_summary() {}

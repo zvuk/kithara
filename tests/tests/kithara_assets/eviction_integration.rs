@@ -12,7 +12,7 @@ use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     storage::ResourceExt,
 };
-use kithara_assets::{index::schema::ArchivedPinsIndexFile, internal::schema::PinsIndexFile};
+use kithara_assets::index::schema::{ArchivedPinsIndexFile, PinsIndexFile};
 use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::temp_dir;
 
@@ -52,7 +52,6 @@ fn eviction_max_assets_skips_pinned_assets(
 ) {
     let dir = temp_dir.path().to_path_buf();
 
-    // Create more assets than the limit, keep the last one pinned
     for i in 0..create_count {
         let asset_root = format!("asset-{}", i);
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(max_assets));
@@ -61,10 +60,8 @@ fn eviction_max_assets_skips_pinned_assets(
         let res = store.acquire_resource(&key).unwrap();
         res.write_all(format!("data-{}", i).as_bytes()).unwrap();
 
-        // Keep handle for the last asset to pin it
         if i == create_count - 1 {
             let res_b = res;
-            // Sanity: pins file should contain last asset while handle is alive.
             if let Ok(pins_bytes) = fs::read(dir.join("_index/pins.bin"))
                 && let Ok(archived) =
                     rkyv::access::<ArchivedPinsIndexFile, rkyv::rancor::Error>(&pins_bytes)
@@ -72,7 +69,7 @@ fn eviction_max_assets_skips_pinned_assets(
                 let pins_file: PinsIndexFile =
                     rkyv::deserialize::<PinsIndexFile, rkyv::rancor::Error>(archived).unwrap();
                 let mut is_pinned = false;
-                for (k, v) in pins_file.pinned.iter() {
+                for (k, v) in &pins_file.pinned {
                     if *v && k.as_str() == format!("asset-{}", i) {
                         is_pinned = true;
                         break;
@@ -85,7 +82,6 @@ fn eviction_max_assets_skips_pinned_assets(
                 );
             }
 
-            // Asset that should trigger eviction
             let trigger_root = format!("asset-trigger-{}", i);
             let trigger_store = asset_store_with_root(&temp_dir, &trigger_root, Some(max_assets));
             let key_trigger = ResourceKey::new("media/trigger.bin");
@@ -93,13 +89,12 @@ fn eviction_max_assets_skips_pinned_assets(
             res_trigger.write_all(b"trigger").unwrap();
 
             assert!(exists_asset_dir(&dir, &format!("asset-trigger-{}", i)));
-            assert!(exists_asset_dir(&dir, &format!("asset-{}", i))); // pinned asset should remain
+            assert!(exists_asset_dir(&dir, &format!("asset-{}", i)));
 
             drop(res_b);
         }
     }
 
-    // Count how many asset directories exist
     let mut existing_count = 0;
     for i in 0..=create_count {
         if exists_asset_dir(&dir, &format!("asset-{}", i))
@@ -109,7 +104,6 @@ fn eviction_max_assets_skips_pinned_assets(
         }
     }
 
-    // Should have at most max_assets + 1 (trigger asset) remaining
     assert!(
         existing_count <= max_assets + 1,
         "Should have at most {} + 1 assets remaining, got {}",
@@ -132,7 +126,6 @@ fn eviction_ignores_missing_index(
 ) {
     let dir = temp_dir.path().to_path_buf();
 
-    // Create assets without proper LRU tracking (simulate missing/corrupted index)
     for i in 0..asset_count {
         let asset_root = format!("asset-{}", i);
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(2));
@@ -142,13 +135,11 @@ fn eviction_ignores_missing_index(
         res.write_all(format!("data-{}", i).as_bytes()).unwrap();
     }
 
-    // Manually corrupt LRU index to simulate missing metadata
     let index_path = dir.join("_index/lru.bin");
     if index_path.exists() {
         fs::write(&index_path, b"corrupted json").unwrap();
     }
 
-    // Creating one more asset should work without crashing despite missing index
     let trigger_store = asset_store_with_root(&temp_dir, "trigger-asset", Some(2));
     let trigger_key = ResourceKey::new("data/trigger.bin");
 
@@ -165,7 +156,6 @@ fn eviction_ignores_missing_index(
 fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
     let dir = temp_dir.path().to_path_buf();
 
-    // Create assets with zero bytes
     for i in 0..3 {
         let asset_root = format!("zero-asset-{}", i);
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(2));
@@ -175,7 +165,6 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
         res.write_all(b"").unwrap();
     }
 
-    // Should have at most 2 zero-byte assets
     let mut existing_count = 0;
     for i in 0..3 {
         if exists_asset_dir(&dir, &format!("zero-asset-{}", i)) {
@@ -195,9 +184,9 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case(1, 3, 1)] // max_assets=1, create 3 assets, keep 1 newest pinned
-#[case(2, 4, 1)] // max_assets=2, create 4 assets, keep 1 newest pinned
-#[case(3, 6, 2)] // max_assets=3, create 6 assets, keep 2 newest pinned
+#[case(1, 3, 1)]
+#[case(2, 4, 1)]
+#[case(3, 6, 2)]
 fn eviction_respects_max_assets_limit(
     #[case] max_assets: usize,
     #[case] create_count: usize,
@@ -206,7 +195,6 @@ fn eviction_respects_max_assets_limit(
 ) {
     let dir = temp_dir.path().to_path_buf();
 
-    // Create more assets than the limit
     let mut pinned_handles = Vec::new();
     for i in 0..create_count {
         let asset_root = format!("asset-{}", i);
@@ -215,17 +203,13 @@ fn eviction_respects_max_assets_limit(
         let res = store.acquire_resource(&key).unwrap();
         res.write_all(b"DATA").unwrap();
 
-        // Keep handle for the newest `pinned_count` assets to pin them
-        // This simulates real usage where some assets are actively being used
         if i >= create_count - pinned_count {
             pinned_handles.push((store, res));
         }
     }
 
-    // Give eviction a moment to complete
     thread::sleep(Duration::from_millis(100));
 
-    // Count how many asset directories exist
     let mut existing_count = 0;
     for i in 0..create_count {
         if exists_asset_dir(&dir, &format!("asset-{}", i)) {
@@ -233,8 +217,6 @@ fn eviction_respects_max_assets_limit(
         }
     }
 
-    // Should have at most max_assets + pinned_count remaining
-    // Pinned assets can temporarily exceed the limit
     assert!(
         existing_count <= max_assets + pinned_count,
         "existing_count={} should be <= max_assets={} + pinned_count={} = {}",
@@ -244,7 +226,6 @@ fn eviction_respects_max_assets_limit(
         max_assets + pinned_count
     );
 
-    // Pinned (newest) assets should exist
     for i in create_count - pinned_count..create_count {
         assert!(
             exists_asset_dir(&dir, &format!("asset-{}", i)),
@@ -253,8 +234,6 @@ fn eviction_respects_max_assets_limit(
         );
     }
 
-    // Oldest non-pinned assets should be evicted first
-    // We should have at most max_assets non-pinned assets remaining
     let non_pinned_remaining = existing_count.saturating_sub(pinned_count);
     assert!(
         non_pinned_remaining <= max_assets,

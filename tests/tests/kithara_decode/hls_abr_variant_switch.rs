@@ -19,8 +19,8 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    events::{Event, EventBus, HlsEvent},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    events::{AbrEvent, Event, EventBus, HlsEvent},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist};
@@ -52,14 +52,9 @@ use tracing::info;
 async fn test_abr_variant_switch_no_byte_glitches(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Create test server with ABR-triggering configuration:
-    // - variant 0: 256 kbps
-    // - variant 1: 512 kbps
-    // - variant 2: 1024 kbps
-    // - segment0 has 2 second delay to trigger ABR switch
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
-        false, // binary mode
+        false,
         Duration::from_secs(2),
     )
     .await;
@@ -67,51 +62,30 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let url = server.url("/master.m3u8");
     info!("Test server started at: {}", url);
 
-    // Create cancellation token
     let cancel_token = CancellationToken::new();
 
-    // Create event bus for tracking variant switches
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    // Configure HLS with ABR that will trigger switch due to slow variant 0
     let config = HlsConfig::new(url.clone())
         .with_cancel(cancel_token.clone())
         .with_events(bus)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.5,
-            min_buffer_for_up_switch_secs: 1.0, // Low threshold for quick upswitch
-            mode: AbrMode::Auto(Some(0)),       // Start with variant 0
-            throughput_safety_factor: 1.2,
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     info!("Opening HLS stream with ABR enabled");
 
-    // Create HLS stream
     let mut stream = Stream::<Hls>::new(config).await?;
 
-    // Track variant switches
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let variant_switches_clone = variant_switches.clone();
 
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             match ev {
-                Event::Hls(HlsEvent::VariantApplied {
-                    from_variant,
-                    to_variant,
-                    ..
-                }) => {
-                    info!(
-                        "Variant switch detected: {} -> {}",
-                        from_variant, to_variant
-                    );
-                    variant_switches_clone
-                        .lock()
-                        .unwrap()
-                        .push((from_variant, to_variant));
+                Event::Abr(AbrEvent::VariantApplied { from, to, .. }) => {
+                    info!("Variant switch detected: {} -> {}", from, to);
+                    variant_switches_clone.lock().unwrap().push((from, to));
                 }
                 Event::Hls(HlsEvent::EndOfStream) => break,
                 _ => {}
@@ -121,16 +95,13 @@ async fn test_abr_variant_switch_no_byte_glitches(
 
     info!("Reading bytes from Stream<Hls>");
 
-    // Give ABR some time to trigger and load segments
     sleep(Duration::from_millis(100)).await;
 
-    // Read bytes in blocking thread
     let result = spawn_blocking(move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let mut all_bytes = Vec::new();
         let mut buffer = vec![0u8; 4096];
         let mut total_reads = 0;
 
-        // Read all available bytes
         loop {
             match stream.read(&mut buffer) {
                 Ok(n) if n > 0 => {
@@ -161,27 +132,20 @@ async fn test_abr_variant_switch_no_byte_glitches(
 
     info!("Read {} bytes total", result.len());
 
-    // Verify we read a reasonable amount of data (at least one full segment ~200KB)
     assert!(
         result.len() > 100_000,
         "Should have read substantial data (got {} bytes)",
         result.len()
     );
 
-    // Verify data is not all zeros (actual content was read)
     let non_zero_bytes = result.iter().filter(|&&b| b != 0).count();
     assert!(
         non_zero_bytes > result.len() / 2,
         "Should have read actual content, not zeros"
     );
 
-    // Verify that ABR switch occurred
     let switches = variant_switches.lock().unwrap();
     info!("Variant switches detected: {:?}", *switches);
-
-    // Note: ABR switch might not trigger in this test due to timing
-    // The important part is that IF switch occurs, bytes are read correctly
-    // If no switch occurs, test still validates sequential reading
 
     info!("Test passed: bytes read sequentially without gaps");
 
@@ -201,8 +165,8 @@ async fn test_basic_multi_segment_reading(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
-        false,                    // binary mode
-        Duration::from_millis(1), // no delay
+        false,
+        Duration::from_millis(1),
     )
     .await;
 
@@ -212,10 +176,7 @@ async fn test_basic_multi_segment_reading(
     let config = HlsConfig::new(url)
         .with_cancel(cancel_token.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0), // Fixed variant - no ABR
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let mut stream = Stream::<Hls>::new(config).await?;
 
@@ -237,7 +198,6 @@ async fn test_basic_multi_segment_reading(
     })
     .await??;
 
-    // Should have read all 3 segments from variant 0 (~600KB total)
     info!("Read {} bytes from variant 0", result.len());
     assert!(
         result.len() > 500_000,
@@ -271,15 +231,14 @@ async fn test_abr_variant_switch_with_seek_backward(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
-        true,                   // text mode for parsing
-        Duration::from_secs(2), // slow variant 0 segment 0 to trigger ABR
+        true,
+        Duration::from_secs(2),
     )
     .await;
 
     let url = server.url("/master.m3u8");
     let cancel_token = CancellationToken::new();
 
-    // Create event bus for tracking variant switches
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
@@ -287,61 +246,39 @@ async fn test_abr_variant_switch_with_seek_backward(
         .with_cancel(cancel_token.clone())
         .with_events(bus)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.5,
-            min_buffer_for_up_switch_secs: 1.0,
-            mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.2,
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     println!("\nCreating HLS stream with ABR");
     let mut stream = Stream::<Hls>::new(config).await?;
 
-    // Track variant switches
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let variant_switches_clone = variant_switches.clone();
 
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
-            if let Event::Hls(HlsEvent::VariantApplied {
-                from_variant,
-                to_variant,
-                ..
-            }) = ev
-            {
-                println!("Variant switch: {} -> {}", from_variant, to_variant);
-                variant_switches_clone
-                    .lock()
-                    .unwrap()
-                    .push((from_variant, to_variant));
+            if let Event::Abr(AbrEvent::VariantApplied { from, to, .. }) = ev {
+                println!("Variant switch: {} -> {}", from, to);
+                variant_switches_clone.lock().unwrap().push((from, to));
             }
         }
     });
 
-    // Give ABR time to trigger and load some segments
     sleep(Duration::from_millis(100)).await;
 
     spawn_blocking(move || -> Result<(), Box<dyn Error + Send + Sync>> {
-        // Read some bytes to trigger ABR switch
         let mut buffer = vec![0u8; 50000];
         let n1 = stream.read(&mut buffer)?;
         println!("Read {} bytes initially", n1);
 
-        // Seek back to beginning - this should trigger loading earlier segments
-        // if ABR switched to a variant that only has later segments loaded
         println!("Seeking back to offset 0");
         stream.seek(SeekFrom::Start(0))?;
 
-        // Try to read from beginning again
         let mut buffer2 = vec![0u8; 1000];
         let n2 = stream.read(&mut buffer2)?;
         println!("Read {} bytes after seek to 0", n2);
 
-        // Verify we read some data (not EOF)
         assert!(n2 > 0, "Should be able to read after seeking to beginning");
 
-        // Verify we're reading from segment 0 (should start with "V")
         let data_str = String::from_utf8_lossy(&buffer2[..n2]);
         assert!(
             data_str.starts_with("V"),
@@ -355,7 +292,6 @@ async fn test_abr_variant_switch_with_seek_backward(
     })
     .await??;
 
-    // Check if ABR switch occurred
     let switches = variant_switches.lock().unwrap();
     println!("Variant switches: {:?}", *switches);
 

@@ -10,16 +10,17 @@ use std::sync::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::abr_fast;
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
-use kithara_test_utils::{TestServerHelper, TestTempDir, abr_fast, temp_dir};
+use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use tracing::info;
 
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
@@ -40,29 +41,23 @@ async fn stress_seek_during_abr_switch_real_decoder(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,
-    abr_fast: AbrOptions,
+    _abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     info!(label, path, "Opening real stream");
 
-    // Create audio pipeline with ABR auto (start from cheapest variant)
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
     let config = AudioConfig::<Hls>::new(hls_config);
 
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");
 
-    // Subscribe to unified events for ABR switch tracking
     let mut events_rx = audio.events();
 
-    // Track ABR switches in background
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
     spawn(async move {
@@ -75,8 +70,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
         }
     });
 
-    // Phase 1: Warmup — read PCM for ~10s to let ABR switch happen
-    // Phase 2: 20s rapid seeking
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
         let start = Instant::now();
@@ -84,11 +77,12 @@ async fn stress_seek_during_abr_switch_real_decoder(
         info!("Phase 1: warmup — reading PCM samples");
         let mut warmup_samples = 0u64;
         while start.elapsed() < Duration::from_secs(2) {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                break;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => break,
+                Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("warmup decode error: {e}"),
             }
-            warmup_samples += n as u64;
         }
         info!(
             warmup_samples,
@@ -96,14 +90,12 @@ async fn stress_seek_during_abr_switch_real_decoder(
             "Warmup done"
         );
 
-        // Phase 2: 200 rapid random seeks
         info!("Phase 2: 200 rapid random seeks");
         let mut seek_count = 0u64;
         let mut samples_after_seek = 0u64;
         let mut seek_errors = 0u64;
         let mut dead_seeks = 0u64;
 
-        // Seek positions spanning the full track (0s to ~220s)
         let positions_secs: Vec<f64> = vec![
             147.0, 30.0, 200.0, 5.0, 180.0, 60.0, 210.0, 15.0, 100.0, 0.0, 170.0, 45.0, 195.0,
             80.0, 220.0, 10.0, 130.0, 25.0, 160.0, 90.0, 50.0, 110.0, 175.0, 35.0, 140.0, 70.0,
@@ -114,14 +106,19 @@ async fn stress_seek_during_abr_switch_real_decoder(
             let pos = positions_secs[i % positions_secs.len()];
             let position = Duration::from_secs_f64(pos);
             match audio.seek(position) {
-                Ok(()) => {
+                Ok(_) => {
                     seek_count += 1;
-                    // Try to read some samples after seek
-                    let n = audio.read(&mut buf);
-                    if n > 0 {
-                        samples_after_seek += n as u64;
-                    } else {
-                        dead_seeks += 1;
+                    match audio.read(&mut buf) {
+                        Ok(ReadOutcome::Frames { count, .. }) => {
+                            samples_after_seek += count.get() as u64;
+                        }
+                        Ok(_) => {
+                            dead_seeks += 1;
+                        }
+                        Err(e) => {
+                            seek_errors += 1;
+                            info!(?e, pos, "read error after seek");
+                        }
                     }
                 }
                 Err(e) => {
@@ -136,8 +133,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
             samples_after_seek, seek_errors, dead_seeks, "Stress test complete"
         );
 
-        // Assert: at least some seeks produced audio
-        // If ALL seeks produce 0 samples → audio is dead → bug confirmed
         assert!(
             samples_after_seek > 0,
             "Audio died after ABR switch: {} seeks, {} errors, {} dead (0 samples), \
@@ -147,7 +142,6 @@ async fn stress_seek_during_abr_switch_real_decoder(
             dead_seeks,
         );
 
-        // Assert: zero dead seeks — with seek_pending retry, all seeks must produce audio.
         assert_eq!(
             dead_seeks, 0,
             "Dead seeks: {dead_seeks}/{seek_count}. \
@@ -179,16 +173,13 @@ async fn seek_sequence_from_log_real_stream(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] label: &str,
-    abr_fast: AbrOptions,
+    _abr_fast: kithara_abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -196,7 +187,6 @@ async fn seek_sequence_from_log_real_stream(
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
-        // Warm up pipeline before seek sequence.
         let warmup_deadline = Instant::now() + Duration::from_secs(4);
         while Instant::now() < warmup_deadline {
             let _ = audio.read(&mut buf);
@@ -210,10 +200,15 @@ async fn seek_sequence_from_log_real_stream(
             let mut samples_after_seek = 0usize;
             let read_deadline = Instant::now() + Duration::from_secs(8);
             while Instant::now() < read_deadline && samples_after_seek < 16_384 {
-                let n = audio.read(&mut buf);
-                samples_after_seek += n;
-                if n == 0 {
-                    thread::sleep(Duration::from_millis(15));
+                match audio.read(&mut buf) {
+                    Ok(ReadOutcome::Pending { .. }) => {
+                        thread::sleep(Duration::from_millis(15));
+                    }
+                    Ok(ReadOutcome::Frames { count, .. }) => {
+                        samples_after_seek += count.get();
+                    }
+                    Ok(ReadOutcome::Eof { .. }) => break,
+                    Err(e) => panic!("post-seek read error: {e}"),
                 }
             }
 

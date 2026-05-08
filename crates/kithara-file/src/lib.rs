@@ -16,11 +16,8 @@
 mod config;
 mod coord;
 mod error;
-mod inner;
 mod session;
-
-#[cfg(feature = "internal")]
-pub mod internal;
+mod stream;
 
 pub use config::{FileConfig, FileSrc};
-pub use inner::File;
+pub use stream::File;

@@ -1,4 +1,3 @@
-// Binary needs at least one frontend — `lib-only` alone is not enough.
 #[cfg(not(any(feature = "tui", feature = "gui")))]
 compile_error!("`kithara` binary requires at least one of `tui` or `gui` feature");
 
@@ -9,6 +8,7 @@ use std::{
 
 use clap::Parser;
 use kithara::{
+    assets::{FlushHub, FlushPolicy},
     audio::generate_log_spaced_bands,
     net::NetOptions,
     play::{PlayerConfig, PlayerImpl},
@@ -22,6 +22,7 @@ use kithara_app::gui::GuiFrontend;
 use kithara_app::tui::{TuiFrontend, init_tracing as init_tui_tracing};
 use kithara_app::{config::AppConfig, frontend::Frontend};
 use kithara_queue::{Queue, QueueConfig};
+use tokio_util::sync::CancellationToken;
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -31,13 +32,13 @@ struct Args {
     #[arg(long, short, default_value = "auto")]
     mode: Mode,
 
+    /// Audio files or URLs to play.
+    tracks: Vec<String>,
+
     /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
     /// Enabled by default during testing phase.
     #[arg(long, default_value_t = true)]
     insecure: bool,
-
-    /// Audio files or URLs to play.
-    tracks: Vec<String>,
 }
 
 /// Application UI mode.
@@ -68,56 +69,55 @@ fn resolve_mode(mode: Mode) -> Mode {
     }
 }
 
-fn main() -> AppResult {
-    // Suppress noisy macOS system logs (OpenGL dlsym, WindowTab, etc.)
-    #[cfg(target_os = "macos")]
+/// Suppress noisy macOS system logs (`OpenGL` `dlsym`, `WindowTab`, etc.)
+/// at program start before any threads are spawned. No-op on other targets.
+#[cfg(target_os = "macos")]
+fn suppress_macos_system_logs() {
     // SAFETY: called at program start before any threads are spawned.
     unsafe {
         std::env::set_var("OS_ACTIVITY_MODE", "disable");
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn suppress_macos_system_logs() {}
+
+#[cfg(feature = "tui")]
+fn init_tracing_for_mode(mode: Mode) -> AppResult<()> {
+    let log_directives: &[&str] = match mode {
+        Mode::Tui => &["off"],
+        _ => &["info"],
+    };
+    init_tui_tracing(log_directives, mode == Mode::Tui)
+}
+
+#[cfg(not(feature = "tui"))]
+fn init_tracing_for_mode(_mode: Mode) -> AppResult<()> {
+    gui::init_tracing()
+}
+
+fn main() -> AppResult {
+    suppress_macos_system_logs();
 
     let args = Args::parse();
     let mode = resolve_mode(args.mode);
 
-    // One Downloader for the whole app — shared HTTP pool and
-    // ambient-runtime aware, so every track created through
-    // `sources::build_source` reuses it. TLS posture goes through
-    // `NetOptions` on the Downloader; `ResourceConfig` has no `net`.
-    let net = NetOptions {
-        insecure: args.insecure,
-        ..NetOptions::default()
-    };
+    let mut net = NetOptions::default();
+    net.is_insecure = args.insecure;
     let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
-    let config = AppConfig::new(downloader)
+    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default()); // kithara:cancel:owner
+    let config = AppConfig::new(downloader, flush_hub)
         .with_tracks(args.tracks)
-        .with_danger_accept_invalid_certs(args.insecure);
+        .with_should_accept_invalid_certs(args.insecure);
 
-    // Initialize tracing based on mode.
-    #[cfg(feature = "tui")]
-    {
-        let log_directives: &[&str] = match mode {
-            Mode::Tui => &["off"],
-            _ => &["info"],
-        };
-        init_tui_tracing(log_directives, mode == Mode::Tui)?;
-    }
-    #[cfg(not(feature = "tui"))]
-    {
-        // GUI-only: simple tracing init without CRLF writer.
-        gui::init_tracing()?;
-    }
+    init_tracing_for_mode(mode)?;
 
     let player_config = PlayerConfig::default()
         .with_crossfade_duration(config.crossfade_seconds)
         .with_eq_layout(generate_log_spaced_bands(config.eq_band_count));
     let player = Arc::new(PlayerImpl::new(player_config));
-    let queue_config = QueueConfig::default()
-        .with_player(player)
-        .with_autoplay(true);
+    let queue_config = QueueConfig::default().with_player(player);
 
-    // Queue is constructed here, but `queue.set_tracks` is deferred to each
-    // frontend's runtime context — `Loader::spawn_load` requires a running
-    // tokio runtime.
     let queue = Arc::new(Queue::new(queue_config));
 
     match mode {

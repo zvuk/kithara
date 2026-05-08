@@ -9,9 +9,11 @@ use bytes::Bytes;
 use futures::Stream;
 use kithara_platform::{MaybeSend, MaybeSync};
 use tokio_util::sync::CancellationToken;
-#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
-use unimock::unimock;
 use url::Url;
+
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
 
 use crate::{
     error::NetError,
@@ -50,19 +52,19 @@ impl ByteStream {
         Self { headers, inner }
     }
 
-    /// Create a `ByteStream` with empty headers (for tests or non-HTTP sources).
-    #[must_use]
-    pub fn without_headers(inner: RawByteStream) -> Self {
-        Self {
-            headers: Headers::new(),
-            inner,
-        }
-    }
-
     /// Consume the wrapper, returning just the raw byte stream.
     #[must_use]
     pub fn into_inner(self) -> RawByteStream {
         self.inner
+    }
+
+    /// Create a `ByteStream` with empty headers (for tests or non-HTTP sources).
+    #[must_use]
+    pub fn without_headers(inner: RawByteStream) -> Self {
+        Self {
+            inner,
+            headers: Headers::new(),
+        }
     }
 }
 
@@ -70,8 +72,6 @@ impl Stream for ByteStream {
     type Item = Result<Bytes, NetError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // ByteStream is Unpin (Headers is Unpin, Pin<Box<_>> is Unpin),
-        // so we can safely access fields through get_mut().
         self.get_mut().inner.as_mut().poll_next(cx)
     }
 }
@@ -81,18 +81,12 @@ impl Stream for ByteStream {
 /// Single definition for both native and wasm32 targets.
 /// On native: `MaybeSend` = `Send`, `MaybeSync` = `Sync`, futures are `Send`.
 /// On wasm32: `MaybeSend`/`MaybeSync` are blanket-implemented (no-op), futures are `!Send`.
-#[cfg_attr(
-    all(not(target_arch = "wasm32"), any(test, feature = "test-utils")),
-    unimock(api = NetMock)
-)]
+#[cfg_attr(not(target_arch = "wasm32"), kithara::mock(api = NetMock))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait Net: MaybeSend + MaybeSync {
     /// Get all bytes from a URL
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError>;
-
-    /// Stream bytes from a URL
-    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError>;
 
     /// Get a range of bytes from a URL
     async fn get_range(
@@ -107,14 +101,12 @@ pub trait Net: MaybeSend + MaybeSync {
     /// This is intended for lightweight metadata probes (e.g. `Content-Length`,
     /// `Accept-Ranges`, `Content-Type`). Implementations should return response headers.
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError>;
+
+    /// Stream bytes from a URL
+    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError>;
 }
 
 pub trait NetExt: Net + Sized {
-    /// Add timeout layer
-    fn with_timeout(self, timeout: Duration) -> TimeoutNet<Self> {
-        TimeoutNet::new(self, timeout)
-    }
-
     /// Add retry layer
     fn with_retry(
         self,
@@ -122,6 +114,11 @@ pub trait NetExt: Net + Sized {
         cancel: CancellationToken,
     ) -> RetryNet<Self, DefaultRetryPolicy> {
         RetryNet::new(self, DefaultRetryPolicy::new(policy), cancel)
+    }
+
+    /// Add timeout layer
+    fn with_timeout(self, timeout: Duration) -> TimeoutNet<Self> {
+        TimeoutNet::new(self, timeout)
     }
 }
 

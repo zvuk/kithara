@@ -46,10 +46,45 @@ class KitharaPlayerItemTest {
     }
 
     @Test
-    fun initialBufferedDurationIsZero() {
+    fun initialLoadedRangesAreEmpty() {
         val item = KitharaPlayerItem("https://example.com/song.mp3")
 
-        assertEquals(0.0, item.bufferedDuration, 0.0)
+        assertTrue(item.loadedRanges.isEmpty())
+    }
+
+    @Test
+    fun audioIdMatchesId() {
+        val item = KitharaPlayerItem("https://example.com/song.mp3")
+
+        assertEquals(item.id, item.audioId)
+    }
+
+    @Test
+    fun uuidIsStableForSameItem() {
+        val item = KitharaPlayerItem("https://example.com/song.mp3")
+        assertEquals(item.uuid, item.uuid)
+    }
+
+    @Test
+    fun isLiveStreamFromConfig() {
+        val item = KitharaPlayerItem("https://example.com/live.m3u8", isLiveStream = true)
+        assertTrue(item.isLiveStream)
+    }
+
+    @Test
+    fun isPlayableLiveAlwaysTrue() {
+        val item = KitharaPlayerItem("https://example.com/live.m3u8", isLiveStream = true)
+        assertTrue(item.isPlayable(progress = 0.0, ranges = emptyList()))
+    }
+
+    @Test
+    fun isPlayableWithRanges() {
+        val item = KitharaPlayerItem("https://example.com/song.mp3")
+        val ranges = listOf(ItemLoadedRange(start = 0.0, duration = 30.0))
+        assertTrue(item.isPlayable(progress = 0.0, ranges = ranges))
+        assertTrue(item.isPlayable(progress = 15.0, ranges = ranges))
+        assertEquals(false, item.isPlayable(progress = 30.0, ranges = ranges))
+        assertEquals(false, item.isPlayable(progress = 45.0, ranges = ranges))
     }
 
     @Test

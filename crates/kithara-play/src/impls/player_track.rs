@@ -27,16 +27,10 @@ const MIN_STEREO_CHANNELS: usize = 2;
 
 /// State machine for a single track's lifecycle.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TrackState {
+pub enum TrackState {
     /// Track is loaded but not yet playing.
     #[default]
     Preloading,
-    /// Track is paused (explicit pause by user).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "retained for future explicit-pause support")
-    )]
-    Paused,
     /// Track is actively playing at full volume.
     Playing,
     /// Track is fading in (volume ramping up).
@@ -48,20 +42,20 @@ pub(crate) enum TrackState {
 }
 
 impl TrackState {
-    /// Whether the track is producing audible audio.
-    pub(crate) fn is_playing(self) -> bool {
-        matches!(self, Self::Playing | Self::FadingIn | Self::FadingOut)
-    }
-
     /// Whether the track is the "leading" track (playing or fading in).
     pub(crate) fn is_leading(self) -> bool {
         matches!(self, Self::Playing | Self::FadingIn)
     }
+
+    /// Whether the track is producing audible audio.
+    pub(crate) fn is_playing(self) -> bool {
+        matches!(self, Self::Playing | Self::FadingIn | Self::FadingOut)
+    }
 }
 
 /// Transition command for a track.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum TrackTransition {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrackTransition {
     /// Start fading in the track with the given source identifier.
     FadeIn(Arc<str>),
     /// Start fading out the track with the given source identifier.
@@ -70,14 +64,7 @@ pub(crate) enum TrackTransition {
 
 /// Result of a single track render attempt.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "position/duration fields are inspected only by tests"
-    )
-)]
-pub(crate) enum TrackReadOutcome {
+pub enum TrackReadOutcome {
     /// The full requested block was written into the mix buffer.
     Full {
         /// Playback position snapshot after the read (seconds).
@@ -110,14 +97,16 @@ pub(crate) enum TrackReadOutcome {
 ///
 /// Manages the `MixDSP` fade, track state, cached position/duration,
 /// and notification logic for a single loaded track.
-pub(crate) struct PlayerTrack {
+pub struct PlayerTrack {
     resource: Arc<Mutex<PlayerResource>>,
-    state: TrackState,
-    state_dirty: bool,
-    notified_track_requested: bool,
-    notified_prefetch_requested: bool,
-    mix: MixDSP,
+    src: Arc<str>,
     fade_curve: FadeCurve,
+    mix: MixDSP,
+    item_id: Option<Arc<str>>,
+    state: TrackState,
+    notified_prefetch_requested: bool,
+    notified_track_requested: bool,
+    state_dirty: bool,
     /// Current crossfade duration used for near-end trigger checks.
     fade_duration: f32,
     /// Lead time before EOF at which the prefetch trigger fires.
@@ -127,6 +116,11 @@ pub(crate) struct PlayerTrack {
     /// is at least as eager as the crossfade trigger and can be set
     /// independently to cover network/probe latency.
     prefetch_duration: f32,
+    /// Last observed duration snapshot.
+    ///
+    /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
+    /// duration) captured under the resource lock.
+    observed_duration: f64,
     sample_rate: u32,
     /// Cumulative frames this track has actually served into the mix output.
     ///
@@ -135,13 +129,6 @@ pub(crate) struct PlayerTrack {
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
     /// mixer thanks to `PlayerResource`'s scratch buffer).
     served_frames: u64,
-    /// Last observed duration snapshot.
-    ///
-    /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
-    /// duration) captured under the resource lock.
-    observed_duration: f64,
-    item_id: Option<Arc<str>>,
-    src: Arc<str>,
 }
 
 impl PlayerTrack {
@@ -149,7 +136,8 @@ impl PlayerTrack {
     ///
     /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
     /// `fade_in()` or `play()` is required to produce audio.
-    pub(crate) fn new(
+    #[must_use]
+    pub fn new(
         resource: Arc<Mutex<PlayerResource>>,
         item_id: Option<Arc<str>>,
         src: Arc<str>,
@@ -178,9 +166,190 @@ impl PlayerTrack {
             item_id,
             src,
         };
-        // Push initial ServiceClass::Warm for the Preloading state.
         track.update_service_class(TrackState::Preloading);
         track
+    }
+
+    /// Add `frames` to the rolling served-frames counter so trigger checks
+    /// reflect what has been mixed into the output, not what the decoder has
+    /// pre-buffered.
+    fn advance_served_frames(&mut self, frames: u64) {
+        self.served_frames = self.served_frames.saturating_add(frames);
+    }
+
+    /// Check position-based notifications.
+    ///
+    /// Two independent triggers may fire in parallel via the same
+    /// `TrackRequested` notification:
+    ///
+    /// - prefetch — at `max(prefetch_duration, fade_duration) + block_seconds`
+    ///   before EOF; preload-only (`imminent = false` unless this coincides
+    ///   with the crossfade threshold).
+    /// - crossfade — at `fade_duration + block_seconds` before EOF;
+    ///   `imminent = true` so the handler can fade-in / hand over.
+    fn check_notifications(
+        &mut self,
+        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
+        block_frames: usize,
+        frames_until_eof: Option<usize>,
+    ) {
+        use num_traits::cast::AsPrimitive;
+        let block_frames_f32: f32 = block_frames.as_();
+        let sr_f32: f32 = self.sample_rate.as_();
+        let block_seconds = block_frames_f32 / sr_f32;
+        let fade_threshold = self.fade_duration + block_seconds;
+        let prefetch_threshold = self.prefetch_duration.max(self.fade_duration) + block_seconds;
+
+        if let Some(frames_until_eof) = frames_until_eof {
+            let frames_f32: f32 = frames_until_eof.as_();
+            let remaining = frames_f32 / sr_f32;
+            if remaining <= prefetch_threshold {
+                self.emit_track_requested(notification_tx);
+            }
+            if remaining <= fade_threshold {
+                self.emit_handover_requested(notification_tx);
+            }
+            return;
+        }
+
+        let duration = self.observed_duration;
+        if duration <= 0.0 {
+            return;
+        }
+
+        let pos: f32 = self.position().as_();
+        let dur: f32 = duration.as_();
+
+        if pos + prefetch_threshold >= dur {
+            self.emit_track_requested(notification_tx);
+        }
+        if pos + fade_threshold >= dur {
+            self.emit_handover_requested(notification_tx);
+        }
+    }
+
+    /// Current visible (post-gapless-trim) duration in seconds.
+    ///
+    /// Mirrors `PlayerResource::duration()` captured under the resource
+    /// lock during the last `read()`. Falls back to a fresh `try_lock`
+    /// when invoked before any `read()` (e.g. immediately after `seek`).
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        if self.observed_duration > 0.0 {
+            return self.observed_duration;
+        }
+        self.resource
+            .try_lock()
+            .ok()
+            .map_or(self.observed_duration, |resource| resource.duration())
+    }
+
+    /// Emit the crossfade-aligned handover trigger once per playback cycle.
+    fn emit_handover_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.notified_track_requested {
+            return;
+        }
+
+        if notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::HandoverRequested)
+            .is_ok()
+        {
+            self.notified_track_requested = true;
+        }
+    }
+
+    /// Emit the prefetch (preload-only) trigger once per playback cycle.
+    fn emit_track_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.notified_prefetch_requested {
+            return;
+        }
+
+        if notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::Requested)
+            .is_ok()
+        {
+            self.notified_prefetch_requested = true;
+        }
+    }
+
+    /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
+    pub fn fade_in(&mut self) {
+        self.set_state(TrackState::FadingIn);
+        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
+        self.notified_track_requested = false;
+        self.notified_prefetch_requested = false;
+    }
+
+    /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
+    pub fn fade_out(&mut self) {
+        self.set_state(TrackState::FadingOut);
+        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
+    }
+
+    /// Handle natural EOF.
+    fn handle_natural_end(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.state == TrackState::Finished {
+            return;
+        }
+        self.notified_prefetch_requested = true;
+        self.emit_handover_requested(notification_tx);
+        self.set_state(TrackState::Finished);
+        notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::PlaybackStopped {
+                src: Arc::clone(&self.src),
+                item_id: self.item_id.clone(),
+                reason: TrackPlaybackStopReason::Eof,
+            })
+            .ok();
+        self.state_dirty = false;
+    }
+
+    /// Emit notification when state changes.
+    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if !self.state_dirty {
+            return;
+        }
+        let notification = match self.state {
+            TrackState::Preloading => PlayerNotification::Loaded {
+                src: Arc::clone(&self.src),
+            },
+            TrackState::FadingIn => PlayerNotification::FadingIn,
+            TrackState::FadingOut => PlayerNotification::FadingOut,
+            TrackState::Playing => PlayerNotification::PlaybackStarted,
+            TrackState::Finished => PlayerNotification::PlaybackStopped {
+                src: Arc::clone(&self.src),
+                item_id: self.item_id.clone(),
+                reason: TrackPlaybackStopReason::Stop,
+            },
+        };
+
+        if notification_tx.lock_sync().try_push(notification).is_ok() {
+            self.state_dirty = false;
+        }
+    }
+
+    /// Instantly start playing at full volume.
+    pub fn play(&mut self) {
+        self.set_state(TrackState::Playing);
+        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
+        self.mix.reset_to_target();
+        self.notified_track_requested = false;
+        self.notified_prefetch_requested = false;
+    }
+
+    /// Current position in seconds.
+    ///
+    /// Tracks `served_frames / sample_rate` — i.e. what has actually been
+    /// mixed into the output — so the value matches the trigger evaluator
+    /// instead of the decoder's pre-buffered position.
+    #[must_use]
+    pub fn position(&self) -> f64 {
+        let sample_rate = self.sample_rate.max(1);
+        let served_f64: f64 = num_traits::cast::AsPrimitive::as_(self.served_frames);
+        served_f64 / f64::from(sample_rate)
     }
 
     /// Read audio from this track into scratch/mix buffers.
@@ -196,7 +365,7 @@ impl PlayerTrack {
     ///
     /// `range` selects the destination subrange inside `scratch_bufs` and
     /// `mix_bufs` that this read may fill.
-    pub(crate) fn read(
+    pub fn read(
         &mut self,
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
@@ -227,9 +396,9 @@ impl PlayerTrack {
                     let frames_until_eof = guard.frames_until_eof();
                     drop(guard);
                     TrackReadOutcome::Full {
-                        position: 0.0, // overwritten below from served_frames
                         duration,
                         frames_until_eof,
+                        position: 0.0,
                     }
                 }
                 ReadOutcome::Partial(frames) => {
@@ -251,12 +420,8 @@ impl PlayerTrack {
                 self.observed_duration = duration;
                 if let Some(remaining_frames) = frames_until_eof {
                     let sample_rate = self.sample_rate.max(1);
-                    #[expect(
-                        clippy::cast_precision_loss,
-                        reason = "buffered frame count precision is sufficient for duration snapshots"
-                    )]
-                    let observed_eof =
-                        self.position() + remaining_frames as f64 / f64::from(sample_rate);
+                    let remaining_f64: f64 = num_traits::cast::AsPrimitive::as_(remaining_frames);
+                    let observed_eof = self.position() + remaining_f64 / f64::from(sample_rate);
                     if self.observed_duration <= 0.0 || observed_eof < self.observed_duration {
                         self.observed_duration = observed_eof;
                     }
@@ -332,133 +497,95 @@ impl PlayerTrack {
         }
     }
 
-    /// Add `frames` to the rolling served-frames counter so trigger checks
-    /// reflect what has been mixed into the output, not what the decoder has
-    /// pre-buffered.
-    fn advance_served_frames(&mut self, frames: u64) {
-        self.served_frames = self.served_frames.saturating_add(frames);
+    /// Reference to the underlying shared resource.
+    #[must_use]
+    pub fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
+        &self.resource
     }
 
-    /// Handle natural EOF.
-    fn handle_natural_end(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.state == TrackState::Finished {
-            return;
+    /// Seek the underlying resource and re-sync the served-frame counter
+    /// so trigger thresholds reflect the new playback origin.
+    pub fn seek(&mut self, seconds: f64) {
+        if let Ok(mut resource) = self.resource.try_lock() {
+            resource.seek(seconds);
         }
-        // EOF backstop: emit a single handover trigger if the crossfade
-        // window never fired earlier. Mark the prefetch channel as used
-        // too so we never emit a stale preload event after EOF.
-        self.notified_prefetch_requested = true;
-        self.emit_handover_requested(notification_tx);
+        let sample_rate = self.sample_rate.max(1);
+        let frames =
+            num_traits::cast::ToPrimitive::to_u64(&(seconds.max(0.0) * f64::from(sample_rate)))
+                .unwrap_or(u64::MAX);
+        self.served_frames = frames;
+        self.notified_track_requested = false;
+        self.notified_prefetch_requested = false;
+    }
+
+    /// Update the prefetch lead time used for the preload trigger.
+    pub fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
+        self.prefetch_duration = prefetch_duration.max(0.0);
+    }
+
+    /// Set the track state and mark as dirty.
+    ///
+    /// Also updates the shared worker's scheduling priority via
+    /// [`ServiceClass`] bridge: Audible tracks get highest priority.
+    fn set_state(&mut self, new_state: TrackState) {
+        if self.state != new_state {
+            self.state = new_state;
+            self.state_dirty = true;
+            self.update_service_class(new_state);
+        }
+    }
+
+    /// Source identifier.
+    #[must_use]
+    pub fn src(&self) -> &Arc<str> {
+        &self.src
+    }
+
+    /// Current track state.
+    #[must_use]
+    pub fn state(&self) -> TrackState {
+        self.state
+    }
+
+    /// Instantly stop (silent, finished state).
+    pub fn stop(&mut self) {
         self.set_state(TrackState::Finished);
-        notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackPlaybackStopped {
-                src: Arc::clone(&self.src),
-                item_id: self.item_id.clone(),
-                reason: TrackPlaybackStopReason::Eof,
-            })
-            .ok();
-        self.state_dirty = false;
+        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
+        self.mix.reset_to_target();
     }
 
-    /// Check position-based notifications.
+    /// Re-create the `MixDSP` with a new fade duration.
+    pub fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
+        let fade_conf = SmootherConfig {
+            smooth_seconds: fade_duration,
+            settle_epsilon: DEFAULT_SETTLE_EPSILON,
+        };
+        let target_mix = if self.state.is_leading() {
+            Mix::FULLY_DRY
+        } else {
+            Mix::FULLY_WET
+        };
+        self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
+        self.fade_duration = fade_duration;
+        self.sample_rate = sample_rate.get();
+    }
+
+    /// Map track state to worker scheduling priority and push the update.
     ///
-    /// Two independent triggers may fire in parallel via the same
-    /// `TrackRequested` notification:
-    ///
-    /// - prefetch — at `max(prefetch_duration, fade_duration) + block_seconds`
-    ///   before EOF; preload-only (`imminent = false` unless this coincides
-    ///   with the crossfade threshold).
-    /// - crossfade — at `fade_duration + block_seconds` before EOF;
-    ///   `imminent = true` so the handler can fade-in / hand over.
-    fn check_notifications(
-        &mut self,
-        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
-        block_frames: usize,
-        frames_until_eof: Option<usize>,
-    ) {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "block duration precision is sufficient for near-end threshold checks"
-        )]
-        let block_seconds = block_frames as f32 / self.sample_rate as f32;
-        let fade_threshold = self.fade_duration + block_seconds;
-        let prefetch_threshold = self.prefetch_duration.max(self.fade_duration) + block_seconds;
-        // Both triggers are emitted independently. `PrefetchRequested` is a
-        // contract precondition for `HandoverRequested`: consumers arm the
-        // next slot on prefetch and commit on handover. Suppressing prefetch
-        // when the windows coincide leaves the consumer without an armed
-        // slot and the handover becomes a no-op. Per-cycle dedup is enforced
-        // inside `emit_*` via `notified_*` flags.
-
-        if let Some(frames_until_eof) = frames_until_eof {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "buffered frame count precision is sufficient for near-end threshold checks"
-            )]
-            let remaining = frames_until_eof as f32 / self.sample_rate as f32;
-            if remaining <= prefetch_threshold {
-                self.emit_track_requested(notification_tx);
+    /// Uses `try_lock()` + `mpsc::send` — not strictly lock-free, but the
+    /// update is a best-effort scheduling hint. If the lock is contended or
+    /// the send briefly blocks, the track keeps its previous priority until
+    /// the next state change.
+    fn update_service_class(&self, state: TrackState) {
+        let class = match state {
+            TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => {
+                ServiceClass::Audible
             }
-            if remaining <= fade_threshold {
-                self.emit_handover_requested(notification_tx);
-            }
-            return;
-        }
-
-        let duration = self.observed_duration;
-        if duration <= 0.0 {
-            return;
-        }
-
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
-        )]
-        let pos = self.position() as f32;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "position/duration in seconds; f32 precision is sufficient for threshold checks"
-        )]
-        let dur = duration as f32;
-
-        if pos + prefetch_threshold >= dur {
-            self.emit_track_requested(notification_tx);
-        }
-        if pos + fade_threshold >= dur {
-            self.emit_handover_requested(notification_tx);
-        }
-    }
-
-    /// Emit the prefetch (preload-only) trigger once per playback cycle.
-    fn emit_track_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.notified_prefetch_requested {
-            return;
-        }
-
-        if notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackRequested(Arc::clone(&self.src)))
-            .is_ok()
-        {
-            self.notified_prefetch_requested = true;
-        }
-    }
-
-    /// Emit the crossfade-aligned handover trigger once per playback cycle.
-    fn emit_handover_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.notified_track_requested {
-            return;
-        }
-
-        if notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::TrackHandoverRequested(Arc::clone(
-                &self.src,
-            )))
-            .is_ok()
-        {
-            self.notified_track_requested = true;
+            TrackState::Preloading => ServiceClass::Warm,
+            TrackState::Finished => ServiceClass::Idle,
+        };
+        if let Ok(resource) = self.resource.try_lock() {
+            resource.set_service_class(class);
         }
     }
 
@@ -478,187 +605,12 @@ impl PlayerTrack {
         };
         self.set_state(new_state);
     }
-
-    /// Emit notification when state changes.
-    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if !self.state_dirty {
-            return;
-        }
-        let notification = match self.state {
-            TrackState::Preloading => PlayerNotification::TrackLoaded(Arc::clone(&self.src)),
-            TrackState::FadingIn => PlayerNotification::TrackFadingIn(Arc::clone(&self.src)),
-            TrackState::FadingOut => PlayerNotification::TrackFadingOut(Arc::clone(&self.src)),
-            TrackState::Playing => PlayerNotification::TrackPlaybackStarted(Arc::clone(&self.src)),
-            TrackState::Paused => PlayerNotification::TrackPlaybackPaused(Arc::clone(&self.src)),
-            TrackState::Finished => PlayerNotification::TrackPlaybackStopped {
-                src: Arc::clone(&self.src),
-                item_id: self.item_id.clone(),
-                reason: TrackPlaybackStopReason::Stop,
-            },
-        };
-
-        if notification_tx.lock_sync().try_push(notification).is_ok() {
-            self.state_dirty = false;
-        }
-    }
-
-    /// Set the track state and mark as dirty.
-    ///
-    /// Also updates the shared worker's scheduling priority via
-    /// [`ServiceClass`] bridge: Audible tracks get highest priority.
-    fn set_state(&mut self, new_state: TrackState) {
-        if self.state != new_state {
-            self.state = new_state;
-            self.state_dirty = true;
-            self.update_service_class(new_state);
-        }
-    }
-
-    /// Map track state to worker scheduling priority and push the update.
-    ///
-    /// Uses `try_lock()` + `mpsc::send` — not strictly lock-free, but the
-    /// update is a best-effort scheduling hint. If the lock is contended or
-    /// the send briefly blocks, the track keeps its previous priority until
-    /// the next state change.
-    fn update_service_class(&self, state: TrackState) {
-        let class = match state {
-            TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => {
-                ServiceClass::Audible
-            }
-            TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
-        };
-        if let Ok(resource) = self.resource.try_lock() {
-            resource.set_service_class(class);
-        }
-    }
-
-    /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
-    pub(crate) fn fade_in(&mut self) {
-        self.set_state(TrackState::FadingIn);
-        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
-        self.notified_track_requested = false;
-        self.notified_prefetch_requested = false;
-    }
-
-    /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
-    pub(crate) fn fade_out(&mut self) {
-        self.set_state(TrackState::FadingOut);
-        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
-    }
-
-    /// Instantly start playing at full volume.
-    pub(crate) fn play(&mut self) {
-        self.set_state(TrackState::Playing);
-        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
-        self.mix.reset_to_target();
-        self.notified_track_requested = false;
-        self.notified_prefetch_requested = false;
-    }
-
-    /// Instantly stop (silent, finished state).
-    pub(crate) fn stop(&mut self) {
-        self.set_state(TrackState::Finished);
-        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
-        self.mix.reset_to_target();
-    }
-
-    /// Seek the underlying resource and re-sync the served-frame counter
-    /// so trigger thresholds reflect the new playback origin.
-    pub(crate) fn seek(&mut self, seconds: f64) {
-        if let Ok(mut resource) = self.resource.try_lock() {
-            resource.seek(seconds);
-        }
-        let sample_rate = self.sample_rate.max(1);
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "negative seek targets are clamped to zero by Resource::seek"
-        )]
-        let frames = (seconds.max(0.0) * f64::from(sample_rate)) as u64;
-        self.served_frames = frames;
-        self.notified_track_requested = false;
-        self.notified_prefetch_requested = false;
-    }
-
-    /// Current position in seconds.
-    ///
-    /// Tracks `served_frames / sample_rate` — i.e. what has actually been
-    /// mixed into the output — so the value matches the trigger evaluator
-    /// instead of the decoder's pre-buffered position.
-    pub(crate) fn position(&self) -> f64 {
-        let sample_rate = self.sample_rate.max(1);
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "served-frame count precision is sufficient for position snapshots"
-        )]
-        {
-            self.served_frames as f64 / f64::from(sample_rate)
-        }
-    }
-
-    /// Current visible (post-gapless-trim) duration in seconds.
-    ///
-    /// Mirrors `PlayerResource::duration()` captured under the resource
-    /// lock during the last `read()`. Falls back to a fresh `try_lock`
-    /// when invoked before any `read()` (e.g. immediately after `seek`).
-    pub(crate) fn duration(&self) -> f64 {
-        if self.observed_duration > 0.0 {
-            return self.observed_duration;
-        }
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_duration, |resource| resource.duration())
-    }
-
-    /// Current track state.
-    pub(crate) fn state(&self) -> TrackState {
-        self.state
-    }
-
-    /// Source identifier.
-    pub(crate) fn src(&self) -> &Arc<str> {
-        &self.src
-    }
-
-    /// Reference to the underlying shared resource.
-    pub(crate) fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
-        &self.resource
-    }
-
-    /// Re-create the `MixDSP` with a new fade duration.
-    pub(crate) fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
-        let fade_conf = SmootherConfig {
-            smooth_seconds: fade_duration,
-            settle_epsilon: DEFAULT_SETTLE_EPSILON,
-        };
-        // Preserve audible/inaudible state
-        let target_mix = if self.state.is_leading() {
-            Mix::FULLY_DRY
-        } else {
-            Mix::FULLY_WET
-        };
-        self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
-        self.fade_duration = fade_duration;
-        self.sample_rate = sample_rate.get();
-    }
-
-    /// Update the fade curve used for future fade operations.
-    pub(crate) fn set_fade_curve(&mut self, curve: FadeCurve) {
-        self.fade_curve = curve;
-    }
-
-    /// Update the prefetch lead time used for the preload trigger.
-    pub(crate) fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
-        self.prefetch_duration = prefetch_duration.max(0.0);
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara_audio::{PcmReader, mock::TestPcmReader};
-    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+    use kithara_audio::PcmReader;
+    use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
@@ -670,15 +622,6 @@ mod tests {
     use super::*;
     use crate::impls::resource::Resource;
 
-    #[derive(Clone, Copy)]
-    enum TrackStateScenario {
-        FadeIn,
-        FadeOutAfterPlay,
-        Play,
-        StartPreloading,
-        StopAfterPlay,
-    }
-
     fn mock_spec() -> PcmSpec {
         PcmSpec {
             channels: 2,
@@ -686,24 +629,18 @@ mod tests {
         }
     }
 
-    // Note: `make_track()` requires a tokio runtime because `Resource::from_reader()`
-    // internally calls `tokio::spawn()` to forward audio events. All tests using
-    // this helper must use `#[kithara::test(tokio)]`.
-    fn make_track_with(duration_secs: f64, item_id: Option<Arc<str>>) -> PlayerTrack {
-        let src: Arc<str> = Arc::from("test.mp3");
-        let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs));
-        make_track_from_resource(resource, src, item_id)
-    }
-
     fn make_track_from_resource(
         resource: Resource,
         src: Arc<str>,
         item_id: Option<Arc<str>>,
     ) -> PlayerTrack {
-        let player_resource =
-            PlayerResource::new(resource, Arc::clone(&src), kithara_bufpool::pcm_pool());
+        let player_resource = PlayerResource::new(
+            resource,
+            Arc::clone(&src),
+            &kithara_bufpool::PcmPool::default(),
+        );
         let arc_resource = Arc::new(Mutex::new(player_resource));
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         PlayerTrack::new(
             arc_resource,
             item_id,
@@ -715,16 +652,15 @@ mod tests {
         )
     }
 
-    fn make_track() -> PlayerTrack {
-        make_track_with(60.0, None)
-    }
-
+    /// PcmReader fixture that reports a 10s duration but actually serves
+    /// a much shorter buffer. Used to verify that the gapless trigger
+    /// logic relies on observed-EOF, not on a possibly-stale duration.
     struct MisreportedDurationReader {
         bus: EventBus,
-        metadata: TrackMetadata,
-        remaining_frames: usize,
-        position_frames: usize,
         spec: PcmSpec,
+        metadata: TrackMetadata,
+        position_frames: usize,
+        remaining_frames: usize,
     }
 
     impl MisreportedDurationReader {
@@ -740,57 +676,82 @@ mod tests {
     }
 
     impl PcmReader for MisreportedDurationReader {
-        fn read(&mut self, buf: &mut [f32]) -> usize {
-            let channels = usize::from(self.spec.channels);
-            let frames = (buf.len() / channels).min(self.remaining_frames);
-            let samples = frames.saturating_mul(channels);
-            buf[..samples].fill(0.5);
-            self.remaining_frames -= frames;
-            self.position_frames += frames;
-            samples
-        }
-
-        fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
-            let frames = output
-                .iter()
-                .map(|channel| channel.len())
-                .min()
-                .unwrap_or(0)
-                .min(self.remaining_frames);
-            for channel in output.iter_mut() {
-                channel[..frames].fill(0.5);
-            }
-            self.remaining_frames -= frames;
-            self.position_frames += frames;
-            frames
-        }
-
-        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
-            Ok(())
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            self.remaining_frames == 0
-        }
-
-        fn position(&self) -> Duration {
-            Duration::from_secs_f64(self.position_frames as f64 / f64::from(self.spec.sample_rate))
-        }
-
         fn duration(&self) -> Option<Duration> {
             Some(Duration::from_secs(10))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
         }
 
         fn metadata(&self) -> &TrackMetadata {
             &self.metadata
         }
 
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
+        fn position(&self) -> Duration {
+            Duration::from_secs_f64(self.position_frames as f64 / f64::from(self.spec.sample_rate))
+        }
+
+        fn read(
+            &mut self,
+            buf: &mut [f32],
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            let channels = usize::from(self.spec.channels);
+            let frames = (buf.len() / channels).min(self.remaining_frames);
+            if frames == 0 {
+                return Ok(kithara_audio::ReadOutcome::Eof {
+                    position: self.position(),
+                });
+            }
+            let samples = frames.saturating_mul(channels);
+            buf[..samples].fill(0.5);
+            self.remaining_frames -= frames;
+            self.position_frames += frames;
+            Ok(kithara_audio::ReadOutcome::Frames {
+                count: std::num::NonZeroUsize::new(frames).expect("BUG: frames > 0"),
+                position: self.position(),
+            })
+        }
+
+        fn read_planar<'a>(
+            &mut self,
+            output: &'a mut [&'a mut [f32]],
+        ) -> Result<kithara_audio::ReadOutcome, kithara_audio::DecodeError> {
+            let frames = output
+                .iter()
+                .map(|channel| channel.len())
+                .min()
+                .unwrap_or(0)
+                .min(self.remaining_frames);
+            if frames == 0 {
+                return Ok(kithara_audio::ReadOutcome::Eof {
+                    position: self.position(),
+                });
+            }
+            for channel in output.iter_mut() {
+                channel[..frames].fill(0.5);
+            }
+            self.remaining_frames -= frames;
+            self.position_frames += frames;
+            Ok(kithara_audio::ReadOutcome::Frames {
+                count: std::num::NonZeroUsize::new(frames).expect("BUG: frames > 0"),
+                position: self.position(),
+            })
+        }
+
+        fn seek(
+            &mut self,
+            position: Duration,
+        ) -> Result<kithara_audio::SeekOutcome, kithara_audio::DecodeError> {
+            let _ = position;
+            Ok(kithara_audio::SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
         }
     }
 
@@ -804,62 +765,12 @@ mod tests {
         notifications
     }
 
-    fn drain_eof_stop_notifications(
-        rx: &mut impl Consumer<Item = PlayerNotification>,
-        saw_partial: bool,
-    ) -> usize {
-        let mut eof_stop_count = 0;
-
-        while let Some(notification) = rx.try_pop() {
-            if let PlayerNotification::TrackPlaybackStopped {
-                item_id,
-                reason: TrackPlaybackStopReason::Eof,
-                ..
-            } = notification
-            {
-                assert!(saw_partial, "EOF stop must not precede Partial");
-                assert!(matches!(item_id, Some(id) if id.as_ref() == "item-1"));
-                eof_stop_count += 1;
-            }
-        }
-
-        eof_stop_count
-    }
-
-    #[kithara::test(tokio)]
-    #[case(TrackStateScenario::StartPreloading, TrackState::Preloading)]
-    #[case(TrackStateScenario::FadeIn, TrackState::FadingIn)]
-    #[case(TrackStateScenario::FadeOutAfterPlay, TrackState::FadingOut)]
-    #[case(TrackStateScenario::Play, TrackState::Playing)]
-    #[case(TrackStateScenario::StopAfterPlay, TrackState::Finished)]
-    async fn track_state_transitions(
-        #[case] scenario: TrackStateScenario,
-        #[case] expected_state: TrackState,
-    ) {
-        let mut track = make_track();
-        match scenario {
-            TrackStateScenario::StartPreloading => {}
-            TrackStateScenario::FadeIn => track.fade_in(),
-            TrackStateScenario::FadeOutAfterPlay => {
-                track.play();
-                track.fade_out();
-            }
-            TrackStateScenario::Play => track.play(),
-            TrackStateScenario::StopAfterPlay => {
-                track.play();
-                track.stop();
-            }
-        }
-        assert_eq!(track.state(), expected_state);
-    }
-
     #[kithara::test]
     fn track_state_is_playing() {
         assert!(TrackState::Playing.is_playing());
         assert!(TrackState::FadingIn.is_playing());
         assert!(TrackState::FadingOut.is_playing());
         assert!(!TrackState::Preloading.is_playing());
-        assert!(!TrackState::Paused.is_playing());
         assert!(!TrackState::Finished.is_playing());
     }
 
@@ -869,216 +780,16 @@ mod tests {
         assert!(TrackState::FadingIn.is_leading());
         assert!(!TrackState::FadingOut.is_leading());
         assert!(!TrackState::Preloading.is_leading());
-        assert!(!TrackState::Paused.is_leading());
         assert!(!TrackState::Finished.is_leading());
-    }
-
-    #[kithara::test(tokio)]
-    async fn track_src_returns_identifier() {
-        let track = make_track();
-        assert_eq!(&**track.src(), "test.mp3");
-    }
-
-    #[kithara::test(tokio)]
-    async fn track_initial_position_and_duration() {
-        let track = make_track();
-        assert_eq!(track.position(), 0.0);
-        assert!((track.duration() - 60.0).abs() < f64::EPSILON);
-    }
-
-    #[kithara::test(tokio)]
-    async fn track_seek_position_is_derived_from_served_frames() {
-        let mut track = make_track();
-        let seconds = 9.791_337;
-        track.seek(seconds);
-
-        let sample_rate = 44_100.0;
-        let expected = (seconds * sample_rate).floor() / sample_rate;
-
-        assert!((track.position() - expected).abs() < f64::EPSILON);
-    }
-
-    #[kithara::test(tokio)]
-    async fn eof_playback_stopped_notification_carries_item_id() {
-        let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
-        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(8).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-
-        let mut saw_eof_stop = false;
-        for _ in 0..4 {
-            let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-
-            while let Some(notification) = rx.try_pop() {
-                if let PlayerNotification::TrackPlaybackStopped {
-                    item_id,
-                    reason: TrackPlaybackStopReason::Eof,
-                    ..
-                } = notification
-                {
-                    saw_eof_stop = matches!(item_id, Some(id) if id.as_ref() == "item-1");
-                }
-            }
-
-            if saw_eof_stop {
-                break;
-            }
-        }
-
-        assert!(saw_eof_stop);
-    }
-
-    #[kithara::test(tokio)]
-    async fn read_outcome_full_on_normal_read() {
-        let mut track = make_track_with(60.0, None);
-        let (tx, _) = HeapRb::<PlayerNotification>::new(8).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-
-        let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-
-        assert!(matches!(
-            outcome,
-            TrackReadOutcome::Full {
-                position,
-                duration,
-                ..
-            } if position >= 0.0 && duration > 0.0
-        ));
-    }
-
-    #[kithara::test(tokio)]
-    async fn read_outcome_partial_then_eof() {
-        let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
-        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-
-        let mut saw_partial = false;
-        let mut saw_eof_after_partial = false;
-        let mut eof_stop_count = 0;
-
-        for _ in 0..8 {
-            let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-
-            match outcome {
-                TrackReadOutcome::Partial { frames, .. } => {
-                    assert!(!saw_partial, "expected exactly one Partial outcome");
-                    assert!(frames > 0);
-                    saw_partial = true;
-                }
-                TrackReadOutcome::Eof => {
-                    if saw_partial {
-                        saw_eof_after_partial = true;
-                        break;
-                    }
-                }
-                TrackReadOutcome::Full { .. } => {}
-            }
-
-            eof_stop_count += drain_eof_stop_notifications(&mut rx, saw_partial);
-        }
-
-        eof_stop_count += drain_eof_stop_notifications(&mut rx, saw_partial);
-
-        assert!(saw_partial, "expected a Partial outcome before EOF");
-        assert!(saw_eof_after_partial, "expected EOF after Partial");
-        assert_eq!(
-            eof_stop_count, 1,
-            "expected exactly one EOF stop notification"
-        );
-    }
-
-    #[kithara::test(tokio)]
-    async fn handover_emits_once_when_position_crosses_fade_threshold() {
-        let mut track = make_track_with(10.0, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
-        track.update_fade_duration(0.2, sample_rate);
-        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-        track.seek(9.79);
-
-        let mut handover_count = 0;
-        let mut saw_eof_stop = false;
-
-        for _ in 0..4 {
-            let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-            for notification in collect_notifications(&mut rx) {
-                match notification {
-                    PlayerNotification::TrackHandoverRequested(src)
-                        if src.as_ref() == "test.mp3" =>
-                    {
-                        handover_count += 1;
-                    }
-                    PlayerNotification::TrackPlaybackStopped {
-                        src,
-                        reason: TrackPlaybackStopReason::Eof,
-                        ..
-                    } if src.as_ref() == "test.mp3" => {
-                        saw_eof_stop = true;
-                    }
-                    _ => {}
-                }
-            }
-
-            if handover_count > 0 {
-                break;
-            }
-        }
-
-        assert_eq!(handover_count, 1);
-        assert!(
-            !saw_eof_stop,
-            "threshold-triggered handover should precede EOF"
-        );
-
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-        let notifications = collect_notifications(&mut rx);
-        assert!(
-            notifications.iter().all(|notification| !matches!(
-                notification,
-                PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3"
-            )),
-            "TrackHandoverRequested must not be emitted twice in one playback cycle"
-        );
     }
 
     #[kithara::test(tokio)]
     async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
         let src = Arc::from("misreported.mp3");
         let resource =
-            Resource::from_reader_with_src(MisreportedDurationReader::new(900), Arc::clone(&src));
+            Resource::from_reader(MisreportedDurationReader::new(900), Some(Arc::clone(&src)));
         let mut track = make_track_from_resource(resource, src, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
+        let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
         track.update_fade_duration(0.0, sample_rate);
         let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
         let notification_tx = Mutex::new(tx);
@@ -1104,10 +815,7 @@ mod tests {
         let notifications = collect_notifications(&mut rx);
         assert!(
             notifications.iter().any(|notification| {
-                matches!(
-                    notification,
-                    PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "misreported.mp3"
-                )
+                matches!(notification, PlayerNotification::HandoverRequested)
             }),
             "handover must be emitted before the EOF block when the resource has already observed EOF"
         );
@@ -1115,7 +823,7 @@ mod tests {
             !notifications.iter().any(|notification| {
                 matches!(
                     notification,
-                    PlayerNotification::TrackPlaybackStopped {
+                    PlayerNotification::PlaybackStopped {
                         reason: TrackPlaybackStopReason::Eof,
                         ..
                     }
@@ -1125,309 +833,11 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio)]
-    async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
-        let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
-        track.update_fade_duration(0.0, sample_rate);
-        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-
-        let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-        assert!(matches!(outcome, TrackReadOutcome::Partial { .. }));
-
-        let notifications = collect_notifications(&mut rx);
-        let handover_count = notifications
-            .iter()
-            .filter(|notification| {
-                matches!(notification, PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3")
-            })
-            .count();
-        let eof_stop_count = notifications
-            .iter()
-            .filter(|notification| {
-                matches!(
-                    notification,
-                    PlayerNotification::TrackPlaybackStopped {
-                        src,
-                        item_id,
-                        reason: TrackPlaybackStopReason::Eof,
-                    }
-                    if src.as_ref() == "test.mp3"
-                        && matches!(item_id, Some(id) if id.as_ref() == "item-1")
-                )
-            })
-            .count();
-
-        assert_eq!(handover_count, 1);
-        assert_eq!(eof_stop_count, 1);
-    }
-
-    #[kithara::test(tokio)]
-    async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
-        let mut track = make_track_with(5.0, Some(Arc::from("item-1")));
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
-        track.update_fade_duration(0.2, sample_rate);
-        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-
-        let mut handover_count = 0;
-        let mut eof_stop_count = 0;
-
-        for _ in 0..600 {
-            let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-
-            for notification in collect_notifications(&mut rx) {
-                match notification {
-                    PlayerNotification::TrackHandoverRequested(src)
-                        if src.as_ref() == "test.mp3" =>
-                    {
-                        handover_count += 1;
-                    }
-                    PlayerNotification::TrackPlaybackStopped {
-                        src,
-                        item_id,
-                        reason: TrackPlaybackStopReason::Eof,
-                    } if src.as_ref() == "test.mp3"
-                        && matches!(&item_id, Some(id) if id.as_ref() == "item-1") =>
-                    {
-                        eof_stop_count += 1;
-                    }
-                    _ => {}
-                }
-            }
-
-            if eof_stop_count == 1 {
-                break;
-            }
-        }
-
-        assert_eq!(handover_count, 1);
-        assert_eq!(eof_stop_count, 1);
-    }
-
-    #[kithara::test(tokio)]
-    async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
-        let mut track = make_track_with(10.0, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
-        track.update_fade_duration(0.0, sample_rate);
-        track.set_prefetch_duration(2.0);
-        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-        // Position 8.5s leaves ~1.5s to EOF: inside the 2.0s prefetch window
-        // but well outside the 0s crossfade window.
-        track.seek(8.5);
-
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-
-        let notifications = collect_notifications(&mut rx);
-        let saw_prefetch = notifications.iter().any(|notification| {
-            matches!(
-                notification,
-                PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3"
-            )
-        });
-        let saw_handover = notifications.iter().any(|notification| {
-            matches!(
-                notification,
-                PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3"
-            )
-        });
-        assert!(
-            saw_prefetch,
-            "TrackRequested (preload) must fire inside the prefetch lead window"
-        );
-        assert!(
-            !saw_handover,
-            "TrackHandoverRequested must not fire while pos < dur - fade"
-        );
-    }
-
-    #[kithara::test(tokio)]
-    async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
-        let mut track = make_track_with(10.0, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
-        track.update_fade_duration(0.2, sample_rate);
-        track.set_prefetch_duration(2.0);
-        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-        track.seek(8.5);
-
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-        let after_prefetch = collect_notifications(&mut rx);
-        assert!(after_prefetch.iter().any(|notification| matches!(
-            notification,
-            PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3"
-        )));
-        assert!(after_prefetch.iter().all(|notification| !matches!(
-            notification,
-            PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3"
-        )));
-
-        // Move close to EOF so the crossfade-aligned trigger fires too.
-        track.seek(9.79);
-
-        let mut saw_handover = false;
-        for _ in 0..4 {
-            let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-            for notification in collect_notifications(&mut rx) {
-                if matches!(
-                    notification,
-                    PlayerNotification::TrackHandoverRequested(src) if src.as_ref() == "test.mp3"
-                ) {
-                    saw_handover = true;
-                }
-            }
-            if saw_handover {
-                break;
-            }
-        }
-        assert!(
-            saw_handover,
-            "handover trigger must fire near EOF after prefetch already fired"
-        );
-    }
-
-    #[kithara::test(tokio)]
-    async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() {
-        let mut track = make_track_with(0.5, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
-        track.update_fade_duration(0.0, sample_rate);
-        track.set_prefetch_duration(5.0);
-        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-
-        let notifications = collect_notifications(&mut rx);
-        assert!(notifications.iter().any(|notification| matches!(
-            notification,
-            PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3"
-        )));
-    }
-
-    #[kithara::test(tokio)]
-    async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
-        // Contract: PrefetchRequested always precedes HandoverRequested,
-        // even when the windows coincide. Consumers (e.g. kithara-queue)
-        // arm the next slot on prefetch and commit on handover; suppressing
-        // prefetch leaves them without an armed slot and the handover is
-        // a no-op.
-        let mut track = make_track_with(10.0, None);
-        let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
-        track.update_fade_duration(0.2, sample_rate);
-        track.set_prefetch_duration(0.0);
-        let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.play();
-        // Mid-track: outside both fade and (zero) prefetch windows.
-        track.seek(5.0);
-        let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-        let mid = collect_notifications(&mut rx);
-        assert!(mid.iter().all(|notification| !matches!(
-            notification,
-            PlayerNotification::TrackRequested(_) | PlayerNotification::TrackHandoverRequested(_)
-        )));
-
-        // Inside the fade window: both triggers must fire (each at most
-        // once per playback cycle thanks to `notified_*` flags).
-        track.seek(9.79);
-        let mut prefetch_count = 0;
-        let mut handover_count = 0;
-        for _ in 0..4 {
-            let _ = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-            for notification in collect_notifications(&mut rx) {
-                match notification {
-                    PlayerNotification::TrackRequested(src) if src.as_ref() == "test.mp3" => {
-                        prefetch_count += 1;
-                    }
-                    PlayerNotification::TrackHandoverRequested(src)
-                        if src.as_ref() == "test.mp3" =>
-                    {
-                        handover_count += 1;
-                    }
-                    _ => {}
-                }
-            }
-            if handover_count > 0 && prefetch_count > 0 {
-                break;
-            }
-        }
-        assert_eq!(prefetch_count, 1, "prefetch must fire exactly once");
-        assert_eq!(handover_count, 1, "handover must fire exactly once");
-    }
-
-    #[kithara::test(tokio)]
-    async fn read_outcome_eof_when_track_finished() {
-        let mut track = make_track();
-        let (tx, _) = HeapRb::<PlayerNotification>::new(8).split();
-        let notification_tx = Mutex::new(tx);
-        let mut scratch_l = [0.0; 512];
-        let mut scratch_r = [0.0; 512];
-        let mut mix_l = [0.0; 512];
-        let mut mix_r = [0.0; 512];
-        let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-        let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-        track.stop();
-
-        let outcome = track.read(&mut scratch_bufs, &mut mix_bufs, 0..512, &notification_tx);
-
-        assert!(matches!(outcome, TrackReadOutcome::Eof));
-    }
-
     #[kithara::test]
     #[case(TrackState::Playing, ServiceClass::Audible)]
     #[case(TrackState::FadingIn, ServiceClass::Audible)]
     #[case(TrackState::FadingOut, ServiceClass::Audible)]
     #[case(TrackState::Preloading, ServiceClass::Warm)]
-    #[case(TrackState::Paused, ServiceClass::Idle)]
     #[case(TrackState::Finished, ServiceClass::Idle)]
     fn track_state_maps_to_service_class(
         #[case] state: TrackState,
@@ -1438,7 +848,7 @@ mod tests {
                 ServiceClass::Audible
             }
             TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Paused | TrackState::Finished => ServiceClass::Idle,
+            TrackState::Finished => ServiceClass::Idle,
         };
         assert_eq!(class, expected);
     }

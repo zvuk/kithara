@@ -16,6 +16,8 @@ mod common;
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;
 
+mod abr_contract;
+
 mod kithara_hls {
     mod abr_auto_switch;
     mod abr_mode_switch;
@@ -27,4 +29,9 @@ mod kithara_hls {
     mod stress_seek_abr_audio;
     mod stress_seek_audio;
     mod stress_seek_lifecycle;
+}
+
+mod kithara_play {
+    #[path = "../kithara_play/hls_seek_middle_stress_long.rs"]
+    mod hls_seek_middle_stress_long;
 }

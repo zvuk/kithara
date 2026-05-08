@@ -10,6 +10,7 @@ use jni::{
     sys::jint,
 };
 use jni_rpv::{
+    JNIEnv as JniEnv021,
     objects::JObject as JObject021,
     sys::{JNIEnv as SysEnv021, jobject as JObject021Raw},
 };
@@ -24,7 +25,10 @@ mod android_context {
     pub(super) static GLOBAL: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 }
 
-#[expect(unreachable_pub, reason = "JNI entrypoint must remain exported")]
+#[cfg_attr(
+    target_os = "android",
+    expect(unreachable_pub, reason = "JNI entrypoint must remain exported")
+)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
     mut env: JNIEnv<'_>,
@@ -66,14 +70,9 @@ pub extern "system" fn Java_com_kithara_Kithara_nativeInit(
         let raw_env = env.get_raw();
         let raw_ctx: JObject021Raw = context.as_raw().cast();
         // SAFETY:
-        // - `raw_env` is a live `*mut jni::sys::JNIEnv` obtained from the
-        //   caller's JNI env for the duration of this call.
-        // - `raw_ctx` is the same Android `Context` JObject already pinned
-        //   as a global ref in `init_android_context`.
-        // - `sys::JNIEnv` is the C-FFI layout shared across jni 0.21/0.22.
         let result = unsafe {
-            let mut env_021 = jni_rpv::JNIEnv::from_raw(raw_env.cast::<SysEnv021>())
-                .expect("jni_rpv::JNIEnv::from_raw");
+            let mut env_021 = JniEnv021::from_raw(raw_env.cast::<SysEnv021>())
+                .expect("BUG: caller-supplied raw JNIEnv pointer is non-null");
             let ctx_021 = JObject021::from_raw(raw_ctx);
             rustls_android::init_with_env(&mut env_021, ctx_021)
         };
@@ -108,8 +107,6 @@ fn init_android_context(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), 
     let java_vm = env
         .get_java_vm()
         .map_err(|err| format!("failed to get JavaVM: {err}"))?;
-    // Keep Context as a process-wide global JNI ref.
-    // A local JNI ref would become invalid after this JNI call returns.
     let context_global = env
         .new_global_ref(context)
         .map_err(|err| format!("failed to create global context ref: {err}"))?;
@@ -120,12 +117,6 @@ fn init_android_context(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), 
     };
 
     // SAFETY:
-    // - `java_vm` pointer comes from the current valid JNI env.
-    // - `global` is a global JNI ref stored for process lifetime.
-    // - guarded by `ANDROID_CONTEXT_READY`, so we initialize only once.
-    // This is required for Android audio backend startup (cpal/AAudio):
-    // in our embedding (Kotlin host + JNI library), ndk-glue is not used,
-    // so ndk_context is not auto-initialized by runtime.
     unsafe {
         ndk_context::initialize_android_context(
             java_vm.get_raw().cast(),

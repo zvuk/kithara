@@ -18,7 +18,9 @@ pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
                 cfg =
                     cfg.with_keys(KeyOptions::new().with_key_registry(config.key_registry.clone()));
             }
-            cfg = cfg.with_downloader(config.downloader.clone());
+            cfg = cfg
+                .with_downloader(config.downloader.clone())
+                .with_flush_hub(config.flush_hub.clone());
             TrackSource::Config(Box::new(cfg))
         }
         Err(e) => {

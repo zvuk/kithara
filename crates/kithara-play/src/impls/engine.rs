@@ -15,15 +15,14 @@ use std::sync::{
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
-use kithara_bufpool::{PcmPool, pcm_pool};
+use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use kithara_platform::{Mutex, tokio::runtime::Handle as RuntimeHandle};
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-#[cfg(any(test, feature = "test-utils"))]
-use super::session_engine::OfflineSession;
 use super::{
     arena_registry::ArenaRegistry,
     player_processor::PlayerCmd,
@@ -42,33 +41,51 @@ use crate::{
 };
 
 /// Configuration for the audio engine.
-#[derive(Clone, Debug, Derivative, Setters)]
-#[derivative(Default)]
+#[derive(Clone, Derivative, Setters)]
+#[derivative(Debug, Default)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct EngineConfig {
-    /// Number of output channels. Default: 2 (stereo).
-    #[derivative(Default(value = "2"))]
-    pub channels: u16,
-    /// EQ band layout per player. Default: 10-band log-spaced.
-    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
-    pub eq_layout: Vec<EqBandConfig>,
-    /// Maximum number of concurrent player slots. Default: 4.
-    #[derivative(Default(value = "4"))]
-    pub max_slots: usize,
+    /// Master cancel token for the engine. The shared audio worker
+    /// thread runs as a child of this token so its shutdown
+    /// participates in the unified cancel hierarchy. `PlayerImpl::new`
+    /// populates this with the resolved player master before
+    /// constructing the engine. When `None`, the engine creates a fresh
+    /// orphan (test/standalone fallback only — see `kithara-play/README.md`).
+    #[derivative(Debug = "ignore")]
+    pub cancel: Option<CancellationToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
     ///
     /// When `None`, the global PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
+    /// Pre-built audio session dispatcher.
+    ///
+    /// `None` → the engine binds to the process-wide cpal-backed session
+    /// (default for production builds).
+    /// `Some(_)` → the engine takes ownership of the supplied dispatcher.
+    /// Integration tests pass an offline session here to drive the audio
+    /// graph synchronously without touching real hardware.
+    #[derivative(Debug = "ignore")]
+    pub session: Option<Arc<dyn SessionDispatcher>>,
+    /// EQ band layout per player. Default: 10-band log-spaced.
+    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
+    pub eq_layout: Vec<EqBandConfig>,
+    /// Number of output channels. Default: 2 (stereo).
+    #[derivative(Default(value = "2"))]
+    pub channels: u16,
     /// Sample rate passed to the runtime backend as a hint. Default: 44100.
     #[derivative(Default(value = "44100"))]
     pub sample_rate: u32,
+    /// Maximum number of concurrent player slots. Default: 4.
+    #[derivative(Default(value = "4"))]
+    pub max_slots: usize,
 }
 
 /// Handle for a slot, providing command channel and shared state.
 pub(crate) struct SlotHandle {
+    pub(crate) shared_state: Arc<SharedPlayerState>,
     pub(crate) cmd_tx: HeapProd<PlayerCmd>,
     pub(crate) eq: SharedEq,
-    pub(crate) shared_state: Arc<SharedPlayerState>,
 }
 
 /// Concrete [`Engine`] implementation backed by a process-wide session.
@@ -76,107 +93,58 @@ pub(crate) struct SlotHandle {
 /// Multiple `EngineImpl` instances share one CPAL/Firewheel stream while
 /// retaining independent per-player graph controls.
 pub struct EngineImpl {
-    config: EngineConfig,
-
-    /// Per-slot tracking (owned by the main side, mirrored).
-    active_slots: Mutex<Vec<SlotId>>,
-
-    /// Shared event bus (passed from `PlayerImpl`).
-    bus: EventBus,
-
-    /// Master output volume for this player instance (linear 0.0 ..= 1.0).
-    master_volume: AtomicF32,
-
-    /// Resolved PCM pool used when registering this player in the session.
-    pcm_pool: PcmPool,
-
-    /// Session player ID allocated lazily on first start.
-    player_id: Mutex<Option<PlayerId>>,
+    /// Audio session backend. Production paths default to the
+    /// process-wide cpal-backed `SessionClient`; tests inject a
+    /// per-instance offline dispatcher through [`EngineConfig::session`].
+    session: Arc<dyn SessionDispatcher>,
 
     /// Whether this engine/player instance is currently running.
     running: AtomicBool,
 
-    /// Session backend — global by default, swappable to per-instance
-    /// offline via [`EngineImpl::new_offline`].
-    session: Arc<dyn SessionDispatcher>,
-
-    /// Per-slot command channels and shared state.
-    slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
+    /// Master output volume for this player instance (linear 0.0 ..= 1.0).
+    master_volume: AtomicF32,
 
     /// Shared audio worker for cooperative multi-track decoding.
     ///
     /// All tracks loaded by this engine share this single worker thread.
     worker: AudioWorkerHandle,
+
+    config: EngineConfig,
+
+    /// Shared event bus (passed from `PlayerImpl`).
+    bus: EventBus,
+
+    /// Per-slot tracking (owned by the main side, mirrored).
+    active_slots: Mutex<Vec<SlotId>>,
+
+    /// Session player ID allocated lazily on first start.
+    player_id: Mutex<Option<PlayerId>>,
+
+    /// Per-slot command channels and shared state.
+    slot_registry: Mutex<ArenaRegistry<SlotId, SlotHandle>>,
+
     runtime: Option<RuntimeHandle>,
+    /// Resolved PCM pool used when registering this player in the session.
+    pcm_pool: PcmPool,
 }
 
 impl EngineImpl {
     /// Create a new engine with the given configuration.
     ///
+    /// If `config.session` is `Some(_)` the engine binds to the supplied
+    /// dispatcher (used by integration tests for offline render). If
+    /// `None`, it falls back to the process-wide cpal-backed session
+    /// client.
+    ///
     /// The engine is created in the *stopped* state. Call [`Engine::start`]
     /// to begin audio processing.
     #[must_use]
-    pub fn new(config: EngineConfig, bus: EventBus) -> Self {
-        Self::with_session(config, bus, session_client())
-    }
-
-    fn with_session(
-        config: EngineConfig,
-        bus: EventBus,
-        session: Arc<dyn SessionDispatcher>,
-    ) -> Self {
-        let max_slots = config.max_slots;
-        let resolved_pool = config
-            .pcm_pool
-            .clone()
-            .unwrap_or_else(|| pcm_pool().clone());
-
-        Self {
-            config,
-            active_slots: Mutex::new(Vec::new()),
-            bus,
-            master_volume: AtomicF32::new(1.0),
-            pcm_pool: resolved_pool,
-            player_id: Mutex::new(None),
-            running: AtomicBool::new(false),
-            session,
-            slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
-            worker: AudioWorkerHandle::new(),
-            runtime: RuntimeHandle::try_current().ok(),
-        }
-    }
-
-    /// Create a self-contained engine backed by a per-instance offline
-    /// session. The returned [`OfflineSessionHandle`] owns the firewheel
-    /// graph; call [`OfflineSessionHandle::render`] to step it
-    /// synchronously from the test thread. Pair with
-    /// [`PlayerImpl::with_engine`](super::player::PlayerImpl::with_engine).
-    ///
-    /// Test-only — does not touch the global session client, so multiple
-    /// offline engines can coexist in one test binary.
-    #[cfg(any(test, feature = "test-utils"))]
-    #[must_use]
-    pub fn new_offline(config: EngineConfig, bus: EventBus) -> (Self, OfflineSessionHandle) {
-        let session = Arc::new(OfflineSession::new());
-        let handle = OfflineSessionHandle {
-            session: Arc::clone(&session),
-        };
-        let engine = Self::with_session(config, bus, session);
-        (engine, handle)
-    }
-
-    /// Process-wide session ducking mode.
-    #[must_use]
-    pub fn session_ducking() -> SessionDuckingMode {
-        session_client().ducking().unwrap_or_else(|err| {
-            warn!(?err, "failed to query session ducking");
-            SessionDuckingMode::Off
-        })
-    }
-
-    /// Set process-wide session ducking mode.
-    pub fn set_session_ducking(mode: SessionDuckingMode) -> Result<(), PlayError> {
-        session_client().set_ducking(mode)
+    pub fn new(mut config: EngineConfig, bus: EventBus) -> Self {
+        let session = config
+            .session
+            .take()
+            .unwrap_or_else(|| session_client() as Arc<dyn SessionDispatcher>);
+        Self::with_session(config, bus, session)
     }
 
     fn emit(&self, event: EngineEvent) {
@@ -197,19 +165,56 @@ impl EngineImpl {
         Ok(id)
     }
 
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "guard must live through find + try_push for atomicity"
-    )]
+    /// Runtime handle captured at engine creation.
+    ///
+    /// Use when building a shared
+    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
+    /// land on the same runtime the audio engine observes, then pass the
+    /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
+    #[must_use]
+    pub fn runtime(&self) -> Option<&RuntimeHandle> {
+        self.runtime.as_ref()
+    }
+
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
         let mut slot_registry = self.slot_registry.lock_sync();
-        let Some(handle) = slot_registry.get_mut(&slot) else {
-            return Err(PlayError::Internal("slot handle not found".into()));
+        let result = match slot_registry.get_mut(&slot) {
+            Some(handle) => handle
+                .cmd_tx
+                .try_push(cmd)
+                .map_err(|_| PlayError::Internal("slot channel full".into())),
+            None => Err(PlayError::Internal("slot handle not found".into())),
         };
-        handle
-            .cmd_tx
-            .try_push(cmd)
-            .map_err(|_| PlayError::Internal("slot channel full".into()))
+        drop(slot_registry);
+        result
+    }
+
+    /// Process-wide session ducking mode.
+    #[must_use]
+    pub fn session_ducking() -> SessionDuckingMode {
+        match session_client().ducking() {
+            Ok(mode) => mode,
+            Err(err) => {
+                warn!(?err, "failed to query session ducking");
+                SessionDuckingMode::Off
+            }
+        }
+    }
+
+    pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
+        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
+        self.session.set_player_eq_gain(player_id, band, gain_db)
+    }
+
+    /// Set process-wide session ducking mode.
+    pub fn set_session_ducking(mode: SessionDuckingMode) -> Result<(), PlayError> {
+        session_client().set_ducking(mode)
+    }
+
+    pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
+        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
+        self.session
+            .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
     }
 
     pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {
@@ -226,6 +231,37 @@ impl EngineImpl {
             .map(|h| Arc::clone(&h.shared_state))
     }
 
+    pub(crate) fn tick(&self) -> Result<(), PlayError> {
+        self.session.tick()
+    }
+
+    fn with_session(
+        config: EngineConfig,
+        bus: EventBus,
+        session: Arc<dyn SessionDispatcher>,
+    ) -> Self {
+        let max_slots = config.max_slots;
+        let resolved_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| PcmPool::default().clone());
+        let worker_cancel = config.cancel.clone().unwrap_or_default().child_token();
+
+        Self {
+            config,
+            bus,
+            session,
+            active_slots: Mutex::new(Vec::new()),
+            master_volume: AtomicF32::new(1.0),
+            pcm_pool: resolved_pool,
+            player_id: Mutex::new(None),
+            running: AtomicBool::new(false),
+            slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
+            worker: AudioWorkerHandle::with_cancel(worker_cancel),
+            runtime: RuntimeHandle::try_current().ok(),
+        }
+    }
+
     /// Shared audio worker handle for this engine.
     ///
     /// Clone and pass to [`ResourceConfig::with_worker`] so all tracks
@@ -234,59 +270,10 @@ impl EngineImpl {
     pub fn worker(&self) -> &AudioWorkerHandle {
         &self.worker
     }
-
-    /// Runtime handle captured at engine creation.
-    ///
-    /// Use when building a shared
-    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
-    /// land on the same runtime the audio engine observes, then pass the
-    /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
-    #[must_use]
-    pub fn runtime(&self) -> Option<&RuntimeHandle> {
-        self.runtime.as_ref()
-    }
-
-    pub(crate) fn tick(&self) -> Result<(), PlayError> {
-        self.session.tick()
-    }
-
-    pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
-        self.session
-            .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
-    }
-
-    pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
-        self.session.set_player_eq_gain(player_id, band, gain_db)
-    }
-}
-
-/// Test-only handle to a per-instance offline session created via
-/// [`EngineImpl::new_offline`]. Owns the firewheel graph; call
-/// [`OfflineSessionHandle::render`] each iteration of the test loop to
-/// drive `ctx.update()` + `OfflineBackend::render(N)` synchronously from
-/// the test thread.
-#[cfg(any(test, feature = "test-utils"))]
-pub struct OfflineSessionHandle {
-    session: Arc<OfflineSession>,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-impl OfflineSessionHandle {
-    /// Synchronously render `frames` of audio. Returns the rendered
-    /// stereo-interleaved (LRLR…) block, or an empty `Vec` if the
-    /// engine has not been started yet.
-    #[must_use]
-    pub fn render(&self, frames: usize) -> Vec<f32> {
-        self.session.render(frames)
-    }
 }
 
 impl Drop for EngineImpl {
     fn drop(&mut self) {
-        // Unregister player first — detaches the graph so the audio thread
-        // stops reading from PlayerResources before the worker is killed.
         let player_id = *self.player_id.lock_sync();
         if let Some(player_id) = player_id
             && let Err(err) = self.session.unregister_player(player_id)
@@ -302,6 +289,123 @@ impl Drop for EngineImpl {
 }
 
 impl Engine for EngineImpl {
+    fn active_slots(&self) -> Vec<SlotId> {
+        self.active_slots.lock_sync().clone()
+    }
+
+    fn allocate_slot(&self) -> Result<SlotId, PlayError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PlayError::EngineNotRunning);
+        }
+
+        {
+            let slots = self.active_slots.lock_sync();
+            if slots.len() >= self.config.max_slots {
+                return Err(PlayError::ArenaFull);
+            }
+        }
+
+        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
+        let (slot_id, cmd_tx, shared_state, eq) = self.session.allocate_slot(player_id)?;
+
+        self.active_slots.lock_sync().push(slot_id);
+        self.slot_registry.lock_sync().insert(
+            slot_id,
+            SlotHandle {
+                shared_state,
+                cmd_tx,
+                eq,
+            },
+        );
+
+        debug!(?slot_id, player_id, "slot allocated");
+        self.emit(EngineEvent::SlotAllocated { slot: slot_id });
+        Ok(slot_id)
+    }
+
+    fn cancel_crossfade(&self) -> Result<(), PlayError> {
+        Err(PlayError::NoCrossfade)
+    }
+
+    fn crossfade(
+        &self,
+        _from: SlotId,
+        _to: SlotId,
+        _config: CrossfadeConfig,
+    ) -> Result<(), PlayError> {
+        Err(PlayError::NotReady)
+    }
+
+    fn is_crossfading(&self) -> bool {
+        false
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
+    }
+
+    fn master_channels(&self) -> u16 {
+        self.config.channels
+    }
+
+    fn master_sample_rate(&self) -> u32 {
+        Self::master_sample_rate(self)
+    }
+
+    fn master_volume(&self) -> f32 {
+        self.master_volume.load(Ordering::Relaxed)
+    }
+
+    fn max_slots(&self) -> usize {
+        self.config.max_slots
+    }
+
+    fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PlayError::EngineNotRunning);
+        }
+
+        {
+            let slots = self.active_slots.lock_sync();
+            if !slots.contains(&slot) {
+                return Err(PlayError::SlotNotFound(slot));
+            }
+        }
+
+        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
+        self.session.release_slot(player_id, slot)?;
+
+        self.active_slots.lock_sync().retain(|s| *s != slot);
+        let _ = self.slot_registry.lock_sync().remove(&slot);
+
+        debug!(?slot, player_id, "slot released");
+        self.emit(EngineEvent::SlotReleased { slot });
+        Ok(())
+    }
+
+    fn set_master_volume(&self, volume: f32) {
+        let clamped = volume.clamp(0.0, 1.0);
+        self.master_volume.store(clamped, Ordering::Relaxed);
+
+        if self.running.load(Ordering::Acquire)
+            && let Some(player_id) = *self.player_id.lock_sync()
+            && let Err(err) = self.session.set_player_master_volume(player_id, clamped)
+        {
+            warn!(
+                ?err,
+                player_id,
+                volume = clamped,
+                "failed to apply player master volume"
+            );
+        }
+
+        self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
+    }
+
+    fn slot_count(&self) -> usize {
+        self.active_slots.lock_sync().len()
+    }
+
     fn start(&self) -> Result<(), PlayError> {
         if self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineAlreadyRunning);
@@ -342,123 +446,6 @@ impl Engine for EngineImpl {
         Ok(())
     }
 
-    fn is_running(&self) -> bool {
-        self.running.load(Ordering::Acquire)
-    }
-
-    fn allocate_slot(&self) -> Result<SlotId, PlayError> {
-        if !self.running.load(Ordering::Acquire) {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        {
-            let slots = self.active_slots.lock_sync();
-            if slots.len() >= self.config.max_slots {
-                return Err(PlayError::ArenaFull);
-            }
-        }
-
-        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
-        let (slot_id, cmd_tx, shared_state, eq) = self.session.allocate_slot(player_id)?;
-
-        self.active_slots.lock_sync().push(slot_id);
-        self.slot_registry.lock_sync().insert(
-            slot_id,
-            SlotHandle {
-                cmd_tx,
-                eq,
-                shared_state,
-            },
-        );
-
-        debug!(?slot_id, player_id, "slot allocated");
-        self.emit(EngineEvent::SlotAllocated { slot: slot_id });
-        Ok(slot_id)
-    }
-
-    fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
-        if !self.running.load(Ordering::Acquire) {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        {
-            let slots = self.active_slots.lock_sync();
-            if !slots.contains(&slot) {
-                return Err(PlayError::SlotNotFound(slot));
-            }
-        }
-
-        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
-        self.session.release_slot(player_id, slot)?;
-
-        self.active_slots.lock_sync().retain(|s| *s != slot);
-        let _ = self.slot_registry.lock_sync().remove(&slot);
-
-        debug!(?slot, player_id, "slot released");
-        self.emit(EngineEvent::SlotReleased { slot });
-        Ok(())
-    }
-
-    fn active_slots(&self) -> Vec<SlotId> {
-        self.active_slots.lock_sync().clone()
-    }
-
-    fn slot_count(&self) -> usize {
-        self.active_slots.lock_sync().len()
-    }
-
-    fn max_slots(&self) -> usize {
-        self.config.max_slots
-    }
-
-    fn master_volume(&self) -> f32 {
-        self.master_volume.load(Ordering::Relaxed)
-    }
-
-    fn set_master_volume(&self, volume: f32) {
-        let clamped = volume.clamp(0.0, 1.0);
-        self.master_volume.store(clamped, Ordering::Relaxed);
-
-        if self.running.load(Ordering::Acquire)
-            && let Some(player_id) = *self.player_id.lock_sync()
-            && let Err(err) = self.session.set_player_master_volume(player_id, clamped)
-        {
-            warn!(
-                ?err,
-                player_id,
-                volume = clamped,
-                "failed to apply player master volume"
-            );
-        }
-
-        self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
-    }
-
-    fn master_sample_rate(&self) -> u32 {
-        Self::master_sample_rate(self)
-    }
-
-    fn master_channels(&self) -> u16 {
-        self.config.channels
-    }
-
-    fn crossfade(
-        &self,
-        _from: SlotId,
-        _to: SlotId,
-        _config: CrossfadeConfig,
-    ) -> Result<(), PlayError> {
-        Err(PlayError::NotReady)
-    }
-
-    fn cancel_crossfade(&self) -> Result<(), PlayError> {
-        Err(PlayError::NoCrossfade)
-    }
-
-    fn is_crossfading(&self) -> bool {
-        false
-    }
-
     fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
     }
@@ -494,7 +481,6 @@ mod tests {
     #[kithara::test]
     fn engine_creates_worker() {
         let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
-        // Worker accessor should return a valid handle.
         let _w = engine.worker();
     }
 
@@ -503,7 +489,6 @@ mod tests {
         let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
         let w1 = engine.worker().clone();
         let w2 = engine.worker().clone();
-        // Both clones should be usable (same underlying worker).
         w1.wake();
         w2.wake();
     }
@@ -513,7 +498,6 @@ mod tests {
         let engine = EngineImpl::new(EngineConfig::default(), EventBus::default());
         let worker_clone = engine.worker().clone();
         drop(engine);
-        // Worker should be shut down — wake() is harmless on a dead worker.
         worker_clone.wake();
     }
 }

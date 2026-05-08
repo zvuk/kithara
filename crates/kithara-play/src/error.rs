@@ -56,6 +56,9 @@ pub enum PlayError {
     #[error("invalid parameter value: {name}={value}")]
     InvalidParameter { name: String, value: f32 },
 
+    #[error("end of resource")]
+    Eof,
+
     #[error("{0}")]
     Internal(String),
 }

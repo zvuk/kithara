@@ -97,14 +97,10 @@ impl<T> WasmSend<T> {
     }
 }
 
-// On native: Send iff T: Send (standard rules).
 #[cfg(not(target_arch = "wasm32"))]
 // SAFETY: delegates to T's Send impl — no additional invariants.
 unsafe impl<T: Send> Send for WasmSend<T> {}
 
-// On WASM: unconditionally Send.
 #[cfg(target_arch = "wasm32")]
 // SAFETY: see struct-level safety contract. The wrapped value must not be
-// concurrently accessed from multiple threads. Values containing JS objects
-// must be None/uninitialized when transferred between threads.
 unsafe impl<T> Send for WasmSend<T> {}

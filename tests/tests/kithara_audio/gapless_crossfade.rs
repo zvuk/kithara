@@ -2,7 +2,7 @@ use kithara::{
     decode::{GaplessInfo, GaplessTrimmer, PcmChunk, PcmMeta, PcmSpec},
     platform::time::Duration,
 };
-use kithara_bufpool::pcm_pool;
+use kithara_bufpool::PcmPool;
 use kithara_test_utils::signal_pcm::signal::{SignalFn, SineWave};
 
 use crate::gapless_common::{
@@ -101,7 +101,7 @@ fn trim_track(
             spec,
             ..Default::default()
         },
-        pcm_pool().attach(samples),
+        PcmPool::default().attach(samples),
     );
 
     let mut output = Vec::new();

@@ -1,12 +1,15 @@
 id: style.no-magic-numbers
 message: Magic number detected; extract it into a named constant.
-severity: error
+severity: warning
 language: Rust
 files:
   - crates/**/src/**/*.rs
 ignores:
-  - crates/kithara-test-macros/**
-  - crates/kithara-test-utils/**
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   any:
     - all:

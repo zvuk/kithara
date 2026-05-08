@@ -16,23 +16,24 @@ bytes = { workspace = true }
 delegate = { workspace = true }
 derive_setters = { workspace = true }
 futures = { workspace = true }
-kithara-events = { workspace = true, features = ["downloader"] }
+kithara-abr = { workspace = true }
+kithara-events = { workspace = true, features = ["abr", "downloader"] }
 kithara-net = { workspace = true }
 kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
+kithara-test-utils = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 thunderdome = { workspace = true }
 tokio-util = { workspace = true }
 url = { workspace = true }
 hotpath = { workspace = true, optional = true }
-unimock = { workspace = true, optional = true }
+unimock = { workspace = true }
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-test-utils = ["unimock"]
-internal = []
+test-utils = []
 disable-hang-detector = [
     "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
@@ -48,13 +49,11 @@ wasm-bindgen-futures = { workspace = true }
 wasm_safe_thread = { workspace = true }
 
 [dev-dependencies]
-kithara-stream = { path = ".", default-features = false, features = ["internal"] }
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-stream = { path = ".", default-features = false }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 tokio-stream = { workspace = true }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
-unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 memory-stats = { workspace = true }

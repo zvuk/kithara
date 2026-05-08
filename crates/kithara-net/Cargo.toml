@@ -11,13 +11,14 @@ description = "HTTP networking with retry, timeout, and streaming support"
 workspace = true
 
 [features]
-test-utils = ["unimock"]
+test-utils = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
-internal = []
 
 [dependencies]
 derivative = { workspace = true }
+derive_setters = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-test-macros = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
@@ -25,7 +26,7 @@ thiserror = { workspace = true }
 tokio-util = { workspace = true }
 url = { workspace = true }
 async-trait = { workspace = true }
-unimock = { workspace = true, optional = true }
+unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -38,11 +39,9 @@ reqwest = { workspace = true, features = ["stream"] }
 gloo-timers = { workspace = true }
 
 [dev-dependencies]
-kithara-net = { path = ".", default-features = false, features = ["internal"] }
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-net = { path = ".", default-features = false }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 futures = { workspace = true }
-unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

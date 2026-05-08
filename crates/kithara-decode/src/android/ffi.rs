@@ -3,11 +3,6 @@
 use std::ffi::CStr;
 #[cfg(target_os = "android")]
 use std::ffi::{c_char, c_void};
-#[cfg(target_os = "android")]
-use std::panic::catch_unwind;
-
-#[cfg(target_os = "android")]
-use jni::{signature::RuntimeFieldSignature, strings::JNIString, JavaVM};
 
 pub(crate) const MEDIA_STATUS_OK: i32 = 0;
 pub(crate) const MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM: u32 = 4;
@@ -17,15 +12,25 @@ pub(crate) const MEDIA_CODEC_INFO_TRY_AGAIN_LATER: i32 = -1;
 pub(crate) const PCM_ENCODING_16BIT: i32 = 2;
 pub(crate) const PCM_ENCODING_FLOAT: i32 = 4;
 pub(crate) const SEEK_MODE_PREVIOUS_SYNC: u32 = 0;
-pub(crate) const MIN_HARDWARE_API_LEVEL: u32 = 28;
 
 pub(crate) const KEY_MIME: &CStr = c"mime";
 pub(crate) const KEY_SAMPLE_RATE: &CStr = c"sample-rate";
 pub(crate) const KEY_CHANNEL_COUNT: &CStr = c"channel-count";
 pub(crate) const KEY_DURATION_US: &CStr = c"durationUs";
 pub(crate) const KEY_PCM_ENCODING: &CStr = c"pcm-encoding";
-pub(crate) const KEY_ENCODER_DELAY: &CStr = c"encoder-delay";
-pub(crate) const KEY_ENCODER_PADDING: &CStr = c"encoder-padding";
+/// `AMEDIAFORMAT_KEY_SAMPLE_FILE_OFFSET` — present on the per-sample
+/// format returned by `AMediaExtractor_getSampleFormat` (API 28+).
+/// Carries the byte offset of the current sample in the source file.
+pub(crate) const KEY_SAMPLE_FILE_OFFSET: &CStr = c"sample-file-offset";
+/// Codec-specific data payload (`csd-0`) — `AudioSpecificConfig` for AAC,
+/// `STREAMINFO` for FLAC. Required when configuring the codec without
+/// an `AMediaExtractor`-supplied format.
+pub(crate) const KEY_CSD_0: &CStr = c"csd-0";
+
+/// Android MediaCodec MIME type for AAC (raw frames or fMP4-stripped).
+pub(crate) const MIME_AAC: &CStr = c"audio/mp4a-latm";
+/// Android MediaCodec MIME type for FLAC.
+pub(crate) const MIME_FLAC: &CStr = c"audio/flac";
 
 #[cfg(target_os = "android")]
 pub(crate) type MediaStatus = i32;
@@ -74,6 +79,12 @@ pub(crate) type AMediaDataSourceReadAt =
 pub(crate) type AMediaDataSourceGetSize = Option<unsafe extern "C" fn(*mut c_void) -> Off64>;
 #[cfg(target_os = "android")]
 pub(crate) type AMediaDataSourceClose = Option<unsafe extern "C" fn(*mut c_void)>;
+
+#[cfg(target_os = "android")]
+#[link(name = "android")]
+unsafe extern "C" {
+    fn android_get_device_api_level() -> i32;
+}
 
 #[cfg(target_os = "android")]
 #[link(name = "mediandk")]
@@ -125,6 +136,15 @@ unsafe extern "C" {
     pub(crate) fn AMediaExtractor_getSampleTime(extractor: *mut AMediaExtractor) -> i64;
     pub(crate) fn AMediaExtractor_getSampleTrackIndex(extractor: *mut AMediaExtractor) -> i32;
     pub(crate) fn AMediaExtractor_advance(extractor: *mut AMediaExtractor) -> bool;
+    /// Available since API 28 (Android 9). Populates `*out_format` with a
+    /// new `AMediaFormat` carrying per-sample metadata, including
+    /// `"sample-file-offset"` (the byte offset of the current sample in
+    /// the source file).  Caller owns the returned format and must free
+    /// it with [`AMediaFormat_delete`].
+    pub(crate) fn AMediaExtractor_getSampleFormat(
+        extractor: *mut AMediaExtractor,
+        out_format: *mut *mut AMediaFormat,
+    ) -> MediaStatus;
 
     pub(crate) fn AMediaCodec_createDecoderByType(mime_type: *const c_char) -> *mut AMediaCodec;
     pub(crate) fn AMediaCodec_delete(codec: *mut AMediaCodec) -> MediaStatus;
@@ -170,7 +190,19 @@ unsafe extern "C" {
         render: bool,
     ) -> MediaStatus;
 
+    pub(crate) fn AMediaFormat_new() -> *mut AMediaFormat;
     pub(crate) fn AMediaFormat_delete(format: *mut AMediaFormat);
+    pub(crate) fn AMediaFormat_setString(
+        format: *mut AMediaFormat,
+        name: *const c_char,
+        value: *const c_char,
+    );
+    pub(crate) fn AMediaFormat_setBuffer(
+        format: *mut AMediaFormat,
+        name: *const c_char,
+        data: *const c_void,
+        size: usize,
+    );
     pub(crate) fn AMediaFormat_getString(
         format: *mut AMediaFormat,
         name: *const c_char,
@@ -195,48 +227,19 @@ unsafe extern "C" {
 
 #[cfg(target_os = "android")]
 pub(crate) fn current_api_level() -> Option<u32> {
-    runtime_api_level().or_else(compile_time_api_level)
+    let level = unsafe { android_get_device_api_level() };
+    (level >= 0).then_some(level as u32)
 }
 
 #[cfg(not(target_os = "android"))]
 pub(crate) fn current_api_level() -> Option<u32> {
-    // Host builds still compile Android capability logic and its tests, but
-    // they must never claim that MediaCodec is available at runtime.
-    None
-}
-
-#[cfg(target_os = "android")]
-fn runtime_api_level() -> Option<u32> {
-    let context = catch_unwind(ndk_context::android_context).ok()?;
-    let vm = unsafe { JavaVM::from_raw(context.vm().cast()) };
-    let sig = RuntimeFieldSignature::from_str("I").ok()?;
-    vm.attach_current_thread(|env| -> jni::errors::Result<u32> {
-        let build_version = env.find_class(JNIString::from("android/os/Build$VERSION"))?;
-        let sdk_int = env
-            .get_static_field(build_version, JNIString::from("SDK_INT"), sig.field_signature())?
-            .i()?;
-        u32::try_from(sdk_int).map_err(|e| jni::errors::Error::ParseFailed(e.to_string()))
-    })
-    .ok()
-}
-
-#[cfg(target_os = "android")]
-fn compile_time_api_level() -> Option<u32> {
-    option_env!("CARGO_NDK_PLATFORM").and_then(|value| value.parse::<u32>().ok())
-}
-
-#[cfg(target_os = "android")]
-pub(crate) fn capability_api_level() -> Option<u32> {
-    compile_time_api_level()
-}
-
-#[cfg(not(target_os = "android"))]
-pub(crate) fn capability_api_level() -> Option<u32> {
     None
 }
 
 #[must_use]
 pub(crate) fn api_level_allows_hardware(api_level: Option<u32>) -> bool {
+    /// Minimum Android API level that supports the hardware decoder path.
+    const MIN_HARDWARE_API_LEVEL: u32 = 28;
     api_level.is_some_and(|level| level >= MIN_HARDWARE_API_LEVEL)
 }
 
@@ -261,9 +264,7 @@ mod tests {
         assert_eq!(KEY_CHANNEL_COUNT.to_str().ok(), Some("channel-count"));
         assert_eq!(KEY_DURATION_US.to_str().ok(), Some("durationUs"));
         assert_eq!(KEY_PCM_ENCODING.to_str().ok(), Some("pcm-encoding"));
-        assert_eq!(KEY_ENCODER_DELAY.to_str().ok(), Some("encoder-delay"));
-        assert_eq!(KEY_ENCODER_PADDING.to_str().ok(), Some("encoder-padding"));
-        assert_eq!(current_api_level(), None);
+        const MIN_HARDWARE_API_LEVEL: u32 = 28;
         assert!(api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL)));
         assert!(!api_level_allows_hardware(Some(MIN_HARDWARE_API_LEVEL - 1)));
     }

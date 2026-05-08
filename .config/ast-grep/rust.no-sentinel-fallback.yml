@@ -1,0 +1,92 @@
+id: rust.no-sentinel-fallback
+message: |
+  `.unwrap_or($T::MAX|MIN|INFINITY|NEG_INFINITY|NAN)` (and the
+  `unwrap_or_else` variants) hides a missing value behind an extreme
+  sentinel built from a *raw type literal*. This is worse than `.expect(...)`:
+  `expect` panics loudly at the failure site; a sentinel keeps running with
+  an out-of-band value that overflows, distorts comparisons, or poisons
+  downstream arithmetic.
+
+  Pick one of:
+    • propagate with `?` (`.ok_or(MyError::Missing)?`),
+    • return early with a typed error,
+    • fall back to a value whose semantics make sense in context
+      (`0`, `Duration::ZERO`, an empty buffer).
+
+      // ❌  raw type literal — no domain meaning, no API to query the sentinel
+      let timeout = config.timeout_ms().unwrap_or(u64::MAX);
+      let head    = stream.position().unwrap_or(usize::MAX);
+      let amp     = sample.peak().unwrap_or(f64::INFINITY);
+
+      // ✅  propagate
+      let timeout = config.timeout_ms().ok_or(ConfigError::MissingTimeout)?;
+      let amp     = sample.peak()?;
+
+      // ✅  meaningful fallback
+      let head    = stream.position().unwrap_or(0);
+
+  If the type genuinely models the sentinel (an in-domain "indefinite",
+  "absent", or wire-format flag value queried via an `is_X()` predicate),
+  do NOT inline the raw `T::MAX` literal. Lift it onto the owning type as
+  a named const and consume *that* — the matcher above only fires on the
+  raw `MAX|MIN|INFINITY|NEG_INFINITY|NAN` trailing identifier, so a
+  domain-named const passes cleanly:
+
+      // ✅  domain sentinel: named, owned by the type, queried via dedicated API
+      impl MediaTime {
+          /// Anchor for "indefinite" times; queried via `is_indefinite()`.
+          pub const INDEFINITE_VALUE: i64 = i64::MAX;
+
+          #[must_use]
+          pub fn is_indefinite(&self) -> bool {
+              self.value == Self::INDEFINITE_VALUE
+          }
+      }
+
+      pub fn with_seconds(seconds: f64, timescale: i32) -> Self {
+          let value = (seconds * f64::from(timescale))
+              .to_i64()
+              .unwrap_or(Self::INDEFINITE_VALUE); // OK: not a raw T::MAX
+          Self { value, timescale }
+      }
+
+  For a saturating *conversion* — `u32::try_from(usize_count)` where the
+  `try_from` failure means the value cannot fit in the target type and
+  the truthful answer is "the maximum the target can hold" — the inline
+  `unwrap_or(T::MAX)` is the most readable form. Suppress on that line:
+
+      let count = u32::try_from(slice.len()).unwrap_or(u32::MAX); // ast-grep-ignore: rust.no-sentinel-fallback
+      // saturate: a >4G slice is not a real input; ceiling makes the cast lossless.
+
+  Suppress with `// ast-grep-ignore: rust.no-sentinel-fallback` only when
+  the comment on the same line documents *why* the sentinel is the truthful
+  answer at this site.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+  - xtask/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: $E.unwrap_or($T::MAX)
+    - pattern: $E.unwrap_or($T::MIN)
+    - pattern: $E.unwrap_or($T::INFINITY)
+    - pattern: $E.unwrap_or($T::NEG_INFINITY)
+    - pattern: $E.unwrap_or($T::NAN)
+    - pattern: $E.unwrap_or_else(|| $T::MAX)
+    - pattern: $E.unwrap_or_else(|| $T::MIN)
+    - pattern: $E.unwrap_or_else(|| $T::INFINITY)
+    - pattern: $E.unwrap_or_else(|| $T::NEG_INFINITY)
+    - pattern: $E.unwrap_or_else(|| $T::NAN)
+    - pattern: $E.unwrap_or_else(|_| $T::MAX)
+    - pattern: $E.unwrap_or_else(|_| $T::MIN)
+    - pattern: $E.unwrap_or_else(|_| $T::INFINITY)
+    - pattern: $E.unwrap_or_else(|_| $T::NEG_INFINITY)
+    - pattern: $E.unwrap_or_else(|_| $T::NAN)

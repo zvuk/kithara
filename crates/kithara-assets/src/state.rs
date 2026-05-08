@@ -22,7 +22,7 @@ pub enum AssetResourceState {
 impl From<ResourceStatus> for AssetResourceState {
     fn from(status: ResourceStatus) -> Self {
         match status {
-            ResourceStatus::Active => Self::Active,
+            ResourceStatus::Active | ResourceStatus::Cancelled => Self::Active,
             ResourceStatus::Committed { final_len } => Self::Committed { final_len },
             ResourceStatus::Failed(reason) => Self::Failed(reason),
         }

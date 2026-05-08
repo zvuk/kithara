@@ -63,7 +63,6 @@ import Kithara
 
 let player = KitharaPlayer()
 let item = KitharaPlayerItem(url: "https://example.com/track.mp3")
-item.load()
 
 try player.insert(item)
 player.play()
@@ -76,15 +75,36 @@ player.play()
 ```swift
 player.play()
 player.pause()
+player.stop()                         // pause + clear queue
+player.advanceToNextItem()
 player.volume = 0.5
 player.isMuted = true
-player.defaultRate = 1.5   // playback speed
+player.playingRate = 1.5              // target playback speed
+```
+
+### Runtime DRM (HLS-AES)
+
+```swift
+player.setupHlsAes { encryptedKey, salt in
+    // The player generates `salt` and attaches it to every outgoing
+    // request under `X-Encrypted-Key`. Build the cipher from the
+    // same salt to match the server's encryption.
+    let cipher = Cipher(key: cipherKey + salt)
+    return cipher.decrypt(encryptedKey)
+}
+```
+
+### Network defaults
+
+```swift
+player.setupNetwork(authToken: "<token>")
+player.updatePeakBitrate(wifi: 2_000_000, cellular: 500_000)
 ```
 
 ### Seek
 
 ```swift
-player.seek(to: 30.0, callback: MySeekCallback())
+player.seek(to: 30.0, tolerance: nil, completionHandler: MySeekCallback())
 
 final class MySeekCallback: SeekCallback, @unchecked Sendable {
     func onComplete(finished: Bool) {
@@ -92,6 +112,18 @@ final class MySeekCallback: SeekCallback, @unchecked Sendable {
     }
 }
 ```
+
+### Migration from earlier API
+
+| Old | New |
+|-----|-----|
+| `player.defaultRate` | `player.playingRate` |
+| `player.seek(to:callback:)` | `player.seek(to:tolerance:completionHandler:)` |
+| `player.setPreferredPeakBitrate(...)` | `player.updatePeakBitrate(wifi:cellular:)` |
+| `KeyProcessor.processKey(_ key:)` | `KeyProcessor.processKey(_ key:salt:)` |
+| `KitharaPlayerItem.id` | `KitharaPlayerItem.audioId` (synonym `id` retained) |
+| `ItemEvent.bufferedDurationChanged(seconds:)` | `ItemEvent.loadedRangesChanged(ranges:)` |
+| `currentTime: TimeInterval?` | `currentTime: TimeInterval` (`0` when no item is loaded) |
 
 ### Queue Management
 
@@ -193,13 +225,13 @@ KITHARA_LOCAL_DEV=1 open Package.swift
 A minimal macOS demo player is included in [`Examples/KitharaDemo`](Examples/KitharaDemo). Plays audio from any URL (MP3, AAC, FLAC, HLS) with transport controls, seek, volume, playback rate, and error reporting.
 
 ```bash
-just apple-demo
+just apple demo
 ```
 
 Or manually:
 
 ```bash
-cargo xtask xcframework --profile debug
+cargo xtask apple build --profile debug
 cd apple && swift run KitharaDemo
 ```
 

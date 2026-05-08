@@ -23,7 +23,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::num::NonZeroU32;
 
 use kithara_assets::StoreOptions;
 use kithara_decode::{GaplessMode, SilenceTrimParams};
@@ -258,7 +258,7 @@ async fn create_gapless_hls_resource(
                 .segments_per_variant(AAC_GAPLESS_SEGMENTS)
                 .segment_duration_secs(AAC_GAPLESS_SEGMENT_SECS)
                 .packaged_audio(PackagedAudioRequest {
-                    codec: kithara_stream::AudioCodec::AacLc,
+                    codec: kithara_encode::codec::AudioCodec::AacLc,
                     sample_rate: GAPLESS_SAMPLE_RATE,
                     channels: GAPLESS_CHANNELS,
                     start_frame: NonZeroU32::new(
@@ -284,13 +284,6 @@ async fn create_gapless_hls_resource(
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for seamless queue fixture");
-    // Force the first decoded chunk to land in the resource's internal buffer
-    // before we hand it to the player. Without this, the audio thread races the
-    // HLS downloader/decoder for the first ~50–500 ms of playback and feeds
-    // silence to the mixer, which kills crossfade energy and creates an audible
-    // gap at the join. The contract under test is queue auto-advance — not
-    // first-chunk preroll — so paying that latency up front mirrors what real
-    // callers do via the public `Resource::preload()` API.
     resource.preload().await;
     resource
 }
@@ -328,8 +321,6 @@ async fn render_until_second_item_end(
                 }),
         );
 
-        // Two `ItemDidPlayToEnd` deliveries marks the second (terminal)
-        // item finishing.
         if count_item_end(&events) >= 2 {
             for _ in 0..POST_ROLL_BLOCKS {
                 let block = harness.render(BLOCK_FRAMES as usize);

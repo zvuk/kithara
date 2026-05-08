@@ -9,28 +9,9 @@ publish = false
 workspace = true
 
 [dependencies]
-kithara = { workspace = true, features = ["file", "hls", "rodio"] }
+kithara = { workspace = true, features = ["file", "hls"] }
 kithara-platform = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rodio = { workspace = true, features = ["playback"] }
 tokio = { workspace = true }
-
-[[example]]
-name = "file_audio"
-
-[[example]]
-name = "hls_audio"
-
-[[example]]
-name = "hls_drm_audio"
-
-[[example]]
-name = "file_rodio"
-
-[[example]]
-name = "hls_rodio"
-
-[[example]]
-name = "resource_rodio"

@@ -4,8 +4,13 @@ import com.kithara.ffi.AudioPlayerItem as FfiAudioPlayerItem
 import com.kithara.ffi.FfiAbrMode
 import com.kithara.ffi.FfiItemConfig
 import com.kithara.ffi.FfiItemEvent
+import com.kithara.ffi.FfiItemLoadResult
 import com.kithara.ffi.FfiItemStatus
+import com.kithara.ffi.FfiTimeRange
+import com.kithara.ffi.ItemLoadCallback
 import com.kithara.ffi.ItemObserver
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,13 +28,6 @@ import kotlinx.coroutines.flow.update
  * player.insert(item)
  * player.play()
  * ```
- *
- * @param url The audio source URL.
- * @param additionalHeaders Optional HTTP headers included in all requests for this item.
- * @param preferredPeakBitrate Peak bitrate ceiling in bits/sec. `0.0` means no cap.
- * @param preferredPeakBitrateForExpensiveNetworks Peak bitrate ceiling on
- *   expensive networks (cellular). `0.0` means no cap.
- * @param abrMode Optional per-item ABR mode override.
  */
 class KitharaPlayerItem(
     url: String,
@@ -37,26 +35,49 @@ class KitharaPlayerItem(
     preferredPeakBitrate: Double = 0.0,
     preferredPeakBitrateForExpensiveNetworks: Double = 0.0,
     abrMode: FfiAbrMode? = null,
+    isLiveStream: Boolean = false,
 ) {
     internal val inner: FfiAudioPlayerItem = FfiAudioPlayerItem(
         FfiItemConfig(
-            url = url,
+            abrMode = abrMode,
             headers = additionalHeaders,
+            url = url,
             preferredPeakBitrate = preferredPeakBitrate,
             preferredPeakBitrateExpensive = preferredPeakBitrateForExpensiveNetworks,
-            abrMode = abrMode,
+            isLiveStream = isLiveStream,
         )
     )
 
-    /**
-     * Source URL for this item.
-     */
+    /** Source URL for this item. */
     val url: String = inner.url()
 
     /**
-     * Stable identifier for this item instance.
+     * Stable per-item identifier (UUID-string). Mirrors the iOS
+     * `AudioPlayerItemProtocol.audioId`. Synonym alias [id] is kept
+     * for `Identifiable`-style consumers.
      */
-    val id: String = inner.id()
+    val audioId: String = inner.audioId()
+
+    /** Synonym for [audioId]. */
+    val id: String get() = audioId
+
+    /** Numeric form of [audioId] derived from the first 16 hex digits. */
+    val uuid: Long
+        get() = inner.uuidI64()
+
+    /**
+     * Caller-declared live-stream flag. Mirrors the iOS
+     * `AudioPlayerItemProtocol.isLiveStream`.
+     */
+    val isLiveStream: Boolean
+        get() = inner.isLiveStream()
+
+    /**
+     * Cached duration in seconds. Defaults to `0.0` until the
+     * underlying resource emits a duration update.
+     */
+    val durationSec: Double
+        get() = inner.durationSec()
 
     private val observer = ItemObserverBridge(this)
     private val stateFlow = MutableStateFlow(ItemState())
@@ -65,46 +86,59 @@ class KitharaPlayerItem(
         inner.setObserver(observer)
     }
 
-    /**
-     * Full item state as a single observable snapshot.
-     */
+    /** Full item state as a single observable snapshot. */
     val state: StateFlow<ItemState> = stateFlow.asStateFlow()
 
-    /**
-     * Current loading state of the item.
-     */
     val status: ItemStatus
         get() = state.value.status
 
-    /**
-     * Duration in seconds, or `null` if unknown.
-     */
     val duration: Double?
         get() = state.value.duration
 
-    /**
-     * Buffered duration in seconds.
-     */
-    val bufferedDuration: Double
-        get() = state.value.bufferedDuration
+    /** Buffered ranges (start + duration in seconds). */
+    val loadedRanges: List<ItemLoadedRange>
+        get() = state.value.loadedRanges
 
-    /**
-     * Last item error, if any.
-     */
     val error: KitharaError?
         get() = state.value.error
 
-    /**
-     * Preferred peak bitrate in bits per second. Zero means no limit.
-     */
+    /** Preferred peak bitrate in bits per second. Zero means no limit. */
     val preferredPeakBitrate: Double
         get() = inner.preferredPeakBitrate()
 
-    /**
-     * Preferred peak bitrate for expensive networks in bits per second. Zero means no limit.
-     */
+    /** Preferred peak bitrate on expensive networks. Zero means no limit. */
     val preferredPeakBitrateForExpensiveNetworks: Double
         get() = inner.preferredPeakBitrateForExpensiveNetworks()
+
+    /**
+     * Resolve a snapshot of the current load status. The result
+     * reflects cached state — `KitharaPlayer.insert` already starts
+     * background loading. Mirrors the iOS `func load() -> Observable<…>`
+     * via Kotlin coroutines.
+     */
+    suspend fun load(): ItemLoadResult = suspendCoroutine { cont ->
+        inner.load(object : ItemLoadCallback {
+            override fun onComplete(result: FfiItemLoadResult) {
+                cont.resume(
+                    ItemLoadResult(
+                        hasProtectedContent = result.hasProtectedContent,
+                        isPlayable = result.isPlayable,
+                    )
+                )
+            }
+        })
+    }
+
+    /**
+     * Whether the item is playable at `progress` (seconds) given the
+     * caller-supplied buffered `ranges`. Live streams are reported
+     * playable unconditionally.
+     */
+    fun isPlayable(progress: Double, ranges: List<ItemLoadedRange>): Boolean =
+        inner.isPlayable(
+            progress,
+            ranges.map { FfiTimeRange(durationSeconds = it.duration, startSeconds = it.start) },
+        )
 
     private fun updateState(update: (ItemState) -> ItemState) {
         stateFlow.update(update)
@@ -115,12 +149,20 @@ class KitharaPlayerItem(
             is FfiItemEvent.DurationChanged ->
                 updateState { it.copy(duration = event.seconds) }
 
-            is FfiItemEvent.BufferedDurationChanged ->
-                updateState { it.copy(bufferedDuration = event.seconds) }
+            is FfiItemEvent.LoadedRangesChanged ->
+                updateState {
+                    it.copy(
+                        loadedRanges = event.ranges.map { range ->
+                            ItemLoadedRange(start = range.startSeconds, duration = range.durationSeconds)
+                        }
+                    )
+                }
 
             is FfiItemEvent.StatusChanged ->
                 updateState { it.copy(status = event.status.toItemStatus()) }
 
+            is FfiItemEvent.DidReachEnd,
+            is FfiItemEvent.DidStall,
             is FfiItemEvent.VariantsDiscovered,
             is FfiItemEvent.VariantSelected,
             is FfiItemEvent.VariantApplied -> Unit
@@ -142,9 +184,20 @@ class KitharaPlayerItem(
     }
 }
 
+/** Outcome reported by [KitharaPlayerItem.load]. */
+data class ItemLoadResult(
+    val hasProtectedContent: Boolean,
+    val isPlayable: Boolean,
+)
+
+/** Buffered range expressed as `[start, start + duration)` seconds. */
+data class ItemLoadedRange(
+    val start: Double,
+    val duration: Double,
+)
+
 private fun FfiItemStatus.toItemStatus(): ItemStatus = when (this) {
     FfiItemStatus.READY_TO_PLAY -> ItemStatus.ReadyToPlay
     FfiItemStatus.FAILED -> ItemStatus.Failed
     FfiItemStatus.UNKNOWN -> ItemStatus.Unknown
 }
-

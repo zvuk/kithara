@@ -1,5 +1,5 @@
 use ffmpeg::{
-    ChannelLayout, Dictionary, Error as FfmpegError, Rational,
+    ChannelLayout, Dictionary, Error as FfmpegError, Packet, Rational,
     codec::{
         Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
         flag::Flags as CodecFlags,
@@ -7,10 +7,9 @@ use ffmpeg::{
     encoder::find as find_encoder,
 };
 use ffmpeg_next as ffmpeg;
-use kithara_stream::AudioCodec;
 
 use super::{
-    build_direct_filter, collect_encoded_packets, ensure_ffmpeg_initialized,
+    build_direct_filter, ensure_ffmpeg_initialized,
     pcm::{
         drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
         send_frame_to_filter,
@@ -18,6 +17,7 @@ use super::{
 };
 use crate::{
     EncodeError, EncodeResult,
+    codec::AudioCodec,
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
@@ -27,10 +27,6 @@ pub(crate) struct AacFFmpegEncoder;
 
 impl AacFFmpegEncoder {
     pub(crate) const AAC_FRAME_SAMPLES: usize = 1024;
-
-    pub(crate) const fn frame_samples() -> usize {
-        Self::AAC_FRAME_SAMPLES
-    }
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
         if request.timescale == 0 {
@@ -73,9 +69,6 @@ impl AacFFmpegEncoder {
             .with_codec(AudioCodec::AacLc)
             .with_sample_rate(request.pcm.sample_rate())
             .with_channels(request.pcm.channels());
-        let encoder_delay = request
-            .encoder_delay
-            .saturating_add(encoder.native_encoder_delay());
 
         Ok(EncodedTrack {
             media_info,
@@ -83,19 +76,23 @@ impl AacFFmpegEncoder {
             bit_rate: request.bit_rate,
             codec_config: Vec::new(),
             packets_per_segment: request.packets_per_segment,
-            encoder_delay,
+            encoder_delay: request.encoder_delay,
             trailing_delay: request.trailing_delay,
             access_units: encoder.into_units(),
         })
     }
+
+    pub(crate) const fn frame_samples() -> usize {
+        Self::AAC_FRAME_SAMPLES
+    }
 }
 
 struct PacketCollectingEncoder {
-    filter: ffmpeg::filter::Graph,
     encoder: AudioEncoder,
+    filter: ffmpeg::filter::Graph,
+    timestamp_origin: Option<i64>,
     encoder_time_base: Rational,
     target_time_base: Rational,
-    timestamp_origin: Option<i64>,
     units: Vec<EncodedAccessUnit>,
 }
 
@@ -145,6 +142,10 @@ impl PacketCollectingEncoder {
         })
     }
 
+    fn into_units(self) -> Vec<EncodedAccessUnit> {
+        self.units
+    }
+
     fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {
         let encoder_time_base = self.encoder_time_base;
         let target_time_base = self.target_time_base;
@@ -171,90 +172,52 @@ impl PacketCollectingEncoder {
             &mut self.units,
         );
     }
+}
 
-    fn native_encoder_delay(&self) -> u32 {
-        let Some(origin) = self.timestamp_origin else {
-            return 0;
-        };
-        if origin >= 0 {
-            return 0;
+fn collect_encoded_packets(
+    encoder: &mut AudioEncoder,
+    encoder_time_base: Rational,
+    target_time_base: Rational,
+    timestamp_origin: &mut Option<i64>,
+    units: &mut Vec<EncodedAccessUnit>,
+) {
+    let mut encoded = Packet::empty();
+    while encoder.receive_packet(&mut encoded).is_ok() {
+        if encoded.size() == 0 {
+            continue;
         }
-        u32::try_from(origin.saturating_abs()).unwrap_or(u32::MAX)
-    }
-
-    fn into_units(self) -> Vec<EncodedAccessUnit> {
-        self.units
+        let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
+        packet.set_pts(encoded.pts());
+        packet.set_dts(encoded.dts());
+        packet.set_duration(encoded.duration());
+        packet.rescale_ts(encoder_time_base, target_time_base);
+        let raw_pts = packet.pts().unwrap_or_default();
+        let raw_dts = packet.dts().unwrap_or_default();
+        let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
+        units.push(EncodedAccessUnit {
+            bytes: packet.data().unwrap_or(&[]).to_vec(),
+            pts: normalize_timestamp(raw_pts, origin),
+            dts: normalize_timestamp(raw_dts, origin),
+            duration: {
+                let d = packet.duration().max(0);
+                u32::try_from(d).unwrap_or_else(|_| {
+                    tracing::error!(
+                        packet_duration = d,
+                        "BUG: AAC packet duration exceeds u32::MAX in target_time_base"
+                    );
+                    0
+                })
+            },
+            is_sync: encoded.is_key(),
+        });
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-    use kithara_test_utils::kithara;
-
-    use super::AacFFmpegEncoder;
-    use crate::{EncoderFactory, PackagedEncodeRequest, test_pcm::SawtoothPcmFixture};
-
-    #[kithara::test]
-    fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
-        const SAMPLE_RATE: u32 = 48_000;
-        const CHANNELS: u16 = 2;
-
-        let total_frames = 4 * AacFFmpegEncoder::frame_samples();
-        let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);
-        let media_info = MediaInfo::default()
-            .with_codec(AudioCodec::AacLc)
-            .with_container(ContainerFormat::Fmp4);
-
-        let encoded = EncoderFactory::encode_packaged(PackagedEncodeRequest {
-            pcm: &pcm,
-            media_info,
-            timescale: SAMPLE_RATE,
-            bit_rate: 128_000,
-            packets_per_segment: 2,
-            encoder_delay: 0,
-            trailing_delay: 0,
-        })
-        .unwrap_or_else(|error| panic!("encode_packaged(AacLc) failed: {error}"));
-
-        assert_eq!(encoded.media_info.codec, Some(AudioCodec::AacLc));
-        assert_eq!(encoded.media_info.container, Some(ContainerFormat::Fmp4));
-        assert_eq!(encoded.media_info.sample_rate, Some(SAMPLE_RATE));
-        assert_eq!(encoded.media_info.channels, Some(CHANNELS));
-        assert_eq!(encoded.timescale, SAMPLE_RATE);
-        assert_eq!(encoded.bit_rate, 128_000);
-        assert_eq!(encoded.packets_per_segment, 2);
-        assert_eq!(
-            encoded.encoder_delay,
-            u32::try_from(AacFFmpegEncoder::frame_samples()).expect("AAC frame samples fit u32")
-        );
-        assert_eq!(encoded.trailing_delay, 0);
-        assert!(encoded.codec_config.is_empty());
-        assert!(
-            encoded.access_units.len() >= 2,
-            "expected multiple AAC access units, got {}",
-            encoded.access_units.len()
-        );
-
-        let mut expected_pts = None;
-        for unit in &encoded.access_units {
-            assert!(!unit.bytes.is_empty(), "access unit payload is empty");
-            assert_eq!(unit.pts, unit.dts, "AAC should not reorder audio packets");
-            assert_eq!(
-                unit.duration,
-                u32::try_from(AacFFmpegEncoder::frame_samples()).expect("AAC frame size fits u32"),
-                "AAC-LC packets should use the natural frame duration"
-            );
-
-            if let Some(expected_pts) = expected_pts {
-                assert_eq!(
-                    unit.pts, expected_pts,
-                    "AAC packet timestamps should be contiguous"
-                );
-            } else {
-                assert_eq!(unit.pts, 0, "AAC timeline should start at zero");
-            }
-            expected_pts = Some(unit.pts + u64::from(unit.duration));
-        }
-    }
+fn normalize_timestamp(value: i64, origin: i64) -> u64 {
+    let normalized = i128::from(value) - i128::from(origin);
+    let clamped = normalized.max(0);
+    u64::try_from(clamped).unwrap_or_else(|_| {
+        tracing::error!(normalized = ?clamped, "BUG: normalized timestamp exceeds u64::MAX");
+        0
+    })
 }

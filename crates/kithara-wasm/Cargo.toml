@@ -15,11 +15,11 @@ tracing = { workspace = true }
 
 [features]
 default = []
-internal = []
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false, features = ["file", "hls", "backend-web-audio", "wasm-bindgen"] }
+num-traits = { workspace = true }
 tracing-wasm = { workspace = true }
 tracing-log = { workspace = true }
 console_error_panic_hook = { workspace = true }
@@ -31,6 +31,3 @@ kithara-wasm-macros = { workspace = true }
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-kithara-wasm = { path = ".", default-features = false, features = ["internal"] }

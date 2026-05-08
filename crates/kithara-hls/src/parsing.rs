@@ -33,10 +33,10 @@ pub struct VariantId(pub usize);
 /// Codec/container information extracted from playlist attributes (best-effort).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodecInfo {
-    /// The raw `CODECS="..."` string from the playlist.
-    pub codecs: Option<String>,
     /// Parsed audio codec from the CODECS string.
     pub audio_codec: Option<AudioCodec>,
+    /// The raw `CODECS="..."` string from the playlist.
+    pub codecs: Option<String>,
     /// A best-effort guess at the container format.
     pub container: Option<ContainerFormat>,
 }
@@ -57,10 +57,10 @@ pub enum EncryptionMethod {
 pub struct KeyInfo {
     /// The encryption method to be used.
     pub method: EncryptionMethod,
-    /// The URI of the encryption key. Can be relative to the playlist.
-    pub uri: Option<String>,
     /// The initialization vector (IV), if specified.
     pub iv: Option<[u8; IV_LEN]>,
+    /// The URI of the encryption key. Can be relative to the playlist.
+    pub uri: Option<String>,
 }
 
 /// The effective encryption key for a specific segment.
@@ -82,98 +82,51 @@ pub struct MasterPlaylist {
 /// One variant stream entry from a master playlist.
 #[derive(Debug, Clone)]
 pub struct VariantStream {
-    /// Variant identifier (stable for this parsed master playlist).
-    pub id: VariantId,
-    /// Absolute or relative URL of the media playlist for this variant.
-    pub uri: String,
     /// Optional advertised bandwidth in bits per second.
     pub bandwidth: Option<u64>,
-    /// Optional human-readable name.
-    pub name: Option<String>,
     /// Codec and format information for this variant.
     pub codec: Option<CodecInfo>,
+    /// Optional human-readable name.
+    pub name: Option<String>,
+    /// Absolute or relative URL of the media playlist for this variant.
+    pub uri: String,
+    /// Variant identifier (stable for this parsed master playlist).
+    pub id: VariantId,
 }
 
 /// Parsed init segment information (for fMP4 streams).
 #[derive(Debug, Clone)]
 pub struct InitSegment {
-    /// URL of the initialization segment (absolute or relative to playlist URI).
-    pub uri: String,
     /// Optional encryption information effective for this init segment.
     pub key: Option<SegmentKey>,
+    /// URL of the initialization segment (absolute or relative to playlist URI).
+    pub uri: String,
 }
 
 /// Parsed media playlist.
 #[derive(Debug, Clone)]
 pub struct MediaPlaylist {
-    /// List of segments in the order they appear.
-    pub segments: Vec<MediaSegment>,
-    /// Target segment duration if present.
-    #[cfg_attr(
-        not(clippy),
-        allow(
-            dead_code,
-            reason = "retained from playlist parsing for future HLS policy and diagnostics"
-        )
-    )]
-    pub target_duration: Option<Duration>,
-    /// Optional initialization segment (for fMP4 streams).
-    pub init_segment: Option<InitSegment>,
-    /// Media sequence number of the first segment.
-    #[cfg_attr(
-        not(clippy),
-        allow(
-            dead_code,
-            reason = "retained from playlist parsing for future HLS policy and diagnostics"
-        )
-    )]
-    pub media_sequence: u64,
-    /// Whether the playlist is finished (VOD or live that ended).
-    #[cfg_attr(
-        not(clippy),
-        allow(
-            dead_code,
-            reason = "retained from playlist parsing for future HLS policy and diagnostics"
-        )
-    )]
-    pub end_list: bool,
-    /// Informational: first key found in the playlist (if any).
-    #[cfg_attr(
-        not(clippy),
-        allow(
-            dead_code,
-            reason = "retained from playlist parsing for future HLS policy and diagnostics"
-        )
-    )]
-    pub current_key: Option<KeyInfo>,
     /// Container format detected from segment/init URIs.
     pub detected_container: Option<ContainerFormat>,
-    /// Whether the playlist allows caching.
-    ///
-    /// `false` when the playlist contains `#EXT-X-ALLOW-CACHE:NO` (HLS v3, deprecated in v7).
-    #[cfg_attr(
-        not(clippy),
-        allow(
-            dead_code,
-            reason = "retained from playlist parsing for future HLS policy and diagnostics"
-        )
-    )]
-    pub allow_cache: bool,
+    /// Optional initialization segment (for fMP4 streams).
+    pub init_segment: Option<InitSegment>,
+    /// List of segments in the order they appear.
+    pub segments: Vec<MediaSegment>,
 }
 
 /// One media segment entry.
 #[derive(Debug, Clone)]
 pub struct MediaSegment {
-    /// Sequence number of the segment (media-sequence + index in playlist).
-    pub sequence: u64,
-    /// URL of the segment (absolute or relative to playlist URI).
-    pub uri: String,
     /// Duration of the segment if known.
     pub duration: Duration,
-    /// Optional encryption information effective for this segment.
-    pub key: Option<SegmentKey>,
     /// Byte length from `#EXT-X-BYTERANGE` if present in the playlist.
     pub byte_range_len: Option<u64>,
+    /// Optional encryption information effective for this segment.
+    pub key: Option<SegmentKey>,
+    /// URL of the segment (absolute or relative to playlist URI).
+    pub uri: String,
+    /// Sequence number of the segment (media-sequence + index in playlist).
+    pub sequence: u64,
 }
 
 /// Detect container format from URI extension.
@@ -215,30 +168,27 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
             };
 
             let codec = codecs_str.map(|c| {
-                // Parse audio codec from CODECS string
-                // CODECS can contain multiple codecs separated by comma (e.g., "avc1.42c00d,mp4a.40.2")
                 let audio_codec = c
                     .split(',')
                     .map(str::trim)
                     .map(|codec| codec.trim_matches('"'))
                     .find_map(AudioCodec::from_hls_codec);
 
-                // Determine container format from URI extension
                 let container = detect_container_from_uri(&uri);
 
                 CodecInfo {
-                    codecs: Some(c),
                     audio_codec,
                     container,
+                    codecs: Some(c),
                 }
             });
 
             VariantStream {
-                id: VariantId(index),
                 uri,
                 bandwidth,
-                name: None,
                 codec,
+                id: VariantId(index),
+                name: None,
             }
         })
         .collect();
@@ -279,15 +229,9 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
         .map_err(|e| crate::HlsError::PlaylistParse(truncate_error(&e.to_string())))?
         .into_owned();
 
-    // Treat `#EXT-X-ENDLIST` as the only reliable end-of-stream marker.
-    let end_list = input.contains("#EXT-X-ENDLIST");
-
-    // HLS v3 `#EXT-X-ALLOW-CACHE:NO` (deprecated in v7, but still used by servers).
-    let allow_cache = !input.contains("#EXT-X-ALLOW-CACHE:NO");
-    let target_duration = Some(hls_media.target_duration);
     let media_sequence = hls_media.media_sequence as u64;
 
-    let current_key: Option<KeyInfo> = hls_media
+    let init_key_fallback: Option<KeyInfo> = hls_media
         .segments
         .values()
         .find_map(|seg| seg.keys().first().copied())
@@ -320,15 +264,12 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
 
     let init_segment = hls_media.segments.iter().next().and_then(|(_, seg)| {
         seg.map.as_ref().map(|m| {
-            // hls_m3u8 may not associate #EXT-X-KEY with #EXT-X-MAP tags.
-            // Fall back to the playlist's current_key (the effective key at
-            // the point where the MAP tag appears).
             let map_key: Option<SegmentKey> = m
                 .keys()
                 .first()
                 .copied()
                 .and_then(keyinfo_from_decryption_key)
-                .or_else(|| current_key.clone())
+                .or_else(|| init_key_fallback.clone())
                 .map(|ki| SegmentKey {
                     method: ki.method.clone(),
                     key_info: Some(ki),
@@ -341,7 +282,6 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
         })
     });
 
-    // Detect container from init segment or first segment URI
     let detected_container = init_segment
         .as_ref()
         .and_then(|init| detect_container_from_uri(&init.uri))
@@ -352,14 +292,9 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
         });
 
     Ok(MediaPlaylist {
-        segments,
-        target_duration,
-        init_segment,
-        media_sequence,
-        end_list,
-        current_key,
         detected_container,
-        allow_cache,
+        init_segment,
+        segments,
     })
 }
 
@@ -384,35 +319,25 @@ pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
 }
 
 #[cfg(test)]
-#[expect(
-    dead_code,
-    unused_imports,
-    reason = "test helpers kept for #[kithara::fixture] macro expansion"
-)]
 mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::HlsError;
 
-    #[kithara::fixture]
-    fn variant_id_42() -> VariantId {
-        VariantId(42)
-    }
-
-    #[kithara::fixture]
-    fn simple_master_playlist_data() -> &'static [u8] {
-        b"#EXTM3U
+    /// Static playlist fixtures used by the test cases below. Grouped in a
+    /// nested module to avoid `style.multiple-private-module-consts`
+    /// (>2 free private consts) and `style.no-impl-only-consts` (consts-
+    /// only inherent impl) rules.
+    mod fixtures {
+        pub(super) const SIMPLE_MASTER_PLAYLIST: &[u8] = b"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"mp4a.40.2\"
 audio.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS=\"mp4a.40.2\"
-audio_high.m3u8"
-    }
+audio_high.m3u8";
 
-    #[kithara::fixture]
-    fn simple_media_playlist_data() -> &'static [u8] {
-        b"#EXTM3U
+        pub(super) const SIMPLE_MEDIA_PLAYLIST: &[u8] = b"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-TARGETDURATION:4
 #EXT-X-MEDIA-SEQUENCE:0
@@ -421,57 +346,41 @@ audio_high.m3u8"
 segment0.ts
 #EXTINF:4.0,
 segment1.ts
-#EXT-X-ENDLIST"
-    }
+#EXT-X-ENDLIST";
 
-    #[kithara::fixture]
-    fn media_playlist_with_init_data() -> &'static [u8] {
-        b"#EXTM3U
+        pub(super) const MEDIA_PLAYLIST_WITH_INIT: &[u8] = b"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-TARGETDURATION:4
 #EXT-X-MEDIA-SEQUENCE:0
 #EXT-X-MAP:URI=\"init.mp4\"
 #EXTINF:4.0,
 segment0.m4s
-#EXT-X-ENDLIST"
-    }
+#EXT-X-ENDLIST";
 
-    #[kithara::fixture]
-    fn invalid_playlist_data() -> &'static [u8] {
-        b"NOT A VALID PLAYLIST"
-    }
+        pub(super) const INVALID_PLAYLIST: &[u8] = b"NOT A VALID PLAYLIST";
 
-    #[kithara::fixture]
-    fn empty_master_playlist_data() -> &'static [u8] {
-        b"#EXTM3U
-#EXT-X-VERSION:6"
-    }
+        pub(super) const EMPTY_MASTER_PLAYLIST: &[u8] = b"#EXTM3U
+#EXT-X-VERSION:6";
 
-    #[kithara::fixture]
-    fn master_playlist_with_codec_data() -> &'static [u8] {
-        b"#EXTM3U
+        pub(super) const MASTER_PLAYLIST_WITH_CODEC: &[u8] = b"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"mp4a.40.2,avc1.64001f\",RESOLUTION=1280x720
-video.m3u8"
-    }
+video.m3u8";
 
-    #[kithara::fixture]
-    fn master_playlist_with_mixed_case_flac_codec_data() -> &'static [u8] {
-        b"#EXTM3U
+        pub(super) const MASTER_PLAYLIST_WITH_MIXED_CASE_FLAC_CODEC: &[u8] = b"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"fLaC\"
-audio_flac.m3u8"
+audio_flac.m3u8";
     }
 
-    // Test Cases
-
-    #[kithara::test(wasm)]
-    fn test_variant_id_creation(variant_id_42: VariantId) {
-        assert_eq!(variant_id_42.0, 42);
+    #[kithara::test]
+    fn test_variant_id_creation() {
+        assert_eq!(VariantId(42).0, 42);
     }
 
-    #[kithara::test(wasm)]
-    fn test_parse_simple_master_playlist(simple_master_playlist_data: &[u8]) {
+    #[kithara::test]
+    fn test_parse_simple_master_playlist() {
+        let simple_master_playlist_data = fixtures::SIMPLE_MASTER_PLAYLIST;
         let result = parse_master_playlist(simple_master_playlist_data);
         assert!(
             result.is_ok(),
@@ -491,8 +400,9 @@ audio_flac.m3u8"
         assert_eq!(master.variants[1].bandwidth, Some(2000000));
     }
 
-    #[kithara::test(wasm)]
-    fn test_parse_simple_media_playlist(simple_media_playlist_data: &[u8]) {
+    #[kithara::test]
+    fn test_parse_simple_media_playlist() {
+        let simple_media_playlist_data = fixtures::SIMPLE_MEDIA_PLAYLIST;
         let result = parse_media_playlist(simple_media_playlist_data);
         assert!(
             result.is_ok(),
@@ -502,9 +412,6 @@ audio_flac.m3u8"
 
         let media = result.unwrap();
         assert_eq!(media.segments.len(), 2);
-        assert_eq!(media.target_duration, Some(Duration::from_secs_f64(4.0)));
-        assert_eq!(media.media_sequence, 0);
-        assert!(media.end_list);
 
         assert_eq!(media.segments[0].uri, "segment0.ts");
         assert_eq!(media.segments[0].sequence, 0);
@@ -513,8 +420,9 @@ audio_flac.m3u8"
         assert_eq!(media.segments[1].sequence, 1);
     }
 
-    #[kithara::test(wasm)]
-    fn test_parse_media_playlist_with_init_segment(media_playlist_with_init_data: &[u8]) {
+    #[kithara::test]
+    fn test_parse_media_playlist_with_init_segment() {
+        let media_playlist_with_init_data = fixtures::MEDIA_PLAYLIST_WITH_INIT;
         let result = parse_media_playlist(media_playlist_with_init_data);
         assert!(
             result.is_ok(),
@@ -530,20 +438,21 @@ audio_flac.m3u8"
         assert_eq!(init.uri, "init.mp4");
     }
 
-    #[kithara::test(wasm)]
-    fn test_parse_invalid_playlist(invalid_playlist_data: &[u8]) {
+    #[kithara::test]
+    fn test_parse_invalid_playlist() {
+        let invalid_playlist_data = fixtures::INVALID_PLAYLIST;
         let result = parse_master_playlist(invalid_playlist_data);
         assert!(result.is_err(), "Should fail to parse invalid playlist");
 
         if let Err(HlsError::PlaylistParse(_)) = result {
-            // Expected error type
         } else {
             panic!("Expected PlaylistParse error, got: {:?}", result);
         }
     }
 
-    #[kithara::test(wasm)]
-    fn test_empty_master_playlist(empty_master_playlist_data: &[u8]) {
+    #[kithara::test]
+    fn test_empty_master_playlist() {
+        let empty_master_playlist_data = fixtures::EMPTY_MASTER_PLAYLIST;
         let result = parse_master_playlist(empty_master_playlist_data);
         assert!(result.is_ok(), "Empty master playlist should parse");
 
@@ -551,8 +460,9 @@ audio_flac.m3u8"
         assert_eq!(master.variants.len(), 0);
     }
 
-    #[kithara::test(wasm)]
-    fn test_master_playlist_with_codec_info(master_playlist_with_codec_data: &[u8]) {
+    #[kithara::test]
+    fn test_master_playlist_with_codec_info() {
+        let master_playlist_with_codec_data = fixtures::MASTER_PLAYLIST_WITH_CODEC;
         let result = parse_master_playlist(master_playlist_with_codec_data);
         assert!(result.is_ok());
 
@@ -569,10 +479,10 @@ audio_flac.m3u8"
         assert_eq!(codec.audio_codec, Some(AudioCodec::AacLc));
     }
 
-    #[kithara::test(wasm)]
-    fn test_master_playlist_with_mixed_case_flac_codec(
-        master_playlist_with_mixed_case_flac_codec_data: &[u8],
-    ) {
+    #[kithara::test]
+    fn test_master_playlist_with_mixed_case_flac_codec() {
+        let master_playlist_with_mixed_case_flac_codec_data =
+            fixtures::MASTER_PLAYLIST_WITH_MIXED_CASE_FLAC_CODEC;
         let result = parse_master_playlist(master_playlist_with_mixed_case_flac_codec_data);
         assert!(result.is_ok());
 
@@ -584,7 +494,7 @@ audio_flac.m3u8"
         assert_eq!(codec.audio_codec, Some(AudioCodec::Flac));
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test]
     #[case(HlsError::PlaylistParse("test error".to_string()), "test error")]
     #[case(HlsError::VariantNotFound("variant 0".to_string()), "variant 0")]
     #[case(HlsError::InvalidUrl("bad url".to_string()), "bad url")]
@@ -598,7 +508,7 @@ audio_flac.m3u8"
         );
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test]
     #[case(0u32, "test.m3u8", Some(1000000), Some("Test Variant".to_string()))]
     #[case(1u32, "audio.m3u8", Some(2000000), None)]
     #[case(2u32, "video.m3u8", None, Some("Video Only".to_string()))]
@@ -609,9 +519,9 @@ audio_flac.m3u8"
         #[case] name: Option<String>,
     ) {
         let variant = VariantStream {
+            bandwidth,
             id: VariantId(id as usize),
             uri: uri.to_string(),
-            bandwidth,
             name: name.clone(),
             codec: None,
         };
@@ -625,7 +535,7 @@ audio_flac.m3u8"
         }
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test]
     #[case(0u64, "segment.ts", 4.0)]
     #[case(1u64, "segment1.m4s", 6.0)]
     #[case(2u64, "chunk.ts", 2.5)]
@@ -638,6 +548,7 @@ audio_flac.m3u8"
             sequence,
             uri: uri.to_string(),
             duration: Duration::from_secs_f64(duration_secs),
+            byte_range_len: None,
             key: None,
         };
 
@@ -646,7 +557,7 @@ audio_flac.m3u8"
         assert!(debug_output.contains(uri));
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test]
     #[case(
         b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-STREAM-INF:BANDWIDTH=500000\nlow.m3u8",
         1
@@ -665,19 +576,14 @@ audio_flac.m3u8"
         assert_eq!(master.variants.len(), expected_count);
     }
 
-    #[kithara::test(wasm)]
+    #[kithara::test]
     #[case(
         b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXT-X-ENDLIST",
-        1,
-        true
+        1
     )]
-    #[case(b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXTINF:4.0,\nseg2.ts", 2, false)]
-    #[case(b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXTINF:4.0,\nseg2.ts\n#EXTINF:4.0,\nseg3.ts\n#EXT-X-ENDLIST", 3, true)]
-    fn test_media_playlist_segment_count_and_endlist(
-        #[case] data: &[u8],
-        #[case] expected_segments: usize,
-        #[case] expected_endlist: bool,
-    ) {
+    #[case(b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXTINF:4.0,\nseg2.ts", 2)]
+    #[case(b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXTINF:4.0,\nseg2.ts\n#EXTINF:4.0,\nseg3.ts\n#EXT-X-ENDLIST", 3)]
+    fn test_media_playlist_segment_count(#[case] data: &[u8], #[case] expected_segments: usize) {
         let result = parse_media_playlist(data);
         assert!(
             result.is_ok(),
@@ -687,26 +593,5 @@ audio_flac.m3u8"
 
         let media = result.unwrap();
         assert_eq!(media.segments.len(), expected_segments);
-        assert_eq!(media.end_list, expected_endlist);
-    }
-
-    #[kithara::test(wasm)]
-    fn test_allow_cache_no() {
-        let data = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-ALLOW-CACHE:NO\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXT-X-ENDLIST";
-        let media = parse_media_playlist(data).unwrap();
-        assert!(!media.allow_cache, "allow_cache should be false");
-    }
-
-    #[kithara::test(wasm)]
-    fn test_allow_cache_default(simple_media_playlist_data: &[u8]) {
-        let media = parse_media_playlist(simple_media_playlist_data).unwrap();
-        assert!(media.allow_cache, "allow_cache should be true by default");
-    }
-
-    #[kithara::test(wasm)]
-    fn test_allow_cache_yes() {
-        let data = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-ALLOW-CACHE:YES\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXT-X-ENDLIST";
-        let media = parse_media_playlist(data).unwrap();
-        assert!(media.allow_cache, "allow_cache should be true for YES");
     }
 }

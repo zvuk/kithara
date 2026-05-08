@@ -2,7 +2,7 @@
 
 use kithara_platform::time::Duration;
 
-use crate::{SeekEpoch, SeekTaskId};
+use crate::SeekEpoch;
 
 /// Seek lifecycle stage used for end-to-end diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,37 @@ impl std::fmt::Display for AudioFormat {
     }
 }
 
+/// Position of a seek target inside the source's variant/segment grid.
+///
+/// All fields are `Option`: callers may know only some coordinates (e.g. a
+/// pre-decode `SeekRequest` knows the variant but not the resolved byte
+/// range yet). Empty `SegmentLocation::default()` means "no information".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SegmentLocation {
+    pub byte_range_end: Option<u64>,
+    pub byte_range_start: Option<u64>,
+    pub segment_index: Option<u32>,
+    pub variant: Option<usize>,
+}
+
+impl SegmentLocation {
+    #[must_use]
+    pub const fn new(
+        variant: Option<usize>,
+        segment_index: Option<u32>,
+        byte_range_start: Option<u64>,
+        byte_range_end: Option<u64>,
+    ) -> Self {
+        Self {
+            byte_range_end,
+            byte_range_start,
+            segment_index,
+            variant,
+        }
+    }
+}
+
 /// Events from the audio pipeline.
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
@@ -62,11 +93,7 @@ pub enum AudioEvent {
     SeekLifecycle {
         stage: SeekLifecycleStage,
         seek_epoch: SeekEpoch,
-        task_id: SeekTaskId,
-        variant: Option<usize>,
-        segment_index: Option<u32>,
-        byte_range_start: Option<u64>,
-        byte_range_end: Option<u64>,
+        location: SegmentLocation,
     },
     /// Seek completed.
     SeekComplete {

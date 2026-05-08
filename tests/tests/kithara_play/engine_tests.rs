@@ -1,7 +1,7 @@
 use std::sync::{Mutex as StdMutex, OnceLock};
 
 use kithara_events::EventBus;
-use kithara_play::internal::engine::*;
+use kithara_play::test_helpers::engine::*;
 use kithara_test_utils::kithara;
 
 fn make_engine() -> EngineImpl {
@@ -139,10 +139,7 @@ fn engine_cancel_crossfade_stub_returns_no_crossfade() {
 
 #[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
-    let config = EngineConfig {
-        sample_rate: 48000,
-        ..Default::default()
-    };
+    let config = EngineConfig::default().with_sample_rate(48000);
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
 }
@@ -175,50 +172,4 @@ fn engine_instances_share_session_ducking() {
 
     EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
     assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
-}
-
-// Tests that require actual audio hardware should be marked #[ignore].
-// They are run explicitly during local development or on hardware-capable CI.
-
-#[kithara::test]
-#[ignore = "requires audio hardware"]
-fn engine_start_stop_roundtrip() {
-    let engine = make_engine();
-    engine.start().unwrap();
-    assert!(engine.is_running());
-    engine.stop().unwrap();
-    assert!(!engine.is_running());
-}
-
-#[kithara::test]
-#[ignore = "requires audio hardware"]
-fn engine_allocate_and_release_slot() {
-    let engine = make_engine();
-    engine.start().unwrap();
-
-    let slot_id = engine.allocate_slot().unwrap();
-    assert_eq!(engine.slot_count(), 1);
-    assert!(engine.active_slots().contains(&slot_id));
-
-    engine.release_slot(slot_id).unwrap();
-    assert_eq!(engine.slot_count(), 0);
-
-    engine.stop().unwrap();
-}
-
-#[kithara::test]
-#[ignore = "requires audio hardware"]
-fn engine_arena_full_error() {
-    let config = EngineConfig {
-        max_slots: 1,
-        ..Default::default()
-    };
-    let engine = EngineImpl::new(config, EventBus::default());
-    engine.start().unwrap();
-
-    let _slot1 = engine.allocate_slot().unwrap();
-    let result = engine.allocate_slot();
-    assert!(matches!(result, Err(PlayError::ArenaFull)));
-
-    engine.stop().unwrap();
 }

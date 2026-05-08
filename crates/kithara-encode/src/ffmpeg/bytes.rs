@@ -23,17 +23,17 @@ use crate::{
 };
 
 struct EncodeTarget {
+    option_pairs: &'static [(&'static str, &'static str)],
     ext: &'static str,
     mime: &'static str,
     bit_rate: Option<usize>,
-    option_pairs: &'static [(&'static str, &'static str)],
 }
 
 impl EncodeTarget {
     fn from_request(request: &BytesEncodeRequest<'_>) -> EncodeResult<Self> {
-        let bit_rate = request
-            .bit_rate
-            .or_else(|| request.target.default_bit_rate());
+        let explicit = request.bit_rate;
+        let codec_default = request.target.default_bit_rate();
+        let bit_rate = explicit.or(codec_default);
         let bit_rate = bit_rate
             .map(|value| {
                 usize::try_from(value).map_err(|_| {
@@ -44,9 +44,9 @@ impl EncodeTarget {
 
         let target = match request.target {
             BytesEncodeTarget::Mp3 => Self {
+                bit_rate,
                 ext: "mp3",
                 mime: "audio/mpeg",
-                bit_rate,
                 option_pairs: &[("b", "128k")],
             },
             BytesEncodeTarget::Flac => Self {
@@ -56,15 +56,15 @@ impl EncodeTarget {
                 option_pairs: &[("compression_level", "5")],
             },
             BytesEncodeTarget::Aac => Self {
+                bit_rate,
                 ext: "aac",
                 mime: "audio/aac",
-                bit_rate,
                 option_pairs: &[("b", "128k")],
             },
             BytesEncodeTarget::M4a => Self {
+                bit_rate,
                 ext: "m4a",
                 mime: "audio/mp4",
-                bit_rate,
                 option_pairs: &[("b", "128k")],
             },
         };
@@ -128,8 +128,8 @@ fn encode_direct_pcm(
 }
 
 struct DirectEncoder {
-    filter: ffmpeg::filter::Graph,
     encoder: AudioEncoder,
+    filter: ffmpeg::filter::Graph,
 }
 
 impl DirectEncoder {
@@ -197,7 +197,14 @@ impl DirectEncoder {
 
         let filter = build_direct_filter(&encoder, sample_rate, channels)?;
 
-        Ok(Self { filter, encoder })
+        Ok(Self { encoder, filter })
+    }
+
+    fn receive_and_process_encoded_packets(
+        &mut self,
+        octx: &mut av_format::context::Output,
+    ) -> Result<(), FfmpegError> {
+        write_encoded_packets(&mut self.encoder, octx)
     }
 
     fn receive_and_process_filtered_frames(
@@ -207,13 +214,6 @@ impl DirectEncoder {
         drain_filtered_frames(&mut self.filter, &mut self.encoder, |encoder| {
             write_encoded_packets(encoder, octx)
         })
-    }
-
-    fn receive_and_process_encoded_packets(
-        &mut self,
-        octx: &mut av_format::context::Output,
-    ) -> Result<(), FfmpegError> {
-        write_encoded_packets(&mut self.encoder, octx)
     }
 }
 
@@ -232,71 +232,4 @@ fn write_encoded_packets(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use crate::{
-        BytesEncodeRequest, BytesEncodeTarget, EncoderFactory, test_pcm::SawtoothPcmFixture,
-    };
-
-    #[kithara::test]
-    fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers() {
-        const SAMPLE_RATE: u32 = 48_000;
-        const CHANNELS: u16 = 2;
-        const AAC_FRAME_SAMPLES: usize = 1024;
-
-        let pcm = SawtoothPcmFixture::new(4 * AAC_FRAME_SAMPLES, SAMPLE_RATE, CHANNELS);
-        let cases = [
-            BytesEncodeTarget::Mp3,
-            BytesEncodeTarget::Flac,
-            BytesEncodeTarget::Aac,
-            BytesEncodeTarget::M4a,
-        ];
-
-        for target in cases {
-            let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
-                pcm: &pcm,
-                target,
-                bit_rate: None,
-            })
-            .unwrap_or_else(|error| panic!("encode_bytes({target:?}) failed: {error}"));
-
-            assert!(!encoded.bytes.is_empty(), "{target:?} payload is empty");
-            assert_eq!(encoded.content_type, target.content_type());
-            assert_eq!(encoded.media_info.codec, Some(target.codec()));
-            assert_eq!(encoded.media_info.container, Some(target.container()));
-            assert_eq!(encoded.media_info.sample_rate, Some(SAMPLE_RATE));
-            assert_eq!(encoded.media_info.channels, Some(CHANNELS));
-
-            assert_container_marker(target, &encoded.bytes);
-        }
-    }
-
-    fn assert_container_marker(target: BytesEncodeTarget, bytes: &[u8]) {
-        match target {
-            BytesEncodeTarget::Mp3 => assert!(
-                bytes.starts_with(b"ID3")
-                    || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0),
-                "MP3 output is missing an ID3 tag or MPEG frame sync"
-            ),
-            BytesEncodeTarget::Flac => {
-                assert!(
-                    bytes.starts_with(b"fLaC"),
-                    "FLAC output is missing the `fLaC` marker"
-                );
-            }
-            BytesEncodeTarget::Aac => assert!(
-                bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xF0) == 0xF0,
-                "AAC output is missing an ADTS sync word"
-            ),
-            BytesEncodeTarget::M4a => assert!(
-                bytes.windows(4).any(|window| window == b"ftyp")
-                    && bytes.windows(4).any(|window| window == b"mdat"),
-                "M4A output is missing MP4 container boxes"
-            ),
-        }
-    }
 }

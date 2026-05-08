@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 //! # Kithara
 //!
@@ -18,11 +17,6 @@
 //! let mut buf = [0.0f32; 1024];
 //! resource.read(&mut buf);
 //! ```
-
-#[cfg(feature = "internal")]
-pub mod internal;
-
-// Virtual modules — namespaced access to all subcrates.
 
 pub mod audio {
     pub use kithara_audio::*;
@@ -87,11 +81,10 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
-// Test macros — `#[kithara::test]` and `#[kithara::fixture]`.
+pub use kithara_test_macros::mock;
 #[cfg(feature = "test-utils")]
 pub use kithara_test_macros::{fixture, test};
 
-// Mock module — re-exports mocks from all subcrates with test-utils.
 #[cfg(feature = "test-utils")]
 pub mod mock {
     pub use kithara_audio::mock::*;
@@ -102,29 +95,22 @@ pub mod mock {
 
 /// Prelude — flat imports for common types.
 pub mod prelude {
-    // Audio pipeline
-    // HLS (optional)
     #[cfg(feature = "hls")]
-    pub use kithara_abr::{AbrMode, AbrOptions};
+    pub use kithara_abr::AbrMode;
     pub use kithara_audio::{Audio, AudioConfig, PcmReader, ResamplerQuality};
-    // Decode
     pub use kithara_decode::{
         DecodeError, DecodeResult, DecoderTrackInfo, PcmMeta, PcmSpec, TrackMetadata,
     };
-    // Events
     #[cfg(feature = "hls")]
     pub use kithara_events::HlsEvent;
     pub use kithara_events::{AudioEvent, BusScope, Event, EventBus, EventReceiver, FileEvent};
-    // File (optional)
     #[cfg(feature = "file")]
     pub use kithara_file::{File, FileConfig};
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig};
-    // Play
     pub use kithara_play::{
         AudioWorkerHandle, EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource,
         ResourceConfig, ResourceSrc, ServiceClass, SourceType,
     };
-    // Stream
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
 }

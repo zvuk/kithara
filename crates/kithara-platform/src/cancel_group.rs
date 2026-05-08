@@ -28,17 +28,6 @@ impl CancelGroup {
         }
     }
 
-    /// Returns `true` if both groups share the same underlying source array.
-    #[must_use]
-    pub fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.sources, &other.sources)
-    }
-
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.sources.iter().any(CancellationToken::is_cancelled)
-    }
-
     pub async fn cancelled(&self) {
         if self.is_cancelled() {
             return;
@@ -55,12 +44,21 @@ impl CancelGroup {
         select_all(futs).await;
     }
 
+    /// Returns `true` if both groups share the same underlying source array.
+    #[must_use]
+    pub fn equals_ptr(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.sources, &other.sources)
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.sources.iter().any(CancellationToken::is_cancelled)
+    }
+
     fn tokens(&self) -> &[CancellationToken] {
         &self.sources
     }
 }
-
-// From
 
 impl From<CancellationToken> for CancelGroup {
     fn from(token: CancellationToken) -> Self {
@@ -74,8 +72,6 @@ impl From<Vec<CancellationToken>> for CancelGroup {
     }
 }
 
-// BitOr: group | group
-
 impl BitOr for CancelGroup {
     type Output = Self;
 
@@ -86,8 +82,6 @@ impl BitOr for CancelGroup {
     }
 }
 
-// BitOr: group | token
-
 impl BitOr<CancellationToken> for CancelGroup {
     type Output = Self;
 
@@ -97,8 +91,6 @@ impl BitOr<CancellationToken> for CancelGroup {
         Self::new(tokens)
     }
 }
-
-// BitOr: token | group
 
 impl BitOr<CancelGroup> for CancellationToken {
     type Output = CancelGroup;
@@ -120,8 +112,6 @@ mod tests {
 
     use super::CancelGroup;
 
-    // Helpers
-
     #[derive(Clone, Debug)]
     enum Src {
         Fresh,
@@ -138,8 +128,8 @@ mod tests {
 
     struct Setup {
         group: CancelGroup,
-        sources: Vec<CancellationToken>,
         parents: Vec<CancellationToken>,
+        sources: Vec<CancellationToken>,
     }
 
     fn build(spec: &[Src]) -> Setup {
@@ -166,8 +156,8 @@ mod tests {
         let group = CancelGroup::new(sources.clone());
         Setup {
             group,
-            sources,
             parents,
+            sources,
         }
     }
 
@@ -178,8 +168,6 @@ mod tests {
             Act::None => {}
         }
     }
-
-    // Sync parametrized tests
 
     macro_rules! sync_cancel_tests {
         ($($name:ident: $spec:expr, $action:expr, $expected:expr;)*) => {
@@ -221,8 +209,6 @@ mod tests {
             [Src::Fresh, Src::ChildOf(0), Src::PreCancelled], Act::None, true;
     }
 
-    // Async parametrized tests
-
     macro_rules! async_cancel_tests {
         ($($name:ident: $spec:expr, $action:expr;)*) => {
             $(
@@ -239,8 +225,8 @@ mod tests {
 
                     tokio_time::timeout(Duration::from_secs(2), handle)
                         .await
-                        .expect("cancelled() must resolve within timeout")
-                        .expect("task must not panic");
+                        .expect("BUG: cancelled() must resolve within the test timeout")
+                        .expect("BUG: spawned cancellation task must not panic");
                 }
             )*
         }
@@ -263,8 +249,6 @@ mod tests {
             [Src::ChildOf(0), Src::ChildOf(1)], Act::Parent(1);
     }
 
-    // Edge cases
-
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn cancelled_resolves_immediately_when_pre_cancelled() {
         let tok = CancellationToken::new();
@@ -273,7 +257,7 @@ mod tests {
 
         tokio_time::timeout(Duration::from_secs(1), group.cancelled())
             .await
-            .expect("cancelled() must return immediately for pre-cancelled source");
+            .expect("BUG: cancelled() must return immediately for a pre-cancelled source");
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -302,8 +286,6 @@ mod tests {
         assert!(group.is_cancelled());
         assert!(cloned.is_cancelled());
     }
-
-    // BitOr composition tests
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn token_bitor_token() {
@@ -378,7 +360,7 @@ mod tests {
 
         tokio_time::timeout(Duration::from_secs(2), handle)
             .await
-            .expect("cancelled() must resolve")
-            .expect("task must not panic");
+            .expect("BUG: cancelled() must resolve once one source has cancelled")
+            .expect("BUG: spawned task awaiting cancellation must not panic");
     }
 }

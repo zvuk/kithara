@@ -15,7 +15,7 @@ use tracing::trace;
 use crate::DecryptContext;
 
 /// AES block size in bytes.
-const AES_BLOCK_SIZE: usize = 16;
+pub(crate) const AES_BLOCK_SIZE: usize = 16;
 
 /// AES-128-CBC chunk decryption function.
 ///
@@ -49,7 +49,6 @@ pub fn aes128_cbc_process_chunk(
         return Ok(0);
     }
 
-    // AES-CBC requires input aligned to block size
     if !input.len().is_multiple_of(AES_BLOCK_SIZE) {
         return Err(format!(
             "input length {} is not aligned to AES block size {}",
@@ -58,19 +57,15 @@ pub fn aes128_cbc_process_chunk(
         ));
     }
 
-    // Save last ciphertext block BEFORE decryption — needed for CBC IV chaining.
-    // In CBC mode the IV for the next chunk is the last ciphertext block of this chunk.
     let next_iv: [u8; AES_BLOCK_SIZE] = {
         let mut iv = [0u8; AES_BLOCK_SIZE];
         iv.copy_from_slice(&input[input.len() - AES_BLOCK_SIZE..]);
         iv
     };
 
-    // Copy input to output buffer for in-place decryption
     output[..input.len()].copy_from_slice(input);
 
     if is_last {
-        // Last chunk: decrypt with PKCS7 unpadding
         let decryptor = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
         let plaintext = decryptor
             .decrypt_padded::<Pkcs7>(&mut output[..input.len()])
@@ -81,10 +76,8 @@ pub fn aes128_cbc_process_chunk(
             decrypted = written,
             "aes128_cbc: last chunk decrypted with unpadding"
         );
-        // No need to update IV for last chunk — there are no more chunks.
         Ok(written)
     } else {
-        // Intermediate chunk: decrypt without unpadding (block-by-block, same size)
         let decryptor = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
         let plaintext = decryptor
             .decrypt_padded::<NoPadding>(&mut output[..input.len()])
@@ -95,117 +88,7 @@ pub fn aes128_cbc_process_chunk(
             decrypted = written,
             "aes128_cbc: intermediate chunk decrypted"
         );
-        // Update IV for next chunk: CBC chaining requires the last ciphertext block.
         ctx.iv = next_iv;
         Ok(written)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use aes::Aes128;
-    use cbc::{
-        Encryptor,
-        cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
-    };
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    fn encrypt_aes128_cbc(plaintext: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
-        let encryptor = Encryptor::<Aes128>::new(key.into(), iv.into());
-        // Allocate buffer: plaintext + up to one full padding block
-        let padded_len = plaintext.len() + (AES_BLOCK_SIZE - plaintext.len() % AES_BLOCK_SIZE);
-        let mut buf = vec![0u8; padded_len];
-        buf[..plaintext.len()].copy_from_slice(plaintext);
-        let ct = encryptor
-            .encrypt_padded::<Pkcs7>(&mut buf, plaintext.len())
-            .expect("encrypt_padded failed");
-        ct.to_vec()
-    }
-
-    fn repeating_bytes(len: usize) -> Vec<u8> {
-        (0u8..=u8::MAX).cycle().take(len).collect()
-    }
-
-    /// Roundtrip: encrypt → decrypt single chunk.
-    #[kithara::test(wasm)]
-    #[case::hello(b"Hello, DRM world! This is a test of AES-128-CBC.".as_slice(), [0x42u8; 16], [0x13u8; 16])]
-    #[case::exact_block(&[0x55u8; 16], [0xAAu8; 16], [0xBBu8; 16])]
-    fn test_single_chunk_roundtrip(
-        #[case] plaintext: &[u8],
-        #[case] key: [u8; 16],
-        #[case] iv: [u8; 16],
-    ) {
-        let ciphertext = encrypt_aes128_cbc(plaintext, &key, &iv);
-        let mut ctx = DecryptContext::new(key, iv);
-
-        let mut output = vec![0u8; ciphertext.len()];
-        let written = aes128_cbc_process_chunk(&ciphertext, &mut output, &mut ctx, true).unwrap();
-
-        assert_eq!(&output[..written], plaintext);
-    }
-
-    #[kithara::test]
-    fn test_single_chunk_roundtrip_large() {
-        let key = [0x01u8; 16];
-        let iv = [0x02u8; 16];
-        let plaintext = repeating_bytes(1000);
-
-        let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
-        let mut ctx = DecryptContext::new(key, iv);
-
-        let mut output = vec![0u8; ciphertext.len()];
-        let written = aes128_cbc_process_chunk(&ciphertext, &mut output, &mut ctx, true).unwrap();
-
-        assert_eq!(written, plaintext.len());
-        assert_eq!(&output[..written], &plaintext[..]);
-    }
-
-    #[kithara::test]
-    fn test_empty_input() {
-        let mut ctx = DecryptContext::new([0u8; 16], [0u8; 16]);
-        let mut output = [0u8; 16];
-        let written = aes128_cbc_process_chunk(&[], &mut output, &mut ctx, true).unwrap();
-        assert_eq!(written, 0);
-    }
-
-    #[kithara::test]
-    fn test_unaligned_input_fails() {
-        let mut ctx = DecryptContext::new([0u8; 16], [0u8; 16]);
-        let input = [0u8; 15]; // Not aligned to 16
-        let mut output = [0u8; 15];
-        let result = aes128_cbc_process_chunk(&input, &mut output, &mut ctx, false);
-        assert!(result.is_err());
-    }
-
-    /// Multi-chunk CBC IV chaining.
-    #[kithara::test(wasm)]
-    #[case::small_2_chunks(48, 32)]
-    #[case::large_4_chunks(256, 64)]
-    #[case::uneven_3_chunks(160, 48)]
-    fn test_multi_chunk_cbc_chaining(#[case] plaintext_len: usize, #[case] chunk_size: usize) {
-        let key = [0x77u8; 16];
-        let iv = [0x33u8; 16];
-
-        let plaintext = repeating_bytes(plaintext_len);
-        let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
-
-        let mut ctx = DecryptContext::new(key, iv);
-        let mut decrypted = Vec::new();
-
-        let total = ciphertext.len();
-        let mut offset = 0;
-        while offset < total {
-            let end = (offset + chunk_size).min(total);
-            let is_last = end == total;
-            let chunk = &ciphertext[offset..end];
-            let mut output = vec![0u8; chunk.len()];
-            let written = aes128_cbc_process_chunk(chunk, &mut output, &mut ctx, is_last).unwrap();
-            decrypted.extend_from_slice(&output[..written]);
-            offset = end;
-        }
-
-        assert_eq!(decrypted, plaintext);
     }
 }

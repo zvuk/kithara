@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::missing_errors_doc, clippy::ignored_unit_patterns)]
+#![cfg_attr(all(), allow(clippy::missing_errors_doc))]
 
 #[cfg(all(target_arch = "wasm32", not(feature = "backend-web-audio")))]
 compile_error!("kithara-play: wasm32 build requires `backend-web-audio`");
@@ -16,8 +16,8 @@ mod metadata;
 mod time;
 mod types;
 
-#[cfg(feature = "internal")]
-pub mod internal;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_helpers;
 
 pub mod impls;
 pub mod traits;
@@ -32,15 +32,20 @@ pub use error::PlayError;
 pub use events::{
     DjEvent, EngineEvent, InterruptionKind, ItemEvent, PlayerEvent, RouteChangeReason, SessionEvent,
 };
-// Concrete implementations
-pub use impls::config::{ResourceConfig, ResourceSrc};
 pub use impls::{
+    config::{ResourceConfig, ResourceSrc},
     engine::{EngineConfig, EngineImpl},
     player::{PlayerConfig, PlayerImpl},
+    player_node::PlayerNode,
     resource::Resource,
+    session_engine::{
+        AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionState,
+        StartStreamFn, run_cmd,
+    },
+    shared_eq::SharedEq,
     source_type::SourceType,
 };
-pub use kithara_audio::{AudioWorkerHandle, ServiceClass};
+pub use kithara_audio::{AudioWorkerHandle, SeekOutcome, ServiceClass};
 #[cfg(any(feature = "file", feature = "hls"))]
 pub use kithara_net::Headers;
 pub use metadata::{Artwork, Metadata};
@@ -65,6 +70,6 @@ pub use traits::{
     },
 };
 pub use types::{
-    ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId, TimeControlStatus, TimeRange,
-    WaitingReason,
+    ActionAtItemEnd, ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId,
+    TimeControlStatus, TimeRange, WaitingReason,
 };

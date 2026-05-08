@@ -29,7 +29,7 @@ pub async fn sleep(duration: Duration) {
     let ms = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);
     let promise = Promise::new(&mut |resolve, _| {
         let set_timeout: Function = Reflect::get(&global(), &JsValue::from_str("setTimeout"))
-            .expect("setTimeout must exist")
+            .expect("BUG: setTimeout is a standard browser global, must always exist")
             .unchecked_into();
         let _ = set_timeout.call2(&JsValue::UNDEFINED, &resolve, &JsValue::from(ms));
     });

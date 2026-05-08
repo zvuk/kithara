@@ -1,10 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 use std::fmt;
 
-use kithara::{
-    events::{AudioEvent, Event, EventReceiver},
-    play::internal::offline::OfflinePlayer,
-};
+use kithara::events::{AudioEvent, Event, EventReceiver};
+use kithara_integration_tests::offline::OfflinePlayer;
 use kithara_platform::{
     thread,
     time::{Duration, Instant},

@@ -1,10 +1,16 @@
 id: style.no-separator-comments-rs
 message: Separator comments are not allowed; use plain // section headers.
-severity: error
+severity: warning
 language: Rust
 files:
   - crates/**/*.rs
   - tests/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   all:
     - kind: line_comment

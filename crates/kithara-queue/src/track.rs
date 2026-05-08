@@ -7,14 +7,14 @@ use kithara_play::ResourceConfig;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct TrackEntry {
-    /// Stable identifier.
-    pub id: TrackId,
-    /// Display name derived from the URL or caller-supplied. May be empty.
-    pub name: String,
     /// Source URL, if known. `None` for `TrackSource::Config` entries
     /// whose source is a pre-built [`ResourceConfig`] without a URL
     /// string (local file path, etc.).
     pub url: Option<String>,
+    /// Display name derived from the URL or caller-supplied. May be empty.
+    pub name: String,
+    /// Stable identifier.
+    pub id: TrackId,
     /// Current loading status.
     pub status: TrackStatus,
 }
@@ -47,9 +47,10 @@ impl TrackSource {
     /// Returns the source URI if the variant is [`TrackSource::Uri`].
     #[must_use]
     pub fn uri(&self) -> Option<&str> {
-        match self {
-            Self::Uri(s) => Some(s),
-            Self::Config(_) => None,
+        if let Self::Uri(s) = self {
+            Some(s)
+        } else {
+            None
         }
     }
 }
@@ -87,15 +88,15 @@ impl From<Box<ResourceConfig>> for TrackSource {
 /// the polled view (`tracks[i].status`) and the reactive
 /// [`QueueEvent::TrackStatusChanged`] stream never drift.
 pub(crate) struct Tracks {
-    inner: Mutex<Vec<TrackEntry>>,
     bus: EventBus,
+    inner: Mutex<Vec<TrackEntry>>,
 }
 
 impl Tracks {
     pub(crate) fn new(bus: EventBus) -> Self {
         Self {
-            inner: Mutex::new(Vec::new()),
             bus,
+            inner: Mutex::new(Vec::new()),
         }
     }
 
@@ -141,7 +142,8 @@ mod tests {
 
     #[kithara::test]
     fn track_source_from_resource_config() {
-        let cfg = ResourceConfig::new("https://example.com/a.mp3").expect("valid url");
+        let cfg =
+            ResourceConfig::new("https://example.com/a.mp3").expect("BUG: hard-coded URL is valid");
         let src: TrackSource = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));
         assert_eq!(src.uri(), None);

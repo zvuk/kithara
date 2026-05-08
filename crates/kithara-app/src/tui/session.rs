@@ -39,8 +39,8 @@ impl Drop for RawModeGuard {
 /// and terminal resize events. Uses ratatui with an inline viewport
 /// anchored to the bottom of the terminal.
 pub struct UiSession {
-    _raw: RawModeGuard,
     pub dashboard: Dashboard,
+    _raw: RawModeGuard,
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
 }
 
@@ -67,13 +67,17 @@ impl UiSession {
         terminal.hide_cursor()?;
 
         let mut session = Self {
-            _raw: raw,
             dashboard,
             terminal,
+            _raw: raw,
         };
         session.stick_to_bottom()?;
         session.park_cursor_above_dashboard()?;
         Ok(session)
+    }
+
+    fn dashboard_height(&self) -> u16 {
+        self.dashboard.height()
     }
 
     /// # Errors
@@ -106,8 +110,12 @@ impl UiSession {
         Ok(())
     }
 
-    fn dashboard_height(&self) -> u16 {
-        self.dashboard.height()
+    fn park_cursor_above_dashboard(&mut self) -> TuiResult {
+        let terminal_height = self.terminal.size()?.height.max(1);
+        let height = self.dashboard_height().min(terminal_height);
+        let y = terminal_height.saturating_sub(height.saturating_add(CURSOR_GUARD_LINES));
+        self.terminal.set_cursor_position(Position { x: 0, y })?;
+        Ok(())
     }
 
     fn stick_to_bottom(&mut self) -> TuiResult {
@@ -122,14 +130,6 @@ impl UiSession {
         self.terminal.insert_before(pad, |buf| {
             Clear.render(buf.area, buf);
         })?;
-        Ok(())
-    }
-
-    fn park_cursor_above_dashboard(&mut self) -> TuiResult {
-        let terminal_height = self.terminal.size()?.height.max(1);
-        let height = self.dashboard_height().min(terminal_height);
-        let y = terminal_height.saturating_sub(height.saturating_add(CURSOR_GUARD_LINES));
-        self.terminal.set_cursor_position(Position { x: 0, y })?;
         Ok(())
     }
 }

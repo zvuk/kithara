@@ -29,7 +29,6 @@ impl Consts {
 )]
 fn serve_with_range(data: &'static [u8], req: Request) -> Response {
     if let Some(range_header) = req.headers().get("range").and_then(|v| v.to_str().ok()) {
-        // Parse "bytes=START-END"
         if let Some(range_str) = range_header.strip_prefix("bytes=") {
             let parts: Vec<&str> = range_str.split('-').collect();
             if parts.len() == 2 {
@@ -56,7 +55,6 @@ fn serve_with_range(data: &'static [u8], req: Request) -> Response {
         }
     }
 
-    // No Range header or invalid range — return full content.
     Response::builder()
         .status(200)
         .header("Content-Length", data.len().to_string())
@@ -82,14 +80,10 @@ async fn run_test_server() -> TestHttpServer {
     TestHttpServer::new(test_app()).await
 }
 
-// Fixtures
-
 #[kithara::fixture]
 async fn test_server() -> TestHttpServer {
     run_test_server().await
 }
-
-// Stream<File> Seek Tests
 
 #[kithara::test(
     tokio,
@@ -116,9 +110,6 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let expected_vec = expected.to_vec();
 
     let result = spawn_blocking(move || {
-        // Primer read: forces wait_range to block until download delivers data.
-        // For a 27-byte file the entire payload arrives in one chunk,
-        // so after this read all offsets are guaranteed available.
         let mut primer = [0u8; 1];
         let _ = stream.read(&mut primer).unwrap();
 
@@ -141,9 +132,15 @@ async fn stream_file_seek_start_reads_correct_bytes(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn stream_file_seek_current_works(
+#[case::current_after_read(Some((5, b"ID3\x04\x00")), SeekFrom::Current(5), 10, b"estA")]
+#[case::end_from_fresh(None, SeekFrom::End(-5), 22, b"12345")]
+async fn stream_file_seek_reads_expected_bytes(
     #[future] test_server: TestHttpServer,
     temp_dir: TestTempDir,
+    #[case] initial_read: Option<(usize, &'static [u8])>,
+    #[case] seek_from: SeekFrom,
+    #[case] expected_pos: u64,
+    #[case] expected: &'static [u8],
 ) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");
@@ -152,49 +149,20 @@ async fn stream_file_seek_current_works(
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {
-        // Read first 5 bytes
-        let mut buf = [0u8; 5];
+        if let Some((len, prefix)) = initial_read {
+            let mut buf = vec![0u8; len];
+            let n = stream.read(&mut buf).unwrap();
+            assert_eq!(n, len);
+            assert_eq!(&buf[..n], prefix);
+        }
+
+        let pos = stream.seek(seek_from).unwrap();
+        assert_eq!(pos, expected_pos);
+
+        let mut buf = vec![0u8; expected.len()];
         let n = stream.read(&mut buf).unwrap();
-        assert_eq!(n, 5);
-        assert_eq!(&buf, b"ID3\x04\x00");
-
-        // Seek forward 5 bytes (position = 5 + 5 = 10)
-        let pos = stream.seek(SeekFrom::Current(5)).unwrap();
-        assert_eq!(pos, 10);
-
-        // Read from position 10
-        let mut buf = [0u8; 4];
-        let n = stream.read(&mut buf).unwrap();
-        assert_eq!(n, 4);
-        assert_eq!(&buf, b"estA");
-    })
-    .await
-    .unwrap();
-}
-
-#[kithara::test(
-    tokio,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
-async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_dir: TestTempDir) {
-    let server = test_server.await;
-    let url = server.url("/audio.mp3");
-
-    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let mut stream = Stream::<File>::new(config).await.unwrap();
-
-    spawn_blocking(move || {
-        // Seek from end — wait_range inside seek() ensures len() is known.
-        let pos = stream.seek(SeekFrom::End(-5)).unwrap();
-        // Test data: b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345" = 27 bytes
-        assert_eq!(pos, 22);
-
-        // Read last 5 bytes
-        let mut buf = [0u8; 5];
-        let n = stream.read(&mut buf).unwrap();
-        assert_eq!(n, 5);
-        assert_eq!(&buf, b"12345");
+        assert_eq!(n, expected.len());
+        assert_eq!(&buf[..n], expected);
     })
     .await
     .unwrap();
@@ -216,8 +184,6 @@ async fn stream_file_seek_past_eof_fails(
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {
-        // wait_range inside seek() ensures len() is known, then rejects past-EOF.
-        // Attempt to seek past EOF �� length is known.
         let result = stream.seek(SeekFrom::Start(1000));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
@@ -242,27 +208,23 @@ async fn stream_file_multiple_seeks_work(
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {
-        // Read from start
         let mut buf = [0u8; 3];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 3);
         assert_eq!(&buf, b"ID3");
 
-        // Seek to middle
         stream.seek(SeekFrom::Start(13)).unwrap();
         let mut buf = [0u8; 5];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 5);
         assert_eq!(&buf, b"Audio");
 
-        // Seek back to start
         stream.seek(SeekFrom::Start(0)).unwrap();
         let mut buf = [0u8; 3];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 3);
         assert_eq!(&buf, b"ID3");
 
-        // Seek to end
         let pos = stream.seek(SeekFrom::End(0)).unwrap();
         assert_eq!(pos, 27);
     })

@@ -1,0 +1,35 @@
+id: idioms.for-if-filter-shape
+message: |
+  `for x in xs { if cond { ... } }` is a filter-shape masquerading as a
+  loop. Replace with one of:
+
+      // Iterator chain — clearest when the body is short:
+      xs.iter().filter(|x| cond).for_each(|x| { ... });
+
+      // Filtered for — when the body needs `break`/`continue` or
+      // captures `&mut` state:
+      for x in xs.iter().filter(|x| cond) { ... }
+
+  This makes "I only process matching items" explicit at the for-line
+  instead of two indents deep.
+
+  Suppress with `// ast-grep-ignore: idioms.for-if-filter-shape` when
+  the `if` body is followed by other statements that depend on the
+  iteration step (rare).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  pattern: |
+    for $X in $IT {
+        if $COND {
+            $$$BODY
+        }
+    }

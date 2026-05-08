@@ -23,26 +23,23 @@
 //! `setTimeout` on wasm32.
 
 mod cancel_group;
+#[cfg(not(target_arch = "wasm32"))]
+mod env;
 mod maybe_send;
 pub mod sync;
-#[cfg(not(target_arch = "wasm32"))]
-mod test_env;
 pub mod thread;
 pub mod time;
 pub mod tokio;
 
-#[cfg(feature = "internal")]
-pub mod internal;
-
 pub use cancel_group::CancelGroup;
+#[cfg(not(target_arch = "wasm32"))]
+pub use env::env_mutation_lock;
 pub use kithara_hang_detector::{HangDetector, default_timeout, hang_watchdog};
 pub use maybe_send::{BoxFuture, MaybeSend, MaybeSendFuture, MaybeSync, WasmSend};
 pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
     WaitTimeoutResult,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use test_env::test_env_lock;
 pub use thread::{
     Duration, JoinHandle, Thread, ThreadId, current, park, park_timeout, sleep, spawn,
 };

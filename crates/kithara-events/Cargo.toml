@@ -14,28 +14,29 @@ workspace = true
 dashmap = { workspace = true }
 delegate = { workspace = true }
 derivative = { workspace = true }
+kithara-net = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
+num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 smallvec = { workspace = true }
-
-kithara-abr = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
-default = ["file", "hls", "audio", "player", "app", "queue", "downloader"]
+default = ["abr", "file", "hls", "audio", "player", "app", "queue", "downloader"]
+abr = []
 app = []
 file = []
-hls = ["dep:kithara-abr"]
+hls = ["abr"]
 audio = []
 player = []
 queue = []
-downloader = []
-internal = []
+downloader = ["dep:kithara-net", "dep:url"]
 
 [dev-dependencies]
-kithara-events = { path = ".", default-features = false, features = ["internal"] }
-kithara-test-utils = { workspace = true }
+kithara-events = { path = ".", default-features = false }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 wasm-bindgen-test = { workspace = true }
 

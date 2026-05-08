@@ -1,0 +1,25 @@
+id: style.pub-primitive-spread
+message: |
+  Public function with three or more consecutive raw-primitive parameters
+  (`u64`, `u32`, `usize`, `i64`, `bool`, `String`, …). At call sites these
+  collapse into "what was the order again?" — easy to swap, easy to misuse,
+  and hard to extend without breaking every caller.
+
+  Push the related primitives into a typed value (newtype struct, builder,
+  or enum) so the call site reads `do_thing(SeekRequest { offset, limit, ... })`
+  instead of `do_thing(123, 456, true, "x".into())`.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  all:
+    - kind: function_item
+    - any:
+        - regex: '^\s*pub(?:\s*\([^)]*\))?\s+(?:async\s+)?(?:unsafe\s+)?(?:extern\s+(?:"[^"]*"\s+)?)?fn\s+\w+\s*(?:<[^>]*>)?\s*\([^)]*?\b\w+\s*:\s*(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char|String)\s*,\s*\w+\s*:\s*(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char|String)\s*,\s*\w+\s*:\s*(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char|String)\b'

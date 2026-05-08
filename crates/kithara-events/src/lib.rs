@@ -8,6 +8,8 @@ mod receiver;
 mod scope;
 mod seek;
 
+#[cfg(feature = "abr")]
+mod abr;
 #[cfg(feature = "app")]
 mod app;
 #[cfg(feature = "audio")]
@@ -18,25 +20,28 @@ mod downloader;
 mod file;
 #[cfg(feature = "hls")]
 mod hls;
-#[cfg(feature = "internal")]
-pub mod internal;
 #[cfg(feature = "player")]
 mod play;
 #[cfg(feature = "queue")]
 mod queue;
 
+#[cfg(feature = "abr")]
+pub use abr::{
+    AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, AbrVariant, BandwidthSource,
+    VariantDuration, VariantInfo,
+};
 #[cfg(feature = "app")]
 pub use app::AppEvent;
 #[cfg(feature = "audio")]
-pub use audio::{AudioEvent, AudioFormat, SeekLifecycleStage};
+pub use audio::{AudioEvent, AudioFormat, SeekLifecycleStage, SegmentLocation};
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 #[cfg(feature = "downloader")]
-pub use downloader::DownloaderEvent;
+pub use downloader::{CancelReason, DownloaderEvent, RequestId, RequestMethod, RequestPriority};
 pub use event::Event;
 #[cfg(feature = "file")]
-pub use file::FileEvent;
+pub use file::{FileError, FileEvent};
 #[cfg(feature = "hls")]
-pub use hls::HlsEvent;
+pub use hls::{HlsError, HlsEvent};
 #[cfg(feature = "player")]
 pub use play::{
     BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, MediaTime, PlayerEvent,
@@ -47,4 +52,4 @@ pub use play::{
 pub use queue::{QueueEvent, TrackId, TrackStatus};
 pub use receiver::EventReceiver;
 pub use scope::BusScope;
-pub use seek::{SeekEpoch, SeekTaskId};
+pub use seek::SeekEpoch;

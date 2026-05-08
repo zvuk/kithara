@@ -1,6 +1,7 @@
 use std::{cmp::min, collections::HashMap, time::Duration};
 
 use derivative::Derivative;
+use derive_setters::Setters;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Headers {
@@ -15,21 +16,21 @@ impl Headers {
         }
     }
 
-    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
-        self.inner.insert(key.into(), value.into());
-    }
-
     pub fn get(&self, key: &str) -> Option<&str> {
         self.inner.get(key).map(String::as_str)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
+        self.inner.insert(key.into(), value.into());
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 }
 
@@ -73,6 +74,7 @@ impl RangeSpec {
 
 #[derive(Clone, Debug, Derivative)]
 #[derivative(Default)]
+#[non_exhaustive]
 pub struct RetryPolicy {
     #[derivative(Default(value = "Duration::from_millis(100)"))]
     pub base_delay: Duration,
@@ -104,21 +106,48 @@ impl RetryPolicy {
     }
 }
 
-#[derive(Clone, Debug, Derivative)]
+#[derive(Clone, Debug, Derivative, Setters)]
 #[derivative(Default)]
+#[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct NetOptions {
+    /// Maximum allowed inactivity between consecutive read operations.
+    /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
+    /// "The timeout applies to each read operation, and resets after a
+    /// successful read") and also drives the Downloader-layer
+    /// `BodyStream` chunk-inactivity guard for the same semantics one
+    /// layer down.
+    ///
+    /// Protects against zombie connections that send headers but then
+    /// stop streaming bytes. Does **not** cap the total request
+    /// lifetime; a legitimately slow stream that keeps delivering
+    /// chunks (even one byte every few seconds) is not aborted.
+    /// Default 30s is sized to absorb realistic mobile-network stalls
+    /// (TCP retransmits, captive-portal warm-up, server-side TTFB
+    /// spikes) without aborting valid slow streams — the player's
+    /// contract is "wait for the segment, regardless of connection
+    /// speed", and a 10s cap raced real fixtures.
+    #[derivative(Default(value = "Duration::from_secs(30)"))]
+    pub inactivity_timeout: Duration,
+    /// Hard cap on total request lifetime. Maps to
+    /// [`reqwest::RequestBuilder::timeout`]. `None` lets streaming
+    /// downloads run indefinitely as long as `inactivity_timeout` is
+    /// satisfied — required for the player to honour "wait for the
+    /// segment, regardless of connection speed". Default `Some(2 min)`
+    /// keeps a safety net against pathological cases (server stuck in
+    /// mid-body without ever closing) while not racing realistic
+    /// slow-network seeks.
+    #[derivative(Default(value = "Some(Duration::from_secs(120))"))]
+    pub total_timeout: Option<Duration>,
+    pub retry_policy: RetryPolicy,
+    /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
+    /// **Security risk** — use only for local development and test servers.
+    pub is_insecure: bool,
     /// Max idle connections per host. Enables HTTP keep-alive connection
     /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
     /// Set to 0 to disable pooling.
     #[derivative(Default(value = "8"))]
     pub pool_max_idle_per_host: usize,
-    /// Hard timeout per request. Connection is aborted after this duration.
-    #[derivative(Default(value = "Duration::from_secs(10)"))]
-    pub request_timeout: Duration,
-    pub retry_policy: RetryPolicy,
-    /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
-    /// **Security risk** — use only for local development and test servers.
-    pub insecure: bool,
 }
 
 #[cfg(test)]
@@ -129,7 +158,6 @@ mod tests {
 
     use super::*;
 
-    // Headers tests
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::empty_headers(Headers::new(), true)]
     #[case::headers_with_values({
@@ -191,7 +219,6 @@ mod tests {
         assert!(headers.is_empty());
     }
 
-    // RangeSpec tests
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::full_range(0, Some(100), "bytes=0-100")]
     #[case::open_ended(50, None, "bytes=50-")]
@@ -253,7 +280,6 @@ mod tests {
         assert_eq!(range1.end, range2.end);
     }
 
-    // RetryPolicy tests
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_retry_policy_default() {
         let policy = RetryPolicy::default();
@@ -286,8 +312,8 @@ mod tests {
     #[case(3, Duration::from_millis(400))]
     #[case(4, Duration::from_millis(800))]
     #[case(5, Duration::from_millis(1600))]
-    #[case(10, Duration::from_secs(5))] // Capped at max_delay
-    #[case(20, Duration::from_secs(5))] // Capped at max_delay
+    #[case(10, Duration::from_secs(5))]
+    #[case(20, Duration::from_secs(5))]
     async fn test_retry_policy_delay_for_attempt_default(
         #[case] attempt: u32,
         #[case] expected_delay: Duration,
@@ -326,14 +352,14 @@ mod tests {
         Duration::from_millis(200),
         3,
         Duration::from_millis(200)
-    )] // Capped
+    )]
     #[case(
         1,
         Duration::from_millis(50),
         Duration::from_millis(200),
         4,
         Duration::from_millis(200)
-    )] // Capped
+    )]
     async fn test_retry_policy_delay_for_attempt_custom(
         #[case] max_retries: u32,
         #[case] base_delay: Duration,
@@ -368,10 +394,9 @@ mod tests {
         assert_eq!(policy1.max_delay, policy2.max_delay);
     }
 
-    // Edge cases for RangeSpec
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::start_equals_end(10, Some(10), "bytes=10-10")]
-    #[case::start_greater_than_end(20, Some(10), "bytes=20-10")] // This is valid per spec
+    #[case::start_greater_than_end(20, Some(10), "bytes=20-10")]
     #[case::max_values(u64::MAX, Some(u64::MAX), &format!("bytes={}-{}", u64::MAX, u64::MAX))]
     async fn test_range_spec_edge_cases(
         #[case] start: u64,
@@ -382,7 +407,6 @@ mod tests {
         assert_eq!(range.to_header_value(), expected_header);
     }
 
-    // Edge cases for RetryPolicy
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::zero_max_retries(0, Duration::from_millis(100), Duration::from_secs(1))]
     #[case::large_max_retries(100, Duration::from_millis(10), Duration::from_secs(10))]
@@ -395,39 +419,31 @@ mod tests {
     ) {
         let policy = RetryPolicy::new(max_retries, base_delay, max_delay);
 
-        // Test delay calculation for edge cases
         for attempt in 0..=5 {
             let delay = policy.delay_for_attempt(attempt);
 
-            // Delay should never be negative
             assert!(delay >= Duration::ZERO);
 
-            // Delay should be capped at max_delay
             assert!(delay <= max_delay);
 
-            // For zero base_delay, all delays should be zero (except attempt 0 which is always zero)
             if base_delay == Duration::ZERO {
                 assert_eq!(delay, Duration::ZERO);
             }
         }
     }
 
-    // Test that large attempt numbers don't cause overflow
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case(10)]
     #[case(20)]
     async fn test_retry_policy_large_attempts(#[case] attempt: u32) {
         let policy = RetryPolicy::default();
 
-        // This should not panic
         let delay = policy.delay_for_attempt(attempt);
 
-        // Delay should be capped at max_delay
         assert!(delay <= policy.max_delay);
         assert!(delay >= Duration::ZERO);
     }
 
-    // Test Headers with special characters
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::with_spaces("X-Custom Header", "value with spaces")]
     #[case::with_unicode("X-Emoji", "🎉")]
@@ -440,14 +456,12 @@ mod tests {
         assert_eq!(headers.get(key), Some(value));
     }
 
-    // Test Headers case sensitivity
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_headers_case_sensitive() {
         let mut headers = Headers::new();
         headers.insert("Content-Type", "application/json");
         headers.insert("content-type", "text/plain");
 
-        // Should be case-sensitive
         assert_eq!(headers.get("Content-Type"), Some("application/json"));
         assert_eq!(headers.get("content-type"), Some("text/plain"));
         assert_ne!(headers.get("Content-Type"), headers.get("content-type"));

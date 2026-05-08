@@ -1,0 +1,130 @@
+//! Offline firewheel `AudioBackend` impl used by integration tests.
+//!
+//! Drives the firewheel audio graph without a real audio device. Tests
+//! call [`OfflineBackend::render`] (directly or via [`OfflineSession`])
+//! to step the graph synchronously.
+//!
+//! [`OfflineSession`]: super::session::OfflineSession
+
+use std::{num::NonZeroU32, time::Duration};
+
+use firewheel::{
+    StreamInfo,
+    backend::{AudioBackend, BackendProcessInfo},
+    node::StreamStatus,
+    processor::FirewheelProcessor,
+};
+
+/// Minimal firewheel `AudioBackend` that renders offline (no real device).
+pub struct OfflineBackend {
+    processor: Option<FirewheelProcessor<Self>>,
+    sample_rate: u32,
+    frames_rendered: u64,
+}
+
+/// Configuration for [`OfflineBackend`].
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct OfflineConfig {
+    pub block_frames: u32,
+    pub sample_rate: u32,
+}
+
+impl Default for OfflineConfig {
+    fn default() -> Self {
+        const DEFAULT_SAMPLE_RATE: u32 = 44100;
+        const DEFAULT_BLOCK_FRAMES: u32 = 512;
+
+        Self {
+            sample_rate: DEFAULT_SAMPLE_RATE,
+            block_frames: DEFAULT_BLOCK_FRAMES,
+        }
+    }
+}
+
+/// Errors (never happen for the offline backend).
+#[derive(Debug, thiserror::Error)]
+#[error("offline backend error")]
+pub struct OfflineError;
+
+impl AudioBackend for OfflineBackend {
+    type Config = OfflineConfig;
+    type Enumerator = ();
+    type Instant = kithara_platform::time::Instant;
+    type StartStreamError = OfflineError;
+    type StreamError = OfflineError;
+
+    fn delay_from_last_process(&self, _process_timestamp: Self::Instant) -> Option<Duration> {
+        None
+    }
+
+    fn enumerator() -> Self::Enumerator {}
+
+    fn poll_status(&mut self) -> Result<(), Self::StreamError> {
+        Ok(())
+    }
+
+    fn set_processor(&mut self, processor: FirewheelProcessor<Self>) {
+        self.processor = Some(processor);
+    }
+
+    fn start_stream(config: Self::Config) -> Result<(Self, StreamInfo), Self::StartStreamError> {
+        let sr = NonZeroU32::new(config.sample_rate).expect("BUG: non-zero sample rate");
+        let block = NonZeroU32::new(config.block_frames).expect("BUG: non-zero block frames");
+        let declick =
+            NonZeroU32::new(OfflineConfig::default().block_frames).expect("BUG: non-zero");
+        let stream_info = StreamInfo {
+            sample_rate: sr,
+            sample_rate_recip: 1.0 / f64::from(config.sample_rate),
+            prev_sample_rate: sr,
+            max_block_frames: block,
+            num_stream_in_channels: 0,
+            num_stream_out_channels: u32::try_from(Self::STEREO_CHANNELS).unwrap_or(u32::MAX),
+            input_to_output_latency_seconds: 0.0,
+            declick_frames: declick,
+            output_device_id: String::from("offline"),
+            input_device_id: None,
+        };
+        let backend = Self {
+            processor: None,
+            sample_rate: config.sample_rate,
+            frames_rendered: 0,
+        };
+        Ok((backend, stream_info))
+    }
+}
+
+impl OfflineBackend {
+    const STEREO_CHANNELS: usize = 2;
+
+    /// Render `frames` of audio. Calls `process_interleaved` on the
+    /// firewheel processor, driving all audio nodes in the graph.
+    ///
+    /// Returns the rendered stereo output buffer (interleaved LRLR).
+    pub fn render(&mut self, frames: usize) -> Vec<f32> {
+        let channels = Self::STEREO_CHANNELS;
+        let total_samples = frames * channels;
+        let input = vec![0.0f32; 0];
+        let mut output = vec![0.0f32; total_samples];
+
+        if let Some(ref mut processor) = self.processor {
+            let info = BackendProcessInfo {
+                frames,
+                num_in_channels: 0,
+                num_out_channels: channels,
+                process_timestamp: kithara_platform::time::Instant::now(),
+                duration_since_stream_start: {
+                    let frames_f64: f64 = num_traits::cast::AsPrimitive::as_(self.frames_rendered);
+                    Duration::from_secs_f64(frames_f64 / f64::from(self.sample_rate))
+                },
+                input_stream_status: StreamStatus::empty(),
+                output_stream_status: StreamStatus::empty(),
+                dropped_frames: 0,
+            };
+            processor.process_interleaved(&input, &mut output, info);
+        }
+
+        self.frames_rendered += frames as u64;
+        output
+    }
+}

@@ -7,13 +7,14 @@
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
-    events::{Event, EventBus, HlsEvent},
+    audio::{Audio, AudioConfig, ChunkOutcome, ReadOutcome},
+    decode::DecoderBackend,
+    events::{AbrEvent, Event, EventBus},
     file::{File, FileConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
-    play::internal::offline::{OfflinePlayer, resource_from_reader},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, Stream},
 };
+use kithara_integration_tests::offline::{OfflinePlayer, resource_from_reader};
 use kithara_platform::time::{Duration, Instant, sleep};
 use kithara_test_utils::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -28,15 +29,8 @@ use crate::continuity::{
     CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe, render_offline_window,
 };
 
-fn forced_downswitch_abr_options() -> AbrOptions {
-    AbrOptions {
-        down_switch_buffer_secs: 0.0,
-        min_buffer_for_up_switch_secs: 0.0,
-        min_switch_interval: Duration::from_secs(120),
-        mode: AbrMode::Auto(Some(0)),
-        throughput_safety_factor: 1.0,
-        ..AbrOptions::default()
-    }
+fn forced_downswitch_abr_options() -> AbrMode {
+    AbrMode::Auto(Some(0))
 }
 
 fn packaged_identical_content_abr_builder(codec: AudioCodec) -> HlsFixtureBuilder {
@@ -78,12 +72,12 @@ async fn create_packaged_abr_fixture() -> (TestServerHelper, url::Url) {
 async fn open_packaged_hls_audio(
     url: &url::Url,
     store: StoreOptions,
-    abr: AbrOptions,
+    abr: AbrMode,
     bus: Option<EventBus>,
 ) -> Audio<Stream<Hls>> {
     let mut hls_config = HlsConfig::new(url.clone())
         .with_store(store)
-        .with_abr_options(abr)
+        .with_initial_abr_mode(abr)
         .with_download_batch_size(1);
     if let Some(bus) = bus.clone() {
         hls_config = hls_config.with_events(bus);
@@ -97,7 +91,7 @@ async fn open_packaged_hls_audio(
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("packaged ABR audio should open for {url}: {err}"));
-    audio.preload();
+    let _ = audio.preload();
     audio
 }
 
@@ -106,15 +100,15 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
     let mut buf = [0.0f32; 4096];
 
     loop {
-        audio.preload();
-        let read = audio.read(&mut buf);
-        if read > 0 {
-            return read;
+        let _ = audio.preload();
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF while waiting for packaged ABR audio at stage={stage}");
+            }
+            Err(e) => panic!("decode error at stage={stage}: {e}"),
         }
-        assert!(
-            !audio.is_eof(),
-            "unexpected EOF while waiting for packaged ABR audio at stage={stage}"
-        );
         assert!(
             Instant::now() <= deadline,
             "timed out waiting for packaged ABR audio at stage={stage}"
@@ -143,34 +137,36 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
-    // Read for 15 seconds. If ABR switch hangs the worker,
-    // HangDetector (3s) will panic before the 30s test timeout.
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut buf = vec![0f32; 4096];
     let mut total_samples = 0u64;
 
+    let mut saw_eof = false;
     while Instant::now() < deadline {
-        let n = audio.read(&mut buf);
-        total_samples += n as u64;
-        if n == 0 {
-            if audio.is_eof() {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {
+                sleep(Duration::from_millis(10)).await;
+            }
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                total_samples += count.get() as u64;
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                saw_eof = true;
                 break;
             }
-            sleep(Duration::from_millis(10)).await;
+            Err(e) => panic!("decode error: {e}"),
         }
     }
 
+    let _ = saw_eof;
     info!(total_samples, "playback completed without hang");
     assert!(
         total_samples > 1000,
@@ -217,12 +213,20 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let deadline = Instant::now() + Duration::from_secs(8);
 
     while Instant::now() < deadline {
-        progress_audio.preload();
-        let read = progress_audio.read(&mut buf);
+        let _ = progress_audio.preload();
+        let read: usize = match progress_audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Pending { .. }) => 0,
+            Ok(ReadOutcome::Eof { .. }) => {
+                progress_probe.drain(&mut progress_rx);
+                break;
+            }
+            Err(e) => panic!("decode error: {e}"),
+        };
         progress_probe.drain(&mut progress_rx);
         loop {
             match hls_rx.try_recv() {
-                Ok(Event::Hls(HlsEvent::VariantApplied { .. })) => {
+                Ok(Event::Abr(AbrEvent::VariantApplied { .. })) => {
                     switch_count += 1;
                     switch_seen = true;
                 }
@@ -232,9 +236,6 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         }
 
         if read == 0 {
-            if progress_audio.is_eof() {
-                break;
-            }
             sleep(Duration::from_millis(10)).await;
             progress_probe.observe_idle();
             continue;
@@ -281,7 +282,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let decode_audio =
         open_packaged_hls_audio(&url, store, forced_downswitch_abr_options(), None).await;
     let mut resource = resource_from_reader(decode_audio);
-    timeout(Duration::from_secs(5), resource.preload())
+    let _ = timeout(Duration::from_secs(5), resource.preload())
         .await
         .expect("packaged ABR preload must complete");
     let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
@@ -325,19 +326,31 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[case::drm_abr_auto_sw("drm/master.m3u8", true, false)]
-#[case::drm_abr_auto_hw("drm/master.m3u8", true, true)]
-#[case::hls_abr_auto_sw("hls/master.m3u8", true, false)]
-#[case::hls_abr_auto_hw("hls/master.m3u8", true, true)]
-#[case::drm_manual_v0_sw("drm/master.m3u8", false, false)]
-#[case::drm_manual_v0_hw("drm/master.m3u8", false, true)]
-#[case::hls_manual_v0_sw("hls/master.m3u8", false, false)]
-#[case::hls_manual_v0_hw("hls/master.m3u8", false, true)]
+#[case::drm_abr_auto_sw("drm/master.m3u8", true, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::drm_abr_auto_hw("drm/master.m3u8", true, DecoderBackend::Apple)
+)]
+#[case::hls_abr_auto_sw("hls/master.m3u8", true, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hls_abr_auto_hw("hls/master.m3u8", true, DecoderBackend::Apple)
+)]
+#[case::drm_manual_v0_sw("drm/master.m3u8", false, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::drm_manual_v0_hw("drm/master.m3u8", false, DecoderBackend::Apple)
+)]
+#[case::hls_manual_v0_sw("hls/master.m3u8", false, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hls_manual_v0_hw("hls/master.m3u8", false, DecoderBackend::Apple)
+)]
 async fn stream_continues_after_seek(
     temp_dir: TestTempDir,
     #[case] path: &str,
     #[case] abr_auto: bool,
-    #[case] prefer_hardware: bool,
+    #[case] backend: DecoderBackend,
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
@@ -351,32 +364,23 @@ async fn stream_continues_after_seek(
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: abr_mode,
-            ..Default::default()
-        });
+        .with_initial_abr_mode(abr_mode);
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(prefer_hardware);
+    let config = AudioConfig::<Hls>::new(hls_config).with_decoder_backend(backend);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
     let mut buf = vec![0f32; 4096];
 
-    // Phase 1: Read for 3s (warmup)
     let warmup = Instant::now() + Duration::from_secs(3);
     while Instant::now() < warmup {
         let _ = audio.read(&mut buf);
         sleep(Duration::from_millis(5)).await;
     }
 
-    // Phase 2: Seek to ~7s, ~13s, ~18s, ~24s (like app3.log)
-    //
-    // Read a limited number of samples after each seek — NOT a wall-time
-    // deadline — because the decoder decodes faster than real-time and
-    // would otherwise reach EOF within each 3-second window.
-    let samples_per_seek: u64 = 48000 * 2; // ~1 second of stereo 48 kHz
+    let samples_per_seek: u64 = 48000 * 2;
     for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
         audio
             .seek(Duration::from_secs_f64(target_secs))
@@ -385,10 +389,15 @@ async fn stream_continues_after_seek(
         let mut samples = 0u64;
         let deadline = Instant::now() + Duration::from_secs(5);
         while samples < samples_per_seek && Instant::now() < deadline {
-            let n = audio.read(&mut buf);
-            samples += n as u64;
-            if n == 0 {
-                sleep(Duration::from_millis(10)).await;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    samples += count.get() as u64;
+                }
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
             }
         }
         assert!(
@@ -397,18 +406,18 @@ async fn stream_continues_after_seek(
         );
     }
 
-    // Phase 3: Continue reading after last seek — must not hang.
-    // Read another ~1s of audio to confirm playback continues.
     let mut post_seek_samples = 0u64;
     let deadline = Instant::now() + Duration::from_secs(5);
     while post_seek_samples < samples_per_seek && Instant::now() < deadline {
-        let n = audio.read(&mut buf);
-        post_seek_samples += n as u64;
-        if n == 0 {
-            if audio.is_eof() {
-                break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {
+                sleep(Duration::from_millis(10)).await;
             }
-            sleep(Duration::from_millis(10)).await;
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                post_seek_samples += count.get() as u64;
+            }
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error: {e}"),
         }
     }
     assert!(
@@ -433,29 +442,28 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut buf = vec![0f32; 4096];
     let mut total_samples = 0u64;
 
     while Instant::now() < deadline {
-        let n = audio.read(&mut buf);
-        total_samples += n as u64;
-        if n == 0 {
-            if audio.is_eof() {
-                break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {
+                sleep(Duration::from_millis(10)).await;
             }
-            sleep(Duration::from_millis(10)).await;
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                total_samples += count.get() as u64;
+            }
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error: {e}"),
         }
     }
 
@@ -488,28 +496,23 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(false);
+    let config =
+        AudioConfig::<Hls>::new(hls_config).with_decoder_backend(DecoderBackend::Symphonia);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
     let mut buf = vec![0f32; 4096];
 
-    // Phase 1: Warmup — read a few seconds so ABR can switch variant.
     let warmup = Instant::now() + Duration::from_secs(3);
     while Instant::now() < warmup {
         let _ = audio.read(&mut buf);
         sleep(Duration::from_millis(5)).await;
     }
 
-    // Phase 2: Random seeks — same pattern as the stress test.
-    // Each seek must produce at least some samples within 5s.
     let seek_targets = [
         50.0, 120.0, 5.0, 80.0, 150.0, 30.0, 100.0, 60.0, 140.0, 20.0, 90.0, 10.0, 70.0, 130.0,
         40.0, 110.0,
@@ -523,10 +526,15 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
         let mut samples = 0u64;
         let deadline = Instant::now() + Duration::from_secs(5);
         while samples < samples_per_seek && Instant::now() < deadline {
-            let n = audio.read(&mut buf);
-            samples += n as u64;
-            if n == 0 {
-                sleep(Duration::from_millis(10)).await;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    samples += count.get() as u64;
+                }
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
             }
         }
         assert!(
@@ -556,18 +564,16 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create audio");
-    audio.preload();
+    let _ = audio.preload();
 
     let mut buf = vec![0f32; 4096];
 
-    // Phase 1: Read for 3s (warmup)
     let warmup = Instant::now() + Duration::from_secs(3);
     while Instant::now() < warmup {
         let _ = audio.read(&mut buf);
         sleep(Duration::from_millis(5)).await;
     }
 
-    // Phase 2: Seek to ~7s, ~13s, ~18s, ~24s (same as HLS/DRM tests)
     let samples_per_seek: u64 = 48000 * 2;
     for &target_secs in &[7.0, 13.0, 18.0, 24.0] {
         audio
@@ -577,10 +583,15 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         let mut samples = 0u64;
         let deadline = Instant::now() + Duration::from_secs(5);
         while samples < samples_per_seek && Instant::now() < deadline {
-            let n = audio.read(&mut buf);
-            samples += n as u64;
-            if n == 0 {
-                sleep(Duration::from_millis(10)).await;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    samples += count.get() as u64;
+                }
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
             }
         }
         assert!(
@@ -589,17 +600,18 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
         );
     }
 
-    // Phase 3: Continue reading after last seek — must not hang
     let mut post_seek_samples = 0u64;
     let deadline = Instant::now() + Duration::from_secs(5);
     while post_seek_samples < samples_per_seek && Instant::now() < deadline {
-        let n = audio.read(&mut buf);
-        post_seek_samples += n as u64;
-        if n == 0 {
-            if audio.is_eof() {
-                break;
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {
+                sleep(Duration::from_millis(10)).await;
             }
-            sleep(Duration::from_millis(10)).await;
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                post_seek_samples += count.get() as u64;
+            }
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error: {e}"),
         }
     }
     assert!(
@@ -630,38 +642,30 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
 
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            down_switch_buffer_secs: 0.0,
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::ZERO,
-            min_throughput_record_ms: 0,
-            sample_window: Duration::from_secs(1),
-            mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
-    // Helper: read one chunk with timeout.
     async fn next_chunk(audio: &mut Audio<Stream<Hls>>, timeout_ms: u64) -> Option<PcmChunk> {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         loop {
-            if let Some(chunk) = PcmReader::next_chunk(audio) {
-                return Some(chunk);
+            let _ = audio.preload();
+            match PcmReader::next_chunk(audio) {
+                Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
+                Ok(ChunkOutcome::Eof { .. }) => return None,
+                Ok(ChunkOutcome::Pending { .. }) => {}
+                Err(e) => panic!("decode error in next_chunk: {e}"),
             }
             if Instant::now() > deadline {
                 return None;
             }
-            audio.preload();
             sleep(Duration::from_millis(2)).await;
         }
     }
 
-    // Phase 1: warmup — read chunks until variant changes from initial (0).
     info!("Phase 1: warmup until ABR switches from variant 0");
     let mut initial_variant = None;
     let warmup_deadline = Instant::now() + Duration::from_secs(10);
@@ -678,9 +682,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
             break;
         }
     }
-    // Read a few post-switch chunks to confirm the variant stabilized.
-    // After ABR switch the decoder may be recreated, causing a brief gap
-    // in chunk production. Use a longer timeout and retry to survive it.
     let mut current_variant = None;
     for _ in 0..3 {
         if let Some(chunk) = next_chunk(&mut audio, 1_000).await {
@@ -691,9 +692,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         }
     }
     if current_variant.is_none() || current_variant == initial_variant {
-        // ABR did not switch during warmup — asset server throughput is
-        // too uniform for ABR to trigger a variant change. Skip the
-        // seek-freeze assertion since there is nothing to freeze.
         info!(
             ?initial_variant,
             ?current_variant,
@@ -703,12 +701,11 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     }
     info!(?current_variant, "Pre-seek variant established");
 
-    // Phase 2: seek — variant must stay the same.
     let variant_before_seek = current_variant;
     audio
         .seek(Duration::from_secs(50))
         .expect("seek must not fail");
-    audio.preload();
+    let _ = audio.preload();
 
     let post_seek_chunk = next_chunk(&mut audio, 500).await;
     assert!(
@@ -721,7 +718,6 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         "ABR must NOT switch variant during seek"
     );
 
-    // Phase 3: resume playback — ABR must still function.
     info!("Phase 3: verify ABR still works post-seek");
     let resume_deadline = Instant::now() + Duration::from_secs(8);
     let mut resume_chunks = 0u32;

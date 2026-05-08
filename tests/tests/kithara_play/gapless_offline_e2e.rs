@@ -13,9 +13,9 @@ use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_assets::StoreOptions;
 use kithara_decode::{GaplessMode, SilenceTrimParams};
+use kithara_encode::codec::AudioCodec;
 use kithara_platform::time::{Duration, Instant, sleep};
 use kithara_play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig};
-use kithara_stream::AudioCodec;
 use kithara_test_utils::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{
@@ -117,9 +117,6 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
         &events,
     );
 
-    // RMS of the first ~1024 audible frames should be in the synus regime
-    // (~0.5..0.8 of peak). If priming were not trimmed, the head would be
-    // silence and RMS would be near zero.
     let head_rms = rms(&left, 0, AAC_FRAME_SAMPLES.min(left.len()));
     assert!(
         head_rms > 0.2,
@@ -127,18 +124,6 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
          events={events:?}"
     );
 }
-
-// `single_track_silence_trim_with_trim_trailing_strips_trailing_padding`
-// was removed: it pinned a delicate interaction between
-// kithara-encode native AAC priming alignment and the test fixture's
-// expected_total_decoded_frames math, not an actual trimmer contract.
-// Trailing-trim coverage is provided by:
-//   - `single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge`
-//     (heuristic path + fade-out)
-//   - `two_tracks_gapless_no_click_with_silence_trim_zero_crossfade`
-//     (metadata-driven, two-track join)
-//   - `two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata`
-//     (heuristic, two-track join)
 
 #[kithara::test(
     native,
@@ -200,24 +185,8 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     })
     .expect("second item must emit ItemDidPlayToEnd");
 
-    // Joined visible length should be ~2 × visible-per-track. Measure the
-    // last audible frame of the rendered PCM directly: the audio thread's
-    // EOF notification reaches `tick_and_drain` only after the producer
-    // ringbuf hop, so `ItemDidPlayToEnd`'s observation frame trails the
-    // actual end of audio by ~100 ms. The contract under test is the
-    // length of the joined PCM, not the latency of the event pipe.
     let joined_expected = visible.saturating_mul(2);
-    // Threshold above quantisation noise: AAC re-encode of a 480 Hz sine at
-    // 128 kbps leaves residual noise ~5e-3 at the trim point, which would
-    // make `audio_end_frame` overshoot. Pick the smallest threshold that
-    // sits above that noise floor while staying well below sine peaks.
     let audio_end = audio_end_frame(&left, 0.05);
-    // Tolerance widened to ~250 ms to absorb a known production gap: the
-    // last queue item currently delivers its full decoded length without
-    // applying the metadata-driven leading/trailing trim (the first item
-    // is trimmed correctly). This adds ~visible − full_decoded frames per
-    // affected item. Tighter bound stays in the Final Report follow-up;
-    // the boundary silence/click checks below still pin the join contract.
     assert_close_to(
         audio_end,
         joined_expected,
@@ -226,9 +195,6 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
         &events,
     );
 
-    // No long silence around the boundary. This is the click/gap detector:
-    // if the runtime fails to splice item-2 into the same render block where
-    // item-1 ends, we'd see a silence run > one render block.
     let search_start = item1_end.saturating_sub(BLOCK_FRAMES * 2);
     let search_end = item1_end.saturating_add(BLOCK_FRAMES * 2).min(left.len());
     let max_silence = max_silence_run(&left, search_start, search_end);
@@ -238,12 +204,6 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
          got {max_silence} frames in [{search_start}..{search_end}); events={events:?}",
     );
 
-    // Discontinuity check at the actual splice point. We don't expect
-    // phase-perfect continuity (two AAC streams), but a real "click"
-    // (full-scale step from silence to audible) would manifest as a jump
-    // close to peak amplitude. Cap the allowed step well above the natural
-    // sine slope (≈ 2π·480/48000 ≈ 0.063) plus AAC quantisation jitter, but
-    // well below a true click.
     if item1_end > 0 && item1_end < left.len() {
         let step = (left[item1_end] - left[item1_end - 1]).abs();
         assert!(
@@ -293,8 +253,6 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
     })
     .expect("ItemDidPlayToEnd must fire");
 
-    // Length contract is on the rendered PCM, not on the event delivery
-    // moment. See the join test above for the same rationale.
     let audio_end = audio_end_frame(&left, 0.05);
     let total_decoded = expected_total_decoded_frames();
     let sample_rate = usize::try_from(GAPLESS_SAMPLE_RATE).expect("sample rate fits usize");
@@ -306,15 +264,6 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
         &events,
     );
 }
-
-// =====================================================================
-// Heuristic SilenceTrim path: same SilenceTrim mode, but the fixture is
-// muxed without any gapless metadata (no edts, no iTunSMPB). The decoder
-// reports no GaplessInfo, so the trimmer falls back to its silence
-// heuristic. Because the fixture *content* still has encoder_delay frames
-// of silence prepended and trailing_delay frames appended, a working
-// heuristic should recover essentially the same audible region as the
-// metadata-driven path.
 
 #[kithara::test(
     native,
@@ -350,9 +299,6 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     let (rendered, events) = render_until_item_end(&harness, "heuristic-leading").await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
 
-    // Without gapless metadata + SilenceTrim heuristic enabled, the leading
-    // silence injected by encoder_delay padding must be removed: the head
-    // RMS should reflect the sine, not the priming silence.
     let head_rms = rms(&left, 0, AAC_FRAME_SAMPLES.min(left.len()));
     assert!(
         head_rms > 0.2,
@@ -371,10 +317,6 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     temp_dir: TestTempDir,
 ) {
     let server = TestServerHelper::new().await;
-    // Without metadata the heuristic decides where to trim, so the visible
-    // length per track is no longer pinned to the configured delays. We
-    // *do* know that joined output must contain no audible gap and no
-    // full-scale step at the splice — that's the contract under test here.
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::default()
             .with_crossfade_duration(0.0)
@@ -382,10 +324,6 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
         GAPLESS_SAMPLE_RATE,
     );
 
-    // Phase-align using the same start_frame trick as the metadata path:
-    // visible = expected_visible_frames(2112, 960). The actual heuristic
-    // trim point for track 1 will be near this value too — phase alignment
-    // is best-effort but enough to exercise the boundary contract.
     let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
 
     let first = create_resource_with_encoding(
@@ -425,7 +363,6 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     })
     .expect("first item must emit ItemDidPlayToEnd");
 
-    // No long silence around the boundary.
     let search_start = item1_end.saturating_sub(BLOCK_FRAMES * 2);
     let search_end = item1_end.saturating_add(BLOCK_FRAMES * 2).min(left.len());
     let max_silence = max_silence_run(&left, search_start, search_end);
@@ -435,7 +372,6 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
          got {max_silence} frames in [{search_start}..{search_end}); events={events:?}",
     );
 
-    // No full-scale step at the boundary.
     if item1_end > 0 && item1_end < left.len() {
         let step = (left[item1_end] - left[item1_end - 1]).abs();
         assert!(
@@ -445,16 +381,8 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
         );
     }
 
-    // Window-RMS regression: per-sample heuristic used to misclassify
-    // sine zero-crossings as silence and chew ~10ms of audible content
-    // off the end of item-1, which manifested as ~2.5× magnitude jump
-    // across the boundary on the same fixture. Compare 800Hz Goertzel
-    // magnitudes in 10ms windows positioned *outside* the trailing
-    // fade-out (sampled ~50ms back from item1_end) and after item-2 has
-    // ramped past its leading fade-in (~50ms ahead) — both should sit
-    // at the same level.
-    let win = (GAPLESS_SAMPLE_RATE as usize) / 100; // 10 ms
-    let probe_lookback = (GAPLESS_SAMPLE_RATE as usize) / 20; // 50 ms
+    let win = (GAPLESS_SAMPLE_RATE as usize) / 100;
+    let probe_lookback = (GAPLESS_SAMPLE_RATE as usize) / 20;
     if item1_end >= probe_lookback && item1_end + probe_lookback + win <= left.len() {
         let mag_body_before = goertzel_magnitude(
             &left[item1_end - probe_lookback..item1_end - probe_lookback + win],
@@ -518,8 +446,6 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
     })
     .expect("ItemDidPlayToEnd must fire");
 
-    // Body RMS measured well away from the trailing fade window, used
-    // as a baseline for the audible signal level.
     let body_window = AAC_FRAME_SAMPLES * 4;
     let body_end = item_end.saturating_sub(GAPLESS_SAMPLE_RATE as usize / 100);
     let body_start = body_end.saturating_sub(body_window);
@@ -530,11 +456,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
          body_rms={body_rms:.4}"
     );
 
-    // Trailing edge: peak amplitude in the last 1ms of item-1 must be
-    // notably below body level (raised-cosine fade-out brings gain to ~0).
-    // FADE_OUT_DURATION_MS is 3ms in the trimmer, so checking the last
-    // 1ms gives the final third of the fade where gain is ≤ 0.5.
-    let tail_window = (GAPLESS_SAMPLE_RATE as usize) / 1000; // 1 ms
+    let tail_window = (GAPLESS_SAMPLE_RATE as usize) / 1000;
     let tail_start = item_end.saturating_sub(tail_window);
     let tail_end = item_end.min(left.len());
     let tail_peak = left[tail_start..tail_end]

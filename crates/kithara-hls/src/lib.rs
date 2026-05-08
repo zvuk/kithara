@@ -1,9 +1,4 @@
-#![forbid(unsafe_code)]
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns))]
-#![allow(
-    unreachable_pub,
-    reason = "many helpers are `pub` so the `internal` feature can re-export them without widening the stable API surface"
-)]
+#![deny(unsafe_code)]
 
 //! HLS (HTTP Live Streaming) VOD implementation.
 //!
@@ -23,30 +18,38 @@
 //! let stream = Stream::<Hls>::new(config).await?;
 //! ```
 
-// Public modules
 pub mod config;
 pub mod error;
-
-#[cfg(feature = "internal")]
-pub mod internal;
 
 mod context;
 mod coord;
 mod ids;
-pub(crate) mod loading;
+mod loading;
 mod parsing;
 mod peer;
-pub(crate) mod playlist;
-pub(crate) mod scheduler;
+mod playlist;
+mod scheduler;
 mod source;
 mod stream;
-pub(crate) mod stream_index;
+mod stream_index;
 
-// Public API re-exports
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 
 pub use config::{HlsConfig, KeyOptions};
 pub use context::HlsStreamContext;
+pub use coord::{HlsCoord, SegmentRequest};
 pub use error::{HlsError, HlsResult};
-pub use kithara_abr::{AbrMode, AbrOptions};
+pub use ids::VariantIndex;
+pub use kithara_abr::AbrMode;
 pub use kithara_drm::{KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
+pub use loading::{KeyManager, PlaylistCache, SegmentLoader};
+pub use parsing::{
+    MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
+    parse_media_playlist, variant_info_from_master,
+};
+pub use playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState};
+pub use scheduler::HlsScheduler;
+pub use source::HlsSource;
 pub use stream::Hls;
+pub use stream_index::{SegmentData, StreamIndex};

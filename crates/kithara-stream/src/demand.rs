@@ -22,7 +22,11 @@ where
         }
     }
 
-    pub fn submit(&self, demand: D) -> bool
+    pub fn clear(&self) {
+        *self.inner.lock_sync() = None;
+    }
+
+    pub fn did_replace(&self, demand: D) -> bool
     where
         D: PartialEq,
     {
@@ -34,22 +38,18 @@ where
         true
     }
 
-    pub fn replace(&self, demand: D) {
-        *self.inner.lock_sync() = Some(demand);
-    }
-
     #[must_use]
     pub fn peek(&self) -> Option<D> {
         self.inner.lock_sync().clone()
     }
 
+    pub fn replace(&self, demand: D) {
+        *self.inner.lock_sync() = Some(demand);
+    }
+
     #[must_use]
     pub fn take(&self) -> Option<D> {
         self.inner.lock_sync().take()
-    }
-
-    pub fn clear(&self) {
-        *self.inner.lock_sync() = None;
     }
 }
 

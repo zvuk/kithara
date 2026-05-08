@@ -1,0 +1,63 @@
+# Crate-level layered architecture.
+# Lower-layer crates may not transitively depend on higher-layer crates.
+# Layers are derived from the actual `cargo metadata` graph; any change to
+# real dependencies that contradicts this file is a violation.
+
+[[layer]]
+index = 0
+name = "leaves"
+crates = ["kithara-drm", "kithara-hang-detector", "kithara-workspace-hack"]
+
+[[layer]]
+index = 1
+name = "platform"
+crates = ["kithara-platform"]
+
+[[layer]]
+index = 2
+name = "infra"
+crates = ["kithara-bufpool", "kithara-events", "kithara-net"]
+
+[[layer]]
+index = 3
+name = "services"
+crates = ["kithara-abr", "kithara-storage"]
+
+[[layer]]
+index = 4
+name = "core"
+crates = ["kithara-assets", "kithara-stream"]
+
+[[layer]]
+index = 5
+name = "protocols"
+crates = [
+    "kithara-decode",
+    "kithara-encode",
+    "kithara-file",
+    "kithara-hls",
+    "kithara-test-utils",
+]
+
+[[layer]]
+index = 6
+name = "engine"
+crates = ["kithara-audio"]
+
+[[layer]]
+index = 7
+name = "playback"
+crates = ["kithara-play"]
+
+[[layer]]
+index = 8
+name = "facade"
+crates = ["kithara", "kithara-queue", "kithara-wasm"]
+
+[[layer]]
+index = 9
+name = "apps"
+crates = ["kithara-app", "kithara-examples", "kithara-ffi"]
+
+# Transitional edges that must shrink to zero. Format: "from -> to" = "reason".
+[exemptions]

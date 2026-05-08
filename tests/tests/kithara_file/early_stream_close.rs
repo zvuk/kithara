@@ -73,7 +73,6 @@ async fn handle_request(
     let call_num = state.call_count.fetch_add(1, Ordering::SeqCst);
     let method = req.method().clone();
 
-    // HEAD request — return correct Content-Length
     if method == Method::HEAD {
         tracing::info!(
             "Server: HEAD request - Content-Length: {}",
@@ -89,7 +88,6 @@ async fn handle_request(
             .into_response();
     }
 
-    // Parse Range header
     let range_header = headers
         .get(header::RANGE)
         .and_then(|v| v.to_str().ok())
@@ -103,7 +101,6 @@ async fn handle_request(
     );
 
     if let Some(range_str) = range_header {
-        // Range request — serve requested range fully
         if let Some(range_part) = range_str.strip_prefix("bytes=") {
             let parts: Vec<&str> = range_part.split('-').collect();
             let start = parts[0].parse::<usize>().unwrap_or(0);
@@ -132,11 +129,6 @@ async fn handle_request(
         }
     }
 
-    // Sequential request — advertise full Content-Length but only send
-    // partial data (simulates early stream close / connection drop).
-    // A real web server always reports the full file size in Content-Length;
-    // the client detects the mismatch when the stream ends prematurely.
-    // We use a streaming body so hyper doesn't override our Content-Length.
     tracing::warn!(
         "Server: sequential request - sends {}KB of {}KB",
         Consts::STREAM_CLOSES_AT / 1024,
@@ -190,10 +182,11 @@ async fn file_stream_closes_early_seek_still_works() {
 
     let dl = Downloader::new(
         DownloaderConfig::default()
-            .with_net(kithara_net::NetOptions {
-                request_timeout: Duration::from_secs(1),
-                ..Default::default()
-            })
+            .with_net(
+                kithara_net::NetOptions::default()
+                    .with_inactivity_timeout(Duration::from_secs(1))
+                    .with_total_timeout(Duration::from_secs(1)),
+            )
             .with_cancel(cancel_token.clone()),
     );
 
@@ -206,13 +199,11 @@ async fn file_stream_closes_early_seek_still_works() {
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     let blocking_task = spawn_blocking(move || {
-        // Read first chunk from initial partial stream
         let mut buf = [0u8; 10_000];
         let n = stream.read(&mut buf).unwrap();
         assert!(n > 0, "Should read initial data");
         tracing::info!("Read {} bytes from initial stream", n);
 
-        // Seek beyond initial 512KB stream → triggers on-demand Range request
         let seek_offset = 700_000u64;
         tracing::info!(
             "Seeking to {}KB (beyond {}KB stream)",
@@ -271,7 +262,6 @@ async fn partial_cache_resume_works() {
     let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
     let (url, _call_count, _server) = setup_server(file_data).await;
 
-    // Phase 1: partial download, then drop
     let cancel1 = CancellationToken::new();
     let config1 = FileConfig::new(FileSrc::Remote(url.clone()))
         .with_store(StoreOptions::new(cache_dir.path()))
@@ -287,9 +277,7 @@ async fn partial_cache_resume_works() {
         assert!(n > 0, "Phase 1: should read initial data");
         tracing::info!("Phase 1: read {} bytes", n);
 
-        // Give sequential download time to finish (server sends 512KB quickly)
         thread::sleep(Duration::from_millis(500));
-        // stream1 drops here
     });
 
     timeout(Duration::from_secs(3), phase1)
@@ -301,7 +289,6 @@ async fn partial_cache_resume_works() {
     sleep(Duration::from_millis(200)).await;
     tracing::info!("Phase 1 complete, stream dropped");
 
-    // Phase 2: reopen same URL + cache dir, seek beyond partial
     let cancel2 = CancellationToken::new();
     let config2 = FileConfig::new(FileSrc::Remote(url))
         .with_store(StoreOptions::new(cache_dir.path()))

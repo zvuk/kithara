@@ -17,8 +17,6 @@ use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-// Helper Functions
-
 fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
     if cfg!(target_arch = "wasm32") {
         Duration::from_secs(wasm_secs)
@@ -39,8 +37,6 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
         None
     }
 }
-
-// Manual Variant Switch Tests
 
 /// Test: Manual variant switch with fixed ABR, verify data comes from correct variant.
 ///
@@ -101,14 +97,11 @@ async fn sequential_read_across_segments_maintains_variant(
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
-    // Fix to variant 1 to avoid any ABR switching
     let mut stream = HlsStreamBuilder::new()
         .variant(1)
         .build(&server, temp_dir.path(), cancel_token)
         .await;
 
-    // Read all three segments sequentially
-    // Use 64KB buffer to avoid async lock overhead per small read
     let result = spawn_blocking(move || {
         let mut all_data = Vec::new();
         let mut buf = vec![0u8; 64 * 1024];
@@ -122,7 +115,6 @@ async fn sequential_read_across_segments_maintains_variant(
             read_count += 1;
             all_data.extend_from_slice(&buf[..n]);
 
-            // Safety limit to prevent infinite loop
             if read_count > 10000 {
                 panic!(
                     "Read loop exceeded 10000 iterations, likely infinite loop. Total bytes: {}",
@@ -141,14 +133,12 @@ async fn sequential_read_across_segments_maintains_variant(
     .await
     .unwrap();
 
-    // Verify we read substantial amount of data (at least 500KB for 3 segments)
     assert!(
         result.len() > 500_000,
         "Should read substantial data, got {} bytes",
         result.len()
     );
 
-    // Verify all data starts with variant 1 segment 0 prefix
     assert!(
         result.starts_with(b"V1-SEG-0:"),
         "Data should start with V1-SEG-0:"
@@ -178,10 +168,8 @@ async fn after_seek_sequential_reads_maintain_variant(
         .await;
 
     let result = spawn_blocking(move || {
-        // Seek to middle of segment 1 (200KB per segment)
         stream.seek(SeekFrom::Start(200_100)).unwrap();
 
-        // Read several chunks
         let mut reads = Vec::new();
         for _ in 0..5 {
             let mut buf = [0u8; 10];
@@ -197,7 +185,6 @@ async fn after_seek_sequential_reads_maintain_variant(
     .await
     .unwrap();
 
-    // All reads should be from variant 2
     for (i, data) in result.iter().enumerate() {
         if let Some(var) = variant_from_data(data) {
             assert_eq!(
@@ -208,8 +195,6 @@ async fn after_seek_sequential_reads_maintain_variant(
         }
     }
 }
-
-// Edge Case Tests
 
 /// Test: Multiple seeks don't cause variant confusion.
 ///
@@ -231,7 +216,6 @@ async fn multiple_seeks_maintain_correct_variant(
         .await;
 
     let result = spawn_blocking(move || {
-        // First, read all data to ensure all segments are fetched
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];
         loop {
@@ -246,24 +230,20 @@ async fn multiple_seeks_maintain_correct_variant(
 
         let mut positions_and_data = Vec::new();
 
-        // Seek back to start and verify
         stream.seek(SeekFrom::Start(0)).unwrap();
         let mut buf = [0u8; 9];
         let _ = stream.read(&mut buf).unwrap();
         positions_and_data.push((0, buf.to_vec()));
 
-        // Seek to middle of stream (within segment 1)
         let mid_pos = 200_000u64;
         stream.seek(SeekFrom::Start(mid_pos)).unwrap();
         let _ = stream.read(&mut buf).unwrap();
         positions_and_data.push((mid_pos, buf.to_vec()));
 
-        // Seek back to start
         stream.seek(SeekFrom::Start(0)).unwrap();
         let _ = stream.read(&mut buf).unwrap();
         positions_and_data.push((0, buf.to_vec()));
 
-        // Seek to position 100 (within segment 0)
         stream.seek(SeekFrom::Start(100)).unwrap();
         let mut small_buf = [0u8; 6];
         let _ = stream.read(&mut small_buf).unwrap();
@@ -274,29 +254,24 @@ async fn multiple_seeks_maintain_correct_variant(
     .await
     .unwrap();
 
-    // Verify data from correct positions
-    // Position 0: should read "V0-SEG-0:"
     assert_eq!(
         &result[0].1[..9],
         b"V0-SEG-0:",
         "Position 0 should read segment 0 prefix"
     );
 
-    // Position 200,000: should read "V0-SEG-1:"
     assert_eq!(
         &result[1].1[..9],
         b"V0-SEG-1:",
         "Position 200000 should read segment 1 prefix"
     );
 
-    // Position 0 again: should read "V0-SEG-0:"
     assert_eq!(
         &result[2].1[..9],
         b"V0-SEG-0:",
         "Position 0 (again) should read segment 0 prefix"
     );
 
-    // Position 100: should be within padding (0xFF bytes)
     assert_eq!(
         &result[3].1, &[0xFF; 6],
         "Position 100 should be padding bytes"
@@ -311,9 +286,9 @@ async fn multiple_seeks_maintain_correct_variant(
     timeout(browser_timeout(10, 30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case(0)] // Start of segment 0
-#[case(200_000)] // Start of segment 1
-#[cfg_attr(not(target_arch = "wasm32"), case(400_000))] // Start of segment 2
+#[case(0)]
+#[case(200_000)]
+#[cfg_attr(not(target_arch = "wasm32"), case(400_000))]
 async fn seek_to_segment_boundary_reads_correct_segment(
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
@@ -328,7 +303,6 @@ async fn seek_to_segment_boundary_reads_correct_segment(
     let result = spawn_blocking(move || {
         stream.seek(SeekFrom::Start(position)).unwrap();
 
-        // Read first 26 bytes (the meaningful prefix before padding)
         let mut buf = [0u8; 26];
         let n = stream.read(&mut buf).unwrap();
         buf[..n].to_vec()
@@ -337,7 +311,6 @@ async fn seek_to_segment_boundary_reads_correct_segment(
     .unwrap();
 
     let segment_index = (position / 200_000) as usize;
-    // Expected prefix: "V1-SEG-{n}:TEST_SEGMENT_DATA" (26 bytes)
     let expected_prefix = format!("V1-SEG-{}:TEST_SEGMENT_DATA", segment_index);
     assert_eq!(
         result,

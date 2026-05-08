@@ -1,0 +1,47 @@
+id: style.no-items-in-lib-or-mod-rs
+message: |
+  lib.rs and mod.rs files must contain only module declarations
+  (`mod foo;` / `pub mod foo;`), re-exports (`pub use ...;`), inner
+  attributes, and doc-comments. Move all other items (structs, enums,
+  unions, traits, impls, free functions, type aliases, consts, statics,
+  macro definitions, inline modules with bodies, and `mod tests` blocks)
+  to a sibling file.
+severity: error
+language: Rust
+files:
+  - crates/**/src/lib.rs
+  - crates/**/src/**/mod.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  # Proc-macro crates: rustc requires `#[proc_macro_*]` functions to be
+  # physically defined in lib.rs (the crate root). `pub use` re-exports
+  # of proc-macros are rejected with E0658-style error
+  # "proc-macro crate types currently cannot export any items other than
+  # functions tagged with #[proc_macro_*]". Splitting helpers into
+  # submodules is fine (and these crates already do so), but the macro
+  # entry functions themselves cannot be moved.
+  - "crates/kithara-probe-macros/src/lib.rs"
+  - "crates/kithara-test-macros/src/lib.rs"
+  - "crates/kithara-wasm-macros/src/lib.rs"
+  - "crates/kithara-hang-detector-macros/src/lib.rs"
+rule:
+  any:
+    - kind: function_item
+    - kind: struct_item
+    - kind: enum_item
+    - kind: union_item
+    - kind: trait_item
+    - kind: impl_item
+    - kind: type_item
+    - kind: const_item
+    - kind: static_item
+    - kind: macro_definition
+    # `mod tests { ... }` (inline test module) — even though `mod_item`
+    # is the legal form for re-exports, an inline module *with* a body
+    # is logic, not a declaration. Detect via the explicit `mod foo {}`
+    # pattern; bare `mod foo;` declarations remain valid.
+    - pattern: mod $NAME { $$$ }

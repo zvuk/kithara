@@ -10,15 +10,13 @@
 //!
 //! Run with: `cargo test --test memory_rss -- --test-threads=1 --nocapture`
 
-#![cfg(not(target_arch = "wasm32"))]
-
 use std::time::Duration;
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
@@ -37,8 +35,6 @@ impl Consts {
     const LEAK_WARMUP_SECS: u64 = 5;
     const LEAK_TOLERANCE_MB: usize = 5;
 }
-
-// Test 1: RSS budget
 
 /// Multi-run RSS measurement: peak RSS delta must stay within budget.
 #[kithara::test(
@@ -62,10 +58,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
 
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp_dir.path()))
-            .with_abr_options(AbrOptions {
-                mode: AbrMode::Auto(Some(0)),
-                ..Default::default()
-            });
+            .with_initial_abr_mode(AbrMode::Auto(Some(0)));
         let config = AudioConfig::<Hls>::new(hls_config);
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
@@ -78,8 +71,14 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             let mut last_sample = start;
 
             while start.elapsed() < Duration::from_secs(Consts::BUDGET_PLAYBACK_SECS) {
-                let n = audio.read(&mut buf);
-                if n == 0 {
+                let outcome = audio.read(&mut buf);
+                let stop = matches!(
+                    outcome,
+                    Ok(kithara::audio::ReadOutcome::Frames { count: 0, .. })
+                        | Ok(kithara::audio::ReadOutcome::Eof { .. })
+                        | Err(_)
+                );
+                if stop {
                     break;
                 }
 
@@ -108,7 +107,6 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             samples.len(),
         );
 
-        // Cleanup between runs
         drop(server);
     }
 
@@ -132,8 +130,6 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     );
 }
 
-// Test 2: No RSS leak
-
 /// RSS should stabilize after warmup — no sustained growth.
 #[kithara::test(
     native,
@@ -149,10 +145,7 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
 
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..Default::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -165,14 +158,19 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
         let mut final_rss = 0usize;
 
         while start.elapsed() < Duration::from_secs(Consts::LEAK_PLAYBACK_SECS) {
-            let n = audio.read(&mut buf);
-            if n == 0 {
+            let outcome = audio.read(&mut buf);
+            let stop = matches!(
+                outcome,
+                Ok(kithara::audio::ReadOutcome::Frames { count: 0, .. })
+                    | Ok(kithara::audio::ReadOutcome::Eof { .. })
+                    | Err(_)
+            );
+            if stop {
                 break;
             }
 
             let elapsed = start.elapsed();
 
-            // Capture RSS at warmup boundary
             if warmup_rss.is_none()
                 && elapsed >= Duration::from_secs(Consts::LEAK_WARMUP_SECS)
                 && let Some(stats) = memory_stats()
@@ -180,7 +178,6 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
                 warmup_rss = Some(stats.physical_mem);
             }
 
-            // Continuously update final RSS
             if let Some(stats) = memory_stats() {
                 final_rss = stats.physical_mem;
             }

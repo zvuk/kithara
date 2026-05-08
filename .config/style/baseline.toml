@@ -1,0 +1,88 @@
+schema_version = 1
+
+[comment_hygiene]
+"crates/kithara-assets/src/index/flush.rs:3:size:doc" = 1
+"crates/kithara-assets/src/index/pin.rs:26:size:doc" = 1
+"crates/kithara-assets/src/lib.rs:3:size:doc" = 1
+"crates/kithara-assets/src/process.rs:49:size:doc" = 1
+"crates/kithara-assets/src/process.rs:732:size:doc" = 1
+"crates/kithara-assets/src/store.rs:182:size:doc" = 1
+"crates/kithara-assets/src/store.rs:900:size:doc" = 1
+"crates/kithara-assets/src/store.rs:990:size:doc" = 1
+"crates/kithara-audio/src/audio.rs:74:size:doc" = 1
+"crates/kithara-audio/src/lib.rs:1:size:doc" = 1
+"crates/kithara-audio/src/pipeline/source.rs:903:size:doc" = 1
+"crates/kithara-audio/src/traits.rs:129:size:doc" = 1
+"crates/kithara-bufpool/src/lib.rs:1:size:doc" = 1
+"crates/kithara-decode/src/factory/mod.rs:1:size:doc" = 1
+"crates/kithara-decode/src/gapless/codec_priming.rs:3:size:doc" = 1
+"crates/kithara-drm/src/decrypt.rs:20:size:doc" = 1
+"crates/kithara-events/src/downloader.rs:3:size:doc" = 1
+"crates/kithara-hang-detector-macros/src/lib.rs:1:size:doc" = 1
+"crates/kithara-hang-detector-macros/src/lib.rs:92:size:doc" = 1
+"crates/kithara-hls/src/loading/keys.rs:145:size:doc" = 1
+"crates/kithara-hls/src/peer.rs:1111:size:doc" = 1
+"crates/kithara-hls/src/peer.rs:1233:size:doc" = 1
+"crates/kithara-hls/src/peer.rs:1311:size:doc" = 1
+"crates/kithara-hls/src/peer.rs:1492:size:doc" = 1
+"crates/kithara-hls/src/peer.rs:1588:size:doc" = 1
+"crates/kithara-hls/src/peer.rs:1729:size:doc" = 1
+"crates/kithara-hls/src/source/tests.rs:1553:size:doc" = 1
+"crates/kithara-platform/src/lib.rs:1:size:doc" = 1
+"crates/kithara-play/src/impls/config.rs:80:size:doc" = 1
+"crates/kithara-storage/src/decorator/chunked/core.rs:3:size:doc" = 1
+"crates/kithara-test-macros/src/test_macro.rs:911:size:doc" = 1
+"crates/kithara-test-utils/src/inner/native/probe_capture.rs:1:size:doc" = 1
+"crates/kithara-test-utils/src/inner/native/routes/signal.rs:1:size:doc" = 1
+"crates/kithara-test-utils/src/probes/mod.rs:1:size:doc" = 1
+"crates/kithara-wasm-macros/src/lib.rs:16:size:doc" = 1
+
+[const_locality]
+"crates/kithara-app/src/crossfade.rs::PROGRESS_LOG_INTERVAL" = 1
+"crates/kithara-app/src/drm.rs::SEED_LEN" = 1
+"crates/kithara-app/src/events.rs::SECONDS_PER_MINUTE" = 1
+"crates/kithara-app/src/gui/subscription.rs::TICK_INTERVAL_ACTIVE_MS" = 1
+"crates/kithara-app/src/gui/subscription.rs::TICK_INTERVAL_IDLE_MS" = 1
+"crates/kithara-app/src/tui/session.rs::CURSOR_GUARD_LINES" = 1
+"crates/kithara-assets/src/disk_store.rs::INDEX_INITIAL_SIZE" = 1
+"crates/kithara-assets/src/index/persist.rs::INITIAL_LEN" = 1
+"crates/kithara-decode/src/composed.rs::smoke_tests::TEST_MP3_BYTES" = 1
+"crates/kithara-decode/src/symphonia/codec.rs::TRACK_ID" = 1
+"crates/kithara-drm/src/decrypt.rs::AES_BLOCK_SIZE" = 1
+"crates/kithara-encode/src/types.rs::DEFAULT_LOSSY_BIT_RATE" = 1
+"crates/kithara-events/src/abr.rs::ABR_MODE_AUTO_THRESHOLD" = 1
+"crates/kithara-ffi/src/item.rs::UUID_HEX_PREFIX_LEN" = 1
+"crates/kithara-ffi/src/player.rs::SALT_LEN" = 1
+"crates/kithara-hang-detector/src/dump.rs::native::ENV_DUMP_DIR" = 1
+"crates/kithara-hls/src/loading/segment_loader.rs::AES_KEY_LEN" = 1
+"crates/kithara-hls/src/loading/size_estimation.rs::BITS_PER_BYTE" = 1
+"crates/kithara-play/src/impls/config.rs::DEFAULT_PRELOAD_CHUNKS" = 1
+"crates/kithara-play/src/impls/master_eq_node.rs::MIN_STEREO" = 1
+"crates/kithara-play/src/impls/player.rs::MIN_PLAYBACK_RATE" = 1
+"crates/kithara-play/src/impls/player_track.rs::MIN_STEREO_CHANNELS" = 1
+"crates/kithara-play/src/impls/shared_eq.rs::EQ_MAX_GAIN_DB" = 1
+"crates/kithara-play/src/impls/shared_eq.rs::EQ_MIN_GAIN_DB" = 1
+"crates/kithara-play/src/impls/shared_player_state.rs::NOTIFICATION_RINGBUF_CAPACITY" = 1
+"crates/kithara-stream/src/dl/downloader.rs::PEER_CMD_CHANNEL_CAPACITY" = 1
+"crates/kithara-stream/src/dl/registry.rs::SLOT_COUNT" = 1
+"crates/kithara-test-utils/src/inner/native/routes/signal.rs::PCM_STREAM_CHUNK_BYTES" = 1
+"crates/kithara-test-utils/src/inner/signal_pcm.rs::MAX_FRAME_BYTES" = 1
+
+[struct_field_order]
+"crates/kithara-net/src/timeout.rs::TimeoutNet" = 1
+"crates/kithara-play/src/impls/config.rs::ResourceConfig" = 1
+"crates/kithara-queue/src/queue/state.rs::Queue" = 1
+
+[struct_init_order]
+"crates/kithara-app/src/tui/session.rs:117::Position" = 1
+"crates/kithara-assets/src/cache.rs:148::Self" = 1
+"crates/kithara-audio/src/resampler.rs:258::Self" = 1
+"crates/kithara-hang-detector/src/detector.rs:50::Self" = 1
+"crates/kithara-hls/src/source/reader_hooks.rs:67::Self" = 1
+"crates/kithara-net/src/types.rs:63::Self" = 1
+"crates/kithara-play/src/impls/player.rs:642::Self" = 1
+"crates/kithara-play/src/impls/player_track.rs:153::Self" = 1
+"crates/kithara-test-utils/src/inner/hls_fixture.rs:635::HlsSpec" = 1
+"crates/kithara-test-utils/src/inner/native/fmp4/mux.rs:587::EncodedAccessUnit" = 1
+"crates/kithara-test-utils/src/inner/test_server.rs:201::Self" = 1
+"crates/kithara-test-utils/src/inner/test_server.rs:456::PackagedAudioRequest" = 1

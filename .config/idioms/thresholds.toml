@@ -1,0 +1,22 @@
+# Idiom-detector thresholds. Override defaults from
+# `xtask/src/idioms/config.rs`. Tightened 2026-05-02: branch_chains and
+# guard_cascade limits trimmed to surface more hot-path branch-prediction
+# offenders (see plan: Bug #2 hot-path optimization).
+
+[branch_chains]
+# Strongest match-conversion hint — homogeneous chains test the same
+# expression with the same operator. Three arms are already a `match`.
+homogeneous_arms = 3
+# Heterogeneous chains test unrelated predicates. Four arms is enough
+# cognitive load to extract predicates or build a tag-enum + match.
+heterogeneous_arms = 4
+# Catch-all cognitive-load signal regardless of structure.
+general_arms = 5
+# `if let` chains often have no `match` form — keep them excluded.
+count_if_let = false
+
+[guard_cascade]
+# Three consecutive early-return guards (or `let-else`) are enough to
+# warrant either a parallel-compute + tuple-match, or an Option-resolver
+# extraction. See `xtask/src/idioms/checks/guard_cascade.rs` module docs.
+warn_streak = 3

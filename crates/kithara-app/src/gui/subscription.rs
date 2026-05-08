@@ -6,11 +6,11 @@
 /// observed in Instruments traces (512 ms / 30 s).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SubscriptionConfig {
+    /// Global keyboard listener for Delete/Backspace shortcuts.
+    pub is_keyboard_enabled: bool,
     /// Time tick interval in milliseconds that drives position/state sync
     /// with the queue. Lower interval = more responsive but more CPU.
     pub tick_interval_ms: u64,
-    /// Global keyboard listener for Delete/Backspace shortcuts.
-    pub keyboard: bool,
 }
 
 /// Time-tick interval while a track is actively playing.
@@ -37,7 +37,7 @@ pub(crate) const fn subscription_config(playing: bool) -> SubscriptionConfig {
         } else {
             TICK_INTERVAL_IDLE_MS
         },
-        keyboard: true,
+        is_keyboard_enabled: true,
     }
 }
 
@@ -56,7 +56,7 @@ mod tests {
              redraws while idle (see CPU audit §11)"
         );
         assert!(
-            cfg.keyboard,
+            cfg.is_keyboard_enabled,
             "keyboard listener must stay active even while paused \
              (Delete must work to remove a highlighted row)"
         );
@@ -70,7 +70,7 @@ mod tests {
             "playing subscription must stay at 100 ms so the position slider \
              appears smooth during playback"
         );
-        assert!(cfg.keyboard);
+        assert!(cfg.is_keyboard_enabled);
     }
 
     #[kithara::test]

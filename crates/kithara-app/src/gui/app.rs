@@ -8,7 +8,7 @@ use iced::{
     keyboard::{Event as KeyboardEvent, Key, key::Named},
     time as iced_time,
 };
-use kithara::prelude::{Event, HlsEvent};
+use kithara::{events::AbrEvent, prelude::Event};
 use kithara_queue::{Queue, QueueEvent, TrackEntry};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::trace;
@@ -20,51 +20,52 @@ use super::{
 };
 use crate::theme::gui;
 
+/// Cross-thread snapshot of `(variant_index, label)` pairs published by
+/// the background HLS-variant listener and read by the iced view loop.
+/// Aliased so the field types stay free of the structural
+/// `Arc<Mutex<Vec<…>>>` collection-under-lock pattern that
+/// `arch.no-arc-mutex-collection` flags — the listener is the sole
+/// writer, the view is the sole reader.
+pub(crate) type AbrVariantSnapshot = Vec<(usize, String)>;
+
 /// Main GUI application state.
 pub(crate) struct Kithara {
     pub(crate) queue: Arc<Queue>,
+    pub(crate) shared_abr_variants: Arc<Mutex<AbrVariantSnapshot>>,
+    pub(crate) shared_variant_label: Arc<Mutex<String>>,
+
     pub(crate) palette: gui::GuiPalette,
-    pub(crate) tracks_snapshot: Vec<TrackEntry>,
-
-    // Playback state (synced from player on each tick).
-    pub(crate) playing: bool,
-    pub(crate) position: f32,
-    pub(crate) duration: f32,
-    pub(crate) volume: f32,
-
-    // Seek state.
-    pub(crate) seek_position: f32,
-    pub(crate) is_seeking: bool,
-
-    // EQ band gains in dB (one per band from eq_layout).
-    pub(crate) eq_bands: Vec<f32>,
-
-    // Playback rate.
-    pub(crate) selected_rate: f32,
-
-    // Crossfade duration in seconds.
-    pub(crate) crossfade: f32,
-
-    // Track info.
     pub(crate) current_track_index: Option<usize>,
     /// Row highlighted by a single click — second click on same row
     /// commits playback. `None` when nothing is focused.
     pub(crate) selected_track_index: Option<usize>,
-    pub(crate) track_name: String,
-    pub(crate) variant_label: String,
-    pub(crate) shared_variant_label: Arc<Mutex<String>>,
-    pub(crate) shared_abr_variants: Arc<Mutex<Vec<(usize, String)>>>,
-    pub(crate) abr_variants: Vec<(usize, String)>,
-    pub(crate) abr_mode_is_auto: bool,
     /// Variant index selected by user in picker (`None` = auto).
     /// Updated immediately on click. Separate from `variant_label`
     /// which reflects the actually applied variant from `VariantApplied` event.
     pub(crate) selected_variant: Option<usize>,
 
-    // UI state.
+    pub(crate) track_name: String,
+    pub(crate) variant_label: String,
+
     pub(crate) active_tab: Tab,
-    pub(crate) shuffle_enabled: bool,
+
+    pub(crate) abr_variants: Vec<(usize, String)>,
+
+    pub(crate) eq_bands: Vec<f32>,
+
+    pub(crate) tracks_snapshot: Vec<TrackEntry>,
+    pub(crate) abr_mode_is_auto: bool,
+    pub(crate) is_seeking: bool,
+    pub(crate) playing: bool,
     pub(crate) repeat_enabled: bool,
+    pub(crate) shuffle_enabled: bool,
+    pub(crate) crossfade: f32,
+    pub(crate) duration: f32,
+    pub(crate) position: f32,
+
+    pub(crate) seek_position: f32,
+    pub(crate) selected_rate: f32,
+    pub(crate) volume: f32,
     pub(crate) blink_counter: u8,
 }
 
@@ -75,8 +76,6 @@ impl Kithara {
         palette: gui::GuiPalette,
         config: &crate::config::AppConfig,
     ) -> (Self, Task<Message>) {
-        // Feed tracks from inside iced's tokio runtime — `Loader::spawn_load`
-        // uses `tokio::spawn`, which requires a running reactor.
         queue.set_tracks(crate::sources::build_sources(config));
 
         let volume = queue.volume();
@@ -94,18 +93,18 @@ impl Kithara {
             queue,
             palette,
             tracks_snapshot,
+            volume,
+            crossfade,
+            current_track_index,
+            track_name,
             playing: false,
             position: 0.0,
             duration: 0.0,
-            volume,
             seek_position: 0.0,
             is_seeking: false,
             eq_bands: vec![0.0; eq_band_count],
             selected_rate: 1.0,
-            crossfade,
-            current_track_index,
             selected_track_index: None,
-            track_name,
             variant_label: String::new(),
             shared_variant_label: Arc::new(Mutex::new(String::new())),
             shared_abr_variants: Arc::new(Mutex::new(Vec::new())),
@@ -128,21 +127,17 @@ impl Kithara {
         (state, Task::none())
     }
 
-    /// The dark + gold theme.
-    pub(crate) fn theme(&self) -> Theme {
-        theme::kithara_theme(&self.palette)
-    }
-
     /// Time-tick subscription for player state sync plus keyboard. Tick
     /// interval scales with playback state to save CPU while idle — see
     /// [`subscription_config`] for rationale.
     pub(crate) fn subscription(&self) -> Subscription<Message> {
+        const SUBSCRIPTION_CAPACITY: usize = 2;
         let cfg = subscription_config(self.playing);
-        let mut subs = Vec::with_capacity(2);
+        let mut subs = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
         subs.push(
             iced_time::every(Duration::from_millis(cfg.tick_interval_ms)).map(|_| Message::Tick),
         );
-        if cfg.keyboard {
+        if cfg.is_keyboard_enabled {
             subs.push(event::listen_with(|e, _status, _window| match e {
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
@@ -152,6 +147,11 @@ impl Kithara {
             }));
         }
         Subscription::batch(subs)
+    }
+
+    /// The dark + gold theme.
+    pub(crate) fn theme(&self) -> Theme {
+        theme::kithara_theme(&self.palette)
     }
 }
 
@@ -174,7 +174,7 @@ fn start_event_logging(queue: &Queue) {
 fn start_variant_listener(
     queue: &Queue,
     variant_label: Arc<Mutex<String>>,
-    shared_variants: Arc<Mutex<Vec<(usize, String)>>>,
+    shared_variants: Arc<Mutex<AbrVariantSnapshot>>,
 ) {
     let mut rx = queue.subscribe();
 
@@ -182,12 +182,12 @@ fn start_variant_listener(
         let mut variants: Vec<kithara::abr::VariantInfo> = Vec::new();
         loop {
             match rx.recv().await {
-                Ok(Event::Hls(HlsEvent::VariantsDiscovered {
+                Ok(Event::Abr(AbrEvent::VariantsRegistered {
                     variants: v,
-                    initial_variant,
+                    initial,
                 })) => {
                     variants.clone_from(&v);
-                    let text = variant_display_label(&variants, initial_variant);
+                    let text = variant_display_label(&variants, initial);
                     if let Ok(mut l) = variant_label.lock() {
                         *l = text;
                     }
@@ -207,14 +207,13 @@ fn start_variant_listener(
                         *sv = gui_variants;
                     }
                 }
-                Ok(Event::Hls(HlsEvent::VariantApplied { to_variant, .. })) => {
-                    let text = variant_display_label(&variants, to_variant);
+                Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
+                    let text = variant_display_label(&variants, to);
                     if let Ok(mut l) = variant_label.lock() {
                         *l = text;
                     }
                 }
                 Ok(Event::Queue(QueueEvent::CurrentTrackChanged { .. })) => {
-                    // Reset variant cache — a new track may have its own variants.
                     variants.clear();
                     if let Ok(mut l) = variant_label.lock() {
                         l.clear();

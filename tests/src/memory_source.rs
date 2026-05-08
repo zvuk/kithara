@@ -1,0 +1,157 @@
+//! In-memory Source implementation for testing.
+
+use std::{io::Error as IoError, num::NonZeroUsize, ops::Range};
+
+use futures::executor::block_on;
+use kithara_platform::time::Duration;
+use kithara_storage::WaitOutcome;
+use kithara_stream::{
+    ReadOutcome, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType, Timeline,
+};
+
+/// Error type for memory-backed sources.
+#[derive(Debug, thiserror::Error)]
+#[error("memory source error")]
+pub struct MemorySourceError;
+
+/// In-memory source for testing Source-based readers.
+///
+/// When `report_len` is `true` (default), `len()` returns `Some(data.len())`.
+/// Set `report_len` to `false` to simulate sources without known length
+/// (e.g. for testing `SeekFrom::End` error paths).
+pub struct MemorySource {
+    timeline: Timeline,
+    data: Vec<u8>,
+    report_len: bool,
+}
+
+impl MemorySource {
+    #[must_use]
+    pub fn new(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            timeline: Timeline::new(),
+            report_len: true,
+        }
+    }
+
+    /// Create a source that reports unknown length (`len()` returns `None`).
+    #[must_use]
+    pub fn without_len(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            timeline: Timeline::new(),
+            report_len: false,
+        }
+    }
+}
+
+impl Source for MemorySource {
+    fn len(&self) -> Option<u64> {
+        if self.report_len {
+            Some(self.data.len() as u64)
+        } else {
+            None
+        }
+    }
+
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        if range.start >= self.data.len() as u64 {
+            SourcePhase::Eof
+        } else {
+            SourcePhase::Ready
+        }
+    }
+
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+        let offset = offset as usize;
+        if offset >= self.data.len() {
+            return Ok(ReadOutcome::Eof);
+        }
+        let available = self.data.len() - offset;
+        let n = buf.len().min(available);
+        let Some(count) = NonZeroUsize::new(n) else {
+            return Ok(ReadOutcome::Eof);
+        };
+        buf[..n].copy_from_slice(&self.data[offset..offset + n]);
+        Ok(ReadOutcome::Bytes(count))
+    }
+
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        let _ = timeout;
+        if range.start >= self.data.len() as u64 {
+            Ok(WaitOutcome::Eof)
+        } else {
+            Ok(WaitOutcome::Ready)
+        }
+    }
+}
+
+/// Backwards-compatible alias for `MemorySource::without_len`.
+pub type UnknownLenSource = MemorySource;
+
+/// `StreamType` using `MemorySource` (known length).
+pub struct MemStream;
+
+impl StreamType for MemStream {
+    type Config = MemStreamConfig;
+    type Events = ();
+    type Source = MemorySource;
+
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        config
+            .source
+            .ok_or_else(|| SourceError::other(IoError::other("no source")))
+    }
+}
+
+#[derive(Default)]
+pub struct MemStreamConfig {
+    pub source: Option<MemorySource>,
+}
+
+/// `StreamType` using `MemorySource` with unknown length.
+pub struct UnknownLenStream;
+
+impl StreamType for UnknownLenStream {
+    type Config = UnknownLenStreamConfig;
+    type Events = ();
+    type Source = MemorySource;
+
+    async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
+        config
+            .source
+            .ok_or_else(|| SourceError::other(IoError::other("no source")))
+    }
+}
+
+#[derive(Default)]
+pub struct UnknownLenStreamConfig {
+    pub source: Option<MemorySource>,
+}
+
+/// Create a `Stream` from a `MemorySource`.
+#[must_use]
+pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
+    let config = MemStreamConfig {
+        source: Some(source),
+    };
+    block_on(Stream::new(config)).unwrap()
+}
+
+/// Create a `Stream` from a `MemorySource` with unknown length.
+#[must_use]
+pub fn unknown_len_stream(source: MemorySource) -> Stream<UnknownLenStream> {
+    let config = UnknownLenStreamConfig {
+        source: Some(source),
+    };
+    block_on(Stream::new(config)).unwrap()
+}

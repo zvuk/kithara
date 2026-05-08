@@ -5,17 +5,18 @@ use std::mem::size_of;
 use crate::PcmSource;
 
 /// Interleaved PCM buffer: each frame repeats one 16-bit little-endian sawtooth sample per channel.
-pub(crate) struct SawtoothPcmFixture {
-    sample_rate: u32,
-    channels: u16,
+pub struct SawtoothPcmFixture {
     bytes: Vec<u8>,
+    channels: u16,
+    sample_rate: u32,
 }
 
 impl SawtoothPcmFixture {
-    const SAWTOOTH_PERIOD: usize = 65_536;
     const SAWTOOTH_CENTER: i32 = 32_768;
+    const SAWTOOTH_PERIOD: usize = 65_536;
 
-    pub(crate) fn new(total_frames: usize, sample_rate: u32, channels: u16) -> Self {
+    #[must_use]
+    pub fn new(total_frames: usize, sample_rate: u32, channels: u16) -> Self {
         let mut bytes = Vec::with_capacity(
             total_frames.saturating_mul(usize::from(channels)) * size_of::<i16>(),
         );
@@ -27,9 +28,9 @@ impl SawtoothPcmFixture {
             }
         }
         Self {
-            sample_rate,
-            channels,
             bytes,
+            channels,
+            sample_rate,
         }
     }
 
@@ -42,16 +43,8 @@ impl SawtoothPcmFixture {
 }
 
 impl PcmSource for SawtoothPcmFixture {
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
     fn channels(&self) -> u16 {
         self.channels
-    }
-
-    fn total_byte_len(&self) -> Option<usize> {
-        Some(self.bytes.len())
     }
 
     fn read_pcm_at(&self, offset: usize, buf: &mut [u8]) -> usize {
@@ -61,5 +54,13 @@ impl PcmSource for SawtoothPcmFixture {
         let read = remaining.len().min(buf.len());
         buf[..read].copy_from_slice(&remaining[..read]);
         read
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn total_byte_len(&self) -> Option<usize> {
+        Some(self.bytes.len())
     }
 }

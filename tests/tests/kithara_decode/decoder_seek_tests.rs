@@ -4,7 +4,8 @@
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    decode::DecoderBackend,
     events::{AudioEvent, Event, EventBus},
     file::{File, FileConfig},
     stream::Stream,
@@ -17,21 +18,43 @@ async fn server() -> TestServerHelper {
     TestServerHelper::new().await
 }
 
+/// Open a remote test.mp3 as `Audio<Stream<File>>` with optional hw/sw backend
+/// and optional event bus. Centralises the setup shared by every seek test.
+async fn open_test_mp3(
+    server: &TestServerHelper,
+    temp_dir: &TestTempDir,
+    backend: DecoderBackend,
+    events: Option<EventBus>,
+) -> Audio<Stream<File>> {
+    let url = server.asset("test.mp3");
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let mut config = AudioConfig::<File>::new(file_config)
+        .with_hint("mp3")
+        .with_decoder_backend(backend);
+    if let Some(bus) = events {
+        config = config.with_events(bus);
+    }
+    Audio::<Stream<File>>::new(config).await.unwrap()
+}
+
 async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
 
     loop {
-        if PcmReader::next_chunk(audio).is_some() {
-            return;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(_)) => return,
+            Ok(ChunkOutcome::Eof { .. }) => {
+                panic!("unexpected EOF while waiting for {stage}");
+            }
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("decode error at {stage}: {e}"),
         }
-
-        assert!(!audio.is_eof(), "unexpected EOF while waiting for {stage}");
         assert!(
             Instant::now() <= deadline,
             "timed out waiting for decoded PCM at stage={stage}",
         );
 
-        audio.preload();
+        audio.preload().expect("preload must succeed");
         sleep(Duration::from_millis(10)).await;
     }
 }
@@ -48,12 +71,7 @@ async fn decoder_file_creates_successfully(
     temp_dir: TestTempDir,
 ) {
     let server = server.await;
-    let url = server.asset("test.mp3");
-
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
-
-    let decoder = Audio::<Stream<File>>::new(config).await.unwrap();
+    let decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     let spec = decoder.spec();
     assert!(spec.sample_rate > 0);
@@ -69,68 +87,47 @@ async fn decoder_file_creates_successfully(
 )]
 async fn decoder_file_reads_samples(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
     let server = server.await;
-    let url = server.asset("test.mp3");
-
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
-    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
+    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     next_chunk(&mut decoder, "initial read").await;
 }
 
-/// Seek to 0: read, seek to beginning, read again.
+/// Decoder<Stream<File>> seeks to a single target and resumes decoding.
+///
+/// Covers three zero-warmup scenarios: seek to 0, seek forward (2s), seek
+/// to 0 again. The backward-seek case (which needs a warmup prelude) is a
+/// separate test.
 #[kithara::test(
     tokio,
     browser,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn decoder_file_seek_to_zero(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
+#[case::to_zero(Duration::from_secs(0))]
+#[case::forward(Duration::from_secs(2))]
+async fn decoder_file_single_seek(
+    #[future] server: TestServerHelper,
+    temp_dir: TestTempDir,
+    #[case] target: Duration,
+) {
     let server = server.await;
-    let url = server.asset("test.mp3");
-
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
-    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
-
-    next_chunk(&mut decoder, "before seek to zero").await;
-    decoder.seek(Duration::from_secs(0)).unwrap();
-    next_chunk(&mut decoder, "after seek to zero").await;
-}
-
-/// Decoder<Stream<File>> reads MP3 samples and can seek forward.
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
-async fn decoder_file_seek_forward(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
-    let server = server.await;
-    let url = server.asset("test.mp3");
-
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
-    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
+    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     let spec = decoder.spec();
-    assert!(spec.sample_rate > 0);
-    assert!(spec.channels > 0);
+    assert!(spec.sample_rate > 0 && spec.channels > 0);
 
-    next_chunk(&mut decoder, "before seek forward").await;
-    assert!(!decoder.is_eof());
+    next_chunk(&mut decoder, "before seek").await;
 
-    decoder.seek(Duration::from_secs(2)).unwrap();
-    assert!(!decoder.is_eof(), "should not be EOF after seek forward");
+    decoder.seek(target).unwrap();
 
-    next_chunk(&mut decoder, "after seek forward").await;
+    next_chunk(&mut decoder, "after seek").await;
 
     let spec_after = decoder.spec();
     assert_eq!(spec.sample_rate, spec_after.sample_rate);
     assert_eq!(spec.channels, spec_after.channels);
 }
 
-/// Decoder<Stream<File>> can seek backward to the beginning.
+/// Decoder<Stream<File>> can seek backward to the beginning after a warmup.
 #[kithara::test(
     tokio,
     browser,
@@ -139,11 +136,7 @@ async fn decoder_file_seek_forward(#[future] server: TestServerHelper, temp_dir:
 )]
 async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
     let server = server.await;
-    let url = server.asset("test.mp3");
-
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
-    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
+    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, None).await;
 
     for stage in 0..3 {
         next_chunk(&mut decoder, &format!("warmup chunk {stage}")).await;
@@ -153,7 +146,6 @@ async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir
     next_chunk(&mut decoder, "after seek forward").await;
 
     decoder.seek(Duration::from_secs(0)).unwrap();
-    assert!(!decoder.is_eof(), "should not be EOF after seek to start");
     next_chunk(&mut decoder, "after seek backward").await;
 }
 
@@ -164,35 +156,25 @@ async fn decoder_file_seek_backward(#[future] server: TestServerHelper, temp_dir
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case::sw(false)]
-#[case::hw(true)]
+#[case::sw(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hw(DecoderBackend::Apple)
+)]
 async fn decoder_file_seek_multiple(
     #[future] server: TestServerHelper,
     temp_dir: TestTempDir,
-    #[case] prefer_hardware: bool,
+    #[case] backend: DecoderBackend,
 ) {
     let server = server.await;
-    let url = server.asset("test.mp3");
-
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config)
-        .with_hint("mp3")
-        .with_prefer_hardware(prefer_hardware);
-    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
+    let mut decoder = open_test_mp3(&server, &temp_dir, backend, None).await;
 
     next_chunk(&mut decoder, "initial read").await;
 
-    decoder.seek(Duration::from_secs(1)).unwrap();
-    next_chunk(&mut decoder, "after seek to 1s").await;
-
-    decoder.seek(Duration::from_secs(5)).unwrap();
-    next_chunk(&mut decoder, "after seek to 5s").await;
-
-    decoder.seek(Duration::from_secs(2)).unwrap();
-    next_chunk(&mut decoder, "after seek back to 2s").await;
-
-    decoder.seek(Duration::from_secs(0)).unwrap();
-    next_chunk(&mut decoder, "after seek to 0s").await;
+    for target in [1, 5, 2, 0] {
+        decoder.seek(Duration::from_secs(target)).unwrap();
+        next_chunk(&mut decoder, &format!("after seek to {target}s")).await;
+    }
 }
 
 /// Decoder<Stream<File>> events are emitted on seek.
@@ -204,16 +186,10 @@ async fn decoder_file_seek_multiple(
 )]
 async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp_dir: TestTempDir) {
     let server = server.await;
-    let url = server.asset("test.mp3");
-
     let bus = EventBus::new(64);
     let mut events_rx = bus.subscribe();
 
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config)
-        .with_hint("mp3")
-        .with_events(bus);
-    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
+    let mut decoder = open_test_mp3(&server, &temp_dir, DecoderBackend::Symphonia, Some(bus)).await;
 
     next_chunk(&mut decoder, "before seek events").await;
     decoder.seek(Duration::from_secs(2)).unwrap();
@@ -245,14 +221,17 @@ async fn decoder_file_seek_emits_events(#[future] server: TestServerHelper, temp
             "timed out waiting for FormatDetected/SeekComplete events",
         );
 
-        let read = decoder.read(&mut buf);
-        if read == 0 {
-            assert!(
-                !decoder.is_eof(),
-                "unexpected EOF while waiting for seek events",
-            );
-            decoder.preload();
-            sleep(Duration::from_millis(10)).await;
+        use kithara::audio::ReadOutcome;
+        match decoder.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {
+                decoder.preload().expect("preload must succeed");
+                sleep(Duration::from_millis(10)).await;
+            }
+            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF while waiting for seek events");
+            }
+            Err(e) => panic!("decode error: {e}"),
         }
     }
 

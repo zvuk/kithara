@@ -23,4 +23,5 @@ pub(crate) mod segment_loader;
 pub(crate) mod size_estimation;
 pub use keys::KeyManager;
 pub use playlist_cache::PlaylistCache;
-pub use segment_loader::{SegmentLoader, SegmentMeta};
+pub use segment_loader::SegmentLoader;
+pub(crate) use segment_loader::SegmentMeta;

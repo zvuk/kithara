@@ -1,0 +1,43 @@
+id: arch.no-cfg-on-statement
+message: |
+  `#[cfg(...)]` attached to an inline statement or expression inside a
+  function body. Lift the gate to the enclosing module, or extract the
+  gated logic into a small trait with platform-specific impls (see
+  `kithara-platform`).
+
+      // ❌
+      fn x() {
+          #[cfg(feature = "fast")]
+          let y = compute_fast();
+          #[cfg(not(feature = "fast"))]
+          let y = compute_slow();
+          drop(y);
+      }
+
+      // ✅
+      // Either: gate the whole `mod` (one cfg attribute, top of file).
+      // Or:     define `trait Compute { fn run(&self) -> u8; }` and
+      //         provide two impls behind the feature in kithara-platform.
+
+  Suppress with `// ast-grep-ignore: arch.no-cfg-on-statement` only when
+  the gate genuinely cannot be lifted (e.g. inside a generic monomorphised
+  body where cfg switches behavior per platform target).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  all:
+    - pattern: "#[cfg($$$)]"
+    - inside:
+        kind: function_item
+        stopBy: end
+    - any:
+        - precedes: { kind: let_declaration }
+        - precedes: { kind: expression_statement }

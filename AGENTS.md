@@ -28,6 +28,7 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
 - Do not use destructive git commands unless the user explicitly asks for them.
+- Cancel-token hierarchy: master cancel lives at the consumer-crate top (`Queue` / `App` / FFI player) or `PlayerImpl` (when used directly). All cancels below — Downloader, AssetStore, audio worker, epoch_cancel, per-fetch CancelGroup — are children derived via `.child_token()` from that master. `unwrap_or_default()` on `Option<CancellationToken>` config fields is allowed as a test/standalone safety net but must never fire in the production path. Hard-coded `CancellationToken::new()` is forbidden except at marked owner / bridge sites: add `// kithara:cancel:owner` (consumer-crate top, `PlayerImpl::new` fallback) or `// kithara:cancel:bridge` (FFI bridge that intentionally outlives the player) on the same line. Enforced by `cargo xtask lint arch` (`cancel_hierarchy`). See `crates/kithara-play/README.md` "Cancel Hierarchy" for the full contract.
 - Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
 - Keep code readable and easy to understand.
 - Optimize for performance in hot paths.

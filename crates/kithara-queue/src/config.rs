@@ -5,15 +5,15 @@ use derive_setters::Setters;
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
-const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
+pub(crate) const DEFAULT_MAX_CONCURRENT_LOADS: NonZeroUsize = match NonZeroUsize::new(3) {
     Some(n) => n,
     None => unreachable!(),
 };
 
 /// Default prefetch lead time before EOF, in seconds.
 ///
-/// Mirrors [`kithara_play::PlayerConfig::prefetch_duration`] default.
-const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
+/// Mirrors `kithara_play::PlayerConfig::prefetch_duration` default.
+pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 
 /// Configuration for a [`Queue`](crate::Queue).
 ///
@@ -35,24 +35,26 @@ const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 #[derive(Clone, Derivative, Setters)]
 #[derivative(Debug, Default)]
 #[setters(prefix = "with_", strip_option)]
+#[non_exhaustive]
 pub struct QueueConfig {
+    /// Max concurrent `Loader` in-flight loads. Default: 3.
+    #[derivative(Default(value = "DEFAULT_MAX_CONCURRENT_LOADS"))]
+    pub max_concurrent_loads: NonZeroUsize,
+
     /// Externally-owned player. `None` means Queue builds a default.
     #[setters(skip)]
     #[derivative(Debug = "ignore")]
     pub player: Option<Arc<PlayerImpl>>,
 
-    /// Max concurrent `Loader` in-flight loads. Default: 3.
-    #[derivative(Default(value = "DEFAULT_MAX_CONCURRENT_LOADS"))]
-    pub max_concurrent_loads: NonZeroUsize,
+    /// Whether the queue auto-advances to the next track at EOF. When
+    /// `false`, the queue stops at the end of the current track and
+    /// requires an explicit `Queue::play_next` call. Default: `true`.
+    #[derivative(Default(value = "true"))]
+    pub should_autoplay: bool,
 
-    /// Whether the Queue should start playing as soon as the first track
-    /// enters [`TrackStatus::Loaded`](crate::TrackStatus::Loaded).
-    /// Default: `false`.
-    pub autoplay: bool,
-
-    /// Lead time in seconds before EOF at which the next queued track is
-    /// preloaded into the audio processor. Independent of crossfade.
-    /// See [`kithara_play::PlayerConfig::prefetch_duration`] for the
+    /// Lead time in seconds before EOF at which the next queued track
+    /// is preloaded into the audio processor. Independent of crossfade.
+    /// See `kithara_play::PlayerConfig::prefetch_duration` for the
     /// effective threshold formula. Default: 3.5.
     #[derivative(Default(value = "DEFAULT_PREFETCH_DURATION"))]
     pub prefetch_duration: f32,
@@ -84,14 +86,7 @@ mod tests {
     fn default_config_has_reasonable_loader_cap() {
         let cfg = QueueConfig::default();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
-        assert!(!cfg.autoplay);
         assert!(cfg.player.is_none());
         assert!((cfg.prefetch_duration - 3.5).abs() < f32::EPSILON);
-    }
-
-    #[kithara::test]
-    fn with_autoplay_sets_field() {
-        let cfg = QueueConfig::default().with_autoplay(true);
-        assert!(cfg.autoplay);
     }
 }

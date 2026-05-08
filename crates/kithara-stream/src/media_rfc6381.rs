@@ -69,11 +69,9 @@ pub const fn audio_codec_supports_fmp4_packaging(codec: AudioCodec) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use kithara_test_utils::kithara;
 
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
+    use super::*;
 
     #[kithara::test]
     #[case::aac_lc_fmp4(AudioCodec::AacLc, ContainerFormat::Fmp4, Some("mp4a.40.2"))]

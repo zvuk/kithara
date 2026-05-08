@@ -1,9 +1,6 @@
 #![forbid(unsafe_code)]
 
-use kithara::{
-    hls::{HlsError, HlsResult},
-    internal::VariantId,
-};
+use kithara::hls::{HlsError, HlsResult, VariantId};
 use kithara_integration_tests::hls_fixture::*;
 use kithara_platform::time::Duration;
 use url::Url;
@@ -15,8 +12,6 @@ fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
         Duration::from_secs(native_secs)
     }
 }
-
-// Test Cases
 
 #[kithara::test(
     tokio,
@@ -104,14 +99,12 @@ async fn fetch_media_playlist_for_different_variants(
     let server = test_server.await;
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
 
-    // Test variant 0
     let media_url_0 = server.url("/v0.m3u8");
     let media_playlist_0 = fetch_manager
         .media_playlist(&media_url_0, VariantId(0))
         .await?;
     assert_eq!(media_playlist_0.segments.len(), 3);
 
-    // Test variant 1 (different playlist)
     let media_url_1 = server.url("/v1.m3u8");
     let media_playlist_1 = fetch_manager
         .media_playlist(&media_url_1, VariantId(1))
@@ -136,15 +129,12 @@ async fn fetch_manager_caching_behavior(
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
     let master_url = server.url("/master.m3u8");
 
-    // First fetch
     let master1 = fetch_manager.master_playlist(&master_url).await?;
     assert_eq!(master1.variants.len(), 3);
 
-    // Second fetch (should use cache)
     let master2 = fetch_manager.master_playlist(&master_url).await?;
     assert_eq!(master2.variants.len(), 3);
 
-    // Variants should be the same
     assert_eq!(master1.variants.len(), master2.variants.len());
 
     Ok(())
@@ -162,7 +152,6 @@ async fn fetch_manager_error_handling_invalid_url(
 ) -> HlsResult<()> {
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
 
-    // Try to fetch from invalid URL
     let invalid_url = Url::parse("http://127.0.0.1:9/master.m3u8")
         .map_err(|e| HlsError::InvalidUrl(e.to_string()))?;
 
@@ -188,7 +177,6 @@ async fn resolve_multiple_relative_urls(
     let fetch_manager = test_playlist_cache(&assets_fixture, net_fixture);
     fetch_manager.set_base_url(Some(base_url.clone()));
 
-    // Test different relative URLs
     let test_cases = vec![
         ("segment.ts", "/base/segment.ts"),
         ("./segment.ts", "/base/segment.ts"),
@@ -222,18 +210,15 @@ async fn fetch_manager_with_different_base_urls(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    // Test with no base URL
     let fetch_manager_no_base = test_playlist_cache(&assets_fixture, net_fixture.clone());
     let master_url = server.url("/master.m3u8");
     let master_no_base = fetch_manager_no_base.master_playlist(&master_url).await?;
     assert_eq!(master_no_base.variants.len(), 3);
 
-    // Test with base URL
     let base_url = server.url("/custom/base/");
     let fetch_manager_with_base = test_playlist_cache(&assets_fixture, net_fixture);
     fetch_manager_with_base.set_base_url(Some(base_url));
 
-    // Fetch should still work with base URL
     let master_with_base = fetch_manager_with_base.master_playlist(&master_url).await?;
     assert_eq!(master_with_base.variants.len(), 3);
 

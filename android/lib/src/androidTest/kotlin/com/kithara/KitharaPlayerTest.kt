@@ -34,19 +34,10 @@ class KitharaPlayerTest {
     }
 
     @Test
-    fun defaultRateIsOne() {
+    fun playingRateIsOne() {
         val player = KitharaPlayer()
 
-        assertEquals(1.0f, player.defaultRate, 0.0f)
-    }
-
-    @Test
-    fun initAcceptsGaplessModeConfig() {
-        val player = KitharaPlayer(
-            KitharaPlayer.Config(gaplessMode = GaplessMode.CodecPriming),
-        )
-
-        assertEquals(PlayerStatus.Unknown, player.status)
+        assertEquals(1.0f, player.playingRate, 0.0f)
     }
 
     @Test

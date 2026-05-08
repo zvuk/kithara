@@ -1,12 +1,8 @@
 //! FFI-compatible type conversions between `kithara-play` and platform bindings.
 
-use std::time::Duration;
-
-use kithara::{
-    decode::{GaplessMode, SilenceTrimParams},
-    play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange},
-};
+use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 use kithara_events::TrackStatus as TS;
+use kithara_platform::time::Duration;
 use url::Url;
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
@@ -34,23 +30,27 @@ pub enum FfiError {
 
 pub type FfiResult<T> = Result<T, FfiError>;
 impl FfiError {
-    const ERROR_CODE_INTERNAL: i32 = 0;
-    const ERROR_CODE_NOT_READY: i32 = 1;
-    const ERROR_CODE_ITEM_FAILED: i32 = 2;
-    const ERROR_CODE_SEEK_FAILED: i32 = 3;
     const ERROR_CODE_ENGINE_NOT_RUNNING: i32 = 4;
+    const ERROR_CODE_INTERNAL: i32 = 0;
     const ERROR_CODE_INVALID_ARGUMENT: i32 = 5;
+    const ERROR_CODE_ITEM_FAILED: i32 = 2;
+    const ERROR_CODE_NOT_READY: i32 = 1;
+    const ERROR_CODE_SEEK_FAILED: i32 = 3;
 
     #[must_use]
     pub fn observer_code(&self) -> i32 {
-        match self {
-            Self::Internal { .. } => Self::ERROR_CODE_INTERNAL,
-            Self::NotReady => Self::ERROR_CODE_NOT_READY,
-            Self::ItemFailed { .. } => Self::ERROR_CODE_ITEM_FAILED,
-            Self::SeekFailed { .. } => Self::ERROR_CODE_SEEK_FAILED,
-            Self::EngineNotRunning => Self::ERROR_CODE_ENGINE_NOT_RUNNING,
-            Self::InvalidArgument { .. } => Self::ERROR_CODE_INVALID_ARGUMENT,
-        }
+        ffi_error_observer_code(self)
+    }
+}
+
+fn ffi_error_observer_code(error: &FfiError) -> i32 {
+    match error {
+        FfiError::Internal { .. } => FfiError::ERROR_CODE_INTERNAL,
+        FfiError::NotReady => FfiError::ERROR_CODE_NOT_READY,
+        FfiError::ItemFailed { .. } => FfiError::ERROR_CODE_ITEM_FAILED,
+        FfiError::SeekFailed { .. } => FfiError::ERROR_CODE_SEEK_FAILED,
+        FfiError::EngineNotRunning => FfiError::ERROR_CODE_ENGINE_NOT_RUNNING,
+        FfiError::InvalidArgument { .. } => FfiError::ERROR_CODE_INVALID_ARGUMENT,
     }
 }
 
@@ -125,15 +125,13 @@ pub fn parse_url(s: &str) -> FfiResult<Url> {
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiPlayerConfig {
-    /// Number of EQ bands (log-spaced). Default: 10.
-    pub eq_band_count: u32,
-    /// How resources loaded for this player trim leading/trailing PCM.
-    pub gapless_mode: FfiGaplessMode,
     /// DRM key handling. Pass an empty [`FfiKeyOptions`] (default) when
     /// no DRM is needed.
     pub key_options: FfiKeyOptions,
     /// Storage options shared by all items (cache directory, etc.).
     pub store: crate::config::StoreOptions,
+    /// Number of EQ bands (log-spaced). Default: 10.
+    pub eq_band_count: u32,
 }
 
 /// Default number of log-spaced EQ bands.
@@ -143,71 +141,8 @@ impl Default for FfiPlayerConfig {
     fn default() -> Self {
         Self {
             eq_band_count: DEFAULT_EQ_BAND_COUNT,
-            gapless_mode: FfiGaplessMode::default(),
             key_options: FfiKeyOptions::default(),
             store: crate::config::StoreOptions::default(),
-        }
-    }
-}
-
-/// FFI-friendly tunables for silence-based gapless trimming.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
-pub struct FfiSilenceTrimParams {
-    pub threshold_db: f32,
-    pub min_trim_frames: u64,
-    pub scan_window_frames: u64,
-    pub trim_trailing: bool,
-}
-
-impl Default for FfiSilenceTrimParams {
-    fn default() -> Self {
-        SilenceTrimParams::default().into()
-    }
-}
-
-impl From<SilenceTrimParams> for FfiSilenceTrimParams {
-    fn from(params: SilenceTrimParams) -> Self {
-        Self {
-            threshold_db: params.threshold_db,
-            min_trim_frames: params.min_trim_frames,
-            scan_window_frames: params.scan_window_frames,
-            trim_trailing: params.trim_trailing,
-        }
-    }
-}
-
-impl From<FfiSilenceTrimParams> for SilenceTrimParams {
-    fn from(params: FfiSilenceTrimParams) -> Self {
-        Self {
-            threshold_db: params.threshold_db,
-            min_trim_frames: params.min_trim_frames,
-            scan_window_frames: params.scan_window_frames,
-            trim_trailing: params.trim_trailing,
-        }
-    }
-}
-
-/// FFI-friendly mirror of [`GaplessMode`].
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
-pub enum FfiGaplessMode {
-    Disabled,
-    #[default]
-    MediaOnly,
-    CodecPriming,
-    SilenceTrim {
-        params: FfiSilenceTrimParams,
-    },
-}
-
-impl From<FfiGaplessMode> for GaplessMode {
-    fn from(mode: FfiGaplessMode) -> Self {
-        match mode {
-            FfiGaplessMode::Disabled => Self::Disabled,
-            FfiGaplessMode::MediaOnly => Self::MediaOnly,
-            FfiGaplessMode::CodecPriming => Self::CodecPriming,
-            FfiGaplessMode::SilenceTrim { params } => Self::SilenceTrim(params.into()),
         }
     }
 }
@@ -236,11 +171,18 @@ impl std::fmt::Debug for FfiKeyOptions {
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiKeyRule {
     pub processor: std::sync::Arc<dyn crate::observer::FfiKeyProcessor>,
-    /// Domain patterns — exact (`"example.com"`) or wildcard
-    /// subdomain (`"*.example.com"`).
-    pub domains: Vec<String>,
     pub headers: Option<std::collections::HashMap<String, String>>,
     pub query_params: Option<std::collections::HashMap<String, String>>,
+    /// Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
+    /// on every decrypt. `None` is treated as an empty string.
+    ///
+    /// `setup_hls_aes` populates this automatically with a freshly
+    /// generated 16-character alphanumeric value and mirrors it into
+    /// [`crate::observer::SALT_HEADER`] in the player-wide header map.
+    pub salt: Option<String>,
+    /// Domain patterns — exact (`"example.com"`), wildcard subdomain
+    /// (`"*.example.com"`), or match-any (`"*"`).
+    pub domains: Vec<String>,
 }
 
 impl std::fmt::Debug for FfiKeyRule {
@@ -249,6 +191,7 @@ impl std::fmt::Debug for FfiKeyRule {
             .field("domains", &self.domains)
             .field("headers", &self.headers)
             .field("query_params", &self.query_params)
+            .field("salt", &self.salt.as_ref().map(|_| "<set>"))
             .finish_non_exhaustive()
     }
 }
@@ -258,14 +201,20 @@ impl std::fmt::Debug for FfiKeyRule {
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiItemConfig {
-    pub url: String,
+    pub abr_mode: Option<FfiAbrMode>,
     pub headers: Option<std::collections::HashMap<String, String>>,
+    pub url: String,
+    /// Caller-declared live-stream flag. `true` means the source is a
+    /// live HLS feed (radio / broadcast); the player skips end-of-stream
+    /// gating and `is_playable` always returns `true` for the item.
+    /// Defaults to `false`. Auto-detection from the manifest is a
+    /// future improvement.
+    pub is_live_stream: bool,
     /// Peak bitrate ceiling in bits/sec. `0.0` means no cap.
     pub preferred_peak_bitrate: f64,
     /// Peak bitrate ceiling on expensive networks (cellular). `0.0`
     /// means no cap.
     pub preferred_peak_bitrate_expensive: f64,
-    pub abr_mode: Option<FfiAbrMode>,
 }
 
 impl FfiItemConfig {
@@ -277,6 +226,7 @@ impl FfiItemConfig {
             preferred_peak_bitrate: 0.0,
             preferred_peak_bitrate_expensive: 0.0,
             abr_mode: None,
+            is_live_stream: false,
         }
     }
 }
@@ -341,7 +291,8 @@ impl From<TimeControlStatus> for FfiTimeControlStatus {
 /// FFI-friendly mirror of [`kithara_events::TrackStatus`].
 ///
 /// Mirrors the Queue-side track lifecycle: pending -> loading -> slow ->
-/// loaded -> consumed, or `failed` on error.
+/// loaded -> consumed, or `failed` on error. `Cancelled` covers
+/// loads that were overridden by a later `select` of a different track.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Enum))]
 pub enum FfiTrackStatus {
@@ -351,6 +302,7 @@ pub enum FfiTrackStatus {
     Loaded,
     Failed { reason: String },
     Consumed,
+    Cancelled,
 }
 
 impl From<kithara_events::TrackStatus> for FfiTrackStatus {
@@ -361,8 +313,7 @@ impl From<kithara_events::TrackStatus> for FfiTrackStatus {
             TS::Loaded => Self::Loaded,
             TS::Failed(reason) => Self::Failed { reason },
             TS::Consumed => Self::Consumed,
-            // `TrackStatus` is `#[non_exhaustive]`; fall back to `Pending`
-            // for `Pending` itself + any future variants.
+            TS::Cancelled => Self::Cancelled,
             _ => Self::Pending,
         }
     }
@@ -372,8 +323,8 @@ impl From<kithara_events::TrackStatus> for FfiTrackStatus {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiTimeRange {
-    pub start_seconds: f64,
     pub duration_seconds: f64,
+    pub start_seconds: f64,
 }
 
 impl From<TimeRange> for FfiTimeRange {
@@ -400,7 +351,6 @@ pub enum FfiPlayerEvent {
     TimeChanged { seconds: f64 },
     RateChanged { rate: f32 },
     CurrentItemChanged { item_id: Option<String> },
-    QueueItemRemoved { item_id: String },
     StatusChanged { status: FfiPlayerStatus },
     TimeControlStatusChanged { status: FfiTimeControlStatus },
     Error { error: String },
@@ -408,6 +358,7 @@ pub enum FfiPlayerEvent {
     BufferedDurationChanged { seconds: f64 },
     VolumeChanged { volume: f32 },
     MuteChanged { muted: bool },
+    ItemDidPlayToEnd,
     /// Queue-level: the loading/playback status of an item changed.
     /// `item_id` matches `AudioPlayerItem::id()`.
     TrackStatusChanged { item_id: String, status: FfiTrackStatus },
@@ -452,8 +403,12 @@ pub enum FfiItemEvent {
     DurationChanged {
         seconds: f64,
     },
-    BufferedDurationChanged {
-        seconds: f64,
+    /// Buffered byte ranges, expressed as `[start, start + duration)` in
+    /// seconds. Replaces the older scalar `BufferedDurationChanged` —
+    /// the total buffered time is the sum of `range.duration_seconds`.
+    /// Mirrors the iOS `AudioPlayerItemProtocol.rxLoadedRanges` shape.
+    LoadedRangesChanged {
+        ranges: Vec<FfiTimeRange>,
     },
     StatusChanged {
         status: FfiItemStatus,
@@ -469,6 +424,12 @@ pub enum FfiItemEvent {
     VariantApplied {
         variant: FfiVariant,
     },
+    /// The item reached natural end-of-stream. Mirrors the iOS
+    /// `AudioPlayerItemProtocol.rxDidReachEnd`.
+    DidReachEnd,
+    /// Playback stalled (the player is waiting for more data).
+    /// Mirrors the iOS `AudioPlayerItemProtocol.rxDidStall`.
+    DidStall,
     Error {
         error: String,
     },
@@ -478,9 +439,20 @@ pub enum FfiItemEvent {
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
 pub struct FfiVariant {
+    pub name: Option<String>,
     pub index: u32,
     pub bandwidth_bps: u64,
-    pub name: Option<String>,
+}
+
+/// Outcome reported by [`crate::observer::ItemLoadCallback::on_complete`]
+/// when [`crate::item::AudioPlayerItem::load`] resolves.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Record))]
+pub struct FfiItemLoadResult {
+    /// `true` once the metadata layer recognises encrypted segments.
+    pub has_protected_content: bool,
+    /// `true` when the item has enough metadata to start playback.
+    pub is_playable: bool,
 }
 
 /// FFI-friendly ABR mode.
@@ -501,10 +473,12 @@ pub struct FfiPlayerSnapshot {
     pub status: FfiPlayerStatus,
     pub current_time: Option<f64>,
     pub duration: Option<f64>,
+    pub is_muted: bool,
+    /// Target playback speed (the value used by `play()`). Live `rate`
+    /// equals this while playing and `0.0` while paused.
+    pub playing_rate: f32,
     pub rate: f32,
-    pub default_rate: f32,
     pub volume: f32,
-    pub muted: bool,
 }
 
 #[cfg(test)]
@@ -513,13 +487,13 @@ mod tests {
 
     #[kithara::test]
     fn seconds_to_duration_valid() {
-        let d = seconds_to_duration(1.5).expect("valid");
+        let d = seconds_to_duration(1.5).expect("BUG: hard-coded test input is in the valid range");
         assert_eq!(d, Duration::from_secs_f64(1.5));
     }
 
     #[kithara::test]
     fn seconds_to_duration_zero() {
-        let d = seconds_to_duration(0.0).expect("valid");
+        let d = seconds_to_duration(0.0).expect("BUG: hard-coded test input is in the valid range");
         assert_eq!(d, Duration::ZERO);
     }
 
@@ -542,20 +516,23 @@ mod tests {
     #[kithara::test]
     fn duration_roundtrip() {
         let secs = 42.123_456;
-        let d = seconds_to_duration(secs).expect("valid");
+        let d =
+            seconds_to_duration(secs).expect("BUG: hard-coded test input is in the valid range");
         let back = duration_to_seconds(d);
         assert!((back - secs).abs() < 1e-9);
     }
 
     #[kithara::test]
     fn parse_url_valid() {
-        let u = parse_url("https://example.com/song.mp3").expect("valid");
+        let u = parse_url("https://example.com/song.mp3")
+            .expect("BUG: hard-coded test input is in the valid range");
         assert_eq!(u.scheme(), "https");
     }
 
     #[kithara::test]
     fn parse_url_trimmed() {
-        let u = parse_url("  https://example.com/  ").expect("valid");
+        let u = parse_url("  https://example.com/  ")
+            .expect("BUG: hard-coded test input is in the valid range");
         assert_eq!(u.host_str(), Some("example.com"));
     }
 
@@ -663,42 +640,5 @@ mod tests {
         let ffi = FfiTimeRange::from(tr);
         assert!((ffi.start_seconds - 10.0).abs() < 1e-9);
         assert!((ffi.duration_seconds - 5.0).abs() < 1e-9);
-    }
-
-    #[kithara::test]
-    fn gapless_mode_defaults_to_media_only() {
-        assert_eq!(FfiGaplessMode::default(), FfiGaplessMode::MediaOnly);
-    }
-
-    #[kithara::test]
-    fn gapless_mode_maps_to_decode_mode() {
-        assert_eq!(
-            GaplessMode::from(FfiGaplessMode::Disabled),
-            GaplessMode::Disabled
-        );
-        assert_eq!(
-            GaplessMode::from(FfiGaplessMode::CodecPriming),
-            GaplessMode::CodecPriming
-        );
-    }
-
-    #[kithara::test]
-    fn silence_trim_params_map_to_decode_mode() {
-        let ffi_params = FfiSilenceTrimParams {
-            threshold_db: 72.0,
-            min_trim_frames: 512,
-            scan_window_frames: 8192,
-            trim_trailing: true,
-        };
-
-        assert_eq!(
-            GaplessMode::from(FfiGaplessMode::SilenceTrim { params: ffi_params }),
-            GaplessMode::SilenceTrim(SilenceTrimParams {
-                threshold_db: 72.0,
-                min_trim_frames: 512,
-                scan_window_frames: 8192,
-                trim_trailing: true,
-            })
-        );
     }
 }

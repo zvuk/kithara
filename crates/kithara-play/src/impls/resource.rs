@@ -2,10 +2,12 @@
 
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
-use kithara_audio::{Audio, AudioConfig, PcmReader, ServiceClass};
-use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+use kithara_audio::{
+    Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, SeekOutcome, ServiceClass,
+};
+use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
-use kithara_stream::Stream;
+use kithara_stream::{Stream, StreamType};
 
 use crate::impls::{config::ResourceConfig, source_type::SourceType};
 
@@ -31,8 +33,8 @@ use crate::impls::{config::ResourceConfig, source_type::SourceType};
 /// ```
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
-    bus: EventBus,
     src: Arc<str>,
+    bus: EventBus,
 }
 
 impl Resource {
@@ -53,104 +55,26 @@ impl Resource {
             #[cfg(feature = "file")]
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.into_file_config();
-                Self::from_file(audio_config, src).await
+                Self::from_stream_audio(audio_config, src).await
             }
             #[cfg(feature = "hls")]
             SourceType::HlsStream(_) => {
                 let audio_config = config.into_hls_config()?;
-                Self::from_hls(audio_config, src).await
+                Self::from_stream_audio(audio_config, src).await
             }
         }
     }
 
-    /// Create a resource from any `PcmReader`.
-    ///
-    /// The resource shares the reader's event bus directly.
-    /// Use this for custom sources.
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
-        Self::from_reader_with_src(reader, Arc::from("unknown"))
-    }
-
-    /// Create a resource from any `PcmReader` with an explicit source identifier.
-    ///
-    /// This is primarily useful for tests that need distinct in-memory readers
-    /// to coexist in the processor arena without colliding on the default
-    /// placeholder source key.
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) fn from_reader_with_src(reader: impl PcmReader + 'static, src: Arc<str>) -> Self {
-        let bus = reader.event_bus().clone();
-        let mut inner: Box<dyn PcmReader> = Box::new(reader);
-        // Player resources are consumed from the audio render thread,
-        // which must never block: flip the reader into non-blocking mode
-        // immediately. Callers that want to wait for the first decoded
-        // chunk still use `Resource::preload()` explicitly.
-        inner.preload();
-        Self { inner, bus, src }
-    }
-
-    /// Create a resource from a file audio config.
-    ///
-    /// Use this when you need to customize `FileConfig` or `AudioConfig`
-    /// beyond what `Resource::new()` provides.
-    #[cfg(feature = "file")]
-    pub(crate) async fn from_file(
-        mut config: AudioConfig<kithara_file::File>,
-        src: Arc<str>,
-    ) -> DecodeResult<Self> {
-        // Extract existing bus from stream config, or create a new one.
-        let bus = config.stream.bus.clone().unwrap_or_default();
-        // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
-        config.stream.bus = Some(bus.clone());
-
-        let mut audio = Audio::<Stream<kithara_file::File>>::new(config).await?;
-        // Always non-blocking for the player render thread; see
-        // `from_reader` for rationale.
-        audio.preload();
-        Ok(Self {
-            inner: Box::new(audio),
-            bus,
-            src,
-        })
-    }
-
-    /// Create a resource from an HLS audio config.
-    ///
-    /// Use this when you need to customize `HlsConfig`, ABR, keys, etc.
-    #[cfg(feature = "hls")]
-    pub(crate) async fn from_hls(
-        mut config: AudioConfig<kithara_hls::Hls>,
-        src: Arc<str>,
-    ) -> DecodeResult<Self> {
-        // Extract existing bus from stream config, or create a new one.
-        let bus = config.stream.bus.clone().unwrap_or_default();
-        // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
-        config.stream.bus = Some(bus.clone());
-
-        let mut audio = Audio::<Stream<kithara_hls::Hls>>::new(config).await?;
-        // Always non-blocking for the player render thread; see
-        // `from_reader` for rationale.
-        audio.preload();
-        Ok(Self {
-            inner: Box::new(audio),
-            bus,
-            src,
-        })
-    }
-
-    /// Source identifier for this resource.
+    /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
     #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        &self.src
+    pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.inner.abr_handle()
     }
 
-    /// Subscribe to unified events.
-    ///
-    /// Returns a receiver for all events published to the bus,
-    /// including audio, file, and HLS events.
+    /// Get total duration (if known).
     #[must_use]
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
-        self.bus.subscribe()
+    pub fn duration(&self) -> Option<Duration> {
+        self.inner.duration()
     }
 
     /// Get a reference to the underlying `EventBus`.
@@ -161,13 +85,107 @@ impl Resource {
         &self.bus
     }
 
+    /// Create a resource from any `PcmReader`.
+    ///
+    /// The resource shares the reader's event bus directly. Use for custom
+    /// sources or offline render harnesses where the production
+    /// [`Resource::new`] / [`Resource::from_stream_audio`] paths (which
+    /// build a real `Stream<T>`) are heavier than the caller needs.
+    ///
+    /// `src` rides along on `PlayerEvent::ItemDidPlayToEnd` and is what
+    /// the queue uses to tell which track ended. `None` defaults to
+    /// `"unknown"`.
+    #[must_use]
+    pub fn from_reader<R: PcmReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
+        let bus = reader.event_bus().clone();
+        let mut inner: Box<dyn PcmReader> = Box::new(reader);
+        let _ = inner.preload();
+        Self {
+            inner,
+            bus,
+            src: src.unwrap_or_else(|| Arc::from("unknown")),
+        }
+    }
+
+    /// Create a resource from a concrete stream-backed audio config.
+    ///
+    /// Generic over any [`StreamType`] whose config carries an optional
+    /// `kithara_events::EventBus`. Callers wanting fine-grained control
+    /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
+    pub(crate) async fn from_stream_audio<T>(
+        mut config: AudioConfig<T>,
+        src: Arc<str>,
+    ) -> DecodeResult<Self>
+    where
+        T: StreamType<Events = EventBus> + 'static,
+        Audio<Stream<T>>: PcmReader + 'static,
+    {
+        let bus = T::event_bus(&config.stream)
+            .or_else(|| config.bus.clone())
+            .unwrap_or_default();
+        config.bus = Some(bus.clone());
+
+        let mut audio = Audio::<Stream<T>>::new(config).await?;
+        let _ = audio.preload();
+        Ok(Self {
+            src,
+            bus,
+            inner: Box::new(audio),
+        })
+    }
+
+    /// Get track metadata.
+    #[must_use]
+    pub fn metadata(&self) -> &TrackMetadata {
+        self.inner.metadata()
+    }
+
+    /// Read the next decoded chunk with full metadata.
+    ///
+    /// # Errors
+    /// Propagated from the underlying `PcmReader` on decoder / channel failure.
+    pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        self.inner.next_chunk()
+    }
+
+    /// Get current playback position.
+    #[must_use]
+    pub fn position(&self) -> Duration {
+        self.inner.position()
+    }
+
+    /// Wait for first decoded chunk to be available, then move it to internal buffer.
+    ///
+    /// After preload completes, the first `read()` returns data without blocking.
+    /// Safe to call multiple times (no-op if already preloaded).
+    ///
+    /// # Errors
+    /// Propagated from the underlying `PcmReader::preload` if the
+    /// producer channel closed or the initial fill hit a decoder
+    /// failure.
+    pub async fn preload(&mut self) -> Result<(), DecodeError> {
+        if let Some(notify) = self.inner.preload_notify() {
+            notify.notified().await;
+        }
+        self.inner.preload()
+    }
+
     /// Read interleaved PCM samples.
-    pub fn read(&mut self, buf: &mut [f32]) -> usize {
+    ///
+    /// # Errors
+    /// Propagated from the underlying `PcmReader` on decoder / channel failure.
+    pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         self.inner.read(buf)
     }
 
     /// Read deinterleaved (planar) PCM samples.
-    pub fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
+    ///
+    /// # Errors
+    /// Propagated from the underlying `PcmReader` on decoder / channel failure.
+    pub fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
         self.inner.read_planar(output)
     }
 
@@ -177,38 +195,8 @@ impl Resource {
     ///
     /// Returns an error if the seek position is out of range or the underlying
     /// stream does not support seeking.
-    pub fn seek(&mut self, position: Duration) -> DecodeResult<()> {
+    pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         self.inner.seek(position)
-    }
-
-    /// Get current PCM specification.
-    #[must_use]
-    pub fn spec(&self) -> PcmSpec {
-        self.inner.spec()
-    }
-
-    /// Check if end of stream has been reached.
-    #[must_use]
-    pub fn is_eof(&self) -> bool {
-        self.inner.is_eof()
-    }
-
-    /// Get current playback position.
-    #[must_use]
-    pub fn position(&self) -> Duration {
-        self.inner.position()
-    }
-
-    /// Get total duration (if known).
-    #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        self.inner.duration()
-    }
-
-    /// Get track metadata.
-    #[must_use]
-    pub fn metadata(&self) -> &TrackMetadata {
-        self.inner.metadata()
     }
 
     /// Set the target sample rate of the audio host.
@@ -232,150 +220,23 @@ impl Resource {
         self.inner.set_service_class(class);
     }
 
-    /// Wait for first decoded chunk to be available, then move it to internal buffer.
+    /// Get current PCM specification.
+    #[must_use]
+    pub fn spec(&self) -> PcmSpec {
+        self.inner.spec()
+    }
+
+    /// Source identifier for this resource.
+    #[must_use]
+    pub fn src(&self) -> &Arc<str> {
+        &self.src
+    }
+    /// Subscribe to unified events.
     ///
-    /// After preload completes, the first `read()` returns data without blocking.
-    /// Safe to call multiple times (no-op if already preloaded).
-    pub async fn preload(&mut self) {
-        if let Some(notify) = self.inner.preload_notify() {
-            notify.notified().await;
-        }
-        self.inner.preload();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_audio::mock::TestPcmReader;
-    use kithara_decode::PcmSpec;
-    use kithara_events::{AudioEvent, AudioFormat, Event, EventBus};
-    use kithara_platform::{time, time::Duration};
-    use kithara_test_utils::kithara;
-
-    use super::Resource;
-
-    fn mock_spec() -> PcmSpec {
-        PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        }
-    }
-
-    fn make_resource() -> Resource {
-        Resource::from_reader(TestPcmReader::new(mock_spec(), 1.0))
-    }
-
-    fn make_resource_with_bus() -> (Resource, EventBus) {
-        let reader = TestPcmReader::new(mock_spec(), 1.0);
-        let bus = reader.event_bus().clone();
-        let resource = Resource::from_reader(reader);
-        (resource, bus)
-    }
-
-    #[derive(Clone, Copy)]
-    enum ReadMode {
-        Interleaved,
-        Planar,
-    }
-
-    #[kithara::test(tokio)]
-    #[case(ReadMode::Interleaved)]
-    #[case(ReadMode::Planar)]
-    async fn test_resource_from_reader_read_variants(#[case] mode: ReadMode) {
-        let mut resource = make_resource();
-        match mode {
-            ReadMode::Interleaved => {
-                let mut buf = [0.0f32; 64];
-                let n = resource.read(&mut buf);
-                assert_eq!(n, 64);
-                for sample in &buf[..n] {
-                    assert!((sample - 0.5).abs() < f32::EPSILON);
-                }
-            }
-            ReadMode::Planar => {
-                let mut ch0 = [0.0f32; 32];
-                let mut ch1 = [0.0f32; 32];
-                let mut output: Vec<&mut [f32]> = vec![&mut ch0, &mut ch1];
-                let frames = resource.read_planar(&mut output);
-                assert_eq!(frames, 32);
-                for &s in &ch0[..frames] {
-                    assert!((s - 0.5).abs() < f32::EPSILON);
-                }
-                for &s in &ch1[..frames] {
-                    assert!((s - 0.5).abs() < f32::EPSILON);
-                }
-            }
-        }
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_from_reader_spec() {
-        let resource = make_resource();
-        let spec = resource.spec();
-        assert_eq!(spec.sample_rate, 44100);
-        assert_eq!(spec.channels, 2);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_from_reader_position_and_duration() {
-        let resource = make_resource();
-        assert_eq!(resource.position(), Duration::ZERO);
-        let dur = resource.duration().unwrap();
-        // 1.0 second at 44100 Hz
-        assert!((dur.as_secs_f64() - 1.0).abs() < 0.001);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_from_reader_seek() {
-        let mut resource = make_resource();
-        assert_eq!(resource.position(), Duration::ZERO);
-
-        resource.seek(Duration::from_millis(500)).unwrap();
-        let pos = resource.position();
-        assert!((pos.as_secs_f64() - 0.5).abs() < 0.001);
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_from_reader_is_eof() {
-        let mut resource = make_resource();
-        assert!(!resource.is_eof());
-
-        // Read all samples: 44100 frames * 2 channels = 88200 samples
-        let mut buf = [0.0f32; 4096];
-        loop {
-            let n = resource.read(&mut buf);
-            if n == 0 {
-                break;
-            }
-        }
-        assert!(resource.is_eof());
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_subscribe_receives_events() {
-        let (resource, bus) = make_resource_with_bus();
-        let mut rx = resource.subscribe();
-
-        // Publish an AudioEvent through the shared bus directly.
-        let spec = mock_spec();
-        let format = AudioFormat::new(spec.channels, spec.sample_rate);
-        bus.publish(AudioEvent::FormatDetected { spec: format });
-
-        let event = time::timeout(Duration::from_millis(200), rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(
-            matches!(event, Event::Audio(AudioEvent::FormatDetected { spec: s }) if s == format)
-        );
-    }
-
-    #[kithara::test(tokio)]
-    async fn test_resource_metadata() {
-        let resource = make_resource();
-        let meta = resource.metadata();
-        assert_eq!(meta.title.as_deref(), Some("Mock"));
-        assert!(meta.artwork.is_none());
+    /// Returns a receiver for all events published to the bus,
+    /// including audio, file, and HLS events.
+    #[must_use]
+    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+        self.bus.subscribe()
     }
 }

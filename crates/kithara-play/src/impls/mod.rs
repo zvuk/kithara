@@ -3,20 +3,16 @@ pub mod config;
 pub(crate) mod crossfade;
 pub mod engine;
 pub(crate) mod master_eq_node;
-#[cfg(any(test, feature = "backend-offline"))]
-pub mod offline_backend;
 pub mod player;
-pub(crate) mod player_node;
-pub(crate) mod player_notification;
-pub(crate) mod player_processor;
-pub(crate) mod player_resource;
-pub(crate) mod player_track;
+pub mod player_node;
+pub mod player_notification;
+pub mod player_processor;
+pub mod player_resource;
+pub mod player_track;
 pub mod resource;
-#[cfg(feature = "rodio")]
-mod rodio_impl;
-pub(crate) mod session_engine;
-pub(crate) mod shared_eq;
-pub(crate) mod shared_player_state;
+pub mod session_engine;
+pub mod shared_eq;
+pub mod shared_player_state;
 pub mod source_type;
 
 pub use config::{ResourceConfig, ResourceSrc};

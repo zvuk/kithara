@@ -17,8 +17,6 @@ fn registry_for_host(host: &str, processor: kithara::hls::KeyProcessor) -> KeyPr
     reg
 }
 
-// Test Cases
-
 #[kithara::test(
     tokio,
     browser,
@@ -149,8 +147,6 @@ async fn unmatched_domain_uses_raw_key(
 ) -> HlsResult<()> {
     let server = test_server.await;
 
-    // Processor registered for a domain that doesn't match — key should
-    // pass through unmodified.
     let sentinel_processor: kithara::hls::KeyProcessor =
         Arc::new(|_key: Bytes| Ok(Bytes::from_static(b"MODIFIED")));
     let registry = registry_for_host("other.example", sentinel_processor);

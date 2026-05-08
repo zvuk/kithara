@@ -3,9 +3,14 @@ import KitharaFFI
 
 /// Position-dependent symmetric cipher for DRM key decryption.
 ///
-/// Wraps the Rust `UniqueBinaryCipher` from `kithara-drm`.
-/// Conforms to ``KeyProcessor`` so it can be passed directly
-/// to ``KitharaPlayer/setKeyProcessor(_:headers:)``.
+/// Wraps the Rust `UniqueBinaryCipher` from `kithara-drm`. Conforms to
+/// ``KeyProcessor`` so it can be passed directly into a
+/// ``KitharaPlayer.KeyRule`` and registered through ``KitharaPlayer/init(config:)``.
+///
+/// The cipher closes over the secret supplied at construction time —
+/// the per-call ``salt`` argument is ignored here. Use
+/// ``KitharaPlayer/setupHlsAes(keyDecryptor:)`` with an inline closure
+/// when the cipher needs to be derived from the salt on every decrypt.
 public final class Cipher: KeyProcessor, @unchecked Sendable {
     private let _inner: FfiCipher
 
@@ -21,7 +26,9 @@ public final class Cipher: KeyProcessor, @unchecked Sendable {
 
     // MARK: - KeyProcessor
 
-    public func processKey(_ key: Data) -> Data {
-        decrypt(key)
+    public func processKey(_ key: Data, salt: String) -> Data {
+        // Cipher's secret is fixed at init; salt is not consumed here.
+        _ = salt
+        return decrypt(key)
     }
 }

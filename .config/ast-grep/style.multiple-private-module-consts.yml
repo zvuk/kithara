@@ -1,7 +1,22 @@
 id: style.multiple-private-module-consts
-message: "Multiple private module-level constants found. If >2, group them into a `struct Consts`, separate module or `enum Consts`. If used in a single impl, move to that impl."
+message: |
+  Multiple private module-level constants found. If >2, group them into a
+  `struct Consts`, a separate module, or an `enum Consts`. If used in a
+  single impl, move into that impl.
+
+  See xtask detector `const_group_enum_shape` for value-shape-aware
+  recommendations: sequential → enum, power-of-2 → bitflags!, sparse
+  hex → #[repr(T)] enum. The xtask detector also fires on pub /
+  pub(crate) groups (this rule fires only on private), so prefer
+  consulting it when grouping FFI constants.
 severity: error
 language: Rust
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   all:
     - any:

@@ -1,13 +1,16 @@
 id: style.no-deep-qualified-paths
 message: Qualified path 3+ segments; add `use` import at file top.
-severity: error
+severity: warning
 language: Rust
 files:
   - crates/**/*.rs
   - tests/**/*.rs
 ignores:
-  - crates/kithara-test-macros/**
-  - crates/kithara-hang-detector-macros/**
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   all:
     - kind: scoped_identifier

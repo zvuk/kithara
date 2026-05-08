@@ -7,14 +7,12 @@ pub mod assets;
 pub mod builders;
 pub mod crypto;
 
-// Re-export commonly used types
 pub use assets::*;
 pub use builders::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use crypto::*;
 #[cfg(target_arch = "wasm32")]
 pub use crypto::{aes128_iv, aes128_plaintext_segment};
-// Common types
 use kithara::hls::HlsError;
 pub use kithara_test_utils::hls_fixture::{
     AbrTestServer, EncryptionConfig, HlsTestServer, HlsTestServerConfig, PackagedTestServer,

@@ -1,5 +1,5 @@
 use ffmpeg::{
-    ChannelLayout, Dictionary, Error as FfmpegError, Rational,
+    ChannelLayout, Dictionary, Error as FfmpegError, Packet, Rational,
     codec::{
         Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
         flag::Flags as CodecFlags,
@@ -7,12 +7,11 @@ use ffmpeg::{
     encoder::find as find_encoder,
 };
 use ffmpeg_next as ffmpeg;
-use kithara_stream::{AudioCodec, ContainerFormat};
 
 use super::{
     build_direct_filter,
     bytes::encode_bytes_audio,
-    collect_encoded_packets, ensure_ffmpeg_initialized,
+    ensure_ffmpeg_initialized,
     pcm::{
         drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
         send_frame_to_filter,
@@ -20,6 +19,7 @@ use super::{
 };
 use crate::{
     BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult,
+    codec::{AudioCodec, ContainerFormat},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
@@ -28,17 +28,13 @@ use crate::{
 pub(crate) struct FlacFFmpegEncoder;
 
 impl FlacFFmpegEncoder {
+    pub(crate) const FLAC_BLOCK_TYPE_MASK: u8 = 0x7F;
     pub(crate) const FLAC_FRAME_SAMPLES: usize = 4608;
-    pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
+    pub(crate) const FLAC_LAST_BLOCK_FLAG: u8 = 0x80;
     pub(crate) const FLAC_METADATA_HEADER_LEN: usize = 4;
     pub(crate) const FLAC_MIN_METADATA_BLOCK_LEN: usize =
         Self::FLAC_METADATA_HEADER_LEN + Self::FLAC_STREAMINFO_LEN;
-    pub(crate) const FLAC_BLOCK_TYPE_MASK: u8 = 0x7F;
-    pub(crate) const FLAC_LAST_BLOCK_FLAG: u8 = 0x80;
-
-    pub(crate) const fn frame_samples() -> usize {
-        Self::FLAC_FRAME_SAMPLES
-    }
+    pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
 
     pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
         if request.timescale == 0 {
@@ -88,24 +84,28 @@ impl FlacFFmpegEncoder {
 
         Ok(EncodedTrack {
             media_info,
+            codec_config,
+            access_units,
             timescale: request.timescale,
             bit_rate: request.bit_rate,
-            codec_config,
             packets_per_segment: request.packets_per_segment,
             encoder_delay: request.encoder_delay,
             trailing_delay: request.trailing_delay,
-            access_units,
         })
+    }
+
+    pub(crate) const fn frame_samples() -> usize {
+        Self::FLAC_FRAME_SAMPLES
     }
 }
 
 struct PacketCollectingEncoder {
-    filter: ffmpeg::filter::Graph,
     encoder: AudioEncoder,
-    codec_config: Vec<u8>,
+    filter: ffmpeg::filter::Graph,
+    timestamp_origin: Option<i64>,
     encoder_time_base: Rational,
     target_time_base: Rational,
-    timestamp_origin: Option<i64>,
+    codec_config: Vec<u8>,
     units: Vec<EncodedAccessUnit>,
 }
 
@@ -158,6 +158,10 @@ impl PacketCollectingEncoder {
         })
     }
 
+    fn into_track_parts(self) -> (Vec<u8>, Vec<EncodedAccessUnit>) {
+        (self.codec_config, self.units)
+    }
+
     fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {
         let encoder_time_base = self.encoder_time_base;
         let target_time_base = self.target_time_base;
@@ -184,10 +188,6 @@ impl PacketCollectingEncoder {
             &mut self.units,
         );
     }
-
-    fn into_track_parts(self) -> (Vec<u8>, Vec<EncodedAccessUnit>) {
-        (self.codec_config, self.units)
-    }
 }
 
 fn extract_flac_codec_config(pcm: &dyn crate::PcmSource) -> EncodeResult<Vec<u8>> {
@@ -199,7 +199,15 @@ fn extract_flac_codec_config(pcm: &dyn crate::PcmSource) -> EncodeResult<Vec<u8>
     extract_stream_info_from_flac_bytes(&encoded.bytes)
 }
 
-fn normalize_flac_codec_config(raw: &[u8]) -> EncodeResult<Vec<u8>> {
+/// Normalize a raw FLAC codec config blob to a 34-byte STREAMINFO body.
+///
+/// Accepts either a bare 34-byte STREAMINFO, a metadata block carrying
+/// STREAMINFO, or a leading `fLaC` magic followed by metadata blocks.
+///
+/// # Errors
+///
+/// Returns [`EncodeError`] if no STREAMINFO body can be located in `raw`.
+pub fn normalize_flac_codec_config(raw: &[u8]) -> EncodeResult<Vec<u8>> {
     if raw.len() == FlacFFmpegEncoder::FLAC_STREAMINFO_LEN {
         return Ok(raw.to_vec());
     }
@@ -276,82 +284,50 @@ fn parse_flac_metadata_block(raw: &[u8]) -> Option<&[u8]> {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-    use kithara_test_utils::kithara;
-
-    use super::{FlacFFmpegEncoder, normalize_flac_codec_config};
-    use crate::{EncoderFactory, PackagedEncodeRequest, test_pcm::SawtoothPcmFixture};
-
-    struct Consts;
-    impl Consts {
-        const SAMPLE_RATE: u32 = 48_000;
-        const CHANNELS: u16 = 2;
-    }
-
-    #[kithara::test]
-    fn normalize_flac_codec_config_accepts_mp4_metadata_block() {
-        let data = [
-            0x80, 0x00, 0x00, 0x22, 0x12, 0x00, 0x12, 0x00, 0x00, 0x04, 0x2F, 0x00, 0x09, 0x41,
-            0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0xAC, 0x44, 0x09, 0x1A, 0x92, 0x07, 0x6E, 0xC3,
-            0xBC, 0x84, 0x8E, 0x7F, 0x60, 0x75, 0x8D, 0x3A, 0x77, 0x61,
-        ];
-        let normalized = normalize_flac_codec_config(&data).expect("normalize dfLa payload");
-        assert_eq!(normalized.len(), 34);
-        assert_eq!(&normalized[..4], &[0x12, 0x00, 0x12, 0x00]);
-    }
-
-    #[kithara::test]
-    fn encode_packaged_flac_happy_path_emits_monotonic_access_units() {
-        let total_frames = 4 * FlacFFmpegEncoder::frame_samples();
-        let pcm = SawtoothPcmFixture::new(total_frames, Consts::SAMPLE_RATE, Consts::CHANNELS);
-        let media_info = MediaInfo::default()
-            .with_codec(AudioCodec::Flac)
-            .with_container(ContainerFormat::Fmp4);
-
-        let encoded = EncoderFactory::encode_packaged(PackagedEncodeRequest {
-            pcm: &pcm,
-            media_info,
-            timescale: Consts::SAMPLE_RATE,
-            bit_rate: 512_000,
-            packets_per_segment: 2,
-            encoder_delay: 0,
-            trailing_delay: 0,
-        })
-        .unwrap_or_else(|error| panic!("encode_packaged(Flac) failed: {error}"));
-
-        assert_eq!(encoded.media_info.codec, Some(AudioCodec::Flac));
-        assert_eq!(encoded.media_info.container, Some(ContainerFormat::Fmp4));
-        assert_eq!(encoded.media_info.sample_rate, Some(Consts::SAMPLE_RATE));
-        assert_eq!(encoded.media_info.channels, Some(Consts::CHANNELS));
-        assert_eq!(encoded.timescale, Consts::SAMPLE_RATE);
-        assert_eq!(encoded.packets_per_segment, 2);
-        assert_eq!(encoded.encoder_delay, 0);
-        assert_eq!(encoded.trailing_delay, 0);
-        assert_eq!(encoded.codec_config.len(), 34);
-        assert!(
-            encoded.access_units.len() >= 2,
-            "expected multiple FLAC access units, got {}",
-            encoded.access_units.len()
-        );
-
-        let mut expected_pts = None;
-        for unit in &encoded.access_units {
-            assert!(!unit.bytes.is_empty(), "access unit payload is empty");
-            assert_eq!(unit.pts, unit.dts, "FLAC should not reorder audio packets");
-            assert!(unit.is_sync, "FLAC packets should be sync samples");
-            assert!(unit.duration > 0, "FLAC packet duration must be positive");
-
-            if let Some(expected_pts) = expected_pts {
-                assert_eq!(
-                    unit.pts, expected_pts,
-                    "FLAC packet timestamps should be contiguous"
-                );
-            } else {
-                assert_eq!(unit.pts, 0, "FLAC timeline should start at zero");
-            }
-            expected_pts = Some(unit.pts + u64::from(unit.duration));
+fn collect_encoded_packets(
+    encoder: &mut AudioEncoder,
+    encoder_time_base: Rational,
+    target_time_base: Rational,
+    timestamp_origin: &mut Option<i64>,
+    units: &mut Vec<EncodedAccessUnit>,
+) {
+    let mut encoded = Packet::empty();
+    while encoder.receive_packet(&mut encoded).is_ok() {
+        if encoded.size() == 0 {
+            continue;
         }
+        let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
+        packet.set_pts(encoded.pts());
+        packet.set_dts(encoded.dts());
+        packet.set_duration(encoded.duration());
+        packet.rescale_ts(encoder_time_base, target_time_base);
+        let raw_pts = packet.pts().unwrap_or_default();
+        let raw_dts = packet.dts().unwrap_or_default();
+        let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
+        units.push(EncodedAccessUnit {
+            bytes: packet.data().unwrap_or(&[]).to_vec(),
+            pts: normalize_timestamp(raw_pts, origin),
+            dts: normalize_timestamp(raw_dts, origin),
+            duration: {
+                let d = packet.duration().max(0);
+                u32::try_from(d).unwrap_or_else(|_| {
+                    tracing::error!(
+                        packet_duration = d,
+                        "BUG: FLAC packet duration exceeds u32::MAX in target_time_base"
+                    );
+                    0
+                })
+            },
+            is_sync: encoded.is_key(),
+        });
     }
+}
+
+fn normalize_timestamp(value: i64, origin: i64) -> u64 {
+    let normalized = i128::from(value) - i128::from(origin);
+    let clamped = normalized.max(0);
+    u64::try_from(clamped).unwrap_or_else(|_| {
+        tracing::error!(normalized = ?clamped, "BUG: normalized timestamp exceeds u64::MAX");
+        0
+    })
 }

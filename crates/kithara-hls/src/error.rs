@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use kithara_stream::SourceError;
 use thiserror::Error;
 
 /// HLS orchestration errors.
@@ -34,6 +35,29 @@ pub enum HlsError {
 
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    /// Cooperative `wait_range` budget exceeded — surfaces as
+    /// [`SourceError::WaitBudgetExceeded`] for hot-path classification.
+    #[error("wait_range budget exceeded")]
+    WaitBudgetExceeded,
+}
+
+impl From<HlsError> for SourceError {
+    fn from(err: HlsError) -> Self {
+        match err {
+            HlsError::Net(e) => Self::Net(e),
+            HlsError::Storage(e) => Self::Storage(e),
+            HlsError::Assets(e) => Self::other(e),
+            HlsError::PlaylistParse(s) => Self::PlaylistParse(s),
+            HlsError::VariantNotFound(s) => Self::VariantNotFound(s),
+            HlsError::SegmentNotFound(s) => Self::SegmentNotFound(s),
+            HlsError::KeyProcessing(s) => Self::KeyProcessing(s),
+            HlsError::InvalidUrl(s) => Self::InvalidUrl(s),
+            HlsError::Cancelled => Self::Cancelled,
+            HlsError::Timeout(s) => Self::Timeout(s),
+            HlsError::WaitBudgetExceeded => Self::WaitBudgetExceeded,
+        }
+    }
 }
 
 pub type HlsResult<T> = Result<T, HlsError>;

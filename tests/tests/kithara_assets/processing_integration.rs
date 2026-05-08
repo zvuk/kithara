@@ -34,7 +34,6 @@ fn create_xor_chunk_callback(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<Tes
     Arc::new(
         move |input: &[u8], output: &mut [u8], ctx: &mut TestContext, _is_last: bool| {
             call_count.fetch_add(1, Ordering::SeqCst);
-            // XOR each byte with the key
             for (i, &b) in input.iter().enumerate() {
                 output[i] = b ^ ctx.xor_key;
             }
@@ -105,7 +104,6 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDi
 
     let key = ResourceKey::new("data.bin");
 
-    // Write original data and commit with context.
     let original_data = b"Hello, World! This is test data for processing.";
     let ctx = TestContext { xor_key: 0x42 };
     {
@@ -114,21 +112,17 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDi
             .unwrap();
         res.write_at(0, original_data).unwrap();
 
-        // Processing happens on commit
         res.commit(Some(original_data.len() as u64)).unwrap();
     }
 
-    // Verify callback was called during commit
     assert!(call_count.load(Ordering::SeqCst) > 0);
 
-    // Open again and read processed data
     let processed_res = store.open_resource_with_ctx(&key, Some(ctx)).unwrap();
 
     let mut buf = vec![0u8; original_data.len()];
     let n = processed_res.read_at(0, &mut buf).unwrap();
     assert_eq!(n, original_data.len());
 
-    // Verify XOR transformation was applied.
     let expected: Vec<u8> = original_data.iter().map(|b| b ^ 0x42).collect();
     assert_eq!(buf, expected);
 }
@@ -146,7 +140,6 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     let key = ResourceKey::new("cached.bin");
     let ctx = TestContext { xor_key: 0xAB };
 
-    // Write and commit data.
     let original_data = b"Data for caching test";
     {
         let res = store
@@ -157,7 +150,6 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     }
     let count_after_commit = call_count.load(Ordering::SeqCst);
 
-    // First read - data already processed on disk
     let processed_res = store
         .open_resource_with_ctx(&key, Some(ctx.clone()))
         .unwrap();
@@ -165,15 +157,12 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
     processed_res.read_at(0, &mut buf1).unwrap();
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
 
-    // Second read from same resource - no additional processing
     let mut buf2 = vec![0u8; original_data.len()];
     processed_res.read_at(0, &mut buf2).unwrap();
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
 
-    // Data should be the same.
     assert_eq!(buf1, buf2);
 
-    // Third read with partial offset - still no processing
     let mut buf3 = vec![0u8; 10];
     processed_res.read_at(5, &mut buf3).unwrap();
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
@@ -192,7 +181,6 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
     let key = ResourceKey::new("partial.bin");
     let ctx = TestContext { xor_key: 0xFF };
 
-    // Write data.
     let original_data: Vec<u8> = (0..100).collect();
     {
         let res = store
@@ -204,19 +192,16 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
 
     let processed_res = store.open_resource_with_ctx(&key, Some(ctx)).unwrap();
 
-    // Read middle portion.
     let mut buf = vec![0u8; 20];
     let n = processed_res.read_at(40, &mut buf).unwrap();
     assert_eq!(n, 20);
 
-    // Verify correct slice was returned (XORed).
     let expected: Vec<u8> = (40..60).map(|b: u8| b ^ 0xFF).collect();
     assert_eq!(buf, expected);
 
-    // Read at end.
     let mut buf_end = vec![0u8; 20];
     let n_end = processed_res.read_at(90, &mut buf_end).unwrap();
-    assert_eq!(n_end, 10); // Only 10 bytes available.
+    assert_eq!(n_end, 10);
 
     let expected_end: Vec<u8> = (90..100).map(|b: u8| b ^ 0xFF).collect();
     assert_eq!(&buf_end[..10], &expected_end[..]);
@@ -235,7 +220,6 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
     let key = ResourceKey::new("eof.bin");
     let ctx = TestContext { xor_key: 0x00 };
 
-    // Write small data.
     let original_data = b"short";
     {
         let res = store
@@ -247,7 +231,6 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
 
     let processed_res = store.open_resource_with_ctx(&key, Some(ctx)).unwrap();
 
-    // Read past end.
     let mut buf = vec![0u8; 100];
     let n = processed_res.read_at(100, &mut buf).unwrap();
     assert_eq!(n, 0);
@@ -255,19 +238,16 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn store_without_processing_works_normally(temp_dir: kithara_test_utils::TestTempDir) {
-    // Build store WITHOUT custom process_fn (uses default pass-through).
     let store = build_test_store_no_processing(&temp_dir, "no-processing");
 
     let key = ResourceKey::new("test.bin");
 
-    // Write some data.
     {
         let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, b"data").unwrap();
         res.commit(Some(4)).unwrap();
     }
 
-    // Read - should get original data (pass-through processing)
     let res = store.open_resource(&key).unwrap();
     let mut buf = vec![0u8; 4];
     let n = res.read_at(0, &mut buf).unwrap();

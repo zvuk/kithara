@@ -7,7 +7,7 @@
 //! Observed pattern (from `.docs/test-run-rc2-fix1.log`):
 //!   * 37 segments commit in rapid succession (variant 0).
 //!   * LRU (cap=4) evicts segments the reader has NOT yet read because
-//!     the reader is stuck inside segment 0 at byte ~31_744 waiting for
+//!     the reader is stuck inside segment 0 at byte ~`31_744` waiting for
 //!     segment 0 to be `range_ready`.
 //!   * `rewind_to_first_missing_segment` clamps by `reader_segment_floor()`,
 //!     which returns 0 because the reader's `byte_position` never advanced
@@ -46,8 +46,8 @@ use std::{num::NonZeroUsize, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, PcmReader},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::time::{Instant, sleep};
@@ -59,14 +59,7 @@ impl Consts {
     const PLAYBACK_BUDGET_SECS: u64 = 12;
     const WARMUP_CHUNKS: usize = 4;
     const NEXT_CHUNK_TIMEOUT: Duration = Duration::from_millis(3_000);
-    // Slow the reader so downloads race ahead and LRU evicts the reader's
-    // live segment. Each chunk ≈ 20 ms of audio; a 30 ms sleep per chunk
-    // means the downloader finishes well before the reader exits seg 0.
     const READER_SLEEP_MS: u64 = 30;
-    // Expected lower bound. With 12s budget and 30ms/chunk rate-limit, a
-    // healthy pipeline yields ~400 chunks. The hot-refetch loop collapses
-    // this to near-zero because every completed fetch evicts the reader's
-    // live window before it can be read.
     const MIN_PROGRESS_CHUNKS: usize = 100;
 }
 
@@ -81,25 +74,19 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    // Tighter than production (cap=4) to force the race deterministically
-    // without needing CPU contention to surface it.
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(1).expect("nonzero"));
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await
         .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
-    // Warmup: read a few chunks so byte_position advances past seg 0.
     info!("warmup: reading {} chunks", Consts::WARMUP_CHUNKS);
     let mut chunks_read = 0usize;
     let warmup_deadline = Instant::now() + Duration::from_secs(10);
@@ -114,48 +101,55 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
                 Consts::WARMUP_CHUNKS
             );
         }
-        if let Some(_chunk) = PcmReader::next_chunk(&mut audio) {
-            chunks_read += 1;
-            continue;
-        }
-        if audio.is_eof() {
-            break;
+        match PcmReader::next_chunk(&mut audio) {
+            Ok(ChunkOutcome::Chunk(_)) => {
+                chunks_read += 1;
+                continue;
+            }
+            Ok(ChunkOutcome::Eof { .. }) => break,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("warmup decode error: {e}"),
         }
         sleep(Duration::from_micros(100)).await;
     }
     info!(chunks_read, "warmup done");
 
-    // Drain for Consts::PLAYBACK_BUDGET_SECS. With the hot-refetch bug, the reader
-    // stalls or crawls as soon as its current segment is evicted by a
-    // parallel re-fetch of a behind-reader segment.
     let deadline = Instant::now() + Duration::from_secs(Consts::PLAYBACK_BUDGET_SECS);
     let mut drained = 0usize;
     let mut stall_at: Option<Duration> = None;
     let started = Instant::now();
+    let mut reached_eof = false;
     while Instant::now() < deadline {
         let chunk_deadline = Instant::now() + Consts::NEXT_CHUNK_TIMEOUT;
         let mut got_chunk = false;
+        let mut inner_eof = false;
         while Instant::now() < chunk_deadline {
-            if let Some(_chunk) = PcmReader::next_chunk(&mut audio) {
-                drained += 1;
-                got_chunk = true;
-                // Rate-limit the reader.
-                sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
-                break;
-            }
-            if audio.is_eof() {
-                break;
+            match PcmReader::next_chunk(&mut audio) {
+                Ok(ChunkOutcome::Chunk(_)) => {
+                    drained += 1;
+                    got_chunk = true;
+                    sleep(Duration::from_millis(Consts::READER_SLEEP_MS)).await;
+                    break;
+                }
+                Ok(ChunkOutcome::Eof { .. }) => {
+                    inner_eof = true;
+                    break;
+                }
+                Ok(ChunkOutcome::Pending { .. }) => {}
+                Err(e) => panic!("drain decode error: {e}"),
             }
             sleep(Duration::from_micros(100)).await;
         }
-        if !got_chunk && !audio.is_eof() {
+        if inner_eof {
+            reached_eof = true;
+            break;
+        }
+        if !got_chunk {
             stall_at = Some(started.elapsed());
             break;
         }
-        if audio.is_eof() {
-            break;
-        }
     }
+    let _ = reached_eof;
 
     let elapsed = started.elapsed();
     info!(drained, ?elapsed, ?stall_at, "drain done");

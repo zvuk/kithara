@@ -8,58 +8,56 @@ pub struct Rgb(pub u8, pub u8, pub u8);
 /// to their framework-specific color types via [`From`].
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
+    /// Accent color (active elements, highlights).
+    pub accent: Rgb,
     /// Main background.
     pub bg: Rgb,
     /// Panel / elevated surface background.
     pub bg_panel: Rgb,
-    /// Accent color (active elements, highlights).
-    pub accent: Rgb,
-    /// Muted / inactive text.
-    pub muted: Rgb,
-    /// Primary text.
-    pub text: Rgb,
-    /// Success indicator.
-    pub success: Rgb,
     /// Danger indicator.
     pub danger: Rgb,
+    /// Muted / inactive text.
+    pub muted: Rgb,
+    /// Success indicator.
+    pub success: Rgb,
+    /// Primary text.
+    pub text: Rgb,
     /// Warning indicator.
     pub warning: Rgb,
 }
 
 impl Palette {
-    // Kithara dark + gold palette RGB values
+    const ACCENT_B: u8 = 66;
+    const ACCENT_G: u8 = 148;
+    const ACCENT_R: u8 = 187;
 
-    const BG_R: u8 = 26;
-    const BG_G: u8 = 26;
     const BG_B: u8 = 46;
-
-    const BG_PANEL_R: u8 = 34;
-    const BG_PANEL_G: u8 = 34;
+    const BG_G: u8 = 26;
     const BG_PANEL_B: u8 = 68;
 
-    const ACCENT_R: u8 = 187;
-    const ACCENT_G: u8 = 148;
-    const ACCENT_B: u8 = 66;
+    const BG_PANEL_G: u8 = 34;
+    const BG_PANEL_R: u8 = 34;
+    const BG_R: u8 = 26;
 
-    const MUTED_R: u8 = 136;
-    const MUTED_G: u8 = 136;
-    const MUTED_B: u8 = 136;
-
-    const TEXT_R: u8 = 230;
-    const TEXT_G: u8 = 230;
-    const TEXT_B: u8 = 230;
-
-    const SUCCESS_R: u8 = 102;
-    const SUCCESS_G: u8 = 204;
-    const SUCCESS_B: u8 = 102;
-
-    const DANGER_R: u8 = 230;
-    const DANGER_G: u8 = 77;
     const DANGER_B: u8 = 77;
+    const DANGER_G: u8 = 77;
+    const DANGER_R: u8 = 230;
 
-    const WARNING_R: u8 = 230;
-    const WARNING_G: u8 = 179;
+    const MUTED_B: u8 = 136;
+    const MUTED_G: u8 = 136;
+    const MUTED_R: u8 = 136;
+
+    const SUCCESS_B: u8 = 102;
+    const SUCCESS_G: u8 = 204;
+    const SUCCESS_R: u8 = 102;
+
+    const TEXT_B: u8 = 230;
+    const TEXT_G: u8 = 230;
+    const TEXT_R: u8 = 230;
+
     const WARNING_B: u8 = 51;
+    const WARNING_G: u8 = 179;
+    const WARNING_R: u8 = 230;
 
     /// Kithara dark + gold theme.
     #[must_use]
@@ -83,8 +81,6 @@ impl Default for Palette {
     }
 }
 
-// GUI (iced) palette
-
 #[cfg(feature = "gui")]
 pub(crate) mod gui {
     use iced::Color;
@@ -94,13 +90,13 @@ pub(crate) mod gui {
     /// Resolved iced color palette.
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct GuiPalette {
+        pub accent: Color,
         pub bg: Color,
         pub bg_panel: Color,
-        pub accent: Color,
-        pub muted: Color,
-        pub text: Color,
-        pub success: Color,
         pub danger: Color,
+        pub muted: Color,
+        pub success: Color,
+        pub text: Color,
         pub warning: Color,
     }
 
@@ -124,8 +120,6 @@ pub(crate) mod gui {
     }
 }
 
-// TUI (ratatui) palette
-
 #[cfg(feature = "tui")]
 pub(crate) mod tui {
     use ratatui::style::Color;
@@ -135,9 +129,9 @@ pub(crate) mod tui {
     /// Resolved ratatui color palette.
     #[derive(Debug, Clone, Copy)]
     pub struct TuiPalette {
+        pub accent: Color,
         pub bg: Color,
         pub bg_panel: Color,
-        pub accent: Color,
         pub danger: Color,
         pub muted: Color,
         pub text: Color,

@@ -11,6 +11,7 @@ use std::sync::{
 
 use kithara_decode::PcmChunk;
 use kithara_platform::tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 use super::{
     AudioWorkerSource,
@@ -25,11 +26,11 @@ use crate::{
 
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
+    pub preload_notify: Arc<Notify>,
     pub source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     pub outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
-    pub preload_notify: Arc<Notify>,
-    pub preload_chunks: usize,
     pub service_class: ServiceClass,
+    pub preload_chunks: usize,
 }
 
 /// Clonable handle to a shared audio worker.
@@ -37,8 +38,8 @@ pub(crate) struct TrackRegistration {
 /// Multiple [`Audio`](crate::Audio) handles can share one worker by cloning
 /// the handle and passing it via [`AudioConfig`](crate::AudioConfig).
 pub struct AudioWorkerHandle {
-    inner: SchedulerHandle<Box<dyn crate::runtime::Node>>,
     id_gen: Arc<TrackIdGen>,
+    inner: SchedulerHandle<Box<dyn crate::runtime::Node>>,
 }
 
 impl Clone for AudioWorkerHandle {
@@ -54,19 +55,14 @@ impl Clone for AudioWorkerHandle {
 static AUDIO_WORKER_ID: AtomicU64 = AtomicU64::new(0);
 
 impl AudioWorkerHandle {
-    /// Spawn a new shared worker thread and return a handle.
+    /// Spawn a new shared worker with a fresh orphan cancel token.
+    ///
+    /// Convenience for tests and standalone usage. Production paths use
+    /// [`AudioWorkerHandle::with_cancel`] with a child of the player
+    /// master — see `kithara-play/README.md` "Cancel Hierarchy".
     #[must_use]
     pub fn new() -> Self {
-        let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
-        let inner = Scheduler::<Box<dyn crate::runtime::Node>, HangWatchdogObserver>::start(
-            format!("kithara-audio-worker-{id}"),
-            HangWatchdogObserver::new(),
-        );
-
-        Self {
-            inner,
-            id_gen: Arc::new(TrackIdGen::new()),
-        }
+        Self::with_cancel(CancellationToken::new()) // kithara:cancel:owner
     }
 
     /// Register a track. Returns the assigned [`TrackId`].
@@ -81,14 +77,19 @@ impl AudioWorkerHandle {
         id
     }
 
-    /// Remove a track by ID.
-    pub(crate) fn unregister_track(&self, track_id: TrackId) {
-        self.inner.unregister(track_id);
-    }
-
     /// Update scheduling priority for a track.
     pub(crate) fn set_service_class(&self, track_id: TrackId, class: ServiceClass) {
         self.inner.set_service_class(track_id, class);
+    }
+
+    /// Request graceful shutdown and cancel the worker.
+    pub fn shutdown(&self) {
+        self.inner.shutdown();
+    }
+
+    /// Remove a track by ID.
+    pub(crate) fn unregister_track(&self, track_id: TrackId) {
+        self.inner.unregister(track_id);
     }
 
     /// Wake the worker (e.g. when new data arrives from downloader).
@@ -96,9 +97,23 @@ impl AudioWorkerHandle {
         self.inner.wake();
     }
 
-    /// Request graceful shutdown and cancel the worker.
-    pub fn shutdown(&self) {
-        self.inner.shutdown();
+    /// Spawn a new shared worker thread bound to the given cancel token
+    /// and return a handle. Production callers (e.g. `EngineImpl`) pass a
+    /// child of the player master so worker shutdown participates in the
+    /// unified cancel hierarchy.
+    #[must_use]
+    pub fn with_cancel(cancel: CancellationToken) -> Self {
+        let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
+        let inner = Scheduler::<Box<dyn crate::runtime::Node>, HangWatchdogObserver>::start(
+            format!("kithara-audio-worker-{id}"),
+            HangWatchdogObserver::new(),
+            cancel,
+        );
+
+        Self {
+            inner,
+            id_gen: Arc::new(TrackIdGen::new()),
+        }
     }
 }
 
@@ -134,14 +149,12 @@ mod tests {
         worker::{AudioWorkerSource, thread_wake::ThreadWake, types::ServiceClass},
     };
 
-    // Mock source
-
     struct MockSource {
         timeline: Timeline,
-        chunks_to_produce: usize,
-        cursor: usize,
         ready: bool,
         should_panic: bool,
+        chunks_to_produce: usize,
+        cursor: usize,
     }
 
     impl MockSource {
@@ -174,7 +187,6 @@ mod tests {
         type Chunk = PcmChunk;
 
         fn step_track(&mut self) -> TrackStep<PcmChunk> {
-            // Handle seek
             if self.timeline.is_seek_pending() || self.timeline.is_flushing() {
                 let epoch = self.timeline.seek_epoch();
                 self.timeline.complete_seek(epoch);
@@ -199,49 +211,27 @@ mod tests {
         }
     }
 
-    // Helpers
-
-    fn make_registration(
-        source: MockSource,
+    fn make_registration<S>(
+        source: S,
         ringbuf_capacity: usize,
         preload_chunks: usize,
     ) -> (
         TrackRegistration,
         crate::runtime::Inlet<Fetch<PcmChunk>>,
         Arc<Notify>,
-    ) {
+    )
+    where
+        S: AudioWorkerSource<Chunk = PcmChunk> + 'static,
+    {
         let wake = Arc::new(ThreadWake::new());
         let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
         let preload_notify = Arc::new(Notify::new());
 
         let reg = TrackRegistration {
+            outlet,
+            preload_chunks,
             source: Box::new(source),
-            outlet,
             preload_notify: Arc::clone(&preload_notify),
-            preload_chunks,
-            service_class: ServiceClass::Audible,
-        };
-        (reg, inlet, preload_notify)
-    }
-
-    fn make_registration_with_source(
-        source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-        ringbuf_capacity: usize,
-        preload_chunks: usize,
-    ) -> (
-        TrackRegistration,
-        crate::runtime::Inlet<Fetch<PcmChunk>>,
-        Arc<Notify>,
-    ) {
-        let wake = Arc::new(ThreadWake::new());
-        let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
-        let preload_notify = Arc::new(Notify::new());
-
-        let reg = TrackRegistration {
-            source,
-            outlet,
-            preload_notify: Arc::clone(&preload_notify),
-            preload_chunks,
             service_class: ServiceClass::Audible,
         };
         (reg, inlet, preload_notify)
@@ -264,15 +254,12 @@ mod tests {
         received
     }
 
-    // Tests
-
     #[kithara::test]
     fn worker_creates_and_drops_cleanly() {
         let handle = AudioWorkerHandle::new();
         thread_sleep(Duration::from_millis(10));
         handle.shutdown();
         thread_sleep(Duration::from_millis(50));
-        // If we get here without panic, the worker started and stopped cleanly.
     }
 
     #[kithara::test]
@@ -282,7 +269,6 @@ mod tests {
 
         let _id = handle.register_track(reg);
 
-        // Wait for chunks to arrive.
         let received = wait_for_chunks(&mut data_rx, 5, Duration::from_secs(5));
         assert!(received >= 5, "expected >=5 chunks, got {received}");
 
@@ -299,7 +285,6 @@ mod tests {
         let _id_a = handle.register_track(reg_a);
         let _id_b = handle.register_track(reg_b);
 
-        // Both tracks should receive chunks.
         let a = wait_for_chunks(&mut rx_a, 3, Duration::from_secs(5));
         let b = wait_for_chunks(&mut rx_b, 3, Duration::from_secs(5));
         assert!(a >= 3, "track A: expected >=3 chunks, got {a}");
@@ -312,7 +297,6 @@ mod tests {
     fn worker_skips_not_ready_tracks() {
         let handle = AudioWorkerHandle::new();
 
-        // Track A: ready, Track B: not ready.
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(10), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::not_ready(10), 32, 1);
 
@@ -333,15 +317,12 @@ mod tests {
     fn worker_overflow_on_full_ringbuf() {
         let handle = AudioWorkerHandle::new();
 
-        // Ringbuf capacity 1 — second chunk lands in the outlet's overflow slot.
         let (reg, mut rx, _) = make_registration(MockSource::new(5), 1, 1);
 
         let _id = handle.register_track(reg);
 
-        // Give worker time to fill and re-fill.
         thread_sleep(Duration::from_millis(50));
 
-        // Pop one, give worker time to flush the parked overflow chunk.
         let first = rx.try_pop();
         assert!(first.is_some(), "should have at least one chunk");
 
@@ -357,14 +338,12 @@ mod tests {
     fn worker_panic_isolation() {
         let handle = AudioWorkerHandle::new();
 
-        // Track A: panics, Track B: normal.
         let (reg_a, _, _) = make_registration(MockSource::panicking(), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(10), 32, 1);
 
         let _id_a = handle.register_track(reg_a);
         let _id_b = handle.register_track(reg_b);
 
-        // Track B should still receive chunks despite Track A panicking.
         let b = wait_for_chunks(&mut rx_b, 3, Duration::from_secs(5));
         assert!(
             b >= 3,
@@ -384,18 +363,14 @@ mod tests {
 
         let _id = handle.register_track(reg);
 
-        // Wait for a few chunks first.
         let got = wait_for_chunks(&mut rx, 2, Duration::from_secs(5));
         assert!(got >= 2);
 
-        // Initiate a seek via timeline.
         let _ = timeline.initiate_seek(Duration::from_secs(10));
         handle.wake();
 
-        // The seek should be handled (seek pending cleared after apply).
         thread_sleep(Duration::from_millis(100));
 
-        // After seek completes, more chunks should arrive.
         let after_seek = wait_for_chunks(&mut rx, 1, Duration::from_secs(5));
         assert!(after_seek >= 1, "should resume decoding after seek");
 
@@ -410,10 +385,6 @@ mod tests {
 
         let _id = handle.register_track(reg);
 
-        // preload_notify should fire after 3 chunks.
-        // We use a tokio runtime to await the notify.
-        // Give worker time to produce 3+ chunks.
-        // The preload_notify fires internally; we verify it doesn't deadlock.
         thread_sleep(Duration::from_millis(200));
 
         handle.shutdown();
@@ -455,10 +426,8 @@ mod tests {
         handle.unregister_track(id);
         thread_sleep(Duration::from_millis(50));
 
-        // Drain remaining.
         while rx.try_pop().is_some() {}
 
-        // No more chunks should arrive.
         thread_sleep(Duration::from_millis(50));
         assert!(rx.try_pop().is_none(), "no chunks after unregister");
 
@@ -469,29 +438,22 @@ mod tests {
     fn worker_service_class_prioritises_audible() {
         let handle = AudioWorkerHandle::new();
 
-        // Track A: Idle, large supply (but low priority).
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 4, 0);
         let id_a = handle.register_track(reg_a);
 
-        // Track B: will be promoted to Audible.
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(100), 4, 0);
         let id_b = handle.register_track(reg_b);
 
-        // Let both tracks start decoding (both default to Audible from registration).
         thread_sleep(Duration::from_millis(30));
 
-        // Drain both to make room.
         while rx_a.try_pop().is_some() {}
         while rx_b.try_pop().is_some() {}
 
-        // Demote A to Idle, keep B as Audible.
         handle.set_service_class(id_a, ServiceClass::Idle);
         handle.set_service_class(id_b, ServiceClass::Audible);
 
-        // Wait a bit for scheduling to take effect.
         thread_sleep(Duration::from_millis(50));
 
-        // B (Audible) should have at least as many chunks as A (Idle).
         let got_a = {
             let mut n = 0;
             while rx_a.try_pop().is_some() {
@@ -513,8 +475,6 @@ mod tests {
 
         handle.shutdown();
     }
-
-    // Starvation tests
 
     /// A slow/blocked track must not starve a producing track.
     ///
@@ -538,7 +498,6 @@ mod tests {
 
             fn step_track(&mut self) -> TrackStep<PcmChunk> {
                 if self.blocking.load(Ordering::Relaxed) {
-                    // Simulate sync blocking (like wait_range timeout at 10ms).
                     thread_sleep(Duration::from_millis(10));
                     TrackStep::Blocked(WaitingReason::Waiting)
                 } else {
@@ -553,20 +512,17 @@ mod tests {
 
         let handle = AudioWorkerHandle::new();
 
-        // Track A: always ready, produces 100 chunks fast.
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 32, 0);
         let _id_a = handle.register_track(reg_a);
 
-        // Track B: blocks thread for 50ms per step (simulating network wait).
         let blocking = Arc::new(AtomicBool::new(true));
         let blocking_source = BlockingSource {
             timeline: Timeline::new(),
             blocking: Arc::clone(&blocking),
         };
-        let (reg_b, _rx_b, _) = make_registration_with_source(Box::new(blocking_source), 32, 0);
+        let (reg_b, _rx_b, _) = make_registration(blocking_source, 32, 0);
         let _id_b = handle.register_track(reg_b);
 
-        // Give worker 500ms to produce chunks for track A despite track B blocking.
         thread_sleep(Duration::from_millis(500));
 
         let mut got_a = 0;
@@ -574,12 +530,6 @@ mod tests {
             got_a += 1;
         }
 
-        // With 50ms blocking per step, round-robin takes ~50ms per round.
-        // In 1s: ~20 rounds. Track A gets one chunk per round = ~20 chunks.
-        // For glitch-free 44100Hz audio: need ~11 chunks/s (4096 samples each).
-        // The REAL issue: during the 50ms block, track A's ringbuf drains
-        // and the audio callback gets silence → audible glitch.
-        // Test must verify track A gets enough chunks WITHOUT gaps.
         assert!(
             got_a >= 11,
             "Producing track must not be starved by blocking track: \
@@ -610,8 +560,6 @@ mod tests {
             type Chunk = PcmChunk;
 
             fn step_track(&mut self) -> TrackStep<PcmChunk> {
-                // Simulate: source_is_ready() returns true, then
-                // decode_next_chunk() blocks on wait_range() for data.
                 thread_sleep(Duration::from_millis(self.block_ms));
                 TrackStep::Produced(Fetch::new(PcmChunk::default(), false, 0))
             }
@@ -623,26 +571,16 @@ mod tests {
 
         let handle = AudioWorkerHandle::new();
 
-        // Track A (MP3-like): fast, always ready.
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(1000), 32, 0);
         let _id_a = handle.register_track(reg_a);
 
-        // Track B (HLS-like): blocks 10ms per step. This simulates the
-        // reduced WAIT_RANGE_TIMEOUT (10ms) + WAIT_RANGE_SLEEP_MS (2ms)
-        // where wait_range does a few condvar spins before timing out.
-        // With the fix, step_track returns within ~10ms instead of 50ms+.
         let slow_source = SlowDecodeSource {
             timeline: Timeline::new(),
             block_ms: 10,
         };
-        let (reg_b, mut rx_b, _) = make_registration_with_source(Box::new(slow_source), 32, 0);
+        let (reg_b, mut rx_b, _) = make_registration(slow_source, 32, 0);
         let _id_b = handle.register_track(reg_b);
 
-        // Simulate audio callback draining track A's ringbuf at real-time rate.
-        // At 44100Hz stereo with 4096 samples/chunk → one chunk every ~46ms.
-        // If worker can't deliver within 46ms, the consumer starves → glitch.
-        //
-        // We poll every 5ms and measure the longest gap between chunks.
         let mut max_gap = Duration::ZERO;
         let mut last_chunk_time = Instant::now();
         let mut total_chunks = 0u32;
@@ -657,14 +595,10 @@ mod tests {
                 last_chunk_time = Instant::now();
                 total_chunks += 1;
             }
-            // Drain track B to prevent backpressure.
             while rx_b.try_pop().is_some() {}
             thread_sleep(Duration::from_millis(5));
         }
 
-        // For glitch-free playback, the max gap between chunks must be
-        // less than one chunk duration (~46ms at 44100Hz stereo).
-        // The slow track's 50ms sync blocking causes gaps ≥50ms → glitch.
         assert!(
             max_gap < Duration::from_millis(46),
             "Max gap between chunks for fast track: {max_gap:?} (limit 46ms). \

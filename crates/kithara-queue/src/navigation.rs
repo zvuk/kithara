@@ -1,8 +1,5 @@
 use std::collections::VecDeque;
 
-/// Maximum history entries retained for [`NavigationState::prev`].
-const MAX_HISTORY_SIZE: usize = 100;
-
 /// Behavior when the queue reaches the last track.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -24,9 +21,9 @@ pub enum RepeatMode {
 #[derive(Debug, Default)]
 pub struct NavigationState {
     current_index: Option<usize>,
+    repeat_mode: RepeatMode,
     history: VecDeque<usize>,
     shuffle_enabled: bool,
-    repeat_mode: RepeatMode,
 }
 
 impl NavigationState {
@@ -47,61 +44,6 @@ impl NavigationState {
     #[must_use]
     pub fn is_shuffle_enabled(&self) -> bool {
         self.shuffle_enabled
-    }
-
-    /// Current repeat mode.
-    #[must_use]
-    pub fn repeat_mode(&self) -> RepeatMode {
-        self.repeat_mode
-    }
-
-    /// Enable / disable shuffle.
-    pub fn set_shuffle(&mut self, on: bool) {
-        self.shuffle_enabled = on;
-    }
-
-    /// Set repeat mode.
-    pub fn set_repeat(&mut self, mode: RepeatMode) {
-        self.repeat_mode = mode;
-    }
-
-    /// Record an explicit selection. If the previously-current track is
-    /// different, it is pushed onto history (deduped against the tail).
-    pub fn select(&mut self, idx: usize) {
-        if let Some(current) = self.current_index
-            && current != idx
-            && self.history.back() != Some(&current)
-        {
-            add_to_history(&mut self.history, current);
-        }
-        self.current_index = Some(idx);
-    }
-
-    /// Non-mutating preview of the auto-advance successor.
-    ///
-    /// Returns the index the auto-advance armer should preload, without
-    /// touching `current_index` or `history`.
-    ///
-    /// Unlike [`Self::next`], returns `None` (not `Some(0)`) when no track
-    /// is selected — preloading slot 0 before selection races the loader
-    /// commit and would arm against the already-playing decoder.
-    #[must_use]
-    pub fn peek_next(&self, len: usize) -> Option<usize> {
-        if len == 0 {
-            return None;
-        }
-        let current = self.current_index?;
-        if self.repeat_mode == RepeatMode::One {
-            return Some(current);
-        }
-        if current + 1 < len {
-            Some(current + 1)
-        } else {
-            match self.repeat_mode {
-                RepeatMode::All => Some(0),
-                RepeatMode::Off | RepeatMode::One => None,
-            }
-        }
     }
 
     /// Advance to the next track.
@@ -126,7 +68,10 @@ impl NavigationState {
         } else {
             match self.repeat_mode {
                 RepeatMode::All => 0,
-                RepeatMode::Off | RepeatMode::One => return None,
+                RepeatMode::Off | RepeatMode::One => {
+                    self.current_index = None;
+                    return None;
+                }
             }
         };
         self.current_index = Some(next);
@@ -144,9 +89,40 @@ impl NavigationState {
         self.current_index = Some(prev);
         Some(prev)
     }
+
+    /// Current repeat mode.
+    #[must_use]
+    pub fn repeat_mode(&self) -> RepeatMode {
+        self.repeat_mode
+    }
+
+    /// Record an explicit selection. If the previously-current track is
+    /// different, it is pushed onto history (deduped against the tail).
+    pub fn select(&mut self, idx: usize) {
+        if let Some(current) = self.current_index
+            && current != idx
+            && self.history.back() != Some(&current)
+        {
+            add_to_history(&mut self.history, current);
+        }
+        self.current_index = Some(idx);
+    }
+
+    /// Set repeat mode.
+    pub fn set_repeat(&mut self, mode: RepeatMode) {
+        self.repeat_mode = mode;
+    }
+
+    /// Enable / disable shuffle.
+    pub fn set_shuffle(&mut self, on: bool) {
+        self.shuffle_enabled = on;
+    }
 }
 
 fn add_to_history(history: &mut VecDeque<usize>, track_idx: usize) {
+    /// Maximum history entries retained for [`NavigationState::prev`].
+    const MAX_HISTORY_SIZE: usize = 100;
+
     if history.back() == Some(&track_idx) {
         return;
     }
@@ -185,8 +161,8 @@ mod tests {
     fn select_dedupes_adjacent_history() {
         let mut nav = NavigationState::new();
         nav.select(1);
-        nav.select(1); // same
-        nav.select(1); // same
+        nav.select(1);
+        nav.select(1);
         assert!(nav.history.is_empty());
     }
 
@@ -203,21 +179,13 @@ mod tests {
     }
 
     #[kithara::test]
-    fn peek_next_from_unselected_is_none() {
-        // PrefetchRequested can race navigation.select(0) on autoplay start;
-        // peek_next must not default None->Some(0) and arm the playing slot.
-        let nav = NavigationState::new();
-        assert_eq!(nav.peek_next(7), None);
-    }
-
-    #[kithara::test]
     fn next_wraps_with_repeat_all() {
         let mut nav = NavigationState::new();
         nav.set_repeat(RepeatMode::All);
         assert_eq!(nav.next(3), Some(0));
         assert_eq!(nav.next(3), Some(1));
         assert_eq!(nav.next(3), Some(2));
-        assert_eq!(nav.next(3), Some(0)); // wrap
+        assert_eq!(nav.next(3), Some(0));
     }
 
     #[kithara::test]
@@ -260,12 +228,13 @@ mod tests {
 
     #[kithara::test]
     fn history_caps_at_max() {
+        const MAX: usize = 100;
         let mut nav = NavigationState::new();
         nav.select(0);
-        for i in 1..=(MAX_HISTORY_SIZE + 10) {
+        for i in 1..=(MAX + 10) {
             nav.select(i);
         }
-        assert_eq!(nav.history.len(), MAX_HISTORY_SIZE);
+        assert_eq!(nav.history.len(), MAX);
     }
 
     #[kithara::test]

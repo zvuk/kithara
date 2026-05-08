@@ -1,18 +1,17 @@
 use std::sync::OnceLock;
 
 use ffmpeg::{
-    ChannelLayout, Error as FfmpegError, Packet, Rational,
+    ChannelLayout, Error as FfmpegError,
     codec::{capabilities::Capabilities, encoder::Audio as AudioEncoder},
     filter::{self, Graph as FilterGraph},
     format as av_format,
 };
 use ffmpeg_next as ffmpeg;
-use kithara_stream::AudioCodec;
 
 use super::{aac::AacFFmpegEncoder, flac::FlacFFmpegEncoder};
 use crate::{
     BytesEncodeRequest, EncodeError, EncodeResult, EncodedBytes, EncodedTrack, InnerEncoder,
-    PackagedEncodeRequest, types::EncodedAccessUnit,
+    PackagedEncodeRequest, codec::AudioCodec,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -104,39 +103,4 @@ pub(crate) fn build_direct_filter(
     }
 
     Ok(graph)
-}
-
-pub(crate) fn collect_encoded_packets(
-    encoder: &mut AudioEncoder,
-    encoder_time_base: Rational,
-    target_time_base: Rational,
-    timestamp_origin: &mut Option<i64>,
-    units: &mut Vec<EncodedAccessUnit>,
-) {
-    let mut encoded = Packet::empty();
-    while encoder.receive_packet(&mut encoded).is_ok() {
-        if encoded.size() == 0 {
-            continue;
-        }
-        let mut packet = Packet::copy(encoded.data().unwrap_or(&[]));
-        packet.set_pts(encoded.pts());
-        packet.set_dts(encoded.dts());
-        packet.set_duration(encoded.duration());
-        packet.rescale_ts(encoder_time_base, target_time_base);
-        let raw_pts = packet.pts().unwrap_or_default();
-        let raw_dts = packet.dts().unwrap_or_default();
-        let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
-        units.push(EncodedAccessUnit {
-            bytes: packet.data().unwrap_or(&[]).to_vec(),
-            pts: normalize_timestamp(raw_pts, origin),
-            dts: normalize_timestamp(raw_dts, origin),
-            duration: u32::try_from(packet.duration().max(0)).unwrap_or(u32::MAX),
-            is_sync: encoded.is_key(),
-        });
-    }
-}
-
-fn normalize_timestamp(value: i64, origin: i64) -> u64 {
-    let normalized = i128::from(value) - i128::from(origin);
-    u64::try_from(normalized.max(0)).unwrap_or(u64::MAX)
 }

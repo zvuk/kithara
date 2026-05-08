@@ -12,7 +12,6 @@ description = "Platform-aware primitives (sync, traits, time) for native and was
 workspace = true
 
 [features]
-internal = []
 disable-hang-detector = ["kithara-hang-detector/disable-hang-detector"]
 
 [dependencies]
@@ -36,7 +35,7 @@ wasm-bindgen-futures = { workspace = true }
 console_error_panic_hook = { workspace = true }
 
 [dev-dependencies]
-kithara-platform = { path = ".", default-features = false, features = ["internal"] }
+kithara-platform = { path = ".", default-features = false }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 wasm-bindgen-test = { workspace = true }

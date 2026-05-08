@@ -20,12 +20,11 @@
 
 use std::sync::Arc;
 
-use kithara_audio::mock::TestPcmReader;
 use kithara_decode::PcmSpec;
-use kithara_play::{
-    PlayerConfig, Resource,
-    internal::offline::resource_from_reader_with_src,
+use kithara_integration_tests::{
+    audio_mock::TestPcmReader, offline::resource_from_reader_with_src,
 };
+use kithara_play::{PlayerConfig, Resource};
 use kithara_queue::{Queue, QueueConfig, Transition};
 use kithara_test_utils::kithara;
 
@@ -70,14 +69,9 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
         .position(|frame| frame.iter().any(|s| s.abs() > threshold))
 }
 
-
 /// Render until either EOF count or block budget is reached. Returns the
 /// concatenated stereo-interleaved PCM.
-fn render_loop(
-    queue: &Queue,
-    harness: &OfflinePlayerHarness,
-    block_budget: usize,
-) -> Vec<f32> {
+fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usize) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
         let _ = queue.tick();
@@ -103,12 +97,14 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
     let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
-    queue.select(id_a, Transition::None).expect("select track A");
+    queue
+        .select(id_a, Transition::None)
+        .expect("select track A");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
 
@@ -117,18 +113,13 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     let track_a_frames = (f64::from(SAMPLE_RATE) * TRACK_SECS) as usize;
     let window = SAMPLE_RATE as usize / 8;
 
-    // Window inside track A (skip first 1/4 to clear fade-in).
-    let mean_a = mean_abs_window(&pcm, onset + track_a_frames / 4, window)
-        .expect("track A mid window fits");
+    let mean_a =
+        mean_abs_window(&pcm, onset + track_a_frames / 4, window).expect("track A mid window fits");
 
-    // Window inside where track B should be (well past A's end + handover).
     let track_b_probe = onset + track_a_frames + track_a_frames / 4;
     let mean_b = mean_abs_window(&pcm, track_b_probe, window)
         .expect("track B mid window fits — render budget too small");
 
-    // The firewheel graph applies a fixed master attenuation
-    // (~`Volume::default()³`) so we compare ratios, not absolute values:
-    // mean_b / mean_a must mirror TRACK_B_VALUE / TRACK_A_VALUE within tol.
     let expected_ratio = TRACK_B_VALUE / TRACK_A_VALUE;
     let observed_ratio = mean_b / mean_a.max(f32::EPSILON);
     assert!(
@@ -171,12 +162,14 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
     let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
-    queue.select(id_a, Transition::None).expect("select track A");
+    queue
+        .select(id_a, Transition::None)
+        .expect("select track A");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
 
@@ -186,15 +179,11 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     let crossfade_frames = (f32::from(SAMPLE_RATE as u16) * CROSSFADE_SECS) as usize;
     let window = SAMPLE_RATE as usize / 8;
 
-    // Window well inside track A (skip first 1/4 fade-in, well before the
-    // trailing crossfade).
     let mean_a = mean_abs_window(&pcm, onset + track_a_frames / 4, window)
         .expect("track A early window fits");
 
-    // Window inside track B, after the crossfade has settled.
     let track_b_probe = onset + track_a_frames + crossfade_frames * 2;
-    let mean_b = mean_abs_window(&pcm, track_b_probe, window)
-        .expect("track B settled window fits");
+    let mean_b = mean_abs_window(&pcm, track_b_probe, window).expect("track B settled window fits");
 
     let expected_ratio = TRACK_B_VALUE / TRACK_A_VALUE;
     let observed_ratio = mean_b / mean_a.max(f32::EPSILON);
@@ -241,13 +230,15 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
     let mut rx = queue.subscribe();
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.10));
     let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, 0.80));
-    queue.select(id_a, Transition::None).expect("select track A");
+    queue
+        .select(id_a, Transition::None)
+        .expect("select track A");
 
     let mut prefetch_seen = false;
     let mut handover_seen = false;
@@ -299,8 +290,8 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 #[kithara::test(tokio)]
 async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;
-    const QUIET_VALUE: f32 = 0.10; // track A — registered first, must play first
-    const LOUD_VALUE: f32 = 0.80; // track B — registered second, loaded first
+    const QUIET_VALUE: f32 = 0.10;
+    const LOUD_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
         PlayerConfig::default().with_crossfade_duration(0.0),
@@ -309,17 +300,12 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(true),
+            .with_should_autoplay(true),
     );
 
-    // Register both BEFORE any load completes, exactly like the real
-    // app calling `queue.append(url1); queue.append(url2);`.
     let id_a = queue.register_for_test();
     let id_b = queue.register_for_test();
 
-    // Load completions arrive in REVERSE order — simulates B's loader
-    // task winning the timing race against A's. The original
-    // implementation would have picked B as the autoplay target.
     queue.complete_load_for_test(id_b, make_resource("b", TRACK_SECS, LOUD_VALUE));
     queue.complete_load_for_test(id_a, make_resource("a", TRACK_SECS, QUIET_VALUE));
 
@@ -336,10 +322,6 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
     let mean_second = mean_abs_window(&pcm, track_second_probe, window)
         .expect("window inside the second audible track fits");
 
-    // Regression check: if B preempted A, mean_first ≈ LOUD and
-    // mean_second ≈ QUIET (or silence). With the fix, mean_first ≈
-    // QUIET and mean_second ≈ LOUD. Compare via ratios so the firewheel
-    // graph attenuation cancels out.
     assert!(
         mean_second > mean_first * 4.0,
         "the loud track (B, registered SECOND) preempted the quiet track (A, \
@@ -381,15 +363,15 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
     let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
 
-    // First playthrough: select A and let it auto-advance to B, then
-    // end_queue when B finishes.
-    queue.select(id_a, Transition::None).expect("first select track A");
+    queue
+        .select(id_a, Transition::None)
+        .expect("first select track A");
     let _first_pcm = render_loop(&queue, &harness, MAX_BLOCKS);
     assert_eq!(
         queue.current_index(),
@@ -397,27 +379,21 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         "first playthrough must reach track B"
     );
 
-    // Pre-supply fresh resources for the replay. spawn_apply_after_load
-    // pulls these instead of dispatching the real loader.
     queue.supply_test_resource_for_respawn(id_a, make_resource("a2", TRACK_SECS, TRACK_A_VALUE));
     queue.supply_test_resource_for_respawn(id_b, make_resource("b2", TRACK_SECS, TRACK_B_VALUE));
 
-    // Replay: select A again. Goes through the `Consumed` branch in
-    // `Queue::select` → respawns A → A becomes Loaded → pending_select
-    // matches → plays. Mid-A, prefetch handler sees B=Consumed and my
-    // fix respawns B → B becomes Loaded → arm_next → arena handover at
-    // A's EOF promotes B.
-    queue.select(id_a, Transition::None).expect("second select track A");
+    queue
+        .select(id_a, Transition::None)
+        .expect("second select track A");
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
 
-    let onset = first_onset_frame(&pcm, 0.005)
-        .expect("track A must produce non-silence on replay");
+    let onset = first_onset_frame(&pcm, 0.005).expect("track A must produce non-silence on replay");
     let track_a_frames = (f64::from(SAMPLE_RATE) * TRACK_SECS) as usize;
     let window = SAMPLE_RATE as usize / 8;
 
-    let mean_a = mean_abs_window(&pcm, onset + track_a_frames / 4, window)
-        .expect("track A mid window fits");
+    let mean_a =
+        mean_abs_window(&pcm, onset + track_a_frames / 4, window).expect("track A mid window fits");
     let track_b_probe = onset + track_a_frames + track_a_frames / 4;
     let mean_b = mean_abs_window(&pcm, track_b_probe, window)
         .expect("track B mid window fits — the queue may have stopped after track A on replay");
@@ -453,14 +429,15 @@ async fn queue_pauses_player_when_last_track_ends() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(false),
+            .with_should_autoplay(false),
     );
     let mut rx = queue.subscribe();
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.30));
-    queue.select(id_a, Transition::None).expect("select track A");
+    queue
+        .select(id_a, Transition::None)
+        .expect("select track A");
 
-    // Render until QueueEnded fires (or budget exhausts).
     let mut saw_queue_ended = false;
     for _ in 0..MAX_BLOCKS {
         let _ = queue.tick();
@@ -474,7 +451,6 @@ async fn queue_pauses_player_when_last_track_ends() {
             }
         }
         if saw_queue_ended {
-            // Drain a few more ticks to let pause propagate to the player.
             for _ in 0..4 {
                 let _ = queue.tick();
                 let _ = harness.render(BLOCK_FRAMES);
@@ -510,16 +486,15 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     let queue = Queue::new(
         QueueConfig::default()
             .with_player(Arc::clone(harness.player()))
-            .with_autoplay(true),
+            .with_should_autoplay(true),
     );
 
-    // With the bug, peek_next(None) -> Some(0) arms this slot against itself.
     let _id = queue.insert_loaded_for_test(make_resource("solo", TRACK_SECS, TRACK_VALUE));
 
     let pcm = render_loop(&queue, &harness, MAX_BLOCKS);
 
-    let onset = first_onset_frame(&pcm, 0.005)
-        .expect("autoplay'd track must produce audible samples");
+    let onset =
+        first_onset_frame(&pcm, 0.005).expect("autoplay'd track must produce audible samples");
     let track_frames = (f64::from(SAMPLE_RATE) * TRACK_SECS) as usize;
     let window = SAMPLE_RATE as usize / 8;
 
@@ -531,5 +506,9 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
         "no signal mid-playback (mean={mean_mid}) — decoder likely self-armed"
     );
 
-    assert_eq!(queue.current_index(), Some(0), "current_index must stay on the only track");
+    assert_eq!(
+        queue.current_index(),
+        Some(0),
+        "current_index must stay on the only track"
+    );
 }

@@ -35,15 +35,15 @@ pub(crate) enum SchedulerCmd<N> {
 
 /// A slot holding a node and its metadata.
 pub(crate) struct Slot<N> {
-    pub id: SlotId,
     pub node: N,
     pub service_class: ServiceClass,
-    pub terminal: bool,
+    pub id: SlotId,
+    pub is_terminal: bool,
 }
 
 impl<N: Node> Slot<N> {
     fn is_removable(&self) -> bool {
-        self.terminal
+        self.is_terminal
     }
 }
 
@@ -61,9 +61,9 @@ impl<N> Clone for SchedulerHandle<N> {
 }
 
 struct SchedulerInner<N> {
-    cmd_tx: mpsc::Sender<SchedulerCmd<N>>,
     wake: Arc<SchedulerWake>,
     cancel: CancellationToken,
+    cmd_tx: mpsc::Sender<SchedulerCmd<N>>,
 }
 
 impl<N> SchedulerInner<N> {
@@ -94,29 +94,40 @@ impl<N: Node> SchedulerHandle<N> {
         self.inner.wake.wake();
     }
 
-    /// Remove a node by ID.
-    pub(crate) fn unregister(&self, id: SlotId) {
-        let _ = self.inner.cmd_tx.send_sync(SchedulerCmd::Unregister(id));
-        self.inner.wake.wake();
-    }
-
     /// Update scheduling priority for a node.
     pub(crate) fn set_service_class(&self, id: SlotId, class: ServiceClass) {
-        let _ = self
+        if self
             .inner
             .cmd_tx
-            .send_sync(SchedulerCmd::SetServiceClass(id, class));
-        self.inner.wake.wake();
-    }
-
-    /// Wake the scheduler.
-    pub(crate) fn wake(&self) {
+            .send_sync(SchedulerCmd::SetServiceClass(id, class))
+            .is_err()
+        {
+            warn!(slot_id = id, "set_service_class: scheduler channel closed");
+        }
         self.inner.wake.wake();
     }
 
     /// Request graceful shutdown and cancel the scheduler.
     pub(crate) fn shutdown(&self) {
         self.inner.shutdown();
+    }
+
+    /// Remove a node by ID.
+    pub(crate) fn unregister(&self, id: SlotId) {
+        if self
+            .inner
+            .cmd_tx
+            .send_sync(SchedulerCmd::Unregister(id))
+            .is_err()
+        {
+            warn!(slot_id = id, "unregister: scheduler channel closed");
+        }
+        self.inner.wake.wake();
+    }
+
+    /// Wake the scheduler.
+    pub(crate) fn wake(&self) {
+        self.inner.wake.wake();
     }
 }
 
@@ -126,17 +137,25 @@ pub(crate) struct Scheduler<N, O> {
 }
 
 impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
+    const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
+    const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
     /// Threshold for warning about slow `tick` calls.
     const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
-    const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
-    const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
 
     /// Spawn a new scheduler thread and return a handle.
+    ///
+    /// `cancel` is the externally-owned token that drives the run loop's
+    /// shutdown. Callers (e.g. [`AudioWorkerHandle`](super::super::worker::AudioWorkerHandle))
+    /// derive it as a child of the player master so worker shutdown
+    /// participates in the unified cancel hierarchy.
     #[must_use]
-    pub(crate) fn start(name: String, observer: O) -> SchedulerHandle<N> {
+    pub(crate) fn start(
+        name: String,
+        observer: O,
+        cancel: CancellationToken,
+    ) -> SchedulerHandle<N> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let wake = Arc::new(SchedulerWake::new());
-        let cancel = CancellationToken::new();
 
         let wake_clone = Arc::clone(&wake);
         let cancel_clone = cancel.clone();
@@ -147,9 +166,9 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
 
         SchedulerHandle {
             inner: Arc::new(SchedulerInner {
-                cmd_tx,
                 wake,
                 cancel,
+                cmd_tx,
             }),
         }
     }
@@ -169,15 +188,7 @@ fn run_loop<N: Node, O: SchedulerObserver>(
     loop {
         observer.on_event(SchedulerEvent::PassStart);
 
-        if cancel.is_cancelled() {
-            trace!("scheduler cancelled");
-            for slot in &mut slots {
-                slot.node.on_cancel();
-            }
-            return;
-        }
-
-        if drain_commands(cmd_rx, &mut slots, &mut needs_reorder) {
+        if cancel_and_drain(cancel, cmd_rx, &mut slots, &mut needs_reorder) {
             return;
         }
 
@@ -194,24 +205,44 @@ fn run_loop<N: Node, O: SchedulerObserver>(
             needs_reorder = true;
         }
 
-        match outcome {
-            PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress),
-            PassOutcome::Waiting => {}
-            PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle),
-        }
-
+        report_outcome(&mut observer, outcome);
         observer.on_event(SchedulerEvent::PassEnd);
+        park_after_outcome::<N, O>(wake, outcome);
+    }
+}
 
-        match outcome {
-            PassOutcome::Produced => {
-                yield_now();
-            }
-            PassOutcome::Waiting => {
-                wake.wait_timeout(Scheduler::<N, O>::IDLE_TIMEOUT);
-            }
-            PassOutcome::Idle => {
-                wake.wait_timeout(Scheduler::<N, O>::EMPTY_TIMEOUT);
-            }
+fn cancel_and_drain<N: Node>(
+    cancel: &CancellationToken,
+    cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
+    slots: &mut Vec<Slot<N>>,
+    needs_reorder: &mut bool,
+) -> bool {
+    if cancel.is_cancelled() {
+        trace!("scheduler cancelled");
+        for slot in slots.iter_mut() {
+            slot.node.on_cancel();
+        }
+        return true;
+    }
+    drain_commands(cmd_rx, slots, needs_reorder)
+}
+
+fn report_outcome<O: SchedulerObserver>(observer: &mut O, outcome: PassOutcome) {
+    match outcome {
+        PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress),
+        PassOutcome::Waiting => {}
+        PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle),
+    }
+}
+
+fn park_after_outcome<N: Node, O: SchedulerObserver>(wake: &SchedulerWake, outcome: PassOutcome) {
+    match outcome {
+        PassOutcome::Produced => yield_now(),
+        PassOutcome::Waiting => {
+            wake.wait_timeout(Scheduler::<N, O>::IDLE_TIMEOUT);
+        }
+        PassOutcome::Idle => {
+            wake.wait_timeout(Scheduler::<N, O>::EMPTY_TIMEOUT);
         }
     }
 }
@@ -248,7 +279,7 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
             r
         } else {
             warn!(slot_id = slot.id, "scheduler: node panicked");
-            slot.terminal = true;
+            slot.is_terminal = true;
             slot.node.on_cancel();
             TickResult::Done
         };
@@ -256,13 +287,13 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
 
         if elapsed > Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
             observer.on_event(SchedulerEvent::SlowTick {
-                slot: slot.id,
                 elapsed,
+                slot: slot.id,
             });
         }
 
         if result == TickResult::Done {
-            slot.terminal = true;
+            slot.is_terminal = true;
         }
 
         best = match (best, result) {
@@ -279,64 +310,104 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
     }
 }
 
-#[expect(clippy::cognitive_complexity)]
+/// Outcome of processing a single scheduler command.
+enum DrainStep {
+    /// Command applied; keep draining the queue.
+    Continue,
+    /// Queue is empty for now; bail out and resume the audio loop.
+    Empty,
+    /// Scheduler shutdown was requested (or all handles dropped); exit thread.
+    Shutdown,
+}
+
 fn drain_commands<N: Node>(
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
     slots: &mut Vec<Slot<N>>,
     needs_reorder: &mut bool,
 ) -> bool {
     loop {
-        match cmd_rx.try_recv() {
-            Ok(SchedulerCmd::Register(id, node)) => {
-                debug!(slot_id = id, "scheduler: registering node");
-                let service_class = node.service_class();
-                slots.push(Slot {
-                    id,
-                    node,
-                    service_class,
-                    terminal: false,
-                });
-                *needs_reorder = true;
-            }
-            Ok(SchedulerCmd::Unregister(id)) => {
-                debug!(slot_id = id, "scheduler: unregistering node");
-                if let Some(slot) = slots.iter_mut().find(|s| s.id == id) {
-                    slot.node.on_cancel();
-                }
-                let before = slots.len();
-                slots.retain(|s| s.id != id);
-                if slots.len() < before {
-                    *needs_reorder = true;
-                }
-            }
-            Ok(SchedulerCmd::SetServiceClass(id, class)) => {
-                if let Some(slot) = slots.iter_mut().find(|s| s.id == id)
-                    && slot.service_class != class
-                {
-                    slot.service_class = class;
-                    *needs_reorder = true;
-                }
-            }
-            Ok(SchedulerCmd::Shutdown) => {
-                trace!("scheduler shutdown");
-                for slot in slots.iter_mut() {
-                    slot.node.on_cancel();
-                }
-                return true;
-            }
-            Err(err) => {
-                if matches!(err, TryRecvError::Disconnected) {
-                    trace!("scheduler: all handles dropped");
-                    for slot in slots.iter_mut() {
-                        slot.node.on_cancel();
-                    }
-                    return true;
-                }
-                break;
-            }
+        match handle_drain_step(cmd_rx, slots, needs_reorder) {
+            DrainStep::Continue => {}
+            DrainStep::Empty => return false,
+            DrainStep::Shutdown => return true,
         }
     }
-    false
+}
+
+fn handle_drain_step<N: Node>(
+    cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
+    slots: &mut Vec<Slot<N>>,
+    needs_reorder: &mut bool,
+) -> DrainStep {
+    match cmd_rx.try_recv() {
+        Ok(SchedulerCmd::Register(id, node)) => {
+            register_slot(slots, needs_reorder, id, node);
+            DrainStep::Continue
+        }
+        Ok(SchedulerCmd::Unregister(id)) => {
+            unregister_slot(slots, needs_reorder, id);
+            DrainStep::Continue
+        }
+        Ok(SchedulerCmd::SetServiceClass(id, class)) => {
+            set_service_class(slots, needs_reorder, id, class);
+            DrainStep::Continue
+        }
+        Ok(SchedulerCmd::Shutdown) => {
+            trace!("scheduler shutdown");
+            cancel_all(slots);
+            DrainStep::Shutdown
+        }
+        Err(TryRecvError::Disconnected) => {
+            trace!("scheduler: all handles dropped");
+            cancel_all(slots);
+            DrainStep::Shutdown
+        }
+        Err(TryRecvError::Empty) => DrainStep::Empty,
+    }
+}
+
+fn register_slot<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool, id: SlotId, node: N) {
+    debug!(slot_id = id, "scheduler: registering node");
+    let service_class = node.service_class();
+    slots.push(Slot {
+        id,
+        node,
+        service_class,
+        is_terminal: false,
+    });
+    *needs_reorder = true;
+}
+
+fn unregister_slot<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool, id: SlotId) {
+    debug!(slot_id = id, "scheduler: unregistering node");
+    if let Some(slot) = slots.iter_mut().find(|s| s.id == id) {
+        slot.node.on_cancel();
+    }
+    let before = slots.len();
+    slots.retain(|s| s.id != id);
+    if slots.len() < before {
+        *needs_reorder = true;
+    }
+}
+
+fn set_service_class<N: Node>(
+    slots: &mut [Slot<N>],
+    needs_reorder: &mut bool,
+    id: SlotId,
+    class: ServiceClass,
+) {
+    if let Some(slot) = slots.iter_mut().find(|s| s.id == id)
+        && slot.service_class != class
+    {
+        slot.service_class = class;
+        *needs_reorder = true;
+    }
+}
+
+fn cancel_all<N: Node>(slots: &mut [Slot<N>]) {
+    for slot in slots.iter_mut() {
+        slot.node.on_cancel();
+    }
 }
 
 /// Process CPU time in milliseconds (user + system).
@@ -391,17 +462,17 @@ mod tests {
     }
 
     struct DummyNode {
-        ticks: usize,
-        max_ticks: usize,
         panic_at: Option<usize>,
+        max_ticks: usize,
+        ticks: usize,
     }
 
     impl Node for DummyNode {
         fn tick(&mut self) -> TickResult {
-            if let Some(p) = self.panic_at {
-                if self.ticks == p {
-                    panic!("dummy panic");
-                }
+            if let Some(p) = self.panic_at
+                && self.ticks == p
+            {
+                panic!("dummy panic");
             }
             if self.ticks >= self.max_ticks {
                 TickResult::Done
@@ -417,19 +488,22 @@ mod tests {
     }
 
     impl Node for ServiceClassNode {
-        fn tick(&mut self) -> TickResult {
-            TickResult::Done
-        }
-
         fn service_class(&self) -> ServiceClass {
             self.service_class
+        }
+
+        fn tick(&mut self) -> TickResult {
+            TickResult::Done
         }
     }
 
     #[kithara::test]
     fn scheduler_creates_and_drops_cleanly() {
-        let handle =
-            Scheduler::<DummyNode, TestObserver>::start("test-worker".into(), TestObserver);
+        let handle = Scheduler::<DummyNode, TestObserver>::start(
+            "test-worker".into(),
+            TestObserver,
+            CancellationToken::new(),
+        );
         sleep(Duration::from_millis(10));
         handle.shutdown();
         sleep(Duration::from_millis(50));
@@ -437,8 +511,11 @@ mod tests {
 
     #[kithara::test]
     fn scheduler_panic_isolation() {
-        let handle =
-            Scheduler::<DummyNode, TestObserver>::start("test-worker".into(), TestObserver);
+        let handle = Scheduler::<DummyNode, TestObserver>::start(
+            "test-worker".into(),
+            TestObserver,
+            CancellationToken::new(),
+        );
 
         handle.register(
             1,
@@ -472,8 +549,11 @@ mod tests {
 
     #[kithara::test]
     fn scheduler_does_not_busy_spin_on_backpressure() {
-        let handle =
-            Scheduler::<BackpressureNode, TestObserver>::start("test-worker".into(), TestObserver);
+        let handle = Scheduler::<BackpressureNode, TestObserver>::start(
+            "test-worker".into(),
+            TestObserver,
+            CancellationToken::new(),
+        );
 
         handle.register(1, BackpressureNode);
 
@@ -503,7 +583,7 @@ mod tests {
                     service_class: ServiceClass::Idle,
                 },
                 service_class: ServiceClass::Idle,
-                terminal: false,
+                is_terminal: false,
             },
             Slot {
                 id: 2,
@@ -511,7 +591,7 @@ mod tests {
                     service_class: ServiceClass::Audible,
                 },
                 service_class: ServiceClass::Audible,
-                terminal: false,
+                is_terminal: false,
             },
             Slot {
                 id: 3,
@@ -519,7 +599,7 @@ mod tests {
                     service_class: ServiceClass::Warm,
                 },
                 service_class: ServiceClass::Warm,
-                terminal: false,
+                is_terminal: false,
             },
         ];
 

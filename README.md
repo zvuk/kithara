@@ -153,8 +153,8 @@ cargo install cargo-semver-checks --locked
 
 The repository contains two verified mobile build flows:
 
-- Android: `just android-aar` builds the Rust core, generates Kotlin bindings, and exports both release AARs required by consumer apps
-- Apple: `just xcframework` builds the Swift-facing XCFramework consumed by local packages or Xcode projects
+- Android: `just android aar` builds the Rust core, generates Kotlin bindings, and exports both release AARs required by consumer apps
+- Apple: `just apple xcframework` builds the Swift-facing XCFramework consumed by local packages or Xcode projects
 
 ### Android AARs
 
@@ -171,7 +171,7 @@ rustup target add aarch64-linux-android x86_64-linux-android
 Build the Android libraries:
 
 ```bash
-just android-aar
+just android aar
 ```
 
 What this command does:
@@ -207,13 +207,13 @@ rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x
 Build the Apple library:
 
 ```bash
-just xcframework
+just apple xcframework
 ```
 
 For a faster local iteration build:
 
 ```bash
-just xcframework --profile debug
+just apple xcframework --profile debug
 ```
 
 Output directory:

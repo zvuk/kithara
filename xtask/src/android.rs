@@ -39,7 +39,6 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         ("x86_64-linux-android", "x86_64"),
     ];
 
-    // 1. Check prerequisites.
     check_tool("cargo", &["ndk", "--help"], "cargo install cargo-ndk")?;
     check_tool("rustup", &["--version"], "https://rustup.rs")?;
 
@@ -49,7 +48,6 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         }
     }
 
-    // 2. Resolve workspace paths.
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
@@ -58,11 +56,9 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
     let jni_dir = root.join("android/lib/build/generated/jniLibs");
     let kotlin_dir = root.join("android/lib/build/generated/uniffi/kotlin");
 
-    // 3. Recreate output directories.
     recreate_dir(&jni_dir)?;
     recreate_dir(&kotlin_dir)?;
 
-    // 4. Build Android shared libraries via cargo-ndk.
     println!("==> Building Android shared libraries");
 
     let ndk_targets: Vec<&str> = RUST_TARGETS
@@ -70,9 +66,6 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         .flat_map(|(_, abi)| ["-t", abi])
         .collect();
 
-    // Debug builds enable the `test` feature to expose diagnostic
-    // JNI entrypoints (e.g. offline capture) that must never ship in
-    // a release AAR.
     let features: &str = if matches!(profile, BuildProfile::Release) {
         "backend-uniffi,android"
     } else {
@@ -99,13 +92,11 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         bail!("cargo ndk failed");
     }
 
-    // 5. Verify the arm64 library was produced.
     let lib_path = jni_dir.join("arm64-v8a/libkithara_ffi.so");
     if !lib_path.exists() {
         bail!("compiled library not found at {}", lib_path.display());
     }
 
-    // 6. Generate Kotlin bindings via uniffi-bindgen.
     println!("==> Generating Kotlin bindings");
 
     let mut cmd = Command::new("cargo");
@@ -139,7 +130,6 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
         bail!("uniffi-bindgen failed");
     }
 
-    // 7. Print summary.
     println!("==> Done!");
     println!("==> JNI libs: {}", jni_dir.display());
     println!("==> Kotlin bindings: {}", kotlin_dir.display());

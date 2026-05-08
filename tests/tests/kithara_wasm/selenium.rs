@@ -217,7 +217,7 @@ impl SeleniumHarness {
             .env("TEST_SERVER_PORT", self.config.test_server_port.to_string());
 
         self.test_server = Some(ChildGuard::spawn("test_server", cmd)?);
-        wait_http_ready(&health_url, self.config.startup_timeout).await
+        wait_url_ready(&health_url, self.config.startup_timeout, "").await
     }
 
     async fn ensure_trunk_server(&mut self) -> Result<(), String> {
@@ -225,10 +225,10 @@ impl SeleniumHarness {
 
         if self.config.page_url_override.is_some() {
             println!("[selenium] using external wasm page: {page_url}");
-            return wait_page_ready(&page_url, self.config.startup_timeout).await;
+            return wait_url_ready(&page_url, self.config.startup_timeout, "wasm page").await;
         }
 
-        if page_ready_once(&page_url).await {
+        if http_ok(&page_url).await {
             println!("[selenium] trunk page already running: {page_url}");
             return Ok(());
         }
@@ -254,7 +254,7 @@ impl SeleniumHarness {
             ]);
 
         self.trunk_server = Some(ChildGuard::spawn("trunk", cmd)?);
-        wait_page_ready(&page_url, self.config.startup_timeout).await
+        wait_url_ready(&page_url, self.config.startup_timeout, "wasm page").await
     }
 
     async fn ensure_webdriver_server(&mut self) -> Result<(), String> {
@@ -420,7 +420,6 @@ impl WasmPlayerSelenium {
     async fn collect_browser_logs(&self) -> String {
         let mut logs = Vec::new();
 
-        // UI event log
         let script = r#"
             return [...document.querySelectorAll('#event-log > div')]
                 .slice(-30)
@@ -434,7 +433,6 @@ impl WasmPlayerSelenium {
             logs.push(format!("--- UI event log ---\n{s}"));
         }
 
-        // Captured console logs
         let console_script = "return (window.__consoleLogs || []).slice(-80).join('\\n');";
         if let Ok(ret) = self
             .driver
@@ -896,7 +894,6 @@ impl WasmPlayerSelenium {
     /// the baseline and check that exactly 2 *additional* workers appear after
     /// track load (engine command worker + shared audio worker).
     async fn run_worker_count_scenario(&self) -> Result<(), String> {
-        // Phase 1: Measure baseline worker count after page load.
         self.open_player_page().await?;
         sleep(Duration::from_secs(2)).await;
 
@@ -906,7 +903,6 @@ impl WasmPlayerSelenium {
              urls={urls_baseline:?}"
         );
 
-        // Phase 2: Select a track — triggers engine + shared audio worker creation.
         self.clear_playlist().await?;
         self.add_track(&self.config.hls_url()).await?;
         let hls_idx = self.find_track_index("hls/master.m3u8").await?;
@@ -921,7 +917,6 @@ impl WasmPlayerSelenium {
         .await?;
         self.click_button("play-btn").await?;
 
-        // Wait for resource to be fully loaded (duration known).
         self.wait_for(
             "track duration known",
             self.config.wait_timeout,
@@ -930,7 +925,6 @@ impl WasmPlayerSelenium {
         )
         .await?;
 
-        // Sample worker count right after track load (may include ephemeral workers).
         let (count_peak, urls_peak) = self.count_web_workers().await?;
         let delta_peak = count_peak.saturating_sub(baseline);
         println!(
@@ -938,10 +932,8 @@ impl WasmPlayerSelenium {
              from baseline), urls={urls_peak:?}"
         );
 
-        // Phase 3: Wait for ephemeral workers (probe/decoder spawn_blocking) to exit.
         sleep(Duration::from_secs(10)).await;
 
-        // Verify playback is still alive.
         self.assert_motion(
             "playback after worker settle",
             Duration::from_secs(3),
@@ -956,9 +948,6 @@ impl WasmPlayerSelenium {
              from baseline), urls={urls_steady:?}"
         );
 
-        // Expect at most +2 from baseline: engine command worker + shared audio worker.
-        // With wasm_safe_thread pool model, workers may be reused (delta=0).
-        // The key invariant: no unbounded growth.
         if delta_steady > 2 {
             return Err(format!(
                 "too many workers at steady state: expected at most baseline+2 \
@@ -967,7 +956,6 @@ impl WasmPlayerSelenium {
             ));
         }
 
-        // Phase 4: Report ephemeral cleanup.
         if count_peak > count_steady {
             println!(
                 "[worker_count] ephemeral cleanup OK: peak={count_peak} → \
@@ -1072,7 +1060,6 @@ impl WasmPlayerSelenium {
         target_ms: f64,
         label: &str,
     ) -> Result<(bool, bool), String> {
-        // Drain events before seek so we see only seek-related events
         let _ = self
             .driver
             .execute(
@@ -1110,16 +1097,14 @@ impl WasmPlayerSelenium {
             return Ok((false, false));
         }
 
-        // Sample position + events during playback check
         let mut positions = Vec::new();
-        let steps = 16; // 8s / 500ms
+        let steps = 16;
         for _ in 0..steps {
             sleep(Consts::POLL_INTERVAL).await;
             let pos = self.get_position_ms().await?;
             positions.push(pos);
         }
 
-        // Collect events that happened during/after seek
         let events = self
             .driver
             .execute(
@@ -1421,7 +1406,7 @@ async fn http_ok(url: &str) -> bool {
     }
 }
 
-async fn wait_http_ready(url: &str, timeout: Duration) -> Result<(), String> {
+async fn wait_url_ready(url: &str, timeout: Duration, kind: &str) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
@@ -1431,33 +1416,11 @@ async fn wait_http_ready(url: &str, timeout: Duration) -> Result<(), String> {
         sleep(Consts::CHECK_INTERVAL).await;
     }
 
-    Err(format!("timeout waiting for {url}"))
-}
-
-async fn page_ready_once(url: &str) -> bool {
-    let client = Client::builder().timeout(Duration::from_secs(2)).build();
-
-    let Ok(client) = client else {
-        return false;
-    };
-
-    match client.get(url).send().await {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
+    if kind.is_empty() {
+        Err(format!("timeout waiting for {url}"))
+    } else {
+        Err(format!("timeout waiting for {kind} {url}"))
     }
-}
-
-async fn wait_page_ready(url: &str, timeout: Duration) -> Result<(), String> {
-    let deadline = Instant::now() + timeout;
-
-    while Instant::now() < deadline {
-        if page_ready_once(url).await {
-            return Ok(());
-        }
-        sleep(Consts::CHECK_INTERVAL).await;
-    }
-
-    Err(format!("timeout waiting for wasm page {url}"))
 }
 
 /// Create a [`WasmPlayerSelenium`] session with its owning harness.

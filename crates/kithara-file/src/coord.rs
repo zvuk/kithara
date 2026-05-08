@@ -13,32 +13,52 @@ use kithara_stream::{DemandSlot, Timeline};
 use platform_tokio::sync::Notify;
 
 pub(crate) struct FileCoord {
+    read_pos: Arc<AtomicU64>,
+    total_bytes: Arc<AtomicU64>,
     demand: DemandSlot<Range<u64>>,
     downloader_wake: Notify,
     reader_advanced: Notify,
-    read_pos: Arc<AtomicU64>,
     timeline: Timeline,
-    total_bytes: Arc<AtomicU64>,
 }
 
 impl FileCoord {
+    /// Sentinel for "total length unknown" stored in `total_bytes`
+    /// (atomic). `set_total_bytes` replaces it once the HEAD/Range
+    /// response settles; `total_bytes()` filters it back to `None`.
     const NO_TOTAL_BYTES: u64 = u64::MAX;
 
     #[must_use]
     pub(crate) fn new(timeline: Timeline) -> Self {
         Self {
+            timeline,
             demand: DemandSlot::new(),
             downloader_wake: Notify::new(),
-            reader_advanced: Notify::new(),
             read_pos: Arc::new(AtomicU64::new(0)),
-            timeline,
+            reader_advanced: Notify::new(),
             total_bytes: Arc::new(AtomicU64::new(Self::NO_TOTAL_BYTES)),
         }
+    }
+
+    /// Borrow the demand notify — callers await `.notified()` directly.
+    pub(crate) fn demand_notify(&self) -> &Notify {
+        &self.downloader_wake
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn read_pos(&self) -> u64 {
         self.read_pos.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn request_range(&self, range: Range<u64>) -> bool {
+        let inserted = self.demand.did_replace(range);
+        if inserted {
+            self.downloader_wake.notify_one();
+        }
+        inserted
+    }
+
+    pub(crate) fn set_download_pos(&self, value: u64) {
+        self.timeline.set_download_position(value);
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -47,8 +67,18 @@ impl FileCoord {
         self.reader_advanced.notify_one();
     }
 
-    pub(crate) fn set_download_pos(&self, value: u64) {
-        self.timeline.set_download_position(value);
+    pub(crate) fn set_total_bytes(&self, total: Option<u64>) {
+        self.total_bytes
+            .store(total.unwrap_or(Self::NO_TOTAL_BYTES), Ordering::Release);
+    }
+
+    pub(crate) fn take_range_request(&self) -> Option<Range<u64>> {
+        self.demand.take()
+    }
+
+    #[must_use]
+    pub(crate) fn timeline(&self) -> Timeline {
+        self.timeline.clone()
     }
 
     #[must_use]
@@ -59,33 +89,6 @@ impl FileCoord {
         } else {
             Some(total)
         }
-    }
-
-    pub(crate) fn set_total_bytes(&self, total: Option<u64>) {
-        self.total_bytes
-            .store(total.unwrap_or(Self::NO_TOTAL_BYTES), Ordering::Release);
-    }
-
-    #[must_use]
-    pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-
-    pub(crate) fn request_range(&self, range: Range<u64>) -> bool {
-        let inserted = self.demand.submit(range);
-        if inserted {
-            self.downloader_wake.notify_one();
-        }
-        inserted
-    }
-
-    pub(crate) fn take_range_request(&self) -> Option<Range<u64>> {
-        self.demand.take()
-    }
-
-    /// Borrow the demand notify — callers await `.notified()` directly.
-    pub(crate) fn demand_notify(&self) -> &Notify {
-        &self.downloader_wake
     }
 }
 

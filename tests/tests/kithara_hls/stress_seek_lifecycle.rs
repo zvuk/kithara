@@ -18,14 +18,17 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    abr_fast,
+    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+};
 use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
 use kithara_test_utils::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, abr_fast, detect_direction,
+    SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
     fixture_protocol::DelayRule,
     phase_from_f32,
     signal_pcm::{Finite, SignalPcm, signal},
@@ -45,21 +48,34 @@ impl Consts {
     const MAX_ZERO_READS: usize = 50;
 }
 
-/// Read with retry: keeps trying until data arrives or stuck.
-/// Returns (`samples_read`, `retries_needed`).
-fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, usize) {
+/// Read with retry: keeps trying until data arrives, a terminal signal is
+/// reached (natural EOF or unrecoverable producer failure), or the retry
+/// budget is exhausted. Returns (`samples_read`, `retries_needed`,
+/// `saw_terminal`).
+///
+/// `saw_terminal = true` combines natural EOF (`Ok(ReadOutcome::Eof)`) and
+/// terminal producer failure (`Err(DecodeError)`, i.e. `ConsumerPhase::Failed`).
+/// Both are permanent for this `Audio` instance, so the stress test treats
+/// them identically: end of this read loop. A terminal Err counts against
+/// the `dead_seeks` tolerance budget (1% of `STRESS_SEEK_ITERATIONS`).
+fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, usize, bool) {
     for retry in 0..Consts::MAX_ZERO_READS {
-        if audio.is_eof() {
-            return (0, retry);
+        match audio.read(buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => return (count.get(), retry, false),
+            Ok(ReadOutcome::Pending { .. }) => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Ok(ReadOutcome::Eof { .. }) => return (0, retry, true),
+            Err(e) => {
+                warn!(
+                    ?e,
+                    "terminal producer failure under stress; counted as dead seek"
+                );
+                return (0, retry, true);
+            }
         }
-        let n = audio.read(buf);
-        if n > 0 {
-            return (n, retry);
-        }
-        // Give background worker some time to fill the buffer
-        thread::sleep(Duration::from_millis(1));
     }
-    (0, Consts::MAX_ZERO_READS)
+    (0, Consts::MAX_ZERO_READS, false)
 }
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
@@ -75,7 +91,10 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 #[case::ephemeral(true)]
 #[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]
-async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast: AbrOptions) {
+async fn stress_seek_lifecycle_with_zero_reset(
+    #[case] ephemeral: bool,
+    abr_fast: kithara_abr::AbrSettings,
+) {
     let init_segment = Arc::new(create_wav_header(
         Consts::D.sample_rate,
         Consts::D.channels,
@@ -170,16 +189,14 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let cap =
             NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
         store.cache_capacity = Some(cap);
-        store.ephemeral = true;
+        store.is_ephemeral = true;
     }
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let _ = &abr_fast;
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
@@ -200,14 +217,13 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let mut buf = vec![0.0f32; chunk_samples];
         let mut rng = Xorshift64::new(0xCAFE_BABE_DEAD_BEEF);
 
-        // Phase 1: Warmup until ABR switch
         info!("Phase 1: warmup - reading until ABR switch");
         let mut initial_direction = Direction::Unknown;
         let mut switch_detected = false;
         let warmup_deadline = Instant::now() + Duration::from_secs(10);
 
         while Instant::now() < warmup_deadline {
-            let (n, _) = read_with_retry(&mut audio, &mut buf);
+            let (n, _, _) = read_with_retry(&mut audio, &mut buf);
             if n == 0 {
                 break;
             }
@@ -234,7 +250,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
             warn!("ABR switch not detected during warmup - continuing anyway");
         }
 
-        // Phase 2: 2000 rapid random seeks
         info!("Phase 2: {} rapid random seeks", Consts::STRESS_SEEK_ITERATIONS);
         let max_seek_secs = total_secs - 0.1;
         let mut dead_seeks = 0u64;
@@ -244,8 +259,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let mut channel_mismatches = 0u64;
 
         for i in 0..Consts::STRESS_SEEK_ITERATIONS {
-            // Mix of random positions: 10% chance to seek near start (< 1s),
-            // 10% chance to seek near the end (last 2s), 80% random.
             let r = rng.next_f64();
             let pos_secs = if r < 0.1 {
                 rng.range_f64(0.0, 1.0)
@@ -263,7 +276,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 continue;
             }
 
-            let (n, retries) = read_with_retry(&mut audio, &mut buf);
+            let (n, retries, saw_eof) = read_with_retry(&mut audio, &mut buf);
             total_retries += retries as u64;
             if retries > max_retries_single {
                 max_retries_single = retries;
@@ -275,7 +288,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                     warn!(
                         iteration = i,
                         pos_secs,
-                        is_eof = audio.is_eof(),
+                        is_eof = saw_eof,
                         retries,
                         "STUCK: read returned 0 after {} retries", Consts::MAX_ZERO_READS
                     );
@@ -283,7 +296,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 continue;
             }
 
-            // Integrity check: finite, in range
             for (j, &sample) in buf[..n].iter().enumerate() {
                 if !sample.is_finite() || !(-1.0..=1.0).contains(&sample) {
                     integrity_errors += 1;
@@ -294,7 +306,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 }
             }
 
-            // L == R check
             if channels == 2 {
                 let frames = n / channels;
                 for f in 0..frames {
@@ -324,8 +335,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
             "Phase 2 complete"
         );
 
-        // Tolerate a small number of dead seeks (decoder restart race)
-        // but not more than 1% of total iterations.
         let max_dead = (Consts::STRESS_SEEK_ITERATIONS as u64) / 100;
         assert!(
             dead_seeks <= max_dead,
@@ -341,7 +350,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
             "L/R channel mismatches - data corruption"
         );
 
-        // ── Phase 3: Seek to 0 → full track read with continuity check ──
         info!("Phase 3: seek to 0 - full track integrity verification");
 
         audio.seek(Duration::ZERO).expect("seek to 0 must succeed");
@@ -352,23 +360,25 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
         let mut read_attempts = 0u64;
         let max_read_attempts = 100_000u64;
 
+        #[allow(unused_assignments)]
+        let mut final_saw_eof = false;
         loop {
-            let (n, retries) = read_with_retry(&mut audio, &mut buf);
+            let (n, retries, saw_eof) = read_with_retry(&mut audio, &mut buf);
             read_attempts += 1;
 
             if n == 0 {
-                if audio.is_eof() {
+                if saw_eof {
+                    final_saw_eof = true;
                     break;
                 }
                 if retries >= Consts::MAX_ZERO_READS {
                     panic!(
                         "STUCK at position {:.3}s after seek to 0: \
                          read returned 0 after {} retries, \
-                         total_frames_read={}, is_eof={}",
+                         total_frames_read={}",
                         audio.position().as_secs_f64(),
                         Consts::MAX_ZERO_READS,
                         total_frames_read,
-                        audio.is_eof()
                     );
                 }
                 continue;
@@ -376,7 +386,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
 
             let frames = n / channels;
 
-            // Integrity: every sample must be finite and in range
             for (j, &sample) in buf[..n].iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -387,7 +396,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 );
             }
 
-            // L == R
             if channels == 2 {
                 for f in 0..frames {
                     let l = buf[f * 2];
@@ -401,11 +409,8 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 }
             }
 
-            // Continuity: check inter-chunk boundary (prev_phase → first frame)
             let first_phase = phase_from_f32(buf[0]);
             if let Some(pp) = prev_phase {
-                // After seek to 0, we're reading the post-ABR-switch variant
-                // (ascending or descending). Check both directions.
                 let next_asc = (pp + 1) % SawWav::SAW_PERIOD;
                 let next_desc = (pp + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
                 if first_phase != next_asc && first_phase != next_desc {
@@ -423,7 +428,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 }
             }
 
-            // Intra-chunk continuity
             for f in 1..frames {
                 let p0 = phase_from_f32(buf[(f - 1) * channels]);
                 let p1 = phase_from_f32(buf[f * channels]);
@@ -440,7 +444,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
                 }
             }
 
-            // Track the last phase for inter-chunk check
             let last_frame_phase = phase_from_f32(buf[(frames - 1) * channels]);
             prev_phase = Some(last_frame_phase);
 
@@ -455,11 +458,11 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
             }
         }
 
-        assert!(audio.is_eof(), "expected EOF after full track read");
+        assert!(final_saw_eof, "expected EOF after full track read");
 
         let expected_frames = (Consts::SEGMENT_COUNT * Consts::D.segment_size) / (Consts::D.channels as usize * 2);
         let frame_diff = total_frames_read.abs_diff(expected_frames as u64);
-        let tolerance = (expected_frames as u64) / 50; // 2%
+        let tolerance = (expected_frames as u64) / 50;
 
         info!(
             total_frames_read,
@@ -472,8 +475,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool, abr_fast
             total_frames_read, expected_frames, tolerance
         );
 
-        // Allow a few continuity breaks at segment/decoder boundaries,
-        // but not proportional to track length.
         let max_breaks = 10u64;
         assert!(
             continuity_breaks <= max_breaks,

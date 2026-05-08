@@ -29,10 +29,6 @@ pub(crate) fn run(cmd: WasmCommand) -> Result<()> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// wasm build
-// ---------------------------------------------------------------------------
-
 fn check_rust_target_nightly(target: &str) -> Result<bool> {
     let output = Command::new("rustup")
         .args(["target", "list", "--installed", "--toolchain", "nightly"])
@@ -60,7 +56,6 @@ fn check_rust_component_nightly(component: &str) -> Result<()> {
 }
 
 fn run_build(profile: crate::BuildProfile) -> Result<()> {
-    // 1. Check prerequisites.
     check_tool("trunk", &["--version"], "cargo install trunk")?;
     check_tool(
         "rustup",
@@ -75,12 +70,10 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     }
     check_rust_component_nightly("rust-src")?;
 
-    // 2. Resolve wasm crate dir.
     let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
     let root = metadata.workspace_root.as_std_path();
     let wasm_dir = root.join("crates/kithara-wasm");
 
-    // 3. Run trunk build.
     println!("==> Building kithara-wasm");
     let mut cmd = Command::new("trunk");
     cmd.args(["build", "--config", "Trunk.toml"]);
@@ -98,10 +91,6 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
     println!("==> Done! Output in {}/dist/", wasm_dir.display());
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// wasm postbuild
-// ---------------------------------------------------------------------------
 
 struct Consts;
 impl Consts {
@@ -191,8 +180,6 @@ mod wasm_patcher_regex {
     });
 }
 
-// --- HTML transformations ---
-
 fn strip_html_attrs(content: &str) -> String {
     let s = wasm_patcher_regex::RE_INTEGRITY.replace_all(content, "");
     let s = wasm_patcher_regex::RE_CROSSORIGIN.replace_all(&s, "");
@@ -211,8 +198,6 @@ fn rewrite_paths(content: &str) -> String {
         )
 }
 
-// --- JS transformations ---
-
 fn apply_text_decoder_polyfill(content: &str) -> String {
     content.replace(
         "let cachedTextDecoder",
@@ -222,34 +207,27 @@ fn apply_text_decoder_polyfill(content: &str) -> String {
 
 fn apply_inline_patches(content: &str) -> String {
     content
-        // 1. Disable cleanup handler (8-byte leak per thread).
         .replace(
             "__cleanup_handler(exitStatePtr);",
             "/* cleanup disabled: 8-byte leak per thread */",
         )
-        // 2. Fix double-decrement bug in Worker error handler.
         .replace(
             "throw err;",
             "if (typeof close === \"function\") { close(); }",
         )
-        // 3. Inject boot lock function.
         .replace(
             "let __wstExitStatePtr = 0;",
             &format!("let __wstExitStatePtr = 0; {}", Consts::BOOT_LOCK_FN),
         )
-        // 4. Replace initSync with locked version.
         .replace(
             "shim.initSync({ module, memory, thread_stack_size: 1048576 });",
             "__wstLockedInit(shim, module, memory, meta);",
         )
-        // 5. Pass boot lock pointer to Workers.
         .replace(
             "__wst_parent_managed: true",
             "__wst_parent_managed: true, __wst_boot_lock_ptr: (globalThis.__wst_boot_lock_ptr || 0)",
         )
 }
-
-// --- Player class generation ---
 
 fn generate_player_class(js: &str) -> Option<String> {
     if wasm_patcher_regex::RE_PLAYER_CLASS.is_match(js)
@@ -288,20 +266,16 @@ fn generate_player_class(js: &str) -> Option<String> {
     ))
 }
 
-// --- postbuild orchestrator ---
-
 fn run_postbuild(staging_dir: &str) -> Result<()> {
     let dir = Path::new(staging_dir);
     anyhow::ensure!(dir.is_dir(), "staging dir does not exist: {staging_dir}");
 
-    // 1. Patch index.html.
     let index = dir.join("index.html");
     let content = fs::read_to_string(&index).context("read index.html")?;
     let content = strip_html_attrs(&content);
     let content = rewrite_paths(&content);
     fs::write(&index, content).context("write index.html")?;
 
-    // 2. Patch kithara-wasm.js.
     let js = dir.join("kithara-wasm.js");
     if js.exists() {
         let content = fs::read_to_string(&js).context("read kithara-wasm.js")?;
@@ -316,7 +290,6 @@ fn run_postbuild(staging_dir: &str) -> Result<()> {
         println!("post-build: kithara-wasm.js patched");
     }
 
-    // 3. Patch inline0.js files via glob.
     let pattern = format!("{}/snippets/wasm_safe_thread-*/inline0.js", dir.display());
     for entry in glob::glob(&pattern).context("glob inline0.js")? {
         let path = entry.context("glob entry")?;

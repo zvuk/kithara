@@ -15,18 +15,21 @@ use std::sync::{
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ReadOutcome},
     events::EventBus,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    abr_fast,
+    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+};
 use kithara_platform::{
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
 use kithara_test_utils::{
-    TestTempDir, abr_fast,
+    TestTempDir,
     fixture_protocol::DelayRule,
     signal_pcm::{Finite, SignalPcm, signal},
     temp_dir,
@@ -76,7 +79,10 @@ fn create_pcm_segments() -> Vec<u8> {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3")
 )]
-async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOptions) {
+async fn abr_auto_switch_during_playback(
+    temp_dir: TestTempDir,
+    _abr_fast: kithara_abr::AbrSettings,
+) {
     let init_segment = Arc::new(create_wav_init_segment());
     let pcm_data = Arc::new(create_pcm_segments());
 
@@ -90,9 +96,7 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
         segment_duration_secs: segment_duration,
         custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
-        // V0 = 5 Mbps (high, delayed), V1 = 1 Mbps (low, fast).
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        // V0 segments 3+ delayed 500ms → throughput ~3.2 Mbps < 5 Mbps → down-switch.
         delay_rules: vec![DelayRule {
             variant: Some(0),
             segment_gte: Some(3),
@@ -108,8 +112,6 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
 
     let cancel = CancellationToken::new();
 
-    // Shared event bus: subscribe BEFORE Audio::new so we don't miss
-    // fast ABR switches that happen during stream creation.
     let bus = EventBus::new(32);
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
@@ -135,10 +137,7 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
         .with_events(bus.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)), // start on V0
-            ..abr_fast
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config)
@@ -148,7 +147,6 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
         .await
         .expect("create Audio<Stream<Hls>>");
 
-    // Read audio until EOF or timeout
     let result = spawn_blocking(move || {
         let mut buf = vec![0.0f32; 4096];
         let mut total_samples = 0u64;
@@ -156,14 +154,14 @@ async fn abr_auto_switch_during_playback(temp_dir: TestTempDir, abr_fast: AbrOpt
         let timeout = Duration::from_secs(5);
 
         while start.elapsed() < timeout {
-            let n = audio.read(&mut buf);
-            if n == 0 {
-                if audio.is_eof() {
-                    break;
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => continue,
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total_samples += count.get() as u64;
                 }
-                continue;
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("decode error: {e}"),
             }
-            total_samples += n as u64;
         }
 
         info!(total_samples, "playback finished");

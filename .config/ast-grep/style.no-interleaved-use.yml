@@ -1,0 +1,50 @@
+id: style.no-interleaved-use
+message: |
+  `use` import found after a non-import item in the same module. All `use`
+  statements must form a contiguous block at the top of the file (or top of
+  a `mod tests {}` body).
+
+  Move this `use` up next to the leading import block. If the import is
+  only needed inside one function, the right fix is to widen the leading
+  import block, not to keep the local `use`.
+
+      // ❌
+      use std::io;
+      const N: u32 = 1;
+      use std::fs;            // <-- interleaved
+      pub fn x() {}
+
+      // ✅
+      use std::fs;
+      use std::io;
+      const N: u32 = 1;
+      pub fn x() {}
+
+  Suppress with `// ast-grep-ignore: style.no-interleaved-use` on the
+  offending line if the import genuinely cannot move (e.g. macro-expanded
+  scope).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  all:
+    - kind: use_declaration
+    - follows:
+        any:
+          - kind: const_item
+          - kind: static_item
+          - kind: struct_item
+          - kind: enum_item
+          - kind: function_item
+          - kind: impl_item
+          - kind: type_item
+          - kind: trait_item
+        stopBy: neighbor

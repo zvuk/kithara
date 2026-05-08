@@ -21,6 +21,8 @@ ignored = ["kithara-workspace-hack"]
 web-time = { workspace = true }
 tracing = { workspace = true }
 kithara-hang-detector-macros = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
@@ -28,5 +30,5 @@ kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 [dev-dependencies]
 kithara-hang-detector = { path = "." }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 wasm-bindgen-test = { workspace = true }

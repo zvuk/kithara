@@ -1,0 +1,61 @@
+id: style.no-trivial-method
+message: |
+  Inherent-impl method whose body is a literal or `self`/`Self` token.
+  Either the value is a constant (use `pub const NAME: T = ...`) or the
+  method is redundant (drop it).
+
+      // ❌
+      impl Codec { pub fn id(self) -> Self { self } }
+      impl Codec { pub fn slot(&self) -> u32 { 1 } }
+      impl Codec { pub fn name(&self) -> &str { "aac" } }
+
+      // ✅
+      impl Codec {
+          pub const SLOT: u32 = 1;
+          pub const NAME: &str = "aac";
+      }
+
+  Methods named `default`, `clone`, `from`, `into`, `as_ref`, `as_mut`,
+  `deref`, `deref_mut`, `drop`, `eq`, `cmp`, `partial_cmp`, `hash`,
+  `fmt`, `next`, `borrow`, `borrow_mut` are skipped — they typically
+  shadow trait methods that cannot be expressed as constants.
+
+  Suppress with `// ast-grep-ignore: style.no-trivial-method` if the
+  method satisfies a trait bound that cannot be expressed as a const.
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  all:
+    - any:
+        - pattern: "fn $NAME($$$ARGS) -> $RET { $BODY }"
+        - pattern: "pub fn $NAME($$$ARGS) -> $RET { $BODY }"
+        - pattern: "pub(crate) fn $NAME($$$ARGS) -> $RET { $BODY }"
+        - pattern: "pub(super) fn $NAME($$$ARGS) -> $RET { $BODY }"
+    - inside:
+        kind: impl_item
+        stopBy: end
+    - not:
+        inside:
+          pattern: "impl $TRAIT for $TYPE { $$$ }"
+          stopBy: end
+constraints:
+  BODY:
+    any:
+      - kind: integer_literal
+      - kind: float_literal
+      - kind: string_literal
+      - kind: char_literal
+      - kind: boolean_literal
+      - kind: self
+      - regex: "^Self$"
+  NAME:
+    not:
+      regex: "^(default|clone|from|into|as_ref|as_mut|deref|deref_mut|drop|eq|cmp|partial_cmp|hash|fmt|next|borrow|borrow_mut)$"

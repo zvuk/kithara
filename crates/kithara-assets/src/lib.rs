@@ -36,6 +36,7 @@
 
 mod base;
 pub(crate) mod cache;
+mod deleter;
 mod disk_store;
 mod error;
 mod evict;
@@ -48,17 +49,19 @@ mod state;
 mod store;
 mod unified;
 
-#[cfg(feature = "internal")]
-pub mod internal;
-
-// Public API - used by other crates
-pub use cache::CachedResource;
+pub use base::Assets;
+pub use cache::{CachedAssets, CachedResource};
+#[cfg(not(target_arch = "wasm32"))]
+pub use disk_store::DiskAssetStore;
 pub use error::{AssetsError, AssetsResult};
-pub use index::EvictConfig;
+pub use evict::EvictAssets;
+pub use index::{EvictConfig, FlushHub, FlushPolicy};
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
-pub use kithara_bufpool::{BytePool, byte_pool};
-pub use process::ProcessChunkFn;
+pub use kithara_bufpool::BytePool;
+pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
+pub use mem_store::MemAssetStore;
+pub use process::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
 pub use state::AssetResourceState;
 pub use store::{AssetResource, AssetStoreBuilder, OnInvalidatedFn, StoreOptions};
 pub use unified::AssetStore;

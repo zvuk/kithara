@@ -46,23 +46,24 @@ impl<T> Outlet<T> {
         self.push_or_park(item)
     }
 
-    /// Push an item into the outlet.
+    /// Whether an item is currently parked in the overflow slot.
+    pub(crate) fn has_pending(&self) -> bool {
+        self.overflow.is_some()
+    }
+
+    /// Whether both the ring buffer and the overflow slot are full.
     ///
-    /// First tries to drain the overflow slot, then attempts to push `item`
-    /// into the ring buffer. If the ring is full but the overflow slot is
-    /// empty, `item` is parked there and `Ok(())` is returned. `Err(item)`
-    /// is returned only when both the ring and the overflow slot are
-    /// saturated.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(item)` when the ring and overflow slot are both full.
-    pub(crate) fn try_push(&mut self, item: T) -> Result<(), T> {
-        if !self.flush() {
-            return Err(item);
+    /// When `true`, the next [`try_push`](Self::try_push) is guaranteed to
+    /// return `Err`.
+    #[cfg(test)]
+    pub(crate) fn is_full(&self) -> bool {
+        self.overflow.is_some() && self.producer.is_full()
+    }
+
+    fn notify(&self) {
+        if let Some(wake) = &self.wake {
+            wake.wake();
         }
-        let _ = self.push_or_park(item);
-        Ok(())
     }
 
     /// Try to push into the ring; on failure, park into the (assumed empty)
@@ -85,11 +86,6 @@ impl<T> Outlet<T> {
         }
     }
 
-    /// Whether an item is currently parked in the overflow slot.
-    pub(crate) fn has_pending(&self) -> bool {
-        self.overflow.is_some()
-    }
-
     /// Discard the parked overflow item, returning it to the caller.
     ///
     /// Useful when a producer needs to invalidate previously enqueued data
@@ -99,19 +95,23 @@ impl<T> Outlet<T> {
         self.overflow.take()
     }
 
-    /// Whether both the ring buffer and the overflow slot are full.
+    /// Push an item into the outlet.
     ///
-    /// When `true`, the next [`try_push`](Self::try_push) is guaranteed to
-    /// return `Err`.
-    #[cfg(test)]
-    pub(crate) fn is_full(&self) -> bool {
-        self.overflow.is_some() && self.producer.is_full()
-    }
-
-    fn notify(&self) {
-        if let Some(wake) = &self.wake {
-            wake.wake();
+    /// First tries to drain the overflow slot, then attempts to push `item`
+    /// into the ring buffer. If the ring is full but the overflow slot is
+    /// empty, `item` is parked there and `Ok(())` is returned. `Err(item)`
+    /// is returned only when both the ring and the overflow slot are
+    /// saturated.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(item)` when the ring and overflow slot are both full.
+    pub(crate) fn try_push(&mut self, item: T) -> Result<(), T> {
+        if !self.flush() {
+            return Err(item);
         }
+        let _ = self.push_or_park(item);
+        Ok(())
     }
 }
 
@@ -121,15 +121,15 @@ pub(crate) struct Inlet<T> {
 }
 
 impl<T> Inlet<T> {
-    /// Pop an item from the inlet. Returns `None` if empty.
-    pub(crate) fn try_pop(&mut self) -> Option<T> {
-        self.consumer.try_pop()
-    }
-
     /// Check if the inlet is empty.
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.consumer.is_empty()
+    }
+
+    /// Pop an item from the inlet. Returns `None` if empty.
+    pub(crate) fn try_pop(&mut self) -> Option<T> {
+        self.consumer.try_pop()
     }
 }
 
@@ -144,8 +144,8 @@ pub(crate) fn connect<T>(
     (
         Outlet {
             producer,
-            overflow: None,
             wake,
+            overflow: None,
         },
         Inlet { consumer },
     )
@@ -187,16 +187,13 @@ mod tests {
 
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(out.try_push(2), Ok(()));
-        // Ring is full but overflow is empty — third push parks in overflow.
         assert_eq!(out.try_push(3), Ok(()));
         assert!(out.has_pending());
-        // Now both slots are saturated — fourth push is rejected.
         assert_eq!(out.try_push(4), Err(4));
         assert!(out.is_full());
 
         assert_eq!(inl.try_pop(), Some(1));
         assert_eq!(inl.try_pop(), Some(2));
-        // Overflow not yet drained until producer flushes.
         assert_eq!(inl.try_pop(), None);
 
         assert!(out.flush());
@@ -215,7 +212,6 @@ mod tests {
         assert!(out.has_pending());
 
         assert_eq!(inl.try_pop(), Some(1));
-        // Next push must drain the parked `2` first, then enqueue `3`.
         assert_eq!(out.try_push(3), Ok(()));
         assert!(out.has_pending());
 
@@ -232,7 +228,6 @@ mod tests {
         assert_eq!(out.try_push(2), Ok(()));
         assert!(out.has_pending());
 
-        // Ring still full → overflow stays parked.
         assert!(!out.flush());
         assert!(out.has_pending());
 
@@ -274,11 +269,9 @@ mod tests {
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(wake.count.load(Ordering::SeqCst), 1);
 
-        // Parks in overflow — consumer view of the ring is unchanged, no wake.
         assert_eq!(out.try_push(2), Ok(()));
         assert_eq!(wake.count.load(Ordering::SeqCst), 1);
 
-        // Consumer drains and producer flushes — overflow now reaches the ring.
         assert_eq!(inl.try_pop(), Some(1));
         assert!(out.flush());
         assert_eq!(wake.count.load(Ordering::SeqCst), 2);

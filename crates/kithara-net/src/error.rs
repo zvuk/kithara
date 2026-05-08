@@ -27,43 +27,34 @@ pub enum NetError {
 }
 
 impl NetError {
+    /// HTTP 408 Request Timeout.
+    const HTTP_REQUEST_TIMEOUT: u16 = 408;
+
     /// Minimum HTTP status code for server errors (5xx).
     const HTTP_SERVER_ERROR_MIN: u16 = 500;
 
     /// HTTP 429 Too Many Requests.
     const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 
-    /// HTTP 408 Request Timeout.
-    const HTTP_REQUEST_TIMEOUT: u16 = 408;
-
-    /// Creates a timeout error
-    #[must_use]
-    pub fn timeout() -> Self {
-        Self::Timeout
-    }
-
     /// Checks if this error is considered retryable
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Http(http_err_str) => {
-                // Check for retryable HTTP status codes in error strings
-                http_err_str.contains("500") ||  // Server errors
-                http_err_str.contains("502") ||  // Bad Gateway
-                http_err_str.contains("503") ||  // Service Unavailable
-                http_err_str.contains("504") ||  // Gateway Timeout
-                http_err_str.contains("429") ||  // Too Many Requests
-                http_err_str.contains("408") ||  // Request Timeout
-                // Check for common network error patterns
-                http_err_str.contains("timeout") ||
-                http_err_str.contains("connection") ||
-                http_err_str.contains("network") ||
-                http_err_str.contains("decoding") ||  // Body decode errors
-                http_err_str.contains("body") // Body read errors
+                http_err_str.contains("500")
+                    || http_err_str.contains("502")
+                    || http_err_str.contains("503")
+                    || http_err_str.contains("504")
+                    || http_err_str.contains("429")
+                    || http_err_str.contains("408")
+                    || http_err_str.contains("timeout")
+                    || http_err_str.contains("connection")
+                    || http_err_str.contains("network")
+                    || http_err_str.contains("decoding")
+                    || http_err_str.contains("body")
             }
             Self::Timeout => true,
             Self::HttpError { status, .. } => {
-                // Retry on 5xx server errors and 429 Too Many Requests
                 *status >= Self::HTTP_SERVER_ERROR_MIN
                     || *status == Self::HTTP_TOO_MANY_REQUESTS
                     || *status == Self::HTTP_REQUEST_TIMEOUT
@@ -73,6 +64,12 @@ impl NetError {
             | Self::Cancelled
             | Self::InvalidContentType(_) => false,
         }
+    }
+
+    /// Creates a timeout error
+    #[must_use]
+    pub fn timeout() -> Self {
+        Self::Timeout
     }
 }
 
@@ -100,10 +97,9 @@ mod tests {
     use super::*;
 
     fn test_url(raw: &str) -> Url {
-        Url::parse(raw).expect("valid test URL")
+        Url::parse(raw).expect("BUG: hard-coded test URL is valid")
     }
 
-    // Test error creation methods
     #[kithara::test(tokio)]
     #[case::timeout_error(NetError::timeout(), NetError::Timeout)]
     async fn test_error_creation_methods(
@@ -116,7 +112,6 @@ mod tests {
         }
     }
 
-    // Test is_retryable method - parameterized
     #[kithara::test(tokio)]
     #[case::timeout(NetError::Timeout, true)]
     #[case::http_500(NetError::HttpError { status: 500, url: test_url("http://example.com"), body: None }, true)]
@@ -129,7 +124,6 @@ mod tests {
         assert_eq!(error.is_retryable(), expected_retryable);
     }
 
-    // Test error display formatting
     #[kithara::test(tokio)]
     #[case::http_error(
         NetError::Http("connection failed".to_string()),
@@ -151,20 +145,18 @@ mod tests {
         );
     }
 
-    // Test RetryExhausted error display
     #[kithara::test(tokio)]
     async fn test_retry_exhausted_display() {
         let source = Box::new(NetError::Timeout);
         let error = NetError::RetryExhausted {
-            max_retries: 3,
             source,
+            max_retries: 3,
         };
 
         let display = error.to_string();
         assert!(display.contains("Request failed after 3 retries: Timeout"));
     }
 
-    // Test error cloning
     #[kithara::test(tokio)]
     #[case::timeout(NetError::Timeout)]
     #[case::http_error(NetError::HttpError { status: 500, url: test_url("http://example.com"), body: None })]
@@ -173,21 +165,17 @@ mod tests {
     async fn test_error_cloning(#[case] error: NetError) {
         let cloned = error.clone();
 
-        // Compare string representations since some variants don't implement PartialEq
         assert_eq!(error.to_string(), cloned.to_string());
 
-        // Verify is_retryable is preserved
         assert_eq!(error.is_retryable(), cloned.is_retryable());
     }
 
-    // Test error debug formatting
     #[kithara::test(tokio)]
     #[case::timeout(NetError::Timeout)]
     #[case::http_error(NetError::HttpError { status: 404, url: test_url("http://example.com"), body: None })]
     async fn test_error_debug(#[case] error: NetError) {
         let debug_output = format!("{:?}", error);
 
-        // Debug output should contain the variant name
         match error {
             NetError::Timeout => assert!(debug_output.contains("Timeout")),
             NetError::HttpError { .. } => assert!(debug_output.contains("HttpError")),
@@ -195,15 +183,12 @@ mod tests {
         }
     }
 
-    // Test NetResult type alias
     #[kithara::test(tokio)]
     async fn test_net_result_type() {
-        // Test Ok variant
         let ok_result: NetResult<i32> = Ok(42);
         assert!(ok_result.is_ok());
         assert!(matches!(ok_result, Ok(42)));
 
-        // Test Err variant
         let err_result: NetResult<i32> = Err(NetError::Timeout);
         assert!(err_result.is_err());
 
@@ -213,7 +198,6 @@ mod tests {
         }
     }
 
-    // Test that HTTP error strings are parsed for retryability
     #[kithara::test(tokio)]
     #[case("500 Internal Server Error", true)]
     #[case("502 Bad Gateway", true)]
@@ -236,21 +220,16 @@ mod tests {
         assert_eq!(error.is_retryable(), expected_retryable);
     }
 
-    // Test error equality (where applicable)
     #[kithara::test(tokio)]
     async fn test_error_equality() {
-        // Timeout errors should be equal
         let timeout1 = NetError::Timeout;
         let timeout2 = NetError::Timeout;
-        // Note: NetError doesn't implement PartialEq, so we compare string representations
         assert_eq!(timeout1.to_string(), timeout2.to_string());
 
-        // Same HTTP error strings should have same display
         let http1 = NetError::Http("test".to_string());
         let http2 = NetError::Http("test".to_string());
         assert_eq!(http1.to_string(), http2.to_string());
 
-        // Different HTTP error strings should have different display
         let http3 = NetError::Http("error1".to_string());
         let http4 = NetError::Http("error2".to_string());
         assert_ne!(http3.to_string(), http4.to_string());

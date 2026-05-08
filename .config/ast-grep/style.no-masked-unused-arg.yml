@@ -2,6 +2,12 @@ id: style.no-masked-unused-arg
 message: "Argument `$NAME` is masked with an underscore but not used in the function body. Use `_` if the name is not needed."
 severity: error
 language: Rust
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
 rule:
   kind: function_item
   all:

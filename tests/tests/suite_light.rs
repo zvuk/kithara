@@ -20,6 +20,17 @@ mod kithara_assets;
 mod kithara_audio;
 mod kithara_bufpool;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod kithara_encode {
+    mod aac_tests;
+    mod bytes_tests;
+    mod error_tests;
+    mod factory_tests;
+    mod flac_tests;
+    mod traits_tests;
+    mod types_tests;
+}
+
 mod kithara_decode {
     mod decoder_seek_tests;
     mod decoder_tests;
@@ -48,6 +59,7 @@ mod kithara_hls {
     mod html_error_cleanup;
     mod keys_integration;
     mod playlist_integration;
+    mod prefetch_403_fails_open;
     mod red_leak_pattern;
     mod red_leak_peer_handle_cycle;
     mod red_leak_small_cache_seek;
@@ -59,9 +71,13 @@ mod kithara_hls {
     mod wait_range_contract;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod kithara_abr_integration;
 mod kithara_net;
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play;
+#[cfg(not(target_arch = "wasm32"))]
+mod kithara_queue;
 mod kithara_storage;
 mod kithara_stream;
 mod thread_budget;

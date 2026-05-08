@@ -1,8 +1,11 @@
 //! Xing/Info/LAME tag extraction for MPEG audio gapless metadata.
 
-const MPEG_HEADER_LEN: usize = 4;
-const SYNC_MASK: u32 = 0xFFE0_0000;
-const SYNC_VALUE: u32 = 0xFFE0_0000;
+struct Consts;
+impl Consts {
+    const MPEG_HEADER_LEN: usize = 4;
+    const SYNC_MASK: u32 = 0xFFE0_0000;
+    const SYNC_VALUE: u32 = 0xFFE0_0000;
+}
 
 /// Canonical LAME/Lavc/Lavf decoder convergence delay (528 + 1 samples).
 /// LAME-aware decoders pre-skip `LAME_DECODER_DELAY + enc_delay` and post-skip `enc_padding − LAME_DECODER_DELAY`.
@@ -19,7 +22,7 @@ pub(crate) struct LameTrim {
 pub(crate) fn read_lame_trim(data: &[u8]) -> Option<LameTrim> {
     let frame_start = find_frame_start(data)?;
     let frame_bytes = data.get(frame_start..)?;
-    if frame_bytes.len() < MPEG_HEADER_LEN {
+    if frame_bytes.len() < Consts::MPEG_HEADER_LEN {
         return None;
     }
     let header_word = u32::from_be_bytes([
@@ -30,7 +33,7 @@ pub(crate) fn read_lame_trim(data: &[u8]) -> Option<LameTrim> {
     ]);
     let header = parse_header(header_word)?;
     let side_info = side_info_len(header);
-    let tag_offset = MPEG_HEADER_LEN + side_info;
+    let tag_offset = Consts::MPEG_HEADER_LEN + side_info;
     let tag = frame_bytes.get(tag_offset..)?;
     if tag.len() < 8 {
         return None;
@@ -72,14 +75,9 @@ pub(crate) fn read_lame_trim(data: &[u8]) -> Option<LameTrim> {
 
 fn find_frame_start(data: &[u8]) -> Option<usize> {
     let mut idx = skip_id3v2(data);
-    while idx + MPEG_HEADER_LEN <= data.len() {
-        let word = u32::from_be_bytes([
-            data[idx],
-            data[idx + 1],
-            data[idx + 2],
-            data[idx + 3],
-        ]);
-        if word & SYNC_MASK == SYNC_VALUE && parse_header(word).is_some() {
+    while idx + Consts::MPEG_HEADER_LEN <= data.len() {
+        let word = u32::from_be_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
+        if word & Consts::SYNC_MASK == Consts::SYNC_VALUE && parse_header(word).is_some() {
             return Some(idx);
         }
         idx += 1;
@@ -103,20 +101,19 @@ fn skip_id3v2(data: &[u8]) -> usize {
 
 #[derive(Debug, Clone, Copy)]
 struct FrameHeader {
-    samples_per_frame: u32,
     side_info_mono: bool,
+    samples_per_frame: u32,
 }
 
 fn parse_header(word: u32) -> Option<FrameHeader> {
     let version_bits = (word >> 19) & 0x3;
     let layer_bits = (word >> 17) & 0x3;
     if layer_bits != 0b01 {
-        // Only Layer III carries Xing/Info tags.
         return None;
     }
     let samples_per_frame = match version_bits {
-        0b11 => 1152,        // MPEG-1
-        0b10 | 0b00 => 576,  // MPEG-2 / MPEG-2.5
+        0b11 => 1152,
+        0b10 | 0b00 => 576,
         _ => return None,
     };
     let channel_mode = (word >> 6) & 0x3;
@@ -141,25 +138,19 @@ mod tests {
     use super::*;
 
     fn build_mpeg1_stereo_xing(enc_delay: u32, enc_padding: u32) -> Vec<u8> {
-        // MPEG-1 Layer III, 48 kHz, stereo, 128 kbps, padding=0 → 384 byte frame.
         let mut buf = vec![0u8; 384];
         buf[0] = 0xFF;
         buf[1] = 0xFB;
         buf[2] = 0x90;
         buf[3] = 0x00;
-        // 32-byte stereo side info zeros, then Xing tag at offset 4 + 32 = 36.
         let tag_off = 36;
         buf[tag_off..tag_off + 4].copy_from_slice(b"Xing");
         buf[tag_off + 4..tag_off + 8].copy_from_slice(&0x0000_000Fu32.to_be_bytes());
-        // num_frames, num_bytes, 100-byte TOC, quality.
         buf[tag_off + 8..tag_off + 12].copy_from_slice(&100u32.to_be_bytes());
         buf[tag_off + 12..tag_off + 16].copy_from_slice(&38400u32.to_be_bytes());
-        // toc 100 bytes already zeroed.
         buf[tag_off + 116..tag_off + 120].copy_from_slice(&0u32.to_be_bytes());
-        // LAME header begins at tag_off + 120.
         let lame_off = tag_off + 120;
         buf[lame_off..lame_off + 4].copy_from_slice(b"LAME");
-        // bytes 4..21 zeroed.
         let trim = (enc_delay << 12) | (enc_padding & 0xFFF);
         buf[lame_off + 21] = ((trim >> 16) & 0xFF) as u8;
         buf[lame_off + 22] = ((trim >> 8) & 0xFF) as u8;
@@ -170,7 +161,7 @@ mod tests {
     #[test]
     fn extracts_lame_trim_from_xing_frame() {
         let buf = build_mpeg1_stereo_xing(576, 960);
-        let lame = read_lame_trim(&buf).expect("lame");
+        let lame = read_lame_trim(&buf).expect("BUG: lame");
         assert_eq!(lame.enc_delay, 576);
         assert_eq!(lame.enc_padding, 960);
     }

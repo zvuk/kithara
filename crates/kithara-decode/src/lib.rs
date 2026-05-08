@@ -1,7 +1,5 @@
 // NOTE: deny instead of forbid to allow unsafe in platform-specific FFI modules (apple, android)
 #![deny(unsafe_code)]
-#![allow(clippy::ignored_unit_patterns)]
-#![cfg_attr(test, allow(clippy::allow_attributes))]
 
 //! # Kithara Decode
 //!
@@ -19,39 +17,36 @@
 //! let decoder = DecoderFactory::create_from_media_info(source, &media_info, config)?;
 //! ```
 
+mod codec;
+mod composed;
+mod demuxer;
 mod error;
 mod factory;
+mod fmp4;
 mod gapless;
 mod mp4;
 mod pcm_time;
+#[cfg(feature = "symphonia")]
 mod symphonia;
 mod traits;
 mod types;
 
-#[cfg(feature = "internal")]
-pub mod internal;
-
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 
-// Platform-specific backends
-#[cfg(any(test, all(feature = "android", target_os = "android")))]
+#[cfg(all(feature = "android", target_os = "android"))]
 mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
 
-mod hardware;
-
-// Error types
-pub use error::{DecodeError, DecodeResult};
-// Factory for runtime selection
-pub use factory::{DecoderConfig, DecoderFactory};
+pub use error::{DecodeError, DecodeResult, ErrorClass};
+pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
 pub use gapless::{
     GaplessInfo, GaplessMode, GaplessOutput, GaplessTrimmer, SilenceTrimParams,
     codec_priming_frames, probe_mp4_gapless,
 };
 pub use pcm_time::{duration_for_frames, frames_for_duration};
-// Public traits
-pub use traits::InnerDecoder;
-// Core types
+pub use traits::{
+    Decoder, DecoderChunkOutcome, DecoderInput, DecoderSeekOutcome, InputReadOutcome,
+};
 pub use types::{DecoderTrackInfo, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};

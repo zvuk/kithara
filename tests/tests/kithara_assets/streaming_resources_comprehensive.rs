@@ -43,10 +43,10 @@ fn asset_store_with_root(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-#[case(1024, 512, 0)] // Small write
-#[case(4096, 2048, 8192)] // Medium write with offset
-#[case(16384, 8192, 32768)] // Large write with offset
-#[case(65536, 32768, 131072)] // Very large write with offset
+#[case(1024, 512, 0)]
+#[case(4096, 2048, 8192)]
+#[case(16384, 8192, 32768)]
+#[case(65536, 32768, 131072)]
 fn streaming_resource_complex_write_patterns(
     #[case] total_size: usize,
     #[case] chunk_size: usize,
@@ -59,7 +59,6 @@ fn streaming_resource_complex_write_patterns(
 
     let res = store.acquire_resource(&key).unwrap();
 
-    // Write data in chunks at different positions
     let total_chunks = total_size / chunk_size;
     for i in 0..total_chunks {
         let offset = initial_offset + (i * chunk_size) as u64;
@@ -69,7 +68,6 @@ fn streaming_resource_complex_write_patterns(
         res.wait_range(offset..(offset + chunk_size as u64))
             .unwrap();
 
-        // Verify the written data
         let read_back = read_bytes(&res, offset, chunk_size);
         assert_eq!(read_back, data);
     }
@@ -82,8 +80,8 @@ fn streaming_resource_complex_write_patterns(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case(1, 100)] // Single concurrent write
-#[case(2, 50)] // Few concurrent writes (reduced to avoid timeout)
+#[case(1, 100)]
+#[case(2, 50)]
 fn streaming_resource_concurrent_writes(
     #[case] write_count: usize,
     #[case] chunk_size: usize,
@@ -95,7 +93,6 @@ fn streaming_resource_concurrent_writes(
 
     let res = store.acquire_resource(&key).unwrap();
 
-    // Spawn concurrent writes
     let mut handles = Vec::new();
     for i in 0..write_count {
         let handle = thread::spawn({
@@ -112,10 +109,8 @@ fn streaming_resource_concurrent_writes(
         handles.push(handle);
     }
 
-    // Wait for all writes to complete and verify
     for handle in handles {
         let (offset, _data) = handle.join().unwrap();
-        // Just verify the task completed
         println!("Task for offset {} completed", offset);
     }
 
@@ -123,10 +118,10 @@ fn streaming_resource_concurrent_writes(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-#[case(0, 1024)] // Read from start
-#[case(2048, 1024)] // Read from middle
-#[case(4096, 512)] // Read from end
-#[case(8192, 100)] // Read beyond written data (partial)
+#[case(0, 1024)]
+#[case(2048, 1024)]
+#[case(4096, 512)]
+#[case(8192, 100)]
 fn streaming_resource_edge_case_reads(
     #[case] offset: u64,
     #[case] read_size: usize,
@@ -138,13 +133,11 @@ fn streaming_resource_edge_case_reads(
 
     let res = store.acquire_resource(&key).unwrap();
 
-    // Write initial data
-    let data_size = 6144; // Total data size
+    let data_size = 6144;
     let initial_data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
     res.write_at(0, &initial_data).unwrap();
     res.wait_range(0..data_size as u64).unwrap();
 
-    // Perform edge case read
     if offset < data_size as u64 {
         let expected_size = read_size.min(data_size - offset as usize);
         let read_back = read_bytes(&res, offset, read_size);
@@ -161,8 +154,8 @@ fn streaming_resource_edge_case_reads(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-#[case(vec![(0, 1024), (2048, 1024)])] // Non-overlapping
-#[case(vec![(0, 512), (1024, 512)])] // Smaller overlapping
+#[case(vec![(0, 1024), (2048, 1024)])]
+#[case(vec![(0, 512), (1024, 512)])]
 fn streaming_resource_multiple_range_operations(
     #[case] write_ranges: Vec<(usize, usize)>,
     temp_dir: kithara_test_utils::TestTempDir,
@@ -173,7 +166,6 @@ fn streaming_resource_multiple_range_operations(
 
     let res = store.acquire_resource(&key).unwrap();
 
-    // Write multiple ranges
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
         let data: Vec<u8> = (0..*size).map(|j| ((i * 1000 + j) % 256) as u8).collect();
         let offset_u64 = *offset as u64;
@@ -182,12 +174,10 @@ fn streaming_resource_multiple_range_operations(
         res.wait_range(offset_u64..(offset_u64 + *size as u64))
             .unwrap();
 
-        // Verify each write immediately
         let read_back = read_bytes(&res, offset_u64, *size);
         assert_eq!(read_back, data);
     }
 
-    // Final verification of all ranges
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
         let expected_data: Vec<u8> = (0..*size).map(|j| ((i * 1000 + j) % 256) as u8).collect();
         let read_back = read_bytes(&res, *offset as u64, *size);
@@ -198,8 +188,8 @@ fn streaming_resource_multiple_range_operations(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-#[case(false)] // Without explicit commit
-#[case(true)] // With explicit commit
+#[case(false)]
+#[case(true)]
 fn streaming_resource_commit_behavior(
     #[case] explicit_commit: bool,
     temp_dir: kithara_test_utils::TestTempDir,
@@ -210,12 +200,10 @@ fn streaming_resource_commit_behavior(
 
     let res = store.acquire_resource(&key).unwrap();
 
-    // Write some data
     let data = vec![0xAB; 4096];
     res.write_at(0, &data).unwrap();
     res.wait_range(0..(data.len() as u64)).unwrap();
 
-    // Verify before commit
     let read_back = read_bytes(&res, 0, data.len());
     assert_eq!(read_back, data);
 
@@ -223,11 +211,9 @@ fn streaming_resource_commit_behavior(
         res.commit(None).unwrap();
     }
 
-    // Resource should still be readable
     let read_back_again = read_bytes(&res, 0, data.len());
     assert_eq!(read_back_again, data);
 
-    // Drop resource and verify lifecycle contract after the handle is gone.
     drop(res);
 
     if explicit_commit {
@@ -261,20 +247,16 @@ fn streaming_resource_zero_length_operations(
 
     let res = store.acquire_resource(&key).unwrap();
 
-    // Write some data first
     let data = vec![0xCC; 2048];
     res.write_at(base_offset, &data).unwrap();
     res.wait_range(base_offset..(base_offset + data.len() as u64))
         .unwrap();
 
-    // Test zero-length read at various positions
     let zero_read = read_bytes(&res, base_offset, 0);
     assert!(zero_read.is_empty());
 
-    // Test zero-length write (should be no-op)
     res.write_at(base_offset + 100, &[]).unwrap();
 
-    // Verify original data is still intact
     let read_back = read_bytes(&res, base_offset, data.len());
     assert_eq!(read_back, data);
 

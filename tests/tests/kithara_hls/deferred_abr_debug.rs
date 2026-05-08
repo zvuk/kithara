@@ -7,7 +7,7 @@ use std::io::Read;
 use kithara::{
     assets::StoreOptions,
     events::EventBus,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::TestServer;
@@ -31,31 +31,24 @@ async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: Cancellation
     let url = server.url("/master.m3u8");
     info!("Test server URL: {}", url);
 
-    // Create event bus
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(1),
-            ..AbrOptions::default()
-        })
+        .with_initial_abr_mode(AbrMode::Manual(1))
         .with_events(bus);
 
     info!("Opening HLS stream...");
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    // Spawn event listener
     let events_handle = tokio::spawn(async move {
         while let Ok(event) = events_rx.recv().await {
             info!("HLS Event: {:?}", event);
         }
     });
 
-    // Read with detailed logging
-    // Use 64KB buffer to avoid async lock overhead per small read
     info!("Starting blocking read task...");
     let result = spawn_blocking(move || {
         info!("Inside blocking task, starting read");
@@ -83,7 +76,6 @@ async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: Cancellation
                 );
             }
 
-            // Safety limit
             if read_count > 10000 {
                 panic!(
                     "Read loop exceeded 10000 iterations. Total bytes: {}, likely infinite loop",
@@ -104,14 +96,12 @@ async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: Cancellation
 
     info!("Blocking task completed, received {} bytes", result.len());
 
-    // Verify we read substantial amount of data (at least 500KB for 3 segments)
     assert!(
         result.len() > 500_000,
         "Should read substantial data, got {} bytes",
         result.len()
     );
 
-    // Verify data starts with expected variant 1 segment 0 prefix
     assert!(
         result.starts_with(b"V1-SEG-0:"),
         "Data should start with V1-SEG-0: prefix"
@@ -121,6 +111,5 @@ async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: Cancellation
 
     info!("Test passed!");
 
-    // Cancel to shutdown cleanly
     drop(events_handle);
 }

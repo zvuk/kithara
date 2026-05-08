@@ -30,10 +30,10 @@
 //! delaying process exit past leak-timeout.
 //!
 //! RED strategy
-//! Exercise the same Audio<Stream<Hls>>::new + preload + seek() cycle with
+//! Exercise the same Audio<Stream<Hls>>`::new` + preload + `seek()` cycle with
 //! DRM, then drop everything. Count kithara-owned named threads (exposed
 //! by `kithara_platform::thread::active_named_thread_count`) across N
-//! iterations against a SHARED Downloader + SHARED TestServer — the
+//! iterations against a SHARED Downloader + SHARED `TestServer` — the
 //! server-side artifact is amortised, and any growth per iteration is
 //! thread/task leakage tied to a single session.
 //!
@@ -46,8 +46,8 @@ use std::{error::Error as StdError, num::NonZeroUsize, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
-    audio::{Audio, AudioConfig, AudioWorkerHandle, PcmReader},
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmReader},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_platform::{thread::active_named_thread_count, time::sleep};
@@ -66,11 +66,10 @@ impl Consts {
 async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
-        if PcmReader::next_chunk(audio).is_some() {
-            return;
-        }
-        if audio.is_eof() {
-            return;
+        match PcmReader::next_chunk(audio) {
+            Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
+            Ok(ChunkOutcome::Pending { .. }) => {}
+            Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
         }
         assert!(
             std::time::Instant::now() <= deadline,
@@ -89,35 +88,30 @@ async fn run_drm_seek_resume_cycle(
 ) {
     let url = server.asset("drm/master.m3u8");
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_downloader(downloader.clone())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
 
     let mut audio = Audio::<Stream<Hls>>::new(
         AudioConfig::<Hls>::new(hls_config).with_worker(shared_worker.clone()),
     )
     .await
     .expect("audio creation");
-    audio.preload();
+    let _ = audio.preload();
 
-    // Warmup chunks so the DRM pipeline is fully live before we seek.
     for w in 0..4 {
         next_chunk_or_timeout(&mut audio, &format!("iter_{iter_idx}_warmup_{w}")).await;
     }
 
-    // Reproduce the seek sequence from the real test.
     for (seek_idx, &seek_secs) in Consts::SEEK_TARGETS_SECS.iter().enumerate() {
         audio
             .seek(Duration::from_secs_f64(seek_secs))
             .expect("seek must succeed");
-        audio.preload();
+        let _ = audio.preload();
 
         for c in 0..3 {
             next_chunk_or_timeout(
@@ -132,7 +126,7 @@ async fn run_drm_seek_resume_cycle(
 }
 
 /// RED test: after N DRM+seek+resume cycles against a shared Downloader
-/// and shared AudioWorkerHandle, the count of kithara-named threads must
+/// and shared `AudioWorkerHandle`, the count of kithara-named threads must
 /// be bounded. Each iteration leaks at most a constant number of threads;
 /// iteration-over-iteration growth indicates a real thread/task leak tied
 /// to the DRM seek path.
@@ -148,14 +142,9 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     let server = TestServerHelper::new().await;
     let shared_worker = AudioWorkerHandle::new();
 
-    // Shared Downloader across iterations — its Registry + HTTP pool are
-    // amortised. Any per-iteration growth is from per-session resources
-    // (HlsPeer, HlsScheduler, keys, decoder state) that did not release.
     let downloader =
         Downloader::new(DownloaderConfig::default().with_cancel(CancellationToken::new()));
 
-    // Warm-up iteration: exclude first-time tokio pool / thread spawn growth
-    // from the baseline.
     run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;
     sleep(Duration::from_millis(Consts::SETTLE_MS)).await;
 
@@ -174,15 +163,11 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
         );
     }
 
-    // Give the Downloader run-loop a few more ticks to observe the final
-    // peer-cancel and unregister the last HlsPeer.
     sleep(Duration::from_millis(500)).await;
 
     let threads_after = active_named_thread_count();
     let growth = threads_after.saturating_sub(threads_baseline);
 
-    // We allow ≤1 drift for tokio-internal pool adjustments. Real DRM
-    // seek leaks grow ≥1 per iteration.
     assert!(
         growth <= 1,
         "DRM seek cycle leaked kithara threads: growth={} over {} iterations \

@@ -4,32 +4,31 @@ use kithara_platform::{MaybeSend, MaybeSync, tokio::sync::broadcast};
 use crate::traits::item::PlayerItem;
 use crate::{events::PlayerEvent, types::SlotId};
 
-#[cfg_attr(
-    any(test, feature = "test-utils"),
-    unimock::unimock(api = QueuePlayerMock, type Item = unimock::Unimock;)
-)]
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
+
+#[kithara::mock(api = QueuePlayerMock, type Item = unimock::Unimock;)]
 pub trait QueuePlayer: MaybeSend + MaybeSync + 'static {
     type Item: PlayerItem;
-
-    fn items(&self) -> Vec<&Self::Item>;
 
     fn advance_to_next_item(&self);
 
     fn can_insert(&self, item: &Self::Item, after: Option<&Self::Item>) -> bool;
 
+    fn current_item(&self) -> Option<&Self::Item>;
+
     fn insert(&self, item: Self::Item, after: Option<&Self::Item>);
+
+    fn items(&self) -> Vec<&Self::Item>;
+
+    fn pause(&self);
+
+    fn play(&self);
 
     fn remove(&self, item: &Self::Item);
 
     fn remove_all_items(&self);
-
-    // -- inherited from Player semantics --
-
-    fn play(&self);
-
-    fn pause(&self);
-
-    fn current_item(&self) -> Option<&Self::Item>;
 
     fn slot_id(&self) -> Option<SlotId>;
 

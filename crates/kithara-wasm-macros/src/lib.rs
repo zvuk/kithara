@@ -6,8 +6,12 @@
 //! to `player().<name>(...)`.
 
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{FnArg, ImplItem, ItemFn, ItemImpl, LitStr, Pat, ReturnType, Type, parse_macro_input};
+use syn::{
+    FnArg, Ident, ImplItem, ImplItemFn, ItemFn, ItemImpl, LitStr, Pat, ReturnType, Type,
+    parse_macro_input,
+};
 
 /// Place on an `impl Player` block. Methods marked `#[export]` get
 /// corresponding `#[wasm_bindgen]` free functions generated automatically.
@@ -31,30 +35,13 @@ use syn::{FnArg, ImplItem, ItemFn, ItemImpl, LitStr, Pat, ReturnType, Type, pars
 /// }
 /// ```
 #[proc_macro_attribute]
-#[expect(
-    clippy::missing_panics_doc,
-    reason = "proc_macro attribute, panics are compile errors"
-)]
 pub fn wasm_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemImpl);
-    let mut free_fns = Vec::new();
+    let accessor_name = impl_accessor_name(&input);
 
-    // Extract struct name from `impl Foo { ... }`.
-    let struct_name = match input.self_ty.as_ref() {
-        Type::Path(tp) => tp
-            .path
-            .segments
-            .last()
-            .expect("empty impl path")
-            .ident
-            .clone(),
-        _ => panic!("wasm_export: expected a named type in impl block"),
-    };
-    let accessor_name = format_ident!("{}", struct_name.to_string().to_lowercase());
-
-    // Walk methods, collect those marked #[export].
     let mut cleaned_impl = input.clone();
     cleaned_impl.items = Vec::new();
+    let mut free_fns = Vec::new();
 
     for item in &input.items {
         let ImplItem::Fn(method) = item else {
@@ -62,58 +49,15 @@ pub fn wasm_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
             continue;
         };
 
-        // Check for #[export] attribute.
         let has_export = method.attrs.iter().any(|a| a.path().is_ident("export"));
 
-        // Push method without #[export] into the impl block.
         let mut clean_method = method.clone();
         clean_method.attrs.retain(|a| !a.path().is_ident("export"));
         cleaned_impl.items.push(ImplItem::Fn(clean_method));
 
-        if !has_export {
-            continue;
+        if has_export {
+            free_fns.push(build_free_fn(&accessor_name, method));
         }
-
-        let method_name = &method.sig.ident;
-        let free_fn_name = format_ident!("{}_{}", accessor_name, method_name);
-        let is_async = method.sig.asyncness.is_some();
-
-        // Collect parameters (skip &self).
-        let mut param_defs = Vec::new(); // `name: Type`
-        let mut param_names = Vec::new(); // `name`
-        for arg in method.sig.inputs.iter().skip(1) {
-            if let FnArg::Typed(pat_type) = arg {
-                param_defs.push(quote! { #pat_type });
-                if let Pat::Ident(pat_ident) = pat_type.pat.as_ref() {
-                    param_names.push(pat_ident.ident.clone());
-                }
-            }
-        }
-
-        let ret = match &method.sig.output {
-            ReturnType::Default => quote! {},
-            ReturnType::Type(_, ty) => quote! { -> #ty },
-        };
-
-        // Direct call — no masking, panics are visible.
-        let call = if is_async {
-            quote! { #accessor_name().#method_name(#(#param_names),*).await }
-        } else {
-            quote! { #accessor_name().#method_name(#(#param_names),*) }
-        };
-
-        let async_token = if is_async {
-            quote! { async }
-        } else {
-            quote! {}
-        };
-
-        free_fns.push(quote! {
-            #[wasm_bindgen]
-            pub #async_token fn #free_fn_name(#(#param_defs),*) #ret {
-                #call
-            }
-        });
     }
 
     let output = quote! {
@@ -122,6 +66,68 @@ pub fn wasm_export(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     output.into()
+}
+
+fn impl_accessor_name(input: &ItemImpl) -> Ident {
+    let struct_name = match input.self_ty.as_ref() {
+        Type::Path(tp) => tp
+            .path
+            .segments
+            .last()
+            .expect("BUG: syn::TypePath::path has at least one segment")
+            .ident
+            .clone(),
+        _ => panic!("wasm_export: expected a named type in impl block"),
+    };
+    format_ident!("{}", struct_name.to_string().to_lowercase())
+}
+
+fn build_free_fn(accessor_name: &Ident, method: &ImplItemFn) -> TokenStream2 {
+    let method_name = &method.sig.ident;
+    let free_fn_name = format_ident!("{}_{}", accessor_name, method_name);
+    let is_async = method.sig.asyncness.is_some();
+
+    let typed_args = method
+        .sig
+        .inputs
+        .iter()
+        .skip(1)
+        .filter_map(|arg| match arg {
+            FnArg::Typed(pat_type) => Some(pat_type),
+            FnArg::Receiver(_) => None,
+        });
+    let mut param_defs = Vec::new();
+    let mut param_names = Vec::new();
+    for pat_type in typed_args {
+        param_defs.push(quote! { #pat_type });
+        if let Pat::Ident(pat_ident) = pat_type.pat.as_ref() {
+            param_names.push(pat_ident.ident.clone());
+        }
+    }
+
+    let ret = match &method.sig.output {
+        ReturnType::Default => quote! {},
+        ReturnType::Type(_, ty) => quote! { -> #ty },
+    };
+
+    let call = if is_async {
+        quote! { #accessor_name().#method_name(#(#param_names),*).await }
+    } else {
+        quote! { #accessor_name().#method_name(#(#param_names),*) }
+    };
+
+    let async_token = if is_async {
+        quote! { async }
+    } else {
+        quote! {}
+    };
+
+    quote! {
+        #[wasm_bindgen]
+        pub #async_token fn #free_fn_name(#(#param_defs),*) #ret {
+            #call
+        }
+    }
 }
 
 /// Inject a worker-thread assertion at function entry.

@@ -35,8 +35,8 @@ impl Loader {
     ) -> Self {
         Self {
             player,
-            semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             tracks,
+            semaphore: Arc::new(Semaphore::new(max_concurrent_loads.get())),
         }
     }
 
@@ -76,7 +76,7 @@ impl Loader {
             let Some(bus) = bus_for_slow else { return };
             let mut rx = bus.subscribe();
             while let Ok(ev) = rx.recv().await {
-                if matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow)) {
+                if matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
                     tracks.set_status(id, TrackStatus::Slow);
                     break;
                 }
@@ -171,8 +171,9 @@ mod tests {
             let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
+            let loader = Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks)));
             LoaderFixture {
-                loader: Arc::new(Loader::new(player, self.cap, Arc::clone(&tracks))),
+                loader,
                 tracks,
                 bus,
             }
@@ -218,7 +219,7 @@ mod tests {
 
     #[kithara::test(tokio, multi_thread)]
     async fn semaphore_caps_concurrent_loads() {
-        let cap = NonZeroUsize::new(2).expect("2 > 0");
+        let cap = NonZeroUsize::new(2).expect("BUG: 2 > 0 is mathematically guaranteed");
         let loader = LoaderBuilder::default().with_cap(cap).build().loader;
 
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -230,7 +231,10 @@ mod tests {
             let in_flight = Arc::clone(&in_flight);
             let max_seen = Arc::clone(&max_seen);
             handles.push(spawn(async move {
-                let _permit = sem.acquire_owned().await.expect("acquire");
+                let _permit = sem
+                    .acquire_owned()
+                    .await
+                    .expect("BUG: semaphore not closed in test");
                 let cur = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 max_seen.fetch_max(cur, Ordering::SeqCst);
                 tokio_sleep(Duration::from_millis(50)).await;
@@ -238,7 +242,7 @@ mod tests {
             }));
         }
         for h in handles {
-            h.await.expect("joined");
+            h.await.expect("BUG: spawned task panicked");
         }
         assert!(
             max_seen.load(Ordering::SeqCst) <= 2,
@@ -252,15 +256,15 @@ mod tests {
         let fx = LoaderBuilder::default().build();
         fx.tracks.lock().push(TrackEntry {
             id: TrackId(42),
-            name: String::new(),
             url: None,
+            name: String::new(),
             status: TrackStatus::Pending,
         });
         let mut rx = fx.bus.subscribe();
         let loader = fx.loader;
 
         let handle = loader.spawn_load(TrackId(42), TrackSource::Uri("not-a-url".into()));
-        let result = handle.await.expect("join");
+        let result = handle.await.expect("BUG: spawned task panicked");
         assert!(matches!(result, Err(QueueError::InvalidUrl(_))));
 
         let mut saw_loading = false;

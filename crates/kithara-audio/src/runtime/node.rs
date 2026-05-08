@@ -28,29 +28,29 @@ pub(crate) enum TickResult {
 
 /// A component that can be executed by the scheduler.
 pub(crate) trait Node: Send + 'static {
-    /// Perform one quantum of work.
-    fn tick(&mut self) -> TickResult;
+    /// Called when the scheduler is cancelled or the node is unregistered.
+    fn on_cancel(&mut self) {}
 
     /// Return the current service class (priority) of this node.
     fn service_class(&self) -> ServiceClass {
         ServiceClass::Audible
     }
 
-    /// Called when the scheduler is cancelled or the node is unregistered.
-    fn on_cancel(&mut self) {}
+    /// Perform one quantum of work.
+    fn tick(&mut self) -> TickResult;
 }
 
 impl Node for Box<dyn Node> {
-    fn tick(&mut self) -> TickResult {
-        (**self).tick()
+    fn on_cancel(&mut self) {
+        (**self).on_cancel();
     }
 
     fn service_class(&self) -> ServiceClass {
         (**self).service_class()
     }
 
-    fn on_cancel(&mut self) {
-        (**self).on_cancel();
+    fn tick(&mut self) -> TickResult {
+        (**self).tick()
     }
 }
 

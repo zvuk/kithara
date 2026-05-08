@@ -17,13 +17,6 @@ pub(crate) fn next_bus_id() -> u64 {
 pub struct BusScope(SmallVec<[u64; 4]>);
 
 impl BusScope {
-    /// Create a root scope with the given id.
-    pub(crate) fn root(id: u64) -> Self {
-        let mut path = SmallVec::new();
-        path.push(id);
-        Self(path)
-    }
-
     /// Create a child scope that prepends `id` to this scope's path.
     pub(crate) fn child(&self, id: u64) -> Self {
         let mut path = SmallVec::with_capacity(self.0.len() + 1);
@@ -40,16 +33,23 @@ impl BusScope {
         self.0.contains(&id)
     }
 
+    /// Nesting depth (1 = root).
+    #[must_use]
+    pub fn depth(&self) -> usize {
+        self.0.len()
+    }
+
     /// This scope's own id (first element of the path).
     #[must_use]
     pub fn id(&self) -> u64 {
         self.0[0]
     }
 
-    /// Nesting depth (1 = root).
-    #[must_use]
-    pub fn depth(&self) -> usize {
-        self.0.len()
+    /// Create a root scope with the given id.
+    pub(crate) fn root(id: u64) -> Self {
+        let mut path = SmallVec::new();
+        path.push(id);
+        Self(path)
     }
 }
 

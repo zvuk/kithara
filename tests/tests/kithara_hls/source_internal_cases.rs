@@ -1,22 +1,22 @@
 use std::{
+    num::NonZeroUsize,
     ops::{Deref, Range},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, atomic::Ordering},
 };
 
-use kithara_abr::AbrController;
+use kithara_abr::AbrState;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
-use kithara_hls::internal::{
-    AbrMode, AbrOptions, HlsConfig, HlsCoord, HlsError, HlsSource, PlaylistState, SegmentData,
-    SegmentLoader, SegmentRequest, SegmentState, StreamIndex, VariantId, VariantSizeMap,
-    VariantState, VariantStream, build_source, commit_dummy_resource_from_data,
-    make_test_segment_loader, make_test_source as make_internal_test_source,
-    make_test_source_with_backend as make_internal_test_source_with_backend,
-    set_source_variant_fence, source_can_cross_variant, source_variant_index_handle,
+use kithara_hls::{
+    AbrMode, HlsConfig, HlsCoord, HlsSource, PlaylistState, SegmentData, SegmentLoader,
+    SegmentRequest, SegmentState, StreamIndex, VariantId, VariantSizeMap, VariantState,
+    VariantStream, test_utils,
+};
+use kithara_integration_tests::hls_test_helpers::{
+    commit_dummy_resource_from_data, make_test_segment_loader,
+    make_test_source as make_internal_test_source,
+    make_test_source_with_backend as make_internal_test_source_with_backend, pin_abr_variant,
 };
 use kithara_platform::{
     Mutex,
@@ -48,6 +48,7 @@ impl SegmentRequests {
 }
 
 struct SharedSegments {
+    abr_state: Arc<AbrState>,
     coord: Arc<HlsCoord>,
     playlist_state: Arc<PlaylistState>,
     segment_requests: SegmentRequests,
@@ -76,13 +77,14 @@ impl SharedSegments {
         num_variants: usize,
         num_segments: usize,
     ) -> Self {
-        let abr_variant_index = Arc::new(AtomicUsize::new(0));
+        let abr_state = Arc::new(AbrState::new(Vec::new(), AbrMode::Auto(Some(0))));
         let coord = Arc::new(HlsCoord::new(
             cancel,
             timeline.clone(),
-            Arc::clone(&abr_variant_index),
+            Arc::clone(&abr_state),
         ));
         Self {
+            abr_state,
             coord: Arc::clone(&coord),
             playlist_state,
             segment_requests: SegmentRequests::new(coord),
@@ -206,16 +208,10 @@ fn make_variant_state_with_codec(
                 .join(&format!("v{id}/seg-{index}.m4s"))
                 .expect("valid segment URL"),
             duration: Duration::from_secs(4),
-            key: None,
         })
         .collect();
 
     VariantState {
-        id,
-        uri: base
-            .join(&format!("v{id}.m3u8"))
-            .expect("valid playlist URL"),
-        bandwidth: Some(128_000),
         codec,
         container: None,
         init_url: None,
@@ -284,7 +280,7 @@ async fn wait_range_and_take_request(
     mut source: HlsSource,
     range: Range<u64>,
 ) -> SegmentRequest {
-    let handle = spawn_blocking(move || source.wait_range(range, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(range, Some(Duration::from_secs(1))));
 
     let deadline = Instant::now() + Duration::from_millis(300);
     let request = loop {
@@ -316,13 +312,12 @@ async fn seek_time_anchor_resolves_segment_without_queuing_request() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    let _ = shared.timeline.initiate_seek(Duration::ZERO); // epoch = 1
-    // Bump to epoch 9 by calling initiate_seek 8 more times
+    let _ = shared.timeline.initiate_seek(Duration::ZERO);
     for _ in 0..8 {
         let _ = shared.timeline.initiate_seek(Duration::ZERO);
     }
     shared.timeline.complete_seek(9);
-    shared.abr_variant_index.store(0, Ordering::Relaxed);
+    pin_abr_variant(&shared.abr_state, 0);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
     let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
@@ -351,7 +346,7 @@ fn seek_time_anchor_does_not_commit_reader_position_before_decoder_lands() {
         Timeline::new(),
     ));
     shared.timeline.set_byte_position(100);
-    shared.abr_variant_index.store(0, Ordering::Relaxed);
+    pin_abr_variant(&shared.abr_state, 0);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
     let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
@@ -376,7 +371,7 @@ fn seek_time_anchor_uses_metadata_offset_for_unloaded_tail_segment() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    shared.abr_variant_index.store(0, Ordering::Relaxed);
+    pin_abr_variant(&shared.abr_state, 0);
 
     {
         let mut segments = shared.segments.lock_sync();
@@ -406,7 +401,7 @@ fn demand_range_uses_metadata_offset_for_unloaded_tail_offset() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    shared.abr_variant_index.store(0, Ordering::Relaxed);
+    pin_abr_variant(&shared.abr_state, 0);
 
     {
         let mut segments = shared.segments.lock_sync();
@@ -416,7 +411,6 @@ fn demand_range_uses_metadata_offset_for_unloaded_tail_offset() {
     shared.timeline.set_byte_position(560);
 
     let source = make_test_source(Arc::clone(&shared), cancel);
-    // Segment 6 at metadata offset 600..700, segment 7 at 700..800
     Source::demand_range(&source, 700..701);
 
     let req = shared
@@ -439,7 +433,7 @@ async fn wait_range_uses_metadata_offset_for_unloaded_tail_offset() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    shared.abr_variant_index.store(0, Ordering::Relaxed);
+    pin_abr_variant(&shared.abr_state, 0);
 
     {
         let mut segments = shared.segments.lock_sync();
@@ -449,7 +443,6 @@ async fn wait_range_uses_metadata_offset_for_unloaded_tail_offset() {
     shared.timeline.set_byte_position(560);
 
     let source = make_test_source(Arc::clone(&shared), cancel.clone());
-    // Segment 7 at metadata offset 700..800
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 700..701).await;
     assert_eq!(request.variant, 0);
     assert_eq!(
@@ -467,7 +460,7 @@ async fn seek_reset_wait_range_uses_same_logical_segment_as_anchor() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    shared.abr_variant_index.store(1, Ordering::Relaxed);
+    pin_abr_variant(&shared.abr_state, 1);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
     let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
@@ -487,7 +480,6 @@ async fn seek_reset_wait_range_uses_same_logical_segment_as_anchor() {
         .segments
         .lock_sync()
         .set_layout_variant(target_variant);
-    // Position the decoder at the seek anchor's byte offset in the target variant's byte space.
     shared.timeline.set_byte_position(anchor.byte_offset);
 
     let request = wait_range_and_take_request(
@@ -515,17 +507,11 @@ fn commit_seek_landing_uses_decoder_landed_offset_with_anchor_variant() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    // Layout variant (0) has target segment 2 committed, so
-    // resolve_seek_anchor prefers it over the ABR target. This keeps
-    // the test focused on its original intent — "seek landing
-    // resolves demand from the decoder-landed offset" — without
-    // tripping the fallback-to-ABR path (exercised by dedicated tests
-    // in source::tests).
     {
         let mut segments = shared.segments.lock_sync();
         segments.commit_segment(0, 2, make_segment_data(100));
     }
-    shared.abr_variant_index.store(1, Ordering::Relaxed);
+    pin_abr_variant(&shared.abr_state, 1);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
     let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
@@ -560,7 +546,7 @@ fn commit_seek_landing_skips_request_when_landed_segment_is_ready() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    shared.abr_variant_index.store(1, Ordering::Relaxed);
+    pin_abr_variant(&shared.abr_state, 1);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
     let seg0_data = make_segment_data(100);
@@ -569,7 +555,6 @@ fn commit_seek_landing_skips_request_when_landed_segment_is_ready() {
     {
         let mut segments = shared.segments.lock_sync();
         segments.set_layout_variant(1);
-        // Commit v1 seg 0 so that seg 1 starts at byte offset 100.
         segments.commit_segment(1, 0, seg0_data);
         segments.commit_segment(1, 1, seg1_data);
     }
@@ -597,7 +582,7 @@ fn commit_seek_landing_fences_stale_variants_at_landed_offset() {
         Arc::clone(&playlist_state),
         Timeline::new(),
     ));
-    shared.abr_variant_index.store(1, Ordering::Relaxed);
+    pin_abr_variant(&shared.abr_state, 1);
     shared.timeline.set_byte_position(550);
     {
         let mut segments = shared.segments.lock_sync();
@@ -611,7 +596,6 @@ fn commit_seek_landing_fences_stale_variants_at_landed_offset() {
         .expect("seek anchor resolution should succeed")
         .expect("HLS source should resolve anchor");
 
-    // Seek uses layout_variant (0), not ABR target (1).
     assert_eq!(anchor.variant_index, Some(0));
     assert_eq!(anchor.segment_index, Some(0));
     assert_eq!(anchor.byte_offset, 0);
@@ -620,7 +604,6 @@ fn commit_seek_landing_fences_stale_variants_at_landed_offset() {
     Source::commit_seek_landing(&mut source, Some(anchor));
 
     let segments = shared.segments.lock_sync();
-    // Seek does NOT switch layout_variant. ABR switch happens via format_change.
     assert_eq!(
         segments.layout_variant(),
         0,
@@ -632,7 +615,6 @@ fn commit_seek_landing_fences_stale_variants_at_landed_offset() {
     );
     drop(segments);
 
-    // Recovery requests target layout_variant (0), not ABR target.
     if let Some(request) = shared.segment_requests.pop() {
         assert_eq!(request.variant, 0);
     }
@@ -650,35 +632,26 @@ fn media_info_uses_reader_offset_variant_instead_of_last_loaded_segment() {
     ));
     {
         let mut segments = shared.segments.lock_sync();
-        // Commit v0 seg 0 in variant 0's byte map (layout_variant defaults to 0).
         segments.commit_segment(0, 0, make_segment_data(100));
-        // Commit v1 seg 0 and seg 1 in variant 1's byte map.
         segments.commit_segment(1, 0, make_segment_data(100));
         segments.commit_segment(1, 1, make_segment_data(100));
     }
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    // layout_variant=0, byte_position 0 → v0 seg 0 → AacLc
     shared.timeline.set_byte_position(0);
     let info_at_start = Source::media_info(&source).expect("media info at start");
     assert_eq!(info_at_start.codec, Some(AudioCodec::AacLc));
 
-    // Switch layout to variant 1; byte_position 0 → v1 seg 0 → Flac
     shared.segments.lock_sync().set_layout_variant(1);
     shared.timeline.set_byte_position(0);
     let info_after_switch = Source::media_info(&source).expect("media info at switch");
     assert_eq!(info_after_switch.codec, Some(AudioCodec::Flac));
 
-    // Even when `variant_fence` is set and ABR has moved the hinted cursor
-    // to a different variant, the resolved reader variant must win: at
-    // byte_position 0 the reader sits on V0's seg 0. Returning the hinted
-    // variant here would make the decoder detect a bogus format change,
-    // rewind to byte 0, and re-decode — the exact mmap over-read bug.
     shared.segments.lock_sync().set_layout_variant(0);
     shared.timeline.set_byte_position(0);
-    shared.abr_variant_index.store(1, Ordering::Release);
-    set_source_variant_fence(&mut source, Some(0));
+    pin_abr_variant(&shared.abr_state, 1);
+    source.set_variant_fence(Some(0));
     let info_under_fence = Source::media_info(&source).expect("media info under fence");
     assert_eq!(info_under_fence.codec, Some(AudioCodec::AacLc));
 }
@@ -695,7 +668,7 @@ fn media_info_uses_hinted_variant_when_segments_are_flushed() {
     ));
     let source = make_test_source(Arc::clone(&shared), cancel);
 
-    shared.abr_variant_index.store(1, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 1);
     let info = Source::media_info(&source).expect("media info from hinted variant");
     assert_eq!(info.codec, Some(AudioCodec::Flac));
 }
@@ -726,11 +699,9 @@ fn media_info_at_eof_reports_layout_variant_not_hinted() {
     ));
     {
         let mut segments = shared.segments.lock_sync();
-        // Layout variant is V0; commit 3 V0 segments (byte map: 0..300).
         segments.commit_segment(0, 0, make_segment_data(100));
         segments.commit_segment(0, 1, make_segment_data(100));
         segments.commit_segment(0, 2, make_segment_data(100));
-        // ABR previously probed V1 (stays committed on disk backend).
         segments.commit_segment(1, 0, make_segment_data(100));
         segments.commit_segment(1, 1, make_segment_data(100));
         segments.commit_segment(1, 2, make_segment_data(100));
@@ -738,14 +709,9 @@ fn media_info_at_eof_reports_layout_variant_not_hinted() {
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
 
-    // Decoder just finished reading layout V0 end-to-end — byte_position is
-    // AT EOF of V0's byte map (0..300).
     shared.timeline.set_byte_position(300);
-    // ABR flipped to V1 while the reader was consuming V0.
-    shared.abr_variant_index.store(1, Ordering::Release);
-    // commit_seek_landing always sets the variant fence on every seek, so
-    // after Phase 2's 2000 seeks the fence is set to the layout variant.
-    set_source_variant_fence(&mut source, Some(0));
+    pin_abr_variant(&shared.abr_state, 1);
+    source.set_variant_fence(Some(0));
 
     let info = Source::media_info(&source).expect("media info at EOF");
     assert_eq!(
@@ -796,7 +762,7 @@ fn format_change_segment_range_uses_metadata_when_segments_are_flushed() {
     ));
     let source = make_test_source(Arc::clone(&shared), cancel);
 
-    shared.abr_variant_index.store(1, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 1);
     assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
 }
 
@@ -835,11 +801,7 @@ fn format_change_segment_range_prefers_loaded_init_bearing_segment() {
     }
     let source = make_test_source(Arc::clone(&shared), cancel);
 
-    shared.abr_variant_index.store(1, Ordering::Release);
-    // Segment 2 has init but segment 0 is not committed.
-    // Must return segment 0's metadata range (0..100) so the decoder starts
-    // at offset 0 and sees the full stream — using segment 2's offset would
-    // truncate the stream and cause seek failures near the track end.
+    pin_abr_variant(&shared.abr_state, 1);
     assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
 }
 
@@ -868,8 +830,7 @@ fn format_change_segment_range_falls_back_to_metadata_without_loaded_init() {
     }
     let source = make_test_source(Arc::clone(&shared), cancel);
 
-    shared.abr_variant_index.store(1, Ordering::Release);
-    // Metadata for variant 1 is still the source of init-bearing segment range.
+    pin_abr_variant(&shared.abr_state, 1);
     assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
 }
 
@@ -899,19 +860,14 @@ fn format_change_segment_range_reads_self_contained_bytes_from_reset_layout_floo
         segments.set_layout_variant(1);
         segments.commit_segment(1, 2, segment_data);
     }
-    shared.abr_variant_index.store(1, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 1);
 
-    // Segment 2 has init but segment 0 is not committed. The range must
-    // start from offset 0 (segment 0 metadata) so the decoder sees the full
-    // stream. Without expected_sizes, segment 2 sits at offset 0 in the byte
-    // map, so reading at offset 0 returns segment 2's data.
     assert_eq!(
         Source::format_change_segment_range(&source),
         Some(0..100),
         "decoder-start boundary must use segment 0 metadata range"
     );
 
-    // Data at offset 0 is segment 2 (first committed), verifying readability.
     let mut buf = vec![0u8; expected.len()];
     let read = source
         .read_at(0, &mut buf)
@@ -919,7 +875,7 @@ fn format_change_segment_range_reads_self_contained_bytes_from_reset_layout_floo
 
     assert_eq!(
         read,
-        ReadOutcome::Data(expected.len()),
+        ReadOutcome::Bytes(NonZeroUsize::new(expected.len()).unwrap()),
         "decoder-start boundary must be immediately readable"
     );
     assert_eq!(
@@ -951,7 +907,7 @@ fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
         segments.set_layout_variant(1);
         segments.commit_segment(1, 7, segment_data);
     }
-    shared.abr_variant_index.store(1, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 1);
     shared.timeline.set_byte_position(750);
 
     assert_eq!(
@@ -965,7 +921,6 @@ fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
         "source readiness at the landed byte position must use the absolute layout offset of the loaded segment"
     );
 
-    // Read from offset 750 (50 bytes into the segment starting at 700).
     let read_len = 50;
     let mut buf = vec![0u8; read_len];
     let read = source
@@ -974,7 +929,7 @@ fn reset_layout_reads_late_loaded_segment_at_absolute_offset() {
 
     assert_eq!(
         read,
-        ReadOutcome::Data(read_len),
+        ReadOutcome::Bytes(NonZeroUsize::new(read_len).unwrap()),
         "read_at must return committed bytes for a late loaded segment at its absolute layout offset"
     );
     assert_eq!(
@@ -1026,8 +981,6 @@ fn mixed_layout_read_at_returns_expected_bytes_across_variant_switch() {
     commit_segment_bytes(&write_backend, &seg2, init2_bytes, seg2_bytes);
 
     // TODO: verify this test reflects per-variant byte map semantics
-    // With per-variant byte maps, each variant has its own contiguous byte space.
-    // We commit all segments to variant 1 to test contiguous reads within a single variant.
     {
         let mut segments = shared.segments.lock_sync();
         segments.set_layout_variant(1);
@@ -1035,7 +988,7 @@ fn mixed_layout_read_at_returns_expected_bytes_across_variant_switch() {
         segments.commit_segment(1, 1, seg1);
         segments.commit_segment(1, 2, seg2);
     }
-    shared.abr_variant_index.store(1, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 1);
 
     let mut expected = Vec::new();
     expected.extend_from_slice(seg0_bytes);
@@ -1051,10 +1004,11 @@ fn mixed_layout_read_at_returns_expected_bytes_across_variant_switch() {
             .read_at(offset, &mut buf)
             .expect("read_at over mixed layout");
         match read {
-            ReadOutcome::Data(0) => {
+            ReadOutcome::Eof => {
                 panic!("unexpected EOF while reading mixed-layout byte stream at offset {offset}")
             }
-            ReadOutcome::Data(n) => {
+            ReadOutcome::Bytes(count) => {
+                let n = count.get();
                 actual.extend_from_slice(&buf[..n]);
                 offset += n as u64;
             }
@@ -1085,7 +1039,6 @@ fn set_seek_epoch_is_non_destructive() {
     shared.timeline.set_eof(true);
     shared.timeline.set_download_position(200);
     shared.had_midstream_switch.store(true, Ordering::Release);
-    // Set epoch to 3 via Timeline
     for _ in 0..3 {
         let _ = shared.timeline.initiate_seek(Duration::ZERO);
     }
@@ -1094,10 +1047,8 @@ fn set_seek_epoch_is_non_destructive() {
     let mut source = make_test_source(Arc::clone(&shared), cancel);
     Source::set_seek_epoch(&mut source, 4);
 
-    // Non-destructive: segments, download_position, and exact-EOF visibility
-    // are preserved. Only the midstream-switch coordination flag is reset.
     assert_eq!(shared.timeline.seek_epoch(), 3);
-    assert!(shared.timeline.eof());
+    assert!(shared.timeline.is_eof());
     assert_eq!(shared.timeline.download_position(), 200);
     assert!(!shared.had_midstream_switch.load(Ordering::Acquire));
     assert_eq!(shared.segments.lock_sync().num_committed(), 2);
@@ -1115,7 +1066,7 @@ fn codec_fence_allows_cross_variant_reads_when_codec_matches() {
     ));
     let source = make_test_source(shared, cancel);
 
-    assert!(source_can_cross_variant(&source, 0, 1));
+    assert!(source.can_cross_variant_without_reset(0, 1));
 }
 
 #[kithara::test]
@@ -1130,7 +1081,7 @@ fn codec_fence_blocks_cross_variant_reads_when_codec_changes() {
     ));
     let source = make_test_source(shared, cancel);
 
-    assert!(!source_can_cross_variant(&source, 0, 1));
+    assert!(!source.can_cross_variant_without_reset(0, 1));
 }
 
 #[kithara::test]
@@ -1143,7 +1094,7 @@ fn build_pair_seeds_timeline_total_duration_from_playlist() {
     let variants = parsed_variants(2);
     let (backend, _loader) = local_test_loader(&cancel);
     let config = HlsConfig::default().with_cancel(cancel);
-    let source = build_source(
+    let source = test_utils::build_source_full(
         backend,
         &variants,
         &config,
@@ -1167,12 +1118,9 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
     let variants = parsed_variants(2);
     let (backend, _loader) = local_test_loader(&cancel);
     let config = HlsConfig::default()
-        .with_abr(AbrController::new(AbrOptions {
-            mode: AbrMode::Manual(1),
-            ..AbrOptions::default()
-        }))
+        .with_initial_abr_mode(AbrMode::Manual(1))
         .with_cancel(cancel);
-    let source = build_source(
+    let source = test_utils::build_source_full(
         backend,
         &variants,
         &config,
@@ -1181,7 +1129,7 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
     );
 
     assert_eq!(
-        source_variant_index_handle(&source).load(Ordering::Relaxed),
+        source.coord().abr_state.current_variant_index(),
         1,
         "initial source variant should match ABR manual mode"
     );
@@ -1191,31 +1139,23 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
 fn test_switch_variant_remaps_layout() {
     let mut state = StreamIndex::new(4, 24);
 
-    // V0 entries: segments 0, 1, 2 (each 100 bytes)
     state.commit_segment(0, 0, make_segment_data(100));
     state.commit_segment(0, 1, make_segment_data(100));
     state.commit_segment(0, 2, make_segment_data(100));
 
     assert_eq!(state.num_committed(), 3);
 
-    // Switch active layout to variant 3, commit v3 seg 2.
-    // Per-variant byte maps: v0 and v3 have independent byte spaces.
     state.set_layout_variant(3);
     state.commit_segment(3, 2, make_segment_data(100));
 
-    // num_committed() counts entries in layout_variant's byte_map.
-    // layout_variant is 3, which has 1 committed segment.
     assert_eq!(state.num_committed(), 1);
 
-    // V0 entries are still stored
     assert!(state.is_segment_loaded(0, 0));
     assert!(state.is_segment_loaded(0, 1));
 
-    // V0 entries are in v0's byte layout (switch back to check)
     state.set_layout_variant(0);
     assert!(state.is_range_loaded(&(0..200)));
 
-    // V3's byte map has seg 2 at offset 0 (only committed segment in v3)
     state.set_layout_variant(3);
     assert!(state.find_at_offset(0).is_some());
     assert_eq!(state.find_at_offset(0).unwrap().variant, 3);
@@ -1226,22 +1166,17 @@ fn test_switch_variant_remaps_layout() {
 fn test_find_at_offset_after_switch_variant() {
     let mut state = StreamIndex::new(4, 24);
 
-    // V0: segments 0, 1 (each 100 bytes → 0..100, 100..200 in v0's byte map)
     state.commit_segment(0, 0, make_segment_data(100));
     state.commit_segment(0, 1, make_segment_data(100));
 
-    // With layout_variant=0, V0 entry at 100..200 is findable
     assert!(state.find_at_offset(150).is_some());
     assert_eq!(state.find_at_offset(150).unwrap().variant, 0);
 
-    // Commit v3 seg 1 and seg 2 (each 100 bytes → 0..100, 100..200 in v3's byte map)
     state.commit_segment(3, 1, make_segment_data(100));
     state.commit_segment(3, 2, make_segment_data(100));
 
-    // Switch to variant 3's byte map
     state.set_layout_variant(3);
 
-    // v3 seg 1 at 0..100 (no expected_sizes, seg 0 absent → seg 1 starts at 0)
     let seg = state.find_at_offset(0).unwrap();
     assert_eq!(seg.variant, 3);
     assert_eq!(seg.segment_index, 1);
@@ -1250,7 +1185,6 @@ fn test_find_at_offset_after_switch_variant() {
     assert_eq!(seg.variant, 3);
     assert_eq!(seg.segment_index, 2);
 
-    // Switch back to V0: V0 entries still findable
     state.set_layout_variant(0);
     assert!(state.find_at_offset(50).is_some());
     assert_eq!(state.find_at_offset(50).unwrap().variant, 0);
@@ -1260,25 +1194,19 @@ fn test_find_at_offset_after_switch_variant() {
 fn test_range_loaded_after_switch_variant() {
     let mut state = StreamIndex::new(4, 24);
 
-    // V0: segments 0, 1 (each 100 bytes → 0..100, 100..200 in v0's byte map)
     state.commit_segment(0, 0, make_segment_data(100));
     state.commit_segment(0, 1, make_segment_data(100));
 
-    // Range 100..200 is loaded in v0's byte map (layout_variant=0)
     assert!(state.is_range_loaded(&(100..200)));
 
-    // Commit v3 segments 1 and 2 (each 100 bytes → v3 byte map: 0..100, 100..200)
     state.commit_segment(3, 1, make_segment_data(100));
     state.commit_segment(3, 2, make_segment_data(100));
 
-    // V0 byte map: seg 0 at 0..100, seg 1 at 100..200
     assert!(state.is_range_loaded(&(0..100)));
     assert!(state.is_range_loaded(&(0..200)));
 
-    // Switch to v3 byte map
     state.set_layout_variant(3);
 
-    // v3 byte map: seg 1 at 0..100, seg 2 at 100..200
     assert!(state.is_range_loaded(&(0..100)));
     assert!(state.is_range_loaded(&(100..200)));
     assert!(state.is_range_loaded(&(0..200)));
@@ -1288,7 +1216,6 @@ fn test_range_loaded_after_switch_variant() {
 fn test_cumulative_offset_after_switch() {
     let mut state = StreamIndex::new(4, 24);
 
-    // Simulate V0 segments 0..13 occupying 0..700 in v0's byte map
     for i in 0..14 {
         state.commit_segment(0, i, make_segment_data(50));
     }
@@ -1296,14 +1223,11 @@ fn test_cumulative_offset_after_switch() {
     assert_eq!(state.max_end_offset(), 700);
     assert!(state.is_range_loaded(&(0..700)));
 
-    // Switch to variant 3's byte map
     state.set_layout_variant(3);
 
-    // V3 seg 14 and 15 (no expected_sizes, segs 0-13 absent → contiguous from 0)
     state.commit_segment(3, 14, make_segment_data(200));
     state.commit_segment(3, 15, make_segment_data(200));
 
-    // V3 byte map: seg 14 at 0..200, seg 15 at 200..400
     assert!(state.is_range_loaded(&(0..200)));
     assert!(state.is_range_loaded(&(200..400)));
     assert!(state.is_range_loaded(&(0..400)));
@@ -1312,7 +1236,6 @@ fn test_cumulative_offset_after_switch() {
     assert_eq!(state.find_at_offset(0).unwrap().variant, 3);
     assert_eq!(state.find_at_offset(0).unwrap().segment_index, 14);
 
-    // V0 byte map still intact
     state.set_layout_variant(0);
     assert_eq!(state.max_end_offset(), 700);
     assert!(state.is_range_loaded(&(0..700)));
@@ -1327,7 +1250,6 @@ fn test_max_end_offset_tracks_committed_watermark() {
     state.commit_segment(0, 0, make_segment_data(100));
     assert_eq!(state.max_end_offset(), 100);
 
-    // find_at_offset at highest byte still works
     let seg = state.find_at_offset(99).unwrap();
     assert_eq!(seg.variant, 0);
     assert_eq!(seg.segment_index, 0);
@@ -1335,13 +1257,10 @@ fn test_max_end_offset_tracks_committed_watermark() {
     state.commit_segment(0, 1, make_segment_data(100));
     assert_eq!(state.max_end_offset(), 200);
 
-    // After switching layout variant, max_end_offset reflects the new variant's byte map
     state.set_layout_variant(3);
     state.commit_segment(3, 2, make_segment_data(100));
-    // V3 byte map: seg 2 at 0..100 (no expected_sizes, segs 0-1 absent)
     assert_eq!(state.max_end_offset(), 100);
 
-    // V0 byte map watermark is preserved
     state.set_layout_variant(0);
     assert_eq!(state.max_end_offset(), 200);
 }
@@ -1367,14 +1286,10 @@ fn test_max_end_offset() {
     state.commit_segment(0, 1, make_segment_data(200));
     assert_eq!(state.max_end_offset(), 300);
 
-    // V3 entry after switching layout variant
     state.set_layout_variant(3);
     state.commit_segment(3, 2, make_segment_data(100));
-    // V3 byte map: seg 2 at 0..100 (no segs 0-1, no expected_sizes)
     assert_eq!(state.max_end_offset(), 100);
 }
-
-// wait_range cancellation tests
 
 #[kithara::test(tokio, browser)]
 #[case(WaitRangeUnblock::Cancel)]
@@ -1386,9 +1301,8 @@ async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) 
     let shared2 = Arc::clone(&shared);
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    let handle = spawn_blocking(move || source.wait_range(0..1024, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(0..1024, Some(Duration::from_secs(1))));
 
-    // Give wait_range time to enter the loop
     sleep(Duration::from_millis(20)).await;
 
     match unblock {
@@ -1412,19 +1326,16 @@ async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) 
 
 #[kithara::test(tokio, browser)]
 async fn test_wait_range_returns_ready_when_data_pushed() {
-    // Normal scenario: push segment data, wait_range returns Ready.
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
     let (backend, _loader) = make_test_segment_loader(&cancel);
-    // commit_source shares the same fetch backend for writing dummy resources.
     let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
-    let handle = spawn_blocking(move || source.wait_range(0..100, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(0..100, Some(Duration::from_secs(1))));
 
-    // Push a segment covering 0..100 and commit its resource data
     sleep(Duration::from_millis(20)).await;
     let segment_data = make_segment_data(100);
     commit_dummy_resource_from_data(&commit_source, &segment_data);
@@ -1447,12 +1358,12 @@ fn test_wait_range_flushing_interrupts_without_requesting_segment() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
 
     let _epoch = shared.timeline.initiate_seek(Duration::from_millis(1));
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let result = source.wait_range(150..170, Duration::from_secs(1));
+    let result = source.wait_range(150..170, Some(Duration::from_secs(1)));
     assert!(matches!(result, Ok(WaitOutcome::Interrupted)));
     assert!(
         shared.segment_requests.pop().is_none(),
@@ -1472,7 +1383,7 @@ fn test_wait_range_flushing_overrides_stale_eof() {
     let _ = shared.timeline.initiate_seek(Duration::ZERO);
     let mut source = make_test_source(Arc::clone(&shared), cancel);
 
-    let result = source.wait_range(total_bytes..total_bytes + 128, Duration::from_secs(1));
+    let result = source.wait_range(total_bytes..total_bytes + 128, Some(Duration::from_secs(1)));
 
     assert!(
         shared.timeline.is_flushing(),
@@ -1486,13 +1397,12 @@ fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
 
     let total_bytes = 2_400u64;
     shared.timeline.set_eof(true);
     shared.timeline.set_byte_position(total_bytes);
 
-    // Simulate holding the seek key: multiple seek starts without completing the newest one yet.
     for idx in 0..12u64 {
         let _ = shared
             .timeline
@@ -1500,7 +1410,7 @@ fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
     }
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let result = source.wait_range(total_bytes..total_bytes + 128, Duration::from_secs(1));
+    let result = source.wait_range(total_bytes..total_bytes + 128, Some(Duration::from_secs(1)));
 
     assert!(
         shared.timeline.is_flushing(),
@@ -1510,7 +1420,10 @@ fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
         matches!(result, Ok(WaitOutcome::Interrupted)),
         "stale EOF should not end playback while seek flushing is active"
     );
-    assert!(shared.timeline.eof(), "bug reproducer relies on stale EOF");
+    assert!(
+        shared.timeline.is_eof(),
+        "bug reproducer relies on stale EOF"
+    );
 }
 
 #[kithara::test(tokio, browser)]
@@ -1523,14 +1436,11 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
-    // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
 
-    let handle = spawn_blocking(move || source.wait_range(88_300..89_324, Duration::from_secs(1)));
+    let handle =
+        spawn_blocking(move || source.wait_range(88_300..89_324, Some(Duration::from_secs(1))));
 
-    // Commit data and clear EOF. Repeatedly notify condvar until the
-    // blocking wait_range task wakes up — spawn_blocking may not have
-    // parked yet on the first notify.
     let segment_data = make_segment_data(200_000);
     commit_dummy_resource_from_data(&commit_source, &segment_data);
     {
@@ -1560,24 +1470,21 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
 
 #[kithara::test(tokio, browser)]
 async fn test_wait_range_eof_when_stopped_and_past_end() {
-    // Downloader stopped + eof -- wait_range at past-end offset returns Eof.
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
 
-    // Push one segment
     {
         let mut segments = shared2.segments.lock_sync();
         segments.commit_segment(0, 0, make_segment_data(100));
     }
-    // Mark eof + stopped
     shared2.timeline.set_eof(true);
     shared2.stopped.store(true, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    let result = source.wait_range(100..200, Duration::from_secs(1));
+    let result = source.wait_range(100..200, Some(Duration::from_secs(1)));
     assert!(matches!(result, Ok(WaitOutcome::Eof)));
 }
 
@@ -1588,12 +1495,11 @@ async fn test_wait_range_uses_active_variant_for_seek_request() {
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    // Last pushed segment is from variant 1, but active playback variant is 0.
     {
         let mut segments = shared.segments.lock_sync();
         segments.commit_segment(1, 5, make_segment_data(100));
     }
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
 
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
     assert_eq!(request.variant, 0);
@@ -1607,9 +1513,8 @@ async fn test_wait_range_uses_variant_fence_when_abr_hint_changes() {
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    // Playback is fenced to variant 0, but ABR hint moved to variant 1.
-    set_source_variant_fence(&mut source, Some(0));
-    shared.abr_variant_index.store(1, Ordering::Release);
+    source.set_variant_fence(Some(0));
+    pin_abr_variant(&shared.abr_state, 1);
 
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
     assert_eq!(request.variant, 0);
@@ -1623,10 +1528,8 @@ async fn test_wait_range_uses_layout_variant_after_midstream_switch() {
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    // The read path is still fenced to variant 0, but downloader has already
-    // committed to a midstream switch and drained on-demand requests.
-    set_source_variant_fence(&mut source, Some(0));
-    shared.abr_variant_index.store(1, Ordering::Release);
+    source.set_variant_fence(Some(0));
+    pin_abr_variant(&shared.abr_state, 1);
     shared.had_midstream_switch.store(true, Ordering::Release);
 
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
@@ -1644,8 +1547,8 @@ async fn test_wait_range_clamps_to_target_floor_after_midstream_switch() {
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    set_source_variant_fence(&mut source, Some(0));
-    shared.abr_variant_index.store(1, Ordering::Release);
+    source.set_variant_fence(Some(0));
+    pin_abr_variant(&shared.abr_state, 1);
     shared.had_midstream_switch.store(true, Ordering::Release);
 
     {
@@ -1681,8 +1584,8 @@ async fn test_wait_range_uses_layout_owned_segment_in_switched_tail() {
     ));
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    set_source_variant_fence(&mut source, Some(0));
-    shared.abr_variant_index.store(1, Ordering::Release);
+    source.set_variant_fence(Some(0));
+    pin_abr_variant(&shared.abr_state, 1);
     shared.had_midstream_switch.store(true, Ordering::Release);
 
     {
@@ -1690,7 +1593,6 @@ async fn test_wait_range_uses_layout_owned_segment_in_switched_tail() {
         for segment_index in 0..4 {
             segments.commit_segment(0, segment_index, make_segment_data(50));
         }
-        // Set expected sizes for variant 1 so byte offsets are correct.
         if let Some(sizes) = ps.segment_sizes(1) {
             segments.set_expected_sizes(1, sizes);
         }
@@ -1698,8 +1600,6 @@ async fn test_wait_range_uses_layout_owned_segment_in_switched_tail() {
         segments.commit_segment(1, 4, make_segment_data(700));
     }
 
-    // With per-variant byte maps and layout_variant=1, v1 expected sizes = 700 bytes/seg.
-    // Offset 910 maps to seg 1 (910 / 700 = 1). Demand uses layout_variant directly.
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 910..930).await;
     assert_eq!(
         request.variant, 1,
@@ -1712,72 +1612,16 @@ async fn test_wait_range_uses_layout_owned_segment_in_switched_tail() {
 }
 
 #[kithara::test(tokio, browser)]
-async fn test_wait_range_requeues_request_after_seek_epoch_change() {
-    let cancel = CancellationToken::new();
-    let ps = playlist_state_with_size_maps();
-    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
-    let first_epoch = shared.timeline.initiate_seek(Duration::ZERO);
-    shared.timeline.complete_seek(first_epoch);
-
-    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
-
-    let first_deadline = Instant::now() + Duration::from_millis(300);
-    let first_request = loop {
-        if let Some(request) = shared.segment_requests.pop() {
-            break request;
-        }
-        assert!(
-            Instant::now() <= first_deadline,
-            "expected initial on-demand request"
-        );
-        sleep(Duration::from_millis(10)).await;
-    };
-    assert_eq!(first_request.seek_epoch, first_epoch);
-
-    let second_epoch = shared.timeline.initiate_seek(Duration::from_millis(1));
-    shared.timeline.complete_seek(second_epoch);
-    shared.condvar.notify_all();
-
-    let second_deadline = Instant::now() + Duration::from_millis(700);
-    let second_request = loop {
-        if let Some(request) = shared.segment_requests.pop()
-            && request.seek_epoch == second_epoch
-        {
-            break request;
-        }
-        assert!(
-            Instant::now() <= second_deadline,
-            "expected re-queued on-demand request for updated seek epoch"
-        );
-        sleep(Duration::from_millis(10)).await;
-    };
-
-    assert_eq!(second_request.variant, 0);
-    assert_eq!(second_request.segment_index, 1);
-    assert_eq!(second_request.seek_epoch, second_epoch);
-
-    cancel.cancel();
-    shared.condvar.notify_all();
-    let result = timeout(Duration::from_millis(400), handle)
-        .await
-        .expect("wait_range task should complete")
-        .expect("wait_range task should not panic");
-    assert!(result.is_err(), "wait_range should stop after cancellation");
-}
-
-#[kithara::test(tokio, browser)]
 async fn test_wait_range_interrupts_stale_range_after_applied_seek_epoch_change() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
     let first_epoch = shared.timeline.initiate_seek(Duration::ZERO);
     shared.timeline.complete_seek(first_epoch);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
 
     let first_deadline = Instant::now() + Duration::from_millis(300);
     let first_request = loop {
@@ -1821,10 +1665,11 @@ async fn test_wait_range_without_size_map_does_not_enqueue_request() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_without_size_map();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    let handle = spawn_blocking(move || source.wait_range(0..128, Duration::from_millis(150)));
+    let handle =
+        spawn_blocking(move || source.wait_range(0..128, Some(Duration::from_millis(150))));
 
     let result = timeout(Duration::from_secs(2), handle)
         .await
@@ -1836,10 +1681,8 @@ async fn test_wait_range_without_size_map_does_not_enqueue_request() {
         "no request should be enqueued without size map"
     );
     match result {
-        Err(StreamError::Source(HlsError::Timeout(msg))) => {
-            assert!(msg.contains("budget exceeded"), "unexpected: {msg}");
-        }
-        other => panic!("expected Timeout, got: {other:?}"),
+        Err(StreamError::Source(kithara_stream::SourceError::WaitBudgetExceeded)) => {}
+        other => panic!("expected WaitBudgetExceeded, got: {other:?}"),
     }
 }
 
@@ -1853,10 +1696,10 @@ async fn test_wait_range_stalled_on_demand_request_is_interrupted_by_flush() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let request = loop {
@@ -1893,12 +1736,12 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
     let (backend, _loader) = make_test_segment_loader(&cancel);
     let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
 
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let request = loop {
@@ -1919,7 +1762,6 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
         let seg1_data = make_segment_data(100);
         commit_dummy_resource_from_data(&commit_source, &seg1_data);
         let mut segments = shared.segments.lock_sync();
-        // Commit seg 0 first so seg 1 starts at byte offset 100 (covering 150..170).
         segments.commit_segment(0, 0, seg0_data);
         segments.commit_segment(0, 1, seg1_data);
     }
@@ -1942,10 +1784,10 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(30)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(30))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
@@ -1985,11 +1827,11 @@ async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
     shared.had_midstream_switch.store(true, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(30)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(30))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
@@ -2029,12 +1871,12 @@ async fn test_wait_range_midstream_switch_target_request_stays_stable_until_read
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(1, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 1);
     shared.had_midstream_switch.store(true, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    set_source_variant_fence(&mut source, Some(0));
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(30)));
+    source.set_variant_fence(Some(0));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(30))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {
@@ -2083,14 +1925,14 @@ async fn test_wait_range_clears_midstream_switch_after_target_range_becomes_read
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(1, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 1);
     shared.had_midstream_switch.store(true, Ordering::Release);
     let (backend, _loader) = local_test_loader(&cancel);
     let commit_source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
     let mut source = make_test_source_with_backend(Arc::clone(&shared), backend.clone());
-    set_source_variant_fence(&mut source, Some(0));
+    source.set_variant_fence(Some(0));
 
-    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Some(Duration::from_secs(1))));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let request = loop {
@@ -2148,15 +1990,12 @@ async fn test_wait_range_clears_midstream_switch_after_target_range_becomes_read
 )]
 async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
     let cancel = CancellationToken::new();
-    let ps = playlist_state_with_size_maps(); // 24 segs × 100 bytes = 2400 total per variant
+    let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.abr_variant_index.store(0, Ordering::Release);
+    pin_abr_variant(&shared.abr_state, 0);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    // Background task: commit segments at high indices (10+) that do NOT
-    // cover the waited range (100..200). This grows `total` but never
-    // satisfies `range_ready` for offset range covering segment 1.
     let bg_shared = Arc::clone(&shared);
     let bg_cancel = cancel.clone();
     let bg = spawn(async move {
@@ -2175,10 +2014,7 @@ async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
         }
     });
 
-    // wait_range for offset 100..200 — no entries cover this range.
-    // Background entries are at 10000+. total grows but range stays unready.
-    // Budget check returns Err(Timeout) after 3s.
-    let handle = spawn_blocking(move || source.wait_range(100..200, Duration::from_secs(3)));
+    let handle = spawn_blocking(move || source.wait_range(100..200, Some(Duration::from_secs(3))));
 
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -2190,14 +2026,11 @@ async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
         cancel.cancel();
         let _ = timeout(Duration::from_secs(1), bg).await;
 
-        // Budget check returns Err(Timeout) because range is never ready.
         match result {
-            Err(StreamError::Source(HlsError::Timeout(_))) => {
-                // Expected: budget exceeded.
-            }
+            Err(StreamError::Source(kithara_stream::SourceError::WaitBudgetExceeded)) => {}
             other => {
                 panic!(
-                    "wait_range should return Err(Timeout) when range is never ready: {other:?}"
+                    "wait_range should return Err(WaitBudgetExceeded) when range is never ready: {other:?}"
                 );
             }
         }
@@ -2205,9 +2038,6 @@ async fn wait_range_times_out_when_total_grows_but_range_not_ready() {
 
     #[cfg(target_arch = "wasm32")]
     {
-        // On WASM, wait_range runs synchronously on the current thread,
-        // so we just check that it eventually returns an error or blocks
-        // until cancellation.
         cancel.cancel();
         shared.condvar.notify_all();
         let result = timeout(Duration::from_secs(5), handle)

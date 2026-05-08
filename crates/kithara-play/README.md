@@ -286,6 +286,29 @@ runtime selection or app-facing engine setup. The default runtime path
 normal session transport and should not change behavior because this testing
 backend is enabled.
 
+## Cancel Hierarchy
+
+A single `CancellationToken` master flows top-down through the player tree. Subsystems (Downloader, AssetStore, HlsPeer, Audio worker, epoch_cancel) derive children from it via `.child_token()`; cancelling the master cascades to every descendant.
+
+Ownership rules:
+
+- **Master owner**: the consumer crate that the user picks as their entry point.
+  - `kithara-play` used directly: `PlayerImpl::new` is the canonical fallback site — if `PlayerConfig.cancel = None`, it constructs a fresh master via `unwrap_or_default()`.
+  - `kithara-queue::Queue`, `kithara-app::App`, `kithara-ffi` player handle: each constructs its own master in its constructor and propagates it via `PlayerConfig.cancel = Some(master.clone())` before building `PlayerImpl`.
+- **Per-track child**: `PlayerImpl::prepare_config` injects `Some(self.cancel.child_token())` into `ResourceConfig.cancel` (only when caller hasn't supplied a per-track override). Each track is therefore independently cancellable while sharing the master root.
+- **Subsystem cascade**: `HlsConfig`, `AudioConfig`, `FileConfig`, `DownloaderConfig`, `AssetStoreBuilder` all carry `cancel: Option<CancellationToken>`. After `prepare_config` runs in production, the field is always `Some(per_track_child)`. Subsystems may keep `unwrap_or_default()` as a test/standalone safety net — the production path never hits the fallback.
+- **Drop pulse**: `Drop for PlayerImpl` (and consumer-crate equivalents) calls `self.cancel.cancel()` so subsystems observe the pulse before structural Arc teardown unwinds.
+
+Allowed `CancellationToken::new()` sites in production:
+
+- The `unwrap_or_default()` in `PlayerImpl::new_with_engine` (canonical fallback) — marked `// kithara:cancel:owner`.
+- Master construction in `Queue::new` / `App::new` / FFI player constructor — same marker.
+- FFI observer / item-bridge sites that intentionally outlive any single track — marked `// kithara:cancel:bridge`.
+
+Forbidden:
+
+- Hard-coded `CancellationToken::new()` (not behind `Option<CancellationToken>`) outside the marked owner / bridge sites. Those create orphan tokens that escape the hierarchy. Audio worker thread, file local source, and similar internal scopes derive children from their config's master instead.
+
 ## Invariants
 
 - `SlotId` is only valid between `allocate_slot()` and `release_slot()`
@@ -294,6 +317,7 @@ backend is enabled.
 - `Player::slot_id()` returns `None` until registered with the engine
 - All `#[non_exhaustive]` enums and structs require builder or constructor
 - `MediaTime::INVALID` has `timescale == 0`; all arithmetic on invalid times returns invalid
+- Cancel hierarchy: production `CancellationToken::new()` only at marked owner / bridge sites (see "Cancel Hierarchy")
 
 ## Integration
 

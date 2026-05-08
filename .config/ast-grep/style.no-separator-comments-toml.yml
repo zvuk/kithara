@@ -9,3 +9,4 @@ rule:
   all:
     - kind: comment
     - regex: "[=─-]{3,}"
+fix: ""

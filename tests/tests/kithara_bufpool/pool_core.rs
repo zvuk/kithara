@@ -1,4 +1,4 @@
-use kithara_bufpool::internal::*;
+use kithara_bufpool::*;
 use kithara_platform::tokio::task::spawn_blocking;
 use kithara_test_utils::kithara;
 
@@ -51,12 +51,12 @@ fn test_shared_pool() {
 #[kithara::test]
 fn test_cross_shard_fallback() {
     let pool = Pool::<2, Vec<u8>>::new(8, 1024);
-    let home_shard = shard_index(&pool);
+    let home_shard = pool.shard_index_of();
     let other_shard = (home_shard + 1) % 2;
 
     let mut buf = Vec::with_capacity(999);
     buf.push(0);
-    put(&pool, buf, other_shard);
+    pool.put(buf, other_shard);
 
     let retrieved = pool.get();
     assert!(retrieved.capacity() > 0);
@@ -65,12 +65,12 @@ fn test_cross_shard_fallback() {
 #[kithara::test]
 fn test_shard_saturation_drops_excess() {
     let pool = Pool::<4, Vec<u8>>::new(4, 1024);
-    let shard = shard_index(&pool);
+    let shard = pool.shard_index_of();
 
     for i in 0u8..3 {
         let mut buf = Vec::with_capacity(128);
         buf.resize(10, i);
-        put(&pool, buf, shard);
+        pool.put(buf, shard);
     }
 
     let first = pool.get();

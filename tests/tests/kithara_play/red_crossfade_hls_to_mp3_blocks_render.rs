@@ -37,21 +37,22 @@ use std::sync::Arc;
 use kithara::{
     audio::{Audio, AudioConfig, AudioWorkerHandle},
     hls::{Hls, HlsConfig},
-    play::{Resource, internal::offline::resource_from_reader},
+    play::Resource,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_file::{File as FileSource, FileConfig, FileSrc};
+use kithara_integration_tests::offline::resource_from_reader;
 use kithara_platform::time::{Duration, Instant, sleep};
 use tokio::time::timeout;
 use tracing::info;
 
-use crate::continuity::render_offline_window;
+use crate::{common::test_defaults::Consts as Shared, continuity::render_offline_window};
 
 struct Consts;
 impl Consts {
-    const READ_TIMEOUT: Duration = Duration::from_secs(5);
-    const BLOCK: usize = 512;
-    const SR: u32 = 44_100;
+    const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
+    const BLOCK: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const SR: u32 = Shared::SAMPLE_RATE;
 }
 
 #[kithara::test(
@@ -60,8 +61,11 @@ impl Consts {
     env(KITHARA_HANG_TIMEOUT_SECS = "10")
 )]
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
-    use kithara::{assets::StoreOptions, play::internal::offline::OfflinePlayer};
-    use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+    use kithara::assets::StoreOptions;
+    use kithara_integration_tests::{
+        hls_fixture::{HlsTestServer, HlsTestServerConfig},
+        offline::OfflinePlayer,
+    };
     use kithara_test_utils::{create_wav_exact_bytes, signal_pcm::signal, temp_dir};
 
     const HLS_SEGMENT_COUNT: usize = 3;
@@ -86,7 +90,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     .await;
     let temp = temp_dir();
     let mut store = StoreOptions::new(temp.path());
-    store.ephemeral = true;
+    store.is_ephemeral = true;
     store.cache_capacity = Some(std::num::NonZeroUsize::new(4).expect("nonzero"));
     store.max_assets = Some(8);
     let hls_url = hls_server.url("/master.m3u8");
@@ -96,7 +100,6 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
-    // Build MP3 resource WITHOUT preload — matches production timing.
     let make_mp3 = |w: AudioWorkerHandle| {
         let p = local_mp3.clone();
         async move {
@@ -111,7 +114,6 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         }
     };
 
-    // Build and preload HLS resource (as in production).
     let make_hls = |w: AudioWorkerHandle, s: StoreOptions| {
         let u = hls_url.clone();
         async move {
@@ -126,19 +128,17 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             let mut r: Resource = resource_from_reader(audio);
             timeout(Consts::READ_TIMEOUT, r.preload())
                 .await
-                .expect("HLS preload");
+                .expect("HLS preload")
+                .expect("HLS preload result");
             r
         }
     };
 
-    // Try 10 iterations; fail as soon as any HLS→MP3 fade trips the budget,
-    // so a single deterministic slow render is enough evidence.
     let mut worst_slow_renders: u32 = 0;
     let mut worst_max_render: Duration = Duration::ZERO;
     let mut worst_label = String::new();
 
     for iter in 0..10 {
-        // HLS phase: play for a bit to get it producing chunks.
         let hls = make_hls(worker.clone(), store.clone()).await;
         sleep(Duration::from_millis(200)).await;
         player.load_and_fadein(hls, &format!("red_hls_{iter}"));
@@ -150,7 +150,6 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
             Consts::SR,
         );
 
-        // Crossfade HLS→MP3. This is where the render thread can block.
         let mp3 = make_mp3(worker.clone()).await;
         sleep(Duration::from_millis(200)).await;
         let before_fade = Instant::now();
@@ -174,7 +173,6 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         }
     }
 
-    // Same contract as the parent test: at most 1 slow render per window.
     assert!(
         worst_slow_renders <= 1,
         "red: HLS→MP3 crossfade exceeded render budget on {} blocks \

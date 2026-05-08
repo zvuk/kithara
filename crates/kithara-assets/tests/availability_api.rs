@@ -41,10 +41,6 @@ fn mem_store_empty_aggregate_returns_empty() {
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_store_slow_path_finds_committed_file() {
-    // Write + commit a resource, drop the handle, then query through
-    // the AssetStore methods. The P-2 aggregate is never populated
-    // (no observer yet), so every query below exercises the
-    // `resource_state` slow-path fallback.
     let dir = tempdir().unwrap();
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
@@ -75,7 +71,6 @@ fn disk_store_missing_resource_returns_empty() {
         .asset_root(Some("availability-p2"))
         .build();
 
-    // Never created — Missing state.
     let key = ResourceKey::new("segments/ghost.bin");
     assert!(store.available_ranges(&key).is_empty());
     assert!(!store.contains_range(&key, 0..1));
@@ -84,10 +79,6 @@ fn disk_store_missing_resource_returns_empty() {
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn remove_resource_clears_aggregate_remove_call() {
-    // Phase P-2 doesn't yet populate the aggregate, so
-    // `remove_resource` exercises only the fact that
-    // `AssetStore::remove_resource` still unwinds cleanly and the
-    // `.remove()` call on the aggregate is a no-op for unknown keys.
     let dir = tempdir().unwrap();
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())

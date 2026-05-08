@@ -1,4 +1,3 @@
-// StreamingResource tests (merged from edge cases)
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 use std::ops::Range;
@@ -8,7 +7,7 @@ use kithara::storage::MemResource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
-use kithara::storage::{MmapOptions, MmapResource, OpenMode};
+use kithara::storage::{MmapOptions, MmapResource};
 use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
 use kithara_platform::{
     thread,
@@ -29,15 +28,7 @@ fn open_test_resource(
 ) -> TestResource {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        Resource::open(
-            cancel,
-            MmapOptions {
-                path: temp_dir.path().join(name),
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .expect("open should succeed")
+        open_mmap_at(temp_dir.path().join(name), None, cancel)
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -53,15 +44,20 @@ fn open_test_resource_with_len(
     len: u64,
     cancel: CancellationToken,
 ) -> TestResource {
-    Resource::open(
-        cancel,
-        MmapOptions {
-            path: temp_dir.path().join(name),
-            initial_len: Some(len),
-            mode: OpenMode::Auto,
-        },
-    )
-    .expect("open should succeed")
+    open_mmap_at(temp_dir.path().join(name), Some(len), cancel)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_mmap_at(
+    path: std::path::PathBuf,
+    initial_len: Option<u64>,
+    cancel: CancellationToken,
+) -> MmapResource {
+    let mut opts = MmapOptions::new(path);
+    if let Some(len) = initial_len {
+        opts = opts.with_initial_len(len);
+    }
+    Resource::open(cancel, opts).expect("open should succeed")
 }
 
 /// Helper to read bytes from resource into a new Vec.
@@ -99,15 +95,7 @@ fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: Cancellat
     #[cfg(not(target_arch = "wasm32"))]
     {
         let file_path = temp_dir.path().join("streaming.dat");
-        let streaming: MmapResource = Resource::open(
-            cancel_token,
-            MmapOptions {
-                path: file_path.clone(),
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .expect("open should succeed");
+        let streaming = open_mmap_at(file_path.clone(), None, cancel_token);
 
         assert_eq!(streaming.path(), Some(file_path.as_path()));
 
@@ -134,7 +122,6 @@ fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: Cancellat
 fn streaming_resource_open_and_status_new(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let resource = open_test_resource(&temp_dir, "stream.dat", cancel_token);
 
-    // A brand new resource should be Active
     assert_eq!(resource.status(), ResourceStatus::Active);
 }
 
@@ -147,31 +134,13 @@ fn streaming_resource_open_existing_is_committed(
     {
         let file_path = temp_dir.path().join("stream.dat");
 
-        // Create and commit a resource first.
         {
-            let resource: MmapResource = Resource::open(
-                cancel_token.clone(),
-                MmapOptions {
-                    path: file_path.clone(),
-                    initial_len: None,
-                    mode: OpenMode::Auto,
-                },
-            )
-            .unwrap();
+            let resource = open_mmap_at(file_path.clone(), None, cancel_token.clone());
             resource.write_at(0, b"existing data").unwrap();
             resource.commit(Some(13)).unwrap();
         }
 
-        // Reopen — should be Committed
-        let resource: MmapResource = Resource::open(
-            cancel_token,
-            MmapOptions {
-                path: file_path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .unwrap();
+        let resource = open_mmap_at(file_path, None, cancel_token);
 
         assert_eq!(
             resource.status(),
@@ -315,95 +284,38 @@ fn streaming_resource_concurrent_wait_and_write() {
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn streaming_resource_persists_across_reopen() {
+#[case::read_only(false, "reopen.dat", b"persisted data")]
+#[case::wait_then_read(true, "wait_reopen.dat", b"waited bytes")]
+fn streaming_resource_reopen_round_trip(
+    #[case] wait_after_reopen: bool,
+    #[case] file_name: &str,
+    #[case] payload: &[u8],
+) {
     let _temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let file_path = _temp_dir.path().join(file_name);
         {
-            let file_path = _temp_dir.path().join("reopen.dat");
-            let resource: MmapResource = Resource::open(
-                cancel_token.clone(),
-                MmapOptions {
-                    path: file_path.clone(),
-                    initial_len: None,
-                    mode: OpenMode::Auto,
-                },
-            )
-            .unwrap();
-
-            resource.write_at(0, b"persisted data").unwrap();
-            resource.commit(Some(14)).unwrap();
-            resource.wait_range(0..14).unwrap();
-
-            let data = read_bytes(&resource, 0, 14);
-            assert_eq!(&data, b"persisted data");
-        }
-
-        let file_path = _temp_dir.path().join("reopen.dat");
-        let file_len = fs::metadata(&file_path).unwrap().len();
-        let resource: MmapResource = Resource::open(
-            CancellationToken::new(),
-            MmapOptions {
-                path: file_path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .unwrap();
-
-        let data = read_bytes(&resource, 0, file_len as usize);
-        assert_eq!(&data, b"persisted data");
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let resource = MemResource::from_bytes(b"persisted data", cancel_token);
-        let data = read_bytes(&resource, 0, 14);
-        assert_eq!(&data, b"persisted data");
-    }
-}
-
-#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn streaming_resource_wait_after_reopen() {
-    let _temp_dir = TestTempDir::new();
-    let cancel_token = CancellationToken::new();
-    let payload = b"waited bytes";
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        {
-            let file_path = _temp_dir.path().join("wait_reopen.dat");
-            let resource: MmapResource = Resource::open(
-                cancel_token.clone(),
-                MmapOptions {
-                    path: file_path.clone(),
-                    initial_len: None,
-                    mode: OpenMode::Auto,
-                },
-            )
-            .unwrap();
-
+            let resource = open_mmap_at(file_path.clone(), None, cancel_token.clone());
             resource.write_at(0, payload).unwrap();
             resource.commit(Some(payload.len() as u64)).unwrap();
             resource.wait_range(0..payload.len() as u64).unwrap();
+
+            if !wait_after_reopen {
+                let data = read_bytes(&resource, 0, payload.len());
+                assert_eq!(&data, payload);
+            }
         }
 
-        let file_path = _temp_dir.path().join("wait_reopen.dat");
         let file_len = fs::metadata(&file_path).unwrap().len();
-        let resource: MmapResource = Resource::open(
-            CancellationToken::new(),
-            MmapOptions {
-                path: file_path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
-        )
-        .unwrap();
+        let resource = open_mmap_at(file_path, None, CancellationToken::new());
 
-        let outcome = resource.wait_range(0..file_len).unwrap();
-        assert_eq!(outcome, WaitOutcome::Ready);
+        if wait_after_reopen {
+            let outcome = resource.wait_range(0..file_len).unwrap();
+            assert_eq!(outcome, WaitOutcome::Ready);
+        }
 
         let data = read_bytes(&resource, 0, file_len as usize);
         assert_eq!(&data, payload);
@@ -411,9 +323,12 @@ fn streaming_resource_wait_after_reopen() {
 
     #[cfg(target_arch = "wasm32")]
     {
+        let _ = file_name;
         let resource = MemResource::from_bytes(payload, cancel_token);
-        let outcome = resource.wait_range(0..payload.len() as u64).unwrap();
-        assert_eq!(outcome, WaitOutcome::Ready);
+        if wait_after_reopen {
+            let outcome = resource.wait_range(0..payload.len() as u64).unwrap();
+            assert_eq!(outcome, WaitOutcome::Ready);
+        }
         let data = read_bytes(&resource, 0, payload.len());
         assert_eq!(&data, payload);
     }
@@ -431,14 +346,11 @@ fn streaming_resource_wait_range_partial_coverage() {
     let resource_clone = resource.clone();
     let wait_handle = thread::spawn(move || resource_clone.wait_range(0..10));
 
-    // Should not complete within 100ms (only 5 bytes written, need 10)
     assert_wait_times_out(&wait_handle, Duration::from_millis(100));
 
-    // Write remaining bytes
     resource.write_at(5, b", World!").unwrap();
     resource.commit(Some(13)).unwrap();
 
-    // Now it should complete
     resource.wait_range(0..13).unwrap();
 }
 
@@ -470,12 +382,9 @@ fn streaming_resource_commit_without_final_len() {
     resource.write_at(0, b"Hello").unwrap();
     resource.commit(None).unwrap();
 
-    // Commit without final_len means we don't know the total size.
-    // read_at still works, but wait_range doesn't know when EOF is reached.
     let status = resource.status();
     assert_eq!(status, ResourceStatus::Committed { final_len: None });
 
-    // We can still read the written data
     let data = read_bytes(&resource, 0, 5);
     assert_eq!(&data, b"Hello");
 }
@@ -487,7 +396,6 @@ fn streaming_resource_sealed_after_commit() {
 
     let resource = open_test_resource(&temp_dir, "sealed.dat", cancel_token);
 
-    // First commit with zero — resource is committed but empty
     resource.commit(Some(0)).unwrap();
 
     if resource.write_at(0, b"data").is_err() {
@@ -607,17 +515,14 @@ fn streaming_resource_invalid_ranges() {
 
     let resource = open_test_resource(&temp_dir, "invalid_ranges.dat", cancel_token);
 
-    // Reversed range (start > end) should return InvalidRange
     assert!(matches!(
         resource.wait_range(Range { start: 10, end: 5 }),
         Err(StorageError::InvalidRange { start: 10, end: 5 })
     ));
 
-    // Empty range (start == end) is valid and returns Ready
     let outcome = resource.wait_range(5..5).unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
 
-    // Overflow in write_at should return error
     let large_data = vec![0u8; 1000];
     let result = resource.write_at(u64::MAX, &large_data);
     assert!(result.is_err());
@@ -653,13 +558,11 @@ fn streaming_resource_empty_operations() {
 
     let resource = open_test_resource(&temp_dir, "empty_ops.dat", cancel_token);
 
-    // Empty write is a no-op
     resource.write_at(0, b"").unwrap();
 
     let data = read_bytes(&resource, 0, 0);
     assert!(data.is_empty());
 
-    // Commit with zero length
     resource.commit(Some(0)).unwrap();
 
     let data = read_bytes(&resource, 0, 0);
@@ -701,7 +604,6 @@ fn streaming_resource_initial_len_hint() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
 
-    // initial_len is a hint for backing file size, not data availability.
     #[cfg(not(target_arch = "wasm32"))]
     let resource = open_test_resource_with_len(&temp_dir, "initial_hint.dat", 100, cancel_token);
 
@@ -712,7 +614,6 @@ fn streaming_resource_initial_len_hint() {
         resource
     };
 
-    // Write actual data and commit.
     resource.write_at(0, b"real data").unwrap();
     resource.commit(Some(9)).unwrap();
 

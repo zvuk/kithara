@@ -13,7 +13,6 @@ struct AesInput {
 }
 
 fuzz_target!(|input: AesInput| {
-    // Align to 16-byte blocks (AES requirement).
     let block_len = (input.data.len() / 16) * 16;
     if block_len == 0 {
         return;
@@ -22,6 +21,5 @@ fuzz_target!(|input: AesInput| {
     let data = &input.data[..block_len];
     let mut ctx = kithara_drm::DecryptContext::new(input.key, input.iv);
     let mut output = vec![0u8; data.len()];
-    // We only care that this doesn't panic/crash unexpectedly.
     let _ = kithara_drm::aes128_cbc_process_chunk(data, &mut output, &mut ctx, input.is_last);
 });

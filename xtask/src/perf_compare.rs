@@ -23,9 +23,6 @@ fn extract_metrics(content: &str) -> Vec<(String, String)> {
 
     for line in content.lines() {
         let columns: Vec<&str> = line.split('|').collect();
-        // A valid row like "| a | b | c | d | e | f |" splits into
-        // ["", " a ", " b ", " c ", " d ", " e ", " f ", ""]
-        // We need at least 5 non-empty segments: columns[1] = name, columns[3] = avg
         if columns.len() < 5 {
             continue;
         }
@@ -37,12 +34,10 @@ fn extract_metrics(content: &str) -> Vec<(String, String)> {
             continue;
         }
 
-        // Skip header row
         if name.eq_ignore_ascii_case("function") {
             continue;
         }
 
-        // Validate time format
         if !time_re.is_match(&avg) {
             continue;
         }
@@ -101,7 +96,6 @@ pub(crate) fn run(current: &Path, baseline: &Path, threshold: u32) -> Result<()>
         bail!("no parsable metrics found in baseline file");
     }
 
-    // Build a map from function name to avg time for the baseline.
     let baseline_map: std::collections::HashMap<&str, &str> = baseline_metrics
         .iter()
         .map(|(name, avg)| (name.as_str(), avg.as_str()))
@@ -199,9 +193,6 @@ mod tests {
 
     #[test]
     fn test_no_regression() {
-        // current is slightly slower but within threshold
-        // decode_chunk: 1.05ms vs 1.00ms = 5% (< 10%)
-        // parse_header: 190us vs 200us = -5% (faster)
         let baseline = "| Function | Calls | Avg | P95 | Total | % Total |\n\
                         | decode_chunk | 1000 | 1.00ms | 1.20ms | 1.00s | 50% |\n\
                         | parse_header | 1000 | 200.00us | 250.00us | 0.20s | 50% |";
@@ -224,7 +215,6 @@ mod tests {
 
     #[test]
     fn test_regression_detected() {
-        // decode_chunk: 1.50ms vs 1.00ms = 50% (> 10%)
         let baseline = "| Function | Calls | Avg | P95 | Total | % Total |\n\
                         | decode_chunk | 1000 | 1.00ms | 1.20ms | 1.00s | 50% |\n\
                         | parse_header | 1000 | 200.00us | 250.00us | 0.20s | 50% |";
@@ -252,7 +242,6 @@ mod tests {
 
     #[test]
     fn test_no_overlapping_metrics() {
-        // Different function names in current vs baseline
         let baseline = "| Function | Calls | Avg | P95 | Total | % Total |\n\
                         | decode_chunk | 1000 | 1.00ms | 1.20ms | 1.00s | 50% |";
         let current = "| Function | Calls | Avg | P95 | Total | % Total |\n\

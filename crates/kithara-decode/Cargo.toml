@@ -13,13 +13,18 @@ workspace = true
 [dependencies]
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-test-macros = { workspace = true }
 derivative = { workspace = true }
+derive_setters = { workspace = true }
+num-traits = { workspace = true }
+re_mp4 = { workspace = true }
 smallvec = { workspace = true }
-symphonia = { workspace = true }
+symphonia = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
-unimock = { workspace = true, optional = true }
+unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
@@ -27,23 +32,35 @@ kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation = { workspace = true, optional = true }
 core-foundation-sys = { workspace = true, optional = true }
+symphonia-core = { workspace = true, optional = true }
+symphonia-format-isomp4 = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }
 ndk-context = { workspace = true }
 
 [features]
-default = []
+# Default pulls in Symphonia so `cargo build` on any platform produces a
+# usable decoder. Consumers wanting an apple/android hardware-only build
+# set `default-features = false` and enable just the platform feature.
+default = ["symphonia"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-apple = ["dep:core-foundation", "dep:core-foundation-sys"]
+apple = [
+    "dep:core-foundation",
+    "dep:core-foundation-sys",
+    "dep:symphonia-core",
+    "dep:symphonia-format-isomp4",
+]
 android = []
-test-utils = ["unimock"]
-internal = []
+# Enables the software (Symphonia) decoder path. When disabled, the
+# factory only uses the compiled hardware backend — no fallback.
+symphonia = ["dep:symphonia"]
+test-utils = []
 
 [dev-dependencies]
-kithara-decode = { path = ".", default-features = false, features = ["internal"] }
-kithara-test-utils = { workspace = true }
-unimock = { workspace = true }
+kithara-decode = { path = ".", default-features = false, features = ["symphonia"] }
+kithara-storage = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 wasm-bindgen-test = { workspace = true }
 
 [package.metadata.cargo-machete]

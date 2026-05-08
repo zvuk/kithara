@@ -20,6 +20,7 @@ lib-only = []
 [dependencies]
 kithara = { workspace = true, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
+kithara-platform = { workspace = true }
 kithara-queue = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -31,10 +32,12 @@ derivative = { workspace = true }
 derive_setters = { workspace = true }
 iced = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
 ratatui = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
@@ -44,7 +47,7 @@ kithara = { workspace = true, features = ["apple"] }
 
 [dev-dependencies]
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 
 [[bin]]
 name = "kithara"

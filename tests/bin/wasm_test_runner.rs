@@ -21,7 +21,6 @@ use kithara_platform::time::{Duration, sleep};
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::TempDir;
 
-// On wasm32, provide a no-op main.
 #[cfg(target_arch = "wasm32")]
 fn main() {}
 
@@ -100,8 +99,6 @@ fn default_runner_timeout_secs(args: &[String]) -> u64 {
         return parsed;
     }
 
-    // `cargo test ... <filter>` forwards `<wasm> <filter> [--options]`.
-    // For filtered runs, prefer a shorter default to fail fast on hangs.
     let has_filter = args.get(1).is_some_and(|arg| !arg.starts_with('-'));
     if has_filter { 180 } else { 1800 }
 }

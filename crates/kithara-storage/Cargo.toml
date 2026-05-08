@@ -12,30 +12,28 @@ workspace = true
 
 [features]
 default = []
-test-utils = ["unimock"]
+test-utils = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
-internal = []
 disable-hang-detector = [
-    "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
 ]
 
 [dependencies]
 delegate = { workspace = true }
 derivative = { workspace = true }
+derive_setters = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-test-macros = { workspace = true }
 
 # range tracking + sync primitives (wasm32-compatible)
 rangemap = { workspace = true }
-kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 crossbeam-queue = { workspace = true }
 
-# mock support (optional)
-unimock = { workspace = true, optional = true }
+unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -48,9 +46,7 @@ tempfile = { workspace = true }
 tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
-kithara-storage = { path = ".", default-features = false, features = ["internal"] }
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-storage = { path = ".", default-features = false }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }
-unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

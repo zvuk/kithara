@@ -52,9 +52,38 @@ impl EventBus {
         senders.push(tx);
         Self {
             registry,
-            scope: BusScope::root(id),
             senders,
+            scope: BusScope::root(id),
         }
+    }
+
+    /// This bus's unique id.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        self.scope.id()
+    }
+
+    /// Publish an event to this scope and all ancestor scopes.
+    ///
+    /// Accepts any type that converts `Into<Event>`, so you can pass
+    /// sub-enum values directly: `bus.publish(HlsEvent::EndOfStream)`.
+    pub fn publish<E: Into<Event>>(&self, event: E) {
+        let event = event.into();
+        let len = self.senders.len();
+        if len == 1 {
+            self.senders[0].send(event).ok();
+            return;
+        }
+        for sender in &self.senders[..len - 1] {
+            sender.send(event.clone()).ok();
+        }
+        self.senders[len - 1].send(event).ok();
+    }
+
+    /// This bus's scope.
+    #[must_use]
+    pub fn scope(&self) -> &BusScope {
+        &self.scope
     }
 
     /// Create a child scope sharing the same topic registry.
@@ -67,33 +96,14 @@ impl EventBus {
         let (tx, _) = broadcast::channel(self.registry.capacity);
         self.registry.topics.insert(id, tx.clone());
         let scope = self.scope.child(id);
-        // Cache senders: self (new) + ancestors (from parent's cache).
         let mut senders = SmallVec::with_capacity(self.senders.len() + 1);
         senders.push(tx);
         senders.extend(self.senders.iter().cloned());
         Self {
-            registry: Arc::clone(&self.registry),
             scope,
             senders,
+            registry: Arc::clone(&self.registry),
         }
-    }
-
-    /// Publish an event to this scope and all ancestor scopes.
-    ///
-    /// Accepts any type that converts `Into<Event>`, so you can pass
-    /// sub-enum values directly: `bus.publish(HlsEvent::EndOfStream)`.
-    pub fn publish<E: Into<Event>>(&self, event: E) {
-        let event = event.into();
-        let len = self.senders.len();
-        if len == 1 {
-            let _ = self.senders[0].send(event);
-            return;
-        }
-        // Clone for all but last, consume owned event on last send.
-        for sender in &self.senders[..len - 1] {
-            let _ = sender.send(event.clone());
-        }
-        let _ = self.senders[len - 1].send(event);
     }
 
     /// Subscribe to events in this bus's scope.
@@ -105,31 +115,12 @@ impl EventBus {
     pub fn subscribe(&self) -> crate::EventReceiver {
         crate::EventReceiver::new(self.senders[0].subscribe())
     }
-
-    /// This bus's unique id.
-    #[must_use]
-    pub fn id(&self) -> u64 {
-        self.scope.id()
-    }
-
-    /// This bus's scope.
-    #[must_use]
-    pub fn scope(&self) -> &BusScope {
-        &self.scope
-    }
 }
 
 impl Drop for EventBus {
     fn drop(&mut self) {
-        // Only remove the topic if this is the last EventBus holding a sender
-        // for this scope. broadcast::Sender strong_count includes the one in
-        // DashMap + one per EventBus clone that has it cached. When our cached
-        // sender is the last clone besides the DashMap entry (count == 2),
-        // removing is safe. For root/ancestor senders cached by children,
-        // strong_count will be higher, so we don't remove them.
         let id = self.scope.id();
         if self.senders[0].receiver_count() == 0 {
-            // No subscribers and we are being dropped — clean up.
             self.registry.topics.remove(&id);
         }
     }
@@ -156,7 +147,7 @@ mod tests {
 
     use super::*;
     #[cfg(feature = "file")]
-    use crate::FileEvent;
+    use crate::{FileError, FileEvent};
 
     #[cfg(feature = "file")]
     fn assert_file_event(event: &Event, expected: &FileEvent) {
@@ -175,7 +166,7 @@ mod tests {
 
     #[cfg(feature = "file")]
     #[kithara::test(tokio)]
-    #[case(FileEvent::DownloadComplete { total_bytes: 42 })]
+    #[case(FileEvent::ReadProgress { position: 42, total: None })]
     #[case(FileEvent::EndOfStream)]
     async fn publish_and_subscribe(#[case] expected: FileEvent) {
         let bus = EventBus::new(16);
@@ -188,8 +179,8 @@ mod tests {
     #[cfg(feature = "file")]
     #[kithara::test(tokio)]
     #[case(FileEvent::EndOfStream)]
-    #[case(FileEvent::DownloadError {
-        error: "network".to_string()
+    #[case(FileEvent::Error {
+        error: FileError::Io("network".to_string()),
     })]
     async fn multiple_subscribers_each_receive(#[case] expected: FileEvent) {
         let bus = EventBus::new(16);
@@ -206,8 +197,8 @@ mod tests {
         let bus = EventBus::new(2);
         let mut rx = bus.subscribe();
         for i in 0..10 {
-            bus.publish(FileEvent::DownloadProgress {
-                offset: i,
+            bus.publish(FileEvent::ReadProgress {
+                position: i,
                 total: None,
             });
         }
@@ -288,12 +279,21 @@ mod tests {
         let mut rx_a = child_a.subscribe();
 
         child_a.publish(FileEvent::EndOfStream);
-        child_b.publish(FileEvent::DownloadComplete { total_bytes: 99 });
+        child_b.publish(FileEvent::ReadProgress {
+            position: 99,
+            total: None,
+        });
 
         let e1 = rx_root.recv().await.unwrap();
         let e2 = rx_root.recv().await.unwrap();
         assert_file_event(&e1, &FileEvent::EndOfStream);
-        assert_file_event(&e2, &FileEvent::DownloadComplete { total_bytes: 99 });
+        assert_file_event(
+            &e2,
+            &FileEvent::ReadProgress {
+                position: 99,
+                total: None,
+            },
+        );
 
         let ea = rx_a.recv().await.unwrap();
         assert_file_event(&ea, &FileEvent::EndOfStream);
@@ -326,7 +326,6 @@ mod tests {
             child_id = child.id();
             assert!(root.registry.topics.contains_key(&child_id));
         }
-        // After drop, topic entry should be removed (no subscribers).
         assert!(!root.registry.topics.contains_key(&child_id));
     }
 }

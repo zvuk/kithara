@@ -8,22 +8,32 @@ repository.workspace = true
 description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming"
 
 [dependencies]
-delegate = { workspace = true }
 derivative = { workspace = true }
+derive_setters = { workspace = true }
+kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-test-utils = { workspace = true }
+num-traits = { workspace = true }
+thiserror = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
+unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
-internal = []
+# No-op shim retained so `#[kithara::probe]` macro expansions
+# (which emit `cfg(any(test, feature = "test-utils"))`) don't trigger
+# `unexpected_cfgs` warnings on this crate. No production code is
+# gated by this feature; the canonical test escape hatch was removed
+# in plan async-juggling-plum.md.
+test-utils = []
 
 [dev-dependencies]
-kithara-abr = { path = ".", default-features = false, features = ["internal"] }
-unimock = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 wasm-bindgen-test = { workspace = true }
+proptest = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }

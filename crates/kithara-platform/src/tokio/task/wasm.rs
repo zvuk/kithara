@@ -18,6 +18,22 @@ use futures::channel::oneshot;
 use tokio_with_wasm::alias as tww_alias;
 use tww_alias::task as tww_task;
 
+/// Forward a `tokio_with_wasm` JoinHandle into our own oneshot-backed
+/// channel, converting any tww join error into our cancelled `JoinError`.
+fn forward_tww_handle<H, T>(tx: oneshot::Sender<Result<T, JoinError>>, handle: H)
+where
+    H: Future<Output = Result<T, tww_task::JoinError>> + 'static,
+    T: 'static,
+{
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = match handle.await {
+            Ok(val) => Ok(val),
+            Err(_) => Err(JoinError { cancelled: true }),
+        };
+        drop(tx.send(result));
+    });
+}
+
 /// Spawn an async task on the current thread's executor.
 ///
 /// On a Web Worker, wraps with `task_begin`/`task_finished` lifecycle hooks.
@@ -32,21 +48,11 @@ where
     if crate::thread::is_worker_thread() {
         wasm_safe_thread::task_begin();
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = tx.send(Ok(future.await));
+            drop(tx.send(Ok(future.await)));
             wasm_safe_thread::task_finished();
         });
     } else {
-        let handle = tww_task::spawn(future);
-        wasm_bindgen_futures::spawn_local(async move {
-            match handle.await {
-                Ok(val) => {
-                    let _ = tx.send(Ok(val));
-                }
-                Err(_) => {
-                    let _ = tx.send(Err(JoinError { cancelled: true }));
-                }
-            }
-        });
+        forward_tww_handle(tx, tww_task::spawn(future));
     }
 
     JoinHandle { rx }
@@ -64,21 +70,11 @@ where
     let (tx, rx) = oneshot::channel();
 
     if crate::thread::is_worker_thread() {
-        let _ = crate::thread::spawn(move || {
-            let _ = tx.send(Ok(f()));
-        });
+        drop(crate::thread::spawn(move || {
+            drop(tx.send(Ok(f())));
+        }));
     } else {
-        let handle = tww_task::spawn_blocking(f);
-        wasm_bindgen_futures::spawn_local(async move {
-            match handle.await {
-                Ok(val) => {
-                    let _ = tx.send(Ok(val));
-                }
-                Err(_) => {
-                    let _ = tx.send(Err(JoinError { cancelled: true }));
-                }
-            }
-        });
+        forward_tww_handle(tx, tww_task::spawn_blocking(f));
     }
 
     JoinHandle { rx }

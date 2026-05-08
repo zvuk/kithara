@@ -85,9 +85,9 @@ impl MediaInfo {
     #[must_use]
     pub fn new(codec: Option<AudioCodec>, container: Option<ContainerFormat>) -> Self {
         Self {
-            channels: None,
             codec,
             container,
+            channels: None,
             sample_rate: None,
             variant_index: None,
         }
@@ -95,6 +95,41 @@ impl MediaInfo {
 }
 
 impl AudioCodec {
+    /// Parse from HLS CODECS attribute value.
+    ///
+    /// Examples:
+    /// - `mp4a.40.2` -> `AacLc`
+    /// - `mp4a.40.5` -> `AacHe`
+    /// - `mp4a.40.29` -> `AacHeV2`
+    /// - `mp4a.40.34` -> `Mp3`
+    /// - `mp4a.69` or `mp4a.6B` -> `Mp3`
+    #[must_use]
+    pub fn from_hls_codec(codec: &str) -> Option<Self> {
+        let codec_lower = codec.to_lowercase();
+
+        if codec_lower.starts_with("mp4a.40.29") {
+            Some(Self::AacHeV2)
+        } else if codec_lower.starts_with("mp4a.40.34") {
+            Some(Self::Mp3)
+        } else if codec_lower.starts_with("mp4a.40.5") {
+            Some(Self::AacHe)
+        } else if codec_lower.starts_with("mp4a.40.2") {
+            Some(Self::AacLc)
+        } else if codec_lower.starts_with("mp4a.69") || codec_lower.starts_with("mp4a.6b") {
+            Some(Self::Mp3)
+        } else if codec_lower.starts_with("flac") || codec_lower.starts_with("fLaC") {
+            Some(Self::Flac)
+        } else if codec_lower.starts_with("vorbis") {
+            Some(Self::Vorbis)
+        } else if codec_lower.starts_with("opus") {
+            Some(Self::Opus)
+        } else if codec_lower.starts_with("alac") {
+            Some(Self::Alac)
+        } else {
+            None
+        }
+    }
+
     /// Parse codec from HTTP Content-Type header value.
     ///
     /// Examples:
@@ -130,49 +165,11 @@ impl AudioCodec {
         }
         None
     }
-
-    /// Parse from HLS CODECS attribute value.
-    ///
-    /// Examples:
-    /// - `mp4a.40.2` -> `AacLc`
-    /// - `mp4a.40.5` -> `AacHe`
-    /// - `mp4a.40.29` -> `AacHeV2`
-    /// - `mp4a.40.34` -> `Mp3`
-    /// - `mp4a.69` or `mp4a.6B` -> `Mp3`
-    #[must_use]
-    pub fn from_hls_codec(codec: &str) -> Option<Self> {
-        let codec_lower = codec.to_lowercase();
-
-        // Check longer prefixes first to avoid false matches
-        if codec_lower.starts_with("mp4a.40.29") {
-            Some(Self::AacHeV2)
-        } else if codec_lower.starts_with("mp4a.40.34") {
-            Some(Self::Mp3)
-        } else if codec_lower.starts_with("mp4a.40.5") {
-            Some(Self::AacHe)
-        } else if codec_lower.starts_with("mp4a.40.2") {
-            Some(Self::AacLc)
-        } else if codec_lower.starts_with("mp4a.69") || codec_lower.starts_with("mp4a.6b") {
-            Some(Self::Mp3)
-        } else if codec_lower.starts_with("flac") || codec_lower.starts_with("fLaC") {
-            Some(Self::Flac)
-        } else if codec_lower.starts_with("vorbis") {
-            Some(Self::Vorbis)
-        } else if codec_lower.starts_with("opus") {
-            Some(Self::Opus)
-        } else if codec_lower.starts_with("alac") {
-            Some(Self::Alac)
-        } else {
-            None
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    mod kithara {
-        pub(crate) use kithara_test_macros::test;
-    }
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -253,10 +250,10 @@ mod tests {
     }
 
     #[kithara::test(wasm)]
-    #[case(1)] // Mono
-    #[case(2)] // Stereo
-    #[case(6)] // 5.1 surround
-    #[case(8)] // 7.1 surround
+    #[case(1)]
+    #[case(2)]
+    #[case(6)]
+    #[case(8)]
     fn test_media_info_with_channels(#[case] channels: u16) {
         let info = MediaInfo::default().with_channels(channels);
         assert_eq!(info.container, None);

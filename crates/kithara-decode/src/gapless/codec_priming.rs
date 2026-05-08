@@ -3,15 +3,22 @@ use kithara_stream::AudioCodec;
 /// Conservative leading priming counts (in PCM frames) for lossy codecs.
 ///
 /// These numbers are the *standard* encoder-delay values for the codec
-/// family. Real files may differ if a non-default encoder was used (see
-/// `Mp3` note below). The table intentionally errs on the side of slight
-/// under-trimming when an encoder is ambiguous: a few residual priming
-/// frames are inaudible after the small fade-in that the heuristic
-/// trimmer applies, but over-trim eats real content.
+/// family. They are the **fallback** the decoder uses when no
+/// container- or encoder-level gapless metadata was probed. When the
+/// factory's `probe_codec_gapless` succeeds (MP4 `udta`/`elst` for AAC,
+/// Xing/Info+LAME tag for MP3), the probed value already contains the
+/// encoder priming and is used verbatim — `codec_priming_frames` is not
+/// added on top, otherwise it would double-count.
 ///
 /// Spec references:
-/// - AAC: ISO/IEC 14496-3 — fixed AAC LC priming = 2112 frames.
-/// - HE-AAC: AAC LC priming + 1024-frame SBR delay = 3072 frames.
+/// - AAC: container metadata produced by mainstream encoders (`FFmpeg`'s
+///   `aacenc`, Apple's `AudioConverter`) already folds the AAC encoder's
+///   native priming (one 1024-frame silent block) into the declared
+///   `encoder_delay`. The fallback for AAC without container metadata
+///   is 0 — a raw AAC stream carries no priming hint, so we under-trim
+///   rather than risk eating real content.
+/// - HE-AAC: same encoder convention; SBR delay is captured inside the
+///   container's `encoder_delay` count, fallback 0.
 /// - MP3 LAME default: 528 + 576 + 1 = 1105 frames (Fraunhofer differs:
 ///   ~1681). 1105 covers LAME — by far the most common encoder; the
 ///   leftover ~12 ms tail of priming for Fraunhofer is masked by
@@ -23,11 +30,12 @@ use kithara_stream::AudioCodec;
 #[must_use]
 pub fn codec_priming_frames(codec: AudioCodec) -> u64 {
     match codec {
-        AudioCodec::AacLc => 2112,
-        AudioCodec::AacHe | AudioCodec::AacHeV2 => 3072,
         AudioCodec::Mp3 => 1105,
         AudioCodec::Opus => 312,
-        AudioCodec::Vorbis
+        AudioCodec::AacLc
+        | AudioCodec::AacHe
+        | AudioCodec::AacHeV2
+        | AudioCodec::Vorbis
         | AudioCodec::Flac
         | AudioCodec::Alac
         | AudioCodec::Pcm
@@ -42,14 +50,10 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn aac_lc_priming_is_2112() {
-        assert_eq!(codec_priming_frames(AudioCodec::AacLc), 2112);
-    }
-
-    #[kithara::test]
-    fn he_aac_adds_sbr_delay() {
-        assert_eq!(codec_priming_frames(AudioCodec::AacHe), 3072);
-        assert_eq!(codec_priming_frames(AudioCodec::AacHeV2), 3072);
+    fn aac_priming_is_already_in_container_encoder_delay() {
+        assert_eq!(codec_priming_frames(AudioCodec::AacLc), 0);
+        assert_eq!(codec_priming_frames(AudioCodec::AacHe), 0);
+        assert_eq!(codec_priming_frames(AudioCodec::AacHeV2), 0);
     }
 
     #[kithara::test]

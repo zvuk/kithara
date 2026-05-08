@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_platform::{
@@ -5,9 +7,11 @@ use kithara_platform::{
     tokio,
 };
 use tokio_util::sync::CancellationToken;
-#[cfg(test)]
-use unimock::unimock;
 use url::Url;
+
+mod kithara {
+    pub(crate) use kithara_test_macros::mock;
+}
 
 use crate::{
     ByteStream,
@@ -25,6 +29,10 @@ impl DefaultRetryPolicy {
         Self { policy }
     }
 
+    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
+        self.policy.delay_for_attempt(attempt)
+    }
+
     pub fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
         if attempt >= self.policy.max_retries {
             return false;
@@ -32,26 +40,56 @@ impl DefaultRetryPolicy {
 
         error.is_retryable()
     }
-
-    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        self.policy.delay_for_attempt(attempt)
-    }
 }
 
 /// Retry decorator for Net implementations
 pub struct RetryNet<N, P> {
+    cancel: CancellationToken,
     inner: N,
     retry_policy: P,
-    cancel: CancellationToken,
 }
 
 impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
     pub fn new(inner: N, retry_policy: P, cancel: CancellationToken) -> Self {
         Self {
+            cancel,
             inner,
             retry_policy,
-            cancel,
         }
+    }
+
+    async fn retry_loop<F, Fut, T>(&self, mut op: F) -> Result<T, NetError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, NetError>>,
+    {
+        let mut last_error = None;
+
+        for attempt in 0..=self.retry_policy.max_attempts() {
+            match op().await {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    if !self.retry_policy.should_retry(&error, attempt) {
+                        return Err(error);
+                    }
+                    last_error = Some(error.clone());
+
+                    if attempt < self.retry_policy.max_attempts() {
+                        let delay = self.retry_policy.delay_for_attempt(attempt);
+                        tokio::select! {
+                            biased;
+                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+                            () = sleep(delay) => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
+            max_retries: self.retry_policy.max_attempts(),
+            source: Box::new(NetError::Unimplemented),
+        }))
     }
 }
 
@@ -59,63 +97,8 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        let mut last_error = None;
-
-        for attempt in 0..=self.retry_policy.max_attempts() {
-            match self.inner.get_bytes(url.clone(), headers.clone()).await {
-                Ok(bytes) => return Ok(bytes),
-                Err(error) => {
-                    if !self.retry_policy.should_retry(&error, attempt) {
-                        return Err(error);
-                    }
-                    last_error = Some(error.clone());
-
-                    if attempt < self.retry_policy.max_attempts() {
-                        let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                            () = sleep(delay) => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
-            max_retries: self.retry_policy.max_attempts(),
-            source: Box::new(NetError::Unimplemented),
-        }))
-    }
-
-    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        let mut last_error = None;
-
-        for attempt in 0..=self.retry_policy.max_attempts() {
-            match self.inner.stream(url.clone(), headers.clone()).await {
-                Ok(stream) => return Ok(stream),
-                Err(error) => {
-                    if !self.retry_policy.should_retry(&error, attempt) {
-                        return Err(error);
-                    }
-                    last_error = Some(error.clone());
-
-                    if attempt < self.retry_policy.max_attempts() {
-                        let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                            () = sleep(delay) => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
-            max_retries: self.retry_policy.max_attempts(),
-            source: Box::new(NetError::Unimplemented),
-        }))
+        self.retry_loop(|| self.inner.get_bytes(url.clone(), headers.clone()))
+            .await
     }
 
     async fn get_range(
@@ -124,88 +107,42 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
-        let mut last_error = None;
-
-        for attempt in 0..=self.retry_policy.max_attempts() {
-            match self
-                .inner
+        self.retry_loop(|| {
+            self.inner
                 .get_range(url.clone(), range.clone(), headers.clone())
-                .await
-            {
-                Ok(stream) => return Ok(stream),
-                Err(error) => {
-                    if !self.retry_policy.should_retry(&error, attempt) {
-                        return Err(error);
-                    }
-                    last_error = Some(error.clone());
-
-                    if attempt < self.retry_policy.max_attempts() {
-                        let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                            () = sleep(delay) => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
-            max_retries: self.retry_policy.max_attempts(),
-            source: Box::new(NetError::Unimplemented),
-        }))
+        })
+        .await
     }
 
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        let mut last_error = None;
+        self.retry_loop(|| self.inner.head(url.clone(), headers.clone()))
+            .await
+    }
 
-        for attempt in 0..=self.retry_policy.max_attempts() {
-            match self.inner.head(url.clone(), headers.clone()).await {
-                Ok(out) => return Ok(out),
-                Err(error) => {
-                    if !self.retry_policy.should_retry(&error, attempt) {
-                        return Err(error);
-                    }
-                    last_error = Some(error.clone());
-
-                    if attempt < self.retry_policy.max_attempts() {
-                        let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::select! {
-                            biased;
-                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
-                            () = sleep(delay) => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
-            max_retries: self.retry_policy.max_attempts(),
-            source: Box::new(NetError::Unimplemented),
-        }))
+    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
+        self.retry_loop(|| self.inner.stream(url.clone(), headers.clone()))
+            .await
     }
 }
 
-#[cfg_attr(test, unimock(api = RetryPolicyMock))]
+#[kithara::mock(api = RetryPolicyMock)]
 pub trait RetryPolicyTrait: Send + Sync {
-    fn should_retry(&self, error: &NetError, attempt: u32) -> bool;
     fn delay_for_attempt(&self, attempt: u32) -> Duration;
     fn max_attempts(&self) -> u32;
+    fn should_retry(&self, error: &NetError, attempt: u32) -> bool;
 }
 
 impl RetryPolicyTrait for DefaultRetryPolicy {
-    fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
-        self.should_retry(error, attempt)
-    }
-
     fn delay_for_attempt(&self, attempt: u32) -> Duration {
         self.delay_for_attempt(attempt)
     }
 
     fn max_attempts(&self) -> u32 {
         self.policy.max_retries
+    }
+
+    fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
+        self.should_retry(error, attempt)
     }
 }
 
@@ -224,7 +161,7 @@ mod tests {
     use crate::traits::NetMock;
 
     fn test_url() -> Url {
-        Url::parse("http://test.com").expect("valid URL")
+        Url::parse("http://test.com").expect("BUG: hard-coded test URL is valid")
     }
 
     fn empty_stream() -> ByteStream {
@@ -233,9 +170,9 @@ mod tests {
 
     fn fast_retry_policy(max_retries: u32) -> RetryPolicy {
         RetryPolicy {
+            max_retries,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
-            max_retries,
         }
     }
 
@@ -250,8 +187,6 @@ mod tests {
     fn retry_net_default(mock: Unimock) -> RetryNet<Unimock, DefaultRetryPolicy> {
         retry_net(mock, RetryPolicy::default())
     }
-
-    // DefaultRetryPolicy Tests
 
     #[kithara::test]
     fn test_default_retry_policy_new() {
@@ -303,8 +238,6 @@ mod tests {
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.delay_for_attempt(attempt), expected);
     }
-
-    // RetryNet Tests - get_bytes
 
     #[kithara::test(tokio)]
     async fn test_retry_net_get_bytes_success_first_try() {
@@ -372,8 +305,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // RetryNet Tests - stream
-
     #[kithara::test(tokio)]
     async fn test_retry_net_stream_success() {
         let mock = Unimock::new(
@@ -409,8 +340,6 @@ mod tests {
 
         assert!(result.is_ok());
     }
-
-    // RetryNet Tests - get_range
 
     #[kithara::test(tokio)]
     async fn test_retry_net_get_range_success() {
@@ -450,8 +379,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // RetryNet Tests - head
-
     #[kithara::test(tokio)]
     async fn test_retry_net_head_success() {
         let mock = Unimock::new(
@@ -487,8 +414,6 @@ mod tests {
 
         assert!(result.is_ok());
     }
-
-    // RetryPolicyTrait Tests
 
     #[kithara::test]
     fn test_retry_policy_trait_max_attempts() {
@@ -531,14 +456,13 @@ mod tests {
         let url = test_url();
         let handle = tokio::spawn(async move { retry_net.get_bytes(url, None).await });
 
-        // Give the first attempt time to fail and enter the retry sleep
         sleep(Duration::from_millis(50)).await;
         cancel.cancel();
 
         let result = timeout(Duration::from_millis(200), handle)
             .await
-            .expect("task should complete within 200ms")
-            .expect("task should not panic");
+            .expect("BUG: spawned retry task must finish within 200ms in this test")
+            .expect("BUG: spawned retry task must not panic in this test");
 
         assert!(matches!(result, Err(NetError::Cancelled)));
     }

@@ -12,7 +12,7 @@ use std::{
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
 use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
@@ -49,15 +49,12 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     let url = server.url("/master.m3u8");
 
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(ephemeral)
+        .with_is_ephemeral(ephemeral)
         .with_cache_capacity(NonZeroUsize::new(256).unwrap());
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
     let total_bytes = server.total_bytes();
@@ -67,7 +64,6 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     );
 
     let result = spawn_blocking(move || {
-        // Phase 1: dense seek burst with immediate probe reads.
         let mut rng = Xorshift64::new(0xA11C_EE55_D00D_BA5E);
         let max_seek = total_bytes - Consts::PROBE_SIZE as u64;
         let mut probe = [0u8; Consts::PROBE_SIZE];
@@ -88,7 +84,6 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
             );
         }
 
-        // Phase 2: sequential tail read must stay contiguous and exact.
         let tail_start = total_bytes / 3;
         let actual = stream
             .seek(SeekFrom::Start(tail_start))
@@ -163,15 +158,12 @@ async fn ephemeral_small_cache_reads_entire_stream() {
     let total_bytes = server.total_bytes();
 
     let store = StoreOptions::new(temp_dir.path())
-        .with_ephemeral(true)
+        .with_is_ephemeral(true)
         .with_cache_capacity(NonZeroUsize::new(5).expect("5 > 0"));
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
     let result = spawn_blocking(move || {

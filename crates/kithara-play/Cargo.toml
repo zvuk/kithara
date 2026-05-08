@@ -19,10 +19,12 @@ kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-file = { workspace = true, optional = true }
 kithara-hls = { workspace = true, optional = true }
-kithara-abr = { workspace = true, optional = true }
+kithara-abr = { workspace = true }
 kithara-assets = { workspace = true, optional = true }
 kithara-net = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
+kithara-test-macros = { workspace = true }
+num-traits = { workspace = true }
 
 # Audio engine
 firewheel = { workspace = true }
@@ -41,11 +43,7 @@ url = { workspace = true }
 portable-atomic = { workspace = true }
 smallvec = { workspace = true }
 
-# Audio output
-rodio = { workspace = true, optional = true }
-
-# Testing
-unimock = { workspace = true, optional = true }
+unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
@@ -57,21 +55,19 @@ firewheel-web-audio = { workspace = true, optional = true }
 [features]
 default = ["file", "hls", "backend-cpal"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
-hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net"]
+hls = ["dep:kithara-hls", "dep:kithara-assets", "dep:kithara-net"]
 backend-cpal = ["firewheel/cpal"]
 backend-web-audio = ["dep:firewheel-web-audio"]
-backend-offline = []
-rodio = ["dep:rodio", "kithara-audio/rodio"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple"]
-test-utils = ["unimock", "backend-offline"]
-internal = []
+# Re-export of testing helpers (engine module + macro mocks).
+# Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
+test-utils = []
 
 [dev-dependencies]
-kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "internal"] }
+kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "test-utils"] }
 kithara-audio = { workspace = true, features = ["test-utils"] }
-unimock = { workspace = true }
-kithara-test-utils = { workspace = true }
+kithara-test-utils = { workspace = true, features = ["test-utils"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

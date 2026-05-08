@@ -10,35 +10,70 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = []
+# Включает полный тестовый набор: фикстуры, тестовый HTTP-сервер,
+# signal/wav/fmp4-генераторы, USDT-эмиссию probes. Прод-крейты держат
+# `kithara-test-utils = { workspace = true }` (без features) и получают
+# только лёгкий `probes/` runtime; `[dev-dependencies]` тех же крейтов
+# подключают эту фичу для тестов.
+test-utils = [
+    "dep:kithara-encode",
+    "dep:axum",
+    "dep:tower-http",
+    "dep:aes",
+    "dep:cbc",
+    "dep:reqwest",
+    "dep:tempfile",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:tracing-subscriber",
+    "dep:tracing-wasm",
+    "dep:base64",
+    "dep:futures",
+    "dep:hex",
+    "dep:sha2",
+    "dep:thiserror",
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:uuid",
+    "dep:usdt",
+    "tokio/net",
+]
+
 [dependencies]
-kithara-stream = { workspace = true }
-kithara-abr = { workspace = true }
-kithara-storage = { workspace = true }
+# UNCONDITIONAL — нужны для лёгкого `probes/` модуля, который остаётся
+# прод-видимым (через `derive(Probe)` impl-блок и ручные impl
+# `IntoProbeArg` в `kithara-hls`).
+kithara-events = { workspace = true, features = ["downloader"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
-tokio-util = { workspace = true }
-tracing-subscriber = { workspace = true }
-base64 = { workspace = true }
-thiserror = { workspace = true }
-futures = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-reqwest = { workspace = true }
-hex = { workspace = true }
-sha2 = { workspace = true }
-uuid = { workspace = true }
+
+# OPTIONAL — пулится только под `feature = "test-utils"`.
+base64 = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-tracing-wasm = { workspace = true }
+tracing-wasm = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-encode = { workspace = true }
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
-axum = { workspace = true }
-tower-http = { workspace = true }
-tokio = { workspace = true, features = ["net", "rt"] }
-aes = { workspace = true }
-cbc = { workspace = true }
+kithara-encode = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+aes = { workspace = true, optional = true }
+cbc = { workspace = true, optional = true }
+usdt = { workspace = true, optional = true }

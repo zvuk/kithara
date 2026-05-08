@@ -35,25 +35,20 @@
 //! ```
 
 #![forbid(unsafe_code)]
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
-// Internal modules
 mod audio;
 pub mod effects;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 mod pipeline;
 mod resampler;
-#[cfg(feature = "rodio")]
-mod rodio;
 mod runtime;
 mod traits;
 pub(crate) mod worker;
 
-#[cfg(feature = "internal")]
-pub mod internal;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_helpers;
 
-// Public API exports
 pub use audio::Audio;
 pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands};
 pub use pipeline::{
@@ -62,5 +57,8 @@ pub use pipeline::{
     track_fsm::TrackPhaseTag,
 };
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
-pub use traits::{AudioEffect, DecodeError, DecodeResult, PcmReader};
+pub use traits::{
+    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmReader, PendingReason, ReadOutcome,
+    SeekOutcome,
+};
 pub use worker::{AudioWorkerSource, handle::AudioWorkerHandle, types::ServiceClass};

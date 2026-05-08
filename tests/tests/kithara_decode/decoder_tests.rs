@@ -14,8 +14,6 @@ fn test_config() -> DecoderConfig {
     DecoderConfig::default()
 }
 
-// Fixtures
-
 #[kithara::fixture]
 fn audio() -> EmbeddedAudio {
     EmbeddedAudio::get()
@@ -33,8 +31,6 @@ fn mp3_media_info() -> MediaInfo {
         .with_container(ContainerFormat::MpegAudio)
 }
 
-// Basic Decode Tests
-
 #[kithara::test]
 #[case::wav(true, "wav")]
 #[case::mp3(false, "mp3")]
@@ -42,16 +38,16 @@ fn decode_with_probe(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &
     let data = if use_wav { audio.wav() } else { audio.mp3() };
     let reader = Cursor::new(data);
 
-    let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
+    let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), &test_config()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
     assert!(spec.channels > 0);
 
-    let chunk = decoder.next_chunk().unwrap();
-    assert!(chunk.is_some());
+    let outcome = decoder.next_chunk().unwrap();
+    assert!(outcome.is_chunk());
 
-    let chunk = chunk.unwrap();
+    let chunk = outcome.into_chunk().unwrap();
     assert!(!chunk.pcm.is_empty());
 }
 
@@ -62,12 +58,12 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
     let data = if use_wav { audio.wav() } else { audio.mp3() };
     let reader = Cursor::new(data);
 
-    let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), test_config()).unwrap();
+    let mut decoder = DecoderFactory::create_with_probe(reader, Some(ext), &test_config()).unwrap();
 
     let mut total_samples = 0;
     let mut chunk_count = 0;
 
-    while let Ok(Some(chunk)) = decoder.next_chunk() {
+    while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         total_samples += chunk.pcm.len();
         chunk_count += 1;
     }
@@ -75,8 +71,6 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
     assert!(total_samples > 0, "Should decode some samples");
     assert!(chunk_count > 0, "Should have at least one chunk");
 }
-
-// MediaInfo Creation Tests
 
 #[kithara::test]
 #[case::wav(true)]
@@ -94,86 +88,81 @@ fn from_media_info(
     };
     let reader = Cursor::new(data);
 
-    let mut decoder = DecoderFactory::create_from_media_info(reader, info, test_config()).unwrap();
+    let mut decoder = DecoderFactory::create_from_media_info(reader, info, &test_config()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
     assert!(spec.channels > 0);
 
-    let chunk = decoder.next_chunk().unwrap();
-    assert!(chunk.is_some());
+    let outcome = decoder.next_chunk().unwrap();
+    assert!(outcome.is_chunk());
 }
 
-// Spec Tests
+/// Acceptable spec for a probed `test.{wav,mp3}` fixture.
+fn assert_spec(spec: &kithara::decode::PcmSpec, ext: &str) {
+    match ext {
+        "wav" => {
+            assert_eq!(spec.sample_rate, 44100);
+            assert_eq!(spec.channels, 2);
+        }
+        "mp3" => {
+            assert!(
+                [44100, 48000, 22050].contains(&spec.sample_rate),
+                "Unexpected MP3 sample rate: {}",
+                spec.sample_rate
+            );
+            assert!(spec.channels == 1 || spec.channels == 2);
+        }
+        other => panic!("unhandled format: {other}"),
+    }
+}
 
 #[kithara::test]
-fn spec_wav_properties(audio: EmbeddedAudio) {
-    let reader = Cursor::new(audio.wav());
+#[case::wav("wav")]
+#[case::mp3("mp3")]
+fn spec_properties(audio: EmbeddedAudio, #[case] ext: &str) {
+    let data = if ext == "wav" {
+        audio.wav()
+    } else {
+        audio.mp3()
+    };
+    let reader = Cursor::new(data);
 
-    let decoder = DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
-    let spec = decoder.spec();
-
-    // Our test WAV is 44.1kHz stereo
-    assert_eq!(spec.sample_rate, 44100);
-    assert_eq!(spec.channels, 2);
+    let decoder = DecoderFactory::create_with_probe(reader, Some(ext), &test_config()).unwrap();
+    assert_spec(&decoder.spec(), ext);
 }
-
-#[kithara::test]
-fn spec_mp3_properties(audio: EmbeddedAudio) {
-    let reader = Cursor::new(audio.mp3());
-
-    let decoder = DecoderFactory::create_with_probe(reader, Some("mp3"), test_config()).unwrap();
-    let spec = decoder.spec();
-
-    // MP3 should have standard sample rate
-    assert!(
-        spec.sample_rate == 44100 || spec.sample_rate == 48000 || spec.sample_rate == 22050,
-        "Unexpected sample rate: {}",
-        spec.sample_rate
-    );
-    assert!(spec.channels == 1 || spec.channels == 2);
-}
-
-// Error Handling Tests
 
 #[kithara::test]
 #[case::invalid(vec![0u8; 100])]
 #[case::empty(vec![])]
 fn invalid_data_fails(#[case] data: Vec<u8>) {
     let reader = Cursor::new(data);
-    // Try to create as WAV - should fail with invalid data
-    let result = DecoderFactory::create_with_probe(reader, Some("wav"), test_config());
+    let result = DecoderFactory::create_with_probe(reader, Some("wav"), &test_config());
     assert!(result.is_err());
 }
 
 #[kithara::test]
 fn truncated_data_handles_gracefully(audio: EmbeddedAudio) {
-    // Take only first 1000 bytes of WAV (truncated)
     let truncated: Vec<u8> = audio.wav().iter().take(1000).copied().collect();
     let reader = Cursor::new(truncated);
 
-    // Should be able to create decoder (header is intact)
-    let decoder_result = DecoderFactory::create_with_probe(reader, Some("wav"), test_config());
+    let decoder_result = DecoderFactory::create_with_probe(reader, Some("wav"), &test_config());
 
-    // Either fails to create or decodes partial data
     if let Ok(mut decoder) = decoder_result {
         let _ = decoder.next_chunk();
     }
 }
-
-// Chunk Properties Tests
 
 #[kithara::test]
 fn chunk_has_valid_samples(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
     let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
+        DecoderFactory::create_with_probe(reader, Some("wav"), &test_config()).unwrap();
     let spec = decoder.spec();
 
-    let chunk = decoder.next_chunk().unwrap().unwrap();
+    let chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
 
-    // Samples should be f32 values in reasonable range
     for sample in chunk.pcm.iter() {
         assert!(
             sample.is_finite(),
@@ -187,7 +176,6 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
         );
     }
 
-    // Sample count should be multiple of channels
     assert_eq!(
         chunk.pcm.len() % spec.channels as usize,
         0,
@@ -200,19 +188,17 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.mp3());
 
     let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("mp3"), test_config()).unwrap();
+        DecoderFactory::create_with_probe(reader, Some("mp3"), &test_config()).unwrap();
     let spec = decoder.spec();
 
     let mut prev_len = None;
     let mut chunk_count = 0;
 
-    while let Ok(Some(chunk)) = decoder.next_chunk() {
+    while let Ok(kithara_decode::DecoderChunkOutcome::Chunk(chunk)) = decoder.next_chunk() {
         chunk_count += 1;
 
-        // Each chunk should have samples multiple of channels
         assert_eq!(chunk.pcm.len() % spec.channels as usize, 0);
 
-        // Skip first few chunks - they can have different sizes during init
         if chunk_count > 3
             && let Some(prev) = prev_len
         {
@@ -233,19 +219,16 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     }
 }
 
-// Decode Consistency Tests
-
 #[kithara::test]
 fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
     let mut decoder =
-        DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
+        DecoderFactory::create_with_probe(reader, Some("wav"), &test_config()).unwrap();
 
-    let first_chunk = decoder.next_chunk().unwrap().unwrap();
-    let second_chunk = decoder.next_chunk().unwrap().unwrap();
+    let first_chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
+    let second_chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
 
-    // Chunks should be different (unless file is very short)
     if first_chunk.pcm.len() > 10 && second_chunk.pcm.len() > 10 {
         let differs = first_chunk
             .pcm

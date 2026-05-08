@@ -1,7 +1,5 @@
 use std::sync::atomic::Ordering;
 
-use kithara_events::HlsEvent;
-
 use super::{helpers::first_missing_segment, state::HlsScheduler};
 use crate::{loading::SegmentMeta, playlist::PlaylistAccess, stream_index::SegmentData};
 
@@ -13,18 +11,8 @@ impl HlsScheduler {
         media: &SegmentMeta,
         init_len: u64,
         init_url: Option<url::Url>,
-        duration: std::time::Duration,
+        _duration: std::time::Duration,
     ) {
-        self.record_throughput(media.len, duration, media.duration);
-
-        self.bus.publish(HlsEvent::SegmentComplete {
-            variant,
-            segment_index: seg_idx,
-            bytes_transferred: media.len,
-            cached: false,
-            duration,
-        });
-
         let actual_init_len = if init_len == 0 {
             let segments = self.segments.lock_sync();
             segments
@@ -37,7 +25,6 @@ impl HlsScheduler {
         let media_len = media.len;
         let actual_size = actual_init_len + media_len;
 
-        // Log HEAD-estimated vs actual sizes for diagnostics.
         let expected_size = self
             .playlist_state
             .segment_size(variant, seg_idx)
@@ -67,15 +54,18 @@ impl HlsScheduler {
         };
 
         let data = SegmentData {
-            init_len: actual_init_len,
             media_len,
             init_url,
+            init_len: actual_init_len,
             media_url: media.url.clone(),
         };
 
         self.segments
             .lock_sync()
             .commit_segment(variant, seg_idx, data);
+
+        self.committed_segment
+            .fetch_max(seg_idx + 1, Ordering::AcqRel);
 
         let end_offset = self.segments.lock_sync().max_end_offset();
         let current_download = self.coord.timeline().download_position();
@@ -89,11 +79,6 @@ impl HlsScheduler {
             self.segments.lock_sync().set_expected_sizes(variant, sizes);
         }
 
-        self.bus.publish(HlsEvent::DownloadProgress {
-            offset: next_download,
-            total: None,
-        });
-
         self.coord.condvar.notify_all();
     }
 
@@ -104,11 +89,6 @@ impl HlsScheduler {
 
         let old_variant = self.download_variant;
         let num_segments = self.num_segments(old_variant).unwrap_or(0);
-        // Clamp by reader position: on an ephemeral LRU, "missing" segments
-        // behind the reader are evictions by design — re-fetching them only
-        // evicts the live window the reader is currently reading, driving
-        // a hot loop. See `rewind_to_first_missing_segment` for the tail-state
-        // variant of this clamp.
         let reader_floor = self.reader_segment_floor();
         let cursor_pos = {
             let state = self.segments.lock_sync();
@@ -122,7 +102,7 @@ impl HlsScheduler {
             .unwrap_or(num_segments)
         };
 
-        self.cursor.reopen_fill(cursor_pos, cursor_pos);
+        self.runtime.cursor.reopen_fill(cursor_pos, cursor_pos);
         self.coord
             .had_midstream_switch
             .store(true, Ordering::Release);

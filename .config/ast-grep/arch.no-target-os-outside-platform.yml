@@ -1,0 +1,43 @@
+id: arch.no-target-os-outside-platform
+message: |
+  `#[cfg(target_os = ...)]` or `#[cfg(target_arch = ...)]` outside the
+  platform layer. Move the conditional code into `kithara-platform` (or
+  `kithara-wasm` for browser-only logic), expose a stable trait/fn from
+  there, and call that abstraction from this crate.
+
+  Why: every business-logic file with a target gate is a place where the
+  wasm or apple build can silently regress. The platform crates exist
+  precisely to centralize these gates.
+
+  Suppress with `// ast-grep-ignore: arch.no-target-os-outside-platform`
+  only when the gate is on a `mod` that is itself a thin platform shim
+  (document the why in the owning crate's README.md).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  # `kithara-wasm` IS the browser/wasm platform shim (parallel to
+  # `kithara-platform` for native targets). The rule's own message
+  # explicitly authorises browser-only logic to live here. The shim
+  # entry points need a single cfg gate on `mod wasm;` and on the
+  # internal re-export module — that's the structural boundary, not a
+  # per-call-site target leak. Documented in
+  # `crates/kithara-wasm/README.md` (Architecture / Platform shim).
+  - "crates/kithara-wasm/src/lib.rs"
+  - "crates/kithara-wasm/src/internal.rs"
+rule:
+  any:
+    - pattern: "#[cfg(target_os = $_)]"
+    - pattern: "#[cfg(target_arch = $_)]"
+    - pattern: "#[cfg(any($$$, target_os = $_, $$$))]"
+    - pattern: "#[cfg(any($$$, target_arch = $_, $$$))]"
+    - pattern: "#[cfg(all($$$, target_os = $_, $$$))]"
+    - pattern: "#[cfg(all($$$, target_arch = $_, $$$))]"
+    - pattern: "#[cfg(not(target_os = $_))]"
+    - pattern: "#[cfg(not(target_arch = $_))]"

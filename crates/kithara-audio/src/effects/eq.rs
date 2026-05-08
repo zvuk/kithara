@@ -11,12 +11,43 @@
 
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
 use derivative::Derivative;
+use derive_setters::Setters;
 use kithara_decode::PcmChunk;
 
 use crate::AudioEffect;
 
 struct Consts;
 impl Consts {
+    /// Highest frequency for log-spaced EQ bands (Hz).
+    const BAND_MAX_FREQ: f32 = 18000.0;
+
+    /// Lowest frequency for log-spaced EQ bands (Hz).
+    ///
+    /// 60 Hz produces a ~250 Hz low/mid crossover for 3 bands — close to the
+    /// industry-standard DJ EQ split point.
+    const BAND_MIN_FREQ: f32 = 60.0;
+
+    /// Butterworth Q factor (1/√2) for LR-4 crossover construction.
+    const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+    /// Standard dB-to-linear formula divisor: `10^(dB / DB_DIVISOR)`.
+    const DB_DIVISOR: f32 = 20.0;
+
+    /// `FilterKind::HighShelf` discriminant in the u8 representation.
+    const HIGH_SHELF_DISCRIMINANT: u8 = 2;
+
+    /// Base-10 exponent base for log-spaced frequency calculation.
+    const LOG_FREQ_BASE: f32 = 10.0;
+
+    /// Minimum number of bands that requires crossover filters.
+    const MIN_CROSSOVER_BANDS: usize = 2;
+
+    /// Milliseconds per second.
+    const MS_PER_SEC: f32 = 1000.0;
+
+    /// Nyquist normalisation factor for `from_normalized_params`: `2 * f0 / fs`.
+    const NYQUIST_FACTOR: f32 = 2.0;
+
     /// Passthrough biquad coefficients (identity filter).
     const PASSTHROUGH: Coefficients<f32> = Coefficients {
         a1: 0.0,
@@ -26,53 +57,23 @@ impl Consts {
         b2: 0.0,
     };
 
-    /// Smoothing time constant in milliseconds.
-    const SMOOTH_TIME_MS: f32 = 10.0;
-
-    /// Number of samples between gain-smoothing steps.
-    const SMOOTH_BLOCK_SIZE: usize = 32;
+    /// Reference band count for Q scaling normalization.
+    const Q_REFERENCE_BANDS: f32 = 10.0;
 
     /// Q scaling factor for log-spaced band generation.
     const Q_SCALE_FACTOR: f32 = 1.4;
 
-    /// Reference band count for Q scaling normalization.
-    const Q_REFERENCE_BANDS: f32 = 10.0;
-
-    /// Base-10 exponent base for log-spaced frequency calculation.
-    const LOG_FREQ_BASE: f32 = 10.0;
+    /// Number of samples between gain-smoothing steps.
+    const SMOOTH_BLOCK_SIZE: usize = 32;
 
     /// Convergence threshold for linear gain smoothing.
     const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.0001;
 
-    /// Lowest frequency for log-spaced EQ bands (Hz).
-    ///
-    /// 60 Hz produces a ~250 Hz low/mid crossover for 3 bands — close to the
-    /// industry-standard DJ EQ split point.
-    const BAND_MIN_FREQ: f32 = 60.0;
-
-    /// Highest frequency for log-spaced EQ bands (Hz).
-    const BAND_MAX_FREQ: f32 = 18000.0;
-
-    /// Milliseconds per second.
-    const MS_PER_SEC: f32 = 1000.0;
+    /// Smoothing time constant in milliseconds.
+    const SMOOTH_TIME_MS: f32 = 10.0;
 
     /// Minimum channel count for stereo processing.
     const STEREO_CHANNELS: usize = 2;
-
-    /// Butterworth Q factor (1/√2) for LR-4 crossover construction.
-    const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
-
-    /// `FilterKind::HighShelf` discriminant in the u8 representation.
-    const HIGH_SHELF_DISCRIMINANT: u8 = 2;
-
-    /// Standard dB-to-linear formula divisor: `10^(dB / DB_DIVISOR)`.
-    const DB_DIVISOR: f32 = 20.0;
-
-    /// Nyquist normalisation factor for `from_normalized_params`: `2 * f0 / fs`.
-    const NYQUIST_FACTOR: f32 = 2.0;
-
-    /// Minimum number of bands that requires crossover filters.
-    const MIN_CROSSOVER_BANDS: usize = 2;
 }
 
 /// Maximum EQ band gain in dB.
@@ -105,19 +106,21 @@ impl From<u8> for FilterKind {
 }
 
 /// Configuration for a single EQ band.
-#[derive(Debug, Clone, Copy, Derivative, PartialEq)]
+#[derive(Debug, Clone, Copy, Derivative, PartialEq, Setters)]
 #[derivative(Default)]
+#[setters(prefix = "with_")]
+#[non_exhaustive]
 pub struct EqBandConfig {
+    /// Filter type label for this band.
+    pub kind: FilterKind,
     /// Center frequency in Hz.
     #[derivative(Default(value = "1000.0"))]
     pub frequency: f32,
+    /// Gain in dB (clamped to [`MIN_GAIN_DB`]..=[`MAX_GAIN_DB`] on set).
+    pub gain_db: f32,
     /// Q factor (used only by `compute_coefficients` for parametric mode).
     #[derivative(Default(value = "std::f32::consts::FRAC_1_SQRT_2"))]
     pub q_factor: f32,
-    /// Gain in dB (clamped to [`MIN_GAIN_DB`]..=[`MAX_GAIN_DB`] on set).
-    pub gain_db: f32,
-    /// Filter type label for this band.
-    pub kind: FilterKind,
 }
 
 /// Generate logarithmically-spaced EQ bands from 60 Hz to 18 kHz.
@@ -125,16 +128,15 @@ pub struct EqBandConfig {
 /// First band is `LowShelf`, last band is `HighShelf`, interior bands are
 /// `Peaking`. Q factor scales with band count.
 #[must_use]
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "band count and index are small integers"
-)]
 pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
+    use num_traits::cast::AsPrimitive;
+
     if count == 0 {
         return Vec::new();
     }
 
-    let q_factor = Consts::Q_SCALE_FACTOR * (count as f32 / Consts::Q_REFERENCE_BANDS).sqrt();
+    let count_f32: f32 = count.as_();
+    let q_factor = Consts::Q_SCALE_FACTOR * (count_f32 / Consts::Q_REFERENCE_BANDS).sqrt();
 
     if count == 1 {
         return vec![EqBandConfig {
@@ -147,7 +149,8 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
 
     let log_min = Consts::BAND_MIN_FREQ.log10();
     let log_max = Consts::BAND_MAX_FREQ.log10();
-    let log_step = (log_max - log_min) / (count - 1) as f32;
+    let last_count_f32: f32 = (count - 1).as_();
+    let log_step = (log_max - log_min) / last_count_f32;
     let last = count - 1;
 
     (0..count)
@@ -159,11 +162,12 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
             } else {
                 FilterKind::Peaking
             };
+            let i_f32: f32 = i.as_();
             EqBandConfig {
-                frequency: Consts::LOG_FREQ_BASE.powf(log_min + i as f32 * log_step),
                 q_factor,
-                gain_db: 0.0,
                 kind,
+                frequency: Consts::LOG_FREQ_BASE.powf(log_min + i_f32 * log_step),
+                gain_db: 0.0,
             }
         })
         .collect()
@@ -173,6 +177,24 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
 #[inline]
 fn clamp_sample(sample: f32) -> f32 {
     if sample.is_finite() { sample } else { 0.0 }
+}
+
+/// Whether every band sits at unity gain with no smoothing in flight.
+/// Computed only when gain state changes; cached on `IsolatorEq`.
+fn compute_bypass_active(gains: &[GainState]) -> bool {
+    !gains.is_empty()
+        && gains.iter().all(|g| {
+            (g.target_linear - 1.0).abs() < f32::EPSILON
+                && (g.current_linear - 1.0).abs() < f32::EPSILON
+        })
+}
+
+/// Whether every band is at full kill (linear 0) with no smoothing in flight.
+fn compute_silence_active(gains: &[GainState]) -> bool {
+    !gains.is_empty()
+        && gains
+            .iter()
+            .all(|g| g.target_linear.abs() < f32::EPSILON && g.current_linear.abs() < f32::EPSILON)
 }
 
 /// Convert dB to linear gain. Full kill at [`MIN_GAIN_DB`].
@@ -218,9 +240,9 @@ fn biquad_coeffs(filter: Type<f32>, freq: f32, sample_rate: f32) -> Coefficients
 
 /// Per-band gain with linear smoothing.
 struct GainState {
+    current_linear: f32,
     target_db: f32,
     target_linear: f32,
-    current_linear: f32,
 }
 
 impl GainState {
@@ -254,13 +276,12 @@ impl GainState {
 }
 
 /// One-pole smoother coefficient, accounting for block-rate updates.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "Consts::SMOOTH_BLOCK_SIZE is a small constant"
-)]
 fn compute_smooth_coeff(sample_rate: f32) -> f32 {
+    use num_traits::cast::AsPrimitive;
+
     let tau = Consts::SMOOTH_TIME_MS / Consts::MS_PER_SEC;
-    let effective_rate = sample_rate / Consts::SMOOTH_BLOCK_SIZE as f32;
+    let block_size_f32: f32 = Consts::SMOOTH_BLOCK_SIZE.as_();
+    let effective_rate = sample_rate / block_size_f32;
     1.0 - (-1.0 / (tau * effective_rate)).exp()
 }
 
@@ -281,45 +302,56 @@ fn compute_smooth_coeff(sample_rate: f32) -> f32 {
 /// The allpass at f₂ on the low band compensates for the phase shift of
 /// the second crossover, so LP + HP sums to a flat allpass at unity gains.
 pub struct IsolatorEq {
-    /// N-1 LR-4 lowpass stages (one per crossover).
-    lps: Vec<LR4>,
-    /// N-1 LR-4 highpass stages (one per crossover).
-    hps: Vec<LR4>,
     /// Flattened allpass compensation filters (contiguous for cache locality).
     /// Band k's allpasses are at `ap_filters[ap_offsets[k]..ap_offsets[k+1]]`.
     ap_filters: Vec<DirectForm1<f32>>,
     /// Start offset per band into `ap_filters` (length = N+1).
     ap_offsets: Vec<usize>,
-    /// Scratch buffer for LP outputs (pre-allocated, size N-1).
-    lp_scratch: Vec<f32>,
-    /// Per-band gain state.
-    gains: Vec<GainState>,
-    /// Crossover frequencies (N-1).
-    crossover_freqs: Vec<f32>,
-    sample_rate: f32,
-    smooth_coeff: f32,
-    block_counter: usize,
     /// Recent-input ring buffer used to rehydrate filter state when exiting
     /// a fast path (unity bypass or full silence). Size covers the LR-4 +
     /// allpass cascade settle time for the lowest default crossover.
     bypass_history: Vec<f32>,
-    /// Write position in [`Self::bypass_history`] (modulo its length).
-    bypass_history_pos: usize,
+    /// Crossover frequencies (N-1).
+    crossover_freqs: Vec<f32>,
+    /// Per-band gain state.
+    gains: Vec<GainState>,
+    /// N-1 LR-4 highpass stages (one per crossover).
+    hps: Vec<LR4>,
+    /// Scratch buffer for LP outputs (pre-allocated, size N-1).
+    lp_scratch: Vec<f32>,
+    /// N-1 LR-4 lowpass stages (one per crossover).
+    lps: Vec<LR4>,
+    /// Cached result of [`Self::compute_bypass_active`]. Same lifecycle
+    /// as `cached_silence_active`.
+    cached_bypass_active: bool,
+    /// Cached result of [`Self::compute_silence_active`] — read on every
+    /// sample inside [`Self::process_sample`]. Refreshed only at the
+    /// points where gain state can change: `set_gain`, `reset`, and
+    /// the per-block smoother tick. Eliminates the `Vec::iter().all()`
+    /// walk per sample (~9-10 profiler samples on the apple sentinel).
+    cached_silence_active: bool,
     /// Whether the previous sample returned via a fast path and therefore
     /// left the filter state frozen — drives a one-shot rehydration on the
     /// next non-fast-path sample.
     was_in_fastpath: bool,
+    sample_rate: f32,
+    smooth_coeff: f32,
+    block_counter: usize,
+    /// Write position in [`Self::bypass_history`] (modulo its length).
+    bypass_history_pos: usize,
 }
 
 impl IsolatorEq {
+    /// Size of the fast-path rehydration ring buffer. 128 samples covers
+    /// the LR-4 + allpass cascade settle time for the lowest default
+    /// crossover (~250 Hz at 44.1 kHz).
+    const BYPASS_HISTORY_LEN: usize = 128;
+
     /// Create a new isolator EQ for the given band layout.
     #[must_use]
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "sample rate fits in f32 for audio"
-    )]
     pub fn new(bands: &[EqBandConfig], sample_rate: u32) -> Self {
-        let sr = sample_rate as f32;
+        use num_traits::cast::AsPrimitive;
+        let sr: f32 = sample_rate.as_();
         let n = bands.len();
         let xover_count = n.saturating_sub(1);
 
@@ -341,8 +373,6 @@ impl IsolatorEq {
             .map(|&f| LR4::new(biquad_coeffs(Type::HighPass, f, sr)))
             .collect();
 
-        // Build flattened allpass array. Band k needs allpasses at
-        // crossover frequencies k+1 .. N-2 (LR-4 LP+HP = 2nd-order allpass).
         let mut ap_filters = Vec::new();
         let mut ap_offsets = Vec::with_capacity(n + 1);
         for band in 0..n {
@@ -355,16 +385,21 @@ impl IsolatorEq {
         }
         ap_offsets.push(ap_filters.len());
 
-        let gains = bands.iter().map(|b| GainState::new(b.gain_db)).collect();
+        let gains: Vec<GainState> = bands.iter().map(|b| GainState::new(b.gain_db)).collect();
+
+        let cached_silence_active = compute_silence_active(&gains);
+        let cached_bypass_active = compute_bypass_active(&gains);
 
         Self {
             lps,
             hps,
             ap_filters,
             ap_offsets,
-            lp_scratch: vec![0.0; xover_count],
             gains,
             crossover_freqs,
+            cached_silence_active,
+            cached_bypass_active,
+            lp_scratch: vec![0.0; xover_count],
             sample_rate: sr,
             smooth_coeff: compute_smooth_coeff(sr),
             block_counter: 0,
@@ -374,28 +409,34 @@ impl IsolatorEq {
         }
     }
 
-    /// Size of the fast-path rehydration ring buffer. 128 samples covers
-    /// the LR-4 + allpass cascade settle time for the lowest default
-    /// crossover (~250 Hz at 44.1 kHz).
-    const BYPASS_HISTORY_LEN: usize = 128;
-
-    /// Set the target gain for a band (dB, clamped to min/max).
-    pub fn set_gain(&mut self, band: usize, gain_db: f32) {
-        if let Some(state) = self.gains.get_mut(band) {
-            state.set_target(gain_db);
-        }
-    }
-
-    /// Current target gain for a band (dB).
-    #[must_use]
-    pub fn target_gain(&self, band: usize) -> Option<f32> {
-        self.gains.get(band).map(|s| s.target_db)
-    }
-
     /// Number of bands.
     #[must_use]
     pub fn band_count(&self) -> usize {
         self.gains.len()
+    }
+
+    /// Whether every band sits at exactly unity gain with no smoothing in
+    /// flight — in that case `process_sample` can skip the LR-4 + allpass
+    /// chain entirely and return the input unchanged.
+    ///
+    /// O(1) read of cached state — refreshed only when gain state actually
+    /// changes (`set_gain`, `reset`, per-block smoother tick), keeping
+    /// the `process_sample` hot path off the gain-band walk.
+    #[must_use]
+    pub fn is_bypass_active(&self) -> bool {
+        self.cached_bypass_active
+    }
+
+    /// Whether every band is at full kill (linear 0) with no smoothing in
+    /// flight — in that case `process_sample` can skip the LR-4 + allpass
+    /// chain entirely and return a literal zero.
+    ///
+    /// Mirrors [`Self::is_bypass_active`] for the opposite extreme: a user
+    /// who slammed every fader to [`MIN_GAIN_DB`] wants silence, not a
+    /// near-zero filtered signal. O(1) read of cached state.
+    #[must_use]
+    pub fn is_silence_active(&self) -> bool {
+        self.cached_silence_active
     }
 
     /// Whether any band is still smoothing toward its target.
@@ -406,41 +447,95 @@ impl IsolatorEq {
         })
     }
 
-    /// Whether every band sits at exactly unity gain with no smoothing in
-    /// flight — in that case `process_sample` can skip the LR-4 + allpass
-    /// chain entirely and return the input unchanged.
+    /// Process a single sample through the crossover EQ.
     ///
-    /// Instruments traces show `process_sample` as ~3 % of total CPU during
-    /// HLS playback; gating the filter chain on non-neutral gain eliminates
-    /// that cost for the common case of a user who never touches the EQ.
-    #[must_use]
-    pub fn is_bypass_active(&self) -> bool {
-        !self.gains.is_empty()
-            && self.gains.iter().all(|g| {
-                (g.target_linear - 1.0).abs() < f32::EPSILON
-                    && (g.current_linear - 1.0).abs() < f32::EPSILON
-            })
+    /// Gain smoothing advances automatically every [`Consts::SMOOTH_BLOCK_SIZE`] calls.
+    #[inline]
+    pub fn process_sample(&mut self, input: f32) -> f32 {
+        self.block_counter += 1;
+        if self.block_counter >= Consts::SMOOTH_BLOCK_SIZE {
+            self.block_counter = 0;
+            for gain in &mut self.gains {
+                gain.smooth(self.smooth_coeff);
+            }
+            self.refresh_fastpath_cache();
+        }
+
+        if self.cached_silence_active {
+            self.record_bypass_input(input);
+            self.was_in_fastpath = true;
+            return 0.0;
+        }
+        if self.cached_bypass_active {
+            self.record_bypass_input(input);
+            self.was_in_fastpath = true;
+            return input;
+        }
+        if self.was_in_fastpath {
+            self.was_in_fastpath = false;
+            self.rehydrate_filter_state();
+        }
+
+        let n = self.gains.len();
+        if n == 0 {
+            return input;
+        }
+        if n == 1 {
+            return clamp_sample(input * self.gains[0].current_linear);
+        }
+
+        let mut hp = input;
+        for i in 0..n - 1 {
+            self.lp_scratch[i] = self.lps[i].process(hp);
+            hp = self.hps[i].process(hp);
+        }
+
+        let mut output = 0.0;
+        for i in 0..n - 1 {
+            let mut band = self.lp_scratch[i];
+            let ap_start = self.ap_offsets[i];
+            let ap_end = self.ap_offsets[i + 1];
+            for ap in &mut self.ap_filters[ap_start..ap_end] {
+                band = ap.run(band);
+            }
+            output += band * self.gains[i].current_linear;
+        }
+        output += hp * self.gains[n - 1].current_linear;
+
+        clamp_sample(output)
     }
 
-    /// Whether every band is at full kill (linear 0) with no smoothing in
-    /// flight — in that case `process_sample` can skip the LR-4 + allpass
-    /// chain entirely and return a literal zero.
-    ///
-    /// Mirrors [`Self::is_bypass_active`] for the opposite extreme: a user
-    /// who slammed every fader to [`MIN_GAIN_DB`] wants silence, not a
-    /// near-zero filtered signal.
-    #[must_use]
-    pub fn is_silence_active(&self) -> bool {
-        !self.gains.is_empty()
-            && self.gains.iter().all(|g| {
-                g.target_linear.abs() < f32::EPSILON && g.current_linear.abs() < f32::EPSILON
-            })
+    fn rebuild_filters(&mut self) {
+        for (i, &freq) in self.crossover_freqs.iter().enumerate() {
+            self.lps[i] = LR4::new(biquad_coeffs(Type::LowPass, freq, self.sample_rate));
+            self.hps[i] = LR4::new(biquad_coeffs(Type::HighPass, freq, self.sample_rate));
+        }
+        for band in 0..self.gains.len() {
+            let start = self.ap_offsets[band];
+            let end = self.ap_offsets[band + 1];
+            for (j, ap) in self.ap_filters[start..end].iter_mut().enumerate() {
+                let freq = self.crossover_freqs[band + 1 + j];
+                *ap = DirectForm1::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
+            }
+        }
     }
 
     fn record_bypass_input(&mut self, input: f32) {
         let len = self.bypass_history.len();
         self.bypass_history[self.bypass_history_pos] = input;
         self.bypass_history_pos = (self.bypass_history_pos + 1) % len;
+    }
+
+    /// Recompute both fast-path predicates after a gain mutation.
+    ///
+    /// Callers MUST invoke this whenever `target_linear` or
+    /// `current_linear` may have changed: smoother tick in
+    /// `process_sample`, `set_gain`, `reset`. Tests that mutate
+    /// `gains[i]` fields directly must also call this before relying on
+    /// `is_silence_active` / `is_bypass_active`.
+    fn refresh_fastpath_cache(&mut self) {
+        self.cached_silence_active = compute_silence_active(&self.gains);
+        self.cached_bypass_active = compute_bypass_active(&self.gains);
     }
 
     /// Replay the ring-buffered recent input through the filter cascade so
@@ -475,72 +570,6 @@ impl IsolatorEq {
         }
     }
 
-    /// Process a single sample through the crossover EQ.
-    ///
-    /// Gain smoothing advances automatically every [`Consts::SMOOTH_BLOCK_SIZE`] calls.
-    #[inline]
-    pub fn process_sample(&mut self, input: f32) -> f32 {
-        self.block_counter += 1;
-        if self.block_counter >= Consts::SMOOTH_BLOCK_SIZE {
-            self.block_counter = 0;
-            for gain in &mut self.gains {
-                gain.smooth(self.smooth_coeff);
-            }
-        }
-
-        // Fast paths skip the LR-4 + allpass chain when the result is
-        // trivially known. Filter state freezes while a fast path is active
-        // and is rehydrated from a ring buffer on exit, so resuming filter
-        // work doesn't jump from zero-state (see rehydrate_filter_state).
-        if self.is_silence_active() {
-            self.record_bypass_input(input);
-            self.was_in_fastpath = true;
-            return 0.0;
-        }
-        if self.is_bypass_active() {
-            self.record_bypass_input(input);
-            self.was_in_fastpath = true;
-            return input;
-        }
-        if self.was_in_fastpath {
-            self.was_in_fastpath = false;
-            self.rehydrate_filter_state();
-        }
-
-        let n = self.gains.len();
-        if n == 0 {
-            return input;
-        }
-        if n == 1 {
-            return clamp_sample(input * self.gains[0].current_linear);
-        }
-
-        // Split via LP/HP chain: each crossover peels off a band via LP,
-        // and the HP output feeds the next crossover.
-        let mut hp = input;
-        for i in 0..n - 1 {
-            self.lp_scratch[i] = self.lps[i].process(hp);
-            hp = self.hps[i].process(hp);
-        }
-
-        // Accumulate: each LP band runs through its allpass compensation,
-        // then is scaled by the band gain.
-        let mut output = 0.0;
-        for i in 0..n - 1 {
-            let mut band = self.lp_scratch[i];
-            let ap_start = self.ap_offsets[i];
-            let ap_end = self.ap_offsets[i + 1];
-            for ap in &mut self.ap_filters[ap_start..ap_end] {
-                band = ap.run(band);
-            }
-            output += band * self.gains[i].current_linear;
-        }
-        // Last band is the final HP remainder.
-        output += hp * self.gains[n - 1].current_linear;
-
-        clamp_sample(output)
-    }
-
     /// Reset all gains to 0 dB (unity) and clear filter state.
     pub fn reset(&mut self) {
         for gain in &mut self.gains {
@@ -553,32 +582,29 @@ impl IsolatorEq {
         self.bypass_history.fill(0.0);
         self.bypass_history_pos = 0;
         self.was_in_fastpath = false;
+        self.refresh_fastpath_cache();
+    }
+
+    /// Set the target gain for a band (dB, clamped to min/max).
+    pub fn set_gain(&mut self, band: usize, gain_db: f32) {
+        if let Some(state) = self.gains.get_mut(band) {
+            state.set_target(gain_db);
+        }
+        self.refresh_fastpath_cache();
+    }
+
+    /// Current target gain for a band (dB).
+    #[must_use]
+    pub fn target_gain(&self, band: usize) -> Option<f32> {
+        self.gains.get(band).map(|s| s.target_db)
     }
 
     /// Re-initialise for a new sample rate (e.g. after stream change).
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "sample rate fits in f32 for audio"
-    )]
     pub fn update_sample_rate(&mut self, sample_rate: u32) {
-        self.sample_rate = sample_rate as f32;
+        use num_traits::cast::AsPrimitive;
+        self.sample_rate = sample_rate.as_();
         self.smooth_coeff = compute_smooth_coeff(self.sample_rate);
         self.rebuild_filters();
-    }
-
-    fn rebuild_filters(&mut self) {
-        for (i, &freq) in self.crossover_freqs.iter().enumerate() {
-            self.lps[i] = LR4::new(biquad_coeffs(Type::LowPass, freq, self.sample_rate));
-            self.hps[i] = LR4::new(biquad_coeffs(Type::HighPass, freq, self.sample_rate));
-        }
-        for band in 0..self.gains.len() {
-            let start = self.ap_offsets[band];
-            let end = self.ap_offsets[band + 1];
-            for (j, ap) in self.ap_filters[start..end].iter_mut().enumerate() {
-                let freq = self.crossover_freqs[band + 1 + j];
-                *ap = DirectForm1::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
-            }
-        }
     }
 }
 
@@ -606,12 +632,6 @@ impl EqEffect {
         }
     }
 
-    /// Set the gain for a specific band (clamped to min/max dB).
-    pub fn set_gain(&mut self, band_index: usize, gain_db: f32) {
-        self.eq_l.set_gain(band_index, gain_db);
-        self.eq_r.set_gain(band_index, gain_db);
-    }
-
     /// Get the band layout. Gains reflect target values.
     #[must_use]
     pub fn bands(&self) -> Vec<EqBandConfig> {
@@ -625,20 +645,30 @@ impl EqEffect {
             .collect()
     }
 
-    /// Get the target gain for a specific band.
-    #[must_use]
-    pub fn target_gain(&self, band_index: usize) -> Option<f32> {
-        self.eq_l.target_gain(band_index)
-    }
-
     /// Check if any band is currently smoothing.
     #[cfg(test)]
     fn is_smoothing(&self) -> bool {
         self.eq_l.is_smoothing()
     }
+
+    /// Set the gain for a specific band (clamped to min/max dB).
+    pub fn set_gain(&mut self, band_index: usize, gain_db: f32) {
+        self.eq_l.set_gain(band_index, gain_db);
+        self.eq_r.set_gain(band_index, gain_db);
+    }
+
+    /// Get the target gain for a specific band.
+    #[must_use]
+    pub fn target_gain(&self, band_index: usize) -> Option<f32> {
+        self.eq_l.target_gain(band_index)
+    }
 }
 
 impl AudioEffect for EqEffect {
+    fn flush(&mut self) -> Option<PcmChunk> {
+        None
+    }
+
     fn process(&mut self, mut chunk: PcmChunk) -> Option<PcmChunk> {
         let channels = self.channels as usize;
         if channels == 0 {
@@ -657,10 +687,6 @@ impl AudioEffect for EqEffect {
         Some(chunk)
     }
 
-    fn flush(&mut self) -> Option<PcmChunk> {
-        None
-    }
-
     fn reset(&mut self) {
         self.eq_l.reset();
         self.eq_r.reset();
@@ -671,7 +697,7 @@ impl AudioEffect for EqEffect {
 mod tests {
     use std::f32::consts::PI;
 
-    use kithara_bufpool::pcm_pool;
+    use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_test_utils::kithara;
 
@@ -683,7 +709,7 @@ mod tests {
                 spec,
                 ..Default::default()
             },
-            pcm_pool().attach(pcm),
+            PcmPool::default().attach(pcm),
         )
     }
 
@@ -779,7 +805,6 @@ mod tests {
         };
         let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
 
-        // Process enough audio for the crossover filters to settle.
         let warmup = vec![0.0f32; 4096];
         let _ = eq.process(test_chunk(spec, warmup));
 
@@ -792,15 +817,13 @@ mod tests {
 
         let chunk = test_chunk(spec, pcm);
         let output = eq.process(chunk).unwrap();
-        let out = output.samples();
+        let out = &output.pcm[..];
 
-        // Skip transient, measure steady-state RMS.
         let steady = &out[4096..];
         let output_rms: f32 =
             (steady.iter().map(|s| s * s).sum::<f32>() / steady.len() as f32).sqrt();
         let gain = output_rms / input_rms;
 
-        // At unity gains the crossover is an allpass (magnitude 1).
         assert!(
             (gain - 1.0).abs() < 0.05,
             "Unity gain should preserve magnitude, got gain={gain:.4}"
@@ -1015,14 +1038,12 @@ mod tests {
         };
         let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
 
-        // Warmup
         let warmup: Vec<f32> = (0..4096)
             .map(|i| (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin())
             .collect();
         let chunk = test_chunk(spec, warmup);
         let _ = eq.process(chunk);
 
-        // Abrupt gain change
         eq.set_gain(0, MAX_GAIN_DB);
 
         let signal: Vec<f32> = (0..4096)
@@ -1030,7 +1051,7 @@ mod tests {
             .collect();
         let chunk = test_chunk(spec, signal);
         let output = eq.process(chunk).unwrap();
-        let out = output.samples();
+        let out = &output.pcm[..];
 
         let max_diff = out
             .windows(2)
@@ -1065,7 +1086,7 @@ mod tests {
         let chunk = test_chunk(spec, pcm);
         let result = eq.process(chunk);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().samples().len(), sample_len);
+        assert_eq!(result.unwrap().pcm.len(), sample_len);
     }
 
     #[kithara::test]
@@ -1097,7 +1118,7 @@ mod tests {
             let pcm: Vec<f32> = (0..1024).map(|i| (i as f32 * 0.1).sin()).collect();
             let chunk = test_chunk(spec, pcm);
             let output = eq.process(chunk).unwrap();
-            for (i, &s) in output.samples().iter().enumerate() {
+            for (i, &s) in output.pcm.iter().enumerate() {
                 assert!(s.is_finite(), "round {round} sample {i}: got {s}");
             }
         }
@@ -1121,7 +1142,7 @@ mod tests {
         let chunk = test_chunk(spec, pcm);
         let output = eq.process(chunk).unwrap();
 
-        for (i, &s) in output.samples().iter().enumerate() {
+        for (i, &s) in output.pcm.iter().enumerate() {
             assert!(s.is_finite(), "sample {i}: got {s}");
         }
     }
@@ -1148,7 +1169,7 @@ mod tests {
             let pcm: Vec<f32> = (0..512).map(|i| ((i as f32) * 0.3).sin()).collect();
             let chunk = test_chunk(spec, pcm);
             let output = eq.process(chunk).unwrap();
-            for &s in output.samples() {
+            for &s in &output.pcm[..] {
                 assert!(s.is_finite());
             }
         }
@@ -1273,10 +1294,10 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let mut eq = IsolatorEq::new(&bands, 44100);
         for i in 0..3 {
-            eq.gains[i].target_linear = 0.0;
+            eq.set_gain(i, MIN_GAIN_DB);
             eq.gains[i].current_linear = 0.0;
-            eq.gains[i].target_db = MIN_GAIN_DB;
         }
+        eq.refresh_fastpath_cache();
         assert!(eq.is_silence_active(), "precondition: silence is active");
 
         let inputs = [0.0_f32, 0.25, -0.5, 0.999, -0.999];
@@ -1295,10 +1316,10 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let mut eq = IsolatorEq::new(&bands, 44100);
         for i in 0..3 {
-            eq.gains[i].target_linear = 0.0;
+            eq.set_gain(i, MIN_GAIN_DB);
             eq.gains[i].current_linear = 0.0;
-            eq.gains[i].target_db = MIN_GAIN_DB;
         }
+        eq.refresh_fastpath_cache();
         assert!(eq.is_silence_active(), "precondition: silence is active");
 
         eq.set_gain(1, -3.0);
@@ -1333,7 +1354,7 @@ mod tests {
 
         let chunk = test_chunk(spec, pcm);
         let output = eq.process(chunk).unwrap();
-        let out = output.samples();
+        let out = &output.pcm[..];
 
         let steady = &out[4096..];
         let output_rms: f32 =

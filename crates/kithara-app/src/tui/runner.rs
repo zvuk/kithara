@@ -15,10 +15,10 @@ use crate::{
 struct Consts;
 impl Consts {
     const CONTROL_POLL_MS: u64 = 50;
+    const MAX_DIGIT_TRACKS: usize = 9;
+    const PERCENT_SCALE: f32 = 100.0;
     const SEEK_STEP_SECONDS_F64: f64 = 5.0;
     const VOLUME_STEP: f32 = 0.05;
-    const PERCENT_SCALE: f32 = 100.0;
-    const MAX_DIGIT_TRACKS: usize = 9;
 }
 
 type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -30,12 +30,10 @@ type RunnerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig) -> RunnerResult {
     let palette: tui::TuiPalette = config.palette.into();
 
-    // Feed tracks from inside the runtime — `Loader::spawn_load` uses
-    // `tokio::spawn`, which requires a running reactor.
     queue.set_tracks(crate::sources::build_sources(config));
 
     let event_rx = queue.subscribe();
-    let bus = queue.player().bus().clone();
+    let bus = queue.bus().clone();
 
     let queue_for_loop = Arc::clone(&queue);
     let mut ui_handle =
@@ -134,7 +132,6 @@ fn run_ui_loop(
             ui.dashboard.set_crossfade_progress(None);
         }
 
-        // Auto-advance: crossfade to next track when remaining time <= crossfade duration.
         let crossfade_secs = f64::from(queue.crossfade_duration());
         if let (Some(pos), Some(dur)) = (queue.position_seconds(), queue.duration_seconds())
             && dur > crossfade_secs
@@ -144,7 +141,6 @@ fn run_ui_loop(
             let not_yet_advanced = auto_advanced_index != Some(current);
             if not_yet_advanced && current + 1 < queue.len() {
                 auto_advanced_index = Some(current);
-                // Clock is armed by QueueEvent::CrossfadeStarted on the bus.
                 let _ = queue.advance_to_next(Transition::Crossfade);
             }
         }
@@ -295,7 +291,7 @@ fn apply_seek(queue: &Queue, delta_seconds: f64, dashboard: &mut Dashboard) -> S
     let current = queue.position_seconds().unwrap_or(0.0).max(0.0);
     let target = (current + delta_seconds).max(0.0);
     match queue.seek(target) {
-        Ok(()) => {
+        Ok(_outcome) => {
             dashboard.set_note(format!("seek {}", format_seconds(target)));
             dashboard.set_position(Duration::from_secs_f64(target));
             format!("seek target={}", format_seconds(target))
@@ -344,15 +340,12 @@ fn switch_to_id(
     ui: &mut UiSession,
     auto_advanced_index: &mut Option<usize>,
 ) -> RunnerResult {
-    // Manual selection from the playlist — immediate cut (no crossfade)
-    // matches the AVQueuePlayer user-initiated-selection idiom.
     match queue.select(id, Transition::None) {
         Ok(()) => {
             *auto_advanced_index = None;
             let note = format!("switch to #{} (immediate)", index + 1);
             ui.dashboard.set_note(&note);
             ui.log_line(&note)?;
-            // Clock is armed by QueueEvent::CrossfadeStarted on the bus.
         }
         Err(e) => {
             let note = format!("switch failed: {e}");

@@ -1,8 +1,7 @@
-#[cfg(not(target_arch = "wasm32"))]
 mod audio_tests;
-#[cfg(not(target_arch = "wasm32"))]
 mod file_ephemeral_mp3;
 #[cfg(not(target_arch = "wasm32"))]
-mod gapless_pipeline;
+mod gapless_crossfade;
 #[cfg(not(target_arch = "wasm32"))]
+mod gapless_pipeline;
 mod stream_source_tests;

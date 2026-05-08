@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    fs::OpenOptions,
+    sync::{Arc, Mutex},
+};
 
 use iced::Size;
 use kithara_queue::Queue;
@@ -14,26 +17,40 @@ use crate::{
 
 /// Initialize tracing for GUI-only mode (no CRLF writer needed).
 ///
+/// Reads the filter from `RUST_LOG` (falling back to `INFO`). If
+/// `KITHARA_LOG_FILE` is set, output goes to that path (append mode);
+/// otherwise to stderr.
+///
 /// # Errors
 /// Returns an error if tracing initialization fails.
 pub fn init_tracing() -> Result<(), FrontendError> {
-    // Honour `RUST_LOG` when set; default to INFO otherwise. Without
-    // this, debug/trace directives passed via the env var are silently
-    // dropped, which makes diagnosing playback / queue issues painful.
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::default().add_directive(LevelFilter::INFO.into()));
-    tracing_subscriber::fmt()
+    let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_line_number(false)
-        .with_file(false)
-        .init();
+        .with_file(false);
+
+    if let Some(path) = std::env::var_os("KITHARA_LOG_FILE") {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+        builder
+            .with_writer(Mutex::new(file))
+            .with_ansi(false)
+            .init();
+    } else {
+        builder.init();
+    }
     Ok(())
 }
 
 /// GUI frontend using iced.
 pub struct GuiFrontend {
-    palette: gui::GuiPalette,
     config: AppConfig,
+    palette: gui::GuiPalette,
 }
 
 impl Frontend for GuiFrontend {
@@ -42,11 +59,6 @@ impl Frontend for GuiFrontend {
             palette: config.palette.into(),
             config: config.clone(),
         })
-    }
-
-    fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
-        // iced handles window setup internally.
-        Ok(())
     }
 
     fn run_loop(&mut self, queue: Arc<Queue>) -> Result<(), FrontendError> {
@@ -74,7 +86,10 @@ impl Frontend for GuiFrontend {
     }
 
     fn shutdown(&mut self) -> Result<(), FrontendError> {
-        // iced handles cleanup internally.
+        Ok(())
+    }
+
+    fn start(&mut self, _queue: Arc<Queue>) -> Result<(), FrontendError> {
         Ok(())
     }
 }

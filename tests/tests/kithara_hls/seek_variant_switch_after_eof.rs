@@ -14,18 +14,17 @@
 //! `wait_range` clears `on_demand_pending` when `had_midstream_switch` is true,
 //! allowing the reader to re-push its request.
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    sync::atomic::Ordering,
-};
+use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
     assets::StoreOptions,
-    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
-    internal::source_variant_index_handle,
+    hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+    hls_test_helpers::pin_abr_variant,
+};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
@@ -59,18 +58,11 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_abr_options(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..AbrOptions::default()
-        });
+        .with_initial_abr_mode(AbrMode::Manual(0));
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    // Get handle to ABR variant index atomic so we can force a switch.
-    let variant_index = source_variant_index_handle(stream.source());
-
     spawn_blocking(move || {
-        // Step 1: Read all data to EOF (caches all variant 0 segments).
         let mut buf = [0u8; 64 * 1024];
         loop {
             let n = stream.read(&mut buf).unwrap();
@@ -80,19 +72,14 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
         }
         info!("All variant 0 data read to EOF");
 
-        // Step 2: Force ABR switch to variant 1.
-        variant_index.store(1, Ordering::Release);
+        pin_abr_variant(&stream.source().coord().abr_state, 1);
         info!("ABR variant switched 0 → 1");
 
-        // Step 3: Seek to middle of stream (segment 1 territory).
         let seek_pos = 200_000u64;
         let pos = stream.seek(SeekFrom::Start(seek_pos)).unwrap();
         assert_eq!(pos, seek_pos);
         info!(seek_pos, "Seek applied");
 
-        // Step 4: Read — must return data within the timeout.
-        // Before the fix, this deadlocks because the on-demand request
-        // for variant 1 segment 1 is silently drained by handle_midstream_switch().
         let n = stream.read(&mut buf).unwrap();
         assert!(n > 0, "Read after seek + variant switch must return data");
         info!(n, "Read succeeded after seek + variant switch");

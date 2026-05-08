@@ -1,6 +1,6 @@
 //! Observer plugin for the scheduler.
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use crate::runtime::SlotId;
 

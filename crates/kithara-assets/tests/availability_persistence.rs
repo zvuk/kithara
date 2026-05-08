@@ -32,9 +32,6 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
         store.checkpoint().unwrap();
     }
 
-    // New store over the same cache dir — the aggregate should be
-    // seeded from `_index/availability.bin` alone, without touching
-    // the segment file itself.
     let store = AssetStoreBuilder::new()
         .root_dir(dir.path())
         .asset_root(Some("p4-persist"))
@@ -49,7 +46,7 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn disk_checkpoint_persists_partial_writes_across_rebuild() {
+fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
     let dir = tempdir().unwrap();
     let key = ResourceKey::new("segments/partial.bin");
 
@@ -59,7 +56,6 @@ fn disk_checkpoint_persists_partial_writes_across_rebuild() {
             .asset_root(Some("p4-partial"))
             .build();
         let res = store.acquire_resource(&key).unwrap();
-        // Write two disjoint ranges, do NOT commit.
         res.write_at(0, b"aaa").unwrap();
         res.write_at(10, b"bbb").unwrap();
         drop(res);
@@ -73,11 +69,12 @@ fn disk_checkpoint_persists_partial_writes_across_rebuild() {
 
     let ranges = store.available_ranges(&key);
     let pairs: Vec<_> = ranges.iter().map(|r| (r.start, r.end)).collect();
-    assert_eq!(pairs, vec![(0, 3), (10, 13)]);
-    assert!(store.contains_range(&key, 0..3));
-    assert!(store.contains_range(&key, 10..13));
-    assert!(!store.contains_range(&key, 3..10));
-    // Uncommitted → final_len unknown.
+    assert!(
+        pairs.is_empty(),
+        "writer abandoned without commit must leave availability empty, got {pairs:?}"
+    );
+    assert!(!store.contains_range(&key, 0..3));
+    assert!(!store.contains_range(&key, 10..13));
     assert_eq!(store.final_len(&key), None);
 }
 
@@ -89,8 +86,6 @@ fn disk_checkpoint_without_prior_writes_is_noop() {
         .asset_root(Some("p4-empty"))
         .build();
 
-    // No resources touched — checkpoint must still succeed and
-    // produce a rebuildable file.
     store.checkpoint().unwrap();
 
     let store2 = AssetStoreBuilder::new()
@@ -105,9 +100,6 @@ fn disk_checkpoint_without_prior_writes_is_noop() {
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
-    // If the user never calls `checkpoint()`, the aggregate is empty
-    // on rebuild but the slow-path `resource_state` fallback still
-    // exposes committed files on disk.
     let dir = tempdir().unwrap();
     let key = ResourceKey::new("segments/slow.bin");
 
@@ -120,7 +112,6 @@ fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
         res.write_at(0, b"xyz").unwrap();
         res.commit(Some(3)).unwrap();
         drop(res);
-        // NO checkpoint — drop store without persisting aggregate.
     }
 
     let store = AssetStoreBuilder::new()
@@ -128,7 +119,6 @@ fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
         .asset_root(Some("p4-slow"))
         .build();
 
-    // Slow path still works: resource_state sees the committed file.
     assert_eq!(store.final_len(&key), Some(3));
     assert!(store.contains_range(&key, 0..3));
 }
@@ -145,11 +135,9 @@ fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
         let res = store.acquire_resource(&key).unwrap();
         res.write_at(0, b"abcd").unwrap();
         res.commit(Some(4)).unwrap();
-        // Checkpoint on a mem store must be a successful no-op.
         store.checkpoint().unwrap();
     }
 
-    // A fresh mem store sees nothing — no persistence.
     let store = AssetStoreBuilder::new()
         .asset_root(Some("p4-mem"))
         .ephemeral(true)
@@ -172,8 +160,6 @@ fn disk_checkpoint_is_idempotent() {
     res.commit(Some(5)).unwrap();
     drop(res);
 
-    // Multiple checkpoints in a row must all succeed and leave the
-    // persisted file in a consistent state.
     store.checkpoint().unwrap();
     store.checkpoint().unwrap();
     store.checkpoint().unwrap();
