@@ -84,8 +84,8 @@ pub(crate) struct FileAssetCtx {
 /// Shared inner state for a `FileSource`. All fields are either immutable
 /// (set at construction) or self-synchronizing — there is no `Mutex`.
 pub(crate) struct FileInner {
-    pub(crate) source: FileSourceCtx,
     pub(crate) asset: FileAssetCtx,
+    pub(crate) source: FileSourceCtx,
     /// Codec discovered from the HTTP `Content-Type` header on first connect.
     /// Set at most once by the download driver.
     pub(crate) content_type_codec: OnceLock<AudioCodec>,

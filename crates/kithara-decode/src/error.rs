@@ -124,18 +124,6 @@ pub enum ErrorClass {
 }
 
 impl DecodeError {
-    /// Returns `true` if the error is an [`Interrupted`](Self::Interrupted) variant.
-    #[must_use]
-    pub fn is_interrupted(&self) -> bool {
-        matches!(self.classify(), ErrorClass::Interrupted)
-    }
-
-    /// Returns `true` if the error signals a non-retriable cross-variant boundary.
-    #[must_use]
-    pub fn is_variant_change(&self) -> bool {
-        matches!(self.classify(), ErrorClass::VariantChange)
-    }
-
     /// Tag the error in one source-chain pass so hot decode loops can
     /// replace `is_interrupted()` + `is_variant_change()` predicate
     /// ladders with a single `match` over the discriminant.
@@ -165,6 +153,18 @@ impl DecodeError {
             }
             _ => ErrorClass::Other,
         }
+    }
+
+    /// Returns `true` if the error is an [`Interrupted`](Self::Interrupted) variant.
+    #[must_use]
+    pub fn is_interrupted(&self) -> bool {
+        matches!(self.classify(), ErrorClass::Interrupted)
+    }
+
+    /// Returns `true` if the error signals a non-retriable cross-variant boundary.
+    #[must_use]
+    pub fn is_variant_change(&self) -> bool {
+        matches!(self.classify(), ErrorClass::VariantChange)
     }
 }
 

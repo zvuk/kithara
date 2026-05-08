@@ -41,12 +41,6 @@ use crate::{
 pub(crate) struct AppleCodec {
     converter: AudioConverterRef,
     input_state: Box<ConverterInputState>,
-    spec: PcmSpec,
-    /// `AudioConverter`'s expected output packets-per-callback. Used to
-    /// pre-grow the caller's `out` buffer before invoking the FFI so the
-    /// converter writes directly into pool memory — no internal scratch
-    /// buffer needed.
-    frames_per_packet: u32,
     /// Decoder-owned playback contract. Populated with the captured
     /// [`crate::GaplessInfo`] when `gapless` was requested in
     /// [`AppleCodec::open_with_config`].
@@ -55,6 +49,7 @@ pub(crate) struct AppleCodec {
     /// the post-first-chunk refresh changes from the init query (AAC
     /// reports priming only after consuming one input packet).
     last_prime_info: Option<AudioConverterPrimeInfo>,
+    spec: PcmSpec,
     /// Whether gapless capture was requested in
     /// [`AppleCodec::open_with_config`].
     gapless_enabled: bool,
@@ -62,50 +57,17 @@ pub(crate) struct AppleCodec {
     /// did not yet yield priming numbers; cleared after the first
     /// post-decode refresh.
     prime_info_refresh_pending: bool,
+    /// `AudioConverter`'s expected output packets-per-callback. Used to
+    /// pre-grow the caller's `out` buffer before invoking the FFI so the
+    /// converter writes directly into pool memory — no internal scratch
+    /// buffer needed.
+    frames_per_packet: u32,
 }
 
 // SAFETY: `AudioConverterRef` is an opaque CoreAudio handle. Apple's
 unsafe impl Send for AppleCodec {}
 
 impl AppleCodec {
-    /// Whether the Apple `AudioConverter` accepts this codec at the
-    /// codec layer alone (i.e. without an external container parser).
-    /// Initial scope: AAC family + FLAC. ALAC / MP3 land in a follow-up
-    /// when `TrackInfo` carries a codec-specific extra-data shape.
-    #[must_use]
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
-        matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
-    }
-
-    /// Build an [`AppleCodec`] with optional gapless capture. When
-    /// `gapless` is `true`, the codec queries
-    /// `kAudioConverterPrimeInfo` at init and arms a one-shot refresh
-    /// to fire after the first `decode_frame` (AAC populates the
-    /// property only after consuming the first input packet; FLAC
-    /// reports it at init).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DecodeError::Backend`] when `CoreAudio`'s `AudioConverterNew`
-    /// rejects the input/output ASBD pair.
-    pub(crate) fn open_with_config(track: &TrackInfo, gapless: bool) -> DecodeResult<Self> {
-        let mut codec = Self::open(track)?;
-        if gapless {
-            codec.gapless_enabled = true;
-            let prime_info = prime_info_from_converter(codec.converter);
-            let gapless = prime_info.and_then(gapless_info_from_prime_info);
-            log_gapless_prime_info("init", prime_info, gapless);
-            codec.last_prime_info = prime_info;
-            let resolved = track.gapless.or(gapless);
-            codec.track_info = DecoderTrackInfo {
-                gapless: resolved,
-                ..DecoderTrackInfo::default()
-            };
-            codec.prime_info_refresh_pending = resolved.is_none();
-        }
-        Ok(codec)
-    }
-
     /// Inherent constructor used by [`Self::open_with_config`] (and only
     /// there). Builds a base [`AppleCodec`] from `TrackInfo` without
     /// any of the gapless / `PrimeInfo` follow-up wiring; the
@@ -174,6 +136,35 @@ impl AppleCodec {
         })
     }
 
+    /// Build an [`AppleCodec`] with optional gapless capture. When
+    /// `gapless` is `true`, the codec queries
+    /// `kAudioConverterPrimeInfo` at init and arms a one-shot refresh
+    /// to fire after the first `decode_frame` (AAC populates the
+    /// property only after consuming the first input packet; FLAC
+    /// reports it at init).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::Backend`] when `CoreAudio`'s `AudioConverterNew`
+    /// rejects the input/output ASBD pair.
+    pub(crate) fn open_with_config(track: &TrackInfo, gapless: bool) -> DecodeResult<Self> {
+        let mut codec = Self::open(track)?;
+        if gapless {
+            codec.gapless_enabled = true;
+            let prime_info = prime_info_from_converter(codec.converter);
+            let gapless = prime_info.and_then(gapless_info_from_prime_info);
+            log_gapless_prime_info("init", prime_info, gapless);
+            codec.last_prime_info = prime_info;
+            let resolved = track.gapless.or(gapless);
+            codec.track_info = DecoderTrackInfo {
+                gapless: resolved,
+                ..DecoderTrackInfo::default()
+            };
+            codec.prime_info_refresh_pending = resolved.is_none();
+        }
+        Ok(codec)
+    }
+
     /// AAC's converter populates `kAudioConverterPrimeInfo` only after
     /// at least one input packet is consumed; FLAC fills it at init.
     /// We arm a one-shot refresh during `open_with_config` and run it
@@ -191,6 +182,15 @@ impl AppleCodec {
             self.last_prime_info = Some(prime_info);
             self.track_info.gapless = gapless;
         }
+    }
+
+    /// Whether the Apple `AudioConverter` accepts this codec at the
+    /// codec layer alone (i.e. without an external container parser).
+    /// Initial scope: AAC family + FLAC. ALAC / MP3 land in a follow-up
+    /// when `TrackInfo` carries a codec-specific extra-data shape.
+    #[must_use]
+    pub(crate) fn supports(codec: AudioCodec) -> bool {
+        matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
     }
 }
 

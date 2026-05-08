@@ -199,12 +199,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) state: TrackState,
     epoch: Arc<AtomicU64>,
     decoder_factory: DecoderFactory<T>,
-    emit: Option<Box<dyn Fn(AudioEvent) + Send>>,
-    last_spec: Option<PcmSpec>,
-    shared_stream: SharedStream<T>,
-    effects: Vec<Box<dyn AudioEffect>>,
-    chunks_decoded: u64,
-    total_samples: u64,
     /// Gapless trim mode applied per-track. Built once at construction;
     /// ABR variant switches inside one track keep the same trimmer
     /// (production semantics) so we never retrim audible content
@@ -212,6 +206,12 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     gapless_mode: GaplessMode,
     /// Per-track gapless trimmer adapter.
     gapless: GaplessStage,
+    emit: Option<Box<dyn Fn(AudioEvent) + Send>>,
+    last_spec: Option<PcmSpec>,
+    shared_stream: SharedStream<T>,
+    effects: Vec<Box<dyn AudioEffect>>,
+    chunks_decoded: u64,
+    total_samples: u64,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -246,48 +246,14 @@ impl<T: StreamType> StreamAudioSource<T> {
             epoch,
             effects,
             timeline,
+            gapless_mode,
+            gapless,
             state: TrackState::Decoding,
             chunks_decoded: 0,
             total_samples: 0,
             last_spec: None,
             emit: None,
-            gapless_mode,
-            gapless,
         }
-    }
-
-    /// Resolve a seek-preemption target in one Option-chain so the per-tick
-    /// hot path of `step_track` short-circuits with a single branch instead
-    /// of four sequential predicates. Returns `Some(target)` only when a
-    /// new timeline seek epoch must preempt the current state; otherwise
-    /// `None` and the caller falls through to the phase dispatcher.
-    ///
-    /// Fast-path: `Timeline::take_seek_preempt` returns `true` exactly
-    /// once per `initiate_seek` call. The typical no-seek tick reads a
-    /// single Acquire bool and falls through, instead of dereferencing
-    /// two `Arc<AtomicU64>`s. A spurious consume (e.g. seek already
-    /// processed by an earlier tick) is harmless because the slow path
-    /// below re-validates against `Timeline`.
-    #[inline]
-    fn preempt_seek_target(&self) -> Option<Duration> {
-        if !self.timeline.did_take_seek_preempt() {
-            return None;
-        }
-        let timeline_epoch = self.timeline.seek_epoch();
-        if timeline_epoch <= self.epoch.load(Ordering::Acquire) {
-            return None;
-        }
-        let target = self.timeline.seek_target()?;
-        if self.state.is_terminal() {
-            return None;
-        }
-        if self
-            .active_seek_epoch()
-            .is_some_and(|epoch| epoch >= timeline_epoch)
-        {
-            return None;
-        }
-        Some(target)
     }
 
     fn active_seek_epoch(&self) -> Option<u64> {
@@ -547,24 +513,6 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         self.apply_seek_applied(epoch, position, self.seek_context(), None);
         true
-    }
-
-    /// Resolve the post-seek skip remainder for the given epoch in one
-    /// pass. Returns `Some(remaining)` only when an active skip is still
-    /// owed; otherwise clears any stale entry and returns `None`. Lets
-    /// the caller short-circuit the per-chunk fast path with a single
-    /// branch instead of a four-guard cascade (`guard_cascade.rs:60-76`).
-    #[inline]
-    fn pending_skip_amount(&mut self, epoch: u64) -> Option<Duration> {
-        let resume = self.resume_state().copied()?;
-        let remaining = resume.skip?;
-        if resume.seek.epoch != epoch || remaining.is_zero() {
-            if let Some(state) = self.resume_state_mut() {
-                state.skip = None;
-            }
-            return None;
-        }
-        Some(remaining)
     }
 
     /// Trim or drop a freshly-decoded chunk against an in-flight seek
@@ -859,21 +807,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         frames as usize
     }
 
-    /// Drain ready chunks from the gapless trimmer through the effect
-    /// chain, returning the first chunk that survives effects.
-    ///
-    /// `apply_effects` may swallow a chunk (e.g. resampler buffering);
-    /// in that case we keep pulling from `gapless.next()` until we hit
-    /// either an emittable chunk or the trimmer is empty.
-    fn next_gapless_output(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.gapless.next() {
-            if let Some(processed) = apply_effects(&mut self.effects, chunk) {
-                return Some(processed);
-            }
-        }
-        None
-    }
-
     fn install_recreated_session(
         &mut self,
         new_info: &MediaInfo,
@@ -898,6 +831,73 @@ impl<T: StreamType> StreamAudioSource<T> {
         if let TrackState::Failed(failure) = &self.state {
             emit_failure_log(failure);
         }
+    }
+
+    /// Drain ready chunks from the gapless trimmer through the effect
+    /// chain, returning the first chunk that survives effects.
+    ///
+    /// `apply_effects` may swallow a chunk (e.g. resampler buffering);
+    /// in that case we keep pulling from `gapless.next()` until we hit
+    /// either an emittable chunk or the trimmer is empty.
+    fn next_gapless_output(&mut self) -> Option<PcmChunk> {
+        while let Some(chunk) = self.gapless.next() {
+            if let Some(processed) = apply_effects(&mut self.effects, chunk) {
+                return Some(processed);
+            }
+        }
+        None
+    }
+
+    /// Resolve the post-seek skip remainder for the given epoch in one
+    /// pass. Returns `Some(remaining)` only when an active skip is still
+    /// owed; otherwise clears any stale entry and returns `None`. Lets
+    /// the caller short-circuit the per-chunk fast path with a single
+    /// branch instead of a four-guard cascade (`guard_cascade.rs:60-76`).
+    #[inline]
+    fn pending_skip_amount(&mut self, epoch: u64) -> Option<Duration> {
+        let resume = self.resume_state().copied()?;
+        let remaining = resume.skip?;
+        if resume.seek.epoch != epoch || remaining.is_zero() {
+            if let Some(state) = self.resume_state_mut() {
+                state.skip = None;
+            }
+            return None;
+        }
+        Some(remaining)
+    }
+
+    /// Resolve a seek-preemption target in one Option-chain so the per-tick
+    /// hot path of `step_track` short-circuits with a single branch instead
+    /// of four sequential predicates. Returns `Some(target)` only when a
+    /// new timeline seek epoch must preempt the current state; otherwise
+    /// `None` and the caller falls through to the phase dispatcher.
+    ///
+    /// Fast-path: `Timeline::take_seek_preempt` returns `true` exactly
+    /// once per `initiate_seek` call. The typical no-seek tick reads a
+    /// single Acquire bool and falls through, instead of dereferencing
+    /// two `Arc<AtomicU64>`s. A spurious consume (e.g. seek already
+    /// processed by an earlier tick) is harmless because the slow path
+    /// below re-validates against `Timeline`.
+    #[inline]
+    fn preempt_seek_target(&self) -> Option<Duration> {
+        if !self.timeline.did_take_seek_preempt() {
+            return None;
+        }
+        let timeline_epoch = self.timeline.seek_epoch();
+        if timeline_epoch <= self.epoch.load(Ordering::Acquire) {
+            return None;
+        }
+        let target = self.timeline.seek_target()?;
+        if self.state.is_terminal() {
+            return None;
+        }
+        if self
+            .active_seek_epoch()
+            .is_some_and(|epoch| epoch >= timeline_epoch)
+        {
+            return None;
+        }
+        Some(target)
     }
 
     /// Shared recovery path for a failed `decoder.seek()`.
@@ -1860,8 +1860,8 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         if let Some(target) = self.preempt_seek_target() {
             self.update_state(TrackState::SeekRequested(SeekRequest {
                 seek: SeekContext {
-                    epoch: self.timeline.seek_epoch(),
                     target,
+                    epoch: self.timeline.seek_epoch(),
                 },
                 ..Default::default()
             }));

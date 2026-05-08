@@ -21,12 +21,12 @@ use crate::impls::resource::Resource;
 /// reads from these buffers, avoiding direct interaction with the
 /// potentially-blocking decoder on every callback.
 pub struct PlayerResource {
+    src: Arc<str>,
     resource: Resource,
     channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
+    eof_seen: bool,
     write_len: usize,
     write_pos: usize,
-    src: Arc<str>,
-    eof_seen: bool,
 }
 
 /// Result of a bounded audio-thread read from [`PlayerResource`].
@@ -45,11 +45,11 @@ pub enum ReadOutcome {
 }
 
 impl PlayerResource {
-    /// Number of stereo output channels.
-    const STEREO_CHANNELS: usize = 2;
-
     /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
     const BUFFER_DURATION_DIVISOR: usize = 5;
+
+    /// Number of stereo output channels.
+    const STEREO_CHANNELS: usize = 2;
 
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
@@ -75,11 +75,66 @@ impl PlayerResource {
         Self {
             resource,
             channel_buffers,
+            src,
             write_len: 0,
             write_pos: 0,
-            src,
             eof_seen: false,
         }
+    }
+
+    /// Total duration in seconds. Returns 0.0 if unknown.
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
+    }
+
+    fn fill_scratch(&mut self, target_frames: usize) -> bool {
+        let mut eof_reached = self.eof_seen;
+
+        while target_frames > self.write_len && !eof_reached {
+            let avail = self.channel_buffers[0].len() - self.write_pos;
+            if avail == 0 {
+                break;
+            }
+
+            let channel_buffers = &mut self.channel_buffers;
+            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
+            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
+            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
+            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
+
+            let n = match self.resource.read_planar(&mut planar) {
+                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
+                Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
+                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
+                    self.eof_seen = true;
+                    eof_reached = true;
+                    0
+                }
+                Err(err) => {
+                    warn!(src = %self.src, error = %err, "PlayerResource: decode error");
+                    self.eof_seen = true;
+                    eof_reached = true;
+                    0
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            self.write_len += n;
+            self.write_pos += n;
+        }
+
+        eof_reached
+    }
+
+    /// Remaining buffered frames when the wrapped reader has reached EOF.
+    ///
+    /// `Some(0)` means the current read drained the last buffered frame exactly;
+    /// the next read will return [`ReadOutcome::Eof`].
+    #[must_use]
+    pub fn frames_until_eof(&self) -> Option<usize> {
+        self.eof_seen.then_some(self.write_len)
     }
 
     /// Read PCM frames into the output buffers for the given range.
@@ -143,46 +198,6 @@ impl PlayerResource {
         }
     }
 
-    fn fill_scratch(&mut self, target_frames: usize) -> bool {
-        let mut eof_reached = self.eof_seen;
-
-        while target_frames > self.write_len && !eof_reached {
-            let avail = self.channel_buffers[0].len() - self.write_pos;
-            if avail == 0 {
-                break;
-            }
-
-            let channel_buffers = &mut self.channel_buffers;
-            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
-            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
-            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
-
-            let n = match self.resource.read_planar(&mut planar) {
-                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
-                Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
-                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
-                    self.eof_seen = true;
-                    eof_reached = true;
-                    0
-                }
-                Err(err) => {
-                    warn!(src = %self.src, error = %err, "PlayerResource: decode error");
-                    self.eof_seen = true;
-                    eof_reached = true;
-                    0
-                }
-            };
-            if n == 0 {
-                break;
-            }
-            self.write_len += n;
-            self.write_pos += n;
-        }
-
-        eof_reached
-    }
-
     /// Seek to the given position in seconds.
     ///
     /// Clears the internal scratch buffers on success.
@@ -198,21 +213,6 @@ impl PlayerResource {
                 warn!("failed to seek: {err}");
             }
         }
-    }
-
-    /// Total duration in seconds. Returns 0.0 if unknown.
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        self.resource.duration().map_or(0.0, |d| d.as_secs_f64())
-    }
-
-    /// Remaining buffered frames when the wrapped reader has reached EOF.
-    ///
-    /// `Some(0)` means the current read drained the last buffered frame exactly;
-    /// the next read will return [`ReadOutcome::Eof`].
-    #[must_use]
-    pub fn frames_until_eof(&self) -> Option<usize> {
-        self.eof_seen.then_some(self.write_len)
     }
 
     /// Set the target sample rate of the audio host.

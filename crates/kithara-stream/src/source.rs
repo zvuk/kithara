@@ -167,13 +167,6 @@ impl SourceSeekAnchor {
 /// (e.g., progress tracking, segment index updates).
 #[kithara::mock(api = SourceMock)]
 pub trait Source: Send + Sync + 'static {
-    /// Whether the source currently reports zero bytes. Default mirrors
-    /// `self.len()` returning `0` (or being unknown — both are treated as
-    /// "no readable bytes yet" for the conventional `len`/`is_empty` pair).
-    fn is_empty(&self) -> bool {
-        self.len().is_none_or(|n| n == 0)
-    }
-
     /// Current ABR handle for runtime mode/bandwidth control.
     ///
     /// Adaptive sources (HLS) return the peer's `AbrHandle` so callers —
@@ -245,6 +238,13 @@ pub trait Source: Send + Sync + 'static {
     /// Returns `None` if no format change occurred or for non-segmented sources.
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         None
+    }
+
+    /// Whether the source currently reports zero bytes. Default mirrors
+    /// `self.len()` returning `0` (or being unknown — both are treated as
+    /// "no readable bytes yet" for the conventional `len`/`is_empty` pair).
+    fn is_empty(&self) -> bool {
+        self.len().is_none_or(|n| n == 0)
     }
 
     /// Total length if known.
@@ -387,17 +387,17 @@ pub trait Source: Send + Sync + 'static {
 /// `Read + Seek` handle, queried independently. Sources that aren't
 /// segment-aware return `None` from [`Source::as_segment_layout`].
 pub trait SegmentLayout: Send + Sync + 'static {
+    /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
+    /// current layout variant. Returns `None` until the init segment is
+    /// announced.
+    fn init_segment_range(&self) -> Option<Range<u64>>;
+
     /// Whether the layout currently reports zero bytes. `len()` is `Option`
     /// because some segmented sources do not know their total upfront, so
     /// emptiness defaults to "len is `None` or `Some(0)`".
     fn is_empty(&self) -> bool {
         self.len().is_none_or(|n| n == 0)
     }
-
-    /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
-    /// current layout variant. Returns `None` until the init segment is
-    /// announced.
-    fn init_segment_range(&self) -> Option<Range<u64>>;
 
     /// Total byte length across all segments. Used to compute total
     /// duration when the source can't provide a direct value.

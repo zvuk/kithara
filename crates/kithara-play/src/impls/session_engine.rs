@@ -51,25 +51,25 @@ pub type StartStreamFn<B> = fn(&mut FirewheelCtx<B>, u32) -> Result<(), String>;
 
 #[derive(Debug)]
 struct SlotNodes {
-    slot_id: SlotId,
-    player_node_id: NodeID,
     vol_pan_memo: Memo<VolumePanNode>,
+    player_node_id: NodeID,
     vol_pan_node_id: NodeID,
+    slot_id: SlotId,
 }
 
 struct PlayerState {
-    eq_layout: Vec<EqBandConfig>,
     master_eq_memo: Option<Memo<MasterEqNode>>,
     master_eq_node_id: Option<NodeID>,
-    master_volume: f32,
     master_vol_pan_memo: Option<Memo<VolumePanNode>>,
     master_vol_pan_node_id: Option<NodeID>,
-    next_slot_id: u64,
     pcm_pool: PcmPool,
     player_id: PlayerId,
     shared_eq: SharedEq,
+    eq_layout: Vec<EqBandConfig>,
     slots: Vec<SlotNodes>,
     started: bool,
+    master_volume: f32,
+    next_slot_id: u64,
 }
 
 impl PlayerState {
@@ -77,14 +77,14 @@ impl PlayerState {
         let band_count = eq_layout.len();
         Self {
             eq_layout,
+            pcm_pool,
+            player_id,
             master_eq_memo: None,
             master_eq_node_id: None,
             master_volume: 1.0,
             master_vol_pan_memo: None,
             master_vol_pan_node_id: None,
             next_slot_id: 1,
-            pcm_pool,
-            player_id,
             shared_eq: SharedEq::new(band_count),
             slots: Vec::new(),
             started: false,
@@ -100,24 +100,24 @@ impl PlayerState {
 /// command-dispatch logic without touching real hardware.
 pub struct SessionState<B: AudioBackend> {
     ctx: Option<FirewheelCtx<B>>,
-    next_player_id: PlayerId,
-    players: Vec<PlayerState>,
-    sample_rate_hint: u32,
-    session_ducking: SessionDuckingMode,
     session_output_memo: Option<Memo<VolumePanNode>>,
     session_output_node_id: Option<NodeID>,
+    next_player_id: PlayerId,
+    session_ducking: SessionDuckingMode,
     /// Backend-specific stream starter baked in at engine-thread spawn
     /// time. Lets [`ensure_ctx`] start the stream without knowing `B`
     /// concretely.
     start_stream_fn: StartStreamFn<B>,
+    players: Vec<PlayerState>,
+    sample_rate_hint: u32,
 }
 
 impl<B: AudioBackend> SessionState<B> {
-    /// Default sample rate hint for the audio session.
-    pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
-
     /// Capacity of the session command ring buffer.
     pub const CMD_RINGBUF_CAPACITY: usize = 64;
+
+    /// Default sample rate hint for the audio session.
+    pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     /// Build a fresh session state with the given backend stream starter.
     ///
@@ -127,6 +127,7 @@ impl<B: AudioBackend> SessionState<B> {
     #[must_use]
     pub fn new(start_stream_fn: StartStreamFn<B>) -> Self {
         Self {
+            start_stream_fn,
             ctx: None,
             next_player_id: 1,
             players: Vec::new(),
@@ -134,7 +135,6 @@ impl<B: AudioBackend> SessionState<B> {
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
-            start_stream_fn,
         }
     }
 
@@ -248,18 +248,6 @@ pub type AllocatedSlot = (
 /// Typed methods are default-impl'd in terms of `exec`, so backends only
 /// implement the dispatch primitive.
 pub trait SessionDispatcher: Send + Sync + 'static {
-    /// Run a command synchronously. Returns the raw [`Reply`] — typed
-    /// methods unpack it.
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
-
-    fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        let reply = self.exec(cmd)?;
-        if let Reply::Err(msg) = &reply {
-            return Err(PlayError::Internal(msg.clone()));
-        }
-        Ok(reply)
-    }
-
     fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
         match self.exec_ok(Cmd::AllocateSlot { player_id })? {
             Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
@@ -278,6 +266,18 @@ pub trait SessionDispatcher: Send + Sync + 'static {
                 "unexpected reply for session ducking query".into(),
             )),
         }
+    }
+
+    /// Run a command synchronously. Returns the raw [`Reply`] — typed
+    /// methods unpack it.
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+
+    fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        let reply = self.exec(cmd)?;
+        if let Reply::Err(msg) = &reply {
+            return Err(PlayError::Internal(msg.clone()));
+        }
+        Ok(reply)
     }
 
     fn query_sample_rate(&self, fallback: u32) -> u32 {
@@ -392,23 +392,6 @@ impl SessionClient {
     const PLAYER_CMD_RINGBUF_CAPACITY: usize = 32;
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
-        let mut pending = msg;
-        loop {
-            match self.cmd_tx.lock_sync().try_push(pending) {
-                Ok(()) => {
-                    self.engine_thread.unpark();
-                    return Ok(());
-                }
-                Err(returned) => {
-                    pending = returned;
-                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
-                }
-            }
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.push_cmd(CmdMsg { cmd, reply_tx })
@@ -441,6 +424,23 @@ impl SessionClient {
             reply_rx
                 .recv_sync()
                 .map_err(|_| PlayError::Internal("session host gone (reply)".into()))
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
+        let mut pending = msg;
+        loop {
+            match self.cmd_tx.lock_sync().try_push(pending) {
+                Ok(()) => {
+                    self.engine_thread.unpark();
+                    return Ok(());
+                }
+                Err(returned) => {
+                    pending = returned;
+                    thread_sleep(Duration::from_millis(Self::CMD_PUSH_BACKOFF_MS));
+                }
+            }
         }
     }
 }
@@ -484,8 +484,8 @@ fn spawn_session_client<B: AudioBackend + Send + 'static>(
     });
     let engine_thread = handle.thread().clone();
     Arc::new(SessionClient {
-        cmd_tx: Mutex::new(cmd_tx),
         engine_thread,
+        cmd_tx: Mutex::new(cmd_tx),
     })
 }
 

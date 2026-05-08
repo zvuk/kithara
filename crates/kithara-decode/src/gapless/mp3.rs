@@ -101,8 +101,8 @@ fn skip_id3v2(data: &[u8]) -> usize {
 
 #[derive(Debug, Clone, Copy)]
 struct FrameHeader {
-    samples_per_frame: u32,
     side_info_mono: bool,
+    samples_per_frame: u32,
 }
 
 fn parse_header(word: u32) -> Option<FrameHeader> {

@@ -50,9 +50,9 @@ pub struct PlaylistCache {
     /// critical sections.
     media: Arc<DashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>,
     backend: AssetStore<DecryptContext>,
-    downloader: PeerHandle,
     /// Byte buffer pool for reading cached playlist bodies.
     byte_pool: kithara_bufpool::BytePool,
+    downloader: PeerHandle,
 }
 
 #[derive(Default, Clone)]

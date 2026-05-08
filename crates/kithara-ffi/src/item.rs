@@ -32,16 +32,17 @@ use crate::{
 /// metadata events.
 #[derive(Default, Debug, Clone, Copy)]
 pub(crate) struct ItemState {
-    pub duration_sec: f64,
+    pub has_protected_content: bool,
+    pub is_failed: bool,
     pub is_live_stream: bool,
     pub is_ready_to_play: bool,
-    pub is_failed: bool,
-    pub has_protected_content: bool,
+    pub duration_sec: f64,
 }
 
 /// FFI-facing audio player item with UUID identity.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayerItem {
+    pub(crate) state: Arc<Mutex<ItemState>>,
     /// Scoped event bus — set by `AudioPlayer::insert` so per-resource
     /// events (Hls/File/Audio) published during `Resource::new` are
     /// captured even when [`set_observer`] is called later.
@@ -53,7 +54,6 @@ pub struct AudioPlayerItem {
     config: FfiItemConfig,
     event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
-    pub(crate) state: Arc<Mutex<ItemState>>,
     id: Uuid,
 }
 
@@ -72,6 +72,7 @@ impl AudioPlayerItem {
     pub fn new(config: FfiItemConfig) -> Arc<Self> {
         let live = config.is_live_stream;
         Arc::new(Self {
+            config,
             id: Uuid::new_v4(),
             event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
@@ -81,7 +82,6 @@ impl AudioPlayerItem {
                 is_live_stream: live,
                 ..ItemState::default()
             })),
-            config,
         })
     }
 
@@ -89,38 +89,6 @@ impl AudioPlayerItem {
     /// `AudioPlayerItemProtocol.audioId`.
     pub fn audio_id(&self) -> String {
         self.id.to_string()
-    }
-
-    /// 64-bit numeric form of [`Self::audio_id`]. Derived from the
-    /// first 16 hex digits of the UUID — stable for the same UUID, but
-    /// **not** cryptographically unique. Treat as an opaque numeric
-    /// handle.
-    pub fn uuid_i64(&self) -> i64 {
-        let hex: String = self
-            .audio_id()
-            .chars()
-            .filter(char::is_ascii_hexdigit)
-            .take(UUID_HEX_PREFIX_LEN)
-            .collect();
-        let raw = u64::from_str_radix(&hex, 16).unwrap_or(0);
-        raw as i64
-    }
-
-    pub fn preferred_peak_bitrate(&self) -> f64 {
-        self.config.preferred_peak_bitrate
-    }
-
-    pub fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64 {
-        self.config.preferred_peak_bitrate_expensive
-    }
-
-    pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
-        *self.observer.lock_sync() = Some(observer);
-        self.restart_bridge();
-    }
-
-    pub fn url(&self) -> String {
-        self.config.url.clone()
     }
 
     /// Cached item duration in seconds. Defaults to `0.0` until the
@@ -134,6 +102,25 @@ impl AudioPlayerItem {
     /// future this getter will also surface auto-detected live streams.
     pub fn is_live_stream(&self) -> bool {
         self.state.lock_sync().is_live_stream
+    }
+
+    /// Whether the item is playable at `progress` (seconds) given the
+    /// caller-supplied buffered `ranges`. Live streams are reported
+    /// playable unconditionally.
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift requires owned Vec across FFI ABI"
+        )
+    )]
+    pub fn is_playable(&self, progress: f64, ranges: Vec<FfiTimeRange>) -> bool {
+        if self.is_live_stream() {
+            return true;
+        }
+        ranges
+            .iter()
+            .any(|r| progress >= r.start_seconds && progress < r.start_seconds + r.duration_seconds)
     }
 
     /// Resolve `callback` with the item's current load status. If the
@@ -170,23 +157,36 @@ impl AudioPlayerItem {
         callback.on_complete(result);
     }
 
-    /// Whether the item is playable at `progress` (seconds) given the
-    /// caller-supplied buffered `ranges`. Live streams are reported
-    /// playable unconditionally.
-    #[cfg_attr(
-        all(),
-        expect(
-            clippy::needless_pass_by_value,
-            reason = "UniFFI Lift requires owned Vec across FFI ABI"
-        )
-    )]
-    pub fn is_playable(&self, progress: f64, ranges: Vec<FfiTimeRange>) -> bool {
-        if self.is_live_stream() {
-            return true;
-        }
-        ranges
-            .iter()
-            .any(|r| progress >= r.start_seconds && progress < r.start_seconds + r.duration_seconds)
+    pub fn preferred_peak_bitrate(&self) -> f64 {
+        self.config.preferred_peak_bitrate
+    }
+
+    pub fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64 {
+        self.config.preferred_peak_bitrate_expensive
+    }
+
+    pub fn set_observer(&self, observer: Arc<dyn ItemObserver>) {
+        *self.observer.lock_sync() = Some(observer);
+        self.restart_bridge();
+    }
+
+    pub fn url(&self) -> String {
+        self.config.url.clone()
+    }
+
+    /// 64-bit numeric form of [`Self::audio_id`]. Derived from the
+    /// first 16 hex digits of the UUID — stable for the same UUID, but
+    /// **not** cryptographically unique. Treat as an opaque numeric
+    /// handle.
+    pub fn uuid_i64(&self) -> i64 {
+        let hex: String = self
+            .audio_id()
+            .chars()
+            .filter(char::is_ascii_hexdigit)
+            .take(UUID_HEX_PREFIX_LEN)
+            .collect();
+        let raw = u64::from_str_radix(&hex, 16).unwrap_or(0);
+        raw as i64
     }
 }
 

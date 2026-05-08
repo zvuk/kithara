@@ -63,14 +63,6 @@ pub(crate) struct TrackInfo {
     pub codec: AudioCodec,
     /// Total track duration if available.
     pub duration: Option<Duration>,
-    /// Codec-specific extra data — `AudioSpecificConfig` (AAC),
-    /// `STREAMINFO` (FLAC), `esds` cookie (Apple), etc. Empty when the
-    /// codec needs no extra data.
-    pub extra_data: Vec<u8>,
-    /// Channel count.
-    pub channels: u16,
-    /// Decoded sample rate (Hz).
-    pub sample_rate: u32,
     /// Container-level gapless metadata — populated by demuxers that
     /// can extract it without consuming the decoder (MP4 `iTunSMPB`
     /// or track `elst`, FLAC `padded_sample_count`, etc.). `None` when
@@ -79,6 +71,14 @@ pub(crate) struct TrackInfo {
     /// refresh, `Symphonia` `AudioDecoderOptions::gapless`) supplements
     /// this for codecs whose priming is not container-visible.
     pub gapless: Option<crate::GaplessInfo>,
+    /// Codec-specific extra data — `AudioSpecificConfig` (AAC),
+    /// `STREAMINFO` (FLAC), `esds` cookie (Apple), etc. Empty when the
+    /// codec needs no extra data.
+    pub extra_data: Vec<u8>,
+    /// Channel count.
+    pub channels: u16,
+    /// Decoded sample rate (Hz).
+    pub sample_rate: u32,
 }
 
 /// One demuxed audio frame, borrowed from the demuxer's internal state.

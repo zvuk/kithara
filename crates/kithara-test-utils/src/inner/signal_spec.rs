@@ -77,25 +77,25 @@ impl TryFrom<&str> for SignalFormat {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SignalRequest {
-    pub(crate) format: SignalFormat,
     pub(crate) spec: ResolvedSignalSpec,
+    pub(crate) format: SignalFormat,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResolvedSignalSpec {
-    pub(crate) kind: SignalKind,
-    pub(crate) sample_rate: u32,
-    pub(crate) channels: u16,
-    pub(crate) length: SignalLength,
     pub(crate) sine_freq_hz: Option<f64>,
     pub(crate) sweep: Option<ResolvedSweep>,
+    pub(crate) kind: SignalKind,
+    pub(crate) length: SignalLength,
+    pub(crate) channels: u16,
+    pub(crate) sample_rate: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ResolvedSweep {
-    pub(crate) start_hz: f64,
-    pub(crate) end_hz: f64,
     pub(crate) mode: SweepMode,
+    pub(crate) end_hz: f64,
+    pub(crate) start_hz: f64,
 }
 
 #[derive(Debug, Error)]
@@ -124,26 +124,26 @@ pub(crate) enum SignalRequestError {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SignalSpecPayload {
-    sample_rate: u32,
-    channels: u16,
-    #[serde(default)]
-    ext: Option<String>,
-    #[serde(default)]
-    seconds: Option<f64>,
-    #[serde(default)]
-    frames: Option<usize>,
-    #[serde(default)]
-    file_bytes: Option<usize>,
-    #[serde(default)]
-    infinite: Option<bool>,
-    #[serde(default)]
-    freq: Option<f64>,
-    #[serde(default)]
-    start_freq: Option<f64>,
     #[serde(default)]
     end_freq: Option<f64>,
     #[serde(default)]
+    ext: Option<String>,
+    #[serde(default)]
+    file_bytes: Option<usize>,
+    #[serde(default)]
+    frames: Option<usize>,
+    #[serde(default)]
+    freq: Option<f64>,
+    #[serde(default)]
+    infinite: Option<bool>,
+    #[serde(default)]
+    seconds: Option<f64>,
+    #[serde(default)]
+    start_freq: Option<f64>,
+    #[serde(default)]
     sweep_mode: Option<String>,
+    channels: u16,
+    sample_rate: u32,
 }
 
 pub(crate) fn parse_signal_request(
@@ -154,7 +154,7 @@ pub(crate) fn parse_signal_request(
     let payload = decode_signal_spec_payload(spec_b64)?;
     let format = resolve_signal_format(path_ext, payload.ext.as_deref())?;
     let spec = normalize_signal_spec(kind, format, &payload)?;
-    Ok(SignalRequest { format, spec })
+    Ok(SignalRequest { spec, format })
 }
 
 fn split_spec_and_ext(spec_with_ext: &str) -> Result<(&str, Option<&str>), SignalRequestError> {
@@ -349,9 +349,9 @@ fn normalize_signal_spec(
             (
                 None,
                 Some(ResolvedSweep {
-                    start_hz,
-                    end_hz,
                     mode,
+                    end_hz,
+                    start_hz,
                 }),
             )
         }
@@ -359,11 +359,11 @@ fn normalize_signal_spec(
 
     Ok(ResolvedSignalSpec {
         kind,
-        sample_rate: payload.sample_rate,
-        channels: payload.channels,
         length,
         sine_freq_hz,
         sweep,
+        sample_rate: payload.sample_rate,
+        channels: payload.channels,
     })
 }
 

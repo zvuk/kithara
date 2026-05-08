@@ -321,6 +321,15 @@ pub struct IsolatorEq {
     lp_scratch: Vec<f32>,
     /// N-1 LR-4 lowpass stages (one per crossover).
     lps: Vec<LR4>,
+    /// Cached result of [`Self::compute_bypass_active`]. Same lifecycle
+    /// as `cached_silence_active`.
+    cached_bypass_active: bool,
+    /// Cached result of [`Self::compute_silence_active`] — read on every
+    /// sample inside [`Self::process_sample`]. Refreshed only at the
+    /// points where gain state can change: `set_gain`, `reset`, and
+    /// the per-block smoother tick. Eliminates the `Vec::iter().all()`
+    /// walk per sample (~9-10 profiler samples on the apple sentinel).
+    cached_silence_active: bool,
     /// Whether the previous sample returned via a fast path and therefore
     /// left the filter state frozen — drives a one-shot rehydration on the
     /// next non-fast-path sample.
@@ -330,15 +339,6 @@ pub struct IsolatorEq {
     block_counter: usize,
     /// Write position in [`Self::bypass_history`] (modulo its length).
     bypass_history_pos: usize,
-    /// Cached result of [`Self::compute_silence_active`] — read on every
-    /// sample inside [`Self::process_sample`]. Refreshed only at the
-    /// points where gain state can change: `set_gain`, `reset`, and
-    /// the per-block smoother tick. Eliminates the `Vec::iter().all()`
-    /// walk per sample (~9-10 profiler samples on the apple sentinel).
-    cached_silence_active: bool,
-    /// Cached result of [`Self::compute_bypass_active`]. Same lifecycle
-    /// as `cached_silence_active`.
-    cached_bypass_active: bool,
 }
 
 impl IsolatorEq {
@@ -397,6 +397,8 @@ impl IsolatorEq {
             ap_offsets,
             gains,
             crossover_freqs,
+            cached_silence_active,
+            cached_bypass_active,
             lp_scratch: vec![0.0; xover_count],
             sample_rate: sr,
             smooth_coeff: compute_smooth_coeff(sr),
@@ -404,8 +406,6 @@ impl IsolatorEq {
             bypass_history: vec![0.0; Self::BYPASS_HISTORY_LEN],
             bypass_history_pos: 0,
             was_in_fastpath: false,
-            cached_silence_active,
-            cached_bypass_active,
         }
     }
 
@@ -437,18 +437,6 @@ impl IsolatorEq {
     #[must_use]
     pub fn is_silence_active(&self) -> bool {
         self.cached_silence_active
-    }
-
-    /// Recompute both fast-path predicates after a gain mutation.
-    ///
-    /// Callers MUST invoke this whenever `target_linear` or
-    /// `current_linear` may have changed: smoother tick in
-    /// `process_sample`, `set_gain`, `reset`. Tests that mutate
-    /// `gains[i]` fields directly must also call this before relying on
-    /// `is_silence_active` / `is_bypass_active`.
-    fn refresh_fastpath_cache(&mut self) {
-        self.cached_silence_active = compute_silence_active(&self.gains);
-        self.cached_bypass_active = compute_bypass_active(&self.gains);
     }
 
     /// Whether any band is still smoothing toward its target.
@@ -536,6 +524,18 @@ impl IsolatorEq {
         let len = self.bypass_history.len();
         self.bypass_history[self.bypass_history_pos] = input;
         self.bypass_history_pos = (self.bypass_history_pos + 1) % len;
+    }
+
+    /// Recompute both fast-path predicates after a gain mutation.
+    ///
+    /// Callers MUST invoke this whenever `target_linear` or
+    /// `current_linear` may have changed: smoother tick in
+    /// `process_sample`, `set_gain`, `reset`. Tests that mutate
+    /// `gains[i]` fields directly must also call this before relying on
+    /// `is_silence_active` / `is_bypass_active`.
+    fn refresh_fastpath_cache(&mut self) {
+        self.cached_silence_active = compute_silence_active(&self.gains);
+        self.cached_bypass_active = compute_bypass_active(&self.gains);
     }
 
     /// Replay the ring-buffered recent input through the filter cascade so

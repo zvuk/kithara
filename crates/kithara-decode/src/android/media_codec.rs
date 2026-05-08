@@ -50,10 +50,10 @@ pub(crate) struct OutputBuffer {
 /// FFI primitives so callers can't accidentally swap argument positions.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct QueueInput {
-    pub(crate) index: usize,
-    pub(crate) size: usize,
     pub(crate) presentation_time_us: i64,
     pub(crate) flags: u32,
+    pub(crate) index: usize,
+    pub(crate) size: usize,
 }
 
 impl OutputBuffer {

@@ -221,10 +221,6 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
         TrackMetadata::default()
     }
 
-    fn track_info(&self) -> crate::DecoderTrackInfo {
-        self.codec.track_info()
-    }
-
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         let outcome = self.next_chunk_inner()?;
         self.emit_chunk_signal(&outcome);
@@ -239,6 +235,10 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
 
     fn spec(&self) -> PcmSpec {
         self.spec
+    }
+
+    fn track_info(&self) -> crate::DecoderTrackInfo {
+        self.codec.track_info()
     }
 
     fn update_byte_len(&self, len: u64) {
@@ -519,10 +519,10 @@ mod hook_tests {
     impl StubDemuxer {
         fn with_outcomes(next: Vec<StubOutcome>, seek: Vec<DemuxSeekOutcome>) -> Self {
             Self {
-                track: empty_track(),
-                held: Vec::new(),
                 next,
                 seek,
+                track: empty_track(),
+                held: Vec::new(),
             }
         }
     }

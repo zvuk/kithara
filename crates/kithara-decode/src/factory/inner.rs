@@ -113,8 +113,6 @@ pub struct DecoderConfig {
     pub segment_layout: Option<Arc<dyn SegmentLayout>>,
     /// Stream context for segment/variant metadata.
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
-    /// Epoch counter for decoder recreation tracking.
-    pub epoch: u64,
     /// Enable gapless trim wiring through the per-backend codec.
     ///
     /// `true` (default) flips the matching `*Config::gapless` for the
@@ -128,9 +126,19 @@ pub struct DecoderConfig {
     /// the `Decoder` trait.
     #[derivative(Default(value = "true"))]
     pub gapless: bool,
+    /// Epoch counter for decoder recreation tracking.
+    pub epoch: u64,
 }
 
 impl DecoderConfig {
+    /// Set [`Self::hooks`] from an `Option`. Same `Option` rationale as
+    /// [`Self::with_segment_layout`].
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: Option<SharedHooks>) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
     /// Set [`Self::segment_layout`] from an `Option`. Distinct from
     /// the derived `with_*` setters because `derive_setters` with
     /// `strip_option` would force callers to unwrap the `Option`
@@ -139,14 +147,6 @@ impl DecoderConfig {
     #[must_use]
     pub fn with_segment_layout(mut self, layout: Option<Arc<dyn SegmentLayout>>) -> Self {
         self.segment_layout = layout;
-        self
-    }
-
-    /// Set [`Self::hooks`] from an `Option`. Same `Option` rationale as
-    /// [`Self::with_segment_layout`].
-    #[must_use]
-    pub fn with_hooks(mut self, hooks: Option<SharedHooks>) -> Self {
-        self.hooks = hooks;
         self
     }
 }

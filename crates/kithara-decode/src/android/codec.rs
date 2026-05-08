@@ -48,39 +48,17 @@ impl Consts {
 /// Frame-level codec wrapping Android's `AMediaCodec`.
 pub(crate) struct AndroidCodec {
     pcm_encoding: AndroidPcmEncoding,
-    codec: OwnedCodec,
-    spec: PcmSpec,
     /// Decoder-owned playback contract. Populated from container-level
     /// gapless metadata (MP4 udta) when `gapless` was requested at
     /// [`AndroidCodec::probe_track_info`]; left empty otherwise.
     /// `MediaCodec` itself does not surface encoder priming, so the
     /// contract value comes solely from container probing.
     track_info: DecoderTrackInfo,
+    codec: OwnedCodec,
+    spec: PcmSpec,
 }
 
 impl AndroidCodec {
-    /// Whether `MediaCodec` accepts this codec at the codec layer alone
-    /// (i.e. without an extractor providing per-track metadata).
-    /// Initial scope: AAC family + FLAC.
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
-        matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
-    }
-
-    /// Build an [`AndroidCodec`]. `gapless` is intentionally accepted for
-    /// API symmetry with [`super::super::apple::AppleCodec::open_with_config`]
-    /// and [`super::super::symphonia::SymphoniaCodec::open_with_config`],
-    /// but `MediaCodec` does not surface encoder priming — gapless
-    /// numbers come exclusively from the demuxer's MP4 udta probe in
-    /// [`Self::probe_track_info`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DecodeError::Backend`] when `AMediaCodec_createDecoderByType`
-    /// or `AMediaFormat` setup fails for the track's codec/sample-rate/channels.
-    pub(crate) fn open_with_config(track: &TrackInfo, _gapless: bool) -> DecodeResult<Self> {
-        Self::open(track)
-    }
-
     /// Inherent constructor used by [`Self::open_with_config`].
     ///
     /// # Errors
@@ -110,6 +88,21 @@ impl AndroidCodec {
             pcm_encoding,
             track_info: DecoderTrackInfo::default(),
         })
+    }
+
+    /// Build an [`AndroidCodec`]. `gapless` is intentionally accepted for
+    /// API symmetry with [`super::super::apple::AppleCodec::open_with_config`]
+    /// and [`super::super::symphonia::SymphoniaCodec::open_with_config`],
+    /// but `MediaCodec` does not surface encoder priming — gapless
+    /// numbers come exclusively from the demuxer's MP4 udta probe in
+    /// [`Self::probe_track_info`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::Backend`] when `AMediaCodec_createDecoderByType`
+    /// or `AMediaFormat` setup fails for the track's codec/sample-rate/channels.
+    pub(crate) fn open_with_config(track: &TrackInfo, _gapless: bool) -> DecodeResult<Self> {
+        Self::open(track)
     }
 
     /// Probe the source for container-level gapless metadata before
@@ -144,6 +137,13 @@ impl AndroidCodec {
             gapless,
             ..DecoderTrackInfo::default()
         })
+    }
+
+    /// Whether `MediaCodec` accepts this codec at the codec layer alone
+    /// (i.e. without an extractor providing per-track metadata).
+    /// Initial scope: AAC family + FLAC.
+    pub(crate) fn supports(codec: AudioCodec) -> bool {
+        matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
     }
 }
 

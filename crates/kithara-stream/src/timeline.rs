@@ -75,6 +75,12 @@ pub struct Timeline {
     /// from it. Decoder-driven via [`Self::advance_committed_to`].
     committed_frame_end: Arc<AtomicU64>,
     committed_position_ns: Arc<AtomicU64>,
+    /// Independent latch for `DecoderNode::sync_seek_epoch`: the
+    /// preempt latch above is destructively consumed inside
+    /// `StreamAudioSource`, so the wrapping decoder node — which has to
+    /// reset its preload counters / drop parked chunks on each new
+    /// epoch — needs its own one-shot signal. `initiate_seek` arms both.
+    decoder_node_seek_latch: Arc<AtomicBool>,
     download_position: Arc<AtomicU64>,
     /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `EOF`, `PLAYING`.
     flags: Arc<AtomicU8>,
@@ -82,11 +88,10 @@ pub struct Timeline {
     /// readers convert `committed_frame_end` ↔ `committed_position`
     /// without external state.
     last_sample_rate: Arc<AtomicU64>,
+
     pending_seek_epoch: Arc<AtomicU64>,
 
     seek_epoch: Arc<AtomicU64>,
-
-    seek_target_ns: Arc<AtomicU64>,
     /// Hot-path latch the audio worker reads on every `step_track` to
     /// skip the multi-condition seek-preempt guard. Set by
     /// `initiate_seek` once per seek (Release after `seek_epoch`/
@@ -94,12 +99,7 @@ pub struct Timeline {
     /// `swap(false, Acquire)`. A single bool load replaces two
     /// `Arc<AtomicU64>` Acquire loads on the typical no-seek tick.
     seek_preempt_latch: Arc<AtomicBool>,
-    /// Independent latch for `DecoderNode::sync_seek_epoch`: the
-    /// preempt latch above is destructively consumed inside
-    /// `StreamAudioSource`, so the wrapping decoder node — which has to
-    /// reset its preload counters / drop parked chunks on each new
-    /// epoch — needs its own one-shot signal. `initiate_seek` arms both.
-    decoder_node_seek_latch: Arc<AtomicBool>,
+    seek_target_ns: Arc<AtomicU64>,
     /// Byte offset at the start of the most recent `Stream::read()` call.
     /// Used by `StreamContext::segment_index()` to resolve which segment
     /// the last-read data belongs to — `byte_position` has already advanced
@@ -171,18 +171,6 @@ impl Timeline {
         Arc::clone(&self.byte_position)
     }
 
-    #[must_use]
-    pub fn did_clear_pending_seek_epoch(&self, seek_epoch: u64) -> bool {
-        self.pending_seek_epoch
-            .compare_exchange(
-                seek_epoch,
-                Self::NO_PENDING_SEEK,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-    }
-
     /// Clear seek-pending flag after the decoder successfully applied the seek.
     ///
     /// Only clears if `epoch` matches the current seek epoch, preventing a
@@ -243,13 +231,46 @@ impl Timeline {
     }
 
     #[must_use]
-    pub fn download_position(&self) -> u64 {
-        self.download_position.load(Ordering::Acquire)
+    pub fn did_clear_pending_seek_epoch(&self, seek_epoch: u64) -> bool {
+        self.pending_seek_epoch
+            .compare_exchange(
+                seek_epoch,
+                Self::NO_PENDING_SEEK,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Consume the decoder-node seek latch with an Acquire swap.
+    ///
+    /// Independent from `take_seek_preempt`: the inner audio source
+    /// consumes that one inside `step_track`, while `DecoderNode` (the
+    /// wrapping scheduler node) needs its own signal so it can reset
+    /// preload state and drop parked chunks on a new epoch. `true`
+    /// here means `seek_epoch` was just bumped and the node must run
+    /// the cleanup branch; otherwise the tick falls through.
+    #[must_use]
+    pub fn did_take_decoder_node_seek(&self) -> bool {
+        self.decoder_node_seek_latch.swap(false, Ordering::Acquire)
+    }
+
+    /// Consume the seek-preempt latch with an Acquire swap.
+    ///
+    /// Returns `true` exactly once per `initiate_seek` call: the worker
+    /// uses this to short-circuit `step_track`'s preempt guard without
+    /// dereferencing two `Arc<AtomicU64>`s. The Acquire ordering
+    /// synchronises with the Release in `initiate_seek` so observing
+    /// `true` here means the new `seek_epoch` and `seek_target_ns`
+    /// stores are also visible.
+    #[must_use]
+    pub fn did_take_seek_preempt(&self) -> bool {
+        self.seek_preempt_latch.swap(false, Ordering::Acquire)
     }
 
     #[must_use]
-    pub fn is_eof(&self) -> bool {
-        self.contains_flag(TimelineFlags::EOF)
+    pub fn download_position(&self) -> u64 {
+        self.download_position.load(Ordering::Acquire)
     }
 
     #[inline]
@@ -281,35 +302,14 @@ impl Timeline {
         epoch
     }
 
-    /// Consume the seek-preempt latch with an Acquire swap.
-    ///
-    /// Returns `true` exactly once per `initiate_seek` call: the worker
-    /// uses this to short-circuit `step_track`'s preempt guard without
-    /// dereferencing two `Arc<AtomicU64>`s. The Acquire ordering
-    /// synchronises with the Release in `initiate_seek` so observing
-    /// `true` here means the new `seek_epoch` and `seek_target_ns`
-    /// stores are also visible.
-    #[must_use]
-    pub fn did_take_seek_preempt(&self) -> bool {
-        self.seek_preempt_latch.swap(false, Ordering::Acquire)
-    }
-
-    /// Consume the decoder-node seek latch with an Acquire swap.
-    ///
-    /// Independent from `take_seek_preempt`: the inner audio source
-    /// consumes that one inside `step_track`, while `DecoderNode` (the
-    /// wrapping scheduler node) needs its own signal so it can reset
-    /// preload state and drop parked chunks on a new epoch. `true`
-    /// here means `seek_epoch` was just bumped and the node must run
-    /// the cleanup branch; otherwise the tick falls through.
-    #[must_use]
-    pub fn did_take_decoder_node_seek(&self) -> bool {
-        self.decoder_node_seek_latch.swap(false, Ordering::Acquire)
-    }
-
     #[inline]
     fn insert_flags_with(&self, flags: TimelineFlags, order: Ordering) {
         self.flags.fetch_or(flags.bits(), order);
+    }
+
+    #[must_use]
+    pub fn is_eof(&self) -> bool {
+        self.contains_flag(TimelineFlags::EOF)
     }
 
     /// Check if the pipeline is being flushed (seek pending).

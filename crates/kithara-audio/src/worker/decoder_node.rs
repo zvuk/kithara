@@ -23,10 +23,10 @@ use crate::{
 #[derive(Default)]
 #[non_exhaustive]
 pub(crate) struct DecoderRuntime {
-    pub(crate) chunks_sent: usize,
-    pub(crate) preloaded: bool,
     pub(crate) eof_sent: bool,
+    pub(crate) preloaded: bool,
     pub(crate) seek_epoch: u64,
+    pub(crate) chunks_sent: usize,
 }
 
 /// A node that decodes audio chunks.
@@ -39,10 +39,10 @@ pub(crate) struct DecoderRuntime {
 pub(crate) struct DecoderNode {
     preload_notify: Arc<Notify>,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+    runtime: DecoderRuntime,
     outlet: Outlet<Fetch<PcmChunk>>,
     service_class: ServiceClass,
     preload_chunks: usize,
-    runtime: DecoderRuntime,
 }
 
 impl DecoderNode {
@@ -203,8 +203,8 @@ mod tests {
         DecoderNode {
             source,
             outlet,
-            service_class: ServiceClass::default(),
             preload_notify,
+            service_class: ServiceClass::default(),
             preload_chunks: 1,
             runtime: DecoderRuntime::default(),
         }

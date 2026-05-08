@@ -38,6 +38,8 @@ impl Consts {
 #[derive(Debug, Default)]
 pub struct GaplessTrimmer {
     mode: GaplessMode,
+    tail_buffer: TailBuffer,
+    tail_buffered_frames: u64,
     /// Tail hold-back size. Reused for two purposes:
     ///   - in `Fixed` mode it is the metadata-driven trailing trim,
     ///   - in `Heuristic` mode it is `scan_window_frames` so we always
@@ -48,8 +50,6 @@ pub struct GaplessTrimmer {
     /// helpers below: `trailing_frames` does not always mean "frames
     /// to drop", sometimes it just means "minimum buffered tail".
     trailing_frames: u64,
-    tail_buffer: TailBuffer,
-    tail_buffered_frames: u64,
 }
 
 #[derive(Debug, Default)]
@@ -68,23 +68,23 @@ enum GaplessMode {
 
 #[derive(Debug)]
 struct HeuristicState {
+    /// Fade-in applied to the first frames after a successful leading
+    /// trim. `None` while we're still buffering or if no trim happened.
+    fade_in: Option<FadeInState>,
     params: SilenceTrimParams,
-    /// Pre-computed linear amplitude floor — recomputing on every
-    /// frame would be wasteful and `params` is immutable for the
-    /// lifetime of the trimmer.
-    silence_threshold_amp: f32,
     /// Buffered chunks while we look for the first non-silent frame.
     /// Once the search ends, the buffer is drained into `tail_buffer`
     /// (with leading frames trimmed) and never refilled.
     leading_buffer: TailBuffer,
-    leading_buffered_frames: u64,
     leading_enabled: bool,
-    /// Fade-in applied to the first frames after a successful leading
-    /// trim. `None` while we're still buffering or if no trim happened.
-    fade_in: Option<FadeInState>,
     /// Same `params.trim_trailing`, copied for fast access in the flush
     /// path so we don't keep matching against the parent enum.
     trim_trailing: bool,
+    /// Pre-computed linear amplitude floor — recomputing on every
+    /// frame would be wasteful and `params` is immutable for the
+    /// lifetime of the trimmer.
+    silence_threshold_amp: f32,
+    leading_buffered_frames: u64,
 }
 
 impl HeuristicState {
@@ -94,11 +94,11 @@ impl HeuristicState {
         Self {
             params,
             silence_threshold_amp,
+            trim_trailing,
             leading_buffer: TailBuffer::new(),
             leading_buffered_frames: 0,
             leading_enabled: true,
             fade_in: None,
-            trim_trailing,
         }
     }
 }
@@ -111,26 +111,11 @@ impl HeuristicState {
 /// handled by the apply step itself.
 #[derive(Debug, Clone, Copy)]
 struct FadeInState {
-    total_frames: u16,
     applied_frames: u16,
+    total_frames: u16,
 }
 
 impl FadeInState {
-    fn for_sample_rate(sample_rate: u32) -> Self {
-        let total_frames =
-            u64::from(sample_rate.max(1)).saturating_mul(Consts::FADE_IN_DURATION_MS) / 1000;
-        let total_frames = u16::try_from(total_frames.clamp(1, 65_535)).unwrap_or(u16::MAX);
-        Self {
-            total_frames,
-            applied_frames: 0,
-        }
-    }
-
-    /// Returns true once the fade has finished — caller can drop the state.
-    fn is_done(self) -> bool {
-        self.applied_frames >= self.total_frames
-    }
-
     /// Apply the next slice of the fade to `chunk`, modifying samples
     /// in place. The chunk may be shorter or longer than the remaining
     /// fade window; we only touch the prefix that still needs shaping.
@@ -160,30 +145,24 @@ impl FadeInState {
         }
         self.applied_frames = self.applied_frames.saturating_add(to_shape);
     }
-}
 
-impl GaplessTrimmer {
-    /// Build a trimmer driven by decoder-reported metadata. No
-    /// fade-in is applied — the decoder's frame counts are exact and
-    /// the trimmed boundary lands on a silent sample.
-    #[must_use]
-    pub fn from_info(info: GaplessInfo) -> Self {
-        let enabled = info.leading_frames > 0 || info.trailing_frames > 0;
+    fn for_sample_rate(sample_rate: u32) -> Self {
+        let total_frames =
+            u64::from(sample_rate.max(1)).saturating_mul(Consts::FADE_IN_DURATION_MS) / 1000;
+        let total_frames = u16::try_from(total_frames.clamp(1, 65_535)).unwrap_or(u16::MAX);
         Self {
-            mode: if enabled {
-                GaplessMode::Fixed {
-                    leading_remaining: info.leading_frames,
-                    fade_in: None,
-                }
-            } else {
-                GaplessMode::Disabled
-            },
-            trailing_frames: info.trailing_frames,
-            tail_buffer: TailBuffer::new(),
-            tail_buffered_frames: 0,
+            total_frames,
+            applied_frames: 0,
         }
     }
 
+    /// Returns true once the fade has finished — caller can drop the state.
+    fn is_done(self) -> bool {
+        self.applied_frames >= self.total_frames
+    }
+}
+
+impl GaplessTrimmer {
     /// Build a trimmer that drops a fixed number of leading frames
     /// looked up from a codec table. The boundary is by definition
     /// approximate, so a short raised-cosine fade-in is applied to
@@ -206,22 +185,75 @@ impl GaplessTrimmer {
         }
     }
 
-    /// Build a silence-scan trimmer. Trim boundaries are inferred by
-    /// scanning samples; a fade-in is applied after the boundary is
-    /// found to mask the level jump.
     #[must_use]
-    pub fn silence_trim(params: SilenceTrimParams) -> Self {
+    pub fn disabled() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn flush(&mut self) -> GaplessOutput {
+        match &mut self.mode {
+            GaplessMode::Disabled => GaplessOutput::new(),
+            GaplessMode::Fixed { .. } => {
+                trim_tail_frames(
+                    &mut self.tail_buffer,
+                    &mut self.tail_buffered_frames,
+                    self.trailing_frames,
+                );
+                drain_tail(&mut self.tail_buffer, &mut self.tail_buffered_frames)
+            }
+            GaplessMode::Heuristic(state) => flush_heuristic(
+                state,
+                &mut self.tail_buffer,
+                &mut self.tail_buffered_frames,
+                self.trailing_frames,
+            ),
+        }
+    }
+
+    /// Build a trimmer driven by decoder-reported metadata. No
+    /// fade-in is applied — the decoder's frame counts are exact and
+    /// the trimmed boundary lands on a silent sample.
+    #[must_use]
+    pub fn from_info(info: GaplessInfo) -> Self {
+        let enabled = info.leading_frames > 0 || info.trailing_frames > 0;
         Self {
-            trailing_frames: params.scan_window_frames,
-            mode: GaplessMode::Heuristic(Box::new(HeuristicState::new(params))),
+            mode: if enabled {
+                GaplessMode::Fixed {
+                    leading_remaining: info.leading_frames,
+                    fade_in: None,
+                }
+            } else {
+                GaplessMode::Disabled
+            },
+            trailing_frames: info.trailing_frames,
             tail_buffer: TailBuffer::new(),
             tail_buffered_frames: 0,
         }
     }
 
-    #[must_use]
-    pub fn disabled() -> Self {
-        Self::default()
+    /// Drop seek-sensitive state. Both heuristic search and pending
+    /// fade-in are abandoned: after a seek we land mid-track and
+    /// trying to "trim leading silence" or apply a fade-in there
+    /// would corrupt audible content.
+    pub fn notify_seek(&mut self) {
+        match &mut self.mode {
+            GaplessMode::Disabled => {}
+            GaplessMode::Fixed {
+                leading_remaining,
+                fade_in,
+            } => {
+                *leading_remaining = 0;
+                *fade_in = None;
+            }
+            GaplessMode::Heuristic(state) => {
+                state.leading_buffer.clear();
+                state.leading_buffered_frames = 0;
+                state.leading_enabled = false;
+                state.fade_in = None;
+            }
+        }
+        clear_tail_buffer(&mut self.tail_buffer, &mut self.tail_buffered_frames);
     }
 
     #[must_use]
@@ -254,49 +286,17 @@ impl GaplessTrimmer {
         }
     }
 
+    /// Build a silence-scan trimmer. Trim boundaries are inferred by
+    /// scanning samples; a fade-in is applied after the boundary is
+    /// found to mask the level jump.
     #[must_use]
-    pub fn flush(&mut self) -> GaplessOutput {
-        match &mut self.mode {
-            GaplessMode::Disabled => GaplessOutput::new(),
-            GaplessMode::Fixed { .. } => {
-                trim_tail_frames(
-                    &mut self.tail_buffer,
-                    &mut self.tail_buffered_frames,
-                    self.trailing_frames,
-                );
-                drain_tail(&mut self.tail_buffer, &mut self.tail_buffered_frames)
-            }
-            GaplessMode::Heuristic(state) => flush_heuristic(
-                state,
-                &mut self.tail_buffer,
-                &mut self.tail_buffered_frames,
-                self.trailing_frames,
-            ),
+    pub fn silence_trim(params: SilenceTrimParams) -> Self {
+        Self {
+            trailing_frames: params.scan_window_frames,
+            mode: GaplessMode::Heuristic(Box::new(HeuristicState::new(params))),
+            tail_buffer: TailBuffer::new(),
+            tail_buffered_frames: 0,
         }
-    }
-
-    /// Drop seek-sensitive state. Both heuristic search and pending
-    /// fade-in are abandoned: after a seek we land mid-track and
-    /// trying to "trim leading silence" or apply a fade-in there
-    /// would corrupt audible content.
-    pub fn notify_seek(&mut self) {
-        match &mut self.mode {
-            GaplessMode::Disabled => {}
-            GaplessMode::Fixed {
-                leading_remaining,
-                fade_in,
-            } => {
-                *leading_remaining = 0;
-                *fade_in = None;
-            }
-            GaplessMode::Heuristic(state) => {
-                state.leading_buffer.clear();
-                state.leading_buffered_frames = 0;
-                state.leading_enabled = false;
-                state.fade_in = None;
-            }
-        }
-        clear_tail_buffer(&mut self.tail_buffer, &mut self.tail_buffered_frames);
     }
 }
 

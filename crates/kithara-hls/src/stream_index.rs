@@ -60,12 +60,12 @@ struct SegmentSlot {
 /// Byte offsets are computed by `StreamIndex` from the stream layout.
 #[derive(Debug, Default)]
 pub struct VariantSegments {
-    segments: BTreeMap<SegmentIndex, SegmentSlot>,
     /// Permanent scheduler failures by segment index. Held alongside
     /// `segments` (not inside the slot) so failed-only entries do not
     /// fabricate a zero-sized `SegmentData` and trick `range_ready` into
     /// reporting "ready" for bytes that never arrived.
     failed: BTreeMap<SegmentIndex, Arc<HlsError>>,
+    segments: BTreeMap<SegmentIndex, SegmentSlot>,
 }
 
 impl VariantSegments {
@@ -86,6 +86,12 @@ impl VariantSegments {
         self.segments
             .get(&segment_index)
             .is_some_and(|slot| slot.available)
+    }
+
+    /// Permanent failure recorded for a segment, if any.
+    #[must_use]
+    pub fn failed_at(&self, segment_index: SegmentIndex) -> Option<&Arc<HlsError>> {
+        self.failed.get(&segment_index)
     }
 
     /// First committed segment (lowest index).
@@ -121,17 +127,6 @@ impl VariantSegments {
             },
         );
         self.failed.remove(&segment_index);
-    }
-
-    /// Record a permanent failure for a segment.
-    pub fn mark_failed(&mut self, segment_index: SegmentIndex, error: Arc<HlsError>) {
-        self.failed.insert(segment_index, error);
-    }
-
-    /// Permanent failure recorded for a segment, if any.
-    #[must_use]
-    pub fn failed_at(&self, segment_index: SegmentIndex) -> Option<&Arc<HlsError>> {
-        self.failed.get(&segment_index)
     }
 
     /// Mark a segment unavailable while preserving its last known lengths.
@@ -180,6 +175,11 @@ impl VariantSegments {
     #[must_use]
     pub fn len(&self) -> usize {
         self.iter().count()
+    }
+
+    /// Record a permanent failure for a segment.
+    pub fn mark_failed(&mut self, segment_index: SegmentIndex, error: Arc<HlsError>) {
+        self.failed.insert(segment_index, error);
     }
 
     /// Highest segment index ever stored in this variant, regardless of
@@ -256,49 +256,6 @@ impl StreamIndex {
         }
     }
 
-    /// Which variant's byte layout is active for the decoder.
-    #[must_use]
-    pub fn layout_variant(&self) -> VariantIndex {
-        self.layout_variant
-    }
-
-    /// Switch the active byte layout to a different variant.
-    ///
-    /// Called when the decoder is recreated for a variant switch.
-    /// Does NOT destroy any data — all variants' byte maps persist.
-    pub fn set_layout_variant(&mut self, variant: VariantIndex) {
-        trace!(
-            from = self.layout_variant,
-            to = variant,
-            "stream_index::set_layout_variant"
-        );
-        self.layout_variant = variant;
-    }
-
-    /// Total number of segments in the playlist.
-    #[must_use]
-    pub fn num_segments(&self) -> usize {
-        self.num_segments
-    }
-
-    /// Number of variants.
-    #[must_use]
-    pub fn num_variants(&self) -> usize {
-        self.variants.len()
-    }
-
-    /// Set expected total sizes per segment (from `size_map` HEAD estimates).
-    ///
-    /// Called once after `calculate_size_map`. Enables `rebuild_variant_byte_map`
-    /// to reserve correct offsets for not-yet-committed segments.
-    pub fn set_expected_sizes(&mut self, variant: VariantIndex, sizes: Vec<u64>) {
-        trace!(variant, count = sizes.len(), "set_expected_sizes");
-        if variant < self.expected_sizes.len() {
-            self.expected_sizes[variant] = sizes;
-        }
-        self.rebuild_variant_byte_map(variant, 0);
-    }
-
     /// Commit a downloaded segment (or replace it for DRM reconciliation).
     ///
     /// Inserts/updates the segment data in the variant and rebuilds the
@@ -321,63 +278,16 @@ impl StreamIndex {
         self.rebuild_variant_byte_map(variant, segment_index);
     }
 
-    /// Record a permanent failure for `(variant, segment_index)`.
-    ///
-    /// Only meant for errors the scheduler cannot recover from
-    /// (`KeyProcessing`, `PlaylistParse`, `VariantNotFound`,
-    /// `SegmentNotFound`, `InvalidUrl`). Network errors stay on the
-    /// scheduler retry path. The reader's `wait_range` consults
-    /// [`StreamIndex::find_failed_at_offset`] every iteration and exits
-    /// with this error rather than spinning until the hang detector fires.
-    pub fn mark_segment_failed(
-        &mut self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-        error: Arc<HlsError>,
-    ) {
-        if let Some(vs) = self.variants.get_mut(variant) {
-            vs.mark_failed(segment_index, error);
-        }
-    }
-
-    /// Permanent failure recorded for the segment owning `offset` in the
-    /// active layout variant, if any.
-    ///
-    /// Mirrors [`Self::find_at_offset`] — uses the same byte map so the
-    /// reader and the scheduler agree on segment ownership at every offset.
+    /// Effective total: max of committed watermark and estimated total.
     #[must_use]
-    pub fn find_failed_at_offset(&self, offset: u64) -> Option<Arc<HlsError>> {
-        self.find_failed_at_offset_in(self.layout_variant, offset)
+    pub(crate) fn effective_total(&self, playlist: &dyn PlaylistAccess) -> u64 {
+        self.max_end_offset().max(self.total_bytes(playlist))
     }
 
-    /// Permanent failure recorded for the segment owning `offset` in
-    /// `variant`, if any.
+    /// Number of expected sizes stored (across all variants).
     #[must_use]
-    pub fn find_failed_at_offset_in(
-        &self,
-        variant: VariantIndex,
-        offset: u64,
-    ) -> Option<Arc<HlsError>> {
-        let byte_map = self.variant_byte_maps.get(variant)?;
-        let (_range, &seg_idx) = byte_map.get_key_value(&offset)?;
-        self.variants
-            .get(variant)
-            .and_then(|vs| vs.failed_at(seg_idx))
-            .cloned()
-    }
-
-    /// Cache invalidation: remove a single segment.
-    pub fn on_segment_invalidated(&mut self, variant: VariantIndex, segment_index: SegmentIndex) {
-        if let Some(vs) = self.variants.get_mut(variant)
-            && vs.contains(segment_index)
-        {
-            trace!(
-                variant,
-                segment_index, "stream_index::on_segment_invalidated"
-            );
-            vs.invalidate(segment_index);
-            self.rebuild_variant_byte_map(variant, 0);
-        }
+    pub fn expected_sizes_len(&self) -> usize {
+        self.expected_sizes.iter().map(Vec::len).sum()
     }
 
     /// Find the committed segment containing the given byte offset.
@@ -411,96 +321,30 @@ impl StreamIndex {
         })
     }
 
-    /// Find the visible segment containing the given byte offset.
-    #[must_use]
-    pub fn visible_segment_at(&self, offset: u64) -> Option<SegmentRef<'_>> {
-        self.find_at_offset(offset)
-    }
-
-    /// Byte range of a committed segment in its variant's byte map.
-    #[must_use]
-    pub fn range_for(
-        &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-    ) -> Option<Range<u64>> {
-        self.item_range((variant, segment_index))
-    }
-
-    /// First segment in the current layout.
-    #[must_use]
-    pub(crate) fn layout_floor_segment(&self) -> Option<(VariantIndex, SegmentIndex)> {
-        if self.num_segments > 0 {
-            Some((self.layout_variant, 0))
-        } else {
-            None
-        }
-    }
-
-    /// Best-known total size of a segment in the given variant.
+    /// Permanent failure recorded for the segment owning `offset` in the
+    /// active layout variant, if any.
     ///
-    /// Prefers stored actual bytes, then the HEAD-derived expected size,
-    /// then the playlist's own estimate. Returns `None` when no source
-    /// knows the size.
-    fn segment_total_size(
+    /// Mirrors [`Self::find_at_offset`] — uses the same byte map so the
+    /// reader and the scheduler agree on segment ownership at every offset.
+    #[must_use]
+    pub fn find_failed_at_offset(&self, offset: u64) -> Option<Arc<HlsError>> {
+        self.find_failed_at_offset_in(self.layout_variant, offset)
+    }
+
+    /// Permanent failure recorded for the segment owning `offset` in
+    /// `variant`, if any.
+    #[must_use]
+    pub fn find_failed_at_offset_in(
         &self,
         variant: VariantIndex,
-        seg_idx: SegmentIndex,
-        playlist: &dyn PlaylistAccess,
-    ) -> Option<u64> {
-        self.stored_segment(variant, seg_idx)
-            .map(SegmentData::total_len)
-            .or_else(|| {
-                self.expected_sizes
-                    .get(variant)
-                    .and_then(|v| v.get(seg_idx).copied())
-            })
-            .or_else(|| playlist.segment_size(variant, seg_idx))
-    }
-
-    /// Byte offset of a logical segment in the layout variant's byte space.
-    #[must_use]
-    pub(crate) fn layout_offset_for_segment(
-        &self,
-        target_segment: SegmentIndex,
-        playlist: &dyn PlaylistAccess,
-    ) -> Option<u64> {
-        let variant = self.layout_variant;
-        let mut offset = 0u64;
-        for seg_idx in 0..target_segment.min(self.num_segments) {
-            let seg_len = self.segment_total_size(variant, seg_idx, playlist)?;
-            offset = offset.saturating_add(seg_len);
-        }
-        Some(offset)
-    }
-
-    /// Whether a committed segment is visible in its variant's byte map.
-    #[must_use]
-    pub fn is_visible(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
-        self.range_for(variant, segment_index).is_some()
-    }
-
-    /// Highest committed byte offset in the layout variant's byte map.
-    #[must_use]
-    pub fn max_end_offset(&self) -> u64 {
-        self.max_end_offset_in(self.layout_variant)
-    }
-
-    /// Highest committed byte offset in a specific variant's byte map.
-    #[must_use]
-    pub fn max_end_offset_in(&self, variant: VariantIndex) -> u64 {
-        self.variant_byte_maps
-            .get(variant)
-            .and_then(|bm| bm.iter().next_back())
-            .map_or(0, |(range, _)| range.end)
-    }
-
-    /// Whether a segment has been committed.
-    #[must_use]
-    pub fn is_segment_loaded(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
+        offset: u64,
+    ) -> Option<Arc<HlsError>> {
+        let byte_map = self.variant_byte_maps.get(variant)?;
+        let (_range, &seg_idx) = byte_map.get_key_value(&offset)?;
         self.variants
             .get(variant)
-            .is_some_and(|vs| vs.contains(segment_index))
+            .and_then(|vs| vs.failed_at(seg_idx))
+            .cloned()
     }
 
     /// Whether a segment has stored data (regardless of `available` flag).
@@ -527,58 +371,106 @@ impl StreamIndex {
             .is_none()
     }
 
-    /// Derived total bytes for the layout variant.
-    ///
-    /// For each segment: committed → actual size, not committed → estimated size.
-    /// Monotonically converges to the true value as segments download.
+    /// Whether a segment has been committed.
     #[must_use]
-    pub(crate) fn total_bytes(&self, playlist: &dyn PlaylistAccess) -> u64 {
-        let variant = self.layout_variant;
-        let mut total = 0u64;
-        for seg_idx in 0..self.num_segments {
-            total += self.stored_segment(variant, seg_idx).map_or_else(
-                || playlist.segment_size(variant, seg_idx).unwrap_or(0),
-                SegmentData::total_len,
-            );
-        }
-        total
+    pub fn is_segment_loaded(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
+        self.variants
+            .get(variant)
+            .is_some_and(|vs| vs.contains(segment_index))
     }
 
-    /// Effective total: max of committed watermark and estimated total.
+    /// Whether a committed segment is visible in its variant's byte map.
     #[must_use]
-    pub(crate) fn effective_total(&self, playlist: &dyn PlaylistAccess) -> u64 {
-        self.max_end_offset().max(self.total_bytes(playlist))
+    pub fn is_visible(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
+        self.range_for(variant, segment_index).is_some()
     }
 
-    /// Map a byte offset to `(variant, segment_index)` in the layout variant.
+    /// Resolve a byte offset to the (variant, segment) pair that owns it
+    /// in the current layout variant.
     #[must_use]
-    pub(crate) fn segment_for_offset(
+    pub fn item_at_offset(&self, offset: u64) -> Option<(VariantIndex, SegmentIndex)> {
+        self.variant_byte_maps[self.layout_variant]
+            .get(&offset)
+            .map(|&seg_idx| (self.layout_variant, seg_idx))
+    }
+
+    /// Byte range of `(variant, seg_idx)` in that variant's byte map.
+    #[must_use]
+    pub fn item_range(
         &self,
-        offset: u64,
-        playlist: &dyn PlaylistAccess,
-    ) -> Option<(VariantIndex, SegmentIndex)> {
-        if let Some(seg_ref) = self.find_at_offset(offset) {
-            return Some((seg_ref.variant, seg_ref.segment_index));
-        }
-
-        let variant = self.layout_variant;
-        let mut cursor = 0u64;
-        for seg_idx in 0..self.num_segments {
-            let seg_len = self.segment_total_size(variant, seg_idx, playlist)?;
-            let end = cursor.saturating_add(seg_len);
-            if offset < end {
-                return Some((variant, seg_idx));
-            }
-            cursor = end;
-        }
-
-        None
+        (variant, seg_idx): (VariantIndex, SegmentIndex),
+    ) -> Option<Range<u64>> {
+        self.variant_byte_maps
+            .get(variant)?
+            .iter()
+            .find(|&(_, &s)| s == seg_idx)
+            .map(|(range, _)| range.clone())
     }
 
-    /// Number of expected sizes stored (across all variants).
+    /// First segment in the current layout.
     #[must_use]
-    pub fn expected_sizes_len(&self) -> usize {
-        self.expected_sizes.iter().map(Vec::len).sum()
+    pub(crate) fn layout_floor_segment(&self) -> Option<(VariantIndex, SegmentIndex)> {
+        if self.num_segments > 0 {
+            Some((self.layout_variant, 0))
+        } else {
+            None
+        }
+    }
+
+    /// Byte offset of a logical segment in the layout variant's byte space.
+    #[must_use]
+    pub(crate) fn layout_offset_for_segment(
+        &self,
+        target_segment: SegmentIndex,
+        playlist: &dyn PlaylistAccess,
+    ) -> Option<u64> {
+        let variant = self.layout_variant;
+        let mut offset = 0u64;
+        for seg_idx in 0..target_segment.min(self.num_segments) {
+            let seg_len = self.segment_total_size(variant, seg_idx, playlist)?;
+            offset = offset.saturating_add(seg_len);
+        }
+        Some(offset)
+    }
+
+    /// Which variant's byte layout is active for the decoder.
+    #[must_use]
+    pub fn layout_variant(&self) -> VariantIndex {
+        self.layout_variant
+    }
+
+    /// Record a permanent failure for `(variant, segment_index)`.
+    ///
+    /// Only meant for errors the scheduler cannot recover from
+    /// (`KeyProcessing`, `PlaylistParse`, `VariantNotFound`,
+    /// `SegmentNotFound`, `InvalidUrl`). Network errors stay on the
+    /// scheduler retry path. The reader's `wait_range` consults
+    /// [`StreamIndex::find_failed_at_offset`] every iteration and exits
+    /// with this error rather than spinning until the hang detector fires.
+    pub fn mark_segment_failed(
+        &mut self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+        error: Arc<HlsError>,
+    ) {
+        if let Some(vs) = self.variants.get_mut(variant) {
+            vs.mark_failed(segment_index, error);
+        }
+    }
+
+    /// Highest committed byte offset in the layout variant's byte map.
+    #[must_use]
+    pub fn max_end_offset(&self) -> u64 {
+        self.max_end_offset_in(self.layout_variant)
+    }
+
+    /// Highest committed byte offset in a specific variant's byte map.
+    #[must_use]
+    pub fn max_end_offset_in(&self, variant: VariantIndex) -> u64 {
+        self.variant_byte_maps
+            .get(variant)
+            .and_then(|bm| bm.iter().next_back())
+            .map_or(0, |(range, _)| range.end)
     }
 
     /// Number of committed segments in the layout variant's byte map.
@@ -587,19 +479,75 @@ impl StreamIndex {
         self.variant_byte_maps[self.layout_variant].iter().count()
     }
 
-    /// Access per-variant storage.
+    /// Total number of segments in the playlist.
     #[must_use]
-    pub fn variant_segments(&self, variant: VariantIndex) -> Option<&VariantSegments> {
-        self.variants.get(variant)
+    pub fn num_segments(&self) -> usize {
+        self.num_segments
     }
 
+    /// Number of variants.
     #[must_use]
-    pub(crate) fn stored_segment(
+    pub fn num_variants(&self) -> usize {
+        self.variants.len()
+    }
+
+    /// Cache invalidation: remove a single segment.
+    pub fn on_segment_invalidated(&mut self, variant: VariantIndex, segment_index: SegmentIndex) {
+        if let Some(vs) = self.variants.get_mut(variant)
+            && vs.contains(segment_index)
+        {
+            trace!(
+                variant,
+                segment_index, "stream_index::on_segment_invalidated"
+            );
+            vs.invalidate(segment_index);
+            self.rebuild_variant_byte_map(variant, 0);
+        }
+    }
+
+    /// Byte range of a committed segment in its variant's byte map.
+    #[must_use]
+    pub fn range_for(
         &self,
         variant: VariantIndex,
         segment_index: SegmentIndex,
-    ) -> Option<&SegmentData> {
-        self.variants.get(variant)?.get_stored(segment_index)
+    ) -> Option<Range<u64>> {
+        self.item_range((variant, segment_index))
+    }
+
+    /// Rebuild a variant's byte map from `from_segment` onward.
+    ///
+    /// When a segment's size changes (DRM reconciliation) or a segment is
+    /// added/removed, all subsequent byte offsets shift to maintain contiguity.
+    fn rebuild_variant_byte_map(&mut self, variant: VariantIndex, from_segment: SegmentIndex) {
+        let mut offset = self.variant_byte_offset_at(variant, from_segment);
+        let num_segments = self.num_segments;
+
+        let variants = &self.variants[variant];
+        let expected_sizes = self.expected_sizes.get(variant);
+        let byte_map = &mut self.variant_byte_maps[variant];
+
+        let keys_to_remove: Vec<Range<u64>> = byte_map
+            .iter()
+            .filter(|&(_, &seg_idx)| seg_idx >= from_segment)
+            .map(|(range, _)| range.clone())
+            .collect();
+        for range in keys_to_remove {
+            byte_map.remove(range);
+        }
+
+        for seg_idx in from_segment..num_segments {
+            let stored_len = variants.get_stored(seg_idx).map(SegmentData::total_len);
+            let total_len = stored_len
+                .or_else(|| expected_sizes.and_then(|v| v.get(seg_idx).copied()))
+                .unwrap_or(0);
+            if total_len == 0 {
+                continue;
+            }
+            let end = offset + total_len;
+            byte_map.insert(offset..end, seg_idx);
+            offset += total_len;
+        }
     }
 
     /// Remove every committed segment that depends on the invalidated resource.
@@ -647,6 +595,103 @@ impl StreamIndex {
         removed
     }
 
+    /// Map a byte offset to `(variant, segment_index)` in the layout variant.
+    #[must_use]
+    pub(crate) fn segment_for_offset(
+        &self,
+        offset: u64,
+        playlist: &dyn PlaylistAccess,
+    ) -> Option<(VariantIndex, SegmentIndex)> {
+        if let Some(seg_ref) = self.find_at_offset(offset) {
+            return Some((seg_ref.variant, seg_ref.segment_index));
+        }
+
+        let variant = self.layout_variant;
+        let mut cursor = 0u64;
+        for seg_idx in 0..self.num_segments {
+            let seg_len = self.segment_total_size(variant, seg_idx, playlist)?;
+            let end = cursor.saturating_add(seg_len);
+            if offset < end {
+                return Some((variant, seg_idx));
+            }
+            cursor = end;
+        }
+
+        None
+    }
+
+    /// Best-known total size of a segment in the given variant.
+    ///
+    /// Prefers stored actual bytes, then the HEAD-derived expected size,
+    /// then the playlist's own estimate. Returns `None` when no source
+    /// knows the size.
+    fn segment_total_size(
+        &self,
+        variant: VariantIndex,
+        seg_idx: SegmentIndex,
+        playlist: &dyn PlaylistAccess,
+    ) -> Option<u64> {
+        self.stored_segment(variant, seg_idx)
+            .map(SegmentData::total_len)
+            .or_else(|| {
+                self.expected_sizes
+                    .get(variant)
+                    .and_then(|v| v.get(seg_idx).copied())
+            })
+            .or_else(|| playlist.segment_size(variant, seg_idx))
+    }
+
+    /// Set expected total sizes per segment (from `size_map` HEAD estimates).
+    ///
+    /// Called once after `calculate_size_map`. Enables `rebuild_variant_byte_map`
+    /// to reserve correct offsets for not-yet-committed segments.
+    pub fn set_expected_sizes(&mut self, variant: VariantIndex, sizes: Vec<u64>) {
+        trace!(variant, count = sizes.len(), "set_expected_sizes");
+        if variant < self.expected_sizes.len() {
+            self.expected_sizes[variant] = sizes;
+        }
+        self.rebuild_variant_byte_map(variant, 0);
+    }
+
+    /// Switch the active byte layout to a different variant.
+    ///
+    /// Called when the decoder is recreated for a variant switch.
+    /// Does NOT destroy any data — all variants' byte maps persist.
+    pub fn set_layout_variant(&mut self, variant: VariantIndex) {
+        trace!(
+            from = self.layout_variant,
+            to = variant,
+            "stream_index::set_layout_variant"
+        );
+        self.layout_variant = variant;
+    }
+
+    #[must_use]
+    pub(crate) fn stored_segment(
+        &self,
+        variant: VariantIndex,
+        segment_index: SegmentIndex,
+    ) -> Option<&SegmentData> {
+        self.variants.get(variant)?.get_stored(segment_index)
+    }
+
+    /// Derived total bytes for the layout variant.
+    ///
+    /// For each segment: committed → actual size, not committed → estimated size.
+    /// Monotonically converges to the true value as segments download.
+    #[must_use]
+    pub(crate) fn total_bytes(&self, playlist: &dyn PlaylistAccess) -> u64 {
+        let variant = self.layout_variant;
+        let mut total = 0u64;
+        for seg_idx in 0..self.num_segments {
+            total += self.stored_segment(variant, seg_idx).map_or_else(
+                || playlist.segment_size(variant, seg_idx).unwrap_or(0),
+                SegmentData::total_len,
+            );
+        }
+        total
+    }
+
     /// Compute the byte offset where `target_segment` starts in a variant's byte space.
     ///
     /// Walks segments `0..target_segment`, summing committed or expected sizes.
@@ -667,61 +712,16 @@ impl StreamIndex {
         offset
     }
 
-    /// Rebuild a variant's byte map from `from_segment` onward.
-    ///
-    /// When a segment's size changes (DRM reconciliation) or a segment is
-    /// added/removed, all subsequent byte offsets shift to maintain contiguity.
-    fn rebuild_variant_byte_map(&mut self, variant: VariantIndex, from_segment: SegmentIndex) {
-        let mut offset = self.variant_byte_offset_at(variant, from_segment);
-        let num_segments = self.num_segments;
-
-        let variants = &self.variants[variant];
-        let expected_sizes = self.expected_sizes.get(variant);
-        let byte_map = &mut self.variant_byte_maps[variant];
-
-        let keys_to_remove: Vec<Range<u64>> = byte_map
-            .iter()
-            .filter(|&(_, &seg_idx)| seg_idx >= from_segment)
-            .map(|(range, _)| range.clone())
-            .collect();
-        for range in keys_to_remove {
-            byte_map.remove(range);
-        }
-
-        for seg_idx in from_segment..num_segments {
-            let stored_len = variants.get_stored(seg_idx).map(SegmentData::total_len);
-            let total_len = stored_len
-                .or_else(|| expected_sizes.and_then(|v| v.get(seg_idx).copied()))
-                .unwrap_or(0);
-            if total_len == 0 {
-                continue;
-            }
-            let end = offset + total_len;
-            byte_map.insert(offset..end, seg_idx);
-            offset += total_len;
-        }
+    /// Access per-variant storage.
+    #[must_use]
+    pub fn variant_segments(&self, variant: VariantIndex) -> Option<&VariantSegments> {
+        self.variants.get(variant)
     }
 
-    /// Resolve a byte offset to the (variant, segment) pair that owns it
-    /// in the current layout variant.
+    /// Find the visible segment containing the given byte offset.
     #[must_use]
-    pub fn item_at_offset(&self, offset: u64) -> Option<(VariantIndex, SegmentIndex)> {
-        self.variant_byte_maps[self.layout_variant]
-            .get(&offset)
-            .map(|&seg_idx| (self.layout_variant, seg_idx))
-    }
-
-    /// Byte range of `(variant, seg_idx)` in that variant's byte map.
-    #[must_use]
-    pub fn item_range(
-        &self,
-        (variant, seg_idx): (VariantIndex, SegmentIndex),
-    ) -> Option<Range<u64>> {
-        self.variant_byte_maps
-            .get(variant)?
-            .iter()
-            .find(|&(_, &s)| s == seg_idx)
-            .map(|(range, _)| range.clone())
+    pub fn visible_segment_at(&self, offset: u64) -> Option<SegmentRef<'_>> {
+        self.find_at_offset(offset)
     }
 }
 

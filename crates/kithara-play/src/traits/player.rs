@@ -15,29 +15,47 @@ mod kithara {
 pub trait Player: MaybeSend + MaybeSync + 'static {
     type Item: crate::traits::item::PlayerItem;
 
-    fn status(&self) -> PlayerStatus;
+    fn add_boundary_time_observer(
+        &self,
+        times: Vec<MediaTime>,
+        callback: Box<dyn Fn() + Send + 'static>,
+    ) -> ObserverId;
 
-    fn error(&self) -> Option<String>;
+    fn add_periodic_time_observer(
+        &self,
+        interval: Duration,
+        callback: Box<dyn Fn(MediaTime) + Send + 'static>,
+    ) -> ObserverId;
 
-    fn time_control_status(&self) -> TimeControlStatus;
+    fn automatically_waits_to_minimize_stalling(&self) -> bool;
 
-    fn reason_for_waiting_to_play(&self) -> Option<WaitingReason>;
+    fn cancel_pending_prerolls(&self);
 
     fn current_item(&self) -> Option<&Self::Item>;
 
-    fn replace_current_item(&self, item: Option<Self::Item>);
+    fn current_time(&self) -> MediaTime;
 
-    fn play(&self);
+    fn error(&self) -> Option<String>;
+
+    fn is_muted(&self) -> bool;
+
+    fn is_network_expensive(&self) -> bool;
 
     fn pause(&self);
+
+    fn play(&self);
 
     fn play_immediately_at_rate(&self, rate: f32);
 
     fn preroll(&self, rate: f32) -> Result<(), PlayError>;
 
-    fn cancel_pending_prerolls(&self);
+    fn rate(&self) -> f32;
 
-    fn current_time(&self) -> MediaTime;
+    fn reason_for_waiting_to_play(&self) -> Option<WaitingReason>;
+
+    fn remove_time_observer(&self, id: ObserverId);
+
+    fn replace_current_item(&self, item: Option<Self::Item>);
 
     fn seek(&self, to: MediaTime);
 
@@ -48,45 +66,27 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
         tolerance_after: MediaTime,
     );
 
-    fn rate(&self) -> f32;
+    fn set_automatically_waits_to_minimize_stalling(&self, waits: bool);
+
+    fn set_muted(&self, muted: bool);
+
+    fn set_network_expensive(&self, expensive: bool);
 
     fn set_rate(&self, rate: f32);
 
     fn set_rate_with_time(&self, rate: f32, time: MediaTime, at_host_time: MediaTime);
 
-    fn volume(&self) -> f32;
-
     fn set_volume(&self, volume: f32);
 
-    fn is_muted(&self) -> bool;
+    fn slot_id(&self) -> Option<SlotId>;
 
-    fn set_muted(&self, muted: bool);
-
-    fn automatically_waits_to_minimize_stalling(&self) -> bool;
-
-    fn set_automatically_waits_to_minimize_stalling(&self, waits: bool);
-
-    fn is_network_expensive(&self) -> bool;
-
-    fn set_network_expensive(&self, expensive: bool);
-
-    fn add_periodic_time_observer(
-        &self,
-        interval: Duration,
-        callback: Box<dyn Fn(MediaTime) + Send + 'static>,
-    ) -> ObserverId;
-
-    fn add_boundary_time_observer(
-        &self,
-        times: Vec<MediaTime>,
-        callback: Box<dyn Fn() + Send + 'static>,
-    ) -> ObserverId;
-
-    fn remove_time_observer(&self, id: ObserverId);
+    fn status(&self) -> PlayerStatus;
 
     fn subscribe(&self) -> broadcast::Receiver<PlayerEvent>;
 
-    fn slot_id(&self) -> Option<SlotId>;
+    fn time_control_status(&self) -> TimeControlStatus;
+
+    fn volume(&self) -> f32;
 }
 
 #[cfg(test)]

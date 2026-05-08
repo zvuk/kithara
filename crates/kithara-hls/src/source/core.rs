@@ -68,20 +68,6 @@ impl HlsSource {
         &self.backend
     }
 
-    #[doc(hidden)]
-    #[must_use]
-    pub fn coord(&self) -> &Arc<HlsCoord> {
-        &self.coord
-    }
-
-    /// Override the variant fence — escape hatch for test scenarios that
-    /// bypass the auto-detection that normally sets the fence on first read.
-    #[cfg(any(test, feature = "test-utils"))]
-    #[doc(hidden)]
-    pub fn set_variant_fence(&mut self, fence: Option<VariantIndex>) {
-        self.variant_fence = fence;
-    }
-
     pub(super) fn byte_offset_for_segment(
         &self,
         variant: VariantIndex,
@@ -111,6 +97,12 @@ impl HlsSource {
     ) -> bool {
         self.playlist_state.variant_codec(from_variant)
             == self.playlist_state.variant_codec(to_variant)
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn coord(&self) -> &Arc<HlsCoord> {
+        &self.coord
     }
 
     /// Returns the variant of the current committed byte layout.
@@ -420,6 +412,14 @@ impl HlsSource {
     pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
         self._peer_handle = Some(handle);
     }
+
+    /// Override the variant fence — escape hatch for test scenarios that
+    /// bypass the auto-detection that normally sets the fence on first read.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[doc(hidden)]
+    pub fn set_variant_fence(&mut self, fence: Option<VariantIndex>) {
+        self.variant_fence = fence;
+    }
 }
 
 /// Outcome of [`HlsSource::init_segment_range_for_variant`].
@@ -474,14 +474,29 @@ impl kithara_test_utils::probes::IntoProbeArg for InitRangeOutcome {
 #[derive(Clone, kithara::Probe)]
 pub(crate) struct InitRangeResolution {
     pub(crate) outcome: InitRangeOutcome,
-    pub(crate) variant: u64,
-    pub(crate) committed_count: u64,
-    pub(crate) seg_idx_with_init: Option<u64>,
     #[probe(skip)]
     pub(crate) range: Option<Range<u64>>,
+    pub(crate) seg_idx_with_init: Option<u64>,
+    pub(crate) committed_count: u64,
+    pub(crate) variant: u64,
 }
 
 impl InitRangeResolution {
+    pub(crate) fn none(
+        variant: VariantIndex,
+        committed_count: u64,
+        seg_idx_with_init: Option<u64>,
+        outcome: InitRangeOutcome,
+    ) -> Self {
+        Self {
+            outcome,
+            committed_count,
+            seg_idx_with_init,
+            variant: variant as u64,
+            range: None,
+        }
+    }
+
     pub(crate) fn ok(
         variant: VariantIndex,
         committed_count: u64,
@@ -491,25 +506,10 @@ impl InitRangeResolution {
     ) -> Self {
         Self {
             outcome,
-            variant: variant as u64,
             committed_count,
             seg_idx_with_init,
+            variant: variant as u64,
             range: Some(range),
-        }
-    }
-
-    pub(crate) fn none(
-        variant: VariantIndex,
-        committed_count: u64,
-        seg_idx_with_init: Option<u64>,
-        outcome: InitRangeOutcome,
-    ) -> Self {
-        Self {
-            outcome,
-            variant: variant as u64,
-            committed_count,
-            seg_idx_with_init,
-            range: None,
         }
     }
 }

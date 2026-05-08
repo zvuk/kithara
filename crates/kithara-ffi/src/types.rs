@@ -173,9 +173,6 @@ pub struct FfiKeyRule {
     pub processor: std::sync::Arc<dyn crate::observer::FfiKeyProcessor>,
     pub headers: Option<std::collections::HashMap<String, String>>,
     pub query_params: Option<std::collections::HashMap<String, String>>,
-    /// Domain patterns — exact (`"example.com"`), wildcard subdomain
-    /// (`"*.example.com"`), or match-any (`"*"`).
-    pub domains: Vec<String>,
     /// Salt forwarded to [`crate::observer::FfiKeyProcessor::process_key`]
     /// on every decrypt. `None` is treated as an empty string.
     ///
@@ -183,6 +180,9 @@ pub struct FfiKeyRule {
     /// generated 16-character alphanumeric value and mirrors it into
     /// [`crate::observer::SALT_HEADER`] in the player-wide header map.
     pub salt: Option<String>,
+    /// Domain patterns — exact (`"example.com"`), wildcard subdomain
+    /// (`"*.example.com"`), or match-any (`"*"`).
+    pub domains: Vec<String>,
 }
 
 impl std::fmt::Debug for FfiKeyRule {
@@ -204,17 +204,17 @@ pub struct FfiItemConfig {
     pub abr_mode: Option<FfiAbrMode>,
     pub headers: Option<std::collections::HashMap<String, String>>,
     pub url: String,
-    /// Peak bitrate ceiling in bits/sec. `0.0` means no cap.
-    pub preferred_peak_bitrate: f64,
-    /// Peak bitrate ceiling on expensive networks (cellular). `0.0`
-    /// means no cap.
-    pub preferred_peak_bitrate_expensive: f64,
     /// Caller-declared live-stream flag. `true` means the source is a
     /// live HLS feed (radio / broadcast); the player skips end-of-stream
     /// gating and `is_playable` always returns `true` for the item.
     /// Defaults to `false`. Auto-detection from the manifest is a
     /// future improvement.
     pub is_live_stream: bool,
+    /// Peak bitrate ceiling in bits/sec. `0.0` means no cap.
+    pub preferred_peak_bitrate: f64,
+    /// Peak bitrate ceiling on expensive networks (cellular). `0.0`
+    /// means no cap.
+    pub preferred_peak_bitrate_expensive: f64,
 }
 
 impl FfiItemConfig {

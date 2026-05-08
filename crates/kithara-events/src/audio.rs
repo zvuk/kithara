@@ -53,10 +53,10 @@ impl std::fmt::Display for AudioFormat {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SegmentLocation {
-    pub variant: Option<usize>,
-    pub segment_index: Option<u32>,
-    pub byte_range_start: Option<u64>,
     pub byte_range_end: Option<u64>,
+    pub byte_range_start: Option<u64>,
+    pub segment_index: Option<u32>,
+    pub variant: Option<usize>,
 }
 
 impl SegmentLocation {
@@ -68,10 +68,10 @@ impl SegmentLocation {
         byte_range_end: Option<u64>,
     ) -> Self {
         Self {
-            variant,
-            segment_index,
-            byte_range_start,
             byte_range_end,
+            byte_range_start,
+            segment_index,
+            variant,
         }
     }
 }

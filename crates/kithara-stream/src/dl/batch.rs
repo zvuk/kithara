@@ -209,7 +209,6 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
         )
         .await;
         deliver(DeliveryContext {
-            target: internal.response,
             result,
             writer,
             on_complete_cb,
@@ -218,6 +217,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
             started,
             request_id,
             bus,
+            target: internal.response,
             peer_cancel: &peer_cancel,
             epoch_cancel: epoch_cancel.as_ref(),
             downloader_cancel: &downloader_cancel,
@@ -353,18 +353,18 @@ fn classify_cancel(
 /// completion callback), the `bus` for telemetry, and the three nested cancel
 /// tokens (peer, epoch, downloader) used to classify cancellation reasons.
 struct DeliveryContext<'a> {
+    downloader_cancel: &'a CancellationToken,
+    peer_cancel: &'a CancellationToken,
+    peer_id: AbrPeerId,
+    abr: Arc<AbrController>,
+    started: Instant,
+    bus: Option<EventBus>,
+    epoch_cancel: Option<&'a CancellationToken>,
+    on_complete_cb: Option<super::cmd::OnCompleteFn>,
+    writer: Option<super::cmd::WriterFn>,
+    request_id: RequestId,
     target: ResponseTarget,
     result: Result<FetchResponse, NetError>,
-    writer: Option<super::cmd::WriterFn>,
-    on_complete_cb: Option<super::cmd::OnCompleteFn>,
-    abr: Arc<AbrController>,
-    peer_id: AbrPeerId,
-    started: Instant,
-    request_id: RequestId,
-    bus: Option<EventBus>,
-    peer_cancel: &'a CancellationToken,
-    epoch_cancel: Option<&'a CancellationToken>,
-    downloader_cancel: &'a CancellationToken,
 }
 
 /// Route a fetch result to its target and publish the matching

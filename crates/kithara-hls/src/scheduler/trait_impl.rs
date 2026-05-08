@@ -24,9 +24,9 @@ impl Drop for HlsScheduler {
 /// commit path) and consumed by [`HlsScheduler::commit_fetch_inline`].
 pub(crate) struct LoadedSegmentBody<'a> {
     pub(crate) media: &'a SegmentMeta,
-    pub(crate) init_len: u64,
-    pub(crate) init_url: Option<Url>,
     pub(crate) duration: Duration,
+    pub(crate) init_url: Option<Url>,
+    pub(crate) init_len: u64,
 }
 
 impl HlsScheduler {

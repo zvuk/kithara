@@ -20,39 +20,22 @@ impl Queue {
         self.insert_entry(source.into(), Placement::Append)
     }
 
-    /// Test helper: register a placeholder track entry without starting
-    /// a real loader. Pair with [`Self::complete_load_for_test`] to
-    /// drive the loaded resource into the player on demand.
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn register_for_test(&self) -> TrackId {
-        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        let url = format!("test://memory/{}", id.as_u64());
-        let entry = TrackEntry {
-            id,
-            name: format!("test-{}", id.as_u64()),
-            url: Some(url.clone()),
-            status: TrackStatus::Pending,
-        };
-        let index = {
+    /// Remove all tracks from the queue.
+    pub fn clear(&self) {
+        let ids: Vec<TrackId> = {
             let mut guard = self.lock_tracks_mut();
-            guard.push(entry);
-            guard.len() - 1
+            let ids = guard.iter().map(|e| e.id).collect();
+            guard.clear();
+            ids
         };
         self.sources
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, TrackSource::Uri(url));
-        self.player.reserve_slots(self.len());
-        if self.should_autoplay {
-            let _ = self.autoplay_target.compare_exchange(
-                Self::NO_ARMED_TRACK,
-                id.as_u64(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
+            .clear();
+        self.player.remove_all_items();
+        for id in ids {
+            self.bus.publish(QueueEvent::TrackRemoved { id });
         }
-        self.bus.publish(QueueEvent::TrackAdded { id, index });
-        id
     }
 
     /// Test helper: drive a pre-built [`kithara_play::Resource`] into the
@@ -82,47 +65,6 @@ impl Queue {
             {
                 tracing::warn!(id = id.as_u64(), %err, "autoplay select failed");
             }
-        }
-    }
-
-    /// Test helper: convenience for the common case where load order
-    /// matches register order. Equivalent to
-    /// [`Self::register_for_test`] + [`Self::complete_load_for_test`].
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn insert_loaded_for_test(&self, resource: kithara_play::Resource) -> TrackId {
-        let id = self.register_for_test();
-        self.complete_load_for_test(id, resource);
-        id
-    }
-
-    /// Test helper: pre-supply a fresh [`kithara_play::Resource`] that
-    /// `Queue::select` should plant when a `Consumed` / `Cancelled` /
-    /// `Failed` track is re-selected. This emulates the loader-respawn
-    /// path the production code uses without dispatching the real
-    /// loader, so harness tests can exercise replay-after-EOF.
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn supply_test_resource_for_respawn(&self, id: TrackId, resource: kithara_play::Resource) {
-        self.test_resources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, resource);
-    }
-
-    /// Remove all tracks from the queue.
-    pub fn clear(&self) {
-        let ids: Vec<TrackId> = {
-            let mut guard = self.lock_tracks_mut();
-            let ids = guard.iter().map(|e| e.id).collect();
-            guard.clear();
-            ids
-        };
-        self.sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
-        self.player.remove_all_items();
-        for id in ids {
-            self.bus.publish(QueueEvent::TrackRemoved { id });
         }
     }
 
@@ -191,6 +133,51 @@ impl Queue {
         id
     }
 
+    /// Test helper: convenience for the common case where load order
+    /// matches register order. Equivalent to
+    /// [`Self::register_for_test`] + [`Self::complete_load_for_test`].
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn insert_loaded_for_test(&self, resource: kithara_play::Resource) -> TrackId {
+        let id = self.register_for_test();
+        self.complete_load_for_test(id, resource);
+        id
+    }
+
+    /// Test helper: register a placeholder track entry without starting
+    /// a real loader. Pair with [`Self::complete_load_for_test`] to
+    /// drive the loaded resource into the player on demand.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn register_for_test(&self) -> TrackId {
+        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let url = format!("test://memory/{}", id.as_u64());
+        let entry = TrackEntry {
+            id,
+            name: format!("test-{}", id.as_u64()),
+            url: Some(url.clone()),
+            status: TrackStatus::Pending,
+        };
+        let index = {
+            let mut guard = self.lock_tracks_mut();
+            guard.push(entry);
+            guard.len() - 1
+        };
+        self.sources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, TrackSource::Uri(url));
+        self.player.reserve_slots(self.len());
+        if self.should_autoplay {
+            let _ = self.autoplay_target.compare_exchange(
+                Self::NO_ARMED_TRACK,
+                id.as_u64(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+        self.bus.publish(QueueEvent::TrackAdded { id, index });
+        id
+    }
+
     /// Remove a track from the queue by id.
     ///
     /// If the removed track is currently playing:
@@ -252,6 +239,19 @@ impl Queue {
         for s in sources {
             let _ = self.append(s);
         }
+    }
+
+    /// Test helper: pre-supply a fresh [`kithara_play::Resource`] that
+    /// `Queue::select` should plant when a `Consumed` / `Cancelled` /
+    /// `Failed` track is re-selected. This emulates the loader-respawn
+    /// path the production code uses without dispatching the real
+    /// loader, so harness tests can exercise replay-after-EOF.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn supply_test_resource_for_respawn(&self, id: TrackId, resource: kithara_play::Resource) {
+        self.test_resources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, resource);
     }
 }
 

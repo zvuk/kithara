@@ -92,30 +92,30 @@ pub struct AudioPlayer {
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
+    event_bridge: Mutex<Option<EventBridge>>,
     /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
     /// and extended at runtime by [`AudioPlayer::setup_hls_aes`].
     /// Cloned per-item on insert (snapshot semantics: items already in
     /// the queue keep their original key registry).
     key_options: Mutex<KeyOptions>,
-    /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
-    /// `X-Auth-Token`). Merged into per-item `headers` on insert.
-    /// Item-supplied headers take precedence on key collision.
-    player_headers: Mutex<HashMap<String, String>>,
+    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
     /// Bandwidth caps configured via
     /// [`AudioPlayer::update_peak_bitrate`]. Wifi value drives the ABR
     /// cap unless cellular is tighter; cellular is held for future
     /// network-state-aware switching.
     peak_bitrate: Mutex<PeakBitrate>,
-    event_bridge: Mutex<Option<EventBridge>>,
-    observer: Mutex<Option<Arc<dyn PlayerObserver>>>,
+    /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
+    /// `X-Auth-Token`). Merged into per-item `headers` on insert.
+    /// Item-supplied headers take precedence on key collision.
+    player_headers: Mutex<HashMap<String, String>>,
     /// Shared storage options (cache dir, etc.) applied to every item.
     store: StoreOptions,
 }
 
 #[derive(Clone, Copy, Default, Debug)]
 struct PeakBitrate {
-    wifi_bps: f64,
     cellular_bps: f64,
+    wifi_bps: f64,
 }
 
 impl PeakBitrate {
@@ -212,6 +212,7 @@ impl AudioPlayer {
         let (key_options, player_headers) = build_initial_key_state(config.key_options);
         Arc::new(Self {
             downloader,
+            cancel,
             key_options: Mutex::new(key_options),
             player_headers: Mutex::new(player_headers),
             peak_bitrate: Mutex::new(PeakBitrate::default()),
@@ -220,41 +221,57 @@ impl AudioPlayer {
             observer: Mutex::new(None),
             event_bridge: Mutex::new(None),
             items: Arc::new(Mutex::new(HashMap::new())),
-            cancel,
         })
     }
 
-    pub fn play(&self) {
-        self.queue.play();
+    /// Advance to the next item in the queue, no-op if already on the
+    /// last item or the queue is empty. Uses [`FfiTransition::None`]
+    /// for an immediate cut.
+    pub fn advance_to_next_item(&self) {
+        let _rt = crate::FFI_RUNTIME.enter();
+        let tracks = self.queue.tracks();
+        let Some(current_idx) = self.queue.current_index() else {
+            return;
+        };
+        let next_idx = current_idx + 1;
+        let Some(next) = tracks.get(next_idx) else {
+            return;
+        };
+        let _ = self.queue.select(next.id, kithara_queue::Transition::None);
     }
 
-    pub fn pause(&self) {
-        self.queue.pause();
+    pub fn crossfade_duration(&self) -> f32 {
+        self.queue.crossfade_duration()
     }
 
-    /// Seek to a position in the current item.
-    ///
-    /// `tolerance` is currently advisory — the underlying engine uses its
-    /// own seek heuristics. Passing `Some` reserves the slot for future
-    /// `seek_with_tolerance` wiring without forcing callers to migrate
-    /// twice; `None` preserves legacy behaviour.
-    ///
-    /// The callback is invoked synchronously with `true` if the seek
-    /// command was accepted, `false` otherwise (matches `AVPlayer`
-    /// semantics).
-    #[cfg_attr(
-        all(),
-        expect(
-            clippy::needless_pass_by_value,
-            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
-        )
-    )]
-    pub fn seek(&self, to_seconds: f64, tolerance: Option<f64>, callback: Arc<dyn SeekCallback>) {
-        let _ = tolerance;
-        match self.queue.seek(to_seconds) {
-            Ok(_outcome) => callback.on_complete(true),
-            Err(_) => callback.on_complete(false),
-        }
+    /// Currently playing item (if any). Resolves the queue's current
+    /// track id against the player's Swift-owned item registry so
+    /// callers get back the same `AudioPlayerItem` instance they passed
+    /// to [`insert`].
+    #[must_use]
+    pub fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
+        let entry = self.queue.current()?;
+        self.items.lock_sync().get(&entry.id).cloned()
+    }
+
+    /// Live playback position in seconds, or `0.0` if no item is loaded.
+    /// Convenience over [`snapshot().current_time`] for hot-path UI
+    /// updates.
+    #[must_use]
+    pub fn current_time(&self) -> f64 {
+        self.queue.position_seconds().unwrap_or(0.0)
+    }
+
+    pub fn eq_band_count(&self) -> u32 {
+        let n = self.queue.eq_band_count();
+        u32::try_from(n).unwrap_or_else(|_| {
+            tracing::error!(eq_band_count = n, "BUG: EQ band count exceeds u32::MAX");
+            0
+        })
+    }
+
+    pub fn eq_gain(&self, band: u32) -> f32 {
+        self.queue.eq_gain(band as usize).unwrap_or(0.0)
     }
 
     /// Insert an item into the queue.
@@ -302,6 +319,47 @@ impl AudioPlayer {
         Ok(())
     }
 
+    pub fn is_muted(&self) -> bool {
+        self.queue.is_muted()
+    }
+
+    pub fn item_count(&self) -> u32 {
+        let len = self.queue.len();
+        u32::try_from(len).unwrap_or_else(|_| {
+            tracing::error!(queue_len = len, "BUG: queue length exceeds u32::MAX");
+            0
+        })
+    }
+
+    pub fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
+        let tracks = self.queue.tracks();
+        let items = self.items.lock_sync();
+        tracks
+            .iter()
+            .filter_map(|t| items.get(&t.id).cloned())
+            .collect()
+    }
+
+    pub fn pause(&self) {
+        self.queue.pause();
+    }
+
+    pub fn play(&self) {
+        self.queue.play();
+    }
+
+    /// Target playback speed used by `play()`. When the player is
+    /// playing, the live `rate()` equals this value; on pause it falls
+    /// to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`
+    /// terminology.
+    pub fn playing_rate(&self) -> f32 {
+        self.queue.default_rate()
+    }
+
+    pub fn rate(&self) -> f32 {
+        self.queue.rate()
+    }
+
     /// Remove an item from the queue.
     ///
     /// # Errors
@@ -328,23 +386,6 @@ impl AudioPlayer {
         for (_, item) in items.drain() {
             *item.track_id.lock_sync() = None;
         }
-    }
-
-    pub fn items(&self) -> Vec<Arc<AudioPlayerItem>> {
-        let tracks = self.queue.tracks();
-        let items = self.items.lock_sync();
-        tracks
-            .iter()
-            .filter_map(|t| items.get(&t.id).cloned())
-            .collect()
-    }
-
-    pub fn item_count(&self) -> u32 {
-        let len = self.queue.len();
-        u32::try_from(len).unwrap_or_else(|_| {
-            tracing::error!(queue_len = len, "BUG: queue length exceeds u32::MAX");
-            0
-        })
     }
 
     /// Replace the item at `index` with a freshly-configured one.
@@ -397,6 +438,38 @@ impl AudioPlayer {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns error if the engine is not running.
+    pub fn reset_eq(&self) -> Result<(), FfiError> {
+        self.queue.reset_eq().map_err(FfiError::from)
+    }
+
+    /// Seek to a position in the current item.
+    ///
+    /// `tolerance` is currently advisory — the underlying engine uses its
+    /// own seek heuristics. Passing `Some` reserves the slot for future
+    /// `seek_with_tolerance` wiring without forcing callers to migrate
+    /// twice; `None` preserves legacy behaviour.
+    ///
+    /// The callback is invoked synchronously with `true` if the seek
+    /// command was accepted, `false` otherwise (matches `AVPlayer`
+    /// semantics).
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
+        )
+    )]
+    pub fn seek(&self, to_seconds: f64, tolerance: Option<f64>, callback: Arc<dyn SeekCallback>) {
+        let _ = tolerance;
+        match self.queue.seek(to_seconds) {
+            Ok(_outcome) => callback.on_complete(true),
+            Err(_) => callback.on_complete(false),
+        }
+    }
+
     /// Select an item in the queue with the given transition.
     ///
     /// `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
@@ -431,26 +504,6 @@ impl AudioPlayer {
             })
     }
 
-    pub fn crossfade_duration(&self) -> f32 {
-        self.queue.crossfade_duration()
-    }
-
-    pub fn set_crossfade_duration(&self, seconds: f32) {
-        self.queue.set_crossfade_duration(seconds);
-    }
-
-    /// Target playback speed used by `play()`. When the player is
-    /// playing, the live `rate()` equals this value; on pause it falls
-    /// to `0.0`. Mirrors the iOS/Android `AVPlayer.playingRate`
-    /// terminology.
-    pub fn playing_rate(&self) -> f32 {
-        self.queue.default_rate()
-    }
-
-    pub fn set_playing_rate(&self, rate: f32) {
-        self.queue.set_default_rate(rate);
-    }
-
     pub fn set_abr_mode(&self, mode: FfiAbrMode) {
         let Some(handle) = self.queue.current_abr_handle() else {
             return;
@@ -464,55 +517,8 @@ impl AudioPlayer {
         }
     }
 
-    /// Cap the ABR controller's choice by per-network peak bitrate
-    /// limits (bits/sec). Pass `0.0` for either argument to clear that
-    /// limit; with both zero the ABR considers every variant again.
-    ///
-    /// The effective cap is the tighter of the two non-zero limits —
-    /// without an explicit network-state signal this guarantees neither
-    /// limit is exceeded on either link. Caller-side network monitoring
-    /// can re-call this method on connectivity changes.
-    pub fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {
-        let updated = PeakBitrate {
-            wifi_bps,
-            cellular_bps,
-        };
-        *self.peak_bitrate.lock_sync() = updated;
-        if let Some(handle) = self.queue.current_abr_handle() {
-            handle.set_max_bandwidth_bps(updated.effective_cap());
-        }
-    }
-
-    pub fn rate(&self) -> f32 {
-        self.queue.rate()
-    }
-
-    pub fn volume(&self) -> f32 {
-        self.queue.volume()
-    }
-
-    pub fn set_volume(&self, volume: f32) {
-        self.queue.set_volume(volume);
-    }
-
-    pub fn is_muted(&self) -> bool {
-        self.queue.is_muted()
-    }
-
-    pub fn set_muted(&self, muted: bool) {
-        self.queue.set_muted(muted);
-    }
-
-    pub fn eq_band_count(&self) -> u32 {
-        let n = self.queue.eq_band_count();
-        u32::try_from(n).unwrap_or_else(|_| {
-            tracing::error!(eq_band_count = n, "BUG: EQ band count exceeds u32::MAX");
-            0
-        })
-    }
-
-    pub fn eq_gain(&self, band: u32) -> f32 {
-        self.queue.eq_gain(band as usize).unwrap_or(0.0)
+    pub fn set_crossfade_duration(&self, seconds: f32) {
+        self.queue.set_crossfade_duration(seconds);
     }
 
     /// # Errors
@@ -524,80 +530,35 @@ impl AudioPlayer {
             .map_err(FfiError::from)
     }
 
-    /// # Errors
-    ///
-    /// Returns error if the engine is not running.
-    pub fn reset_eq(&self) -> Result<(), FfiError> {
-        self.queue.reset_eq().map_err(FfiError::from)
+    pub fn set_muted(&self, muted: bool) {
+        self.queue.set_muted(muted);
     }
 
-    /// Return a snapshot of the player's current state.
-    #[must_use]
-    pub fn snapshot(&self) -> FfiPlayerSnapshot {
-        FfiPlayerSnapshot {
-            status: FfiPlayerStatus::from(self.queue.status()),
-            current_time: self.queue.position_seconds(),
-            duration: self.queue.duration_seconds(),
-            rate: self.queue.rate(),
-            playing_rate: self.queue.default_rate(),
-            volume: self.queue.volume(),
-            is_muted: self.queue.is_muted(),
-        }
+    pub fn set_observer(self: &Arc<Self>, observer: Arc<dyn PlayerObserver>) {
+        let rx = self.queue.subscribe();
+
+        let bridge = EventBridge::spawn(
+            rx,
+            Arc::clone(&observer),
+            Arc::clone(&self.queue),
+            &self.items,
+            CancellationToken::new(), // kithara:cancel:bridge
+        );
+
+        let mut eb = self.event_bridge.lock_sync();
+        let mut obs = self.observer.lock_sync();
+        *eb = Some(bridge);
+        *obs = Some(observer);
+        drop(obs);
+        drop(eb);
     }
 
-    /// Currently playing item (if any). Resolves the queue's current
-    /// track id against the player's Swift-owned item registry so
-    /// callers get back the same `AudioPlayerItem` instance they passed
-    /// to [`insert`].
-    #[must_use]
-    pub fn current_item(&self) -> Option<Arc<AudioPlayerItem>> {
-        let entry = self.queue.current()?;
-        self.items.lock_sync().get(&entry.id).cloned()
+    pub fn set_playing_rate(&self, rate: f32) {
+        self.queue.set_default_rate(rate);
     }
 
-    /// Live playback position in seconds, or `0.0` if no item is loaded.
-    /// Convenience over [`snapshot().current_time`] for hot-path UI
-    /// updates.
-    #[must_use]
-    pub fn current_time(&self) -> f64 {
-        self.queue.position_seconds().unwrap_or(0.0)
-    }
-
-    /// Advance to the next item in the queue, no-op if already on the
-    /// last item or the queue is empty. Uses [`FfiTransition::None`]
-    /// for an immediate cut.
-    pub fn advance_to_next_item(&self) {
-        let _rt = crate::FFI_RUNTIME.enter();
-        let tracks = self.queue.tracks();
-        let Some(current_idx) = self.queue.current_index() else {
-            return;
-        };
-        let next_idx = current_idx + 1;
-        let Some(next) = tracks.get(next_idx) else {
-            return;
-        };
-        let _ = self.queue.select(next.id, kithara_queue::Transition::None);
-    }
-
-    /// Stop playback: pause the engine, drop every queued item, and
-    /// reset the current-item slot. Mirrors `AVPlayer.stop` semantics —
-    /// after `stop()`, the player is ready to receive a fresh queue
-    /// via [`insert`].
-    pub fn stop(&self) {
-        self.queue.pause();
-        self.remove_all_items();
-    }
-
-    /// Player-wide auth header. Stores `auth_token` under
-    /// [`AUTH_TOKEN_HEADER`]; merged into per-item HTTP headers on
-    /// every subsequent [`insert`]. Pass an empty string to clear.
-    pub fn setup_network(&self, auth_token: String) {
-        let mut headers = self.player_headers.lock_sync();
-        if auth_token.is_empty() {
-            headers.remove(AUTH_TOKEN_HEADER);
-        } else {
-            headers.insert(AUTH_TOKEN_HEADER.to_string(), auth_token);
-        }
+    pub fn set_volume(&self, volume: f32) {
+        self.queue.set_volume(volume);
     }
 
     /// Register a runtime DRM key processor for every host (`"*"`).
@@ -648,23 +609,62 @@ impl AudioPlayer {
         *opts = KeyOptions::new().with_key_registry(registry);
     }
 
-    pub fn set_observer(self: &Arc<Self>, observer: Arc<dyn PlayerObserver>) {
-        let rx = self.queue.subscribe();
+    /// Player-wide auth header. Stores `auth_token` under
+    /// [`AUTH_TOKEN_HEADER`]; merged into per-item HTTP headers on
+    /// every subsequent [`insert`]. Pass an empty string to clear.
+    pub fn setup_network(&self, auth_token: String) {
+        let mut headers = self.player_headers.lock_sync();
+        if auth_token.is_empty() {
+            headers.remove(AUTH_TOKEN_HEADER);
+        } else {
+            headers.insert(AUTH_TOKEN_HEADER.to_string(), auth_token);
+        }
+    }
 
-        let bridge = EventBridge::spawn(
-            rx,
-            Arc::clone(&observer),
-            Arc::clone(&self.queue),
-            &self.items,
-            CancellationToken::new(), // kithara:cancel:bridge
-        );
+    /// Return a snapshot of the player's current state.
+    #[must_use]
+    pub fn snapshot(&self) -> FfiPlayerSnapshot {
+        FfiPlayerSnapshot {
+            status: FfiPlayerStatus::from(self.queue.status()),
+            current_time: self.queue.position_seconds(),
+            duration: self.queue.duration_seconds(),
+            rate: self.queue.rate(),
+            playing_rate: self.queue.default_rate(),
+            volume: self.queue.volume(),
+            is_muted: self.queue.is_muted(),
+        }
+    }
 
-        let mut eb = self.event_bridge.lock_sync();
-        let mut obs = self.observer.lock_sync();
-        *eb = Some(bridge);
-        *obs = Some(observer);
-        drop(obs);
-        drop(eb);
+    /// Stop playback: pause the engine, drop every queued item, and
+    /// reset the current-item slot. Mirrors `AVPlayer.stop` semantics —
+    /// after `stop()`, the player is ready to receive a fresh queue
+    /// via [`insert`].
+    pub fn stop(&self) {
+        self.queue.pause();
+        self.remove_all_items();
+    }
+
+    /// Cap the ABR controller's choice by per-network peak bitrate
+    /// limits (bits/sec). Pass `0.0` for either argument to clear that
+    /// limit; with both zero the ABR considers every variant again.
+    ///
+    /// The effective cap is the tighter of the two non-zero limits —
+    /// without an explicit network-state signal this guarantees neither
+    /// limit is exceeded on either link. Caller-side network monitoring
+    /// can re-call this method on connectivity changes.
+    pub fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {
+        let updated = PeakBitrate {
+            cellular_bps,
+            wifi_bps,
+        };
+        *self.peak_bitrate.lock_sync() = updated;
+        if let Some(handle) = self.queue.current_abr_handle() {
+            handle.set_max_bandwidth_bps(updated.effective_cap());
+        }
+    }
+
+    pub fn volume(&self) -> f32 {
+        self.queue.volume()
     }
 }
 

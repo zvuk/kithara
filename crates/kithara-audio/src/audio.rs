@@ -233,8 +233,8 @@ impl<S> Audio<S> {
         let segment_index = meta.as_ref().and_then(|m| m.segment_index);
 
         self.emit_audio_event(AudioEvent::SeekLifecycle {
-            stage: SeekLifecycleStage::OutputCommitted,
             seek_epoch,
+            stage: SeekLifecycleStage::OutputCommitted,
             location: SegmentLocation::new(variant, segment_index, None, None),
         });
 

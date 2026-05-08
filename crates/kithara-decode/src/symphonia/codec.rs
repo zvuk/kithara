@@ -48,11 +48,11 @@ const TRACK_ID: u32 = 0;
 /// Frame codec backed by a symphonia codec registry decoder.
 pub(crate) struct SymphoniaCodec {
     decoder: Box<dyn AudioDecoder>,
-    spec: PcmSpec,
     /// Decoder-owned playback contract. Populated from container-level
     /// gapless metadata captured by the demuxer before the codec is
     /// opened; left empty otherwise.
     track_info: DecoderTrackInfo,
+    spec: PcmSpec,
 }
 
 impl SymphoniaCodec {
@@ -89,16 +89,6 @@ impl SymphoniaCodec {
             spec,
             track_info: DecoderTrackInfo::default(),
         })
-    }
-
-    /// Whether `SymphoniaCodec::open` can accept this codec via
-    /// [`TrackInfo`] alone. `AudioCodec::Pcm` / `AudioCodec::Adpcm` need
-    /// bit-depth + endianness which the generic enum does not encode —
-    /// the factory routes those through [`Self::open_native`] using the
-    /// demuxer's native `AudioCodecParameters` instead.
-    #[must_use]
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
-        !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
     }
 
     /// Build a [`SymphoniaCodec`] from `TrackInfo` with extra options
@@ -149,6 +139,16 @@ impl SymphoniaCodec {
                 ..DecoderTrackInfo::default()
             },
         })
+    }
+
+    /// Whether `SymphoniaCodec::open` can accept this codec via
+    /// [`TrackInfo`] alone. `AudioCodec::Pcm` / `AudioCodec::Adpcm` need
+    /// bit-depth + endianness which the generic enum does not encode —
+    /// the factory routes those through [`Self::open_native`] using the
+    /// demuxer's native `AudioCodecParameters` instead.
+    #[must_use]
+    pub(crate) fn supports(codec: AudioCodec) -> bool {
+        !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
     }
 }
 
@@ -201,12 +201,12 @@ impl FrameCodec for SymphoniaCodec {
         Ok(())
     }
 
-    fn track_info(&self) -> DecoderTrackInfo {
-        self.track_info.clone()
-    }
-
     fn spec(&self) -> PcmSpec {
         self.spec
+    }
+
+    fn track_info(&self) -> DecoderTrackInfo {
+        self.track_info.clone()
     }
 }
 

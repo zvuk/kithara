@@ -44,15 +44,15 @@ impl CancelGroup {
         select_all(futs).await;
     }
 
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.sources.iter().any(CancellationToken::is_cancelled)
-    }
-
     /// Returns `true` if both groups share the same underlying source array.
     #[must_use]
     pub fn equals_ptr(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.sources, &other.sources)
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.sources.iter().any(CancellationToken::is_cancelled)
     }
 
     fn tokens(&self) -> &[CancellationToken] {

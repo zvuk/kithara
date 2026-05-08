@@ -38,7 +38,6 @@ use crate::{
 #[non_exhaustive]
 pub(crate) struct SchedulerRuntime {
     pub(crate) cursor: DownloadCursor<SegmentIndex>,
-    pub(crate) active_seek_epoch: SeekEpoch,
     /// Highest cached-segment count already announced via
     /// `SegmentComplete { cached: true }` per variant. Prevents
     /// `apply_cached_segment_progress` from re-publishing the same events
@@ -68,6 +67,7 @@ pub(crate) struct SchedulerRuntime {
     /// `demand_seg + look_ahead_segments` when a demand is processed;
     /// cleared on the next seek (new epoch) or when reader advances past.
     pub(crate) demand_throttle_until: Option<usize>,
+    pub(crate) active_seek_epoch: SeekEpoch,
     /// True while `poll_next` is filling a layout-variant gap after ABR moved
     /// to a different variant. Prevents ABR from overriding the variant
     /// on subsequent `poll_next` cycles (avoids hot loop: ABR cached commit
@@ -96,13 +96,13 @@ pub struct HlsScheduler {
     /// For ephemeral backends, derived from cache capacity to prevent
     /// evicting segments the reader still needs.
     pub(crate) look_ahead_segments: Option<usize>,
+    pub(crate) runtime: SchedulerRuntime,
     /// Variant the downloader is currently targeting. Used for transition
     /// classification instead of shared `layout_variant` to avoid racing
     /// with the decoder thread.
     pub(crate) download_variant: VariantIndex,
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
-    pub(crate) runtime: SchedulerRuntime,
 }
 
 /// Maximum initial segment index for verbose logging.
@@ -148,27 +148,6 @@ impl HlsScheduler {
             prefetch_count: config.download_batch_size.max(1),
             download_variant: initial_variant,
             runtime: SchedulerRuntime::default(),
-        }
-    }
-
-    /// Mint an `HlsSource` that shares this scheduler's cache, segment
-    /// index, and event bus. The scheduler stays the authoritative writer
-    /// for the shared state; the returned source reads from it.
-    pub(crate) fn spawn_source(&self, reader_segment: Arc<AtomicUsize>) -> HlsSource {
-        HlsSource {
-            coord: Arc::clone(&self.coord),
-            backend: self.backend.clone(),
-            segments: Arc::clone(&self.segments),
-            playlist_state: Arc::clone(&self.playlist_state),
-            bus: self.bus.clone(),
-            reader_segment,
-            segmented_view: HlsSegmentView::new(
-                Arc::clone(&self.playlist_state),
-                Arc::clone(&self.segments),
-            ),
-            variant_fence: None,
-            _hls_peer: None,
-            _peer_handle: None,
         }
     }
 
@@ -374,6 +353,27 @@ impl HlsScheduler {
         }
         self.backend
             .contains_range(&ResourceKey::from_url(&data.media_url), 0..data.media_len)
+    }
+
+    /// Mint an `HlsSource` that shares this scheduler's cache, segment
+    /// index, and event bus. The scheduler stays the authoritative writer
+    /// for the shared state; the returned source reads from it.
+    pub(crate) fn spawn_source(&self, reader_segment: Arc<AtomicUsize>) -> HlsSource {
+        HlsSource {
+            reader_segment,
+            coord: Arc::clone(&self.coord),
+            backend: self.backend.clone(),
+            segments: Arc::clone(&self.segments),
+            playlist_state: Arc::clone(&self.playlist_state),
+            bus: self.bus.clone(),
+            segmented_view: HlsSegmentView::new(
+                Arc::clone(&self.playlist_state),
+                Arc::clone(&self.segments),
+            ),
+            variant_fence: None,
+            _hls_peer: None,
+            _peer_handle: None,
+        }
     }
 
     pub(crate) fn switch_needs_init(

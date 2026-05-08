@@ -64,8 +64,8 @@ pub(super) enum Placement {
 /// raw float parameters at the API boundary.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PlaybackTime {
-    pub(crate) pos: f64,
     pub(crate) dur: f64,
+    pub(crate) pos: f64,
 }
 
 /// Decide whether `Queue::tick` should arm the pre-end advance.

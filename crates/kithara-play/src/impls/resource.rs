@@ -102,8 +102,8 @@ impl Resource {
         let _ = inner.preload();
         Self {
             inner,
-            src: src.unwrap_or_else(|| Arc::from("unknown")),
             bus,
+            src: src.unwrap_or_else(|| Arc::from("unknown")),
         }
     }
 
@@ -128,9 +128,9 @@ impl Resource {
         let mut audio = Audio::<Stream<T>>::new(config).await?;
         let _ = audio.preload();
         Ok(Self {
-            inner: Box::new(audio),
             src,
             bus,
+            inner: Box::new(audio),
         })
     }
 

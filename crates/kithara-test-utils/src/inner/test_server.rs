@@ -166,6 +166,18 @@ impl HlsFixtureBuilder {
         self
     }
 
+    /// Default bit-rate hints recommended by the corresponding codec
+    /// builders for synthetic-test packaged audio.
+    fn default_bit_rate(codec: AudioCodec) -> u64 {
+        match codec {
+            AudioCodec::AacLc => 128_000,
+            AudioCodec::Flac => 512_000,
+            other => panic!(
+                "default_bit_rate: codec {other:?} not supported by HlsFixtureBuilder helpers",
+            ),
+        }
+    }
+
     #[must_use]
     pub fn delay_rules(mut self, delay_rules: Vec<DelayRule>) -> Self {
         self.spec.delay_rules = delay_rules;
@@ -173,14 +185,14 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn error_rules(mut self, error_rules: Vec<HttpErrorRule>) -> Self {
-        self.spec.error_rules = error_rules;
+    pub fn encryption(mut self, encryption: EncryptionRequest) -> Self {
+        self.spec.encryption = Some(encryption);
         self
     }
 
     #[must_use]
-    pub fn encryption(mut self, encryption: EncryptionRequest) -> Self {
-        self.spec.encryption = Some(encryption);
+    pub fn error_rules(mut self, error_rules: Vec<HttpErrorRule>) -> Self {
+        self.spec.error_rules = error_rules;
         self
     }
 
@@ -278,6 +290,37 @@ impl HlsFixtureBuilder {
         self
     }
 
+    /// Override the encoder for a specific variant on top of the
+    /// spec-level codec. Used to mirror production master playlists
+    /// carrying mixed codecs across variants (e.g. AAC LQ/MQ/HQ + FLAC
+    /// lossless on `assets/hls/master.m3u8`).
+    ///
+    /// Must be called AFTER one of the `packaged_audio_*` builders so
+    /// `packaged_audio` is populated.
+    #[must_use]
+    pub fn override_variant_codec(mut self, variant: usize, codec: AudioCodec) -> Self {
+        let packaged =
+            self.spec.packaged_audio.as_mut().expect(
+                "override_variant_codec: call packaged_audio_* before override_variant_codec",
+            );
+        if let Some(existing) = packaged
+            .variant_overrides
+            .iter_mut()
+            .find(|o| o.variant == variant)
+        {
+            existing.codec = Some(codec);
+        } else {
+            packaged
+                .variant_overrides
+                .push(PackagedAudioVariantOverride {
+                    variant,
+                    codec: Some(codec),
+                    ..Default::default()
+                });
+        }
+        self
+    }
+
     #[must_use]
     pub fn packaged_audio(mut self, packaged_audio: PackagedAudioRequest) -> Self {
         self.set_packaged_audio(packaged_audio);
@@ -292,43 +335,6 @@ impl HlsFixtureBuilder {
     #[must_use]
     pub fn packaged_audio_flac(self, sample_rate: u32, channels: u16) -> Self {
         self.packaged_audio_signal_flac(sample_rate, channels, PackagedSignal::Sawtooth)
-    }
-
-    /// Default bit-rate hints recommended by the corresponding codec
-    /// builders for synthetic-test packaged audio.
-    fn default_bit_rate(codec: AudioCodec) -> u64 {
-        match codec {
-            AudioCodec::AacLc => 128_000,
-            AudioCodec::Flac => 512_000,
-            other => panic!(
-                "default_bit_rate: codec {other:?} not supported by HlsFixtureBuilder helpers",
-            ),
-        }
-    }
-
-    /// Configure packaged audio with the given codec + payload source. The
-    /// public per-codec helpers are thin wrappers that forward to this fn
-    /// with the matching `codec` / `default_bit_rate(codec)` pair.
-    fn set_packaged_audio_codec_source(
-        &mut self,
-        codec: AudioCodec,
-        sample_rate: u32,
-        channels: u16,
-        source: PackagedAudioSource,
-    ) {
-        self.set_packaged_audio(PackagedAudioRequest {
-            codec,
-            sample_rate,
-            channels,
-            timescale: Some(sample_rate),
-            bit_rate: Some(Self::default_bit_rate(codec)),
-            source,
-            variant_overrides: Vec::new(),
-            start_frame: None,
-            encoder_delay: None,
-            trailing_delay: None,
-            gapless_encoding: crate::fixture_protocol::GaplessEncoding::None,
-        });
     }
 
     #[must_use]
@@ -411,37 +417,6 @@ impl HlsFixtureBuilder {
         self
     }
 
-    /// Override the encoder for a specific variant on top of the
-    /// spec-level codec. Used to mirror production master playlists
-    /// carrying mixed codecs across variants (e.g. AAC LQ/MQ/HQ + FLAC
-    /// lossless on `assets/hls/master.m3u8`).
-    ///
-    /// Must be called AFTER one of the `packaged_audio_*` builders so
-    /// `packaged_audio` is populated.
-    #[must_use]
-    pub fn override_variant_codec(mut self, variant: usize, codec: AudioCodec) -> Self {
-        let packaged =
-            self.spec.packaged_audio.as_mut().expect(
-                "override_variant_codec: call packaged_audio_* before override_variant_codec",
-            );
-        if let Some(existing) = packaged
-            .variant_overrides
-            .iter_mut()
-            .find(|o| o.variant == variant)
-        {
-            existing.codec = Some(codec);
-        } else {
-            packaged
-                .variant_overrides
-                .push(PackagedAudioVariantOverride {
-                    variant,
-                    codec: Some(codec),
-                    ..Default::default()
-                });
-        }
-        self
-    }
-
     #[must_use]
     pub fn segment_duration_secs(mut self, segment_duration_secs: f64) -> Self {
         self.spec.segment_duration_secs = segment_duration_secs;
@@ -466,6 +441,31 @@ impl HlsFixtureBuilder {
         self.data = HlsFixtureData::Spec(DataMode::TestPattern);
         self.init = HlsFixtureInit::Spec(InitMode::None);
         self.spec.packaged_audio = Some(packaged_audio);
+    }
+
+    /// Configure packaged audio with the given codec + payload source. The
+    /// public per-codec helpers are thin wrappers that forward to this fn
+    /// with the matching `codec` / `default_bit_rate(codec)` pair.
+    fn set_packaged_audio_codec_source(
+        &mut self,
+        codec: AudioCodec,
+        sample_rate: u32,
+        channels: u16,
+        source: PackagedAudioSource,
+    ) {
+        self.set_packaged_audio(PackagedAudioRequest {
+            codec,
+            sample_rate,
+            channels,
+            timescale: Some(sample_rate),
+            bit_rate: Some(Self::default_bit_rate(codec)),
+            source,
+            variant_overrides: Vec::new(),
+            start_frame: None,
+            encoder_delay: None,
+            trailing_delay: None,
+            gapless_encoding: crate::fixture_protocol::GaplessEncoding::None,
+        });
     }
 
     #[must_use]

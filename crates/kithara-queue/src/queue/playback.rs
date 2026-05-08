@@ -11,6 +11,33 @@ use super::{Queue, types::Transition};
 use crate::error::QueueError;
 
 impl Queue {
+    /// If an advance was already armed from `tick()`, consume it and
+    /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
+    /// the same track must not advance again.
+    fn consume_armed_advance(&self, pos: f64, dur: f64) -> bool {
+        if self.take_armed_for().is_some() {
+            debug!(pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Either treat the EOF as a real end-of-track and advance, or log
+    /// it as a spurious signal (decoder-failure pos stamp, crossfade
+    /// fade-out on previous track).
+    fn dispatch_real_or_spurious(&self, pos: f64, dur: f64) {
+        /// Threshold for filtering spurious `PlayerEvent::ItemDidPlayToEnd`
+        /// events emitted by crossfade fade-outs of non-current tracks.
+        const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
+
+        if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
+            let _ = self.advance_to_next(Transition::Crossfade);
+        } else {
+            debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
+        }
+    }
+
     fn drain_player_events(&self) {
         let mut rx = self
             .player_rx
@@ -22,55 +49,6 @@ impl Queue {
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                 Err(TryRecvError::Lagged(_)) => continue,
             }
-        }
-    }
-
-    /// Start the next-track crossfade ahead of end-of-track when the
-    /// remaining playtime drops below the configured crossfade window,
-    /// so the two tracks actually overlap. `ItemDidPlayToEnd` alone
-    /// fires after the first track is already silent — too late for a
-    /// real crossfade.
-    fn maybe_arm_crossfade(&self) {
-        let crossfade = self.player.crossfade_duration();
-        let Some(dur) = self.player.duration_seconds() else {
-            return;
-        };
-        let Some(pos) = self.position_seconds() else {
-            return;
-        };
-        let Some(entry) = self.current() else { return };
-        let armed_for = self.read_armed_for();
-        let time = super::types::PlaybackTime { pos, dur };
-        if !super::types::should_arm_crossfade(time, crossfade, entry.id, armed_for) {
-            return;
-        }
-        self.write_armed_for(Some(entry.id));
-        let transition = if crossfade > 0.0 {
-            Transition::Crossfade
-        } else {
-            Transition::None
-        };
-        let _ = self.advance_to_next(transition);
-    }
-
-    /// Latest monotonic playback position for the current track in
-    /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
-    /// samples the engine produces on pause/resume so downstream UIs
-    /// see stable values.
-    #[must_use]
-    pub fn position_seconds(&self) -> Option<f64> {
-        self.read_cached_position()
-    }
-
-    fn process_player_event(&self, ev: &Event) {
-        match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => {
-                self.handle_item_did_play_to_end(src);
-            }
-            Event::Player(PlayerEvent::CurrentItemChanged) => {
-                self.handle_current_item_changed();
-            }
-            _ => {}
         }
     }
 
@@ -108,30 +86,52 @@ impl Queue {
         }
     }
 
-    /// If an advance was already armed from `tick()`, consume it and
-    /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
-    /// the same track must not advance again.
-    fn consume_armed_advance(&self, pos: f64, dur: f64) -> bool {
-        if self.take_armed_for().is_some() {
-            debug!(pos, dur, "consumed ItemDidPlayToEnd (armed pre-end)");
-            true
-        } else {
-            false
+    /// Start the next-track crossfade ahead of end-of-track when the
+    /// remaining playtime drops below the configured crossfade window,
+    /// so the two tracks actually overlap. `ItemDidPlayToEnd` alone
+    /// fires after the first track is already silent — too late for a
+    /// real crossfade.
+    fn maybe_arm_crossfade(&self) {
+        let crossfade = self.player.crossfade_duration();
+        let Some(dur) = self.player.duration_seconds() else {
+            return;
+        };
+        let Some(pos) = self.position_seconds() else {
+            return;
+        };
+        let Some(entry) = self.current() else { return };
+        let armed_for = self.read_armed_for();
+        let time = super::types::PlaybackTime { dur, pos };
+        if !super::types::should_arm_crossfade(time, crossfade, entry.id, armed_for) {
+            return;
         }
+        self.write_armed_for(Some(entry.id));
+        let transition = if crossfade > 0.0 {
+            Transition::Crossfade
+        } else {
+            Transition::None
+        };
+        let _ = self.advance_to_next(transition);
     }
 
-    /// Either treat the EOF as a real end-of-track and advance, or log
-    /// it as a spurious signal (decoder-failure pos stamp, crossfade
-    /// fade-out on previous track).
-    fn dispatch_real_or_spurious(&self, pos: f64, dur: f64) {
-        /// Threshold for filtering spurious `PlayerEvent::ItemDidPlayToEnd`
-        /// events emitted by crossfade fade-outs of non-current tracks.
-        const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
+    /// Latest monotonic playback position for the current track in
+    /// seconds. Updated on every [`Self::tick`]; skips transient 0.0
+    /// samples the engine produces on pause/resume so downstream UIs
+    /// see stable values.
+    #[must_use]
+    pub fn position_seconds(&self) -> Option<f64> {
+        self.read_cached_position()
+    }
 
-        if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
-            let _ = self.advance_to_next(Transition::Crossfade);
-        } else {
-            debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
+    fn process_player_event(&self, ev: &Event) {
+        match ev {
+            Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => {
+                self.handle_item_did_play_to_end(src);
+            }
+            Event::Player(PlayerEvent::CurrentItemChanged) => {
+                self.handle_current_item_changed();
+            }
+            _ => {}
         }
     }
 

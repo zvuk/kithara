@@ -46,18 +46,18 @@ pub struct QueueConfig {
     #[derivative(Debug = "ignore")]
     pub player: Option<Arc<PlayerImpl>>,
 
+    /// Whether the queue auto-advances to the next track at EOF. When
+    /// `false`, the queue stops at the end of the current track and
+    /// requires an explicit `Queue::play_next` call. Default: `true`.
+    #[derivative(Default(value = "true"))]
+    pub should_autoplay: bool,
+
     /// Lead time in seconds before EOF at which the next queued track
     /// is preloaded into the audio processor. Independent of crossfade.
     /// See `kithara_play::PlayerConfig::prefetch_duration` for the
     /// effective threshold formula. Default: 3.5.
     #[derivative(Default(value = "DEFAULT_PREFETCH_DURATION"))]
     pub prefetch_duration: f32,
-
-    /// Whether the queue auto-advances to the next track at EOF. When
-    /// `false`, the queue stops at the end of the current track and
-    /// requires an explicit `Queue::play_next` call. Default: `true`.
-    #[derivative(Default(value = "true"))]
-    pub should_autoplay: bool,
 }
 
 impl QueueConfig {

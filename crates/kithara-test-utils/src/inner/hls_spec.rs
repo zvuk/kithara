@@ -19,19 +19,19 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedHlsSpec {
-    pub(crate) variant_count: usize,
-    pub(crate) segments_per_variant: usize,
-    pub(crate) segment_size: usize,
-    pub(crate) segment_duration_secs: f64,
-    pub(crate) data_mode: ResolvedDataMode,
-    pub(crate) init_mode: ResolvedInitMode,
-    pub(crate) variant_bandwidths: Vec<u64>,
-    pub(crate) delay_rules: Vec<DelayRule>,
-    pub(crate) error_rules: Vec<HttpErrorRule>,
     pub(crate) encryption: Option<ResolvedEncryption>,
     pub(crate) head_reported_segment_size: Option<usize>,
     pub(crate) key_data: Option<Arc<Vec<u8>>>,
     pub(crate) packaged_audio: Option<ResolvedPackagedAudioSpec>,
+    pub(crate) data_mode: ResolvedDataMode,
+    pub(crate) init_mode: ResolvedInitMode,
+    pub(crate) delay_rules: Vec<DelayRule>,
+    pub(crate) error_rules: Vec<HttpErrorRule>,
+    pub(crate) variant_bandwidths: Vec<u64>,
+    pub(crate) segment_duration_secs: f64,
+    pub(crate) segment_size: usize,
+    pub(crate) segments_per_variant: usize,
+    pub(crate) variant_count: usize,
     cache_key: String,
 }
 
@@ -62,35 +62,35 @@ pub(crate) enum ResolvedInitMode {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedEncryption {
-    pub(crate) key: [u8; 16],
     pub(crate) iv: Option<[u8; 16]>,
+    pub(crate) key: [u8; 16],
     iv_hex: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackagedAudioSpec {
     pub(crate) container: ContainerFormat,
-    pub(crate) sample_rate: u32,
-    pub(crate) channels: u16,
-    pub(crate) timescale: u32,
-    pub(crate) encoder_delay: u32,
-    pub(crate) trailing_delay: u32,
     pub(crate) gapless_encoding: GaplessEncoding,
-    pub(crate) segments_per_variant: usize,
-    pub(crate) segment_duration_secs: f64,
     pub(crate) variants: Vec<ResolvedPackagedVariant>,
+    pub(crate) segment_duration_secs: f64,
+    pub(crate) channels: u16,
+    pub(crate) encoder_delay: u32,
+    pub(crate) sample_rate: u32,
+    pub(crate) timescale: u32,
+    pub(crate) trailing_delay: u32,
+    pub(crate) segments_per_variant: usize,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackagedVariant {
-    pub(crate) bit_rate: u64,
-    pub(crate) start_frame: u64,
-    pub(crate) signal: ResolvedPackagedSignal,
     /// Per-variant codec. Defaults to the spec-level
     /// [`PackagedAudioRequest::codec`]; overridden by
     /// `PackagedAudioVariantOverride.codec` so a single fixture can carry
     /// mixed codecs (production AAC LQ/MQ/HQ + FLAC lossless).
     pub(crate) codec: AudioCodec,
+    pub(crate) signal: ResolvedPackagedSignal,
+    pub(crate) bit_rate: u64,
+    pub(crate) start_frame: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -199,19 +199,19 @@ where
 
     Ok(ResolvedHlsSpec {
         variant_count,
-        segments_per_variant: spec.segments_per_variant,
-        segment_size: spec.segment_size,
-        segment_duration_secs: spec.segment_duration_secs,
         data_mode,
         init_mode,
         variant_bandwidths,
-        delay_rules: spec.delay_rules,
-        error_rules: spec.error_rules,
         encryption,
-        head_reported_segment_size: spec.head_reported_segment_size,
         key_data,
         packaged_audio,
         cache_key,
+        segments_per_variant: spec.segments_per_variant,
+        segment_size: spec.segment_size,
+        segment_duration_secs: spec.segment_duration_secs,
+        delay_rules: spec.delay_rules,
+        error_rules: spec.error_rules,
+        head_reported_segment_size: spec.head_reported_segment_size,
     })
 }
 
@@ -411,23 +411,23 @@ fn resolve_packaged_audio(
         }
         variants.push(ResolvedPackagedVariant {
             bit_rate,
-            start_frame: packaged.start_frame.map_or(0, |n| u64::from(n.get())),
             signal,
             codec,
+            start_frame: packaged.start_frame.map_or(0, |n| u64::from(n.get())),
         });
     }
 
     Ok(ResolvedPackagedAudioSpec {
+        timescale,
+        variants,
         container: ContainerFormat::Fmp4,
         sample_rate: packaged.sample_rate,
         channels: packaged.channels,
-        timescale,
         encoder_delay: packaged.encoder_delay.map(Into::into).unwrap_or_default(),
         trailing_delay: packaged.trailing_delay.map(Into::into).unwrap_or_default(),
         gapless_encoding: packaged.gapless_encoding,
         segments_per_variant: spec.segments_per_variant,
         segment_duration_secs: spec.segment_duration_secs,
-        variants,
     })
 }
 

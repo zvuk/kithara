@@ -195,20 +195,6 @@ pub trait Decoder: Send + 'static {
         TrackMetadata::default()
     }
 
-    /// Decoder-owned playback contract — currently the captured
-    /// [`crate::GaplessInfo`] (encoder priming + trailing padding in
-    /// PCM frames) when `DecoderConfig.gapless = true` and the codec
-    /// reports it. Default implementation returns the empty contract,
-    /// so most decoders inherit the no-trim behaviour.
-    ///
-    /// The audio-pipeline gapless stage reads this once per track and
-    /// constructs a [`crate::GaplessTrimmer`] when the contract is
-    /// non-empty. Returned by-value (clone) so callers don't pin a
-    /// borrow on `&self` across `next_chunk`/`seek`.
-    fn track_info(&self) -> crate::DecoderTrackInfo {
-        crate::DecoderTrackInfo::default()
-    }
-
     /// Decode the next chunk of PCM data.
     ///
     /// Returns [`DecoderChunkOutcome::Chunk`] with PCM data,
@@ -239,6 +225,20 @@ pub trait Decoder: Send + 'static {
 
     /// Get the PCM output specification.
     fn spec(&self) -> PcmSpec;
+
+    /// Decoder-owned playback contract — currently the captured
+    /// [`crate::GaplessInfo`] (encoder priming + trailing padding in
+    /// PCM frames) when `DecoderConfig.gapless = true` and the codec
+    /// reports it. Default implementation returns the empty contract,
+    /// so most decoders inherit the no-trim behaviour.
+    ///
+    /// The audio-pipeline gapless stage reads this once per track and
+    /// constructs a [`crate::GaplessTrimmer`] when the contract is
+    /// non-empty. Returned by-value (clone) so callers don't pin a
+    /// borrow on `&self` across `next_chunk`/`seek`.
+    fn track_info(&self) -> crate::DecoderTrackInfo {
+        crate::DecoderTrackInfo::default()
+    }
 
     /// Update the byte length reported to the underlying media source.
     ///

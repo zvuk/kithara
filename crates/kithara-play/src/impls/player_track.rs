@@ -42,14 +42,14 @@ pub enum TrackState {
 }
 
 impl TrackState {
-    /// Whether the track is producing audible audio.
-    pub(crate) fn is_playing(self) -> bool {
-        matches!(self, Self::Playing | Self::FadingIn | Self::FadingOut)
-    }
-
     /// Whether the track is the "leading" track (playing or fading in).
     pub(crate) fn is_leading(self) -> bool {
         matches!(self, Self::Playing | Self::FadingIn)
+    }
+
+    /// Whether the track is producing audible audio.
+    pub(crate) fn is_playing(self) -> bool {
+        matches!(self, Self::Playing | Self::FadingIn | Self::FadingOut)
     }
 }
 
@@ -99,12 +99,14 @@ pub enum TrackReadOutcome {
 /// and notification logic for a single loaded track.
 pub struct PlayerTrack {
     resource: Arc<Mutex<PlayerResource>>,
-    state: TrackState,
-    state_dirty: bool,
-    notified_track_requested: bool,
-    notified_prefetch_requested: bool,
-    mix: MixDSP,
+    src: Arc<str>,
     fade_curve: FadeCurve,
+    mix: MixDSP,
+    item_id: Option<Arc<str>>,
+    state: TrackState,
+    notified_prefetch_requested: bool,
+    notified_track_requested: bool,
+    state_dirty: bool,
     /// Current crossfade duration used for near-end trigger checks.
     fade_duration: f32,
     /// Lead time before EOF at which the prefetch trigger fires.
@@ -114,6 +116,11 @@ pub struct PlayerTrack {
     /// is at least as eager as the crossfade trigger and can be set
     /// independently to cover network/probe latency.
     prefetch_duration: f32,
+    /// Last observed duration snapshot.
+    ///
+    /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
+    /// duration) captured under the resource lock.
+    observed_duration: f64,
     sample_rate: u32,
     /// Cumulative frames this track has actually served into the mix output.
     ///
@@ -122,13 +129,6 @@ pub struct PlayerTrack {
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
     /// mixer thanks to `PlayerResource`'s scratch buffer).
     served_frames: u64,
-    /// Last observed duration snapshot.
-    ///
-    /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
-    /// duration) captured under the resource lock.
-    observed_duration: f64,
-    item_id: Option<Arc<str>>,
-    src: Arc<str>,
 }
 
 impl PlayerTrack {
@@ -168,6 +168,188 @@ impl PlayerTrack {
         };
         track.update_service_class(TrackState::Preloading);
         track
+    }
+
+    /// Add `frames` to the rolling served-frames counter so trigger checks
+    /// reflect what has been mixed into the output, not what the decoder has
+    /// pre-buffered.
+    fn advance_served_frames(&mut self, frames: u64) {
+        self.served_frames = self.served_frames.saturating_add(frames);
+    }
+
+    /// Check position-based notifications.
+    ///
+    /// Two independent triggers may fire in parallel via the same
+    /// `TrackRequested` notification:
+    ///
+    /// - prefetch — at `max(prefetch_duration, fade_duration) + block_seconds`
+    ///   before EOF; preload-only (`imminent = false` unless this coincides
+    ///   with the crossfade threshold).
+    /// - crossfade — at `fade_duration + block_seconds` before EOF;
+    ///   `imminent = true` so the handler can fade-in / hand over.
+    fn check_notifications(
+        &mut self,
+        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
+        block_frames: usize,
+        frames_until_eof: Option<usize>,
+    ) {
+        use num_traits::cast::AsPrimitive;
+        let block_frames_f32: f32 = block_frames.as_();
+        let sr_f32: f32 = self.sample_rate.as_();
+        let block_seconds = block_frames_f32 / sr_f32;
+        let fade_threshold = self.fade_duration + block_seconds;
+        let prefetch_threshold = self.prefetch_duration.max(self.fade_duration) + block_seconds;
+
+        if let Some(frames_until_eof) = frames_until_eof {
+            let frames_f32: f32 = frames_until_eof.as_();
+            let remaining = frames_f32 / sr_f32;
+            if remaining <= prefetch_threshold {
+                self.emit_track_requested(notification_tx);
+            }
+            if remaining <= fade_threshold {
+                self.emit_handover_requested(notification_tx);
+            }
+            return;
+        }
+
+        let duration = self.observed_duration;
+        if duration <= 0.0 {
+            return;
+        }
+
+        let pos: f32 = self.position().as_();
+        let dur: f32 = duration.as_();
+
+        if pos + prefetch_threshold >= dur {
+            self.emit_track_requested(notification_tx);
+        }
+        if pos + fade_threshold >= dur {
+            self.emit_handover_requested(notification_tx);
+        }
+    }
+
+    /// Current visible (post-gapless-trim) duration in seconds.
+    ///
+    /// Mirrors `PlayerResource::duration()` captured under the resource
+    /// lock during the last `read()`. Falls back to a fresh `try_lock`
+    /// when invoked before any `read()` (e.g. immediately after `seek`).
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        if self.observed_duration > 0.0 {
+            return self.observed_duration;
+        }
+        self.resource
+            .try_lock()
+            .ok()
+            .map_or(self.observed_duration, |resource| resource.duration())
+    }
+
+    /// Emit the crossfade-aligned handover trigger once per playback cycle.
+    fn emit_handover_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.notified_track_requested {
+            return;
+        }
+
+        if notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::HandoverRequested)
+            .is_ok()
+        {
+            self.notified_track_requested = true;
+        }
+    }
+
+    /// Emit the prefetch (preload-only) trigger once per playback cycle.
+    fn emit_track_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.notified_prefetch_requested {
+            return;
+        }
+
+        if notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::Requested)
+            .is_ok()
+        {
+            self.notified_prefetch_requested = true;
+        }
+    }
+
+    /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
+    pub fn fade_in(&mut self) {
+        self.set_state(TrackState::FadingIn);
+        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
+        self.notified_track_requested = false;
+        self.notified_prefetch_requested = false;
+    }
+
+    /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
+    pub fn fade_out(&mut self) {
+        self.set_state(TrackState::FadingOut);
+        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
+    }
+
+    /// Handle natural EOF.
+    fn handle_natural_end(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.state == TrackState::Finished {
+            return;
+        }
+        self.notified_prefetch_requested = true;
+        self.emit_handover_requested(notification_tx);
+        self.set_state(TrackState::Finished);
+        notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::PlaybackStopped {
+                src: Arc::clone(&self.src),
+                item_id: self.item_id.clone(),
+                reason: TrackPlaybackStopReason::Eof,
+            })
+            .ok();
+        self.state_dirty = false;
+    }
+
+    /// Emit notification when state changes.
+    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if !self.state_dirty {
+            return;
+        }
+        let notification = match self.state {
+            TrackState::Preloading => PlayerNotification::Loaded {
+                src: Arc::clone(&self.src),
+            },
+            TrackState::FadingIn => PlayerNotification::FadingIn,
+            TrackState::FadingOut => PlayerNotification::FadingOut,
+            TrackState::Playing => PlayerNotification::PlaybackStarted,
+            TrackState::Finished => PlayerNotification::PlaybackStopped {
+                src: Arc::clone(&self.src),
+                item_id: self.item_id.clone(),
+                reason: TrackPlaybackStopReason::Stop,
+            },
+        };
+
+        if notification_tx.lock_sync().try_push(notification).is_ok() {
+            self.state_dirty = false;
+        }
+    }
+
+    /// Instantly start playing at full volume.
+    pub fn play(&mut self) {
+        self.set_state(TrackState::Playing);
+        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
+        self.mix.reset_to_target();
+        self.notified_track_requested = false;
+        self.notified_prefetch_requested = false;
+    }
+
+    /// Current position in seconds.
+    ///
+    /// Tracks `served_frames / sample_rate` — i.e. what has actually been
+    /// mixed into the output — so the value matches the trigger evaluator
+    /// instead of the decoder's pre-buffered position.
+    #[must_use]
+    pub fn position(&self) -> f64 {
+        let sample_rate = self.sample_rate.max(1);
+        let served_f64: f64 = num_traits::cast::AsPrimitive::as_(self.served_frames);
+        served_f64 / f64::from(sample_rate)
     }
 
     /// Read audio from this track into scratch/mix buffers.
@@ -214,9 +396,9 @@ impl PlayerTrack {
                     let frames_until_eof = guard.frames_until_eof();
                     drop(guard);
                     TrackReadOutcome::Full {
-                        position: 0.0,
                         duration,
                         frames_until_eof,
+                        position: 0.0,
                     }
                 }
                 ReadOutcome::Partial(frames) => {
@@ -315,152 +497,30 @@ impl PlayerTrack {
         }
     }
 
-    /// Add `frames` to the rolling served-frames counter so trigger checks
-    /// reflect what has been mixed into the output, not what the decoder has
-    /// pre-buffered.
-    fn advance_served_frames(&mut self, frames: u64) {
-        self.served_frames = self.served_frames.saturating_add(frames);
+    /// Reference to the underlying shared resource.
+    #[must_use]
+    pub fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
+        &self.resource
     }
 
-    /// Handle natural EOF.
-    fn handle_natural_end(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.state == TrackState::Finished {
-            return;
+    /// Seek the underlying resource and re-sync the served-frame counter
+    /// so trigger thresholds reflect the new playback origin.
+    pub fn seek(&mut self, seconds: f64) {
+        if let Ok(mut resource) = self.resource.try_lock() {
+            resource.seek(seconds);
         }
-        self.notified_prefetch_requested = true;
-        self.emit_handover_requested(notification_tx);
-        self.set_state(TrackState::Finished);
-        notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::PlaybackStopped {
-                src: Arc::clone(&self.src),
-                item_id: self.item_id.clone(),
-                reason: TrackPlaybackStopReason::Eof,
-            })
-            .ok();
-        self.state_dirty = false;
+        let sample_rate = self.sample_rate.max(1);
+        let frames =
+            num_traits::cast::ToPrimitive::to_u64(&(seconds.max(0.0) * f64::from(sample_rate)))
+                .unwrap_or(u64::MAX);
+        self.served_frames = frames;
+        self.notified_track_requested = false;
+        self.notified_prefetch_requested = false;
     }
 
-    /// Check position-based notifications.
-    ///
-    /// Two independent triggers may fire in parallel via the same
-    /// `TrackRequested` notification:
-    ///
-    /// - prefetch — at `max(prefetch_duration, fade_duration) + block_seconds`
-    ///   before EOF; preload-only (`imminent = false` unless this coincides
-    ///   with the crossfade threshold).
-    /// - crossfade — at `fade_duration + block_seconds` before EOF;
-    ///   `imminent = true` so the handler can fade-in / hand over.
-    fn check_notifications(
-        &mut self,
-        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
-        block_frames: usize,
-        frames_until_eof: Option<usize>,
-    ) {
-        use num_traits::cast::AsPrimitive;
-        let block_frames_f32: f32 = block_frames.as_();
-        let sr_f32: f32 = self.sample_rate.as_();
-        let block_seconds = block_frames_f32 / sr_f32;
-        let fade_threshold = self.fade_duration + block_seconds;
-        let prefetch_threshold = self.prefetch_duration.max(self.fade_duration) + block_seconds;
-
-        if let Some(frames_until_eof) = frames_until_eof {
-            let frames_f32: f32 = frames_until_eof.as_();
-            let remaining = frames_f32 / sr_f32;
-            if remaining <= prefetch_threshold {
-                self.emit_track_requested(notification_tx);
-            }
-            if remaining <= fade_threshold {
-                self.emit_handover_requested(notification_tx);
-            }
-            return;
-        }
-
-        let duration = self.observed_duration;
-        if duration <= 0.0 {
-            return;
-        }
-
-        let pos: f32 = self.position().as_();
-        let dur: f32 = duration.as_();
-
-        if pos + prefetch_threshold >= dur {
-            self.emit_track_requested(notification_tx);
-        }
-        if pos + fade_threshold >= dur {
-            self.emit_handover_requested(notification_tx);
-        }
-    }
-
-    /// Emit the prefetch (preload-only) trigger once per playback cycle.
-    fn emit_track_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.notified_prefetch_requested {
-            return;
-        }
-
-        if notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::Requested)
-            .is_ok()
-        {
-            self.notified_prefetch_requested = true;
-        }
-    }
-
-    /// Emit the crossfade-aligned handover trigger once per playback cycle.
-    fn emit_handover_requested(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.notified_track_requested {
-            return;
-        }
-
-        if notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::HandoverRequested)
-            .is_ok()
-        {
-            self.notified_track_requested = true;
-        }
-    }
-
-    /// Transition state after a fade completes.
-    ///
-    /// `FadingIn` → `Playing` (track is now audible).
-    /// `FadingOut` → `Finished` (track is silent and should be cleaned up).
-    ///
-    /// Using `Finished` instead of `Paused` ensures `cleanup_finished_tracks()`
-    /// removes the track from the arena. Previously `Paused` left the track
-    /// in the arena indefinitely, leaking resources on every crossfade.
-    fn update_state_after_fade(&mut self) {
-        let new_state = match self.state {
-            TrackState::FadingIn => TrackState::Playing,
-            TrackState::FadingOut => TrackState::Finished,
-            current => current,
-        };
-        self.set_state(new_state);
-    }
-
-    /// Emit notification when state changes.
-    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if !self.state_dirty {
-            return;
-        }
-        let notification = match self.state {
-            TrackState::Preloading => PlayerNotification::Loaded {
-                src: Arc::clone(&self.src),
-            },
-            TrackState::FadingIn => PlayerNotification::FadingIn,
-            TrackState::FadingOut => PlayerNotification::FadingOut,
-            TrackState::Playing => PlayerNotification::PlaybackStarted,
-            TrackState::Finished => PlayerNotification::PlaybackStopped {
-                src: Arc::clone(&self.src),
-                item_id: self.item_id.clone(),
-                reason: TrackPlaybackStopReason::Stop,
-            },
-        };
-
-        if notification_tx.lock_sync().try_push(notification).is_ok() {
-            self.state_dirty = false;
-        }
+    /// Update the prefetch lead time used for the preload trigger.
+    pub fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
+        self.prefetch_duration = prefetch_duration.max(0.0);
     }
 
     /// Set the track state and mark as dirty.
@@ -473,6 +533,41 @@ impl PlayerTrack {
             self.state_dirty = true;
             self.update_service_class(new_state);
         }
+    }
+
+    /// Source identifier.
+    #[must_use]
+    pub fn src(&self) -> &Arc<str> {
+        &self.src
+    }
+
+    /// Current track state.
+    #[must_use]
+    pub fn state(&self) -> TrackState {
+        self.state
+    }
+
+    /// Instantly stop (silent, finished state).
+    pub fn stop(&mut self) {
+        self.set_state(TrackState::Finished);
+        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
+        self.mix.reset_to_target();
+    }
+
+    /// Re-create the `MixDSP` with a new fade duration.
+    pub fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
+        let fade_conf = SmootherConfig {
+            smooth_seconds: fade_duration,
+            settle_epsilon: DEFAULT_SETTLE_EPSILON,
+        };
+        let target_mix = if self.state.is_leading() {
+            Mix::FULLY_DRY
+        } else {
+            Mix::FULLY_WET
+        };
+        self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
+        self.fade_duration = fade_duration;
+        self.sample_rate = sample_rate.get();
     }
 
     /// Map track state to worker scheduling priority and push the update.
@@ -494,116 +589,21 @@ impl PlayerTrack {
         }
     }
 
-    /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
-    pub fn fade_in(&mut self) {
-        self.set_state(TrackState::FadingIn);
-        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
-        self.notified_track_requested = false;
-        self.notified_prefetch_requested = false;
-    }
-
-    /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
-    pub fn fade_out(&mut self) {
-        self.set_state(TrackState::FadingOut);
-        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
-    }
-
-    /// Instantly start playing at full volume.
-    pub fn play(&mut self) {
-        self.set_state(TrackState::Playing);
-        self.mix.set_mix(Mix::FULLY_DRY, self.fade_curve);
-        self.mix.reset_to_target();
-        self.notified_track_requested = false;
-        self.notified_prefetch_requested = false;
-    }
-
-    /// Instantly stop (silent, finished state).
-    pub fn stop(&mut self) {
-        self.set_state(TrackState::Finished);
-        self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
-        self.mix.reset_to_target();
-    }
-
-    /// Seek the underlying resource and re-sync the served-frame counter
-    /// so trigger thresholds reflect the new playback origin.
-    pub fn seek(&mut self, seconds: f64) {
-        if let Ok(mut resource) = self.resource.try_lock() {
-            resource.seek(seconds);
-        }
-        let sample_rate = self.sample_rate.max(1);
-        let frames =
-            num_traits::cast::ToPrimitive::to_u64(&(seconds.max(0.0) * f64::from(sample_rate)))
-                .unwrap_or(u64::MAX);
-        self.served_frames = frames;
-        self.notified_track_requested = false;
-        self.notified_prefetch_requested = false;
-    }
-
-    /// Current position in seconds.
+    /// Transition state after a fade completes.
     ///
-    /// Tracks `served_frames / sample_rate` — i.e. what has actually been
-    /// mixed into the output — so the value matches the trigger evaluator
-    /// instead of the decoder's pre-buffered position.
-    #[must_use]
-    pub fn position(&self) -> f64 {
-        let sample_rate = self.sample_rate.max(1);
-        let served_f64: f64 = num_traits::cast::AsPrimitive::as_(self.served_frames);
-        served_f64 / f64::from(sample_rate)
-    }
-
-    /// Current visible (post-gapless-trim) duration in seconds.
+    /// `FadingIn` → `Playing` (track is now audible).
+    /// `FadingOut` → `Finished` (track is silent and should be cleaned up).
     ///
-    /// Mirrors `PlayerResource::duration()` captured under the resource
-    /// lock during the last `read()`. Falls back to a fresh `try_lock`
-    /// when invoked before any `read()` (e.g. immediately after `seek`).
-    #[must_use]
-    pub fn duration(&self) -> f64 {
-        if self.observed_duration > 0.0 {
-            return self.observed_duration;
-        }
-        self.resource
-            .try_lock()
-            .ok()
-            .map_or(self.observed_duration, |resource| resource.duration())
-    }
-
-    /// Current track state.
-    #[must_use]
-    pub fn state(&self) -> TrackState {
-        self.state
-    }
-
-    /// Source identifier.
-    #[must_use]
-    pub fn src(&self) -> &Arc<str> {
-        &self.src
-    }
-
-    /// Reference to the underlying shared resource.
-    #[must_use]
-    pub fn resource(&self) -> &Arc<Mutex<PlayerResource>> {
-        &self.resource
-    }
-
-    /// Re-create the `MixDSP` with a new fade duration.
-    pub fn update_fade_duration(&mut self, fade_duration: f32, sample_rate: NonZeroU32) {
-        let fade_conf = SmootherConfig {
-            smooth_seconds: fade_duration,
-            settle_epsilon: DEFAULT_SETTLE_EPSILON,
+    /// Using `Finished` instead of `Paused` ensures `cleanup_finished_tracks()`
+    /// removes the track from the arena. Previously `Paused` left the track
+    /// in the arena indefinitely, leaking resources on every crossfade.
+    fn update_state_after_fade(&mut self) {
+        let new_state = match self.state {
+            TrackState::FadingIn => TrackState::Playing,
+            TrackState::FadingOut => TrackState::Finished,
+            current => current,
         };
-        let target_mix = if self.state.is_leading() {
-            Mix::FULLY_DRY
-        } else {
-            Mix::FULLY_WET
-        };
-        self.mix = MixDSP::new(target_mix, self.fade_curve, fade_conf, sample_rate);
-        self.fade_duration = fade_duration;
-        self.sample_rate = sample_rate.get();
-    }
-
-    /// Update the prefetch lead time used for the preload trigger.
-    pub fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
-        self.prefetch_duration = prefetch_duration.max(0.0);
+        self.set_state(new_state);
     }
 }
 
@@ -657,10 +657,10 @@ mod tests {
     /// logic relies on observed-EOF, not on a possibly-stale duration.
     struct MisreportedDurationReader {
         bus: EventBus,
-        metadata: TrackMetadata,
-        remaining_frames: usize,
-        position_frames: usize,
         spec: PcmSpec,
+        metadata: TrackMetadata,
+        position_frames: usize,
+        remaining_frames: usize,
     }
 
     impl MisreportedDurationReader {
@@ -676,6 +676,22 @@ mod tests {
     }
 
     impl PcmReader for MisreportedDurationReader {
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(10))
+        }
+
+        fn event_bus(&self) -> &EventBus {
+            &self.bus
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.metadata
+        }
+
+        fn position(&self) -> Duration {
+            Duration::from_secs_f64(self.position_frames as f64 / f64::from(self.spec.sample_rate))
+        }
+
         fn read(
             &mut self,
             buf: &mut [f32],
@@ -736,22 +752,6 @@ mod tests {
 
         fn spec(&self) -> PcmSpec {
             self.spec
-        }
-
-        fn position(&self) -> Duration {
-            Duration::from_secs_f64(self.position_frames as f64 / f64::from(self.spec.sample_rate))
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(10))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.metadata
-        }
-
-        fn event_bus(&self) -> &EventBus {
-            &self.bus
         }
     }
 

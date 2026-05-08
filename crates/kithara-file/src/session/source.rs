@@ -77,15 +77,15 @@ impl FileSource {
     ) -> Self {
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
-                coord: Arc::clone(&coord),
                 cancel,
                 bus,
+                coord: Arc::clone(&coord),
             },
             FileAssetCtx {
                 backend,
                 res,
-                headers: None,
                 key,
+                headers: None,
                 url: Url::parse("file:///local")
                     .expect("BUG: hard-coded literal `file:///local` is a valid URL"),
             },
@@ -117,11 +117,11 @@ impl FileSource {
                 bus: state.bus.clone(),
             },
             FileAssetCtx {
+                headers,
+                url,
                 backend: Arc::clone(&state.backend),
                 res: state.res.clone(),
-                headers,
                 key: state.key.clone(),
-                url,
             },
             FilePhase::Init,
         ));

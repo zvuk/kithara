@@ -93,8 +93,8 @@ impl HlsPeer {
             *guard = Some(HlsState {
                 scheduler,
                 loader,
-                waker: None,
                 epoch_cancel,
+                waker: None,
             });
         }
 
@@ -813,9 +813,9 @@ fn commit_cached_segment(state: &mut HlsState, c: &CachedCommit<'_>) {
             seek_epoch: c.seek_epoch,
         },
         crate::scheduler::LoadedSegmentBody {
-            media: &meta,
             init_len,
             init_url,
+            media: &meta,
             duration: Duration::ZERO,
         },
     );
@@ -912,12 +912,12 @@ fn build_fetch_cmd(
                 st.scheduler.commit_fetch_inline(
                     crate::coord::SegmentRequest {
                         variant,
-                        segment_index: seg_idx,
                         seek_epoch,
+                        segment_index: seg_idx,
                     },
                     crate::scheduler::LoadedSegmentBody {
-                        media: meta,
                         init_len,
+                        media: meta,
                         init_url: init_url.clone(),
                         duration: start.elapsed(),
                     },

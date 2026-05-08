@@ -18,8 +18,8 @@ mod cursors {
     use std::io::{Cursor, Read, Seek, SeekFrom};
 
     pub(super) struct CountingCursor {
-        inner: Cursor<Vec<u8>>,
         pub(super) bytes_read: usize,
+        inner: Cursor<Vec<u8>>,
     }
 
     impl CountingCursor {
@@ -78,10 +78,10 @@ use cursors::{CountingCursor, NoEndSeekCursor};
 /// recorded sequence to verify scanner behavior.
 #[derive(Default, Debug, PartialEq, Eq)]
 struct RecordingVisitor {
+    in_track: Option<RecordedTrack>,
+    itunsmpb: Option<ItunSmpb>,
     movie_timescale: Option<u32>,
     tracks: Vec<RecordedTrack>,
-    itunsmpb: Option<ItunSmpb>,
-    in_track: Option<RecordedTrack>,
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Clone)]
@@ -92,6 +92,10 @@ struct RecordedTrack {
 }
 
 impl Mp4Visitor for RecordingVisitor {
+    fn on_itunsmpb(&mut self, info: ItunSmpb) -> ControlFlow<()> {
+        self.itunsmpb = Some(info);
+        ControlFlow::Continue(())
+    }
     fn on_movie_timescale(&mut self, timescale: u32) -> ControlFlow<()> {
         self.movie_timescale = Some(timescale);
         ControlFlow::Continue(())
@@ -100,15 +104,15 @@ impl Mp4Visitor for RecordingVisitor {
         self.in_track = Some(RecordedTrack::default());
         ControlFlow::Continue(())
     }
-    fn on_track_end(&mut self) -> ControlFlow<()> {
-        if let Some(track) = self.in_track.take() {
-            self.tracks.push(track);
+    fn on_track_edit_list(&mut self, entries: &[Mp4EditListEntry]) -> ControlFlow<()> {
+        if let Some(track) = &mut self.in_track {
+            track.edit_list = entries.to_vec();
         }
         ControlFlow::Continue(())
     }
-    fn on_track_sample_rate(&mut self, sample_rate: u32) -> ControlFlow<()> {
-        if let Some(track) = &mut self.in_track {
-            track.sample_rate = Some(sample_rate);
+    fn on_track_end(&mut self) -> ControlFlow<()> {
+        if let Some(track) = self.in_track.take() {
+            self.tracks.push(track);
         }
         ControlFlow::Continue(())
     }
@@ -118,14 +122,10 @@ impl Mp4Visitor for RecordingVisitor {
         }
         ControlFlow::Continue(())
     }
-    fn on_track_edit_list(&mut self, entries: &[Mp4EditListEntry]) -> ControlFlow<()> {
+    fn on_track_sample_rate(&mut self, sample_rate: u32) -> ControlFlow<()> {
         if let Some(track) = &mut self.in_track {
-            track.edit_list = entries.to_vec();
+            track.sample_rate = Some(sample_rate);
         }
-        ControlFlow::Continue(())
-    }
-    fn on_itunsmpb(&mut self, info: ItunSmpb) -> ControlFlow<()> {
-        self.itunsmpb = Some(info);
         ControlFlow::Continue(())
     }
 }

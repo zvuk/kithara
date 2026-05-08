@@ -168,6 +168,9 @@ impl Queue {
             loader,
             tracks,
             bus,
+            #[cfg(any(test, feature = "test-utils"))]
+            should_autoplay,
+            cancel,
             next_id: AtomicU64::new(0),
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(None)),
@@ -177,11 +180,8 @@ impl Queue {
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
             #[cfg(any(test, feature = "test-utils"))]
-            should_autoplay,
-            #[cfg(any(test, feature = "test-utils"))]
             autoplay_target: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
             cached_position: Arc::new(AtomicU64::new(Self::NO_CACHED_POSITION.to_bits())),
-            cancel,
         }
     }
 

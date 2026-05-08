@@ -25,6 +25,10 @@ pub enum GaplessMode {
 /// quiet music.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SilenceTrimParams {
+    /// When true, also trim trailing silence at EOF using the same
+    /// threshold. Disabled by default because tail content is more
+    /// often intentional (decay, reverb).
+    pub trim_trailing: bool,
     /// Silence floor in dB below full scale. Default `45.0` ≈ -45 dB ≈ `5.6e-3`.
     pub threshold_db: f32,
     /// Minimum number of contiguous silent leading frames before any
@@ -35,10 +39,6 @@ pub struct SilenceTrimParams {
     /// the whole window is silent (very long fade-in) we keep the
     /// audio as-is — better safe than sorry.
     pub scan_window_frames: u64,
-    /// When true, also trim trailing silence at EOF using the same
-    /// threshold. Disabled by default because tail content is more
-    /// often intentional (decay, reverb).
-    pub trim_trailing: bool,
 }
 
 impl Default for SilenceTrimParams {

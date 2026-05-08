@@ -68,32 +68,32 @@ pub enum SignalSpecLength {
 /// Public request shape for `/signal/...` URL construction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SignalSpec {
-    pub sample_rate: u32,
-    pub channels: u16,
-    pub length: SignalSpecLength,
     pub format: SignalFormat,
+    pub length: SignalSpecLength,
+    pub channels: u16,
+    pub sample_rate: u32,
 }
 
 #[derive(Debug, Serialize)]
 struct SignalPathPayload {
-    sample_rate: u32,
-    channels: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    seconds: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    frames: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    file_bytes: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    infinite: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    freq: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    start_freq: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     end_freq: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    file_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frames: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    freq: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    infinite: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_freq: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     sweep_mode: Option<&'static str>,
+    channels: u16,
+    sample_rate: u32,
 }
 
 /// Build a `/signal/...` path from a public spec.

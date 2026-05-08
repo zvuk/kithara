@@ -82,19 +82,6 @@ impl HttpClient {
         Self { inner, options }
     }
 
-    /// Build the metadata request used by `Net::head`. On native this
-    /// is a real `HEAD`; on wasm32 we issue a zero-byte ranged `GET`
-    /// because most CORS configs block `HEAD`.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
-        self.inner.head(url)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
-        self.inner.get(url).header("Range", "bytes=0-0")
-    }
-
     fn apply_headers(
         mut req: reqwest::RequestBuilder,
         headers: Option<Headers>,
@@ -131,6 +118,19 @@ impl HttpClient {
     /// Returns [`NetError`] on HTTP failure or network error.
     pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
         <Self as Net>::head(self, url, headers).await
+    }
+
+    /// Build the metadata request used by `Net::head`. On native this
+    /// is a real `HEAD`; on wasm32 we issue a zero-byte ranged `GET`
+    /// because most CORS configs block `HEAD`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
+        self.inner.head(url)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
+        self.inner.get(url).header("Range", "bytes=0-0")
     }
 
     /// Convert a reqwest Response to a [`ByteStream`](crate::ByteStream).

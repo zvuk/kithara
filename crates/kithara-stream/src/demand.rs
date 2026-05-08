@@ -26,15 +26,6 @@ where
         *self.inner.lock_sync() = None;
     }
 
-    #[must_use]
-    pub fn peek(&self) -> Option<D> {
-        self.inner.lock_sync().clone()
-    }
-
-    pub fn replace(&self, demand: D) {
-        *self.inner.lock_sync() = Some(demand);
-    }
-
     pub fn did_replace(&self, demand: D) -> bool
     where
         D: PartialEq,
@@ -45,6 +36,15 @@ where
         }
         *slot = Some(demand);
         true
+    }
+
+    #[must_use]
+    pub fn peek(&self) -> Option<D> {
+        self.inner.lock_sync().clone()
+    }
+
+    pub fn replace(&self, demand: D) {
+        *self.inner.lock_sync() = Some(demand);
     }
 
     #[must_use]

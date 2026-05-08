@@ -55,25 +55,6 @@ impl Clone for AudioWorkerHandle {
 static AUDIO_WORKER_ID: AtomicU64 = AtomicU64::new(0);
 
 impl AudioWorkerHandle {
-    /// Spawn a new shared worker thread bound to the given cancel token
-    /// and return a handle. Production callers (e.g. `EngineImpl`) pass a
-    /// child of the player master so worker shutdown participates in the
-    /// unified cancel hierarchy.
-    #[must_use]
-    pub fn with_cancel(cancel: CancellationToken) -> Self {
-        let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
-        let inner = Scheduler::<Box<dyn crate::runtime::Node>, HangWatchdogObserver>::start(
-            format!("kithara-audio-worker-{id}"),
-            HangWatchdogObserver::new(),
-            cancel,
-        );
-
-        Self {
-            inner,
-            id_gen: Arc::new(TrackIdGen::new()),
-        }
-    }
-
     /// Spawn a new shared worker with a fresh orphan cancel token.
     ///
     /// Convenience for tests and standalone usage. Production paths use
@@ -114,6 +95,25 @@ impl AudioWorkerHandle {
     /// Wake the worker (e.g. when new data arrives from downloader).
     pub fn wake(&self) {
         self.inner.wake();
+    }
+
+    /// Spawn a new shared worker thread bound to the given cancel token
+    /// and return a handle. Production callers (e.g. `EngineImpl`) pass a
+    /// child of the player master so worker shutdown participates in the
+    /// unified cancel hierarchy.
+    #[must_use]
+    pub fn with_cancel(cancel: CancellationToken) -> Self {
+        let id = AUDIO_WORKER_ID.fetch_add(1, Ordering::Relaxed);
+        let inner = Scheduler::<Box<dyn crate::runtime::Node>, HangWatchdogObserver>::start(
+            format!("kithara-audio-worker-{id}"),
+            HangWatchdogObserver::new(),
+            cancel,
+        );
+
+        Self {
+            inner,
+            id_gen: Arc::new(TrackIdGen::new()),
+        }
     }
 }
 

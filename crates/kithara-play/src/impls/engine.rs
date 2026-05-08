@@ -46,10 +46,27 @@ use crate::{
 #[setters(prefix = "with_", strip_option)]
 #[non_exhaustive]
 pub struct EngineConfig {
+    /// Master cancel token for the engine. The shared audio worker
+    /// thread runs as a child of this token so its shutdown
+    /// participates in the unified cancel hierarchy. `PlayerImpl::new`
+    /// populates this with the resolved player master before
+    /// constructing the engine. When `None`, the engine creates a fresh
+    /// orphan (test/standalone fallback only — see `kithara-play/README.md`).
+    #[derivative(Debug = "ignore")]
+    pub cancel: Option<CancellationToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
     ///
     /// When `None`, the global PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
+    /// Pre-built audio session dispatcher.
+    ///
+    /// `None` → the engine binds to the process-wide cpal-backed session
+    /// (default for production builds).
+    /// `Some(_)` → the engine takes ownership of the supplied dispatcher.
+    /// Integration tests pass an offline session here to drive the audio
+    /// graph synchronously without touching real hardware.
+    #[derivative(Debug = "ignore")]
+    pub session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout per player. Default: 10-band log-spaced.
     #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
     pub eq_layout: Vec<EqBandConfig>,
@@ -62,23 +79,6 @@ pub struct EngineConfig {
     /// Maximum number of concurrent player slots. Default: 4.
     #[derivative(Default(value = "4"))]
     pub max_slots: usize,
-    /// Pre-built audio session dispatcher.
-    ///
-    /// `None` → the engine binds to the process-wide cpal-backed session
-    /// (default for production builds).
-    /// `Some(_)` → the engine takes ownership of the supplied dispatcher.
-    /// Integration tests pass an offline session here to drive the audio
-    /// graph synchronously without touching real hardware.
-    #[derivative(Debug = "ignore")]
-    pub session: Option<Arc<dyn SessionDispatcher>>,
-    /// Master cancel token for the engine. The shared audio worker
-    /// thread runs as a child of this token so its shutdown
-    /// participates in the unified cancel hierarchy. `PlayerImpl::new`
-    /// populates this with the resolved player master before
-    /// constructing the engine. When `None`, the engine creates a fresh
-    /// orphan (test/standalone fallback only — see `kithara-play/README.md`).
-    #[derivative(Debug = "ignore")]
-    pub cancel: Option<CancellationToken>,
 }
 
 /// Handle for a slot, providing command channel and shared state.
@@ -145,33 +145,6 @@ impl EngineImpl {
             .take()
             .unwrap_or_else(|| session_client() as Arc<dyn SessionDispatcher>);
         Self::with_session(config, bus, session)
-    }
-
-    fn with_session(
-        config: EngineConfig,
-        bus: EventBus,
-        session: Arc<dyn SessionDispatcher>,
-    ) -> Self {
-        let max_slots = config.max_slots;
-        let resolved_pool = config
-            .pcm_pool
-            .clone()
-            .unwrap_or_else(|| PcmPool::default().clone());
-        let worker_cancel = config.cancel.clone().unwrap_or_default().child_token();
-
-        Self {
-            config,
-            bus,
-            session,
-            active_slots: Mutex::new(Vec::new()),
-            master_volume: AtomicF32::new(1.0),
-            pcm_pool: resolved_pool,
-            player_id: Mutex::new(None),
-            running: AtomicBool::new(false),
-            slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
-            worker: AudioWorkerHandle::with_cancel(worker_cancel),
-            runtime: RuntimeHandle::try_current().ok(),
-        }
     }
 
     fn emit(&self, event: EngineEvent) {
@@ -260,6 +233,33 @@ impl EngineImpl {
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
         self.session.tick()
+    }
+
+    fn with_session(
+        config: EngineConfig,
+        bus: EventBus,
+        session: Arc<dyn SessionDispatcher>,
+    ) -> Self {
+        let max_slots = config.max_slots;
+        let resolved_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| PcmPool::default().clone());
+        let worker_cancel = config.cancel.clone().unwrap_or_default().child_token();
+
+        Self {
+            config,
+            bus,
+            session,
+            active_slots: Mutex::new(Vec::new()),
+            master_volume: AtomicF32::new(1.0),
+            pcm_pool: resolved_pool,
+            player_id: Mutex::new(None),
+            running: AtomicBool::new(false),
+            slot_registry: Mutex::new(ArenaRegistry::with_capacity(max_slots)),
+            worker: AudioWorkerHandle::with_cancel(worker_cancel),
+            runtime: RuntimeHandle::try_current().ok(),
+        }
     }
 
     /// Shared audio worker handle for this engine.

@@ -45,17 +45,17 @@ pub(crate) fn probe_mp4_gapless_dyn(
 ///    and we don't want the iTunes tag to override a real `elst`.
 #[derive(Default)]
 struct GaplessProbe {
-    movie_timescale: Option<u32>,
     current: Option<TrackState>,
     elst_derived: Option<GaplessInfo>,
     itunsmpb: Option<GaplessInfo>,
+    movie_timescale: Option<u32>,
 }
 
 #[derive(Default)]
 struct TrackState {
-    sample_rate: Option<u32>,
-    media: Option<Mp4MediaTiming>,
     first_edit: Option<Mp4EditListEntry>,
+    media: Option<Mp4MediaTiming>,
+    sample_rate: Option<u32>,
 }
 
 impl GaplessProbe {
@@ -65,6 +65,17 @@ impl GaplessProbe {
 }
 
 impl Mp4Visitor for GaplessProbe {
+    fn on_itunsmpb(&mut self, info: ItunSmpb) -> ControlFlow<()> {
+        if info.leading_frames == 0 && info.trailing_frames == 0 {
+            return ControlFlow::Continue(());
+        }
+        self.itunsmpb = Some(GaplessInfo {
+            leading_frames: info.leading_frames,
+            trailing_frames: info.trailing_frames,
+        });
+        ControlFlow::Break(())
+    }
+
     fn on_movie_timescale(&mut self, timescale: u32) -> ControlFlow<()> {
         self.movie_timescale = Some(timescale);
         ControlFlow::Continue(())
@@ -72,6 +83,13 @@ impl Mp4Visitor for GaplessProbe {
 
     fn on_track_begin(&mut self) -> ControlFlow<()> {
         self.current = Some(TrackState::default());
+        ControlFlow::Continue(())
+    }
+
+    fn on_track_edit_list(&mut self, entries: &[Mp4EditListEntry]) -> ControlFlow<()> {
+        if let Some(track) = &mut self.current {
+            track.first_edit = entries.first().copied();
+        }
         ControlFlow::Continue(())
     }
 
@@ -86,13 +104,6 @@ impl Mp4Visitor for GaplessProbe {
         ControlFlow::Continue(())
     }
 
-    fn on_track_sample_rate(&mut self, sample_rate: u32) -> ControlFlow<()> {
-        if let Some(track) = &mut self.current {
-            track.sample_rate = Some(sample_rate);
-        }
-        ControlFlow::Continue(())
-    }
-
     fn on_track_media_timing(&mut self, timing: Mp4MediaTiming) -> ControlFlow<()> {
         if let Some(track) = &mut self.current {
             track.media = Some(timing);
@@ -100,22 +111,11 @@ impl Mp4Visitor for GaplessProbe {
         ControlFlow::Continue(())
     }
 
-    fn on_track_edit_list(&mut self, entries: &[Mp4EditListEntry]) -> ControlFlow<()> {
+    fn on_track_sample_rate(&mut self, sample_rate: u32) -> ControlFlow<()> {
         if let Some(track) = &mut self.current {
-            track.first_edit = entries.first().copied();
+            track.sample_rate = Some(sample_rate);
         }
         ControlFlow::Continue(())
-    }
-
-    fn on_itunsmpb(&mut self, info: ItunSmpb) -> ControlFlow<()> {
-        if info.leading_frames == 0 && info.trailing_frames == 0 {
-            return ControlFlow::Continue(());
-        }
-        self.itunsmpb = Some(GaplessInfo {
-            leading_frames: info.leading_frames,
-            trailing_frames: info.trailing_frames,
-        });
-        ControlFlow::Break(())
     }
 }
 

@@ -173,12 +173,6 @@ impl PcmChunk {
         self.pcm.len().checked_div(channels).unwrap_or(0)
     }
 
-    /// Audio format specification.
-    #[must_use]
-    pub fn spec(&self) -> PcmSpec {
-        self.meta.spec
-    }
-
     /// Borrow the raw interleaved sample buffer.
     ///
     /// Sugar accessor for `&chunk.pcm[..]`; the underlying field stays
@@ -187,6 +181,12 @@ impl PcmChunk {
     #[must_use]
     pub fn samples(&self) -> &[f32] {
         &self.pcm
+    }
+
+    /// Audio format specification.
+    #[must_use]
+    pub fn spec(&self) -> PcmSpec {
+        self.meta.spec
     }
 }
 

@@ -37,6 +37,8 @@ pub struct AudioConfig<T: StreamType> {
     /// [`AudioConfig::with_decoder_backend`] because there is no runtime
     /// fallback.
     pub decoder_backend: DecoderBackend,
+    /// How leading/trailing PCM is trimmed after the decode.
+    pub gapless_mode: GaplessMode,
     /// Number of chunks to buffer before signaling preload readiness.
     ///
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
@@ -47,6 +49,11 @@ pub struct AudioConfig<T: StreamType> {
     pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
+    /// Master cancel token for the audio pipeline. Per-track child of
+    /// the player master — see `kithara-play/README.md` "Cancel
+    /// Hierarchy". Populated by `kithara_play::ResourceConfig`'s
+    /// conversion routines from the resource-level cancel.
+    pub cancel: Option<tokio_util::sync::CancellationToken>,
     /// Optional format hint (file extension like "mp3", "wav")
     #[setters(skip)]
     pub hint: Option<String>,
@@ -75,13 +82,6 @@ pub struct AudioConfig<T: StreamType> {
     pub effects: Vec<Box<dyn AudioEffect>>,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
     pub pcm_buffer_chunks: usize,
-    /// How leading/trailing PCM is trimmed after the decode.
-    pub gapless_mode: GaplessMode,
-    /// Master cancel token for the audio pipeline. Per-track child of
-    /// the player master — see `kithara-play/README.md` "Cancel
-    /// Hierarchy". Populated by `kithara_play::ResourceConfig`'s
-    /// conversion routines from the resource-level cancel.
-    pub cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl<T: StreamType> AudioConfig<T> {

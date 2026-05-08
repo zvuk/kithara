@@ -61,39 +61,6 @@ impl EventBridge {
         }
     }
 
-    /// Forward player-level signals (`ItemDidPlayToEnd`,
-    /// `TimeControlStatusChanged → WaitingToPlay`) to the corresponding
-    /// item-level observer, mapping them onto
-    /// [`FfiItemEvent::DidReachEnd`] / [`FfiItemEvent::DidStall`].
-    fn route_player_event_to_item(
-        items: &Arc<Mutex<ItemRegistry>>,
-        queue: &Arc<Queue>,
-        last_current: &Mutex<Option<kithara_events::TrackId>>,
-        event: &PlayerEvent,
-    ) {
-        let target = match event {
-            PlayerEvent::ItemDidPlayToEnd { .. } => *last_current.lock_sync(),
-            PlayerEvent::TimeControlStatusChanged {
-                status: kithara::play::TimeControlStatus::WaitingToPlay,
-                ..
-            } => queue.current().map(|entry| entry.id),
-            _ => return,
-        };
-        let Some(track_id) = target else { return };
-        let Some(item) = items.lock_sync().get(&track_id).cloned() else {
-            return;
-        };
-        let Some(item_obs) = item.observer() else {
-            return;
-        };
-        let ffi_event = match event {
-            PlayerEvent::ItemDidPlayToEnd { .. } => FfiItemEvent::DidReachEnd,
-            PlayerEvent::TimeControlStatusChanged { .. } => FfiItemEvent::DidStall,
-            _ => return,
-        };
-        item_obs.on_event(ffi_event);
-    }
-
     fn dispatch_queue_event(
         observer: &Arc<dyn PlayerObserver>,
         items: &Arc<Mutex<ItemRegistry>>,
@@ -150,6 +117,39 @@ impl EventBridge {
             PlayerEvent::ItemDidPlayToEnd { .. } => FfiPlayerEvent::ItemDidPlayToEnd,
             _ => return None,
         })
+    }
+
+    /// Forward player-level signals (`ItemDidPlayToEnd`,
+    /// `TimeControlStatusChanged → WaitingToPlay`) to the corresponding
+    /// item-level observer, mapping them onto
+    /// [`FfiItemEvent::DidReachEnd`] / [`FfiItemEvent::DidStall`].
+    fn route_player_event_to_item(
+        items: &Arc<Mutex<ItemRegistry>>,
+        queue: &Arc<Queue>,
+        last_current: &Mutex<Option<kithara_events::TrackId>>,
+        event: &PlayerEvent,
+    ) {
+        let target = match event {
+            PlayerEvent::ItemDidPlayToEnd { .. } => *last_current.lock_sync(),
+            PlayerEvent::TimeControlStatusChanged {
+                status: kithara::play::TimeControlStatus::WaitingToPlay,
+                ..
+            } => queue.current().map(|entry| entry.id),
+            _ => return,
+        };
+        let Some(track_id) = target else { return };
+        let Some(item) = items.lock_sync().get(&track_id).cloned() else {
+            return;
+        };
+        let Some(item_obs) = item.observer() else {
+            return;
+        };
+        let ffi_event = match event {
+            PlayerEvent::ItemDidPlayToEnd { .. } => FfiItemEvent::DidReachEnd,
+            PlayerEvent::TimeControlStatusChanged { .. } => FfiItemEvent::DidStall,
+            _ => return,
+        };
+        item_obs.on_event(ffi_event);
     }
 
     /// Translate a queue-level `TrackStatus` into per-item callbacks so

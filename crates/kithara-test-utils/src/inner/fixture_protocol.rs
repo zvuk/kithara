@@ -192,7 +192,6 @@ impl GaplessEncoding {
 /// to the spec-level [`PackagedAudioRequest`] defaults.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct PackagedAudioVariantOverride {
-    pub variant: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_rate: Option<u64>,
     #[serde(
@@ -203,6 +202,7 @@ pub struct PackagedAudioVariantOverride {
     pub codec: Option<AudioCodec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<PcmPattern>,
+    pub variant: usize,
 }
 
 mod serde_audio_codec_opt {
@@ -244,23 +244,23 @@ mod serde_audio_codec_opt {
 pub struct PackagedAudioRequest {
     #[serde(with = "serde_audio_codec")]
     pub codec: AudioCodec,
-    pub sample_rate: u32,
-    pub channels: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub start_frame: Option<NonZeroU32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timescale: Option<u32>,
+    #[serde(default)]
+    pub gapless_encoding: GaplessEncoding,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_rate: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encoder_delay: Option<NonZeroU32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_frame: Option<NonZeroU32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timescale: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trailing_delay: Option<NonZeroU32>,
-    #[serde(default)]
-    pub gapless_encoding: GaplessEncoding,
     pub source: PackagedAudioSource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variant_overrides: Vec<PackagedAudioVariantOverride>,
+    pub channels: u16,
+    pub sample_rate: u32,
 }
 
 /// Declarative delay rule for segment serving.
@@ -269,12 +269,12 @@ pub struct PackagedAudioRequest {
 /// The first matching rule wins; if none matches, the delay is zero.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct DelayRule {
-    /// Match only this variant index. `None` = any variant.
-    pub variant: Option<usize>,
     /// Match only this exact segment index. `None` = any segment.
     pub segment_eq: Option<usize>,
     /// Match segments with index >= N. `None` = no lower bound.
     pub segment_gte: Option<usize>,
+    /// Match only this variant index. `None` = any variant.
+    pub variant: Option<usize>,
     /// Delay in milliseconds.
     pub delay_ms: u64,
 }
@@ -333,15 +333,15 @@ pub enum HlsRouteKind {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct HttpErrorRule {
     pub kind: HlsRouteKind,
+    /// Optional response body. Defaults to a generic message.
+    pub body: Option<String>,
+    /// Match only this exact segment index (only for [`HlsRouteKind::Segment`]).
+    pub segment_eq: Option<usize>,
     /// Match only this variant index. `None` = any variant.
     /// Ignored for [`HlsRouteKind::Master`] and [`HlsRouteKind::Key`].
     pub variant: Option<usize>,
-    /// Match only this exact segment index (only for [`HlsRouteKind::Segment`]).
-    pub segment_eq: Option<usize>,
     /// HTTP status code to return (e.g. 403, 503).
     pub status: u16,
-    /// Optional response body. Defaults to a generic message.
-    pub body: Option<String>,
 }
 
 impl HttpErrorRule {
@@ -385,10 +385,10 @@ pub fn eval_http_error(
 /// Encryption parameters for HLS segments.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EncryptionRequest {
-    /// 16-byte AES key as hex string.
-    pub key_hex: String,
     /// Optional 16-byte IV as hex string. When `None`, derived from segment sequence.
     pub iv_hex: Option<String>,
+    /// 16-byte AES key as hex string.
+    pub key_hex: String,
 }
 
 /// Generate test-pattern segment data: `V{v}-SEG-{s}:TEST_SEGMENT_DATA` + `0xFF` padding.

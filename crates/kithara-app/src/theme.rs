@@ -27,37 +27,37 @@ pub struct Palette {
 }
 
 impl Palette {
-    const BG_R: u8 = 26;
-    const BG_G: u8 = 26;
-    const BG_B: u8 = 46;
+    const ACCENT_B: u8 = 66;
+    const ACCENT_G: u8 = 148;
+    const ACCENT_R: u8 = 187;
 
-    const BG_PANEL_R: u8 = 34;
-    const BG_PANEL_G: u8 = 34;
+    const BG_B: u8 = 46;
+    const BG_G: u8 = 26;
     const BG_PANEL_B: u8 = 68;
 
-    const ACCENT_R: u8 = 187;
-    const ACCENT_G: u8 = 148;
-    const ACCENT_B: u8 = 66;
+    const BG_PANEL_G: u8 = 34;
+    const BG_PANEL_R: u8 = 34;
+    const BG_R: u8 = 26;
 
-    const MUTED_R: u8 = 136;
-    const MUTED_G: u8 = 136;
-    const MUTED_B: u8 = 136;
-
-    const TEXT_R: u8 = 230;
-    const TEXT_G: u8 = 230;
-    const TEXT_B: u8 = 230;
-
-    const SUCCESS_R: u8 = 102;
-    const SUCCESS_G: u8 = 204;
-    const SUCCESS_B: u8 = 102;
-
-    const DANGER_R: u8 = 230;
-    const DANGER_G: u8 = 77;
     const DANGER_B: u8 = 77;
+    const DANGER_G: u8 = 77;
+    const DANGER_R: u8 = 230;
 
-    const WARNING_R: u8 = 230;
-    const WARNING_G: u8 = 179;
+    const MUTED_B: u8 = 136;
+    const MUTED_G: u8 = 136;
+    const MUTED_R: u8 = 136;
+
+    const SUCCESS_B: u8 = 102;
+    const SUCCESS_G: u8 = 204;
+    const SUCCESS_R: u8 = 102;
+
+    const TEXT_B: u8 = 230;
+    const TEXT_G: u8 = 230;
+    const TEXT_R: u8 = 230;
+
     const WARNING_B: u8 = 51;
+    const WARNING_G: u8 = 179;
+    const WARNING_R: u8 = 230;
 
     /// Kithara dark + gold theme.
     #[must_use]

@@ -42,12 +42,12 @@ pub struct KeyManager {
     /// on the segment hot path.
     decrypted_keys: Arc<Mutex<HashMap<Url, Bytes>>>,
     backend: AssetStore<DecryptContext>,
+    /// Byte buffer pool for reading cached key bodies.
+    byte_pool: kithara_bufpool::BytePool,
     /// Cache-wide headers (typically equal to `HlsConfig::headers`).
     base_headers: Option<Headers>,
     key_registry: Option<KeyProcessorRegistry>,
     downloader: PeerHandle,
-    /// Byte buffer pool for reading cached key bodies.
-    byte_pool: kithara_bufpool::BytePool,
 }
 
 impl KeyManager {
