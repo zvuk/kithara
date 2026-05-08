@@ -29,7 +29,7 @@ fn make_source(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> File
             .build(),
     );
     let key = ResourceKey::new("test-source");
-    FileSource::local(res, coord, bus, backend, key)
+    FileSource::local(res, coord, bus, backend, key, CancellationToken::new())
 }
 
 // FileCoord

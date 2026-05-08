@@ -35,7 +35,7 @@ impl StreamType for File {
 
         // Fully synchronous — returned future is always ready.
         std::future::ready(match src {
-            FileSrc::Local(path) => Self::create_local(path, config, cancel),
+            FileSrc::Local(path) => Self::create_local(path, config, &cancel),
             FileSrc::Remote(url) => Self::create_remote(url, config, cancel),
         })
         .await
@@ -52,7 +52,7 @@ impl File {
     fn create_local(
         path: PathBuf,
         config: FileConfig,
-        cancel: CancellationToken,
+        cancel: &CancellationToken,
     ) -> Result<FileSource, SourceError> {
         if !path.exists() {
             return Err(SourceError::InvalidPath(format!(
@@ -64,7 +64,7 @@ impl File {
         let store = Arc::new(
             AssetStoreBuilder::new()
                 .asset_root(None)
-                .cancel(cancel)
+                .cancel(cancel.clone())
                 .build(),
         );
 
@@ -85,7 +85,14 @@ impl File {
         // on disk. Reader-side `FileEvent::EndOfStream` fires when the
         // reader hits EOF.
 
-        Ok(FileSource::local(res, coord, bus, store, key))
+        Ok(FileSource::local(
+            res,
+            coord,
+            bus,
+            store,
+            key,
+            cancel.child_token(),
+        ))
     }
 
     /// Create a source for a remote file.
@@ -145,6 +152,7 @@ impl File {
                 state.bus.clone(),
                 Arc::clone(&state.backend),
                 state.key.clone(),
+                cancel.child_token(),
             ));
         }
 

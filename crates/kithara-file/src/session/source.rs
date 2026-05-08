@@ -68,17 +68,22 @@ impl FileSource {
     }
 
     /// Create a source for a local/cached file (no downloads needed).
+    ///
+    /// `cancel` is a child of the file config master so a track drop
+    /// pulse interrupts any in-flight reads — see
+    /// `kithara-play/README.md` "Cancel Hierarchy".
     pub(crate) fn local(
         res: AssetResource,
         coord: Arc<FileCoord>,
         bus: EventBus,
         backend: Arc<AssetStore>,
         key: ResourceKey,
+        cancel: CancellationToken,
     ) -> Self {
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
                 coord: Arc::clone(&coord),
-                cancel: CancellationToken::new(),
+                cancel,
                 bus,
             },
             FileAssetCtx {
