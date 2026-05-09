@@ -27,6 +27,7 @@ use kithara_test_utils::{TestServerHelper, TestTempDir, probe_capture, temp_dir}
 use super::helpers::{
     Consts,
     assertions::assert_exact_count,
+    diagnostics::format_probe_dump,
     params::{open_audio, wave_fixture_4_variants},
 };
 
@@ -109,9 +110,10 @@ async fn t8_natural_eof_complete_playback(
             Duration::from_secs(45),
         )
         .unwrap_or_else(|| {
+            let dump = format_probe_dump(&recorder, 60);
             panic!(
                 "T8: build_chunk near EOF (ts >= {near_eof_us}μs) not seen in 45s. \
-                 Backend = {backend:?}, variant = {variant}."
+                 Backend = {backend:?}, variant = {variant}.\n{dump}"
             )
         });
 
@@ -150,9 +152,10 @@ async fn t8_natural_eof_complete_playback(
                     )
                     .is_none()
                 {
+                    let dump = format_probe_dump(&recorder, 60);
                     panic!(
                         "T8: drain stalled at Pending — no further build_chunk in 10s. \
-                         total_frames so far = {total_frames}."
+                         total_frames so far = {total_frames}.\n{dump}"
                     );
                 }
             }

@@ -446,6 +446,94 @@ pub(crate) mod counters {
     }
 }
 
+pub(crate) mod diagnostics {
+    //! On-failure helpers: dump captured probe events so a stuck
+    //! `wait_for_probe` reports WHICH part of the production chain
+    //! actually executed, not just "timeout".
+    use std::collections::BTreeMap;
+
+    use kithara_test_utils::probe_capture::{ProbeEvent, Recorder};
+
+    /// Probes printed in full — they describe the scheduler's decision
+    /// stream end-to-end. Listed once, every firing is shown.
+    const KEY_PROBES: &[&str] = &[
+        "poll_next",
+        "emit_fetch_cmd",
+        "commit_segment",
+        "start_request",
+        "finish_request",
+        "abort_request",
+        "fail_request",
+        "apply",
+        "apply_format_change",
+        "detect_format_change",
+        "format_change_segment_range",
+        "dispatch_seek_demand",
+        "seek_epoch_reset",
+    ];
+
+    fn format_event(e: &ProbeEvent) -> String {
+        let seq = e.seq().unwrap_or(u64::MAX);
+        let name = e.probe_name().unwrap_or("?");
+        let v = e.u64("variant");
+        let seg = e.u64("seg_idx").or_else(|| e.u64("segment_index"));
+        let init_len = e.u64("init_len");
+        let ts = e.u64("timestamp");
+        let frames = e.u64("frames");
+        let off = e.u64("offset");
+        let need_init = e.u64("plan_need_init");
+        let bytes = e.u64("bytes_transferred");
+        let req_id = e.u64("request_id");
+        let caller = e.caller_fn();
+        format!(
+            "  seq={seq:>5} {name:<32} v={v:?} seg={seg:?} init_len={init_len:?} ts={ts:?} frames={frames:?} off={off:?} need_init={need_init:?} req={req_id:?} bytes={bytes:?} caller={caller:?}"
+        )
+    }
+
+    /// Format a recorder snapshot for inclusion in a panic message:
+    /// per-probe firing counts, every firing of every "key" probe in
+    /// `KEY_PROBES`, then the last `tail_n` raw events.
+    pub(crate) fn format_probe_dump(recorder: &Recorder, tail_n: usize) -> String {
+        let events = recorder.snapshot();
+        let mut out = String::new();
+        out.push_str(&format!("probe events captured: {}\n", events.len()));
+
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for e in &events {
+            if let Some(name) = e.probe_name() {
+                *counts.entry(name.to_string()).or_default() += 1;
+            }
+        }
+        out.push_str("probe firing counts:\n");
+        for (name, count) in &counts {
+            out.push_str(&format!("  {name}: {count}\n"));
+        }
+
+        out.push_str("key probe events (every firing):\n");
+        for e in &events {
+            let Some(name) = e.probe_name() else {
+                continue;
+            };
+            if KEY_PROBES.contains(&name) {
+                out.push_str(&format_event(e));
+                out.push('\n');
+            }
+        }
+
+        let tail_start = events.len().saturating_sub(tail_n);
+        out.push_str(&format!(
+            "last {} raw events (of {}):\n",
+            events.len() - tail_start,
+            events.len()
+        ));
+        for e in &events[tail_start..] {
+            out.push_str(&format_event(e));
+            out.push('\n');
+        }
+        out
+    }
+}
+
 pub(crate) mod assertions {
     //! Equality predicates with exact failure messages.
     use std::{collections::BTreeSet, fmt::Debug};
