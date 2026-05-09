@@ -6,7 +6,7 @@ use super::{helpers::first_missing_segment, state::HlsScheduler};
 use crate::{loading::SegmentMeta, playlist::PlaylistAccess, stream_index::SegmentData};
 
 impl HlsScheduler {
-    #[kithara::probe(variant, seg_idx, init_len)]
+    #[kithara::probe(variant, seg_idx, init_len, caller)]
     pub(super) fn commit_segment(
         &mut self,
         variant: usize,

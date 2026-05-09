@@ -42,6 +42,14 @@ pub(crate) fn expand_derive_entry(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Entry-point for `#[derive(kithara::IntoProbeArg)]` — forwarded from `lib.rs`.
+pub(crate) fn expand_derive_into_probe_arg_entry(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_derive_into_probe_arg(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
 /// Parsed `#[kithara::probe(...)]` arguments.
 ///
 /// * `#[kithara::probe]` (no parens) — marker probe: emits only the
@@ -214,30 +222,15 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         }
     };
 
-    let emit_entry_event = if probe_return {
-        quote! {}
-    } else {
-        quote! {
-            #[cfg(any(test, feature = "test-utils"))]
-            {
-                ::kithara_test_utils::probes::register_probes();
-                let __probe_caller = ::core::panic::Location::caller();
-                let __probe_seq: u64 = ::kithara_test_utils::probes::next_probe_seq();
-                #capture_caller_fn
-                ::kithara_test_utils::probes::#fire_fn(#fn_name_str, #(#probe_idents),*);
-                ::tracing::event!(
-                    target: #target,
-                    ::tracing::Level::TRACE,
-                    probe = #fn_name_str,
-                    caller_file = __probe_caller.file(),
-                    caller_line = __probe_caller.line() as u64,
-                    caller_fn = __probe_caller_fn,
-                    seq = __probe_seq,
-                    #(#tracing_fields),*
-                );
-            }
-        }
-    };
+    let emit_entry_event = build_emit_entry_event(
+        probe_return,
+        &fn_name_str,
+        &target,
+        &fire_fn,
+        &probe_idents,
+        &tracing_fields,
+        &capture_caller_fn,
+    );
 
     // `#[track_caller]` is what makes `Location::caller()` resolve to
     // the caller of this probe-attributed function rather than the
@@ -263,6 +256,49 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
             #body
         }
     })
+}
+
+fn build_emit_entry_event(
+    probe_return: bool,
+    fn_name_str: &str,
+    target: &str,
+    fire_fn: &Ident,
+    probe_idents: &[Ident],
+    tracing_fields: &[TokenStream2],
+    capture_caller_fn: &TokenStream2,
+) -> TokenStream2 {
+    if probe_return {
+        return quote! {};
+    }
+    quote! {
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            ::kithara_test_utils::probes::register_probes();
+            let __probe_caller = ::core::panic::Location::caller();
+            let __probe_seq: u64 = ::kithara_test_utils::probes::next_probe_seq();
+            let __probe_thread_seq: u64 =
+                ::kithara_test_utils::probes::next_thread_probe_seq();
+            let __probe_thread_id: u64 =
+                ::kithara_test_utils::probes::current_thread_u64();
+            let __probe_install_id: u64 =
+                ::kithara_test_utils::probes::current_install_id();
+            #capture_caller_fn
+            ::kithara_test_utils::probes::#fire_fn(#fn_name_str, #(#probe_idents),*);
+            ::tracing::event!(
+                target: #target,
+                ::tracing::Level::TRACE,
+                probe = #fn_name_str,
+                caller_file = __probe_caller.file(),
+                caller_line = __probe_caller.line() as u64,
+                caller_fn = __probe_caller_fn,
+                seq = __probe_seq,
+                thread_id = __probe_thread_id,
+                thread_seq = __probe_thread_seq,
+                install_id = __probe_install_id,
+                #(#tracing_fields),*
+            );
+        }
+    }
 }
 
 #[derive(Default)]
@@ -399,6 +435,86 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         #(#tracing_pairs),*
                     );
                 }
+            }
+        }
+    })
+}
+
+/// Expand `#[derive(kithara::IntoProbeArg)]` for a single-field
+/// `Copy` newtype struct. Generates round-trippable `into_probe_arg`
+/// and `from_probe_arg` impls that delegate to the inner field's own
+/// `IntoProbeArg` impl. Multi-field structs and enums are rejected:
+/// they need an explicit packed impl with a documented bit layout
+/// (`SegmentRequest::into_probe_arg` is the canonical example).
+pub(crate) fn expand_derive_into_probe_arg(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let struct_name = &input.ident;
+    let Data::Struct(DataStruct { fields, .. }) = &input.data else {
+        return Err(Error::new_spanned(
+            struct_name,
+            "#[derive(IntoProbeArg)] is only supported on structs",
+        ));
+    };
+
+    let (field_access, field_ty, ctor): (TokenStream2, TokenStream2, TokenStream2) = match fields {
+        Fields::Unit => {
+            return Err(Error::new_spanned(
+                struct_name,
+                "#[derive(IntoProbeArg)] requires exactly one field — \
+                 unit structs carry no probe payload",
+            ));
+        }
+        Fields::Unnamed(unnamed) => {
+            if unnamed.unnamed.len() != 1 {
+                return Err(Error::new_spanned(
+                    struct_name,
+                    "#[derive(IntoProbeArg)] requires exactly one tuple field. \
+                     Multi-field structs need an explicit packed impl with a \
+                     documented bit layout (see `SegmentRequest`).",
+                ));
+            }
+            let field = unnamed.unnamed.first().expect("checked len == 1");
+            let ty = field.ty.clone();
+            (
+                quote!(self.0),
+                quote!(#ty),
+                quote!(Self(<#ty as ::kithara_test_utils::probes::IntoProbeArg>::from_probe_arg(packed))),
+            )
+        }
+        Fields::Named(named) => {
+            if named.named.len() != 1 {
+                return Err(Error::new_spanned(
+                    struct_name,
+                    "#[derive(IntoProbeArg)] requires exactly one named field. \
+                     Multi-field structs need an explicit packed impl with a \
+                     documented bit layout (see `SegmentRequest`).",
+                ));
+            }
+            let field = named.named.first().expect("checked len == 1");
+            let name = field
+                .ident
+                .as_ref()
+                .ok_or_else(|| Error::new_spanned(field, "expected named field"))?;
+            let ty = field.ty.clone();
+            (
+                quote!(self.#name),
+                quote!(#ty),
+                quote!(Self {
+                    #name: <#ty as ::kithara_test_utils::probes::IntoProbeArg>::from_probe_arg(packed),
+                }),
+            )
+        }
+    };
+
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics ::kithara_test_utils::probes::IntoProbeArg
+        for #struct_name #ty_generics #where_clause {
+            fn into_probe_arg(self) -> u64 {
+                <#field_ty as ::kithara_test_utils::probes::IntoProbeArg>::into_probe_arg(#field_access)
+            }
+            fn from_probe_arg(packed: u64) -> Self {
+                #ctor
             }
         }
     })

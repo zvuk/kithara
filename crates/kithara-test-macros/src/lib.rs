@@ -49,3 +49,14 @@ pub fn mock(args: TokenStream, item: TokenStream) -> TokenStream {
 pub fn derive_probe(input: TokenStream) -> TokenStream {
     probe_macro::expand_derive_entry(input)
 }
+
+/// `#[derive(kithara::IntoProbeArg)]` — generates round-trippable
+/// `IntoProbeArg` impl for a `Copy` newtype struct (single field, named
+/// or tuple). Saves repeating the trivial `self.0 as u64` /
+/// `Self(packed as Inner)` boilerplate across every domain id type that
+/// participates in probes. Multi-field structs are rejected — they
+/// must provide an explicit packed impl with a documented layout.
+#[proc_macro_derive(IntoProbeArg)]
+pub fn derive_into_probe_arg(input: TokenStream) -> TokenStream {
+    probe_macro::expand_derive_into_probe_arg_entry(input)
+}

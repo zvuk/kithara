@@ -1,6 +1,7 @@
 use std::{sync::atomic::Ordering, time::Duration};
 
 use kithara_events::HlsEvent;
+use kithara_test_utils::kithara;
 use tracing::{debug, trace};
 use url::Url;
 
@@ -34,6 +35,11 @@ impl HlsScheduler {
     /// clear the matching pending demand.
     ///
     /// Used by `HlsPeer::on_complete` — the Downloader-driven path.
+    /// The `caller`-tagged probe records the resolved frame above the
+    /// commit so the per-thread sequence test can tell whether the
+    /// commit came in via the cached path (`commit_cached_segment`) or
+    /// the streaming on-complete closure.
+    #[kithara::probe(request, caller)]
     pub(crate) fn commit_fetch_inline(
         &mut self,
         request: SegmentRequest,

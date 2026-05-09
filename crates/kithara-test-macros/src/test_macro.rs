@@ -369,7 +369,12 @@ fn emit_async_runtime_test(
         #vis fn #fn_name() #ret_type {
             #env_setup
             let __rt = #runtime_builder;
-            __rt.block_on(async #inner_body)
+            let __probe_install_id =
+                ::kithara_test_utils::probes::bump_install_id();
+            __rt.block_on(
+                ::kithara_test_utils::probes::OWNED_INSTALL_ID
+                    .scope(__probe_install_id, async #inner_body),
+            )
         }
     }
 }
@@ -566,19 +571,26 @@ fn emit_async_timeout_test(
             let _wg = __WG(__done);
 
             let __rt = #runtime_builder;
+            let __probe_install_id =
+                ::kithara_test_utils::probes::bump_install_id();
 
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
-                    __rt.block_on(async {
-                        kithara_platform::time::timeout(__timeout_dur, async {
-                            #inner_body
-                        })
-                        .await
-                        .unwrap_or_else(|_| panic!(
-                            "test `{}` timed out after {:?}",
-                            #fn_name_str, __timeout_dur,
-                        ))
-                    })
+                    __rt.block_on(
+                        ::kithara_test_utils::probes::OWNED_INSTALL_ID.scope(
+                            __probe_install_id,
+                            async {
+                                kithara_platform::time::timeout(__timeout_dur, async {
+                                    #inner_body
+                                })
+                                .await
+                                .unwrap_or_else(|_| panic!(
+                                    "test `{}` timed out after {:?}",
+                                    #fn_name_str, __timeout_dur,
+                                ))
+                            },
+                        ),
+                    )
                 })
             );
 

@@ -447,12 +447,14 @@ pub(crate) mod counters {
 }
 
 pub(crate) mod diagnostics {
-    //! On-failure helpers: dump captured probe events so a stuck
-    //! `wait_for_probe` reports WHICH part of the production chain
-    //! actually executed, not just "timeout".
+    //! On-failure helpers: dump captured probe events so a panic message
+    //! reports WHICH part of the production chain actually executed.
+    //! Per-event formatting comes from `ProbeEvent`'s `Debug` impl, which
+    //! prints only the keys the probe actually carried — no `None`
+    //! placeholders for irrelevant fields.
     use std::collections::BTreeMap;
 
-    use kithara_test_utils::probe_capture::{ProbeEvent, Recorder};
+    use kithara_test_utils::probe_capture::Recorder;
 
     /// Probes printed in full — they describe the scheduler's decision
     /// stream end-to-end. Listed once, every firing is shown.
@@ -464,6 +466,8 @@ pub(crate) mod diagnostics {
         "should_skip_planned_segment",
         "emit_fetch_cmd",
         "commit_segment",
+        "commit_fetch_inline",
+        "record_demand_cursor_protection_rewind",
         "start_request",
         "establish",
         "with_soft_timeout",
@@ -478,24 +482,6 @@ pub(crate) mod diagnostics {
         "dispatch_seek_demand",
         "seek_epoch_reset",
     ];
-
-    fn format_event(e: &ProbeEvent) -> String {
-        let seq = e.seq().unwrap_or(u64::MAX);
-        let name = e.probe_name().unwrap_or("?");
-        let v = e.u64("variant");
-        let seg = e.u64("seg_idx").or_else(|| e.u64("segment_index"));
-        let init_len = e.u64("init_len");
-        let ts = e.u64("timestamp");
-        let frames = e.u64("frames");
-        let off = e.u64("offset");
-        let need_init = e.u64("plan_need_init");
-        let bytes = e.u64("bytes_transferred");
-        let req_id = e.u64("request_id");
-        let caller = e.caller_fn();
-        format!(
-            "  seq={seq:>5} {name:<32} v={v:?} seg={seg:?} init_len={init_len:?} ts={ts:?} frames={frames:?} off={off:?} need_init={need_init:?} req={req_id:?} bytes={bytes:?} caller={caller:?}"
-        )
-    }
 
     /// Format a recorder snapshot for inclusion in a panic message:
     /// per-probe firing counts, every firing of every "key" probe in
@@ -522,8 +508,7 @@ pub(crate) mod diagnostics {
                 continue;
             };
             if KEY_PROBES.contains(&name) {
-                out.push_str(&format_event(e));
-                out.push('\n');
+                out.push_str(&format!("  {e:?}\n"));
             }
         }
 
@@ -534,10 +519,264 @@ pub(crate) mod diagnostics {
             events.len()
         ));
         for e in &events[tail_start..] {
-            out.push_str(&format_event(e));
-            out.push('\n');
+            out.push_str(&format!("  {e:?}\n"));
         }
         out
+    }
+}
+
+pub(crate) mod probe_contracts {
+    //! Per-thread probe-sequence contracts.
+    //!
+    //! Each contract describes "on thread T, the probes fire in this exact
+    //! order with these args" and produces a precise diff on failure
+    //! (which thread, which `thread_seq`, expected vs observed). This
+    //! replaces "wait for some probe with a 45s budget and panic on
+    //! timeout" — the failure message names the violated invariant
+    //! directly so the operator does not have to scan a 3000-line dump.
+    //!
+    //! The contracts read from the global `Recorder` snapshot; they do
+    //! not block, so call them after the test has finished its runtime
+    //! work (drain done, EOF or budget exhausted).
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use kithara_test_utils::probe_capture::{ProbeEvent, Recorder};
+
+    /// Bucket events by `thread_id`, sorted by `thread_seq` within each
+    /// bucket. Events without a `thread_id` (older probe expansions, or
+    /// `probe_return` path) are dropped — the contract layer needs both
+    /// fields to talk about per-thread order.
+    fn group_by_thread(recorder: &Recorder) -> BTreeMap<u64, Vec<ProbeEvent>> {
+        let mut by_thread: BTreeMap<u64, Vec<ProbeEvent>> = BTreeMap::new();
+        for e in recorder.snapshot() {
+            let Some(tid) = e.thread_id() else {
+                continue;
+            };
+            by_thread.entry(tid).or_default().push(e);
+        }
+        for events in by_thread.values_mut() {
+            events.sort_by_key(|e| e.thread_seq().unwrap_or(u64::MAX));
+        }
+        by_thread
+    }
+
+    /// All events matching `predicate`, grouped by `thread_id`.
+    fn filter_by_thread<F>(recorder: &Recorder, predicate: F) -> BTreeMap<u64, Vec<ProbeEvent>>
+    where
+        F: Fn(&ProbeEvent) -> bool,
+    {
+        let mut by_thread = group_by_thread(recorder);
+        for events in by_thread.values_mut() {
+            events.retain(&predicate);
+        }
+        by_thread.retain(|_, v| !v.is_empty());
+        by_thread
+    }
+
+    /// Verify the 5-stage HTTP request lifecycle (`start_request →
+    /// establish → with_soft_timeout → deliver → finish_request`) for
+    /// `request_id` runs to completion on a single thread.
+    ///
+    /// Returns `Ok(())` on a complete lifecycle. On failure the error
+    /// names the request id, the thread, the missing stage, and the
+    /// last stage that was observed — so the operator sees "req=26
+    /// reached `with_soft_timeout` and never delivered" instead of
+    /// "test timed out". Cancelled paths (`abort_request` /
+    /// `fail_request`) are accepted as terminal alternatives to
+    /// `finish_request`.
+    pub(crate) fn assert_request_lifecycle_complete(
+        recorder: &Recorder,
+        request_id: u64,
+    ) -> Result<(), String> {
+        const ENTRY_STAGES: &[&str] =
+            &["start_request", "establish", "with_soft_timeout", "deliver"];
+        const TERMINAL_STAGES: &[&str] = &["finish_request", "abort_request", "fail_request"];
+
+        let by_thread = filter_by_thread(recorder, |e| e.u64("request_id") == Some(request_id));
+        if by_thread.is_empty() {
+            return Err(format!(
+                "request_id={request_id}: ни одной пробы. ожидалось {:?} → {:?}.",
+                ENTRY_STAGES, TERMINAL_STAGES,
+            ));
+        }
+        if by_thread.len() > 1 {
+            return Err(format!(
+                "request_id={request_id}: пробы на нескольких потоках {:?} — \
+                 spawn_fetch контракт нарушен (один task = один поток).",
+                by_thread.keys().collect::<Vec<_>>(),
+            ));
+        }
+        let (thread_id, events) = by_thread.into_iter().next().expect("checked non-empty");
+        let observed: Vec<&str> = events.iter().filter_map(ProbeEvent::probe_name).collect();
+
+        for stage in ENTRY_STAGES {
+            if !observed.contains(stage) {
+                return Err(format!(
+                    "request_id={request_id}, thread_id={thread_id}: \
+                     отсутствует стадия `{stage}`. \
+                     наблюдалось: {observed:?}. \
+                     события на потоке: {events:#?}",
+                ));
+            }
+        }
+        if !TERMINAL_STAGES.iter().any(|t| observed.contains(t)) {
+            return Err(format!(
+                "request_id={request_id}, thread_id={thread_id}: \
+                 ни одна терминальная стадия не наблюдалась \
+                 (ожидалось `finish_request`, `abort_request` или `fail_request`). \
+                 наблюдалось: {observed:?}. \
+                 это означает что `req.send().await` в reqwest не завершился — \
+                 spawn_fetch task завис между `with_soft_timeout` и `deliver`. \
+                 события на потоке: {events:#?}",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Verify `commit_segment` fires **exactly once per `seg=0..n`** on
+    /// the pinned `variant`, all on a single thread. The set of
+    /// committed `(variant, seg_idx)` pairs must equal
+    /// `{(v, 0), (v, 1), …, (v, n-1)}` — no missing seg, no duplicates,
+    /// no foreign variant, no out-of-range `seg_idx`.
+    ///
+    /// **Order is NOT enforced** because the streaming download path
+    /// runs up to `max_concurrent` fetches in parallel, and
+    /// `on_complete` (the closure that calls `commit_fetch_inline`)
+    /// fires in completion order, not in segment order. T8 still
+    /// requires sequential decoder output (verified by
+    /// `frame_offset` continuity in the drain loop), but commits at
+    /// the scheduler boundary are concurrent by design.
+    pub(crate) fn assert_commit_segment_strict(
+        recorder: &Recorder,
+        variant: usize,
+        n: usize,
+    ) -> Result<(), String> {
+        let by_thread = filter_by_thread(recorder, |e| e.probe_name() == Some("commit_segment"));
+        if by_thread.is_empty() {
+            return Err(format!(
+                "commit_segment: ни одного события. ожидалось seg=0..{} на variant={variant}.",
+                n - 1,
+            ));
+        }
+        if by_thread.len() > 1 {
+            return Err(format!(
+                "commit_segment: события на нескольких потоках {:?} — \
+                 single-variant scheduler контракт нарушен.",
+                by_thread.keys().collect::<Vec<_>>(),
+            ));
+        }
+        let (thread_id, events) = by_thread.into_iter().next().expect("checked non-empty");
+        let pairs: Vec<(usize, usize)> = events
+            .iter()
+            .filter_map(|e| {
+                let v = usize::try_from(e.u64("variant")?).ok()?;
+                let s = usize::try_from(e.u64("seg_idx")?).ok()?;
+                Some((v, s))
+            })
+            .collect();
+        let actual: BTreeSet<(usize, usize)> = pairs.iter().copied().collect();
+        let expected: BTreeSet<(usize, usize)> = (0..n).map(|s| (variant, s)).collect();
+        let total_events = pairs.len();
+        let unique_seg_count = actual.len();
+        if actual != expected || total_events != n {
+            let inline_events: Vec<ProbeEvent> = recorder.events_with_probe("commit_fetch_inline");
+            let emit_events: Vec<ProbeEvent> = recorder.events_with_probe("emit_fetch_cmd");
+            let rewind_events: Vec<ProbeEvent> =
+                recorder.events_with_probe("record_demand_cursor_protection_rewind");
+            let readiness_events: Vec<ProbeEvent> =
+                recorder.events_with_probe("apply_variant_readiness");
+            let missing: Vec<(usize, usize)> = expected.difference(&actual).copied().collect();
+            let extra: Vec<(usize, usize)> = actual.difference(&expected).copied().collect();
+            // Считаем сколько раз каждый (variant, seg_idx) появился —
+            // показываем только те, что встретились >1 раза, чтобы
+            // мгновенно увидеть какой именно seg задвоился (это признак
+            // реальной race-condition в commit-цепочке, не порядкового
+            // race'а).
+            let mut counts: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+            for pair in &pairs {
+                *counts.entry(*pair).or_default() += 1;
+            }
+            let duplicates: Vec<((usize, usize), usize)> =
+                counts.into_iter().filter(|(_, c)| *c > 1).collect();
+            let duplicates_diag = if duplicates.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\nдубликаты ({}):\n{:#?}\n\
+                     это означает что один и тот же (variant, seg_idx) \
+                     попал в commit_segment несколько раз — реальная \
+                     race-condition в commit-цепочке (cached path vs \
+                     on-complete closure?). Сравни caller_fn у соседних \
+                     commit_fetch_inline для этого seg_idx.",
+                    duplicates.len(),
+                    duplicates,
+                )
+            };
+            return Err(format!(
+                "commit_segment, thread_id={thread_id}: множество \
+                 закоммиченных сегментов не совпадает \
+                 ({total_events} событий, {unique_seg_count} уникальных, \
+                 ожидалось n={n}).\n\
+                 expected: {expected:?}\n\
+                 actual:   {actual:?}\n\
+                 missing:  {missing:?}\n\
+                 extra:    {extra:?}\
+                 {duplicates_diag}\n\
+                 emit_fetch_cmd события ({}):\n{:#?}\n\
+                 commit_fetch_inline события ({}):\n{:#?}\n\
+                 apply_variant_readiness события ({}):\n{:#?}\n\
+                 record_demand_cursor_protection_rewind события ({}):\n{:#?}",
+                emit_events.len(),
+                emit_events,
+                inline_events.len(),
+                inline_events,
+                readiness_events.len(),
+                readiness_events,
+                rewind_events.len(),
+                rewind_events,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Verify the decoder reached at least `target_ts_us` microseconds
+    /// of decoded audio (a `build_chunk` event with `timestamp >= target`).
+    /// On failure the message reports the last observed timestamp and
+    /// total chunks decoded — concrete evidence of a stall instead of
+    /// "wait_for_probe timed out".
+    pub(crate) fn assert_build_chunk_reached(
+        recorder: &Recorder,
+        target_ts_us: u64,
+    ) -> Result<(), String> {
+        let by_thread = filter_by_thread(recorder, |e| e.probe_name() == Some("build_chunk"));
+        if by_thread.is_empty() {
+            return Err(
+                "build_chunk: ни одного события — декодер не выдал ни одного PCM кадра".into(),
+            );
+        }
+        if by_thread.len() > 1 {
+            return Err(format!(
+                "build_chunk: события на нескольких потоках {:?} — \
+                 в T8 декодер однопоточный.",
+                by_thread.keys().collect::<Vec<_>>(),
+            ));
+        }
+        let (thread_id, events) = by_thread.into_iter().next().expect("checked non-empty");
+        let last_ts = events
+            .iter()
+            .filter_map(|e| e.u64("timestamp"))
+            .max()
+            .unwrap_or(0);
+        if last_ts >= target_ts_us {
+            return Ok(());
+        }
+        Err(format!(
+            "build_chunk, thread_id={thread_id}: декодер достиг ts={last_ts}μs, \
+             ожидалось ts >= {target_ts_us}μs (chunks_observed={}). \
+             декодер встал — следующий шаг: проверить какой fetch не завершился \
+             (см. `assert_request_lifecycle_complete`).",
+            events.len(),
+        ))
     }
 }
 

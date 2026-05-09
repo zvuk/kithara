@@ -46,7 +46,7 @@ use tracing::{Subscriber, field::Visit};
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 
 /// One recorded probe event.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ProbeEvent {
     /// Numeric / boolean fields, keyed by name.
     pub fields: HashMap<String, u64>,
@@ -57,6 +57,84 @@ pub struct ProbeEvent {
     /// Target string of the captured tracing event (e.g.
     /// `"kithara_stream_probe"`, `"kithara_hls_probe"`).
     pub target: String,
+}
+
+/// Probe-event keys auto-injected by the `#[kithara::probe]` macro
+/// (counter sequencing and call-site location). Pulled out of the
+/// custom `Debug` impl so the dump skips the noise and shows only
+/// what the probe site actually carried.
+mod debug_keys {
+    pub(super) const NUMERIC_SERVICE: &[&str] = &["seq", "thread_id", "thread_seq", "caller_line"];
+    pub(super) const STRING_SERVICE: &[&str] = &["probe", "caller_file", "caller_fn"];
+}
+
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "trace dump intentionally omits `at` (timestamp) and `target` \
+              (always `<crate>_probe`) — probe events are read by humans \
+              scanning per-thread sequences, not deserialized; including \
+              these fields buries the signal."
+)]
+impl std::fmt::Debug for ProbeEvent {
+    /// Print only the fields that are actually present. Probes carry
+    /// different argument shapes (one fires with `variant`+`segment_index`,
+    /// another with `request_id`+`bytes_transferred`); a derived `Debug`
+    /// would dump the full `HashMap` payload — printing every probe with
+    /// every possible field name regardless of whether the probe carried
+    /// it makes traces unreadable. This impl shows just the keys that the
+    /// probe set, in the order:
+    ///
+    /// 1. header — `probe`, `thread_id`, `thread_seq`, `seq`;
+    /// 2. user numeric fields (sorted alphabetically);
+    /// 3. `caller_fn` if the probe was declared with `caller` and the
+    ///    backtrace resolved (empty placeholders are suppressed);
+    /// 4. user string fields (sorted alphabetically).
+    ///
+    /// Service keys (`caller_file`, `caller_line`) are not part of the
+    /// dump — they are noisy and rarely useful when reading per-thread
+    /// sequences. If you need them, read `event.fields` / `event.string_fields`
+    /// directly.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("ProbeEvent");
+        if let Some(name) = self.probe_name() {
+            s.field("probe", &name);
+        }
+        if let Some(thread_id) = self.thread_id() {
+            s.field("thread_id", &thread_id);
+        }
+        if let Some(thread_seq) = self.thread_seq() {
+            s.field("thread_seq", &thread_seq);
+        }
+        if let Some(seq) = self.seq() {
+            s.field("seq", &seq);
+        }
+        let mut numeric_keys: Vec<&String> = self
+            .fields
+            .keys()
+            .filter(|k| !debug_keys::NUMERIC_SERVICE.contains(&k.as_str()))
+            .collect();
+        numeric_keys.sort();
+        for key in numeric_keys {
+            if let Some(value) = self.fields.get(key) {
+                s.field(key, value);
+            }
+        }
+        if let Some(caller_fn) = self.caller_fn() {
+            s.field("caller_fn", &caller_fn);
+        }
+        let mut string_keys: Vec<&String> = self
+            .string_fields
+            .keys()
+            .filter(|k| !debug_keys::STRING_SERVICE.contains(&k.as_str()))
+            .collect();
+        string_keys.sort();
+        for key in string_keys {
+            if let Some(value) = self.string_fields.get(key) {
+                s.field(key, value);
+            }
+        }
+        s.finish()
+    }
 }
 
 impl ProbeEvent {
@@ -130,6 +208,29 @@ impl ProbeEvent {
     pub fn seq(&self) -> Option<u64> {
         self.u64("seq")
     }
+
+    /// Hashed identifier of the OS thread that fired this probe.
+    ///
+    /// Pair with [`Self::thread_seq`] to reconstruct each thread's own
+    /// call order. Two probes with the same `thread_id` come from the
+    /// same OS thread (modulo a 64-bit hash collision); filtering by
+    /// `thread_id` gives a single thread's slice of the global trace.
+    #[must_use]
+    pub fn thread_id(&self) -> Option<u64> {
+        self.u64("thread_id")
+    }
+
+    /// Per-thread monotonic sequence number for this probe firing.
+    ///
+    /// Independent of [`Self::seq`]: thread A's first probe and thread
+    /// B's first probe both have `thread_seq=0`, but distinct
+    /// `thread_id`s. Use this to assert "the i-th probe on thread T
+    /// was X with args (...)" without the global ordering noise from
+    /// unrelated threads.
+    #[must_use]
+    pub fn thread_seq(&self) -> Option<u64> {
+        self.u64("thread_seq")
+    }
 }
 
 type SharedLog = Arc<Mutex<Vec<ProbeEvent>>>;
@@ -158,14 +259,27 @@ where
 
 /// Snapshot handle anchored at the moment of installation.
 ///
-/// `snapshot()` returns events captured at or after `start_at`,
-/// filtering out events from earlier tests that landed in the shared
-/// log before this recorder was created.
+/// Cross-test isolation relies on the **install-id task-local** that
+/// `#[kithara::test]` enters before the test body runs: every probe
+/// firing stamps the owning `install_id` into its tracing event, and
+/// this recorder filters by that id. Tasks spawned via `tokio::spawn`
+/// inside the test inherit the task-local automatically; orphan
+/// tasks from a just-finished test (downloader on-complete, audio
+/// worker draining its last buffer) carry the *previous* test's id
+/// and fall out of the new recorder's snapshot — even though they
+/// emit after the new test's `install()`.
+///
+/// The global log is intentionally not drained: under stress runs
+/// with multiple recorder lifetimes, draining could wipe an
+/// actively-recorded sibling's events. The id filter alone is
+/// sufficient. The timestamp filter (`start_at`) handles the small
+/// window between scope entry and recorder construction.
 #[must_use]
 pub fn install() -> Recorder {
     Recorder {
         log: shared_log(),
         start_at: Instant::now(),
+        install_id: crate::probes::current_install_id(),
     }
 }
 
@@ -173,6 +287,7 @@ pub fn install() -> Recorder {
 #[derive(Clone)]
 pub struct Recorder {
     start_at: Instant,
+    install_id: u64,
     log: SharedLog,
 }
 
@@ -187,13 +302,19 @@ impl Recorder {
     }
 
     /// All events recorded since this `Recorder` was created.
+    ///
+    /// Filters by `install_id` first (excludes orphan-task events from
+    /// prior tests that outlive their `Drop`) and `start_at` second
+    /// (excludes anything emitted before the recorder was anchored —
+    /// possible if the install-id counter was bumped before drain
+    /// completed).
     #[must_use]
     pub fn snapshot(&self) -> Vec<ProbeEvent> {
         self.log
             .lock()
             .expect("probe log poisoned")
             .iter()
-            .filter(|e| e.at >= self.start_at)
+            .filter(|e| e.u64("install_id") == Some(self.install_id) && e.at >= self.start_at)
             .cloned()
             .collect()
     }

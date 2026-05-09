@@ -17,6 +17,38 @@ pub struct SegmentRequest {
     pub seek_epoch: u64,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+impl kithara_test_utils::probes::IntoProbeArg for SegmentRequest {
+    /// Pack `(variant, segment_index)` into a single `u64` so the field
+    /// can ride a `#[kithara::probe(request, …)]` site without
+    /// unpacking the struct in the production signature. `seek_epoch`
+    /// is dropped — it is not load-bearing for the seg-routing
+    /// diagnostics that consume this probe (`commit_fetch_inline`
+    /// epoch handling fires its own `seek_epoch_reset` probe). Layout:
+    ///
+    /// ```text
+    /// bits 63..32  variant
+    /// bits 31..00  segment_index
+    /// ```
+    ///
+    /// `from_probe_arg` round-trips `(variant, segment_index)` and
+    /// reconstructs `SegmentRequest` with `seek_epoch = 0` (the lossy
+    /// field documented above) so tests can read it via
+    /// `SegmentRequest::from_probe_arg(event.u64("request").unwrap())`
+    /// without writing a private decode helper.
+    fn into_probe_arg(self) -> u64 {
+        ((self.variant as u64) << 32) | (self.segment_index as u64 & 0xFFFF_FFFF)
+    }
+
+    fn from_probe_arg(packed: u64) -> Self {
+        Self {
+            variant: (packed >> 32) as VariantIndex,
+            segment_index: (packed & 0xFFFF_FFFF) as SegmentIndex,
+            seek_epoch: 0,
+        }
+    }
+}
+
 pub struct HlsCoord {
     /// Shared ABR state — the only authoritative source of the current
     /// variant index. Held as an `Arc<AbrState>` so HLS reads stay
