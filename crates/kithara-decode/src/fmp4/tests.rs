@@ -187,6 +187,93 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
     assert!(chunk.spec().channels >= 1);
 }
 
+/// Helper used by the RED scaffolds below: pull one PCM chunk from the
+/// decoder, returning `None` on EOF or after exhausting the retry budget.
+fn pull_one_chunk(
+    decoder: &mut ComposedDecoder<Fmp4SegmentDemuxer, SymphoniaCodec>,
+) -> Option<crate::types::PcmChunk> {
+    for _ in 0..16 {
+        match decoder.next_chunk().ok()? {
+            DecoderChunkOutcome::Chunk(chunk) => return Some(chunk),
+            DecoderChunkOutcome::Pending(_) => continue,
+            DecoderChunkOutcome::Eof => return None,
+        }
+    }
+    None
+}
+
+/// RED scaffold for ABR variant-switch sub-problem #3
+/// (see project_hls_abr_variant_switch_init_range_bug).
+///
+/// `Fmp4SegmentDemuxer::open` hardcodes `next_byte = 0`. Production
+/// calls `apply_format_change` with `target_offset` equal to the
+/// init-range start in the NEW variant's byte map (which is 0 because
+/// `set_layout_variant` already swapped the active byte map). The
+/// factory then builds the demuxer with `OffsetReader::base_offset = 0`,
+/// and the demuxer's first `next_frame` queries
+/// `segment_after_byte(0)` which always returns the layout's seg-0.
+///
+/// Result: regardless of where the previous decoder left off, the new
+/// decoder restarts at the new variant's seg-0 (T1's "drift = full
+/// pre-switch frame count" symptom).
+///
+/// This test pins the CURRENT (broken) observable: a freshly opened
+/// `Fmp4SegmentDemuxer` always emits its first chunk at
+/// `decode_time = 0`. There is no API surface to resume at a non-zero
+/// time / segment / byte. When such an API is added (e.g.
+/// `Fmp4SegmentDemuxer::open_with_start(source, layout, ResumePoint)`),
+/// this assertion must be inverted to `chunk.meta.timestamp >= resume_point`.
+#[kithara::test]
+fn red_open_always_starts_at_layout_seg_0() {
+    let (blob, segmented) = build_test_layout(3);
+    let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
+
+    let chunk = pull_one_chunk(&mut decoder).expect("BUG: at least one PCM chunk from seg-0");
+    assert_eq!(
+        chunk.meta.timestamp,
+        Duration::ZERO,
+        "RED — Fmp4SegmentDemuxer::open hardcodes next_byte=0, so the \
+         first chunk always lands at decode_time=0. There is no API to \
+         resume at a non-zero decode_time. ABR variant-switch \
+         recreate_decoder relies on this and consequently restarts \
+         playback at seg-0 of the new variant. \
+         When the resume API lands, INVERT this assertion."
+    );
+}
+
+/// RED scaffold for ABR variant-switch sub-problem #4
+/// (cursor freshness): `SegmentCursor::read.byte_range` is frozen at
+/// `ensure_cursor` / `seek` time from `descriptor.byte_range`. If the
+/// underlying `SegmentLayout` updates the descriptor between
+/// `ensure_cursor` and `fill_segment_buffer` (HEAD-estimated size →
+/// actual committed size, or pre-DRM → post-DRM), the cursor still
+/// allocates and seeks against the OLD range. `parse_segment_frames`
+/// then panics with "sample byte range past segment end" because the
+/// fragment's moof-described samples don't fit the smaller buffer.
+///
+/// Contract under test:
+///   - Either `fill_segment_buffer` must re-query the layout each
+///     iteration and grow the buffer if the descriptor's range
+///     extended.
+///   - Or `ensure_cursor` must capture a layout-version cookie and
+///     refuse to fill against a stale descriptor.
+///
+/// Today neither holds: the cursor commits to whatever
+/// `segment_after_byte` returned at first call. This scaffold is
+/// `#[ignore]`-marked because reproducing the parse-side panic
+/// requires bespoke moof bytes — left as a TODO for the fix author.
+/// The point of the scaffold is to make the missing contract
+/// explicit so the fix has somewhere to land its regression test.
+#[kithara::test]
+#[ignore = "RED scaffold — needs crafted moof fixture to demonstrate \
+            the parse_segment_frames panic. Add when implementing \
+            the cursor-freshness contract."]
+fn red_cursor_byte_range_freezes_when_layout_size_grows() {
+    // Intentional placeholder. See the doc comment above for the
+    // contract and the TODO list for the fix author.
+    panic!("RED scaffold — see doc comment");
+}
+
 #[kithara::test]
 fn seek_reads_only_init_and_target_segment() {
     let (blob, segmented) = build_test_layout(5);

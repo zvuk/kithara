@@ -20,6 +20,7 @@ kithara-events = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
 biquad = { workspace = true }
 rubato = { workspace = true }
 audioadapter-buffers = { workspace = true }

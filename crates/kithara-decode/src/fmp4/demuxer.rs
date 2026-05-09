@@ -12,6 +12,7 @@
 use std::{sync::Arc, time::Duration};
 
 use kithara_stream::SegmentLayout;
+use kithara_test_utils::kithara;
 
 use super::{
     parsing::{CodecConfig, Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
@@ -131,6 +132,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
         self.duration
     }
 
+    #[kithara::probe]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         loop {
             match self.ensure_cursor() {

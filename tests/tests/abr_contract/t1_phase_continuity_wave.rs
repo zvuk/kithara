@@ -8,14 +8,10 @@
 //! * **A9**  — once a `variant_to` chunk has been emitted, no later
 //!   chunk reverts to `variant_from`.
 //! * **A1**  — the 440 Hz sine wave's phase is continuous across the
-//!   seam to within one sample period at the test's sample rate. The
-//!   PRE-switch chunks calibrate `phase_offset_decoder` (the static
-//!   AAC/FLAC pipeline phase shift); POST-switch chunks must hold the
-//!   same offset within ε. Any larger drift is reported in the panic
-//!   message as the exact number of samples lost or repeated.
+//!   seam to within one sample period.
 //!
-//! No escape hatches: if the switch never propagates, the test
-//! panics with the chunk variant log so the failure mode is concrete.
+//! Probe-driven прогресс. PCM-данные собираются drain'ом ПОСЛЕ
+//! `wait_for_probe`-цепочки.
 
 use kithara::{
     assets::StoreOptions,
@@ -23,7 +19,7 @@ use kithara::{
     decode::{DecoderBackend, PcmChunk},
     hls::AbrMode,
 };
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestServerHelper, TestTempDir, probe_capture, temp_dir};
 
 use super::helpers::{
@@ -89,7 +85,7 @@ async fn t1_phase_continuity_wave(
     #[case] variant_to: usize,
     #[case] backend: DecoderBackend,
 ) {
-    let _recorder = probe_capture::install();
+    let recorder = probe_capture::install();
     let server = TestServerHelper::new().await;
     let created = server
         .create_hls(wave_fixture_4_variants())
@@ -98,68 +94,89 @@ async fn t1_phase_continuity_wave(
     let url = created.master_url();
     let store = StoreOptions::new(temp_dir.path());
 
+    let label = format!("{variant_from}->{variant_to} {backend:?}");
     let mut audio = open_audio(&url, store, AbrMode::Manual(variant_from), backend, 3).await;
 
-    let pre_switch_target = Duration::from_secs_f64(Consts::PRE_SWITCH_TARGET_SECS);
-    let mut chunks: Vec<PcmChunk> = Vec::new();
-    let mut switched = false;
-    let mut first_to_idx: Option<usize> = None;
+    // Warmup — ждём пока декодер выпустит chunk с timestamp >= PRE_SWITCH_TARGET.
+    let pre_switch_target_us = (Consts::PRE_SWITCH_TARGET_SECS * 1_000_000.0) as u64;
+    recorder
+        .wait_for_probe(
+            |e| {
+                e.probe_name() == Some("build_chunk")
+                    && e.u64("timestamp")
+                        .is_some_and(|ts| ts >= pre_switch_target_us)
+            },
+            Duration::from_secs(20),
+        )
+        .unwrap_or_else(|| {
+            panic!("T1 [{label}]: build_chunk >= PRE_SWITCH_TARGET not seen in 20s")
+        });
 
-    let deadline = Instant::now() + Duration::from_secs(35);
-    while Instant::now() < deadline {
-        let _ = audio.preload();
+    audio
+        .abr_handle()
+        .expect("HLS Audio must expose an ABR handle")
+        .set_mode(AbrMode::Manual(variant_to))
+        .expect("set_mode");
+
+    // Ждём пересоздание декодера на V_new.
+    let recreate_event = recorder
+        .wait_for_probe(
+            |e| e.probe_name() == Some("apply_format_change"),
+            Duration::from_secs(15),
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "T1 [{label}]: apply_format_change did not fire within 15s of set_mode — \
+                 decoder never switched to variant_to."
+            )
+        });
+    let recreate_seq = recreate_event
+        .seq()
+        .expect("apply_format_change must carry seq");
+
+    // Ждём POST_SWITCH_CHUNKS_REQUIRED_SHORT штук `build_chunk` после
+    // recreate. Каждое срабатывание — одна chunk, накопительно даёт
+    // нужное число пост-switch чанков.
+    let mut last_seq = recreate_seq;
+    for i in 0..Consts::POST_SWITCH_CHUNKS_REQUIRED_SHORT {
+        let evt = recorder
+            .wait_for_probe(
+                |e| e.probe_name() == Some("build_chunk") && e.seq().is_some_and(|s| s > last_seq),
+                Duration::from_secs(5),
+            )
+            .unwrap_or_else(|| {
+                panic!(
+                    "T1 [{label}]: build_chunk #{i} after apply_format_change \
+                     (recreate.seq={recreate_seq}) did not fire within 5s."
+                )
+            });
+        last_seq = evt.seq().expect("build_chunk must carry seq");
+    }
+
+    // Сливаем все буферизованные chunks через next_chunk и анализируем.
+    let mut chunks: Vec<PcmChunk> = Vec::new();
+    loop {
         match PcmReader::next_chunk(&mut audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => {
-                let v = chunk.meta.variant_index;
-                let ts = chunk.meta.timestamp;
-                chunks.push(chunk);
-                if !switched && v == Some(variant_from) && ts >= pre_switch_target {
-                    audio
-                        .abr_handle()
-                        .expect("HLS Audio must expose an ABR handle")
-                        .set_mode(AbrMode::Manual(variant_to))
-                        .expect("set_mode");
-                    switched = true;
-                }
-                if switched && v == Some(variant_to) && first_to_idx.is_none() {
-                    first_to_idx = Some(chunks.len() - 1);
-                }
-                if let Some(start) = first_to_idx {
-                    let post = chunks.len() - start;
-                    if post >= Consts::POST_SWITCH_CHUNKS_REQUIRED_SHORT {
-                        break;
-                    }
-                }
-            }
-            Ok(ChunkOutcome::Pending { .. }) => {
-                kithara_platform::time::sleep(Duration::from_millis(5)).await;
-            }
-            Ok(ChunkOutcome::Eof { .. }) => break,
-            Err(e) => panic!("T1 [{variant_from}->{variant_to} {backend:?}]: decode error: {e}"),
+            Ok(ChunkOutcome::Chunk(chunk)) => chunks.push(chunk),
+            Ok(ChunkOutcome::Pending { .. }) | Ok(ChunkOutcome::Eof { .. }) => break,
+            Err(e) => panic!("T1 [{label}]: drain decode error: {e}"),
         }
     }
 
-    assert!(
-        switched,
-        "T1 [{variant_from}->{variant_to} {backend:?}]: warmup never reached \
-         pre_switch_target {pre_switch_target:?}; collected variants: {observed:?}",
-        observed = chunks
-            .iter()
-            .map(|c| c.meta.variant_index)
-            .collect::<Vec<_>>(),
-    );
-
-    let first_to = first_to_idx.unwrap_or_else(|| {
-        panic!(
-            "T1 [{variant_from}->{variant_to} {backend:?}]: switch did not propagate — \
-             collected {n} chunks, none on variant_to. Variant trace: {trace:?}",
-            n = chunks.len(),
-            trace = chunks
-                .iter()
-                .map(|c| c.meta.variant_index)
-                .collect::<Vec<_>>(),
-        )
-    });
+    let first_to_idx = chunks
+        .iter()
+        .position(|c| c.meta.variant_index == Some(variant_to))
+        .unwrap_or_else(|| {
+            panic!(
+                "T1 [{label}]: switch did not propagate — collected {n} chunks, \
+                 none on variant_to. Variant trace: {trace:?}",
+                n = chunks.len(),
+                trace = chunks
+                    .iter()
+                    .map(|c| c.meta.variant_index)
+                    .collect::<Vec<_>>(),
+            )
+        });
 
     for window in chunks.windows(2) {
         let prev = &window[0];
@@ -171,9 +188,8 @@ async fn t1_phase_continuity_wave(
         assert_eq!(
             next.meta.frame_offset,
             expected,
-            "T1 [{variant_from}->{variant_to} {backend:?}] A10: frame_offset not \
-             contiguous: prev={pf} (+{pframes} frames) ⇒ expected next.frame_offset={expected}, \
-             actual={af}. Drift = {drift} frames.",
+            "T1 [{label}] A10: frame_offset not contiguous: prev={pf} (+{pframes} frames) \
+             ⇒ expected next.frame_offset={expected}, actual={af}. Drift = {drift} frames.",
             pf = prev.meta.frame_offset,
             pframes = prev.meta.frames,
             af = next.meta.frame_offset,
@@ -181,13 +197,12 @@ async fn t1_phase_continuity_wave(
         );
     }
 
-    for (idx, chunk) in chunks.iter().enumerate().skip(first_to) {
+    for (idx, chunk) in chunks.iter().enumerate().skip(first_to_idx) {
         assert_ne!(
             chunk.meta.variant_index,
             Some(variant_from),
-            "T1 [{variant_from}->{variant_to} {backend:?}] A9: chunk #{idx} fell back \
-             to variant_from after the first variant_to chunk at #{first_to}. \
-             frame_offset={off}, variants[0..idx]={trace:?}",
+            "T1 [{label}] A9: chunk #{idx} fell back to variant_from after the first \
+             variant_to chunk at #{first_to_idx}. frame_offset={off}, variants[0..idx]={trace:?}",
             off = chunk.meta.frame_offset,
             trace = chunks
                 .iter()
@@ -197,10 +212,10 @@ async fn t1_phase_continuity_wave(
         );
     }
 
-    let pre_chunk = &chunks[first_to.checked_sub(1).expect(
+    let pre_chunk = &chunks[first_to_idx.checked_sub(1).expect(
         "T1: cannot calibrate phase — no pre-switch chunk before the first variant_to chunk",
     )];
-    let post_chunk = &chunks[first_to];
+    let post_chunk = &chunks[first_to_idx];
 
     let pre_measured = measured_phase(
         &pre_chunk.pcm,
@@ -208,27 +223,25 @@ async fn t1_phase_continuity_wave(
         0,
         pre_chunk.meta.spec.sample_rate,
         Consts::SINE_FREQ_HZ,
-    );
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "T1 [{label}] A1: pre-switch chunk magnitude below silence floor — \
+             fixture/decoder produced near-zero samples right before seam. frame_offset={off}",
+            off = pre_chunk.meta.frame_offset,
+        )
+    });
     let post_measured = measured_phase(
         &post_chunk.pcm,
         post_chunk.meta.spec.channels,
         0,
         post_chunk.meta.spec.sample_rate,
         Consts::SINE_FREQ_HZ,
-    );
-    let pre_measured = pre_measured.unwrap_or_else(|| {
+    )
+    .unwrap_or_else(|| {
         panic!(
-            "T1 [{variant_from}->{variant_to} {backend:?}] A1: pre-switch chunk \
-             magnitude below silence floor — fixture or decoder produced \
-             near-zero samples right before the seam. frame_offset={off}",
-            off = pre_chunk.meta.frame_offset,
-        )
-    });
-    let post_measured = post_measured.unwrap_or_else(|| {
-        panic!(
-            "T1 [{variant_from}->{variant_to} {backend:?}] A1: first post-switch \
-             chunk magnitude below silence floor — decoder dropped audio across the \
-             seam. frame_offset={off}, variant={v:?}",
+            "T1 [{label}] A1: first post-switch chunk magnitude below silence floor — \
+             decoder dropped audio across the seam. frame_offset={off}, variant={v:?}",
             off = post_chunk.meta.frame_offset,
             v = post_chunk.meta.variant_index,
         )
@@ -259,11 +272,10 @@ async fn t1_phase_continuity_wave(
 
     assert!(
         seam_drift.abs() < sample_period_eps,
-        "T1 [{variant_from}->{variant_to} {backend:?}] A1: phase drift across the \
-         seam exceeds one sample period (ε = {sample_period_eps} rad). \
-         pre_offset = {pre_offset} rad, post_offset = {post_offset} rad, \
-         seam_drift = {seam_drift} rad ≈ {drift_samples:.2} samples \
-         {direction}. \
+        "T1 [{label}] A1: phase drift across seam exceeds one sample period \
+         (ε = {sample_period_eps} rad). pre_offset = {pre_offset} rad, \
+         post_offset = {post_offset} rad, seam_drift = {seam_drift} rad ≈ \
+         {drift_samples:.2} samples {direction}. \
          pre.frame_offset = {pf} (variant {pv:?}), \
          post.frame_offset = {pof} (variant {pov:?}).",
         direction = if drift_samples >= 0.0 {

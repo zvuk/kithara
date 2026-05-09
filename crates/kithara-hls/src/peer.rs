@@ -206,17 +206,11 @@ impl Peer for HlsPeer {
     #[cfg_attr(
         all(),
         expect(
-            clippy::cognitive_complexity,
-            reason = "HLS scheduler poll_next is a 6-stage atomic state machine"
-        )
-    )]
-    #[cfg_attr(
-        all(),
-        expect(
             clippy::significant_drop_tightening,
             reason = "HLS scheduler guard scope is the atomicity contract"
         )
     )]
+    #[kithara::probe]
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         let mut guard = self.state.lock_sync();
         let Some(ref mut state) = *guard else {
@@ -682,7 +676,7 @@ fn build_batch(
 /// distinguishes init-segment fetches from media-segment fetches so
 /// the contract suite can count A5 (exactly one init fetch per
 /// `variant_to` switch) without URL-string parsing.
-#[kithara::probe(seek_epoch, segment_index, variant, plan_need_init)]
+#[kithara::probe(caller, seek_epoch, segment_index, variant, plan_need_init)]
 fn emit_fetch_cmd(
     state: &mut HlsState,
     state_arc: &Arc<Mutex<Option<HlsState>>>,

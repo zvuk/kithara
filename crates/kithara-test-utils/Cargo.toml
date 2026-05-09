@@ -77,3 +77,6 @@ tower-http = { workspace = true, optional = true }
 aes = { workspace = true, optional = true }
 cbc = { workspace = true, optional = true }
 usdt = { workspace = true, optional = true }
+# Backtrace capture for `#[kithara::probe]` caller-fn resolution.
+# Native-only: WASM has no useful frame symbols.
+backtrace = { workspace = true }

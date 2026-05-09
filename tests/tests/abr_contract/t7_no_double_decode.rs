@@ -18,7 +18,7 @@ use kithara::{
     decode::{DecoderBackend, PcmChunk},
     hls::AbrMode,
 };
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestServerHelper, TestTempDir, probe_capture, temp_dir};
 
 use super::helpers::{
@@ -75,7 +75,7 @@ async fn t7_no_double_decode(
     #[case] variant_to: usize,
     #[case] backend: DecoderBackend,
 ) {
-    let _recorder = probe_capture::install();
+    let recorder = probe_capture::install();
     let server = TestServerHelper::new().await;
     let created = server
         .create_hls(wave_fixture_4_variants())
@@ -84,63 +84,83 @@ async fn t7_no_double_decode(
     let url = created.master_url();
     let store = StoreOptions::new(temp_dir.path());
 
+    let label = format!("{variant_from}->{variant_to} {backend:?}");
     let mut audio = open_audio(&url, store, AbrMode::Manual(variant_from), backend, 3).await;
 
-    let pre_switch_target = Duration::from_secs_f64(Consts::PRE_SWITCH_TARGET_SECS);
-    let mut chunks: Vec<PcmChunk> = Vec::new();
-    let mut switched = false;
-    let mut first_to_idx: Option<usize> = None;
+    // Warmup — wait_for_probe(build_chunk, ts >= PRE_SWITCH_TARGET).
+    let pre_switch_target_us = (Consts::PRE_SWITCH_TARGET_SECS * 1_000_000.0) as u64;
+    recorder
+        .wait_for_probe(
+            |e| {
+                e.probe_name() == Some("build_chunk")
+                    && e.u64("timestamp")
+                        .is_some_and(|ts| ts >= pre_switch_target_us)
+            },
+            Duration::from_secs(20),
+        )
+        .unwrap_or_else(|| {
+            panic!("T7 [{label}]: warmup `build_chunk` >= PRE_SWITCH_TARGET not seen in 20s")
+        });
 
-    let deadline = Instant::now() + Duration::from_secs(35);
-    while Instant::now() < deadline {
-        let _ = audio.preload();
+    audio
+        .abr_handle()
+        .expect("HLS Audio must expose an ABR handle")
+        .set_mode(AbrMode::Manual(variant_to))
+        .expect("set_mode");
+
+    // Ждём пересоздание декодера — сигнал, что V_new chunks начались.
+    let recreate_event = recorder
+        .wait_for_probe(
+            |e| e.probe_name() == Some("apply_format_change"),
+            Duration::from_secs(15),
+        )
+        .unwrap_or_else(|| panic!("T7 [{label}]: apply_format_change not seen in 15s of set_mode"));
+    let recreate_seq = recreate_event
+        .seq()
+        .expect("apply_format_change must carry seq");
+
+    // Ждём POST_SWITCH_CHUNKS_REQUIRED_LONG штук `build_chunk` после
+    // recreate, чтобы регрессия (если есть) гарантированно произошла.
+    let mut last_seq = recreate_seq;
+    for i in 0..Consts::POST_SWITCH_CHUNKS_REQUIRED_LONG {
+        let evt = recorder
+            .wait_for_probe(
+                |e| e.probe_name() == Some("build_chunk") && e.seq().is_some_and(|s| s > last_seq),
+                Duration::from_secs(5),
+            )
+            .unwrap_or_else(|| {
+                panic!(
+                    "T7 [{label}]: build_chunk #{i} after apply_format_change \
+                     (recreate.seq={recreate_seq}) did not fire within 5s."
+                )
+            });
+        last_seq = evt.seq().expect("build_chunk must carry seq");
+    }
+
+    // Сливаем chunks через next_chunk и проверяем variant_index.
+    let mut chunks: Vec<PcmChunk> = Vec::new();
+    loop {
         match PcmReader::next_chunk(&mut audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => {
-                let v = chunk.meta.variant_index;
-                let ts = chunk.meta.timestamp;
-                chunks.push(chunk);
-                if !switched && v == Some(variant_from) && ts >= pre_switch_target {
-                    audio
-                        .abr_handle()
-                        .expect("HLS Audio must expose an ABR handle")
-                        .set_mode(AbrMode::Manual(variant_to))
-                        .expect("set_mode");
-                    switched = true;
-                }
-                if switched && v == Some(variant_to) && first_to_idx.is_none() {
-                    first_to_idx = Some(chunks.len() - 1);
-                }
-                if let Some(start) = first_to_idx {
-                    let post = chunks.len() - start;
-                    if post >= Consts::POST_SWITCH_CHUNKS_REQUIRED_LONG {
-                        break;
-                    }
-                }
-            }
-            Ok(ChunkOutcome::Pending { .. }) => {
-                kithara_platform::time::sleep(Duration::from_millis(5)).await;
-            }
-            Ok(ChunkOutcome::Eof { .. }) => break,
-            Err(e) => panic!("T7 [{variant_from}->{variant_to} {backend:?}]: decode error: {e}"),
+            Ok(ChunkOutcome::Chunk(chunk)) => chunks.push(chunk),
+            Ok(ChunkOutcome::Pending { .. }) | Ok(ChunkOutcome::Eof { .. }) => break,
+            Err(e) => panic!("T7 [{label}]: drain decode error: {e}"),
         }
     }
 
-    assert!(
-        switched,
-        "T7 [{variant_from}->{variant_to} {backend:?}]: warmup never reached \
-         pre_switch_target {pre_switch_target:?}"
-    );
-    let first_to = first_to_idx.unwrap_or_else(|| {
-        panic!(
-            "T7 [{variant_from}->{variant_to} {backend:?}]: switch did not propagate — \
-             collected {n} chunks, none on variant_to. Variant trace: {trace:?}",
-            n = chunks.len(),
-            trace = chunks
-                .iter()
-                .map(|c| c.meta.variant_index)
-                .collect::<Vec<_>>(),
-        )
-    });
+    let first_to = chunks
+        .iter()
+        .position(|c| c.meta.variant_index == Some(variant_to))
+        .unwrap_or_else(|| {
+            panic!(
+                "T7 [{label}]: switch did not propagate — collected {n} chunks, \
+                 none on variant_to. Variant trace: {trace:?}",
+                n = chunks.len(),
+                trace = chunks
+                    .iter()
+                    .map(|c| c.meta.variant_index)
+                    .collect::<Vec<_>>(),
+            )
+        });
 
     let regressions: Vec<(usize, &PcmChunk)> = chunks
         .iter()
@@ -150,9 +170,8 @@ async fn t7_no_double_decode(
         .collect();
     assert!(
         regressions.is_empty(),
-        "T7 [{variant_from}->{variant_to} {backend:?}] A9: {n} chunk(s) reverted \
-         to variant_from after the first variant_to chunk at index {first_to}: \
-         {indices:?}. Variant trace: {trace:?}",
+        "T7 [{label}] A9: {n} chunk(s) reverted to variant_from after the first \
+         variant_to chunk at index {first_to}: {indices:?}. Variant trace: {trace:?}",
         n = regressions.len(),
         indices = regressions.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
         trace = chunks

@@ -13,6 +13,7 @@ use std::{
 };
 
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, StreamSeekPastEof};
+use kithara_test_utils::kithara;
 use symphonia::core::{
     codecs::{
         CodecParameters,
@@ -181,6 +182,7 @@ impl Demuxer for SymphoniaDemuxer {
         self.track_info.duration
     }
 
+    #[kithara::probe]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         self.current_packet = None;
         loop {

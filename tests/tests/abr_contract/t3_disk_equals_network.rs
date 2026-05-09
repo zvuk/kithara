@@ -24,13 +24,8 @@
 
 use std::collections::BTreeSet;
 
-use kithara::{
-    assets::StoreOptions,
-    audio::{ChunkOutcome, PcmReader},
-    decode::DecoderBackend,
-    hls::AbrMode,
-};
-use kithara_platform::time::{Duration, Instant};
+use kithara::{assets::StoreOptions, audio::PcmReader, decode::DecoderBackend, hls::AbrMode};
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestServerHelper, TestTempDir, probe_capture, temp_dir};
 
 use super::helpers::{
@@ -58,60 +53,64 @@ async fn run_case(
     let temp_path = temp_dir.path().to_path_buf();
     let store = StoreOptions::new(temp_dir.path());
 
-    let mut audio = open_audio(&url, store, AbrMode::Manual(variant_from), backend, 3).await;
-
-    let pre_switch_target = Duration::from_secs_f64(Consts::PRE_SWITCH_TARGET_SECS);
-    let mut switched = false;
-    let mut post_count = 0usize;
-
-    let deadline = Instant::now() + Duration::from_secs(35);
-    while Instant::now() < deadline {
-        let _ = audio.preload();
-        match PcmReader::next_chunk(&mut audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => {
-                let v = chunk.meta.variant_index;
-                let ts = chunk.meta.timestamp;
-                if !switched && v == Some(variant_from) && ts >= pre_switch_target {
-                    audio
-                        .abr_handle()
-                        .expect("HLS Audio must expose an ABR handle")
-                        .set_mode(AbrMode::Manual(variant_to))
-                        .expect("set_mode");
-                    switched = true;
-                }
-                if switched && v == Some(variant_to) {
-                    post_count += 1;
-                    if post_count >= Consts::POST_SWITCH_CHUNKS_REQUIRED_SHORT {
-                        break;
-                    }
-                }
-            }
-            Ok(ChunkOutcome::Pending { .. }) => {
-                kithara_platform::time::sleep(Duration::from_millis(5)).await;
-            }
-            Ok(ChunkOutcome::Eof { .. }) => break,
-            Err(e) => panic!(
-                "T3 [{variant_from}->{variant_to} {backend:?} net={net}]: \
-                 decode error: {e}",
-                net = network.label(),
-            ),
-        }
-    }
+    let audio = open_audio(&url, store, AbrMode::Manual(variant_from), backend, 3).await;
 
     let label = format!(
         "{variant_from}->{variant_to} {backend:?} net={net}",
         net = network.label(),
     );
-    assert!(
-        switched,
-        "T3 [{label}]: warmup never reached pre_switch_target {pre_switch_target:?}"
-    );
-    let required_chunks = Consts::POST_SWITCH_CHUNKS_REQUIRED_SHORT;
-    assert!(
-        post_count >= required_chunks,
-        "T3 [{label}]: only collected {post_count} post-switch chunk(s) on \
-         variant_to (expected ≥ {required_chunks})"
-    );
+
+    // Warmup — ждём пока декодер выпустит chunk с timestamp >= PRE_SWITCH_TARGET.
+    let pre_switch_target_us = (Consts::PRE_SWITCH_TARGET_SECS * 1_000_000.0) as u64;
+    recorder
+        .wait_for_probe(
+            |e| {
+                e.probe_name() == Some("build_chunk")
+                    && e.u64("timestamp")
+                        .is_some_and(|ts| ts >= pre_switch_target_us)
+            },
+            Duration::from_secs(35),
+        )
+        .unwrap_or_else(|| {
+            panic!("T3 [{label}]: warmup `build_chunk` >= {pre_switch_target_us}μs not seen in 35s")
+        });
+
+    // Триггер switch.
+    audio
+        .abr_handle()
+        .expect("HLS Audio must expose an ABR handle")
+        .set_mode(AbrMode::Manual(variant_to))
+        .expect("set_mode");
+
+    // Ждём commit V_new seg-0 init — сигнал, что V_new пошёл по сети.
+    recorder
+        .wait_for_probe(
+            |e| {
+                e.probe_name() == Some("commit_segment")
+                    && e.u64("variant") == Some(variant_to as u64)
+                    && e.u64("seg_idx") == Some(0)
+                    && e.u64("init_len").is_some_and(|l| l > 0)
+            },
+            Duration::from_secs(10),
+        )
+        .unwrap_or_else(|| {
+            panic!("T3 [{label}]: commit_segment(V_new, 0, init_len>0) not seen in 10s")
+        });
+
+    // Дополнительные `commit_segment` для V_new чтобы убедиться, что
+    // post-switch фетчи реально записались.
+    recorder
+        .wait_for_probe(
+            |e| {
+                e.probe_name() == Some("commit_segment")
+                    && e.u64("variant") == Some(variant_to as u64)
+                    && e.u64("seg_idx").is_some_and(|s| s >= 1)
+            },
+            Duration::from_secs(10),
+        )
+        .unwrap_or_else(|| {
+            panic!("T3 [{label}]: commit_segment(V_new, seg_idx>=1) not seen in 10s")
+        });
 
     drop(audio);
 

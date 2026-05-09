@@ -17,7 +17,7 @@ ignored = ["serial_test"]
 [dependencies]
 kithara = { workspace = true, features = ["full", "test-utils"] }
 kithara-audio = { workspace = true, features = ["test-utils", "symphonia"] }
-kithara-abr = { workspace = true }
+kithara-abr = { workspace = true, features = ["test-utils"] }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }

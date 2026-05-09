@@ -42,10 +42,27 @@ pub(crate) fn expand_derive_entry(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Parsed `#[kithara::probe(...)]` arguments.
+///
+/// * `#[kithara::probe]` (no parens) — marker probe: emits only the
+///   cheap auto-fields (`seq`, `caller_file`, `caller_line`) and zero
+///   wire args. Use this for very-frequent production functions
+///   whose parameters are not `IntoProbeArg` (e.g.
+///   `Future::poll_next(&self, cx: &mut Context)`).
+/// * `#[kithara::probe(field1, field2, …)]` — explicit list of
+///   parameter idents to record as wire args (max 6, USDT arity
+///   ceiling). Each ident must match a real parameter name.
+/// * `#[kithara::probe(caller, …)]` — additionally capture
+///   `caller_fn` via `backtrace::trace`. Opt-in because backtrace
+///   resolution is ~ms per firing and blows up hot loops; do NOT
+///   use on `poll_next`-style hot probes.
+/// * `#[kithara::probe(probe_return)]` — record the function's
+///   return value through `Probe::record_probe`.
 #[derive(Default)]
 pub(crate) struct ProbeFilter {
     pub args: Option<Vec<Ident>>,
     pub probe_return: bool,
+    pub caller: bool,
 }
 
 pub(crate) fn parse_filter(attr: TokenStream2) -> syn::Result<ProbeFilter> {
@@ -59,6 +76,8 @@ pub(crate) fn parse_filter(attr: TokenStream2) -> syn::Result<ProbeFilter> {
     for ident in parsed {
         if ident == "probe_return" {
             filter.probe_return = true;
+        } else if ident == "caller" {
+            filter.caller = true;
         } else {
             args.push(ident);
         }
@@ -99,8 +118,19 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         }
     }
 
+    // `#[kithara::probe]` (no args, no `probe_return`) → marker
+    // probe with zero wire fields (only auto-injected `seq` /
+    // `caller_fn`). Explicit list `#[kithara::probe(a, b)]` → those
+    // parameters as wire fields. There is no implicit "all params"
+    // mode: passing zero args means zero args.
     let arg_idents: Vec<Ident> = match filter.args {
-        None => all_args,
+        None => {
+            // Consume `all_args` so unused-binding warnings don't
+            // surface on functions whose params are intentionally
+            // outside the probe.
+            let _ = all_args;
+            Vec::new()
+        }
         Some(names) => {
             if let Some(missing) = names
                 .iter()
@@ -172,6 +202,18 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         quote! { #block }
     };
 
+    let capture_caller_fn = if filter.caller {
+        quote! {
+            let __probe_caller_fn = ::kithara_test_utils::probes::caller_fn_above(#fn_name_str)
+                .unwrap_or_default();
+        }
+    } else {
+        quote! {
+            // Cheap-path probe: skip backtrace capture.
+            let __probe_caller_fn = "";
+        }
+    };
+
     let emit_entry_event = if probe_return {
         quote! {}
     } else {
@@ -179,19 +221,41 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
             #[cfg(any(test, feature = "test-utils"))]
             {
                 ::kithara_test_utils::probes::register_probes();
+                let __probe_caller = ::core::panic::Location::caller();
+                let __probe_seq: u64 = ::kithara_test_utils::probes::next_probe_seq();
+                #capture_caller_fn
                 ::kithara_test_utils::probes::#fire_fn(#fn_name_str, #(#probe_idents),*);
                 ::tracing::event!(
                     target: #target,
                     ::tracing::Level::TRACE,
                     probe = #fn_name_str,
+                    caller_file = __probe_caller.file(),
+                    caller_line = __probe_caller.line() as u64,
+                    caller_fn = __probe_caller_fn,
+                    seq = __probe_seq,
                     #(#tracing_fields),*
                 );
             }
         }
     };
 
+    // `#[track_caller]` is what makes `Location::caller()` resolve to
+    // the caller of this probe-attributed function rather than the
+    // function's own definition site. Gated on test/test-utils so
+    // production builds (probe = no-op) don't pay the cost.
+    let track_caller_attr = if probe_return {
+        // probe_return uses the derived `Probe::record_probe` path,
+        // which doesn't honour caller info today. Skip injection so
+        // we don't generate a misleading track_caller attribute on a
+        // function that won't read Location::caller().
+        quote! {}
+    } else {
+        quote! { #[cfg_attr(any(test, feature = "test-utils"), track_caller)] }
+    };
+
     Ok(quote! {
         #(#attrs)*
+        #track_caller_attr
         #vis #sig {
             #(#arg_consume)*
             #(#arg_bindings)*

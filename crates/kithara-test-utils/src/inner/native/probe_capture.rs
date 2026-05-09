@@ -39,7 +39,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, OnceLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use tracing::{Subscriber, field::Visit};
@@ -71,6 +71,64 @@ impl ProbeEvent {
     #[must_use]
     pub fn u64(&self, key: &str) -> Option<u64> {
         self.fields.get(key).copied()
+    }
+
+    /// Read a string field, e.g. `caller_file` set automatically by the
+    /// `#[kithara::probe]` expansion.
+    #[must_use]
+    pub fn str(&self, key: &str) -> Option<&str> {
+        self.string_fields.get(key).map(String::as_str)
+    }
+
+    /// Demangled symbol name of the function that called this probe.
+    ///
+    /// Resolved at firing time via
+    /// `kithara_test_utils::probes::caller_fn_above` (backtrace +
+    /// rustc demangling, with the probe machinery and the
+    /// probe-attributed frame itself filtered out). Available only on
+    /// non-wasm targets — empty string on wasm32.
+    ///
+    /// Tests should prefer this over `caller_file()` for call-site
+    /// assertions: the symbol name survives file moves and renames,
+    /// `caller_file` does not. Returns `None` when the macro could
+    /// not resolve the caller (older expansion, debug info stripped,
+    /// or an empty placeholder string was recorded).
+    #[must_use]
+    pub fn caller_fn(&self) -> Option<&str> {
+        let value = self.str("caller_fn")?;
+        if value.is_empty() { None } else { Some(value) }
+    }
+
+    /// File path of the call site that triggered this probe.
+    ///
+    /// Populated by `#[kithara::probe]` via `Location::caller()` paired
+    /// with the macro-injected `#[track_caller]` attribute, so the
+    /// recorded file is the caller's, not the probe-attributed
+    /// function's own definition. Returns `None` when the probe was
+    /// emitted by an older expansion or by the `probe_return` path
+    /// (which uses the derived `Probe::record_probe` trait method
+    /// without a caller hook).
+    #[must_use]
+    pub fn caller_file(&self) -> Option<&str> {
+        self.str("caller_file")
+    }
+
+    /// Line of the call site that triggered this probe. Pairs with
+    /// [`Self::caller_file`].
+    #[must_use]
+    pub fn caller_line(&self) -> Option<u64> {
+        self.u64("caller_line")
+    }
+
+    /// Process-wide monotonic sequence number for this probe firing.
+    ///
+    /// Increments via `kithara_test_utils::probes::next_probe_seq()`
+    /// each time `#[kithara::probe]` emits a tracing event. Tests can
+    /// sort by `seq` to obtain a deterministic ordering even when two
+    /// firings share the same `Instant`.
+    #[must_use]
+    pub fn seq(&self) -> Option<u64> {
+        self.u64("seq")
     }
 }
 
@@ -144,6 +202,38 @@ impl Recorder {
     #[must_use]
     pub fn start_at(&self) -> Instant {
         self.start_at
+    }
+
+    /// Block until a probe event matches `predicate` or `budget` elapses.
+    ///
+    /// Tests should drive their progress through this, not through
+    /// time-based polling loops on `Audio::read` / `Stream::len()`.
+    /// Each `#[kithara::probe]` site emits a `seq`-stamped event the
+    /// moment the production code reaches it; `wait_for_probe` makes
+    /// that arrival the test's clock instead of wall time.
+    ///
+    /// Returns the first event recorded by this recorder for which
+    /// `predicate` returns `true`. Includes events that arrived *before*
+    /// this call (so a probe that fires before the first poll isn't lost
+    /// to a race). Returns `None` only when `budget` elapsed without a
+    /// match.
+    ///
+    /// `budget` should be a real budget — fail the test if it elapses
+    /// rather than masking a hang. Polls every 5 ms inside the budget.
+    pub fn wait_for_probe<F>(&self, predicate: F, budget: Duration) -> Option<ProbeEvent>
+    where
+        F: Fn(&ProbeEvent) -> bool,
+    {
+        let deadline = Instant::now() + budget;
+        loop {
+            if let Some(evt) = self.snapshot().into_iter().find(|e| predicate(e)) {
+                return Some(evt);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 

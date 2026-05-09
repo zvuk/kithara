@@ -13,6 +13,7 @@ use std::{
 
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_stream::{ReaderChunkSignal, ReaderSeekSignal, SharedHooks, StreamContext};
+use kithara_test_utils::kithara;
 
 use crate::{
     codec::FrameCodec,
@@ -93,6 +94,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
     /// `&Frame<'_>`) so the caller can release the demuxer borrow before
     /// invoking this — needed because `Frame<'_>` borrows into the
     /// demuxer state and would conflict with `&mut self` here.
+    #[kithara::probe(timestamp, frames)]
     fn build_chunk(
         &mut self,
         buf: PcmBuf,

@@ -21,7 +21,7 @@ use kithara::{
     hls::AbrMode,
     stream::AudioCodec,
 };
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestServerHelper, TestTempDir, probe_capture, temp_dir};
 
 use super::helpers::{
@@ -94,11 +94,31 @@ async fn t8_natural_eof_complete_playback(
 
     let mut audio = open_audio(&url, store, AbrMode::Manual(variant), backend, 3).await;
 
-    let deadline = Instant::now() + Duration::from_secs(45);
+    // Ждём пока декодер дойдёт до timestamp близкого к концу трека.
+    // Wave fixture: SEGMENTS_PER_VARIANT * SEGMENT_DURATION_SECS секунд.
+    let track_total_secs = Consts::SEGMENT_DURATION_SECS * (Consts::SEGMENTS_PER_VARIANT as f64);
+    // Цельтесь чуть ниже EOF — декодер не выпустит build_chunk ровно
+    // на EOF (выходит DemuxOutcome::Eof, не Frame).
+    let near_eof_us = ((track_total_secs - Consts::SEGMENT_DURATION_SECS) * 1_000_000.0) as u64;
+    recorder
+        .wait_for_probe(
+            |e| {
+                e.probe_name() == Some("build_chunk")
+                    && e.u64("timestamp").is_some_and(|ts| ts >= near_eof_us)
+            },
+            Duration::from_secs(45),
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "T8: build_chunk near EOF (ts >= {near_eof_us}μs) not seen in 45s. \
+                 Backend = {backend:?}, variant = {variant}."
+            )
+        });
+
+    // Сливаем все буферизованные chunks через next_chunk до EOF.
     let mut total_frames: u64 = 0;
-    let mut saw_eof = false;
-    while Instant::now() < deadline {
-        let _ = audio.preload();
+    let saw_eof: bool;
+    loop {
         match PcmReader::next_chunk(&mut audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => {
                 assert_eq!(
@@ -113,7 +133,28 @@ async fn t8_natural_eof_complete_playback(
                 total_frames += u64::from(chunk.meta.frames);
             }
             Ok(ChunkOutcome::Pending { .. }) => {
-                kithara_platform::time::sleep(Duration::from_millis(5)).await;
+                // Декодер ещё не доехал до EOF — ждём следующий chunk
+                // через пробу.
+                let last_seq = recorder
+                    .snapshot()
+                    .last()
+                    .and_then(|e| e.seq())
+                    .unwrap_or(0);
+                if recorder
+                    .wait_for_probe(
+                        |e| {
+                            e.probe_name() == Some("build_chunk")
+                                && e.seq().is_some_and(|s| s > last_seq)
+                        },
+                        Duration::from_secs(10),
+                    )
+                    .is_none()
+                {
+                    panic!(
+                        "T8: drain stalled at Pending — no further build_chunk in 10s. \
+                         total_frames so far = {total_frames}."
+                    );
+                }
             }
             Ok(ChunkOutcome::Eof { .. }) => {
                 saw_eof = true;
@@ -123,10 +164,7 @@ async fn t8_natural_eof_complete_playback(
         }
     }
 
-    assert!(
-        saw_eof,
-        "T8: decoder did not reach natural EOF before deadline"
-    );
+    assert!(saw_eof, "T8: drain did not reach natural EOF");
 
     let codec = variant_codec(variant);
     let expected = expected_frames_per_variant(codec);

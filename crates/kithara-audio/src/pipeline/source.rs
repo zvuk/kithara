@@ -23,6 +23,7 @@ use kithara_stream::{
     ContainerFormat, MediaInfo, PendingReason, SourcePhase, SourceSeekAnchor, Stream, StreamType,
     Timeline,
 };
+use kithara_test_utils::kithara;
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -421,6 +422,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Apply pending format change: clear fence, seek to segment start, recreate decoder.
     /// Returns true if decoder was recreated successfully.
+    #[kithara::probe(target_offset)]
     fn apply_format_change(&mut self, new_info: &MediaInfo, target_offset: u64) -> bool {
         let current_pos = self.shared_stream.position();
         debug!(
@@ -702,6 +704,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// authoritative decoder type. True codec/container transitions
     /// (rare in real HLS) are surfaced through decode errors and
     /// recovered via `recover_from_decoder_seek_error`.
+    #[kithara::probe]
     fn detect_format_change(&self) -> Option<(MediaInfo, u64)> {
         let current_info = self.shared_stream.media_info()?;
         let target = resolve_format_change_target(self.session.media_info.as_ref(), &current_info)?;

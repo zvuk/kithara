@@ -14,6 +14,7 @@ use kithara_platform::{
     Mutex, RwLock,
     time::{Duration, Instant},
 };
+use kithara_test_utils::kithara;
 
 use super::{peer::PeerEntry, throttle::EventThrottleCache};
 use crate::{
@@ -31,6 +32,12 @@ impl AbrPeerId {
     #[must_use]
     pub fn new(id: NonZeroU64) -> Self {
         Self(id)
+    }
+}
+
+impl kithara_test_utils::probes::IntoProbeArg for AbrPeerId {
+    fn into_probe_arg(self) -> u64 {
+        self.0.get()
     }
 }
 
@@ -143,6 +150,7 @@ impl AbrController {
         self.tick(peer_id, Instant::now());
     }
 
+    #[kithara::probe(peer_id, mode)]
     pub(crate) fn on_mode_changed(&self, peer_id: AbrPeerId, mode: AbrMode) {
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(bus) = entry.bus()

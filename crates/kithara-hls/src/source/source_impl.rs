@@ -270,6 +270,7 @@ impl Source for HlsSource {
         SourcePhase::Waiting
     }
 
+    #[kithara::probe(offset)]
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let read_epoch = self.coord.timeline().seek_epoch();
         let (seg, effective_total) = {

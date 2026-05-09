@@ -18,12 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use kithara::{
-    assets::StoreOptions,
-    audio::{ChunkOutcome, PcmReader},
-    decode::{DecoderBackend, PcmChunk},
-    hls::AbrMode,
-};
+use kithara::{assets::StoreOptions, audio::PcmReader, decode::DecoderBackend, hls::AbrMode};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::{TestServerHelper, TestTempDir, probe_capture, temp_dir};
 
@@ -52,7 +47,12 @@ async fn run_case(
     let url = created.master_url();
     let store = StoreOptions::new(temp_dir.path());
 
-    let mut audio = open_audio(
+    let label = format!(
+        "{variant_from}->{variant_to} {backend:?} pf={prefetch_count} net={net}",
+        net = network.label(),
+    );
+
+    let audio = open_audio(
         &url,
         store,
         AbrMode::Manual(variant_from),
@@ -61,72 +61,49 @@ async fn run_case(
     )
     .await;
 
-    let pre_switch_target = Duration::from_secs_f64(Consts::PRE_SWITCH_TARGET_SECS);
-    let mut chunks: Vec<PcmChunk> = Vec::new();
-    let mut switched = false;
-    let mut first_to_idx: Option<usize> = None;
-    let mut switch_at: Option<Instant> = None;
-    let mut last_pre_chunk_ts: Duration = Duration::ZERO;
+    // Warmup — последний pre-switch decode timestamp берём прямо из пробы.
+    let pre_switch_target_us = (Consts::PRE_SWITCH_TARGET_SECS * 1_000_000.0) as u64;
+    let warmup_event = recorder
+        .wait_for_probe(
+            |e| {
+                e.probe_name() == Some("build_chunk")
+                    && e.u64("timestamp")
+                        .is_some_and(|ts| ts >= pre_switch_target_us)
+            },
+            Duration::from_secs(20),
+        )
+        .unwrap_or_else(|| {
+            panic!("T2 [{label}]: build_chunk >= PRE_SWITCH_TARGET not seen in 20s")
+        });
+    let last_pre_chunk_ts_us = warmup_event
+        .u64("timestamp")
+        .expect("build_chunk must carry timestamp");
+    let last_pre_chunk_ts = Duration::from_micros(last_pre_chunk_ts_us);
 
-    let deadline = Instant::now() + Duration::from_secs(35);
-    while Instant::now() < deadline {
-        let _ = audio.preload();
-        match PcmReader::next_chunk(&mut audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => {
-                let v = chunk.meta.variant_index;
-                let ts = chunk.meta.timestamp;
-                if v == Some(variant_from) {
-                    last_pre_chunk_ts = ts;
-                }
-                chunks.push(chunk);
-                if !switched && v == Some(variant_from) && ts >= pre_switch_target {
-                    audio
-                        .abr_handle()
-                        .expect("HLS Audio must expose an ABR handle")
-                        .set_mode(AbrMode::Manual(variant_to))
-                        .expect("set_mode");
-                    switched = true;
-                    switch_at = Some(Instant::now());
-                }
-                if switched && v == Some(variant_to) && first_to_idx.is_none() {
-                    first_to_idx = Some(chunks.len() - 1);
-                }
-                if let Some(start) = first_to_idx {
-                    let post = chunks.len() - start;
-                    if post >= Consts::POST_SWITCH_CHUNKS_REQUIRED_SHORT {
-                        break;
-                    }
-                }
-            }
-            Ok(ChunkOutcome::Pending { .. }) => {
-                kithara_platform::time::sleep(Duration::from_millis(5)).await;
-            }
-            Ok(ChunkOutcome::Eof { .. }) => break,
-            Err(e) => panic!(
-                "T2 [{variant_from}->{variant_to} {backend:?} pf={prefetch_count} \
-                 net={net}]: decode error: {e}",
-                net = network.label(),
-            ),
-        }
-    }
+    audio
+        .abr_handle()
+        .expect("HLS Audio must expose an ABR handle")
+        .set_mode(AbrMode::Manual(variant_to))
+        .expect("set_mode");
+    let switch_at = Instant::now();
 
-    let label = format!(
-        "{variant_from}->{variant_to} {backend:?} pf={prefetch_count} net={net}",
-        net = network.label(),
-    );
-    assert!(
-        switched,
-        "T2 [{label}]: warmup never reached pre_switch_target {pre_switch_target:?}"
-    );
+    // Ждём commit V_new seg-0 init — после этого fetch_emits для V_new
+    // обязаны быть в логе пробы.
+    recorder
+        .wait_for_probe(
+            |e| {
+                e.probe_name() == Some("commit_segment")
+                    && e.u64("variant") == Some(variant_to as u64)
+                    && e.u64("seg_idx") == Some(0)
+                    && e.u64("init_len").is_some_and(|l| l > 0)
+            },
+            Duration::from_secs(15),
+        )
+        .unwrap_or_else(|| {
+            panic!("T2 [{label}]: commit_segment(V_new, 0, init_len>0) not seen in 15s")
+        });
 
-    let commit_at = first_abr_commit(&recorder, variant_from, variant_to).unwrap_or_else(|| {
-        switch_at.unwrap_or_else(|| {
-            panic!(
-                "T2 [{label}]: neither record_abr_variant_committed probe nor \
-                     local switch wall-clock available — switch never committed"
-            )
-        })
-    });
+    let commit_at = first_abr_commit(&recorder, variant_from, variant_to).unwrap_or(switch_at);
 
     let playback_floor_idx =
         (last_pre_chunk_ts.as_secs_f64() / Consts::SEGMENT_DURATION_SECS) as usize;

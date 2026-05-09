@@ -5,105 +5,30 @@
 //! `InitRangeResolution { outcome, variant, committed_count,
 //! seg_idx_with_init, range }`. The `#[kithara::probe(probe_return)]`
 //! attribute on that function makes the resolution itself emit a
-//! `init_segment_range_for_variant` probe (probe-name picked
-//! from the `Probe` trait's `record_probe(name)` argument the macro
-//! injects on return).
+//! `init_segment_range_for_variant` probe.
 //!
 //! Outcome wire encoding (from `InitRangeOutcome::into_probe_arg`):
 //!
-//! * 0 — `OkSeg0` — segment 0 was already committed and its range
-//!   came directly from `StreamIndex::item_range`.
-//! * 1 — `OkMetadataFallback` — the byte map for seg-0 was not yet
-//!   committed; range came from playlist metadata.
-//! * 2 — `OkSeg0ViaRange` — the init-bearing segment was not seg-0
-//!   itself, range was synthesised from seg-0's committed range.
-//! * 3..6 — `None*` — all the failure paths.
+//! * 0 — `OkSeg0`
+//! * 1 — `OkMetadataFallback`
+//! * 2 — `OkSeg0ViaRange`
+//! * 3..6 — `None*`
 //!
-//! For the contract suite all fixtures present every variant's seg-0
-//! upfront with an explicit `init_url`, so the only correct outcome
-//! is **`OkSeg0` (0)**. Any other outcome means the resolver fell
-//! through a fallback path; both are code smells (workarounds for
-//! commit-ordering bugs that the contract tests must catch).
+//! Для контрактного fixture seg-0 каждого варианта закоммичен upfront
+//! с explicit `init_url`, так что единственный корректный outcome —
+//! **`OkSeg0` (0)**.
+//!
+//! Probe-driven прогресс. Warmup и переходы между вариантами
+//! отслеживаются через `build_chunk(timestamp)` и `apply_format_change`.
 
-use kithara::{
-    assets::StoreOptions,
-    audio::{Audio, ChunkOutcome, PcmReader},
-    decode::DecoderBackend,
-    hls::{AbrMode, Hls},
-    stream::Stream,
-};
-use kithara_platform::time::{Duration, Instant};
+use kithara::{assets::StoreOptions, audio::PcmReader, decode::DecoderBackend, hls::AbrMode};
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestServerHelper, TestTempDir, probe_capture, temp_dir};
 
 use super::helpers::{
     Consts,
     params::{open_audio, wave_fixture_4_variants},
 };
-
-/// Drive the audio through enough chunks so the demuxer has at least
-/// requested `init_segment_range()` once per variant we'll switch to.
-async fn warmup_then_switch_through_all_variants(
-    audio: &mut Audio<Stream<Hls>>,
-    backend: DecoderBackend,
-) {
-    use kithara::audio::ReadOutcome;
-    let _ = backend;
-
-    let warmup_deadline = Instant::now() + Duration::from_secs(8);
-    let mut buf = vec![0.0f32; 4096];
-    let mut warmup_samples = 0u64;
-    while Instant::now() < warmup_deadline && warmup_samples < 8000 {
-        let _ = audio.preload();
-        match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
-            Ok(ReadOutcome::Pending { .. }) => {
-                kithara_platform::time::sleep(Duration::from_millis(5)).await;
-            }
-            Ok(ReadOutcome::Eof { .. }) => break,
-            Err(e) => panic!("T6: decode error during warmup: {e}"),
-        }
-    }
-    assert!(
-        warmup_samples > 0,
-        "T6: warmup failed to produce any samples"
-    );
-
-    for variant in [
-        Consts::VARIANT_AAC_LQ,
-        Consts::VARIANT_AAC_MQ,
-        Consts::VARIANT_AAC_HQ,
-        Consts::VARIANT_FLAC,
-    ] {
-        audio
-            .abr_handle()
-            .expect("HLS Audio must expose an ABR handle")
-            .set_mode(AbrMode::Manual(variant))
-            .expect("set_mode");
-        let deadline = Instant::now() + Duration::from_secs(6);
-        let mut found_chunk_on_variant = false;
-        while Instant::now() < deadline {
-            let _ = audio.preload();
-            match PcmReader::next_chunk(audio) {
-                Ok(ChunkOutcome::Chunk(chunk)) => {
-                    if chunk.meta.variant_index == Some(variant) {
-                        found_chunk_on_variant = true;
-                        break;
-                    }
-                }
-                Ok(ChunkOutcome::Pending { .. }) => {
-                    kithara_platform::time::sleep(Duration::from_millis(5)).await;
-                }
-                Ok(ChunkOutcome::Eof { .. }) => break,
-                Err(e) => panic!("T6: decode error during variant walk: {e}"),
-            }
-        }
-        assert!(
-            found_chunk_on_variant,
-            "T6: never received a chunk on variant {variant} after set_mode \
-             — switch did not propagate end-to-end (probe data not collectible)"
-        );
-    }
-}
 
 #[kithara::test(
     tokio,
@@ -127,7 +52,7 @@ async fn t6_init_range_outcome_is_ok_seg0(temp_dir: TestTempDir, #[case] backend
     let url = created.master_url();
     let store = StoreOptions::new(temp_dir.path());
 
-    let mut audio = open_audio(
+    let audio = open_audio(
         &url,
         store,
         AbrMode::Manual(Consts::VARIANT_AAC_LQ),
@@ -136,7 +61,53 @@ async fn t6_init_range_outcome_is_ok_seg0(temp_dir: TestTempDir, #[case] backend
     )
     .await;
 
-    warmup_then_switch_through_all_variants(&mut audio, backend).await;
+    // Warmup — ждём пока декодер выпустит chunk с timestamp >= 1s.
+    recorder
+        .wait_for_probe(
+            |e| {
+                e.probe_name() == Some("build_chunk")
+                    && e.u64("timestamp").is_some_and(|ts| ts >= 1_000_000)
+            },
+            Duration::from_secs(15),
+        )
+        .unwrap_or_else(|| panic!("T6: warmup `build_chunk` >= 1s not seen in 15s"));
+
+    // Переключаемся через все варианты, для каждого ждём
+    // `apply_format_change` — сигнал, что декодер пересоздан.
+    for variant in [
+        Consts::VARIANT_AAC_LQ,
+        Consts::VARIANT_AAC_MQ,
+        Consts::VARIANT_AAC_HQ,
+        Consts::VARIANT_FLAC,
+    ] {
+        // Снимем seq до set_mode чтобы фильтровать «новый» recreate.
+        let pre_seq = recorder
+            .snapshot()
+            .last()
+            .and_then(|e| e.seq())
+            .unwrap_or(0);
+
+        audio
+            .abr_handle()
+            .expect("HLS Audio must expose an ABR handle")
+            .set_mode(AbrMode::Manual(variant))
+            .expect("set_mode");
+
+        recorder
+            .wait_for_probe(
+                |e| {
+                    e.probe_name() == Some("apply_format_change")
+                        && e.seq().is_some_and(|s| s > pre_seq)
+                },
+                Duration::from_secs(8),
+            )
+            .unwrap_or_else(|| {
+                panic!(
+                    "T6: apply_format_change after set_mode(Manual({variant})) \
+                     не сработал в 8s — switch не дошёл до recreate. Backend = {backend:?}."
+                )
+            });
+    }
 
     let init_range_for_variant: Vec<_> =
         recorder.events_with_probe("init_segment_range_for_variant");
@@ -157,8 +128,8 @@ async fn t6_init_range_outcome_is_ok_seg0(temp_dir: TestTempDir, #[case] backend
             "T6: init_segment_range_for_variant event #{idx} returned \
              non-OkSeg0 outcome={outcome} for variant={variant} \
              (committed_count={committed}, seg_idx_with_init={seg_idx_with_init:?}). \
-             The fixture always commits seg-0 upfront with an explicit init_url, \
-             so the resolver should never need a fallback path. Backend = {backend:?}."
+             Fixture commits seg-0 upfront with explicit init_url, \
+             resolver should never need a fallback path. Backend = {backend:?}."
         );
     }
 }

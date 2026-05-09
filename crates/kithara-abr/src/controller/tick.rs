@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 
 use kithara_events::{AbrEvent, AbrReason, BandwidthSource, VariantInfo};
 use kithara_platform::time::{Duration, Instant};
+use kithara_test_utils::kithara;
 
 use super::{
     core::{AbrController, AbrPeerId},
@@ -66,6 +67,7 @@ impl AbrController {
         self.tick(peer_id, now);
     }
 
+    #[kithara::probe(peer_id)]
     pub(super) fn tick(&self, peer_id: AbrPeerId, now: Instant) {
         let Some(ctx) = TickContext::resolve(self, peer_id) else {
             return;

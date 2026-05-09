@@ -22,39 +22,39 @@
 /// constant out as `Consts::SAMPLE_RATE` etc. — that satisfies the
 /// `style.multiple-private-module-consts` lint and keeps the values
 /// reachable from every T-test through one `use`.
-pub(super) struct Consts;
+pub(crate) struct Consts;
 
 impl Consts {
-    pub(super) const CHANNELS: u16 = 2;
+    pub(crate) const CHANNELS: u16 = 2;
     /// Length of the post-seek observation window, in chunks. Long
     /// enough to expose any late `variant_from` chunk that would
     /// indicate a double-decode regression (T7).
-    pub(super) const POST_SWITCH_CHUNKS_REQUIRED_LONG: usize = 12;
+    pub(crate) const POST_SWITCH_CHUNKS_REQUIRED_LONG: usize = 12;
     /// Number of post-switch chunks the suite must observe before
     /// asserting on phase / fetch-count contracts. Four chunks span
     /// roughly one segment of audio at the test's sample rate.
-    pub(super) const POST_SWITCH_CHUNKS_REQUIRED_SHORT: usize = 4;
+    pub(crate) const POST_SWITCH_CHUNKS_REQUIRED_SHORT: usize = 4;
     /// Pre-switch playhead position (seconds) at which T1, T2, T3,
     /// T5 and T7 commit their `set_mode` call. Far enough into the
     /// fixture for the warmup decoder to be in steady state, but
     /// well before the natural EOF.
-    pub(super) const PRE_SWITCH_TARGET_SECS: f64 = 4.0;
-    pub(super) const SAMPLE_RATE: u32 = 44_100;
-    pub(super) const SEGMENT_DURATION_SECS: f64 = 2.0;
-    pub(super) const SEGMENTS_PER_VARIANT: usize = 12;
-    pub(super) const SINE_FREQ_HZ: f64 = 440.0;
+    pub(crate) const PRE_SWITCH_TARGET_SECS: f64 = 4.0;
+    pub(crate) const SAMPLE_RATE: u32 = 44_100;
+    pub(crate) const SEGMENT_DURATION_SECS: f64 = 2.0;
+    pub(crate) const SEGMENTS_PER_VARIANT: usize = 12;
+    pub(crate) const SINE_FREQ_HZ: f64 = 440.0;
     /// AAC shq (variant 2).
-    pub(super) const VARIANT_AAC_HQ: usize = 2;
+    pub(crate) const VARIANT_AAC_HQ: usize = 2;
     /// AAC slq (variant 0).
-    pub(super) const VARIANT_AAC_LQ: usize = 0;
+    pub(crate) const VARIANT_AAC_LQ: usize = 0;
     /// AAC smq (variant 1).
-    pub(super) const VARIANT_AAC_MQ: usize = 1;
-    pub(super) const VARIANT_BANDWIDTHS: [u64; 4] = [66_000, 134_000, 270_000, 988_000];
+    pub(crate) const VARIANT_AAC_MQ: usize = 1;
+    pub(crate) const VARIANT_BANDWIDTHS: [u64; 4] = [66_000, 134_000, 270_000, 988_000];
     /// FLAC slossless (variant 3).
-    pub(super) const VARIANT_FLAC: usize = 3;
+    pub(crate) const VARIANT_FLAC: usize = 3;
 }
 
-pub(super) mod phase_oracle {
+pub(crate) mod phase_oracle {
     //! 440 Hz sine phase reference per the contract A1.
     //!
     //! The wave fixture renders an identical
@@ -207,7 +207,7 @@ pub(super) mod phase_oracle {
     }
 }
 
-pub(super) mod params {
+pub(crate) mod params {
     //! 4-variant production-shaped wave fixture: 3×AAC LQ/MQ/HQ +
     //! 1×FLAC, all rendering the same 440 Hz sine through the
     //! fixture-server signal pipeline. Network profiles cover the
@@ -306,7 +306,15 @@ pub(super) mod params {
             .with_cancel(cancel)
             .with_initial_abr_mode(abr)
             .with_download_batch_size(prefetch_count);
-        let config = AudioConfig::<Hls>::new(hls_config).with_decoder_backend(backend);
+        // pcm_buffer_chunks по умолчанию 10 (~1s аудио). RED-тестам
+        // нужно ждать определённые пробы (например, decoder build_chunk
+        // на timestamp >= 4s) без активного потребителя — поэтому буфер
+        // расширен до ~30s, чтобы декодер фоновым worker'ом работал
+        // автономно и наполнял канал, пока тестовый поток ждёт через
+        // `wait_for_probe`.
+        let config = AudioConfig::<Hls>::new(hls_config)
+            .with_decoder_backend(backend)
+            .with_pcm_buffer_chunks(300);
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
             .unwrap_or_else(|err| panic!("audio open failed for {url}: {err}"));
@@ -315,7 +323,7 @@ pub(super) mod params {
     }
 }
 
-pub(super) mod counters {
+pub(crate) mod counters {
     //! Typed views over the production probes that the contract
     //! suite asserts on. Each helper returns concrete, typed events —
     //! tests should NOT hand-decode tracing fields.
@@ -438,7 +446,7 @@ pub(super) mod counters {
     }
 }
 
-pub(super) mod assertions {
+pub(crate) mod assertions {
     //! Equality predicates with exact failure messages.
     use std::{collections::BTreeSet, fmt::Debug};
 
