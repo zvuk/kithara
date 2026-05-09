@@ -208,20 +208,22 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
             request_id,
         )
         .await;
-        deliver(DeliveryContext {
-            result,
-            writer,
-            on_complete_cb,
-            abr,
-            peer_id,
-            started,
+        deliver(
             request_id,
-            bus,
-            target: internal.response,
-            peer_cancel: &peer_cancel,
-            epoch_cancel: epoch_cancel.as_ref(),
-            downloader_cancel: &downloader_cancel,
-        })
+            DeliveryContext {
+                result,
+                writer,
+                on_complete_cb,
+                abr,
+                peer_id,
+                started,
+                bus,
+                target: internal.response,
+                peer_cancel: &peer_cancel,
+                epoch_cancel: epoch_cancel.as_ref(),
+                downloader_cancel: &downloader_cancel,
+            },
+        )
         .await;
         inflight.fetch_sub(1, Ordering::Relaxed);
         fetch_waker.wake();
@@ -231,6 +233,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
 /// Race `fut` against a `soft_timeout` timer. When the timer wins, publish
 /// [`DownloaderEvent::LoadSlow`] on `bus` (if any) and keep waiting for
 /// `fut` to complete. Does not abort the underlying request.
+#[kithara::probe(request_id)]
 async fn with_soft_timeout<F, T>(
     fut: F,
     soft: Duration,
@@ -257,6 +260,7 @@ where
 }
 
 /// Establish an HTTP connection and return a [`FetchResponse`].
+#[kithara::probe(request_id)]
 async fn establish(
     client: &HttpClient,
     chunk_timeout: Duration,
@@ -362,14 +366,14 @@ struct DeliveryContext<'a> {
     epoch_cancel: Option<&'a CancellationToken>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,
     writer: Option<super::cmd::WriterFn>,
-    request_id: RequestId,
     target: ResponseTarget,
     result: Result<FetchResponse, NetError>,
 }
 
 /// Route a fetch result to its target and publish the matching
 /// `DownloaderEvent` on `bus` (if any).
-async fn deliver(ctx: DeliveryContext<'_>) {
+#[kithara::probe(request_id)]
+async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
     let DeliveryContext {
         target,
         result,
@@ -378,7 +382,6 @@ async fn deliver(ctx: DeliveryContext<'_>) {
         abr,
         peer_id,
         started,
-        request_id,
         bus,
         peer_cancel,
         epoch_cancel,
