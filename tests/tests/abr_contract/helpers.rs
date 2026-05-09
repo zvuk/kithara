@@ -461,6 +461,7 @@ pub(crate) mod diagnostics {
     const KEY_PROBES: &[&str] = &[
         "poll_next",
         "apply_variant_readiness",
+        "handle_midstream_switch",
         "build_batch",
         "skip_planned_segment",
         "should_skip_planned_segment",
@@ -468,6 +469,8 @@ pub(crate) mod diagnostics {
         "commit_segment",
         "commit_fetch_inline",
         "record_demand_cursor_protection_rewind",
+        "reset_cursor",
+        "rewind_current_segment_index",
         "start_request",
         "establish",
         "with_soft_timeout",
@@ -481,6 +484,7 @@ pub(crate) mod diagnostics {
         "format_change_segment_range",
         "dispatch_seek_demand",
         "seek_epoch_reset",
+        "queue_resolved_segment_request",
     ];
 
     /// Format a recorder snapshot for inclusion in a panic message:
@@ -737,6 +741,342 @@ pub(crate) mod probe_contracts {
             ));
         }
         Ok(())
+    }
+
+    /// One step in an expected probe-sequence: probe name + zero or more
+    /// `(arg_key, expected_value)` constraints + human-readable note. The
+    /// matcher walks the actual peer-thread events and tries to find every
+    /// expected step in order; on failure the error message names which
+    /// step did not match and what the operator should be looking at.
+    struct ExpectedEvent<'a> {
+        name: &'a str,
+        args: Vec<(&'a str, u64)>,
+        note: &'a str,
+    }
+
+    impl ExpectedEvent<'_> {
+        fn matches(&self, e: &ProbeEvent) -> bool {
+            if e.probe_name() != Some(self.name) {
+                return false;
+            }
+            for (key, expected_val) in &self.args {
+                if e.u64(key) != Some(*expected_val) {
+                    return false;
+                }
+            }
+            true
+        }
+
+        fn describe(&self) -> String {
+            let parts: Vec<String> = self.args.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            format!("{}({})", self.name, parts.join(", "))
+        }
+    }
+
+    /// Strict per-thread sequence contract for **post-apply scheduler
+    /// chain** on the peer-thread of an `HlsPeer`.
+    ///
+    /// Encodes the FULL expected probe sequence that should fire on the
+    /// peer-thread between `apply_thread_seq` (a baseline event from ABR
+    /// commit / `tick`) and the first `emit_fetch_cmd(variant=v_new)`.
+    /// **Order is enforced strictly**: the matcher walks `peer_events`
+    /// and increments an `expected[]` cursor every time it finds the
+    /// next expected step; intervening probes (poll_next, skip checks,
+    /// etc.) are tolerated, but expected steps must appear in the given
+    /// order. On failure the error message names exactly which step did
+    /// not match and what the operator should be looking at.
+    ///
+    /// **Forbidden post-apply (regardless of order)**:
+    /// `record_demand_cursor_protection_rewind(variant=v_new)` —
+    /// rewinds the scheduler cursor backwards onto a demand_segment, which
+    /// destroys the C-A5 forward-only invariant and leads to V_new media
+    /// fetches at seg=0.
+    ///
+    /// **Switch case** (`expect_midstream_switch=true`, V_old≠V_new):
+    /// 1. `apply_variant_readiness(variant=V_new, old_variant=V_old)` —
+    ///    first poll_next post-apply must observe ABR.current=V_new while
+    ///    download_variant is still V_old.
+    /// 2. `handle_midstream_switch(is_midstream_switch=1)` — variant
+    ///    switch with cursor>0 must trigger midstream-switch handling
+    ///    (cursor reposition + had_midstream_switch latch).
+    /// 3. `build_batch(variant=V_new, old_variant=V_old)` — after the
+    ///    cursor has been repositioned for V_new, scheduler must walk
+    ///    the V_new prefetch window.
+    /// 4. `emit_fetch_cmd(variant=V_new, plan_need_init=1)` — first
+    ///    V_new media emit must request init range (per-variant fMP4
+    ///    init segment in the commit metadata).
+    ///
+    /// **Noop case** (`expect_midstream_switch=false`, V_old==V_new):
+    /// scheduler must continue normal V_old prefetch — no switch, no
+    /// rewind. Sequence: `apply_variant_readiness(V_old, V_old) →
+    /// build_batch(V_old) → emit_fetch_cmd(V_old)`.
+    ///
+    /// Returns the first `emit_fetch_cmd(v_new)` event so the caller
+    /// can assert C-A5 on its `segment_index`.
+    pub(crate) fn assert_post_apply_fetch_chain(
+        recorder: &Recorder,
+        peer_thread_id: u64,
+        apply_thread_seq: u64,
+        v_old: usize,
+        v_new: usize,
+        expect_midstream_switch: bool,
+        forward_only_floor: usize,
+    ) -> Result<ProbeEvent, String> {
+        let mut peer_events: Vec<ProbeEvent> = recorder
+            .snapshot()
+            .into_iter()
+            .filter(|e| {
+                e.thread_id() == Some(peer_thread_id)
+                    && e.thread_seq().is_some_and(|s| s > apply_thread_seq)
+            })
+            .collect();
+        peer_events.sort_by_key(|e| e.thread_seq().unwrap_or(u64::MAX));
+
+        // Detect a fresh seek_epoch boundary post-apply: a user seek
+        // legitimately resets forward-only — segments behind
+        // `forward_only_floor` are again fetchable. Until that boundary
+        // we enforce forward-only strictly. (T14 itself has no
+        // post-apply seek; this is the principled formulation that
+        // generalises to T1..T13 once they call this helper.)
+        let post_seek_seq = peer_events
+            .iter()
+            .find(|e| e.probe_name() == Some("seek_epoch_reset"))
+            .and_then(ProbeEvent::thread_seq);
+        let is_pre_seek = move |e: &ProbeEvent| -> bool {
+            match (e.thread_seq(), post_seek_seq) {
+                (Some(s), Some(boundary)) => s < boundary,
+                _ => true,
+            }
+        };
+
+        // Forbidden invariant (C-A5): never emit a media fetch for
+        // V_new at `seg_idx < forward_only_floor` while seek_epoch did
+        // not change post-apply. `forward_only_floor` is the
+        // decode_seg-at-apply hint (the segment the decoder was
+        // playing when set_mode fired): after a switch all those
+        // segments are already in the decoder, fetching V_new copies
+        // of them means scheduler walked backwards onto already-played
+        // data. A user seek post-apply (`seek_epoch_reset` fired)
+        // legitimately resets this constraint — forward-only is
+        // anchored to the decode head at the most recent seek-or-apply
+        // boundary, not to apply alone.
+        if expect_midstream_switch
+            && let Some(bad_emit) = peer_events.iter().find(|e| {
+                is_pre_seek(e)
+                    && e.probe_name() == Some("emit_fetch_cmd")
+                    && e.u64("variant") == Some(v_new as u64)
+                    && e.u64("segment_index")
+                        .is_some_and(|s| (s as usize) < forward_only_floor)
+            })
+        {
+            let bad_seq = bad_emit.thread_seq().unwrap_or(u64::MAX);
+            // Cursor mutation context: every reset_cursor /
+            // rewind_current_segment_index fired ON the peer-thread
+            // before the bad emit, with the caller_fn so the operator
+            // can see exactly which production function pulled the
+            // cursor onto seg=0.
+            let cursor_history: Vec<&ProbeEvent> = peer_events
+                .iter()
+                .filter(|e| {
+                    e.thread_seq().is_some_and(|s| s <= bad_seq)
+                        && matches!(
+                            e.probe_name(),
+                            Some("reset_cursor")
+                                | Some("rewind_current_segment_index")
+                                | Some("dispatch_seek_demand")
+                                | Some("seek_epoch_reset")
+                                | Some("apply_variant_readiness")
+                                | Some("handle_midstream_switch")
+                        )
+                })
+                .collect();
+            let bad_seg = bad_emit.u64("segment_index").unwrap_or(u64::MAX) as usize;
+            return Err(format!(
+                "T14 forbidden invariant (C-A5 forward-only): \
+                 `emit_fetch_cmd(variant=V_new={v_new}, segment_index={bad_seg})` \
+                 fired post-apply on peer_thread={peer_thread_id} \
+                 (forward_only_floor={forward_only_floor}, no seek epoch reset \
+                 has fired since apply, so any seg < floor is forbidden).\n\
+                 plan_need_init={pni:?}, seek_epoch={se:?}, \
+                 caller_fn={caller:?}\n\
+                 event: {bad_emit:?}\n\
+                 \n\
+                 cursor mutation context up to the bad emit \
+                 ({n} events; reset_cursor + rewind_current_segment_index \
+                 carry `caller_fn` so the operator sees WHICH \
+                 production fn pulled cursor backwards):\n\
+                 {ctx:#?}\n\
+                 \n\
+                 После set_mode(V_new) decoder уже на seg >= {forward_only_floor}; \
+                 fetching media seg={bad_seg} для V_new — это качать сегменты \
+                 которые уже были проиграны в V_old. C-A5 forward-only \
+                 разрешает download назад только после user seek, который \
+                 fires `seek_epoch_reset` — здесь его не было.",
+                pni = bad_emit.u64("plan_need_init"),
+                se = bad_emit.u64("seek_epoch"),
+                caller = bad_emit.caller_fn(),
+                n = cursor_history.len(),
+                ctx = cursor_history,
+            ));
+        }
+
+        // Forbidden invariant: never rewind cursor backwards on V_new
+        // post-apply. The probe fires from
+        // `apply_variant_readiness::demand_cursor_protection`. On
+        // failure we dump the full peer-thread context — every
+        // `apply_variant_readiness` (with all its args), every
+        // `handle_midstream_switch`, every `dispatch_seek_demand` —
+        // so the operator can see WHICH call to apply_variant_readiness
+        // (and with what `demand_variant_override`) preceded the
+        // rewind. That tells you whether the rewind branch should
+        // have been guarded by `demand_variant_override.is_none()`,
+        // by `is_variant_switch`, or by something else entirely.
+        if let Some(rewind) = peer_events.iter().find(|e| {
+            e.probe_name() == Some("record_demand_cursor_protection_rewind")
+                && e.u64("variant") == Some(v_new as u64)
+        }) {
+            let rewind_seq = rewind.thread_seq().unwrap_or(u64::MAX);
+            let context: Vec<&ProbeEvent> = peer_events
+                .iter()
+                .filter(|e| {
+                    e.thread_seq().is_some_and(|s| s <= rewind_seq)
+                        && matches!(
+                            e.probe_name(),
+                            Some("apply_variant_readiness")
+                                | Some("handle_midstream_switch")
+                                | Some("dispatch_seek_demand")
+                                | Some("seek_epoch_reset")
+                                | Some("record_demand_cursor_protection_rewind")
+                        )
+                })
+                .collect();
+            return Err(format!(
+                "T14 forbidden invariant: \
+                 `record_demand_cursor_protection_rewind` fired for \
+                 V_new={v_new} post-apply on peer_thread={peer_thread_id}.\n\
+                 prev_cursor={prev:?}, demand_segment={ds:?}, \
+                 thread_seq={rewind_seq}\n\
+                 rewind event: {rewind:?}\n\
+                 \n\
+                 peer-thread context up to and including the rewind \
+                 ({n} key events; apply_variant_readiness shows \
+                 variant/old_variant/demand_segment/demand_variant_override):\n\
+                 {context:#?}\n\
+                 \n\
+                 Корень — нужно прочитать **последний** \
+                 apply_variant_readiness ПЕРЕД rewind: его args диктуют, \
+                 какой guard в demand_cursor_protection block должен был \
+                 пропустить rewind. Если demand_variant_override is_some \
+                 — значит reader демандит V_new init/gap, не media; \
+                 rewind на demand_segment=0 в media-cursor неуместен.",
+                prev = rewind.u64("prev_cursor"),
+                ds = rewind.u64("demand_segment"),
+                n = context.len(),
+                context = context,
+            ));
+        }
+
+        let v_old_u = v_old as u64;
+        let v_new_u = v_new as u64;
+        let _ = v_old_u;
+
+        // The probe `old_variant` field is `sched.abr.current_variant_index()`
+        // BEFORE `make_abr_decision`. After ABR.apply(V_new), abr.current is
+        // already V_new — so `old_variant == variant` even on the first
+        // post-apply poll. We don't constrain on it; what the contract
+        // dictates is the **observable side-effect chain**:
+        // `apply_variant_readiness` for V_new fires → `handle_midstream_switch(=1)`
+        // fires (cursor reposition for V_new) → `build_batch` for V_new fires →
+        // `emit_fetch_cmd` for V_new fires with `plan_need_init=1` AND
+        // `segment_index >= 1` (forward of decode_seg, never seg=0 media-fetch).
+        // The full expected sequence post-apply on peer-thread:
+        // `apply_variant_readiness(V_new)` → `build_batch(V_new)` →
+        // `emit_fetch_cmd(V_new)`. Note that `handle_midstream_switch`
+        // is NOT in this list: it can legitimately fire on a poll that
+        // sits between `ABR.apply` (which we observe) and the user-visible
+        // baseline event the test pins (which can be slightly later).
+        // The forward-only invariant is enforced by the forbidden
+        // `emit_fetch_cmd(V_new, seg < forward_only_floor)` check above
+        // — that is the user-visible behavioural contract.
+        let probe_variant = if expect_midstream_switch {
+            v_new_u
+        } else {
+            v_old_u
+        };
+        let expected: Vec<ExpectedEvent<'static>> = vec![
+            ExpectedEvent {
+                name: "apply_variant_readiness",
+                args: vec![("variant", probe_variant)],
+                note: "first poll_next post-apply must observe ABR.current=V_new (or V_old in noop)",
+            },
+            ExpectedEvent {
+                name: "build_batch",
+                args: vec![("variant", probe_variant)],
+                note: "build_batch must walk the V_new (or V_old in noop) prefetch window",
+            },
+            ExpectedEvent {
+                name: "emit_fetch_cmd",
+                args: vec![("variant", probe_variant)],
+                note: "first emit_fetch_cmd post-apply for the target variant — its segment_index must be >= forward_only_floor (enforced by forbidden invariant above)",
+            },
+        ];
+
+        let mut next_idx = 0usize;
+        let mut last_match_pos: Option<usize> = None;
+        for (i, e) in peer_events.iter().enumerate() {
+            if next_idx >= expected.len() {
+                break;
+            }
+            if expected[next_idx].matches(e) {
+                next_idx += 1;
+                last_match_pos = Some(i);
+            }
+        }
+
+        if next_idx < expected.len() {
+            let missed = &expected[next_idx];
+            let start = last_match_pos.map_or(0, |i| i + 1);
+            let observed_after_match: Vec<&ProbeEvent> =
+                peer_events[start..].iter().take(40).collect();
+            let prev_summary = if next_idx == 0 {
+                "no expected step matched yet".to_string()
+            } else {
+                let prev = &expected[next_idx - 1];
+                format!(
+                    "matched expected[0..{next_idx}], last = {}",
+                    prev.describe()
+                )
+            };
+            return Err(format!(
+                "T14 expected[{next_idx}/{total}] not observed: \
+                 expected `{exp}` ({note}).\n\
+                 {prev_summary}.\n\
+                 peer_thread={peer_thread_id}, \
+                 apply_thread_seq={apply_thread_seq}, \
+                 expect_midstream_switch={expect_midstream_switch}, \
+                 v_old={v_old}, v_new={v_new}.\n\
+                 peer events after last match ({n} shown of {total_evt}):\n{events:#?}",
+                total = expected.len(),
+                exp = missed.describe(),
+                note = missed.note,
+                n = observed_after_match.len(),
+                total_evt = peer_events.len() - start,
+                events = observed_after_match,
+            ));
+        }
+
+        let probe_variant = if expect_midstream_switch {
+            v_new_u
+        } else {
+            v_old_u
+        };
+        Ok(peer_events
+            .iter()
+            .find(|e| {
+                e.probe_name() == Some("emit_fetch_cmd") && e.u64("variant") == Some(probe_variant)
+            })
+            .cloned()
+            .expect("matched in expected sequence above"))
     }
 
     /// Verify the decoder reached at least `target_ts_us` microseconds

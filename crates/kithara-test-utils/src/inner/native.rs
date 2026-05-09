@@ -4,7 +4,6 @@
 pub(crate) mod fmp4;
 pub(crate) mod hls_stream;
 pub mod http_server;
-pub mod probe_capture;
 pub mod routes;
 pub(crate) mod test_server_state;
 

@@ -21,6 +21,8 @@ pub mod wav;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod probe_capture;
 pub use fixtures::*;
 pub use hls_fixture::{
     AbrTestServer, EncryptionConfig, HlsTestServer, HlsTestServerConfig, PackagedTestServer,

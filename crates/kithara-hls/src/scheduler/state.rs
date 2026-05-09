@@ -12,6 +12,7 @@ use kithara_drm::DecryptContext;
 use kithara_events::{AbrReason, EventBus, HlsError as PublicHlsError, HlsEvent, SeekEpoch};
 use kithara_platform::{Mutex, time::Instant};
 use kithara_stream::Timeline;
+use kithara_test_utils::kithara;
 use tracing::debug;
 
 use super::{
@@ -277,6 +278,7 @@ impl HlsScheduler {
             .map_or(0, |seg| seg.segment_index)
     }
 
+    #[kithara::probe(segment_index, caller)]
     pub(crate) fn reset_cursor(&mut self, segment_index: SegmentIndex) {
         self.runtime.cursor.reset_fill(segment_index);
     }
@@ -338,6 +340,7 @@ impl HlsScheduler {
         }
     }
 
+    #[kithara::probe(segment_index, caller)]
     pub(crate) fn rewind_current_segment_index(&mut self, segment_index: SegmentIndex) {
         self.runtime.cursor.rewind_fill_to(segment_index);
     }
