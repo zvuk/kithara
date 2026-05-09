@@ -501,13 +501,15 @@ fn resolve_variant(
     (old_variant, variant)
 }
 
+#[kithara::probe(variant, old_variant, demand_segment, demand_variant_override)]
 fn apply_variant_readiness(
     sched: &mut HlsScheduler,
     variant: usize,
-    _old_variant: usize,
+    old_variant: usize,
     demand_segment: Option<usize>,
     demand_variant_override: Option<usize>,
 ) {
+    let _ = old_variant;
     let (is_variant_switch, is_midstream_switch) =
         sched.classify_variant_transition(variant, sched.current_segment_index());
 
@@ -561,6 +563,7 @@ fn record_demand_cursor_protection_rewind(
     let _ = (seek_epoch, demand_segment, prev_cursor, variant);
 }
 
+#[kithara::probe(variant, old_variant, num_segments, demand_segment)]
 fn build_batch(
     state: &mut HlsState,
     state_arc: &Arc<Mutex<Option<HlsState>>>,
@@ -706,6 +709,7 @@ fn emit_fetch_cmd(
     cmd
 }
 
+#[kithara::probe(variant, seg_idx, batch_i, is_demanded, is_midstream_switch)]
 fn skip_planned_segment(
     state: &mut HlsState,
     variant: usize,

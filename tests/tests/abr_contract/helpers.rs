@@ -458,6 +458,10 @@ pub(crate) mod diagnostics {
     /// stream end-to-end. Listed once, every firing is shown.
     const KEY_PROBES: &[&str] = &[
         "poll_next",
+        "apply_variant_readiness",
+        "build_batch",
+        "skip_planned_segment",
+        "should_skip_planned_segment",
         "emit_fetch_cmd",
         "commit_segment",
         "start_request",

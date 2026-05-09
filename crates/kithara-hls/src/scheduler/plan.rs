@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 
 use kithara_abr::AbrDecision;
 use kithara_events::HlsEvent;
+use kithara_test_utils::kithara;
 use tracing::debug;
 
 use super::{helpers::first_missing_segment, state::HlsScheduler};
@@ -214,6 +215,7 @@ impl HlsScheduler {
         true
     }
 
+    #[kithara::probe(variant, seg_idx, is_midstream_switch, old_variant)]
     pub(crate) fn should_skip_planned_segment(
         &mut self,
         variant: usize,
