@@ -531,6 +531,7 @@ fn apply_variant_readiness(
     if let Some(ds) = demand_segment
         && sched.current_segment_index() > ds
         && !sched.runtime.in_flight_segments.contains(&(variant, ds))
+        && !sched.segments.lock_sync().is_segment_loaded(variant, ds)
     {
         let prev_cursor = sched.current_segment_index();
         let seek_epoch = sched.coord.timeline().seek_epoch();
