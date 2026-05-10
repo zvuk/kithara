@@ -242,6 +242,108 @@ fn lock_is_refcounted() {
     assert!(!state.is_locked());
 }
 
+// Phase 2 of the two-cursor refactor: boundary-commit primitive
+// (`request_target` / `commit_pending` / `pending_target`).
+
+#[kithara::test]
+fn pending_target_is_empty_on_fresh_state() {
+    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test]
+fn request_target_records_intent_without_committing() {
+    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    state.request_target(2, AbrReason::UpSwitch);
+    assert_eq!(state.pending_target(), Some(2));
+    assert_eq!(
+        state.current_variant_index(),
+        0,
+        "request_target must not move current_variant; commit_pending owns that step"
+    );
+}
+
+#[kithara::test]
+fn request_target_replace_pending_latest_wins() {
+    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    state.request_target(1, AbrReason::UpSwitch);
+    state.request_target(2, AbrReason::UpSwitch);
+    assert_eq!(
+        state.pending_target(),
+        Some(2),
+        "second request_target must replace the first (latest-wins semantics)"
+    );
+}
+
+#[kithara::test]
+fn commit_pending_returns_none_when_no_request() {
+    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    assert!(state.commit_pending(Instant::now()).is_none());
+    assert_eq!(state.current_variant_index(), 0);
+}
+
+#[kithara::test]
+fn commit_pending_moves_current_variant_and_clears_slot() {
+    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    state.request_target(2, AbrReason::UpSwitch);
+    let decision = state
+        .commit_pending(Instant::now())
+        .expect("pending request must produce a decision");
+    assert_eq!(decision.target_variant_index, 2);
+    assert_eq!(decision.reason, AbrReason::UpSwitch);
+    assert!(decision.did_change);
+    assert_eq!(state.current_variant_index(), 2);
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "commit_pending must drain the pending slot atomically"
+    );
+}
+
+#[kithara::test]
+fn commit_pending_returns_none_when_locked() {
+    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    state.request_target(2, AbrReason::UpSwitch);
+    state.lock();
+    assert!(
+        state.commit_pending(Instant::now()).is_none(),
+        "locked AbrState must defer the commit"
+    );
+    assert_eq!(state.current_variant_index(), 0);
+    assert_eq!(
+        state.pending_target(),
+        Some(2),
+        "deferred commit must keep the pending intent so the next \
+         post-unlock commit_pending can apply it"
+    );
+}
+
+#[kithara::test]
+fn commit_pending_after_unlock_applies_pending_intent() {
+    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    state.lock();
+    state.request_target(2, AbrReason::UpSwitch);
+    assert!(state.commit_pending(Instant::now()).is_none());
+    state.unlock();
+    let decision = state
+        .commit_pending(Instant::now())
+        .expect("post-unlock commit must apply the still-pending intent");
+    assert_eq!(decision.target_variant_index, 2);
+    assert_eq!(state.current_variant_index(), 2);
+}
+
+#[kithara::test]
+fn commit_pending_returns_none_when_target_equals_current() {
+    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(1)));
+    state.request_target(1, AbrReason::AlreadyOptimal);
+    assert!(
+        state.commit_pending(Instant::now()).is_none(),
+        "self-switch (target == current) must not produce a decision"
+    );
+    assert_eq!(state.current_variant_index(), 1);
+    assert_eq!(state.pending_target(), None);
+}
+
 #[kithara::test]
 fn min_switch_interval_prevents_oscillation() {
     let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));

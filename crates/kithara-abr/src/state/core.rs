@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use kithara_events::{AbrMode, AbrVariant};
+use kithara_events::{AbrMode, AbrReason, AbrVariant};
 use kithara_platform::{
     Mutex,
     time::{Duration, Instant},
@@ -22,6 +22,22 @@ pub struct AbrState {
     mode: AtomicUsize,
     reference_instant: Instant,
     variants: Mutex<Vec<AbrVariant>>,
+    /// Phase 2 boundary-commit slot. `Some` means a switch has been
+    /// requested via [`request_target`](AbrState::request_target) and
+    /// the scheduler has not yet observed it on a segment boundary.
+    /// Replace-pending semantics: a fresh `request_target` overwrites
+    /// any prior unobserved entry (latest-wins, matching the
+    /// "switch-only-on-boundaries" contract from the two-cursor plan).
+    pending: Mutex<Option<PendingApply>>,
+}
+
+/// Captured intent of a pending switch: the target variant index plus
+/// the reason the requestor (controller, manual UI, scheduler) wants
+/// recorded once the boundary commit lands.
+#[derive(Clone, Copy, Debug)]
+struct PendingApply {
+    target: usize,
+    reason: AbrReason,
 }
 
 impl AbrState {
@@ -43,6 +59,7 @@ impl AbrState {
             mode: AtomicUsize::new(mode.into()),
             reference_instant: Instant::now(),
             variants: Mutex::new(variants),
+            pending: Mutex::new(None),
         }
     }
 
@@ -141,6 +158,59 @@ impl AbrState {
     fn record_switch(&self, now: Instant) {
         self.last_switch_at_nanos
             .store(self.instant_to_nanos(now), Ordering::Release);
+    }
+
+    /// Phase 2 of the two-cursor refactor: record the intent to switch
+    /// to `target` without committing the variant change. The boundary
+    /// commit is driven by [`commit_pending`](Self::commit_pending) at
+    /// segment boundaries (Phase 3 wires the scheduler to call it).
+    ///
+    /// Replace-pending semantics: a fresh `request_target` overwrites
+    /// any prior unobserved entry. This honours the user-stated
+    /// contract that a switch only commits at the next segment boundary
+    /// — between two boundaries we keep the latest intent and discard
+    /// stale ones.
+    pub fn request_target(&self, target: usize, reason: AbrReason) {
+        *self.pending.lock_sync() = Some(PendingApply { target, reason });
+    }
+
+    /// Phase 2 read-only view of the unobserved pending switch (if any).
+    /// Used by the Phase 3 scheduler boundary check and by tests.
+    #[must_use]
+    pub fn pending_target(&self) -> Option<usize> {
+        self.pending.lock_sync().as_ref().map(|p| p.target)
+    }
+
+    /// Phase 2 boundary commit: if a switch is pending and ABR is not
+    /// locked (the blender-fence / seek-no-switch invariant), atomically
+    /// move `current_variant` to the pending target, record the switch
+    /// timestamp, and return the resulting [`AbrDecision`]. Returns
+    /// `None` when no pending intent exists, when ABR is locked, or
+    /// when the pending target equals `current_variant` (no-op switch).
+    ///
+    /// Phase 3: the scheduler calls this at each detected segment
+    /// boundary; the gating on [`is_locked`](Self::is_locked) prevents
+    /// a chain switch from committing while the blender period (held
+    /// open by `lock`) is still draining the previous `V_old` → `V_new`
+    /// crossfade.
+    #[must_use]
+    pub fn commit_pending(&self, now: Instant) -> Option<AbrDecision> {
+        if self.is_locked() {
+            return None;
+        }
+        let pending = self.pending.lock_sync().take()?;
+        let current = self.current_variant.load(Ordering::Acquire);
+        if pending.target == current {
+            return None;
+        }
+        self.current_variant
+            .store(pending.target, Ordering::Release);
+        self.record_switch(now);
+        Some(AbrDecision {
+            target_variant_index: pending.target,
+            reason: pending.reason,
+            did_change: true,
+        })
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {
