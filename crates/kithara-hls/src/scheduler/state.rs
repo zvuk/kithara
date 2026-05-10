@@ -38,7 +38,6 @@ use crate::{
 #[derive(Default)]
 #[non_exhaustive]
 pub(crate) struct SchedulerRuntime {
-    pub(crate) cursor: DownloadCursor<SegmentIndex>,
     /// Highest cached-segment count already announced via
     /// `SegmentComplete { cached: true }` per variant. Prevents
     /// `apply_cached_segment_progress` from re-publishing the same events
@@ -156,7 +155,7 @@ impl HlsScheduler {
     }
 
     pub(crate) fn advance_current_segment_index(&mut self, segment_index: SegmentIndex) {
-        self.runtime.cursor.advance_fill_to(segment_index);
+        self.primary_cursor_mut().advance_fill_to(segment_index);
     }
 
     /// Drop every per-variant in-flight set. Called on seek-epoch reset
@@ -177,7 +176,7 @@ impl HlsScheduler {
     }
 
     pub(crate) fn current_segment_index(&self) -> SegmentIndex {
-        self.runtime.cursor.fill_next()
+        self.primary_cursor().fill_next()
     }
 
     /// `true` if a `FetchCmd` for `(variant, segment_index)` was emitted
@@ -219,6 +218,40 @@ impl HlsScheduler {
         }
     }
 
+    /// Read-only snapshot of the cursor for the current `download_variant`.
+    /// Returns the type's `Default` (floor=0, next=0) when no entry has
+    /// been created yet — matches the pre-Phase-1 single-cursor
+    /// behaviour where a fresh `SchedulerRuntime` started at zero.
+    pub(crate) fn primary_cursor(&self) -> DownloadCursor<SegmentIndex> {
+        self.runtime
+            .active_downloads
+            .get(&self.download_variant)
+            .map_or_else(DownloadCursor::default, |s| s.cursor)
+    }
+
+    /// Mutable cursor for the current `download_variant`. Lazily creates
+    /// the per-variant entry with default cursor `(0, 0)`.
+    pub(crate) fn primary_cursor_mut(&mut self) -> &mut DownloadCursor<SegmentIndex> {
+        let variant = self.download_variant;
+        self.cursor_mut_for(variant)
+    }
+
+    /// Mutable cursor for an explicit variant. Used by callers that
+    /// need to position the cursor on a variant they are about to
+    /// install as `download_variant` (the only such caller today is
+    /// `handle_midstream_switch`).
+    pub(crate) fn cursor_mut_for(
+        &mut self,
+        variant: VariantIndex,
+    ) -> &mut DownloadCursor<SegmentIndex> {
+        &mut self
+            .runtime
+            .active_downloads
+            .entry(variant)
+            .or_default()
+            .cursor
+    }
+
     pub(super) fn effective_total_bytes(&self) -> Option<u64> {
         let total = self
             .segments
@@ -228,7 +261,7 @@ impl HlsScheduler {
     }
 
     pub(crate) fn gap_scan_start_segment(&self) -> SegmentIndex {
-        self.runtime.cursor.fill_floor()
+        self.primary_cursor().fill_floor()
     }
 
     pub(super) fn is_below_switch_floor(
@@ -331,7 +364,7 @@ impl HlsScheduler {
 
     #[kithara::probe(segment_index, caller)]
     pub(crate) fn reset_cursor(&mut self, segment_index: SegmentIndex) {
-        self.runtime.cursor.reset_fill(segment_index);
+        self.primary_cursor_mut().reset_fill(segment_index);
     }
 
     pub(super) fn reset_for_seek_epoch(
@@ -342,6 +375,13 @@ impl HlsScheduler {
     ) {
         let previous_variant = self.layout_variant();
 
+        // `download_variant` switches first so the cursor reset below
+        // and `clear_in_flight_for_seek` operate on the post-seek
+        // variant entry rather than the outgoing one. The single global
+        // cursor in the pre-Phase-1 model was variant-agnostic; the
+        // per-variant model needs the active key to be in place before
+        // we touch the corresponding `VariantDownloadState`.
+        self.download_variant = variant;
         self.runtime.active_seek_epoch = seek_epoch;
         self.coord.timeline().set_eof(false);
         self.coord
@@ -375,7 +415,6 @@ impl HlsScheduler {
                 .set_download_position(download_position);
         }
 
-        self.download_variant = variant;
         self.runtime.filling_layout_gap = false;
 
         let current_variant = self.abr.current_variant_index();
@@ -393,7 +432,7 @@ impl HlsScheduler {
 
     #[kithara::probe(segment_index, caller)]
     pub(crate) fn rewind_current_segment_index(&mut self, segment_index: SegmentIndex) {
-        self.runtime.cursor.rewind_fill_to(segment_index);
+        self.primary_cursor_mut().rewind_fill_to(segment_index);
     }
 
     pub(super) fn segment_resources_available(&self, data: &SegmentData) -> bool {

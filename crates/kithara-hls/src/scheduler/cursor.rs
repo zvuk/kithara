@@ -24,6 +24,12 @@ pub(crate) struct DownloadCursor<I> {
 /// second instance for the blender period.
 #[derive(Default)]
 pub(crate) struct VariantDownloadState {
+    /// Next-segment / floor pointer for this variant's download track.
+    /// `SchedulerRuntime` no longer owns a global cursor; reads/writes
+    /// go through the helpers on `HlsScheduler`
+    /// (`primary_cursor` / `primary_cursor_mut`) which key into
+    /// `active_downloads` by the current `download_variant`.
+    pub(crate) cursor: DownloadCursor<SegmentIndex>,
     /// Media segments whose `FetchCmd` has been emitted and whose
     /// `on_complete` has not yet fired. Keyed by `SegmentIndex` only —
     /// the variant identity is the map key in

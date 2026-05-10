@@ -404,7 +404,7 @@ fn seek_epoch_reset(state: &mut HlsState, seek_epoch: u64, segment_index: usize,
 
     let (is_variant_switch, is_midstream_switch) =
         sched.classify_variant_transition(variant, segment_index);
-    sched.handle_midstream_switch(is_midstream_switch);
+    sched.handle_midstream_switch(variant, is_midstream_switch);
     if let Some(sizes) = sched.playlist_state.segment_sizes(variant) {
         sched
             .segments
@@ -510,7 +510,7 @@ fn apply_variant_readiness(
         sched.classify_variant_transition(variant, sched.current_segment_index());
 
     if demand_variant_override.is_none() {
-        sched.handle_midstream_switch(is_midstream_switch);
+        sched.handle_midstream_switch(variant, is_midstream_switch);
     }
     if is_variant_switch {
         sched.download_variant = variant;
@@ -1262,8 +1262,7 @@ mod tests {
         }
 
         scheduler
-            .runtime
-            .cursor
+            .primary_cursor_mut()
             .reopen_fill(0, Consts::NUM_SEGMENTS);
         assert_eq!(scheduler.current_segment_index(), Consts::NUM_SEGMENTS);
 
@@ -1367,8 +1366,7 @@ mod tests {
         state.scheduler.download_variant = 0;
         state
             .scheduler
-            .runtime
-            .cursor
+            .primary_cursor_mut()
             .reopen_fill(READER_SEG, Consts::NUM_SEGMENTS);
         state.scheduler.runtime.filling_layout_gap = false;
         state.scheduler.abr.apply(
@@ -1449,7 +1447,7 @@ mod tests {
 
         commit_segment_in_index(&state, 0, 22, 100);
 
-        state.scheduler.runtime.cursor.reopen_fill(20, 23);
+        state.scheduler.primary_cursor_mut().reopen_fill(20, 23);
         let cursor_before = state.scheduler.current_segment_index();
         assert_eq!(cursor_before, 23);
 
@@ -1527,7 +1525,7 @@ mod tests {
     fn red_test_seek_lifecycle_mmap_no_rewind_on_in_flight_segment() {
         let mut state = make_hls_state();
 
-        state.scheduler.runtime.cursor.reopen_fill(12, 13);
+        state.scheduler.primary_cursor_mut().reopen_fill(12, 13);
         state.scheduler.mark_in_flight(0, 12);
         let cursor_before = state.scheduler.current_segment_index();
         assert_eq!(cursor_before, 13);
@@ -1641,8 +1639,7 @@ mod tests {
         state.scheduler.download_variant = 0;
         state
             .scheduler
-            .runtime
-            .cursor
+            .primary_cursor_mut()
             .reopen_fill(LIVE_START, Consts::NUM_SEGMENTS);
         state.scheduler.runtime.filling_layout_gap = false;
 
@@ -1756,7 +1753,7 @@ mod tests {
         let captured_seek_epoch = {
             let mut guard = state_arc.lock_sync();
             let st = guard.as_mut().expect("state must be initialized");
-            st.scheduler.runtime.cursor.reopen_fill(20, 23);
+            st.scheduler.primary_cursor_mut().reopen_fill(20, 23);
             st.scheduler.mark_in_flight(0, 22);
             let epoch = st.scheduler.coord.timeline().seek_epoch();
             drop(guard);

@@ -85,7 +85,17 @@ impl HlsScheduler {
         self.coord.condvar.notify_all();
     }
 
-    pub(crate) fn handle_midstream_switch(&mut self, is_midstream_switch: bool) {
+    /// Phase 1b note: `target_variant` names the variant the caller is
+    /// about to install as `download_variant`. The cursor reopen lands
+    /// on `target_variant`'s `VariantDownloadState` so subsequent reads
+    /// via `current_segment_index` see the same `cursor_pos` the
+    /// pre-Phase-1 single-cursor model exposed. Phase 3 deletes the
+    /// midstream-switch concept entirely.
+    pub(crate) fn handle_midstream_switch(
+        &mut self,
+        target_variant: usize,
+        is_midstream_switch: bool,
+    ) {
         if !is_midstream_switch {
             return;
         }
@@ -105,7 +115,8 @@ impl HlsScheduler {
             .unwrap_or(num_segments)
         };
 
-        self.runtime.cursor.reopen_fill(cursor_pos, cursor_pos);
+        self.cursor_mut_for(target_variant)
+            .reopen_fill(cursor_pos, cursor_pos);
         self.coord
             .had_midstream_switch
             .store(true, Ordering::Release);
