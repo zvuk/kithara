@@ -86,7 +86,7 @@ impl HlsScheduler {
     }
 
     /// Phase 1b note: `target_variant` names the variant the caller is
-    /// about to install as `download_variant`. The cursor reopen lands
+    /// about to install as `primary_variant`. The cursor reopen lands
     /// on `target_variant`'s `VariantDownloadState` so subsequent reads
     /// via `current_segment_index` see the same `cursor_pos` the
     /// pre-Phase-1 single-cursor model exposed. Phase 3 deletes the
@@ -100,7 +100,7 @@ impl HlsScheduler {
             return;
         }
 
-        let old_variant = self.download_variant;
+        let old_variant = self.primary_variant;
         let num_segments = self.num_segments(old_variant).unwrap_or(0);
         let reader_floor = self.reader_segment_floor();
         let cursor_pos = {

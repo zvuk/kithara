@@ -221,7 +221,7 @@ impl Peer for HlsPeer {
         state.waker = Some(cx.waker().clone());
 
         debug!(
-            download_variant = state.scheduler.download_variant,
+            primary_variant = state.scheduler.primary_variant,
             cursor = state.scheduler.current_segment_index(),
             "poll_next: entry"
         );
@@ -412,7 +412,7 @@ fn seek_epoch_reset(state: &mut HlsState, seek_epoch: u64, segment_index: usize,
             .set_expected_sizes(variant, sizes);
     }
     if is_variant_switch {
-        sched.download_variant = variant;
+        sched.primary_variant = variant;
     }
     let (cached_count, cached_end_offset) = sched.populate_cached_segments_if_needed(variant);
     sched.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
@@ -425,7 +425,7 @@ fn resolve_same_epoch_demand(
     if req.segment_index < sched.current_segment_index() {
         maybe_rewind_for_demand(sched, req);
     }
-    let variant_override = (req.variant != sched.download_variant).then_some(req.variant);
+    let variant_override = (req.variant != sched.primary_variant).then_some(req.variant);
     DemandResult::Demand {
         variant_override,
         segment: req.segment_index,
@@ -484,14 +484,14 @@ fn resolve_variant(
 
     if sched.runtime.filling_layout_gap
         && demand_variant_override.is_none()
-        && sched.download_variant != variant
+        && sched.primary_variant != variant
     {
         debug!(
-            layout_variant = sched.download_variant,
+            layout_variant = sched.primary_variant,
             abr_variant = variant,
             "poll_next: continuing layout gap-fill"
         );
-        variant = sched.download_variant;
+        variant = sched.primary_variant;
     }
 
     (old_variant, variant)
@@ -513,7 +513,7 @@ fn apply_variant_readiness(
         sched.handle_midstream_switch(variant, is_midstream_switch);
     }
     if is_variant_switch {
-        sched.download_variant = variant;
+        sched.primary_variant = variant;
     }
     if let Some(sizes) = sched.playlist_state.segment_sizes(variant) {
         sched
@@ -1363,7 +1363,7 @@ mod tests {
             .timeline()
             .set_byte_position(READER_SEG as u64 * SEG_SIZE + 10);
 
-        state.scheduler.download_variant = 0;
+        state.scheduler.primary_variant = 0;
         state
             .scheduler
             .primary_cursor_mut()
@@ -1636,7 +1636,7 @@ mod tests {
             .timeline()
             .set_byte_position(reader_byte_pos);
 
-        state.scheduler.download_variant = 0;
+        state.scheduler.primary_variant = 0;
         state
             .scheduler
             .primary_cursor_mut()

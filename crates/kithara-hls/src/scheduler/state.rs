@@ -56,7 +56,7 @@ pub(crate) struct SchedulerRuntime {
     pub(crate) populated_cached_count: HashMap<VariantIndex, usize>,
     /// Per-variant download bookkeeping (in-flight segments, init-sent
     /// flag). Phase 1 invariant: at most one entry, keyed by the current
-    /// `download_variant`. Phase 3 will add a second entry for the
+    /// `primary_variant`. Phase 3 will add a second entry for the
     /// blender period.
     ///
     /// Use `HlsScheduler::is_in_flight` / `mark_in_flight` /
@@ -102,8 +102,10 @@ pub struct HlsScheduler {
     pub(crate) runtime: SchedulerRuntime,
     /// Variant the downloader is currently targeting. Used for transition
     /// classification instead of shared `layout_variant` to avoid racing
-    /// with the decoder thread.
-    pub(crate) download_variant: VariantIndex,
+    /// with the decoder thread. Phase 1 invariant: also the only key in
+    /// `runtime.active_downloads`. Phase 3 will introduce a separate
+    /// `secondary_variant` slot for the blender period.
+    pub(crate) primary_variant: VariantIndex,
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
 }
@@ -139,6 +141,14 @@ impl HlsScheduler {
         } else {
             None
         };
+        let mut runtime = SchedulerRuntime::default();
+        // Pre-populate the primary variant entry so `current_only` and
+        // the cursor helpers always observe at least one
+        // `VariantDownloadState`. Phase 1 invariant: this is the only
+        // entry until Phase 3 adds a second one for the blender.
+        runtime
+            .active_downloads
+            .insert(initial_variant, VariantDownloadState::default());
         Self {
             look_ahead_segments,
             committed_segment,
@@ -149,8 +159,8 @@ impl HlsScheduler {
             segments,
             bus,
             prefetch_count: config.download_batch_size.max(1),
-            download_variant: initial_variant,
-            runtime: SchedulerRuntime::default(),
+            primary_variant: initial_variant,
+            runtime,
         }
     }
 
@@ -172,11 +182,11 @@ impl HlsScheduler {
         variant: usize,
         segment_index: usize,
     ) -> (bool, bool) {
-        classify_layout_transition(self.download_variant, variant, segment_index)
+        classify_layout_transition(self.primary_variant, variant, segment_index)
     }
 
     pub(crate) fn current_segment_index(&self) -> SegmentIndex {
-        self.primary_cursor().fill_next()
+        self.current_only().cursor.fill_next()
     }
 
     /// `true` if a `FetchCmd` for `(variant, segment_index)` was emitted
@@ -218,27 +228,32 @@ impl HlsScheduler {
         }
     }
 
-    /// Read-only snapshot of the cursor for the current `download_variant`.
-    /// Returns the type's `Default` (floor=0, next=0) when no entry has
-    /// been created yet — matches the pre-Phase-1 single-cursor
-    /// behaviour where a fresh `SchedulerRuntime` started at zero.
-    pub(crate) fn primary_cursor(&self) -> DownloadCursor<SegmentIndex> {
+    /// The single active download track's `VariantDownloadState`.
+    /// Phase 1 invariant: `runtime.active_downloads` has exactly one
+    /// entry, keyed by `primary_variant`. The constructor pre-populates
+    /// it; subsequent variant switches in
+    /// `reset_for_seek_epoch` / `apply_variant_readiness` /
+    /// `handle_midstream_switch` keep the invariant.
+    pub(crate) fn current_only(&self) -> &VariantDownloadState {
         self.runtime
             .active_downloads
-            .get(&self.download_variant)
-            .map_or_else(DownloadCursor::default, |s| s.cursor)
+            .get(&self.primary_variant)
+            .expect(
+                "Phase 1 invariant: active_downloads always has an entry \
+                 for primary_variant (HlsScheduler::new pre-populates it)",
+            )
     }
 
-    /// Mutable cursor for the current `download_variant`. Lazily creates
+    /// Mutable cursor for the current `primary_variant`. Lazily creates
     /// the per-variant entry with default cursor `(0, 0)`.
     pub(crate) fn primary_cursor_mut(&mut self) -> &mut DownloadCursor<SegmentIndex> {
-        let variant = self.download_variant;
+        let variant = self.primary_variant;
         self.cursor_mut_for(variant)
     }
 
     /// Mutable cursor for an explicit variant. Used by callers that
     /// need to position the cursor on a variant they are about to
-    /// install as `download_variant` (the only such caller today is
+    /// install as `primary_variant` (the only such caller today is
     /// `handle_midstream_switch`).
     pub(crate) fn cursor_mut_for(
         &mut self,
@@ -261,7 +276,7 @@ impl HlsScheduler {
     }
 
     pub(crate) fn gap_scan_start_segment(&self) -> SegmentIndex {
-        self.primary_cursor().fill_floor()
+        self.current_only().cursor.fill_floor()
     }
 
     pub(super) fn is_below_switch_floor(
@@ -375,13 +390,13 @@ impl HlsScheduler {
     ) {
         let previous_variant = self.layout_variant();
 
-        // `download_variant` switches first so the cursor reset below
+        // `primary_variant` switches first so the cursor reset below
         // and `clear_in_flight_for_seek` operate on the post-seek
         // variant entry rather than the outgoing one. The single global
         // cursor in the pre-Phase-1 model was variant-agnostic; the
         // per-variant model needs the active key to be in place before
         // we touch the corresponding `VariantDownloadState`.
-        self.download_variant = variant;
+        self.primary_variant = variant;
         self.runtime.active_seek_epoch = seek_epoch;
         self.coord.timeline().set_eof(false);
         self.coord

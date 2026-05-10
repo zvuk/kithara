@@ -28,7 +28,7 @@ pub(crate) struct VariantDownloadState {
     /// `SchedulerRuntime` no longer owns a global cursor; reads/writes
     /// go through the helpers on `HlsScheduler`
     /// (`primary_cursor` / `primary_cursor_mut`) which key into
-    /// `active_downloads` by the current `download_variant`.
+    /// `active_downloads` by the current `primary_variant`.
     pub(crate) cursor: DownloadCursor<SegmentIndex>,
     /// Media segments whose `FetchCmd` has been emitted and whose
     /// `on_complete` has not yet fired. Keyed by `SegmentIndex` only —
