@@ -61,7 +61,7 @@ impl HlsScheduler {
         }
 
         if init_len > 0 {
-            self.runtime.sent_init_for_variant.insert(variant);
+            self.mark_init_sent(variant);
         }
 
         if seg_idx == self.current_segment_index() {

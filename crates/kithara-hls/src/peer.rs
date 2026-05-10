@@ -450,11 +450,7 @@ fn maybe_rewind_for_demand(sched: &mut HlsScheduler, req: &crate::coord::Segment
 }
 
 fn classify_rewind(sched: &HlsScheduler, req: &crate::coord::SegmentRequest) -> &'static str {
-    if sched
-        .runtime
-        .in_flight_segments
-        .contains(&(req.variant, req.segment_index))
-    {
+    if sched.is_in_flight(req.variant, req.segment_index) {
         return "poll_next: same-epoch demand for in-flight segment, skipping rewind";
     }
     if sched
@@ -530,7 +526,7 @@ fn apply_variant_readiness(
 
     if let Some(ds) = demand_segment
         && sched.current_segment_index() > ds
-        && !sched.runtime.in_flight_segments.contains(&(variant, ds))
+        && !sched.is_in_flight(variant, ds)
         && !sched.segments.lock_sync().is_segment_loaded(variant, ds)
     {
         let prev_cursor = sched.current_segment_index();
@@ -699,11 +695,7 @@ fn emit_fetch_cmd(
         prepared,
         plan_need_init,
     );
-    state
-        .scheduler
-        .runtime
-        .in_flight_segments
-        .insert((variant, segment_index));
+    state.scheduler.mark_in_flight(variant, segment_index);
     state
         .scheduler
         .advance_current_segment_index(segment_index + 1);
@@ -720,12 +712,7 @@ fn skip_planned_segment(
     is_midstream_switch: bool,
     old_variant_for_skip: Option<usize>,
 ) -> bool {
-    if state
-        .scheduler
-        .runtime
-        .in_flight_segments
-        .contains(&(variant, seg_idx))
-    {
+    if state.scheduler.is_in_flight(variant, seg_idx) {
         debug!(
             variant,
             seg_idx,
@@ -879,10 +866,7 @@ fn build_fetch_cmd(
                 let Some(ref mut st) = *guard else {
                     return;
                 };
-                st.scheduler
-                    .runtime
-                    .in_flight_segments
-                    .remove(&(variant, seg_idx));
+                st.scheduler.unmark_in_flight(variant, seg_idx);
                 if seek_epoch != st.scheduler.coord.timeline().seek_epoch() {
                     debug!(
                         variant,
@@ -922,10 +906,7 @@ fn build_fetch_cmd(
                     },
                 );
             }
-            st.scheduler
-                .runtime
-                .in_flight_segments
-                .remove(&(variant, seg_idx));
+            st.scheduler.unmark_in_flight(variant, seg_idx);
             if let Some(waker) = st.waker.as_ref() {
                 waker.wake_by_ref();
             }
@@ -1547,7 +1528,7 @@ mod tests {
         let mut state = make_hls_state();
 
         state.scheduler.runtime.cursor.reopen_fill(12, 13);
-        state.scheduler.runtime.in_flight_segments.insert((0, 12));
+        state.scheduler.mark_in_flight(0, 12);
         let cursor_before = state.scheduler.current_segment_index();
         assert_eq!(cursor_before, 13);
 
@@ -1748,8 +1729,8 @@ mod tests {
     ///    is now 1.
     /// 4. The stale `on_complete` for the old (variant=0, seg=22) fetch
     ///    fires now, in the NEW epoch context. `peer.rs:626-641` does:
-    ///        - `in_flight_segments.remove((0, 22))` — no-op, set already
-    ///          cleared by `reset_for_seek_epoch:210`.
+    ///        - `unmark_in_flight(0, 22)` — no-op, the variant entry was
+    ///          already cleared by `reset_for_seek_epoch:210`.
     ///        - `rewind_current_segment_index(22)` →
     ///          `cursor.rewind_fill_to(22)` (cursor.rs:62-67) →
     ///          `result = floor.max(next) = max(10, 22) = 22` →
@@ -1776,7 +1757,7 @@ mod tests {
             let mut guard = state_arc.lock_sync();
             let st = guard.as_mut().expect("state must be initialized");
             st.scheduler.runtime.cursor.reopen_fill(20, 23);
-            st.scheduler.runtime.in_flight_segments.insert((0, 22));
+            st.scheduler.mark_in_flight(0, 22);
             let epoch = st.scheduler.coord.timeline().seek_epoch();
             drop(guard);
             epoch
@@ -1822,7 +1803,7 @@ mod tests {
                 "seek must produce a strictly newer epoch",
             );
             st.scheduler.runtime.active_seek_epoch = new_epoch;
-            st.scheduler.runtime.in_flight_segments.clear();
+            st.scheduler.clear_in_flight_for_seek();
             st.scheduler.reset_cursor(10);
             let cursor = st.scheduler.current_segment_index();
             drop(guard);

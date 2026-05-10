@@ -8,10 +8,31 @@
 //! (the next segment to fetch). `next` is monotonically non-decreasing
 //! within an epoch and is clamped to `>= floor` on rewind.
 
+use std::collections::HashSet;
+
+use crate::ids::SegmentIndex;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DownloadCursor<I> {
     floor: I,
     next: I,
+}
+
+/// Per-variant download bookkeeping. One instance per active downloader
+/// track. In Phase 1 of the two-cursor refactor exactly one
+/// [`VariantDownloadState`] is active at a time; Phase 3 introduces a
+/// second instance for the blender period.
+#[derive(Default)]
+pub(crate) struct VariantDownloadState {
+    /// Media segments whose `FetchCmd` has been emitted and whose
+    /// `on_complete` has not yet fired. Keyed by `SegmentIndex` only —
+    /// the variant identity is the map key in
+    /// `SchedulerRuntime::active_downloads`.
+    pub(crate) in_flight: HashSet<SegmentIndex>,
+    /// `true` once the init segment for this variant has been observed
+    /// as committed (cached commit, or first streaming commit with
+    /// non-zero `init_len`).
+    pub(crate) init_sent: bool,
 }
 
 impl<I: Copy + Ord + std::fmt::Debug> DownloadCursor<I> {

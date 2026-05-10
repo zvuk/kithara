@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -16,7 +16,7 @@ use kithara_test_utils::kithara;
 use tracing::debug;
 
 use super::{
-    cursor::DownloadCursor,
+    cursor::{DownloadCursor, VariantDownloadState},
     helpers::{classify_layout_transition, is_cross_codec_switch},
 };
 use crate::{
@@ -55,14 +55,17 @@ pub(crate) struct SchedulerRuntime {
     /// Only meaningful for non-ephemeral backends — ephemeral stores
     /// short-circuit `populate_cached_segments` directly.
     pub(crate) populated_cached_count: HashMap<VariantIndex, usize>,
-    /// Segments whose `FetchCmd` has been emitted and whose `on_complete`
-    /// has not yet fired. Used by `process_demand` to skip rewinding the
-    /// cursor onto an in-flight segment (which would issue a duplicate
-    /// `FetchCmd` that races the original writer on the same cached
-    /// `AssetResource`). Cleared on new seek epoch (the old epoch's
-    /// cancel token drops any in-flight fetches).
-    pub(crate) in_flight_segments: HashSet<(VariantIndex, SegmentIndex)>,
-    pub(crate) sent_init_for_variant: HashSet<VariantIndex>,
+    /// Per-variant download bookkeeping (in-flight segments, init-sent
+    /// flag). Phase 1 invariant: at most one entry, keyed by the current
+    /// `download_variant`. Phase 3 will add a second entry for the
+    /// blender period.
+    ///
+    /// Use `HlsScheduler::is_in_flight` / `mark_in_flight` /
+    /// `unmark_in_flight` / `mark_init_sent` /
+    /// `clear_in_flight_for_seek` instead of touching this map directly
+    /// — the helpers create per-variant entries lazily and keep the
+    /// invariant centralized.
+    pub(crate) active_downloads: BTreeMap<VariantIndex, VariantDownloadState>,
     /// After a demand, caps cursor advancement so prefetch doesn't evict
     /// the demanded segment from an ephemeral LRU. Set to
     /// `demand_seg + look_ahead_segments` when a demand is processed;
@@ -156,6 +159,15 @@ impl HlsScheduler {
         self.runtime.cursor.advance_fill_to(segment_index);
     }
 
+    /// Drop every per-variant in-flight set. Called on seek-epoch reset
+    /// — the old epoch's cancel token drops any in-flight `FetchCmd`s,
+    /// so the bookkeeping must follow.
+    pub(crate) fn clear_in_flight_for_seek(&mut self) {
+        for state in self.runtime.active_downloads.values_mut() {
+            state.in_flight.clear();
+        }
+    }
+
     pub(crate) fn classify_variant_transition(
         &self,
         variant: usize,
@@ -166,6 +178,45 @@ impl HlsScheduler {
 
     pub(crate) fn current_segment_index(&self) -> SegmentIndex {
         self.runtime.cursor.fill_next()
+    }
+
+    /// `true` if a `FetchCmd` for `(variant, segment_index)` was emitted
+    /// and its `on_complete` has not fired yet.
+    pub(crate) fn is_in_flight(&self, variant: VariantIndex, segment_index: SegmentIndex) -> bool {
+        self.runtime
+            .active_downloads
+            .get(&variant)
+            .is_some_and(|s| s.in_flight.contains(&segment_index))
+    }
+
+    /// Record that a `FetchCmd` for `(variant, segment_index)` has been
+    /// emitted. Lazily creates the per-variant entry.
+    pub(crate) fn mark_in_flight(&mut self, variant: VariantIndex, segment_index: SegmentIndex) {
+        self.runtime
+            .active_downloads
+            .entry(variant)
+            .or_default()
+            .in_flight
+            .insert(segment_index);
+    }
+
+    /// Mark the init segment for `variant` as committed. Lazily creates
+    /// the per-variant entry.
+    pub(crate) fn mark_init_sent(&mut self, variant: VariantIndex) {
+        self.runtime
+            .active_downloads
+            .entry(variant)
+            .or_default()
+            .init_sent = true;
+    }
+
+    /// Drop the in-flight record for `(variant, segment_index)` once
+    /// `on_complete` fires. No-op when the entry is absent (legitimate
+    /// after a seek-epoch reset cleared the set).
+    pub(crate) fn unmark_in_flight(&mut self, variant: VariantIndex, segment_index: SegmentIndex) {
+        if let Some(state) = self.runtime.active_downloads.get_mut(&variant) {
+            state.in_flight.remove(&segment_index);
+        }
     }
 
     pub(super) fn effective_total_bytes(&self) -> Option<u64> {
@@ -297,7 +348,7 @@ impl HlsScheduler {
             .had_midstream_switch
             .store(false, Ordering::Release);
         self.reset_cursor(segment_index);
-        self.runtime.in_flight_segments.clear();
+        self.clear_in_flight_for_seek();
 
         self.runtime.force_init_for_seek = self
             .playlist_state

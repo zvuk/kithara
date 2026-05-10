@@ -30,7 +30,7 @@ impl HlsScheduler {
         if cached_count > self.current_segment_index() {
             self.advance_current_segment_index(cached_count);
         }
-        self.runtime.sent_init_for_variant.insert(variant);
+        self.mark_init_sent(variant);
 
         let _ = cached_count;
         let _ = self.runtime.announced_cached_count.entry(variant);
