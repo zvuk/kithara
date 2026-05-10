@@ -251,6 +251,23 @@ impl HlsScheduler {
         self.cursor_mut_for(variant)
     }
 
+    /// Switch the active download track to `variant` while keeping the
+    /// Phase 1 invariant that `active_downloads` always carries an
+    /// entry for `primary_variant`. Lazy-creates the new entry if it
+    /// is absent so the next `current_only` / `current_segment_index`
+    /// read does not panic.
+    ///
+    /// Pre-existing entries — both for the outgoing variant and for
+    /// `variant` itself (populated earlier by, e.g.,
+    /// `handle_midstream_switch::cursor_mut_for(target)`) — are
+    /// preserved verbatim. Phase 1 is non-behavioural; explicit
+    /// teardown of stale entries is deferred to Phase 3 where the
+    /// blender introduces a second slot with its own lifecycle.
+    pub(crate) fn set_primary_variant(&mut self, variant: VariantIndex) {
+        self.primary_variant = variant;
+        self.runtime.active_downloads.entry(variant).or_default();
+    }
+
     /// Mutable cursor for an explicit variant. Used by callers that
     /// need to position the cursor on a variant they are about to
     /// install as `primary_variant` (the only such caller today is
@@ -396,7 +413,7 @@ impl HlsScheduler {
         // cursor in the pre-Phase-1 model was variant-agnostic; the
         // per-variant model needs the active key to be in place before
         // we touch the corresponding `VariantDownloadState`.
-        self.primary_variant = variant;
+        self.set_primary_variant(variant);
         self.runtime.active_seek_epoch = seek_epoch;
         self.coord.timeline().set_eof(false);
         self.coord

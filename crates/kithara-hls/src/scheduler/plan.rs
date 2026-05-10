@@ -70,7 +70,7 @@ impl HlsScheduler {
                 gap_seg, variant, "tail: ABR variant done, filling layout variant gap"
             );
             self.runtime.filling_layout_gap = true;
-            self.primary_variant = layout;
+            self.set_primary_variant(layout);
             self.reset_cursor(gap_seg);
             self.coord.condvar.notify_all();
             return true;

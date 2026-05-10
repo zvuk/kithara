@@ -412,7 +412,7 @@ fn seek_epoch_reset(state: &mut HlsState, seek_epoch: u64, segment_index: usize,
             .set_expected_sizes(variant, sizes);
     }
     if is_variant_switch {
-        sched.primary_variant = variant;
+        sched.set_primary_variant(variant);
     }
     let (cached_count, cached_end_offset) = sched.populate_cached_segments_if_needed(variant);
     sched.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
@@ -513,7 +513,7 @@ fn apply_variant_readiness(
         sched.handle_midstream_switch(variant, is_midstream_switch);
     }
     if is_variant_switch {
-        sched.primary_variant = variant;
+        sched.set_primary_variant(variant);
     }
     if let Some(sizes) = sched.playlist_state.segment_sizes(variant) {
         sched
@@ -1363,7 +1363,7 @@ mod tests {
             .timeline()
             .set_byte_position(READER_SEG as u64 * SEG_SIZE + 10);
 
-        state.scheduler.primary_variant = 0;
+        state.scheduler.set_primary_variant(0);
         state
             .scheduler
             .primary_cursor_mut()
@@ -1636,7 +1636,7 @@ mod tests {
             .timeline()
             .set_byte_position(reader_byte_pos);
 
-        state.scheduler.primary_variant = 0;
+        state.scheduler.set_primary_variant(0);
         state
             .scheduler
             .primary_cursor_mut()
