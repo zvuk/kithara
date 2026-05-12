@@ -8,6 +8,7 @@
 pub(crate) mod helpers;
 
 mod probe_commit_sequence;
+mod probe_variant_dispatch;
 
 mod t10_no_apply_format_change_until_v_new_init_committed;
 mod t11_apply_format_change_target_offset_matches_init_range;
