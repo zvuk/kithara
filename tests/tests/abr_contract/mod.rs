@@ -9,6 +9,7 @@ pub(crate) mod helpers;
 
 mod probe_baseline_no_switch;
 mod probe_commit_sequence;
+mod probe_demuxer_continuity;
 mod probe_disk_inventory_parity;
 mod probe_emit_count_contract;
 mod probe_init_range;
