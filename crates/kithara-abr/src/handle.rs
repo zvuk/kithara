@@ -1,11 +1,15 @@
 use std::sync::Arc;
 
 use kithara_events::{AbrMode, EventBus};
-use kithara_platform::RwLock;
+use kithara_platform::{
+    RwLock,
+    time::{Duration, Instant},
+};
+use kithara_test_utils::kithara;
 
 use crate::{
     controller::{AbrController, AbrPeerId},
-    state::{AbrError, AbrState},
+    state::{AbrDecision, AbrError, AbrState},
 };
 
 /// Clone-able handle returned by [`AbrController::register`].
@@ -113,6 +117,33 @@ impl AbrHandle {
     pub fn with_bus(self, bus: EventBus) -> Self {
         *self.inner.bus.lock_sync_write() = Some(bus);
         self
+    }
+
+    /// Boundary commit of pending ABR decision. Called by HLS scheduler at fetch boundary.
+    ///
+    /// Returns `Some(decision)` when a pending decision was committed (state.current updated).
+    /// Returns `None` when no pending decision, or `is_locked()` blocks the commit.
+    ///
+    /// Production stub — Plan 01 implements.
+    #[kithara::probe]
+    pub fn commit_pending(&self, _now: Instant) -> Option<AbrDecision> {
+        unimplemented!("Plan 01 — AbrHandle::commit_pending")
+    }
+
+    /// Side-effects after HLS scheduler committed a variant switch:
+    /// emits `VariantApplied` via bus + schedules incoherence watchdog.
+    ///
+    /// Production stub — Plan 01 implements.
+    #[kithara::probe(current_before)]
+    pub fn notify_commit(
+        &self,
+        decision: AbrDecision,
+        current_before: usize,
+        reader_pt: Duration,
+        _now: Instant,
+    ) {
+        let _ = (decision, current_before, reader_pt);
+        unimplemented!("Plan 01 — AbrHandle::notify_commit")
     }
 }
 
