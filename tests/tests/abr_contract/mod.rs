@@ -8,6 +8,7 @@
 pub(crate) mod helpers;
 
 mod probe_commit_sequence;
+mod probe_pcm_seam_continuity;
 mod probe_variant_dispatch;
 mod probe_variant_rebuild;
 
