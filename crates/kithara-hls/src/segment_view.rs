@@ -2,7 +2,10 @@
 
 use std::{
     ops::Range,
-    sync::{Arc, atomic::AtomicUsize},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use kithara_platform::time::Duration;
@@ -27,40 +30,267 @@ impl HlsSegmentView {
             active_variant,
         }
     }
+
+    fn active(&self) -> Option<&HlsVariant> {
+        let idx = self.active_variant.load(Ordering::Acquire);
+        self.variants.get(idx)
+    }
 }
 
 impl SegmentLayout for HlsSegmentView {
     #[kithara::probe]
     fn init_segment_range(&self) -> Option<Range<u64>> {
-        unimplemented!("Plan 04 — HlsSegmentView::init_segment_range")
+        self.active()?.init_byte_range()
+    }
+
+    #[kithara::probe(byte)]
+    fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        self.active()?.descriptor_after_byte(byte)
     }
 
     #[kithara::probe]
-    fn segment_after_byte(&self, _byte: u64) -> Option<SegmentDescriptor> {
-        unimplemented!("Plan 04 — HlsSegmentView::segment_after_byte")
-    }
-
-    #[kithara::probe]
-    fn segment_at_time(&self, _t: Duration) -> Option<SegmentDescriptor> {
-        unimplemented!("Plan 04 — HlsSegmentView::segment_at_time")
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.active()?.descriptor_at_time(t)
     }
 
     fn segment_count(&self) -> Option<u32> {
-        unimplemented!("Plan 04 — HlsSegmentView::segment_count")
+        Some(self.active()?.num_segments())
     }
 
     fn len(&self) -> Option<u64> {
-        unimplemented!("Plan 04 — HlsSegmentView::len")
+        Some(self.active()?.total_bytes())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        sync::{
+            Barrier,
+            atomic::{AtomicBool, Ordering as TestOrdering},
+        },
+        thread,
+    };
 
-    #[test]
-    fn skeleton_constructs() {
+    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
+    use kithara_drm::DecryptContext;
+    use kithara_stream::dl::{Downloader, DownloaderConfig};
+    use tokio_util::sync::CancellationToken;
+    use url::Url;
+
+    use super::*;
+    use crate::variant::{InitEntry, PlanCtx, SegmentEntry, SegmentState};
+
+    fn test_ctx() -> PlanCtx {
+        let cancel = CancellationToken::new();
+        let passthrough: ProcessChunkFn<DecryptContext> =
+            Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
+                output[..input.len()].copy_from_slice(input);
+                Ok(input.len())
+            });
+        let backend = Arc::new(
+            AssetStoreBuilder::new()
+                .ephemeral(true)
+                .cancel(cancel.clone())
+                .process_fn(passthrough)
+                .build(),
+        );
+        let downloader = Arc::new(Downloader::new(
+            DownloaderConfig::default().with_cancel(cancel.child_token()),
+        ));
+        PlanCtx {
+            master_cancel: cancel,
+            asset_store: backend,
+            downloader,
+            prefetch_budget: 3,
+        }
+    }
+
+    fn make_init(size: u64, tag: &str) -> InitEntry {
+        let url: Url = format!("https://example.com/{tag}/init.mp4")
+            .parse()
+            .expect("valid url");
+        let asset_id = ResourceKey::from_url(&url);
+        InitEntry {
+            url,
+            asset_id,
+            size,
+            state: SegmentState::Missing,
+        }
+    }
+
+    fn make_seg(tag: &str, idx: u32, byte_offset: u64, size: u64) -> SegmentEntry {
+        let url: Url = format!("https://example.com/{tag}/seg{idx}.m4s")
+            .parse()
+            .expect("valid url");
+        let asset_id = ResourceKey::from_url(&url);
+        SegmentEntry {
+            url,
+            asset_id,
+            byte_offset,
+            size,
+            state: SegmentState::Missing,
+            decrypt_ctx: None,
+            decode_time: Duration::from_millis(u64::from(idx) * 2000),
+            duration: Duration::from_secs(2),
+        }
+    }
+
+    fn variant_low(ctx: &PlanCtx) -> HlsVariant {
+        HlsVariant::new(
+            0,
+            make_init(100, "lo"),
+            vec![
+                make_seg("lo", 0, 100, 200),
+                make_seg("lo", 1, 300, 200),
+                make_seg("lo", 2, 500, 200),
+            ],
+            ctx,
+        )
+    }
+
+    fn variant_high(ctx: &PlanCtx) -> HlsVariant {
+        HlsVariant::new(
+            1,
+            make_init(300, "hi"),
+            vec![
+                make_seg("hi", 0, 300, 400),
+                make_seg("hi", 1, 700, 400),
+                make_seg("hi", 2, 1100, 400),
+            ],
+            ctx,
+        )
+    }
+
+    #[kithara::test]
+    fn init_segment_range_follows_active_variant() {
+        let ctx = test_ctx();
+        let variants = Arc::new(vec![variant_low(&ctx), variant_high(&ctx)]);
+        let active = Arc::new(AtomicUsize::new(0));
+        let view = HlsSegmentView::new(Arc::clone(&variants), Arc::clone(&active));
+        assert_eq!(view.init_segment_range(), Some(0..100));
+        active.store(1, Ordering::Release);
+        assert_eq!(view.init_segment_range(), Some(0..300));
+    }
+
+    #[kithara::test]
+    fn segment_at_time_routes_through_active() {
+        let ctx = test_ctx();
+        let variants = Arc::new(vec![variant_low(&ctx), variant_high(&ctx)]);
+        let active = Arc::new(AtomicUsize::new(0));
+        let view = HlsSegmentView::new(Arc::clone(&variants), Arc::clone(&active));
+        let desc = view
+            .segment_at_time(Duration::from_secs(2))
+            .expect("seg present");
+        assert_eq!(desc.segment_index, 1);
+        assert_eq!(desc.variant_index, 0);
+        active.store(1, Ordering::Release);
+        let desc = view
+            .segment_at_time(Duration::from_secs(2))
+            .expect("seg present");
+        assert_eq!(desc.variant_index, 1);
+    }
+
+    #[kithara::test]
+    fn segment_after_byte_routes_through_active() {
+        let ctx = test_ctx();
+        let variants = Arc::new(vec![variant_low(&ctx), variant_high(&ctx)]);
+        let active = Arc::new(AtomicUsize::new(0));
+        let view = HlsSegmentView::new(Arc::clone(&variants), Arc::clone(&active));
+        let desc = view.segment_after_byte(150).expect("seg present");
+        assert_eq!(desc.variant_index, 0);
+        active.store(1, Ordering::Release);
+        let desc = view.segment_after_byte(150).expect("seg present");
+        assert_eq!(desc.variant_index, 1);
+        assert_eq!(desc.segment_index, 0);
+    }
+
+    #[kithara::test]
+    fn segment_count_and_len_track_active() {
+        let ctx = test_ctx();
+        let variants = Arc::new(vec![variant_low(&ctx), variant_high(&ctx)]);
+        let active = Arc::new(AtomicUsize::new(0));
+        let view = HlsSegmentView::new(Arc::clone(&variants), Arc::clone(&active));
+        assert_eq!(view.segment_count(), Some(3));
+        assert_eq!(view.len(), Some(700));
+        active.store(1, Ordering::Release);
+        assert_eq!(view.segment_count(), Some(3));
+        assert_eq!(view.len(), Some(1500));
+    }
+
+    #[kithara::test]
+    fn empty_variant_returns_none() {
         let view = HlsSegmentView::new(Arc::new(Vec::new()), Arc::new(AtomicUsize::new(0)));
-        assert!(view.variants.is_empty());
+        assert!(view.init_segment_range().is_none());
+        assert!(view.segment_after_byte(0).is_none());
+        assert!(view.segment_at_time(Duration::from_secs(0)).is_none());
+        assert!(view.segment_count().is_none());
+        assert!(view.len().is_none());
+    }
+
+    #[kithara::test]
+    fn out_of_bounds_active_idx_returns_none() {
+        let ctx = test_ctx();
+        let variants = Arc::new(vec![variant_low(&ctx)]);
+        let view = HlsSegmentView::new(Arc::clone(&variants), Arc::new(AtomicUsize::new(7)));
+        assert!(view.init_segment_range().is_none());
+        assert!(view.segment_count().is_none());
+        assert!(view.len().is_none());
+    }
+
+    #[kithara::test]
+    fn concurrent_reads_consistent_with_flips() {
+        let ctx = test_ctx();
+        let variants = Arc::new(vec![variant_low(&ctx), variant_high(&ctx)]);
+        let active = Arc::new(AtomicUsize::new(0));
+        let view = Arc::new(HlsSegmentView::new(
+            Arc::clone(&variants),
+            Arc::clone(&active),
+        ));
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader_count = 4_usize;
+        let iter_count = 4_000_usize;
+        let barrier = Arc::new(Barrier::new(reader_count + 1));
+
+        let mut readers = Vec::with_capacity(reader_count);
+        for _ in 0..reader_count {
+            let view = Arc::clone(&view);
+            let stop = Arc::clone(&stop);
+            let barrier = Arc::clone(&barrier);
+            readers.push(thread::spawn(move || {
+                barrier.wait();
+                while !stop.load(TestOrdering::Acquire) {
+                    if let Some(range) = view.init_segment_range() {
+                        assert!(range.start == 0);
+                        assert!(matches!(range.end, 100 | 300));
+                    }
+                    if let Some(total) = view.len() {
+                        assert!(matches!(total, 700 | 1500));
+                    }
+                    if let Some(desc) = view.segment_at_time(Duration::from_secs(2)) {
+                        assert!(matches!(desc.variant_index, 0 | 1));
+                    }
+                }
+            }));
+        }
+
+        let writer_view = Arc::clone(&view);
+        let writer_stop = Arc::clone(&stop);
+        let writer_barrier = Arc::clone(&barrier);
+        let writer = thread::spawn(move || {
+            writer_barrier.wait();
+            for i in 0..iter_count {
+                writer_view
+                    .active_variant
+                    .store(i & 1, TestOrdering::Release);
+            }
+            writer_stop.store(true, TestOrdering::Release);
+        });
+
+        writer.join().expect("writer joined");
+        for r in readers {
+            r.join().expect("reader joined");
+        }
     }
 }
