@@ -67,7 +67,7 @@ mod tests {
     use std::{
         sync::{
             Barrier,
-            atomic::{AtomicBool, Ordering as TestOrdering},
+            atomic::{AtomicBool, AtomicU8, Ordering as TestOrdering},
         },
         thread,
     };
@@ -112,7 +112,7 @@ mod tests {
             url,
             resource_id,
             size,
-            state: SegmentState::Missing,
+            state: AtomicU8::new(SegmentState::Missing as u8),
         }
     }
 
@@ -126,7 +126,7 @@ mod tests {
             resource_id,
             byte_offset,
             size,
-            state: SegmentState::Missing,
+            state: AtomicU8::new(SegmentState::Missing as u8),
             decrypt_ctx: None,
             decode_time: Duration::from_millis(u64::from(idx) * 2000),
             duration: Duration::from_secs(2),
