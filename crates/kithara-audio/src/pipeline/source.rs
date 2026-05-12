@@ -56,12 +56,6 @@ impl<T: StreamType> SharedStream<T> {
         }
     }
 
-    /// Build a `StreamContext` from the inner stream's source.
-    pub(crate) fn build_stream_context(&self) -> Arc<dyn kithara_stream::StreamContext> {
-        let stream = self.inner.lock_sync();
-        T::build_stream_context(stream.source())
-    }
-
     delegate! {
         to self.inner.lock_sync() {
             pub(crate) fn position(&self) -> u64;
@@ -1081,11 +1075,12 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn seek_context(&self) -> SegmentLocation {
-        let stream_ctx = self.shared_stream.build_stream_context();
         let segment_range = self.shared_stream.current_segment_range();
         SegmentLocation::new(
-            stream_ctx.variant_index(),
-            stream_ctx.segment_index(),
+            self.shared_stream
+                .abr_handle()
+                .and_then(|h| h.current_variant_index()),
+            None,
             segment_range.as_ref().map(|range| range.start),
             segment_range.as_ref().map(|range| range.end),
         )

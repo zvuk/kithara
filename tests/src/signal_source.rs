@@ -101,10 +101,6 @@ impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
         self.position.store(pos, Ordering::Release);
     }
 
-    fn position_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.position)
-    }
-
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if buf.is_empty() || self.is_past_eof(offset) {
             return Ok(ReadOutcome::Eof);

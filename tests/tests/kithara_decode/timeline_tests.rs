@@ -128,12 +128,9 @@ mod hls_timeline {
             .with_initial_abr_mode(AbrMode::Manual(0));
 
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
-        let stream_ctx = Hls::build_stream_context(stream.source());
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let decoder_config = DecoderConfig::default()
-            .with_stream_ctx(stream_ctx)
-            .with_hint("wav".to_string());
+        let decoder_config = DecoderConfig::default().with_hint("wav".to_string());
 
         let result = tokio::task::spawn_blocking(move || {
             let mut decoder =

@@ -22,8 +22,8 @@ use kithara_decode::{
 use kithara_platform::{Mutex, thread, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, NullStreamContext, ReadOutcome, Source, SourcePhase,
-    SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, Timeline,
+    AudioCodec, ContainerFormat, MediaInfo, ReadOutcome, Source, SourcePhase, SourceSeekAnchor,
+    Stream, StreamError, StreamResult, StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 
@@ -98,10 +98,6 @@ impl Source for TestSource {
 
     fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
-    }
-
-    fn position_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.position)
     }
 
     fn wait_range(
@@ -257,10 +253,6 @@ impl StreamType for TestStream {
         config
             .source
             .ok_or_else(|| kithara_stream::SourceError::other(IoError::other("no source")))
-    }
-
-    fn build_stream_context(source: &Self::Source) -> Arc<dyn kithara_stream::StreamContext> {
-        Arc::new(NullStreamContext::new(source.position_handle()))
     }
 }
 

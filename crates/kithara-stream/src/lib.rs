@@ -9,7 +9,6 @@
 
 #![forbid(unsafe_code)]
 
-mod context;
 pub mod dl;
 mod error;
 mod hooks;
@@ -22,7 +21,6 @@ mod timeline;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 
-pub use context::{NullStreamContext, StreamContext};
 pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};

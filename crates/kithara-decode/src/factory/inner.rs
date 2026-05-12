@@ -11,9 +11,7 @@ use std::{
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, SegmentLayout, SharedHooks, StreamContext,
-};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SegmentLayout, SharedHooks};
 
 use super::probe::{ProbeHint, container_from_extension, probe_codec, resolve_codec_container};
 use crate::{
@@ -111,8 +109,6 @@ pub struct DecoderConfig {
     /// forward seek.
     #[setters(skip)]
     pub segment_layout: Option<Arc<dyn SegmentLayout>>,
-    /// Stream context for segment/variant metadata.
-    pub stream_ctx: Option<Arc<dyn StreamContext>>,
     /// Enable gapless trim wiring through the per-backend codec.
     ///
     /// `true` (default) flips the matching `*Config::gapless` for the
@@ -417,7 +413,6 @@ fn create_file_symphonia_universal(
         pool,
         config.epoch,
         config.byte_len_handle.clone(),
-        config.stream_ctx.clone(),
         config.hooks.clone(),
     );
     Ok(Box::new(decoder))
@@ -494,7 +489,6 @@ where
         pool,
         config.epoch,
         config.byte_len_handle.clone(),
-        config.stream_ctx.clone(),
         config.hooks.clone(),
     );
     Ok(Box::new(decoder))

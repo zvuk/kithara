@@ -86,10 +86,6 @@ impl Source for MemorySource {
         self.position.store(pos, Ordering::Release);
     }
 
-    fn position_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.position)
-    }
-
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let offset = offset as usize;
         if offset >= self.data.len() {

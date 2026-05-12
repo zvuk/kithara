@@ -11,12 +11,12 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
 use kithara_platform::Mutex;
 use kithara_stream::{
-    SourceError, StreamContext, StreamType, Timeline,
+    SourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig, Peer},
 };
 
 use crate::{
-    HlsResult, HlsStreamContext,
+    HlsResult,
     config::HlsConfig,
     coord::HlsCoord,
     loading::{KeyManager, PlaylistCache, SegmentLoader},
@@ -56,15 +56,6 @@ impl StreamType for Hls {
     type Config = HlsConfig;
     type Events = EventBus;
     type Source = HlsSource;
-
-    fn build_stream_context(source: &Self::Source) -> Arc<dyn StreamContext> {
-        Arc::new(HlsStreamContext::new(
-            source.coord.position_handle(),
-            source.coord.timeline(),
-            Arc::clone(&source.segments),
-            Arc::clone(&source.coord.abr_state),
-        ))
-    }
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         let asset_root = asset_root_for_url(&config.url, config.name.as_deref());

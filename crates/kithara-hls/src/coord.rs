@@ -108,11 +108,6 @@ impl HlsCoord {
         self.position.store(pos, Ordering::Release);
     }
 
-    #[must_use]
-    pub(crate) fn position_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.position)
-    }
-
     pub(crate) fn clear_pending_segment_request(&self, request: SegmentRequest) {
         if self.demand.peek() == Some(request) {
             self.demand.clear();

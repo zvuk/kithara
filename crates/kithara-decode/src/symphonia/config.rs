@@ -1,9 +1,7 @@
 //! Probe / direct-reader bootstrap parameters.
 //!
 //! Used by [`super::probe::new_direct`] / [`super::probe::probe_with_seek`]
-//! to wire a Symphonia format reader. The original "decoder god-type"
-//! configuration (gapless, verify, `stream_ctx`, epoch, `pcm_pool`) was
-//! removed when the only consumer — `SymphoniaDecoder` — was deleted.
+//! to wire a Symphonia format reader.
 
 use std::sync::{Arc, atomic::AtomicU64};
 

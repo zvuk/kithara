@@ -12,7 +12,7 @@ use std::{
 };
 
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_stream::{ReaderChunkSignal, ReaderSeekSignal, SharedHooks, StreamContext};
+use kithara_stream::{ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -41,7 +41,6 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     /// first frame past the target is consumed. Lets `seek(target)`
     /// land precisely at `target` instead of at the granule boundary.
     pending_seek_target: Option<Duration>,
-    stream_ctx: Option<Arc<dyn StreamContext>>,
     pool: PcmPool,
     spec: PcmSpec,
     /// Set on every seek; the next emitted chunk re-anchors
@@ -68,7 +67,6 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         pool: PcmPool,
         epoch: u64,
         byte_len_handle: Option<Arc<AtomicU64>>,
-        stream_ctx: Option<Arc<dyn StreamContext>>,
         hooks: Option<SharedHooks>,
     ) -> Self {
         let spec = codec.spec();
@@ -81,7 +79,6 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             pool,
             epoch,
             byte_len_handle,
-            stream_ctx,
             hooks,
             frame_offset: 0,
             pending_seek_target: None,
@@ -123,9 +120,9 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             frames,
             frame_offset,
             source_bytes,
-            segment_index: self.stream_ctx.as_ref().and_then(|ctx| ctx.segment_index()),
+            segment_index: None,
             source_byte_offset: None,
-            variant_index: self.stream_ctx.as_ref().and_then(|ctx| ctx.variant_index()),
+            variant_index: None,
             spec: self.spec,
             epoch: self.epoch,
         };
@@ -318,15 +315,8 @@ mod smoke_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
-        let mut decoder = ComposedDecoder::new(
-            demuxer,
-            codec,
-            PcmPool::default().clone(),
-            0,
-            None,
-            None,
-            None,
-        );
+        let mut decoder =
+            ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
 
         let mut got_chunk = false;
         for _ in 0..16 {
@@ -354,15 +344,8 @@ mod smoke_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
-        let mut decoder = ComposedDecoder::new(
-            demuxer,
-            codec,
-            PcmPool::default().clone(),
-            0,
-            None,
-            None,
-            None,
-        );
+        let mut decoder =
+            ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
 
         for _ in 0..4 {
             let _ = decoder
@@ -591,7 +574,6 @@ mod hook_tests {
             codec,
             PcmPool::default().clone(),
             0,
-            None,
             None,
             Some(hooks),
         )

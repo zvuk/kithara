@@ -118,7 +118,7 @@ impl fmt::Display for VariantChangeError {
 impl StdError for VariantChangeError {}
 
 use crate::{
-    MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
+    MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
     error::{SourceError, StreamError},
     source::{PendingReason, ReadOutcome, Source},
 };
@@ -141,14 +141,6 @@ pub trait StreamType: MaybeSend + 'static {
 
     /// Source implementing `Source`.
     type Source: Source;
-
-    /// Build a `StreamContext` from the source and shared byte position.
-    ///
-    /// Default returns `NullStreamContext` (no segment/variant info).
-    /// HLS overrides with `HlsStreamContext` carrying segment/variant atomics.
-    fn build_stream_context(source: &Self::Source) -> Arc<dyn StreamContext> {
-        Arc::new(crate::NullStreamContext::new(source.position_handle()))
-    }
 
     /// Create the source from configuration.
     ///
@@ -537,10 +529,6 @@ mod tests {
             self.position.store(pos, Ordering::Release);
         }
 
-        fn position_handle(&self) -> Arc<AtomicU64> {
-            Arc::clone(&self.position)
-        }
-
         fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
             let step = self.reads.pop_front().unwrap_or(ScriptRead::Eof);
             match step {
@@ -629,10 +617,6 @@ mod tests {
 
         fn set_position(&self, pos: u64) {
             self.position.store(pos, Ordering::Release);
-        }
-
-        fn position_handle(&self) -> Arc<AtomicU64> {
-            Arc::clone(&self.position)
         }
 
         fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {

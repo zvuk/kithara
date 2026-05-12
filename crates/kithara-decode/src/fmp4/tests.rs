@@ -153,15 +153,7 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
     let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
-    let decoder = ComposedDecoder::new(
-        demuxer,
-        codec,
-        PcmPool::default().clone(),
-        0,
-        None,
-        None,
-        None,
-    );
+    let decoder = ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
     (decoder, reads, record)
 }
 

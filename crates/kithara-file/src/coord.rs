@@ -59,11 +59,6 @@ impl FileCoord {
         self.position.store(pos, Ordering::Release);
     }
 
-    #[must_use]
-    pub(crate) fn position_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.position)
-    }
-
     /// Borrow the demand notify — callers await `.notified()` directly.
     pub(crate) fn demand_notify(&self) -> &Notify {
         &self.downloader_wake

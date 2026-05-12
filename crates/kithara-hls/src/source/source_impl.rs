@@ -1,10 +1,7 @@
 use std::{
     num::NonZeroUsize,
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, atomic::Ordering},
 };
 
 use kithara_events::HlsEvent;
@@ -384,7 +381,7 @@ impl Source for HlsSource {
         let hooks = super::reader_hooks::HlsReaderHooks::new(
             self.bus.clone(),
             Arc::clone(&self.segments),
-            self.coord.position_handle(),
+            Arc::clone(&self.coord),
             self.coord.timeline().seek_epoch_handle(),
         );
         Some(Arc::new(std::sync::Mutex::new(hooks)))
@@ -404,10 +401,6 @@ impl Source for HlsSource {
 
     fn set_position(&self, pos: u64) {
         self.coord.set_position(pos);
-    }
-
-    fn position_handle(&self) -> Arc<AtomicU64> {
-        self.coord.position_handle()
     }
 
     #[kithara_hang_detector::hang_watchdog(timeout = wait_range_hang_timeout(timeout))]

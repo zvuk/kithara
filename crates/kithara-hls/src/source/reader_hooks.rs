@@ -27,10 +27,9 @@ use crate::{
 /// [`HlsSource::take_reader_hooks`](super::core::HlsSource::take_reader_hooks)
 /// and handed off to the audio pipeline at decoder-create time.
 pub(crate) struct HlsReaderHooks {
-    /// Shared atomic byte cursor — written by `Stream::read` /
-    /// `Stream::seek`, read here at hook time. Single source of truth
-    /// for "where the reader currently is".
-    byte_cursor: Arc<AtomicU64>,
+    /// Shared coord — owner of the source's byte cursor; we poll
+    /// `coord.position()` on each chunk without holding `&Source`.
+    coord: Arc<crate::coord::HlsCoord>,
     /// Shared atomic seek epoch — read into the `ReaderSeek` payload
     /// for cross-event correlation.
     seek_epoch_handle: Arc<AtomicU64>,
@@ -60,14 +59,14 @@ impl HlsReaderHooks {
     pub(crate) fn new(
         bus: EventBus,
         segments: Arc<Mutex<StreamIndex>>,
-        byte_cursor: Arc<AtomicU64>,
+        coord: Arc<crate::coord::HlsCoord>,
         seek_epoch_handle: Arc<AtomicU64>,
     ) -> Self {
-        let last_cursor = byte_cursor.load(Ordering::Relaxed);
+        let last_cursor = coord.position();
         Self {
             bus,
             segments,
-            byte_cursor,
+            coord,
             seek_epoch_handle,
             state: None,
             last_cursor,
@@ -129,7 +128,7 @@ impl DecoderHooks for HlsReaderHooks {
         if !matches!(signal, ReaderChunkSignal::Chunk) {
             return;
         }
-        let cursor = self.byte_cursor.load(Ordering::Relaxed);
+        let cursor = self.coord.position();
         self.publish_initial_seek(cursor);
         let delta = cursor.saturating_sub(self.last_cursor);
         self.last_cursor = cursor;

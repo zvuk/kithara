@@ -21,7 +21,6 @@
 pub mod config;
 pub mod error;
 
-mod context;
 mod coord;
 mod demand;
 mod ids;
@@ -43,7 +42,6 @@ pub mod variant;
 pub mod test_utils;
 
 pub use config::{HlsConfig, KeyOptions};
-pub use context::HlsStreamContext;
 pub use coord::{HlsCoord, SegmentRequest};
 pub use error::{HlsError, HlsResult};
 pub use ids::VariantIndex;

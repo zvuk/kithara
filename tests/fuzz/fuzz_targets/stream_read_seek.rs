@@ -14,8 +14,7 @@ use arbitrary::{Arbitrary, Unstructured};
 use kithara_platform::{time::Duration, tokio::runtime::Builder};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext, StreamResult,
-    StreamType, Timeline,
+    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -125,10 +124,6 @@ impl Source for ScriptSource {
         self.position.store(pos, Ordering::Release);
     }
 
-    fn position_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.position)
-    }
-
     fn wait_range(
         &mut self,
         _range: Range<u64>,
@@ -172,10 +167,6 @@ impl StreamType for DummyType {
 
     async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
         Ok(config)
-    }
-
-    fn build_stream_context(source: &Self::Source) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(source.position_handle()))
     }
 }
 

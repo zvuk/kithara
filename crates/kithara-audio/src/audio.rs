@@ -21,7 +21,7 @@ use kithara_platform::{
     thread::park_timeout,
     tokio::{sync::Notify, task::spawn_blocking},
 };
-use kithara_stream::{MediaInfo, Stream, StreamContext, StreamType, Timeline};
+use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
 use portable_atomic::AtomicF32;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
@@ -731,7 +731,6 @@ where
 
         let shared_stream = SharedStream::new(stream);
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
-        let stream_ctx = shared_stream.build_stream_context();
 
         let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
         let decoder = Self::create_initial_decoder(
@@ -741,7 +740,6 @@ where
             pool.clone(),
             byte_pool.clone(),
             decoder_backend,
-            Arc::clone(&stream_ctx),
         )
         .await?;
 
@@ -769,7 +767,6 @@ where
         let emit = Self::create_emit(&bus);
         let decoder_factory = Self::create_decoder_factory(
             decoder_backend,
-            &stream_ctx,
             &epoch,
             &byte_len_handle,
             pool,
@@ -849,13 +846,11 @@ where
 
     fn create_decoder_factory(
         decoder_backend: kithara_decode::DecoderBackend,
-        stream_ctx: &Arc<dyn StreamContext>,
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
         pool: &PcmPool,
         byte_pool: &kithara_bufpool::BytePool,
     ) -> crate::pipeline::source::DecoderFactory<T> {
-        let factory_stream_ctx = Arc::clone(stream_ctx);
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);
         let factory_pool = pool.clone();
@@ -870,7 +865,6 @@ where
                 .with_byte_len_handle(Arc::clone(&factory_byte_len))
                 .with_pcm_pool(factory_pool.clone())
                 .with_byte_pool(factory_byte_pool.clone())
-                .with_stream_ctx(Arc::clone(&factory_stream_ctx))
                 .with_epoch(factory_epoch.load(Ordering::Acquire))
                 .with_segment_layout(stream.as_segment_layout())
                 .with_hooks(stream.take_reader_hooks());
@@ -902,7 +896,6 @@ where
         pcm_pool: PcmPool,
         byte_pool: kithara_bufpool::BytePool,
         decoder_backend: kithara_decode::DecoderBackend,
-        stream_ctx: Arc<dyn StreamContext>,
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
@@ -911,7 +904,6 @@ where
             .with_byte_len_handle(byte_len_handle)
             .with_pcm_pool(pcm_pool)
             .with_byte_pool(byte_pool)
-            .with_stream_ctx(stream_ctx)
             .with_segment_layout(shared_stream.as_segment_layout())
             .with_hooks(shared_stream.take_reader_hooks());
         if let Some(h) = hint.clone() {

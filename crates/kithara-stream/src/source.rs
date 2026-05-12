@@ -377,11 +377,6 @@ pub trait Source: Send + Sync + 'static {
     /// post-seek landings. Sources implement this via the same atomic
     /// cursor that backs [`Self::position`] / [`Self::advance`].
     fn set_position(&self, pos: u64);
-
-    /// Shared `Arc<AtomicU64>` handle for the byte cursor — for
-    /// `StreamContext` and reader hooks that need a lock-free atomic
-    /// reference without holding `&self`.
-    fn position_handle(&self) -> Arc<std::sync::atomic::AtomicU64>;
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented
@@ -475,9 +470,6 @@ mod tests {
             }
             fn set_position(&self, pos: u64) {
                 self.position.store(pos, Ordering::Release);
-            }
-            fn position_handle(&self) -> Arc<AtomicU64> {
-                Arc::clone(&self.position)
             }
         }
         let source = ReadySource {
