@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara_events::{AbrMode, EventBus};
+use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
     RwLock,
     time::{Duration, Instant},
@@ -123,32 +123,177 @@ impl AbrHandle {
     ///
     /// Returns `Some(decision)` when a pending decision was committed (state.current updated).
     /// Returns `None` when no pending decision, or `is_locked()` blocks the commit.
-    ///
-    /// Production stub — Plan 01 implements.
     #[kithara::probe]
-    pub fn commit_pending(&self, _now: Instant) -> Option<AbrDecision> {
-        unimplemented!("Plan 01 — AbrHandle::commit_pending")
+    pub fn commit_pending(&self, now: Instant) -> Option<AbrDecision> {
+        self.inner
+            .state
+            .as_ref()
+            .and_then(|s| s.commit_pending(now))
     }
 
     /// Side-effects after HLS scheduler committed a variant switch:
     /// emits `VariantApplied` via bus + schedules incoherence watchdog.
-    ///
-    /// Production stub — Plan 01 implements.
     #[kithara::probe(current_before)]
     pub fn notify_commit(
         &self,
         decision: AbrDecision,
         current_before: usize,
         reader_pt: Duration,
-        _now: Instant,
+        now: Instant,
     ) {
-        let _ = (decision, current_before, reader_pt);
-        unimplemented!("Plan 01 — AbrHandle::notify_commit")
+        let bus = self.inner.bus.lock_sync_read().clone();
+        if let Some(bus) = bus {
+            bus.publish(AbrEvent::VariantApplied {
+                from: current_before,
+                to: decision.target_variant_index,
+                reason: decision.reason,
+            });
+        }
+        self.inner
+            .controller
+            .schedule_incoherence_watch(self.inner.peer_id, reader_pt, now);
     }
 }
 
 impl Drop for HandleInner {
     fn drop(&mut self) {
         self.controller.unregister(self.peer_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_events::{
+        AbrEvent, AbrReason, AbrVariant, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus,
+        VariantDuration,
+    };
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        Abr, AbrController, AbrSettings, ThroughputEstimator,
+        state::{AbrDecision, AbrState},
+    };
+
+    fn test_variants_3() -> Vec<AbrVariant> {
+        vec![
+            AbrVariant {
+                variant_index: 0,
+                bandwidth_bps: 256_000,
+                duration: VariantDuration::Unknown,
+            },
+            AbrVariant {
+                variant_index: 1,
+                bandwidth_bps: 512_000,
+                duration: VariantDuration::Unknown,
+            },
+            AbrVariant {
+                variant_index: 2,
+                bandwidth_bps: 1_024_000,
+                duration: VariantDuration::Unknown,
+            },
+        ]
+    }
+
+    fn settings_fast() -> AbrSettings {
+        AbrSettings {
+            warmup_min_bytes: 0,
+            min_switch_interval: Duration::ZERO,
+            min_buffer_for_up_switch: Duration::ZERO,
+            ..AbrSettings::default()
+        }
+    }
+
+    struct StatefulPeer {
+        state: Arc<AbrState>,
+    }
+    impl Abr for StatefulPeer {
+        fn state(&self) -> Option<Arc<AbrState>> {
+            Some(Arc::clone(&self.state))
+        }
+        fn variants(&self) -> Vec<AbrVariant> {
+            self.state.variants_snapshot()
+        }
+    }
+
+    #[kithara::test(tokio)]
+    async fn commit_pending_happy_path() {
+        let controller = AbrController::with_estimator(
+            settings_fast(),
+            Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        );
+        let state = Arc::new(AbrState::new(test_variants_3(), AbrMode::Auto(Some(0))));
+        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            state: Arc::clone(&state),
+        });
+        let handle = controller.register(&peer);
+
+        state.request_target(2, AbrReason::UpSwitch);
+
+        let decision = handle.commit_pending(Instant::now());
+        let decision = decision.expect("commit_pending must return Some when pending is set");
+        assert_eq!(decision.target_variant_index, 2);
+        assert_eq!(decision.reason, AbrReason::UpSwitch);
+        assert!(decision.did_change);
+        assert_eq!(state.current_variant_index(), 2);
+    }
+
+    #[kithara::test(tokio)]
+    async fn commit_pending_returns_none_when_locked() {
+        let controller = AbrController::with_estimator(
+            settings_fast(),
+            Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        );
+        let state = Arc::new(AbrState::new(test_variants_3(), AbrMode::Auto(Some(0))));
+        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            state: Arc::clone(&state),
+        });
+        let handle = controller.register(&peer);
+
+        handle.lock();
+        state.request_target(2, AbrReason::UpSwitch);
+
+        let decision = handle.commit_pending(Instant::now());
+        assert!(
+            decision.is_none(),
+            "commit_pending must return None while locked"
+        );
+        assert_eq!(state.current_variant_index(), 0);
+        assert_eq!(state.pending_target(), Some(2));
+    }
+
+    #[kithara::test(tokio)]
+    async fn notify_commit_emits_variant_applied() {
+        let controller = AbrController::with_estimator(
+            settings_fast(),
+            Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        );
+        let state = Arc::new(AbrState::new(test_variants_3(), AbrMode::Auto(Some(0))));
+        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            state: Arc::clone(&state),
+        });
+
+        let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
+        let mut rx = bus.subscribe();
+        let handle = controller.register(&peer).with_bus(bus);
+
+        let decision = AbrDecision {
+            target_variant_index: 2,
+            reason: AbrReason::UpSwitch,
+            did_change: true,
+        };
+        handle.notify_commit(decision, 0, Duration::ZERO, Instant::now());
+
+        let mut seen = false;
+        while let Ok(event) = rx.try_recv() {
+            if let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event {
+                assert_eq!(from, 0);
+                assert_eq!(to, 2);
+                assert_eq!(reason, AbrReason::UpSwitch);
+                seen = true;
+                break;
+            }
+        }
+        assert!(seen, "expected VariantApplied event on the bus");
     }
 }

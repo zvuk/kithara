@@ -56,7 +56,7 @@ impl AbrController {
         Some(IncoherenceCtx { progress, entry })
     }
 
-    pub(super) fn schedule_incoherence_watch(
+    pub(crate) fn schedule_incoherence_watch(
         &self,
         peer_id: AbrPeerId,
         reader_pt: Duration,

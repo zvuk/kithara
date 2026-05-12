@@ -129,17 +129,7 @@ impl AbrController {
         let decision = state.decide(&view, now);
 
         if decision.did_change {
-            let current_before = state.current_variant_index();
-            state.apply(&decision, now);
-            if let Some(ref bus) = bus {
-                bus.publish(AbrEvent::VariantApplied {
-                    from: current_before,
-                    to: decision.target_variant_index,
-                    reason: decision.reason,
-                });
-            }
-            let reader_pt = progress.map_or(Duration::ZERO, |p| p.reader_playback_time);
-            self.schedule_incoherence_watch(peer_id, reader_pt, now);
+            state.request_target(decision.target_variant_index, decision.reason);
         } else if decision.reason != AbrReason::AlreadyOptimal
             && let Some(ref bus) = bus
         {
