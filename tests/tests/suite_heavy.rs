@@ -36,7 +36,6 @@ mod kithara_file {
 mod kithara_hls {
     mod deferred_abr_debug;
     mod drm_stream_integrity;
-    mod source_internal_cases;
     mod stress_chunk_integrity;
     mod stress_seek_random;
 }

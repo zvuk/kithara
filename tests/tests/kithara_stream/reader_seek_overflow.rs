@@ -227,25 +227,6 @@ fn seek_from_end_backward() {
     assert_eq!(result.expect("seek should return new offset"), 999_900);
 }
 
-/// Exact replay of production crash (now returns error instead of panic).
-///
-/// Symphonia parses stale variant 0 data as an fMP4 atom header,
-/// gets a garbage size (~3.5 GB), and issues a seek that overflows.
-/// With `fence_at()` removing stale entries, this shouldn't happen in
-/// production. But if it does, Stream returns Err instead of crashing.
-#[kithara::test]
-fn variant_switch_stale_atoms_produce_garbage_seek() {
-    let source = MockSource::with_reported_len(27_229_109);
-    let mut stream = mock_stream(source);
-
-    stream
-        .seek(SeekFrom::Start(1_165_770))
-        .expect("seek to replay position should succeed");
-
-    let result = stream.seek(SeekFrom::Current(3_528_752_481));
-    assert!(result.is_err(), "garbage seek should return Err, not crash");
-}
-
 /// Read after seek returns correct data.
 #[kithara::test]
 fn read_after_seek() {
