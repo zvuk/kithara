@@ -58,6 +58,7 @@ mod kithara_hls {
     #[cfg(not(target_arch = "wasm32"))]
     mod html_error_body;
     mod html_error_cleanup;
+    mod init_byte_space;
     mod keys_integration;
     mod playlist_integration;
     mod prefetch_403_fails_open;
