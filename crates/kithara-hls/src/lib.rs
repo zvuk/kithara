@@ -34,6 +34,9 @@ mod stream;
 mod stream_index;
 
 #[cfg(any(test, feature = "test-utils"))]
+pub mod variant;
+
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
 pub use config::{HlsConfig, KeyOptions};
