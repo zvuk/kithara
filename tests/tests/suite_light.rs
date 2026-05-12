@@ -65,6 +65,7 @@ mod kithara_hls {
     mod red_leak_small_cache_seek;
     mod seek_past_eof;
     mod seek_variant_switch_after_eof;
+    mod segment_view_lockfree;
     mod smoke_test;
     mod source_seek;
     mod sync_reader_hls_test;
