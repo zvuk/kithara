@@ -54,6 +54,7 @@ mod kithara_hls {
     mod deferred_abr;
     mod driver_test;
     mod ephemeral;
+    mod eviction_routing;
     #[cfg(not(target_arch = "wasm32"))]
     mod html_error_body;
     mod html_error_cleanup;
