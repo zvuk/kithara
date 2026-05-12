@@ -69,6 +69,7 @@ mod kithara_hls {
     mod smoke_test;
     mod source_seek;
     mod sync_reader_hls_test;
+    mod variant_position_independence;
     mod wait_range_contract;
 }
 
