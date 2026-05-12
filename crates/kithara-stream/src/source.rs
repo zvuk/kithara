@@ -375,6 +375,21 @@ pub trait Source: Send + Sync + 'static {
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome>;
+
+    /// Current byte position in the source's virtual byte space.
+    ///
+    /// HLS delegates to active variant; file owns its own atomic cursor.
+    /// Plan 02 implements; this stub returns 0.
+    #[kithara::probe]
+    fn position(&self) -> u64 {
+        0
+    }
+
+    /// Advance the byte cursor by `n` bytes after a successful read.
+    ///
+    /// Plan 02 implements; this stub is no-op default for trait objects.
+    #[kithara::probe]
+    fn advance(&self, _n: u64) {}
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented
