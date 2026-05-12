@@ -34,6 +34,8 @@ mod stream;
 mod stream_index;
 
 #[cfg(any(test, feature = "test-utils"))]
+pub mod segment_view;
+#[cfg(any(test, feature = "test-utils"))]
 pub mod variant;
 
 #[cfg(any(test, feature = "test-utils"))]
