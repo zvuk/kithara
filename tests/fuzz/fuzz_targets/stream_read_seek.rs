@@ -4,7 +4,10 @@ use std::{
     collections::VecDeque,
     io::{Read, Seek, SeekFrom},
     ops::Range,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use arbitrary::{Arbitrary, Unstructured};
@@ -99,6 +102,7 @@ impl<'a> Arbitrary<'a> for Input {
 #[derive(Default)]
 struct ScriptSource {
     timeline: Timeline,
+    position: Arc<AtomicU64>,
     data: Vec<u8>,
     reads: VecDeque<ReadOutcome>,
     waits: VecDeque<WaitOutcome>,
@@ -107,6 +111,22 @@ struct ScriptSource {
 impl Source for ScriptSource {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn advance(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.position)
     }
 
     fn wait_range(
@@ -154,8 +174,8 @@ impl StreamType for DummyType {
         Ok(config)
     }
 
-    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(timeline))
+    fn build_stream_context(source: &Self::Source) -> Arc<dyn StreamContext> {
+        Arc::new(NullStreamContext::new(source.position_handle()))
     }
 }
 
@@ -180,6 +200,7 @@ fuzz_target!(|input: Input| {
     let _ = timeline.clone();
     let source = ScriptSource {
         timeline,
+        position: Arc::new(AtomicU64::new(0)),
         data: input.data,
         reads: reads.collect(),
         waits: waits.collect(),

@@ -59,12 +59,16 @@ impl<T: StreamType> SharedStream<T> {
     /// Build a `StreamContext` from the inner stream's source.
     pub(crate) fn build_stream_context(&self) -> Arc<dyn kithara_stream::StreamContext> {
         let stream = self.inner.lock_sync();
-        T::build_stream_context(stream.source(), stream.timeline())
+        T::build_stream_context(stream.source())
     }
 
     delegate! {
         to self.inner.lock_sync() {
             pub(crate) fn position(&self) -> u64;
+            /// Absolute byte cursor set — forwards to the inner source's
+            /// atomic, used post-seek when the audio FSM lands at a
+            /// known byte position.
+            pub(crate) fn set_position(&self, pos: u64);
             pub(crate) fn len(&self) -> Option<u64>;
             fn media_info(&self) -> Option<MediaInfo>;
             pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
@@ -649,7 +653,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         };
         self.timeline.commit_seek_landed(&pos);
         if let Some(byte) = applied_landed_byte {
-            self.timeline.set_byte_position(byte);
+            self.shared_stream.set_position(byte);
         }
     }
 

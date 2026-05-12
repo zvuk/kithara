@@ -2,7 +2,15 @@
 //!
 //! `SignalPcm<S>` is the PCM-first core that creates interleaved samples.
 
-use std::{io::Error as IoError, num::NonZeroUsize, ops::Range};
+use std::{
+    io::Error as IoError,
+    num::NonZeroUsize,
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use futures::executor::block_on;
 use kithara_platform::time::Duration;
@@ -20,6 +28,7 @@ use kithara_test_utils::{
 pub struct SignalSource<S: signal::SignalFn> {
     pcm: SignalPcm<S>,
     timeline: Timeline,
+    position: Arc<AtomicU64>,
     header: WavHeader,
 }
 
@@ -33,6 +42,7 @@ impl<S: signal::SignalFn> SignalSource<S> {
     pub fn new(pcm: SignalPcm<S>) -> Self {
         Self {
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             header: create_header_from_signal(&pcm),
             pcm,
         }
@@ -77,6 +87,22 @@ impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
         } else {
             SourcePhase::Ready
         }
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn advance(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.position)
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {

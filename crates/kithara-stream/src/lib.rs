@@ -10,7 +10,6 @@
 #![forbid(unsafe_code)]
 
 mod context;
-mod demand;
 pub mod dl;
 mod error;
 mod hooks;
@@ -24,7 +23,6 @@ mod timeline;
 pub mod mock;
 
 pub use context::{NullStreamContext, StreamContext};
-pub use demand::DemandSlot;
 pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};

@@ -23,6 +23,7 @@ pub mod error;
 
 mod context;
 mod coord;
+mod demand;
 mod ids;
 mod loading;
 mod parsing;

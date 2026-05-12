@@ -200,42 +200,31 @@ pub trait Source: Send + Sync + 'static {
     /// Default no-op for sources that do not need post-seek reconciliation.
     fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
 
-    /// Switch layout to the ABR target variant.
+    /// Switch layout to the ABR target variant before decoder recreation.
     ///
-    /// Must be called right before decoder recreation so the new decoder
-    /// reads from the correct variant's byte map. Separate from
-    /// `format_change_segment_range()` to avoid switching layout while
-    /// the old decoder is still reading.
+    /// Transitional — removed in Plan 09 once the audio FSM stops calling
+    /// it on every recreate; HLS uses per-variant position to keep the
+    /// reader stable.
     fn commit_variant_layout(&mut self) {}
 
-    /// Get current segment byte range.
+    /// Current segment byte range (HLS-only).
     ///
-    /// For segmented sources (HLS), returns `Some(range)` of the current segment.
-    /// For non-segmented sources (File), returns `None`.
-    /// Used by decoder to detect segment boundaries for format change handling.
+    /// Transitional — removed in Plan 06 once the audio FSM consumes
+    /// segment boundaries through [`SegmentLayout`].
     fn current_segment_range(&self) -> Option<Range<u64>> {
         None
     }
 
-    /// Signal that the given byte range will be needed soon.
+    /// On-demand range hint to the source's downloader.
     ///
-    /// Non-blocking hint that allows the source to enqueue background
-    /// fetch requests without entering the blocking [`wait_range`](Self::wait_range)
-    /// path.  Called by the audio worker FSM when it discovers that a
-    /// range is not ready and cannot block to wait for it.
-    ///
-    /// Segmented sources (HLS) use this to issue on-demand segment
-    /// requests that wake the downloader.  Non-segmented sources
-    /// (File) keep the default no-op because their downloader fetches
-    /// sequentially and does not need explicit demand signals.
+    /// Transitional — removed in Plan 06 once HLS/file sources drive
+    /// fetches purely through the pull-driven scheduler.
     fn demand_range(&self, _range: Range<u64>) {}
 
-    /// Get byte range of the first segment with current format after a format change.
+    /// Byte range of the first segment with the current format after
+    /// a format change (HLS ABR switch).
     ///
-    /// For HLS ABR switch: returns the first segment of the new variant which contains
-    /// init data (ftyp/moov). This is where the decoder should be recreated.
-    ///
-    /// Returns `None` if no format change occurred or for non-segmented sources.
+    /// Transitional — removed in Plan 06.
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         None
     }
@@ -288,7 +277,7 @@ pub trait Source: Send + Sync + 'static {
     /// Default checks a single byte at the current position.
     /// HLS overrides with segment-aware logic, File with 32KB-window logic.
     fn phase(&self) -> SourcePhase {
-        let pos = self.timeline().byte_position();
+        let pos = self.position();
         self.phase_at(pos..pos.saturating_add(1))
     }
 
@@ -379,17 +368,20 @@ pub trait Source: Send + Sync + 'static {
     /// Current byte position in the source's virtual byte space.
     ///
     /// HLS delegates to active variant; file owns its own atomic cursor.
-    /// Plan 02 implements; this stub returns 0.
-    #[kithara::probe]
-    fn position(&self) -> u64 {
-        0
-    }
+    fn position(&self) -> u64;
 
     /// Advance the byte cursor by `n` bytes after a successful read.
-    ///
-    /// Plan 02 implements; this stub is no-op default for trait objects.
-    #[kithara::probe]
-    fn advance(&self, _n: u64) {}
+    fn advance(&self, n: u64);
+
+    /// Absolute set of the byte cursor — used by [`Stream::seek`] and
+    /// post-seek landings. Sources implement this via the same atomic
+    /// cursor that backs [`Self::position`] / [`Self::advance`].
+    fn set_position(&self, pos: u64);
+
+    /// Shared `Arc<AtomicU64>` handle for the byte cursor — for
+    /// `StreamContext` and reader hooks that need a lock-free atomic
+    /// reference without holding `&self`.
+    fn position_handle(&self) -> Arc<std::sync::atomic::AtomicU64>;
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented
@@ -449,9 +441,11 @@ mod tests {
 
     #[kithara::test]
     fn phase_default_delegates_to_phase_at() {
-        #[derive(Default)]
+        use std::sync::atomic::{AtomicU64, Ordering};
+
         struct ReadySource {
             timeline: Timeline,
+            position: Arc<AtomicU64>,
         }
         impl Source for ReadySource {
             fn timeline(&self) -> Timeline {
@@ -473,8 +467,23 @@ mod tests {
             fn len(&self) -> Option<u64> {
                 Some(100)
             }
+            fn position(&self) -> u64 {
+                self.position.load(Ordering::Acquire)
+            }
+            fn advance(&self, n: u64) {
+                self.position.fetch_add(n, Ordering::AcqRel);
+            }
+            fn set_position(&self, pos: u64) {
+                self.position.store(pos, Ordering::Release);
+            }
+            fn position_handle(&self) -> Arc<AtomicU64> {
+                Arc::clone(&self.position)
+            }
         }
-        let source = ReadySource::default();
+        let source = ReadySource {
+            timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
+        };
         assert_eq!(source.phase(), SourcePhase::Ready);
     }
 }

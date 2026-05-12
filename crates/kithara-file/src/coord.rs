@@ -9,10 +9,16 @@ use std::{
 };
 
 use kithara_platform::tokio as platform_tokio;
-use kithara_stream::{DemandSlot, Timeline};
+use kithara_stream::Timeline;
 use platform_tokio::sync::Notify;
 
+use crate::demand::DemandSlot;
+
 pub(crate) struct FileCoord {
+    /// Authoritative byte cursor exposed via
+    /// [`Source::position`](kithara_stream::Source::position) — File owns
+    /// its own atomic, lock-free for both reader and downloader threads.
+    position: Arc<AtomicU64>,
     read_pos: Arc<AtomicU64>,
     total_bytes: Arc<AtomicU64>,
     demand: DemandSlot<Range<u64>>,
@@ -33,10 +39,29 @@ impl FileCoord {
             timeline,
             demand: DemandSlot::new(),
             downloader_wake: Notify::new(),
+            position: Arc::new(AtomicU64::new(0)),
             read_pos: Arc::new(AtomicU64::new(0)),
             reader_advanced: Notify::new(),
             total_bytes: Arc::new(AtomicU64::new(Self::NO_TOTAL_BYTES)),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn advance_position(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    pub(crate) fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    #[must_use]
+    pub(crate) fn position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.position)
     }
 
     /// Borrow the demand notify — callers await `.notified()` directly.

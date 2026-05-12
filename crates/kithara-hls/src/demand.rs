@@ -1,10 +1,16 @@
 #![forbid(unsafe_code)]
 
+//! Crate-private one-slot replace-or-clear demand mailbox.
+//!
+//! Inlined from `kithara-stream`'s legacy `DemandSlot` so the upstream
+//! crate stays free of HLS/file-specific helpers. Plan 05 (`HlsCoord`
+//! rewrite) removes this in favour of a per-variant queue.
+
 use std::sync::Arc;
 
 use kithara_platform::Mutex;
 
-pub struct DemandSlot<D>
+pub(crate) struct DemandSlot<D>
 where
     D: Clone + Send + Sync + 'static,
 {
@@ -16,17 +22,17 @@ where
     D: Clone + Send + Sync + 'static,
 {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub fn clear(&self) {
+    pub(crate) fn clear(&self) {
         *self.inner.lock_sync() = None;
     }
 
-    pub fn did_replace(&self, demand: D) -> bool
+    pub(crate) fn did_replace(&self, demand: D) -> bool
     where
         D: PartialEq,
     {
@@ -39,16 +45,12 @@ where
     }
 
     #[must_use]
-    pub fn peek(&self) -> Option<D> {
+    pub(crate) fn peek(&self) -> Option<D> {
         self.inner.lock_sync().clone()
     }
 
-    pub fn replace(&self, demand: D) {
-        *self.inner.lock_sync() = Some(demand);
-    }
-
     #[must_use]
-    pub fn take(&self) -> Option<D> {
+    pub(crate) fn take(&self) -> Option<D> {
         self.inner.lock_sync().take()
     }
 }

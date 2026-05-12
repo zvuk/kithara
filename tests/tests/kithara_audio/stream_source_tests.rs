@@ -51,6 +51,7 @@ struct TestSourceState {
 struct TestSource {
     state: Arc<Mutex<TestSourceState>>,
     timeline: Timeline,
+    position: Arc<AtomicU64>,
 }
 
 impl TestSource {
@@ -73,6 +74,7 @@ impl TestSource {
                 seek_anchor_sets_position: false,
             })),
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -84,6 +86,22 @@ impl TestSource {
 impl Source for TestSource {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn advance(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.position)
     }
 
     fn wait_range(
@@ -184,14 +202,14 @@ impl Source for TestSource {
         let set_position = state.seek_anchor_sets_position;
         drop(state);
         if set_position && let Some(anchor) = anchor {
-            self.timeline.set_byte_position(anchor.byte_offset);
+            self.set_position(anchor.byte_offset);
         }
         Ok(anchor)
     }
 
     fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>) {
         let mut state = self.state.lock_sync();
-        state.seek_landing = Some(self.timeline.byte_position());
+        state.seek_landing = Some(self.position());
         state.seek_landing_anchor = anchor;
     }
 
@@ -241,11 +259,8 @@ impl StreamType for TestStream {
             .ok_or_else(|| kithara_stream::SourceError::other(IoError::other("no source")))
     }
 
-    fn build_stream_context(
-        _source: &Self::Source,
-        timeline: Timeline,
-    ) -> Arc<dyn kithara_stream::StreamContext> {
-        Arc::new(NullStreamContext::new(timeline))
+    fn build_stream_context(source: &Self::Source) -> Arc<dyn kithara_stream::StreamContext> {
+        Arc::new(NullStreamContext::new(source.position_handle()))
     }
 }
 
@@ -514,7 +529,7 @@ fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
     let total_bytes = 200u64;
 
     source.timeline().set_eof(true);
-    source.timeline().set_byte_position(total_bytes);
+    source.set_position(total_bytes);
 
     for idx in 0..12u64 {
         let _ = source

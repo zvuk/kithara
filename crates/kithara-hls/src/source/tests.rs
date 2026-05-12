@@ -357,7 +357,7 @@ fn seek_within_layout_variant_preserves_segments() {
     push_segment(&source.segments, 0, 1, SEG_SIZE, SEG_SIZE);
     push_segment(&source.segments, 0, SEG2_INDEX, SEG2_OFFSET, SEG_SIZE);
 
-    source.coord.timeline().set_byte_position(MID_SEG_OFFSET);
+    source.coord.set_position(MID_SEG_OFFSET);
 
     let anchor = make_anchor(0, 0, 0);
     let layout = source.classify_seek(&anchor);
@@ -379,7 +379,7 @@ fn commit_seek_landing_keeps_switched_tail_in_mixed_layout() {
         segments.set_layout_variant(1);
     }
     push_segment(&source.segments, 1, 1, SEG_SIZE, SEG_SIZE);
-    source.coord.timeline().set_byte_position(0);
+    source.coord.set_position(0);
 
     source.commit_seek_landing(Some(make_anchor(0, 0, 0)));
 
@@ -505,7 +505,7 @@ fn commit_seek_landing_uses_layout_variant_for_invalidated_segment() {
     assert!(source.segments.lock_sync().remove_resource(&evicted));
 
     pin_variant(&source.coord.abr_state, 1);
-    source.coord.timeline().set_byte_position(0);
+    source.coord.set_position(0);
 
     source.commit_seek_landing(Some(make_anchor(0, 0, 0)));
 
@@ -549,7 +549,7 @@ fn commit_seek_landing_uses_anchor_variant_metadata_when_reset_truncates_prefix(
 
     let anchor = make_anchor(ANCHOR_VARIANT, ANCHOR_SEGMENT, ANCHOR_OFFSET);
     source.apply_seek_plan(&anchor, &SeekLayout::Reset);
-    source.coord.timeline().set_byte_position(BYTE_POS);
+    source.coord.set_position(BYTE_POS);
 
     source.commit_seek_landing(Some(anchor));
 
@@ -955,7 +955,7 @@ fn set_seek_epoch_keeps_exact_eof_visible_until_seek_lands() {
     let mut source = build_source_with_size_map(&[SEG_SIZE, SEG_SIZE, SEG_SIZE]);
     source.coord.stopped.store(false, Ordering::Release);
     let total = SEG_SIZE * NUM_SEGS;
-    source.coord.timeline().set_byte_position(total);
+    source.coord.set_position(total);
     source.coord.timeline().set_eof(true);
 
     source.set_seek_epoch(NEW_EPOCH);
@@ -976,7 +976,7 @@ fn wait_range_uses_known_total_bytes_for_exact_eof() {
     let mut source = build_source_with_size_map(&[SEG_SIZE, SEG_SIZE, SEG_SIZE]);
     source.coord.stopped.store(false, Ordering::Release);
     let total = SEG_SIZE * NUM_SEGS;
-    source.coord.timeline().set_byte_position(total);
+    source.coord.set_position(total);
     source.coord.timeline().set_eof(false);
 
     let result = source.wait_range(total..total + 1, Some(Duration::from_millis(TIMEOUT_MS)));
@@ -1036,14 +1036,14 @@ fn read_at_does_not_advance_timeline_position() {
             init_url: None,
         },
     );
-    source.coord.timeline().set_byte_position(0);
+    source.coord.set_position(0);
 
     let mut buf = vec![0u8; usize::try_from(media_len).expect("BUG: media_len > usize::MAX")];
     let read = source.read_at(0, &mut buf).unwrap();
 
     assert_eq!(read, nz_bytes(10));
     assert_eq!(
-        source.coord.timeline().byte_position(),
+        source.coord.position(),
         0,
         "HLS read_at must not commit the reader cursor outside Stream::read"
     );
@@ -1412,7 +1412,7 @@ fn red_test_drm_sw_commit_seek_landing_enqueues_request_when_offset_past_total()
     let anchor = make_anchor(0, ANCHOR_SEGMENT, ANCHOR_OFFSET);
     source.apply_seek_plan(&anchor, &SeekLayout::Preserve);
 
-    source.coord.timeline().set_byte_position(LANDED_OFFSET);
+    source.coord.set_position(LANDED_OFFSET);
 
     assert_eq!(source.coord.take_segment_request(), None);
 
@@ -1590,7 +1590,7 @@ fn cross_variant_seek_same_codec_requires_reset() {
     set_variant_size_map(source.playlist_state.as_ref(), 2, &[V2_SEG_SIZE; NUM_SEGS]);
 
     push_segment(&source.segments, 0, 0, 0, V0_SEG_SIZE);
-    source.coord.timeline().set_byte_position(READER_POS);
+    source.coord.set_position(READER_POS);
     assert_eq!(
         source.current_layout_variant(),
         Some(0),

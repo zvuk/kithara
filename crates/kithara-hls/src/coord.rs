@@ -1,13 +1,19 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use kithara_abr::AbrState;
 use kithara_platform::{Condvar, tokio::sync::Notify};
-use kithara_stream::{DemandSlot, Timeline};
+use kithara_stream::Timeline;
 use tokio_util::sync::CancellationToken;
 
-use crate::ids::{SegmentIndex, VariantIndex};
+use crate::{
+    demand::DemandSlot,
+    ids::{SegmentIndex, VariantIndex},
+};
 
 /// Request to load a specific segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +73,9 @@ pub struct HlsCoord {
     pub cancel: CancellationToken,
     pub condvar: Condvar,
     demand: DemandSlot<SegmentRequest>,
+    /// Authoritative byte cursor for this HLS source (transitional
+    /// home — Plan 03 moves ownership to the active `HlsVariant`).
+    position: Arc<AtomicU64>,
     timeline: Timeline,
 }
 
@@ -82,7 +91,26 @@ impl HlsCoord {
             reader_advanced: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
             demand: DemandSlot::new(),
+            position: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn advance_position(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    pub(crate) fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    #[must_use]
+    pub(crate) fn position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.position)
     }
 
     pub(crate) fn clear_pending_segment_request(&self, request: SegmentRequest) {

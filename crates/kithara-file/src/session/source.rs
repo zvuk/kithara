@@ -5,7 +5,11 @@
 //! shared `FileInner` lock-free (atomics + `OnceLock`); this file only reads
 //! from it.
 
-use std::{num::NonZeroUsize, ops::Range, sync::Arc};
+use std::{
+    num::NonZeroUsize,
+    ops::Range,
+    sync::{Arc, atomic::AtomicU64},
+};
 
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::EventBus;
@@ -172,8 +176,24 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase(&self) -> SourcePhase {
-        let pos = self.coord.timeline().byte_position();
+        let pos = self.coord.position();
         self.phase_at(pos..pos.saturating_add(1))
+    }
+
+    fn position(&self) -> u64 {
+        self.coord.position()
+    }
+
+    fn advance(&self, n: u64) {
+        self.coord.advance_position(n);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.coord.set_position(pos);
+    }
+
+    fn position_handle(&self) -> Arc<AtomicU64> {
+        self.coord.position_handle()
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
@@ -223,7 +243,7 @@ impl kithara_stream::Source for FileSource {
         let hooks = super::reader::FileReaderHooks::new(
             self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
-            self.coord.timeline().byte_position_handle(),
+            self.coord.position_handle(),
             self.coord.timeline().seek_epoch_handle(),
         );
         Some(Arc::new(std::sync::Mutex::new(hooks)))

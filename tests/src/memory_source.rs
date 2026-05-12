@@ -1,6 +1,14 @@
 //! In-memory Source implementation for testing.
 
-use std::{io::Error as IoError, num::NonZeroUsize, ops::Range};
+use std::{
+    io::Error as IoError,
+    num::NonZeroUsize,
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use futures::executor::block_on;
 use kithara_platform::time::Duration;
@@ -21,6 +29,7 @@ pub struct MemorySourceError;
 /// (e.g. for testing `SeekFrom::End` error paths).
 pub struct MemorySource {
     timeline: Timeline,
+    position: Arc<AtomicU64>,
     data: Vec<u8>,
     report_len: bool,
 }
@@ -31,6 +40,7 @@ impl MemorySource {
         Self {
             data,
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             report_len: true,
         }
     }
@@ -41,6 +51,7 @@ impl MemorySource {
         Self {
             data,
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             report_len: false,
         }
     }
@@ -61,6 +72,22 @@ impl Source for MemorySource {
         } else {
             SourcePhase::Ready
         }
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn advance(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.position)
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {

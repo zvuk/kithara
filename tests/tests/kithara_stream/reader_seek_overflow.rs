@@ -36,7 +36,10 @@ use std::{
     io::{Error as IoError, Read, Seek, SeekFrom},
     num::NonZeroUsize,
     ops::Range,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use kithara_platform::{time::Duration, tokio::runtime::Runtime};
@@ -50,6 +53,7 @@ use kithara_test_utils::kithara;
 /// Minimal mock source with known length.
 struct MockSource {
     timeline: Timeline,
+    position: Arc<AtomicU64>,
     data: Vec<u8>,
     /// Reported length (may differ from actual data size).
     /// Simulates `expected_total_length` in HLS which is metadata-derived.
@@ -60,6 +64,7 @@ impl MockSource {
     fn new(len: usize) -> Self {
         Self {
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             reported_len: u64::try_from(len).unwrap_or(u64::MAX),
             data: vec![0xAA; len],
         }
@@ -70,6 +75,7 @@ impl MockSource {
     fn with_reported_len(reported_len: u64) -> Self {
         Self {
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             data: Vec::new(),
             reported_len,
         }
@@ -79,6 +85,22 @@ impl MockSource {
 impl Source for MockSource {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn advance(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.position)
     }
 
     fn wait_range(
@@ -129,8 +151,8 @@ impl StreamType for MockStream {
             .ok_or_else(|| kithara_stream::SourceError::other(IoError::other("no source")))
     }
 
-    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(timeline))
+    fn build_stream_context(source: &Self::Source) -> Arc<dyn StreamContext> {
+        Arc::new(NullStreamContext::new(source.position_handle()))
     }
 }
 

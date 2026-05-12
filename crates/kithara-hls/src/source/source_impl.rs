@@ -1,7 +1,10 @@
 use std::{
     num::NonZeroUsize,
     ops::Range,
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use kithara_events::HlsEvent;
@@ -80,7 +83,7 @@ impl Source for HlsSource {
 
     fn commit_seek_landing(&mut self, anchor: Option<SourceSeekAnchor>) {
         let seek_epoch = self.coord.timeline().seek_epoch();
-        let landed_offset = self.coord.timeline().byte_position();
+        let landed_offset = self.coord.position();
         trace!(
             target: "hls_seek_diag",
             seek_epoch,
@@ -143,7 +146,7 @@ impl Source for HlsSource {
 
         let fallback_variant = {
             let segments = self.segments.lock_sync();
-            let reader_offset = self.coord.timeline().byte_position();
+            let reader_offset = self.coord.position();
             segments
                 .find_at_offset(reader_offset)
                 .filter(|s| s.data.is_some())
@@ -215,7 +218,7 @@ impl Source for HlsSource {
     }
 
     fn phase(&self) -> SourcePhase {
-        let pos = self.coord.timeline().byte_position();
+        let pos = self.coord.position();
 
         if self.coord.cancel.is_cancelled() || self.coord.stopped.load(Ordering::Acquire) {
             return SourcePhase::Cancelled;
@@ -381,7 +384,7 @@ impl Source for HlsSource {
         let hooks = super::reader_hooks::HlsReaderHooks::new(
             self.bus.clone(),
             Arc::clone(&self.segments),
-            self.coord.timeline().byte_position_handle(),
+            self.coord.position_handle(),
             self.coord.timeline().seek_epoch_handle(),
         );
         Some(Arc::new(std::sync::Mutex::new(hooks)))
@@ -389,6 +392,22 @@ impl Source for HlsSource {
 
     fn timeline(&self) -> Timeline {
         self.coord.timeline()
+    }
+
+    fn position(&self) -> u64 {
+        self.coord.position()
+    }
+
+    fn advance(&self, n: u64) {
+        self.coord.advance_position(n);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.coord.set_position(pos);
+    }
+
+    fn position_handle(&self) -> Arc<AtomicU64> {
+        self.coord.position_handle()
     }
 
     #[kithara_hang_detector::hang_watchdog(timeout = wait_range_hang_timeout(timeout))]

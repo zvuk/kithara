@@ -382,7 +382,7 @@ impl HlsScheduler {
     /// once played, and re-fetching them only evicts the segments the reader
     /// is actively reading next — a hot loop.
     pub(crate) fn reader_segment_floor(&self) -> SegmentIndex {
-        let byte_pos = self.coord.timeline().byte_position();
+        let byte_pos = self.coord.position();
         if byte_pos == 0 {
             return 0;
         }

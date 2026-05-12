@@ -57,9 +57,10 @@ impl StreamType for Hls {
     type Events = EventBus;
     type Source = HlsSource;
 
-    fn build_stream_context(source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
+    fn build_stream_context(source: &Self::Source) -> Arc<dyn StreamContext> {
         Arc::new(HlsStreamContext::new(
-            timeline,
+            source.coord.position_handle(),
+            source.coord.timeline(),
             Arc::clone(&source.segments),
             Arc::clone(&source.coord.abr_state),
         ))

@@ -11,8 +11,7 @@ use crate::{HlsError, coord::SegmentRequest};
 impl HlsScheduler {
     fn finalize_tail_state(&mut self) -> bool {
         let stream_end = self.effective_total_bytes().unwrap_or(0);
-        let playback_at_end =
-            stream_end == 0 || self.coord.timeline().byte_position() >= stream_end;
+        let playback_at_end = stream_end == 0 || self.coord.position() >= stream_end;
         if !playback_at_end {
             self.coord.timeline().set_eof(false);
             self.coord.condvar.notify_all();

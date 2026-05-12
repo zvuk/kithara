@@ -114,7 +114,7 @@ impl HlsSource {
     /// *current* layout. Using it would misclassify cross-variant seeks as
     /// Preserve when `variant_fence` was cleared before `seek_time_anchor()`.
     pub(super) fn current_layout_variant(&self) -> Option<VariantIndex> {
-        let pos = self.coord.timeline().byte_position();
+        let pos = self.coord.position();
         let segments = self.segments.lock_sync();
         if let Some(seg_ref) = segments.find_at_offset(pos).filter(|s| s.data.is_some()) {
             return Some(seg_ref.variant);
@@ -133,7 +133,7 @@ impl HlsSource {
     /// Returns `(variant, segment_index)` for the segment at the current reader position,
     /// falling back to the last committed segment if no segment covers the exact position.
     pub(super) fn current_loaded_segment_key(&self) -> Option<(VariantIndex, SegmentIndex)> {
-        let reader_offset = self.coord.timeline().byte_position();
+        let reader_offset = self.coord.position();
         let segments = self.segments.lock_sync();
         let result = segments
             .find_at_offset(reader_offset)

@@ -222,7 +222,7 @@ fn file_source_phase_parameterless_waiting_when_current_byte_is_missing() {
     let coord = make_coord(Timeline::new());
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(data.len() as u64));
-    coord.timeline().set_byte_position(32);
+    coord.set_position(32);
     let source = make_source(res, coord, bus);
 
     assert_eq!(Source::phase(&source), SourcePhase::Waiting);
@@ -235,7 +235,7 @@ fn file_source_phase_parameterless_eof_at_end() {
     let coord = make_coord(Timeline::new());
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(data.len() as u64));
-    coord.timeline().set_byte_position(data.len() as u64);
+    coord.set_position(data.len() as u64);
     let source = make_source(res, coord, bus);
 
     assert_eq!(Source::phase(&source), SourcePhase::Eof);
@@ -288,9 +288,9 @@ fn file_source_read_at_does_not_advance_timeline_position() {
     );
 
     assert_eq!(coord.read_pos(), 0);
-    assert_eq!(Source::timeline(&source).byte_position(), 0);
+    assert_eq!(Source::position(&source), 0);
 
     coord.set_read_pos(5);
     assert_eq!(coord.read_pos(), 5);
-    assert_eq!(Source::timeline(&source).byte_position(), 0);
+    assert_eq!(Source::position(&source), 0);
 }

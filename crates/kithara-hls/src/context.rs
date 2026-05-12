@@ -2,7 +2,10 @@
 
 //! HLS stream context for lock-free segment/variant access.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use kithara_abr::AbrState;
 use kithara_platform::Mutex;
@@ -13,18 +16,21 @@ use crate::stream_index::StreamIndex;
 /// `StreamContext` for HLS segmented sources.
 pub struct HlsStreamContext {
     abr_state: Arc<AbrState>,
+    position: Arc<AtomicU64>,
     segments: Arc<Mutex<StreamIndex>>,
     timeline: Timeline,
 }
 
 impl HlsStreamContext {
     pub fn new(
+        position: Arc<AtomicU64>,
         timeline: Timeline,
         segments: Arc<Mutex<StreamIndex>>,
         abr_state: Arc<AbrState>,
     ) -> Self {
         Self {
             abr_state,
+            position,
             segments,
             timeline,
         }
@@ -33,7 +39,7 @@ impl HlsStreamContext {
 
 impl StreamContext for HlsStreamContext {
     fn byte_offset(&self) -> u64 {
-        self.timeline.byte_position()
+        self.position.load(Ordering::Acquire)
     }
 
     fn segment_index(&self) -> Option<u32> {
@@ -87,7 +93,7 @@ mod tests {
     #[kithara::test]
     fn test_hls_stream_context_reads_atomics() {
         let timeline = Timeline::new();
-        timeline.set_byte_position(1000);
+        let position = Arc::new(AtomicU64::new(1000));
         let segments = Arc::new(Mutex::new(StreamIndex::new(4, 20)));
         segments.lock_sync().set_layout_variant(2);
         segments.lock_sync().commit_segment(
@@ -102,7 +108,12 @@ mod tests {
         );
         let abr = fresh_abr(2);
 
-        let ctx = HlsStreamContext::new(timeline.clone(), Arc::clone(&segments), Arc::clone(&abr));
+        let ctx = HlsStreamContext::new(
+            Arc::clone(&position),
+            timeline.clone(),
+            Arc::clone(&segments),
+            Arc::clone(&abr),
+        );
 
         assert_eq!(ctx.byte_offset(), 1000);
         timeline.set_segment_position(100);
@@ -130,6 +141,7 @@ mod tests {
     #[kithara::test]
     fn segment_index_uses_segment_position_not_byte_position() {
         let timeline = Timeline::new();
+        let position = Arc::new(AtomicU64::new(0));
         let segments = Arc::new(Mutex::new(StreamIndex::new(1, 10)));
         segments.lock_sync().commit_segment(
             0,
@@ -142,9 +154,14 @@ mod tests {
             },
         );
         let abr = fresh_abr(0);
-        let ctx = HlsStreamContext::new(timeline.clone(), Arc::clone(&segments), Arc::clone(&abr));
+        let ctx = HlsStreamContext::new(
+            Arc::clone(&position),
+            timeline.clone(),
+            Arc::clone(&segments),
+            Arc::clone(&abr),
+        );
 
-        timeline.set_byte_position(200);
+        position.store(200, Ordering::Release);
         timeline.set_segment_position(150);
         assert_eq!(ctx.segment_index(), Some(0));
         assert_eq!(ctx.variant_index(), Some(0));

@@ -252,7 +252,7 @@ impl Peer for HlsPeer {
                 variant,
                 num_segments,
                 cursor = state.scheduler.current_segment_index(),
-                reader_pos = state.scheduler.coord.timeline().byte_position(),
+                reader_pos = state.scheduler.coord.position(),
                 eof = state.scheduler.coord.timeline().is_eof(),
                 "poll_next: tail state, Pending"
             );
@@ -1268,10 +1268,7 @@ mod tests {
 
         let reader_seg = Consts::NUM_SEGMENTS - 2;
         let reader_byte_pos = reader_seg as u64 * SEG_SIZE + 10;
-        scheduler
-            .coord
-            .timeline()
-            .set_byte_position(reader_byte_pos);
+        scheduler.coord.set_position(reader_byte_pos);
 
         let consumed = scheduler.handle_tail_state(0, Consts::NUM_SEGMENTS);
 
@@ -1360,8 +1357,7 @@ mod tests {
         state
             .scheduler
             .coord
-            .timeline()
-            .set_byte_position(READER_SEG as u64 * SEG_SIZE + 10);
+            .set_position(READER_SEG as u64 * SEG_SIZE + 10);
 
         state.scheduler.set_primary_variant(0);
         state
@@ -1630,11 +1626,7 @@ mod tests {
 
         const READER_SEG: usize = Consts::NUM_SEGMENTS - 2;
         let reader_byte_pos = READER_SEG as u64 * SEG_SIZE + 10;
-        state
-            .scheduler
-            .coord
-            .timeline()
-            .set_byte_position(reader_byte_pos);
+        state.scheduler.coord.set_position(reader_byte_pos);
 
         state.scheduler.set_primary_variant(0);
         state

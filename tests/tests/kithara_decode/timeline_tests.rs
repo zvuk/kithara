@@ -128,7 +128,7 @@ mod hls_timeline {
             .with_initial_abr_mode(AbrMode::Manual(0));
 
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
-        let stream_ctx = Hls::build_stream_context(stream.source(), stream.timeline());
+        let stream_ctx = Hls::build_stream_context(stream.source());
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
         let decoder_config = DecoderConfig::default()
