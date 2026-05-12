@@ -1,5 +1,3 @@
-//! Downloader configuration.
-
 use derive_setters::Setters;
 use kithara_abr::AbrSettings;
 use kithara_net::HttpClient;

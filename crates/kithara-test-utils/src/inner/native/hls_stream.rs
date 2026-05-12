@@ -1,6 +1,3 @@
-//! Packaged HLS orchestration: playlists and segment bytes are built from [`EncodedTrack`]
-//! and fMP4 mux output. This module intentionally does not import `FFmpeg` types.
-
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},

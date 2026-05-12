@@ -1,44 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Crash-safe **chunked** write decorator.
-//!
-//! [`AtomicChunked<R>`] wraps any [`ResourceExt`] and makes the
-//! `write_at … write_at … commit` lifecycle atomic at the file level
-//! via the write-temp → `sync_data` → rename pattern.
-//!
-//! Sibling to [`Atomic<R>`](crate::Atomic):
-//!
-//! - [`Atomic<R>`] makes one-shot **whole-file** rewrites
-//!   ([`ResourceExt::write_all`]) atomic. Used by index files.
-//! - [`AtomicChunked<R>`] makes incremental **chunked**
-//!   ([`ResourceExt::write_at`] + [`ResourceExt::commit`]) atomic.
-//!   Used by segment files where data arrives in pieces.
-//!
-//! Both decorators are generic over the inner resource type. For
-//! file-backed inners (`path() == Some(_)`) the tmp+rename pattern
-//! kicks in; for memory-backed inners it is a no-op pass-through (no
-//! filesystem to protect).
-//!
-//! ## Lifecycle
-//!
-//! - Open the inner on the **tmp path** (sibling `.tmp` of canonical)
-//!   via the [`AtomicChunked::open`] factory.
-//! - `write_at` chunks: routed straight to inner.
-//! - `commit(final_len)`:
-//!     1. `inner.commit(final_len)` — finalizes inner state.
-//!     2. `sync_data` on the tmp file — durably flushes payload pages.
-//!     3. `fs::rename(tmp → canonical)` — atomic at the directory
-//!        entry level (POSIX guarantee).
-//! - `fail` / `Drop` without a successful commit: tmp file is removed
-//!   so the canonical path never inherits partial bytes.
-//!
-//! ## Reads during writes
-//!
-//! Readers go through the decorator (`read_at`, `wait_range`) and hit
-//! the inner mmap on the tmp inode. After `commit`, the canonical
-//! entry now points at the same inode (`rename` did not change the
-//! inode). The inner mmap remains valid post-rename.
-
 use std::{
     fs::{self, OpenOptions},
     ops::Range,

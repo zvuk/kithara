@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Tests for audio decoding with `DecoderFactory`.
-
 use std::io::Cursor;
 
 use kithara::{

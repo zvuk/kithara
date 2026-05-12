@@ -1,16 +1,3 @@
-//! `AndroidCodec` — Android `MediaCodec` as a [`FrameCodec`].
-//!
-//! Container parsing happens upstream in a [`crate::Demuxer`]; this codec
-//! consumes already-demuxed frame bytes and produces interleaved f32 PCM.
-//! `AMediaFormat` is built from [`TrackInfo`] alone (MIME + sample-rate +
-//! channel-count + `csd-0`), with no `AMediaExtractor` and no per-codec
-//! container glue.
-//!
-//! Initial scope: AAC-LC and FLAC (the codecs that flow through
-//! [`crate::fmp4::Fmp4SegmentDemuxer`]). MP3 / ALAC follow alongside the
-//! file-Symphonia migration when [`TrackInfo`] carries codec-specific
-//! extra-data shape.
-
 #![allow(unsafe_code)]
 
 use std::{ffi::c_void, ptr::NonNull, time::Duration};

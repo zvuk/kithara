@@ -1,10 +1,3 @@
-//! Engine implementation backed by a process-wide Firewheel session.
-//!
-//! Graph topology (per player):
-//! ```text
-//! PlayerNode[slotN] -> VolPanNode[slotN] -> PlayerEqNode -> PlayerVolPanNode -> SessionDucking -> GraphOut
-//! ```
-
 #[cfg(test)]
 use std::sync::OnceLock;
 use std::sync::{

@@ -1,8 +1,3 @@
-//! Factory implementation — split out of mod.rs because lib.rs / mod.rs
-//! files must stay declaration-only (see `style.no-items-in-lib-or-mod-rs`).
-//!
-//! See the `factory` module-level docs in `mod.rs` for usage.
-
 use std::{
     io::{Read, Seek},
     sync::{Arc, atomic::AtomicU64},

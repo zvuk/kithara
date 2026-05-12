@@ -1,8 +1,3 @@
-//! Tests for the Symphonia bootstrap path. Now drives
-//! [`ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>`] through
-//! [`crate::factory::DecoderFactory::create_with_probe`] / `_from_media_info`,
-//! since the legacy whole-stream `SymphoniaDecoder` was deleted.
-
 use std::{io::Cursor, time::Duration};
 
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};

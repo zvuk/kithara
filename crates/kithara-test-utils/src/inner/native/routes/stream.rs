@@ -1,5 +1,3 @@
-//! Synthetic HLS generation route family.
-
 use std::sync::Arc;
 
 use axum::{

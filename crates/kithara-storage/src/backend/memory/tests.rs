@@ -1,10 +1,6 @@
 #![forbid(unsafe_code)]
 #![cfg(test)]
 
-//! Unit tests for the in-memory storage driver. Lives in its own file
-//! per the workspace `lib.rs` / `mod.rs` discipline rule (mod.rs holds
-//! only declarations).
-
 mod kithara {
     pub(crate) use kithara_test_macros::test;
 }

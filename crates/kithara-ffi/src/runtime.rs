@@ -1,5 +1,3 @@
-//! Shared tokio runtime for FFI background tasks.
-
 use std::sync::LazyLock;
 
 use kithara_platform::tokio::runtime::{self, Builder as RuntimeBuilder};

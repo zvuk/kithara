@@ -1,10 +1,3 @@
-//! Probes: `HlsSegmentView::segment_at_time`, `segment_after_byte`, `init_segment_range`.
-//!
-//! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-4`
-//!
-//! Plan 00 skeleton — bodies panic via `unimplemented!()`. Plan 04 fills
-//! the lock-free SegmentLayout scenarios.
-
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 

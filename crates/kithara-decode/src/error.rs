@@ -1,5 +1,3 @@
-//! Error types for audio decoding.
-
 use std::{error::Error as StdError, io, io::ErrorKind};
 
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};

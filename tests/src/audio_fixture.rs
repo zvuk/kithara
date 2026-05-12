@@ -1,8 +1,3 @@
-//! Test fixtures for decode tests.
-//!
-//! Provides deterministic local fixtures for decode tests (no external network).
-//! Includes tiny MP3/AAC test assets embedded in the test binary.
-
 /// Embedded audio data for tests that don't need HTTP
 pub struct EmbeddedAudio {
     /// WAV data (0.1 seconds of silence)

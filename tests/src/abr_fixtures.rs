@@ -1,9 +1,3 @@
-//! ABR-specific fixtures used by integration tests.
-//!
-//! Lives here (not in `kithara-test-utils`) so test-utils can stay free of
-//! `kithara-abr` and `kithara-stream` dependencies, which is needed for the
-//! probe-runtime cycle break.
-
 use std::time::Duration;
 
 use kithara_abr::{AbrMode, AbrSettings};

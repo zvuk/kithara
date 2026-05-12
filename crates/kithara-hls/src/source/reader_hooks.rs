@@ -1,14 +1,3 @@
-//! HLS-side `DecoderHooks` implementation.
-//!
-//! Owns reader-segment bookkeeping (previously inline in
-//! `source_impl::read_at`) and emits `HlsEvent::SegmentReadStart`,
-//! `HlsEvent::SegmentReadComplete`, `HlsEvent::ReadProgress`,
-//! `HlsEvent::ReaderSeek` based on the cursor exposed by `Timeline`.
-//!
-//! Granularity: one chunk = one event hop (or two events when the
-//! reader crosses a segment boundary). The decoder's `next_chunk` is
-//! the point of emission, not per-byte read inside the source.
-
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},

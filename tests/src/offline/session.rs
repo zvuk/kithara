@@ -1,17 +1,3 @@
-//! Per-instance offline audio session for integration tests.
-//!
-//! Spawns a worker thread that drives [`SessionState<OfflineBackend>`]
-//! using the canonical [`run_cmd`] from `kithara_play`. Two flavours:
-//!
-//! * [`OfflineSession::new`] — auto-render worker. The worker pulls
-//!   audio through the firewheel graph on a periodic timer.
-//! * [`OfflineSession::new_manual`] — dispatch-only worker. The
-//!   firewheel graph only advances when a test calls
-//!   [`OfflineSession::render`].
-//!
-//! Both implement [`SessionDispatcher`] and can be plugged into
-//! [`kithara_play::EngineConfig::session`] directly.
-
 use std::{sync::Arc, time::Duration};
 
 use kithara_platform::{

@@ -1,5 +1,3 @@
-//! Download command types.
-
 use std::io;
 
 use derive_setters::Setters;

@@ -1,18 +1,3 @@
-//! Constants should live as close as possible to their usage.
-//!
-//! For each module-level `const` (with `inherited`/`pub(crate)`/`pub(super)`
-//! visibility), count how many `fn` bodies in the same module reference its
-//! identifier. Two locality violations are flagged:
-//!
-//! - **L1 — single-fn**: the const is referenced from exactly one fn. Move
-//!   the const inside that fn's body.
-//! - **L2 — single-impl**: the const is referenced from ≥2 methods, but all
-//!   of those methods belong to the same `impl Foo { ... }` block. Move it
-//!   into the impl (accessed as `Self::CONST`).
-//!
-//! Public (`pub`) constants are skipped: they are part of the cross-crate
-//! API and cross-file usage cannot be observed from a single file.
-
 use std::collections::BTreeMap;
 
 use anyhow::Result;

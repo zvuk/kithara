@@ -1,9 +1,3 @@
-//! `Peer` implementation for the file protocol.
-//!
-//! Reports priority based on the audio FSM's PLAYING flag exposed via the
-//! shared `Timeline` — fetches for an actively-consumed track go to the
-//! High-priority slot, idle ones go to Low.
-
 use kithara_abr::Abr;
 use kithara_stream::{
     Timeline,

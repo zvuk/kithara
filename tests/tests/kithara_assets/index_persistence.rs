@@ -1,27 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-//! Integration test: three on-disk index files live alongside the
-//! asset data and reflect runtime state.
-//!
-//! Covers the question "when do `pins.bin` / `lru.bin` /
-//! `availability.bin` actually hit the disk?" Spawns a realistic
-//! acquire → write → commit → read sequence and asserts both the
-//! existence and the content of each file at every intermediate
-//! step, because each of the three indexes has a different
-//! persistence contract:
-//!
-//! | File              | Persisted by                       | Eagerly flushed?     |
-//! | `pins.bin`        | `LeaseAssets::pin` / `Drop` on      | yes, every pin/unpin |
-//! |                   | `LeaseGuard`                        |                      |
-//! | `lru.bin`         | `EvictAssets::touch_and_maybe_evict`| yes, every acquire   |
-//! | `availability.bin`| `AssetStore::checkpoint()`          | **NO** — explicit    |
-//!
-//! If any of the above contracts regresses, this test flips first.
-//! It also validates the on-disk rkyv payload by reconstructing
-//! the archived view and checking the version / pins set /
-//! availability ranges that we just wrote.
-
 use std::{
     fs,
     path::{Path, PathBuf},

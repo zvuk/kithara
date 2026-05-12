@@ -1,6 +1,3 @@
-//! Free items shared by the `Queue` impl modules: `Transition`,
-//! private state shapes, and pure helpers.
-
 use kithara_events::TrackId;
 use kithara_play::ResourceSrc;
 

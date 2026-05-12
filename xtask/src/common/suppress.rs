@@ -1,27 +1,3 @@
-//! Inline lint suppression for xtask static-analysis namespaces.
-//!
-//! Mirrors the `// ast-grep-ignore: <rule-id>` convention used by ast-grep
-//! YAML rules. A directive comment on the line immediately preceding
-//! a violation site silences the rule for that single line.
-//!
-//! Syntax:
-//!
-//! ```text
-//! // optional reason (free-form, single line)
-//! // xtask-lint-ignore: <check_id>[, <check_id>, ...]
-//! offending_code();
-//! ```
-//!
-//! Without an id list (`// xtask-lint-ignore` on its own) the directive
-//! suppresses every check for the next non-comment, non-blank line. The
-//! optional reason comment above is recommended but not enforced; a
-//! check that ignores something silently is the surface of future
-//! incidents.
-//!
-//! The parser walks raw source text rather than the syn AST because syn
-//! discards comments. This is independent of the lint mechanics — every
-//! check uses the same `Suppressions` struct constructed once per file.
-
 use std::collections::{HashMap, HashSet};
 
 const DIRECTIVE_PREFIX: &str = "xtask-lint-ignore";

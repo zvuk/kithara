@@ -1,5 +1,3 @@
-//! Shared async HTTP test server helpers.
-
 use std::{io, time::Duration};
 
 use axum::Router;

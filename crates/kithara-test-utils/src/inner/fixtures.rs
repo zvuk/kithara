@@ -1,5 +1,3 @@
-//! Common fixtures for integration tests.
-
 use std::path::{Path, PathBuf};
 
 use tokio_util::sync::CancellationToken;

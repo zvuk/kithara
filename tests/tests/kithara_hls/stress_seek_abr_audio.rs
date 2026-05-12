@@ -1,15 +1,3 @@
-//! Stress test: ABR variant switch and seek on `Audio<Stream<Hls>>`.
-//!
-//! Two HLS variants with different saw-tooth directions (ascending vs. descending).
-//! V0 segments are delayed after segment 3 to trigger ABR downgrade to V1.
-//! WAV header as HLS init segment (`#EXT-X-MAP`).
-//!
-//! Four-phase verification:
-//! 1. **Warmup**: read until ABR switches from V0 (ascending) to V1 (descending)
-//! 2. **Post-switch**: 10 chunks of descending data confirm stable V1
-//! 3. **Random seeks**: 200 seek+read cycles with integrity/continuity/direction checks
-//! 4. **EOF**: seek near the end, read to EOF
-
 use std::{sync::Arc, time::Duration};
 
 use kithara::{

@@ -1,12 +1,3 @@
-//! CRITICAL: USER-FACING BUG REPRODUCERS.
-//! These 3 bugs exist in main; refactor MUST close all scenarios GREEN.
-//!
-//! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-15`
-//!
-//! Plan 00 skeleton — bodies panic via `unimplemented!()`. Plan 10 fills the
-//! bug reproducers (Bug #1 variant-replay, Bug #2 mid-segment drop, Bug #3
-//! premature EOF) inside these parametric bodies.
-
 use kithara_decode::DecoderBackend;
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;

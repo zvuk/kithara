@@ -1,12 +1,3 @@
-//! Integration tests: verify `with_is_ephemeral(true)` routes data through `MemDriver`
-//! ring buffer (in-memory) instead of `MmapDriver` (disk).
-//!
-//! Two levels of verification:
-//! 1. **Structural**: `AssetStoreBuilder::ephemeral(true)` creates resources with
-//!    `path() == None` (`MemResource`), while disk creates `path() == Some(_)` (`MmapResource`).
-//! 2. **Pipeline**: `Audio<Stream<Hls>>` with `ephemeral: true` produces valid audio
-//!    and leaves the temp directory empty (no files created on disk).
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]

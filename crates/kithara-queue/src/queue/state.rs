@@ -1,6 +1,3 @@
-//! [`Queue`] struct, constructor, and the inherent helpers shared by the
-//! responsibility-split impl blocks (lock helpers + atomic accessors).
-
 use std::{
     collections::HashMap,
     sync::{

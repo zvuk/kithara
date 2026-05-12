@@ -1,13 +1,3 @@
-//! WASM task spawning with Web Worker lifecycle dispatch.
-//!
-//! - Main thread: delegates to `tokio_with_wasm` (standard WASM tokio shim).
-//! - Web Worker: `spawn_local` + `task_begin`/`task_finished` to prevent
-//!   premature Worker shutdown.
-//!
-//! Custom `JoinHandle`/`JoinError` are necessary because `tokio_with_wasm`'s
-//! `JoinHandle` has private fields and their `spawn`/`spawn_blocking` panic
-//! on Web Workers.
-
 use std::{
     future::Future,
     pin::Pin,

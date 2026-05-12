@@ -1,9 +1,3 @@
-//! Concrete Player implementation managing an items queue.
-//!
-//! `PlayerImpl` tracks a list of [`Resource`] items and exposes play/pause/seek.
-//! Owns an [`EngineImpl`] and sends commands to the active slot's processor
-//! via the slot's command channel.
-
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},

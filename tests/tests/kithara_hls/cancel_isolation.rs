@@ -1,37 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-//! Sibling-fetch isolation when one HLS segment URL returns `text/html`.
-//!
-//! Spawns a custom axum server hosting a valid master + media playlist with
-//! several segments. One segment URL is intentionally rigged to respond with
-//! `Content-Type: text/html` (a CDN soft-error page). The test then drives a
-//! [`Stream<Hls>`] read loop and inspects per-URL hit counters on the server
-//! to prove that the html response on a single segment does **not** abort
-//! sibling segment fetches inside the same `HlsPeer` epoch.
-//!
-//! The hypothesis under audit (see `feedback_*` memory entries):
-//!     "When the Downloader receives one invalid response (e.g. text/html
-//!      instead of media), it cascades-cancels every in-flight `FetchCmd`
-//!      across every registered track."
-//!
-//! Cancel hierarchy (per audit of `crates/kithara-stream/src/dl/`):
-//!   - Downloader-wide cancel (parent of every `peer_cancel`).
-//!   - `peer_cancel` per registered `PeerHandle` (child of downloader cancel).
-//!   - For each `FetchCmd` from `Peer::poll_next`, the Registry builds a
-//!     `CancelGroup{peer_cancel.clone(), epoch_cancel}` (see
-//!     `dl/registry.rs:130`). Every sibling in the same `poll_next` batch
-//!     receives the SAME `epoch_cancel` instance (cloned in
-//!     `kithara-hls/src/peer.rs:673`). Firing `epoch_cancel` therefore
-//!     aborts every in-flight sibling — but `epoch_cancel.cancel()` only
-//!     fires from `process_demand` on a new seek epoch. Validator failure
-//!     in `dl/batch.rs:165` returns `Err` for one fetch only and never
-//!     touches `peer_cancel` or `epoch_cancel`.
-//!
-//! Expected behaviour: `text/html` on segment 3 must not cancel siblings.
-//! `HlsPeer::on_complete` for that fetch removes its `in_flight` slot and
-//! rewinds the cursor onto seg 3; siblings 0..2 / 4..5 must still complete.
-
 use std::{
     io::{Read, Seek, SeekFrom},
     net::SocketAddr,

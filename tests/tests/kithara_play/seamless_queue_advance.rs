@@ -1,26 +1,3 @@
-//! Gapless auto-advance with PCM shape verification.
-//!
-//! Drives a per-instance offline session (`EngineImpl::new_offline`)
-//! through the production `PlayerImpl` chain, with the audio thread
-//! living on the offline session worker. The harness's
-//! `render(BLOCK_FRAMES)` returns the rendered stereo block
-//! synchronously, so assertions can pin both event ordering (frame-
-//! exact) and waveform continuity at the join.
-//!
-//! Two scenarios:
-//! - cf=0 — the audio thread must hand item-2 in within the same
-//!   render block where item-1 hits EOF; we tolerate at most one
-//!   block of silence at the join.
-//! - cf=1.0 — both 440 Hz and 880 Hz must be audible in the overlap
-//!   window between item-2 activation and item-1's natural EOF.
-//!
-//! Event-ordering note: `PlayerEvent::ItemDidPlayToEnd` is a unitless
-//! variant — the queue layer (`kithara_queue::Queue`) is the one that
-//! carries per-item identity via `QueueEvent::CurrentTrackChanged` for
-//! FFI clients. For the player-slot path exercised here we
-//! disambiguate item-1 vs item-2 EOF by occurrence index, which is
-//! deterministic given the autoplay/preload ordering.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::num::NonZeroU32;

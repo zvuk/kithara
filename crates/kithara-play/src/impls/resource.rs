@@ -1,5 +1,3 @@
-//! Type-erased resource: unified wrapper over decoded audio streams.
-
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
 use kithara_audio::{

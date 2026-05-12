@@ -1,8 +1,3 @@
-//! Media format information types.
-//!
-//! These types allow sources to communicate codec/container information
-//! to decoders, enabling direct decoder instantiation without probing.
-
 use derive_setters::Setters;
 
 /// Container format type.

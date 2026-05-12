@@ -1,14 +1,3 @@
-//! Bridge between the Queue event stream and FFI observer callbacks.
-//!
-//! Subscribes to [`Queue::subscribe`] (a unified stream carrying player,
-//! audio, hls, file and queue events), translates them into typed
-//! [`FfiPlayerEvent`] variants dispatched via a single
-//! [`PlayerObserver::on_event`] call. A secondary **OS thread** drives
-//! `Queue::tick()` (which pumps `PlayerImpl::tick` and drains engine
-//! events for auto-advance) and polls `position_seconds` /
-//! `duration_seconds` for periodic time updates — avoiding blocking
-//! `Mutex::lock_sync()` inside async.
-
 use std::sync::Arc;
 
 use kithara::play::PlayerEvent;

@@ -1,11 +1,3 @@
-//! `SymphoniaDemuxer` — generic [`Demuxer`] over `symphonia`'s
-//! [`FormatReader`].
-//!
-//! Wraps `Box<dyn FormatReader>` for any container Symphonia handles
-//! (MP3, FLAC, OGG, WAV, AIFF, ADTS, MKV, MP4 / fMP4 file). The demuxer
-//! pumps packets out of the audio track and exposes them as
-//! [`DemuxOutcome::Frame`] values consumable by any [`FrameCodec`].
-
 use std::{
     io::{ErrorKind, Read, Seek},
     sync::{Arc, atomic::AtomicU64},

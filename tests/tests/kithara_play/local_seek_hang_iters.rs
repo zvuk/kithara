@@ -1,15 +1,3 @@
-//! Local mirror of `silvercomet_3tracks_seek_middle_hang_10x` against the
-//! in-process `TestServerHelper` HLS fixture (packaged AAC, sawtooth signal).
-//!
-//! Same shape: per iteration, build a `Resource`, hand it to `OfflinePlayer`
-//! through `load_and_fadein`, render a warmup window, render a measurement
-//! window, seek +30 s, render another window. Both windows must satisfy the
-//! silence-fraction and RMS floors that catch the post-seek hang.
-//!
-//! No `#[ignore]` — runs in every `just test`. Detects regressions of the
-//! post-seek HLS recreate path that previously surfaced only against
-//! silvercomet's live CDN.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 

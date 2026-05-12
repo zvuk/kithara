@@ -1,5 +1,3 @@
-//! Batch execution: epoch-aware grouping and fetch spawning.
-
 use std::sync::{Arc, atomic::Ordering};
 
 use kithara_abr::{AbrController, AbrPeerId};

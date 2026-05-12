@@ -1,8 +1,3 @@
-//! Per-track state with `MixDSP` fade control.
-//!
-//! Each track loaded into the processor gets a [`PlayerTrack`] that wraps
-//! the shared [`PlayerResource`] and manages its fade/state lifecycle.
-
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
 #[rustfmt::skip]

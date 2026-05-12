@@ -1,9 +1,3 @@
-//! `FourCC` constants and a small helper to stringify `OSStatus` values.
-//!
-//! Codec-only surface kept after the legacy AudioFile-based decoder was
-//! removed; only the constants `crate::codec::AppleCodec` references
-//! survive.
-
 #![allow(non_upper_case_globals)]
 
 use super::ffi::{AudioFormatFlags, AudioFormatID, OSStatus};

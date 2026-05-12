@@ -1,7 +1,3 @@
-//! Expansion logic for `#[kithara::test]` — unified sync/async/native/wasm
-//! test attribute. Replaces `#[test]`, `#[tokio::test]`,
-//! `#[multiplatform_test]`, `#[rstest]`, and `#[timeout]` with one attribute.
-
 #![allow(
     clippy::needless_pass_by_value,
     reason = "proc_macro parse_macro_input! produces owned values"

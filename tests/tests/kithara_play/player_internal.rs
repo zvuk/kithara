@@ -1,9 +1,3 @@
-//! Tests for `PlayerImpl` queue management, auto-advance, and the
-//! arm/commit/unarm/select item slot orchestration. Drives the player
-//! through `make_offline_player` (per-test offline session) plus
-//! `make_resource` / `make_tagged_resource` fixtures backed by
-//! `TestPcmReader`.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![allow(
     clippy::cast_possible_truncation,

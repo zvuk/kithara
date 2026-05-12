@@ -1,8 +1,3 @@
-//! Stress test: rapid seeking during/after ABR switch with real Symphonia decoder.
-//!
-//! Uses production HLS stream (requires network).
-//! Expected: FAILS — seek after ABR switch causes deadlock or audio death.
-
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

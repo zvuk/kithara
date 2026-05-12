@@ -1,5 +1,3 @@
-//! Tests for `FileCoord` and `FileSource`.
-
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_assets::{AssetResource, AssetStoreBuilder, ResourceKey};

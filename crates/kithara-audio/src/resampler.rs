@@ -1,7 +1,3 @@
-//! `ResamplerProcessor`: wraps rubato for sample rate conversion.
-//!
-//! Reacts to dynamic `host_sample_rate` changes via `Arc<AtomicU32>`.
-
 use std::{
     iter,
     num::NonZeroUsize,

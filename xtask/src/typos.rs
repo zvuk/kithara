@@ -1,9 +1,3 @@
-//! `cargo xtask typos` — thin wrapper around the `typos` CLI that
-//! pins the workspace config and isolates from ambient discovery.
-//!
-//! Single source of truth for typos invocation; used by `just typos`,
-//! `just audit`, and `just health` so the config path lives in one place.
-
 use std::process::Command;
 
 use anyhow::{Result, bail};

@@ -1,8 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! `Resource<D>::wait_range_inner` — the blocking-wait body for
-//! [`ResourceExt::wait_range`](crate::ResourceExt::wait_range).
-
 use std::ops::Range;
 
 use kithara_platform::{

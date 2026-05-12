@@ -1,10 +1,3 @@
-//! Probes: `HlsVariant::set_position`, `advance`, `get_position`.
-//!
-//! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-5`
-//!
-//! Plan 00 skeleton — bodies panic via `unimplemented!()`. Plan 03 fills
-//! the per-variant position scenarios.
-
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 

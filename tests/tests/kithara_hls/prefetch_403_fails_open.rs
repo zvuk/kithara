@@ -1,21 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Regression test for the silent-hang chain when DRM-key prefetch fails.
-//!
-//! When the key server returns HTTP 403 during `Hls::create`, the prefetch
-//! must propagate the error to the caller instead of swallowing it as a
-//! warning. The previous code resolved `Stream::<Hls>::new` with `Ok`,
-//! pushing the symptom into a downstream `wait_range` hang that
-//! `HangDetector` panicked on after 5 seconds — see the original
-//! reproduction in `app.log` (track ids 95038745 / 176000094).
-//!
-//! Acceptance:
-//! - `Stream::<Hls>::new` returns `Err` (any source error variant) when the
-//!   encrypted variant's key endpoint serves 403.
-//! - The whole open completes in well under 1 second; we wrap the call in
-//!   a 1-second `tokio::time::timeout` so a regression manifests as a
-//!   timeout panic rather than a 5-second hang.
-
 use std::{error::Error, time::Duration};
 
 use kithara::{

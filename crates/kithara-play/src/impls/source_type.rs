@@ -1,5 +1,3 @@
-//! Detected source type from input analysis.
-
 use std::path::PathBuf;
 
 use kithara_decode::DecodeError;

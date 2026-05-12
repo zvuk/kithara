@@ -1,14 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! HLS Stream seek tests.
-//!
-//! Tests verify that:
-//! 1. Stream<Hls> read + seek works with different offsets
-//! 2. Reading across segment boundaries works correctly
-//! 3. Seek + read returns expected bytes
-//!
-//! Note: ABR is set to Manual(0) to fix variant and avoid switching during tests.
-
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};

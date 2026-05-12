@@ -1,6 +1,3 @@
-//! Track lifecycle: `append`, `insert`, `remove`, `clear`, `set_tracks`
-//! and the shared `insert_entry` placement path.
-
 use std::sync::{PoisonError, atomic::Ordering};
 
 use kithara_events::{QueueEvent, TrackId, TrackStatus};

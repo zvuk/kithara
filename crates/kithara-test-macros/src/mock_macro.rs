@@ -1,9 +1,3 @@
-//! Expansion logic for `#[kithara::mock]`.
-//!
-//! Forwards arguments to `::unimock::unimock(...)`, gated behind
-//! `cfg(any(test, feature = "test-utils"))` so production builds of
-//! consumer crates don't pay the cost of compiling mock impls.
-
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;

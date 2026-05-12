@@ -1,6 +1,3 @@
-//! ISO 8601 UTC timestamp without `chrono` (used in markdown report
-//! headers across `quality`, `health`, etc.).
-
 pub(crate) fn utc_timestamp() -> String {
     let now = std::time::SystemTime::now();
     let secs = now

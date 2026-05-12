@@ -1,5 +1,3 @@
-//! Configuration for [`Item`](crate::impls::item::Item).
-
 use std::{
     fmt,
     num::{NonZeroU32, NonZeroUsize},

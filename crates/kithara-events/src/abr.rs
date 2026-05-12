@@ -1,12 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Shared ABR (adaptive bitrate) vocabulary and events.
-//!
-//! Cross-crate types live here (those referenced by [`AbrEvent`]). Controller-
-//! internal shapes (`AbrSettings`, `AbrDecision`, `AbrPeerId`) live in
-//! `kithara-abr`; events only carry `AbrMode`, `AbrReason`, `BandwidthSource`,
-//! `AbrVariant`, `VariantDuration`, `VariantInfo`, `AbrProgressSnapshot`.
-
 use derivative::Derivative;
 use kithara_platform::time::Duration;
 

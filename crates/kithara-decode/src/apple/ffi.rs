@@ -1,9 +1,3 @@
-//! Raw FFI bindings to Apple `AudioToolbox`.
-//!
-//! Codec-only surface — `AudioConverter` plus the `AudioStreamBasicDescription`
-//! / `AudioBuffer` plumbing used by [`crate::codec::AppleCodec`] to feed
-//! demuxed frames through the hardware codec.
-
 #![allow(unsafe_code)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]

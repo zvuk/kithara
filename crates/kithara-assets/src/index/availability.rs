@@ -1,10 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Per-resource byte availability index.
-//!
-//! `Availability` is a single resource's snapshot of which byte ranges
-//! have been written and whether it has been committed.
-
 use std::{
     collections::BTreeMap,
     ops::Range,

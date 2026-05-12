@@ -1,12 +1,3 @@
-//! Stress test: random seek+read cycles on HLS stream.
-//!
-//! Spawns a local HLS server via [`HlsTestServer`], creates `Stream<Hls>`,
-//! performs random byte-level seeks each followed by a read, verifying exact
-//! byte content at every position. Parametrized via rstest cases (small/medium/large).
-//!
-//! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
-//! No external network required.
-
 use std::{
     io::{ErrorKind, Read, Seek, SeekFrom},
     sync::Arc,

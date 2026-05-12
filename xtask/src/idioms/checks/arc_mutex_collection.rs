@@ -1,25 +1,3 @@
-//! `Arc<Mutex<Collection>>` — coarse-grained locking around an entire
-//! collection.
-//!
-//! Locking the whole collection serialises every read and every write,
-//! even when callers touch disjoint keys. For HashMap-like collections
-//! the workspace prefers `dashmap::DashMap` / `DashSet` (per-bucket
-//! locking, no global serialisation point); for append-heavy `Vec`
-//! workloads a lock-free `crossbeam::queue::SegQueue` or a
-//! `tokio::sync::mpsc` channel is cheaper still.
-//!
-//! Detection: walks every `syn::Type::Path` and matches the trailing
-//! shape `Arc < (Mutex | RwLock) < (HashMap | HashSet | BTreeMap |
-//! BTreeSet | Vec) < ... > > >`. Path prefixes are ignored — the
-//! check is structural, not symbol-table-aware. Cross-cutting
-//! `kithara_platform::Mutex` and `parking_lot::Mutex` count the
-//! same as `std::sync::Mutex`: the contention shape is identical.
-//!
-//! The existing `arch.no-arc-mutex-godmap.yml` ast-grep rule catches
-//! one specific `HashMap` shape; this check is broader (`Vec`, `HashSet`,
-//! `BTreeMap`, `BTreeSet`) and ships the long-form Why / Bad / Good /
-//! Suppress block per finding.
-
 use anyhow::Result;
 use syn::{
     GenericArgument, Path, PathArguments, Type, TypePath,

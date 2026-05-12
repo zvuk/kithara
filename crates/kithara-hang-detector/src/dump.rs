@@ -1,9 +1,3 @@
-//! Context dump primitives used by `HangDetector` when a hang fires.
-//!
-//! `HangDump` is the user-facing contract: any `T: serde::Serialize`
-//! implements it automatically via the blanket impl below. `NoContext`
-//! is the zero-payload default used when no dump is configured.
-
 use serde::Serialize;
 
 /// Trait implemented by every value the detector can dump when a hang

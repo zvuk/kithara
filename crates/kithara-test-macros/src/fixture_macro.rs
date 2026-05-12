@@ -1,10 +1,3 @@
-//! Expansion logic for `#[kithara::fixture]` (rstest-fixture replacement).
-//!
-//! A zero-arg fixture passes through unchanged. A fixture with parameters is
-//! transformed to zero-arg by binding each parameter to a same-named function
-//! call (or `name`-without-`_` prefix for ignored fixtures), so the body keeps
-//! seeing the parameter as before.
-
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, Pat, parse_macro_input};

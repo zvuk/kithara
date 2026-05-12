@@ -1,14 +1,3 @@
-//! Isolator-style crossover EQ.
-//!
-//! Splits the input signal into N frequency bands using Linkwitz-Riley (LR-4)
-//! crossover filters with explicit LP/HP pairs, applies independent linear
-//! gain to each band, and sums the result. At minimum gain the band
-//! multiplier is exactly zero — true silence.
-//!
-//! Each crossover splits the signal with parallel LP and HP LR-4 filters
-//! (24 dB/oct). Allpass compensation on earlier bands ensures flat magnitude
-//! sum at unity gains.
-
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
 use derivative::Derivative;
 use derive_setters::Setters;

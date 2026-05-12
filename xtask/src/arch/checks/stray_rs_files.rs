@@ -1,5 +1,3 @@
-//! No `.rs` files at workspace root.
-
 use std::fs;
 
 use anyhow::Result;

@@ -1,8 +1,3 @@
-//! Concurrent File instance tests.
-//!
-//! Verifies that N `Audio<Stream<File>>` instances can run concurrently
-//! and each reads PCM data to EOF with roughly matching sample counts.
-
 use std::path::Path;
 
 use kithara::{

@@ -1,14 +1,3 @@
-//! `Fmp4SegmentDemuxer` — segment-aware [`Demuxer`] for HLS fMP4 streams.
-//!
-//! Bypasses Symphonia's whole-stream `IsoMp4Reader` to avoid the prefix
-//! walk that broke HLS seeks (see `kithara-decode` crate README §2). Each
-//! HLS segment is fetched independently through a [`crate::traits::BoxedSource`]
-//! cursor, demuxed in memory via [`super::parsing`], and frames are
-//! emitted one at a time. Segment layout (init range, decode-time → segment
-//! mapping) comes from a [`SegmentLayout`] handle — the same one HLS /
-//! file fmp4 expose for layout queries — so the demuxer never re-parses
-//! MOOF chains or walks the playlist.
-
 use std::{sync::Arc, time::Duration};
 
 use kithara_stream::SegmentLayout;

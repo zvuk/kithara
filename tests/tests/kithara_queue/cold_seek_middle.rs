@@ -1,14 +1,3 @@
-//! Reproduces the user-reported cold-cache mid-track seek hang against
-//! a local `PackagedTestServer` — the whole production pipeline (Queue,
-//! `PlayerImpl`, `OfflineBackend`) end-to-end, no real network.
-//!
-//! Scenario: two HLS tracks, caller selects the second, plays briefly,
-//! then seeks to the middle of an uncached range. The test asserts the
-//! queue's watchdog either confirms progress or fires its panic+dump.
-//! If the hang reproduces, `Queue::tick` panics through
-//! `HangDetector`; the panic payload + `/tmp/kithara-seek-hang-*.json`
-//! pinpoint the frozen state.
-
 #![forbid(unsafe_code)]
 
 use std::{

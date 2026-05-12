@@ -1,7 +1,3 @@
-//! Performance tests for storage operations.
-//!
-//! Run with: `cargo test --test storage --features perf --release`
-
 #![cfg(feature = "perf")]
 
 use std::io::Write;

@@ -1,18 +1,3 @@
-//! `Demuxer` trait — container-side half of the unified decoder architecture.
-//!
-//! A `Demuxer` consumes raw bytes from a `Source`-backed transport and
-//! yields per-frame slices with PTS / duration. It does NOT touch PCM —
-//! that is the [`FrameCodec`] half. Splitting the two lets us pair any
-//! container parser (HLS-fmp4, file-mp4, ADTS, OGG, …) with any codec
-//! backend (Symphonia software, Apple/Android hardware, …) through
-//! `ComposedDecoder<D, C>`.
-//!
-//! Implementations live in their platform-specific modules:
-//! - [`crate::symphonia::SymphoniaDemuxer`] for MP3 / WAV / OGG / native FLAC / file-fmp4.
-//! - [`crate::fmp4::Fmp4SegmentDemuxer`] for HLS fMP4 (segment-aware).
-//!
-//! [`FrameCodec`]: crate::codec::FrameCodec
-
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, PendingReason};
 

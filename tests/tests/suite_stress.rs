@@ -4,12 +4,6 @@
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
 
-//! Stress tests that require exclusive CPU access.
-//!
-//! These tests use `recv_outcome_blocking` (blocking audio reads after seek)
-//! and are sensitive to CPU contention. They run one at a time via nextest
-//! `threads-required = "num-cpus"` override.
-
 mod common;
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -1,12 +1,3 @@
-//! Stress test: 1000 random seek+read cycles on synthetic WAV.
-//!
-//! Generates a deterministic WAV (10s, ~1.7 MB stereo 44.1 kHz, 16-bit),
-//! creates `Audio<Stream<File>>`, then performs 1000 random seeks
-//! each followed by a read, verifying data integrity at every step.
-//!
-//! Deterministic xorshift64 PRNG guarantees reproducibility.
-//! No network required.
-
 use std::{fs::File as FsFile, io::Write};
 
 use kithara::{

@@ -1,19 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Regression test for seek deadlock when ABR variant switch coincides with seek after EOF.
-//!
-//! Production scenario:
-//!   1. All segments for variant 0 are cached (read to EOF)
-//!   2. ABR switches variant 0 → variant 1
-//!   3. Seek to middle of stream triggers on-demand request for variant 1 segment
-//!   4. `handle_midstream_switch()` drains ALL `segment_requests` — including the
-//!      current-epoch on-demand request
-//!   5. Program hangs — request never served
-//!
-//! Fix: `handle_midstream_switch()` now notifies condvar after draining, and
-//! `wait_range` clears `on_demand_pending` when `had_midstream_switch` is true,
-//! allowing the reader to re-push its request.
-
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{

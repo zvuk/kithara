@@ -1,20 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Failed-fetch cleanup invariants.
-//!
-//! When a CDN returns `text/html` for a playlist or a DRM key, the HLS
-//! engine must NOT leave orphan files or a retry-storm behind. These tests
-//! pin two invariants:
-//!
-//! 1. **No empty cache files** — `atomic_fetch::fetch_atomic_body` pre-allocates
-//!    a `DEFAULT_INITIAL_SIZE` mmap file via `backend.acquire_resource(key)`
-//!    before the network fetch. On `reject_html_response` failure the file
-//!    must be removed, not parked in the cache directory until process exit.
-//!
-//! 2. **Bounded retry count** — a dead endpoint must not keep producing
-//!    network requests. The HLS engine either backs off, drops the track,
-//!    or demotes its priority so the Downloader is not saturated.
-
 use std::{
     net::SocketAddr,
     sync::{

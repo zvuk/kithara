@@ -1,9 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! [`MmapDriver`] struct, options, mmap state machine, and the
-//! [`Driver`] factory impl. [`MmapResource`] alias lives here.
-//! The [`DriverIo`](crate::DriverIo) impl is in the sibling `io` module.
-
 use std::{fmt, fs, ops::Range, path::PathBuf};
 
 use crossbeam_queue::SegQueue;

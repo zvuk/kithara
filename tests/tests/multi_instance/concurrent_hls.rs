@@ -1,8 +1,3 @@
-//! Concurrent HLS instance tests.
-//!
-//! Verifies that N `Audio<Stream<Hls>>` instances can run concurrently and
-//! each reads PCM data to EOF, under manual-variant and auto-ABR modes.
-
 use std::{path::Path, sync::Arc};
 
 use kithara::{

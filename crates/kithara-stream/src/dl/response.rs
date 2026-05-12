@@ -1,5 +1,3 @@
-//! Fetch response types for the channel-based downloader API.
-
 use std::{
     pin::Pin,
     task::{Context, Poll},

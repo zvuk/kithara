@@ -1,14 +1,3 @@
-//! Test: Stream<Hls> reads all bytes.
-//!
-//! CRITICAL TEST: Verifies that Stream<Hls> reads ALL bytes from HLS source.
-//!
-//! This test isolates HLS streaming layer.
-//!
-//! Expected behavior:
-//! - HLS should load all 3 segments (variant 0 has 3 segments in playlist)
-//! - Stream should read ALL bytes from all 3 segments
-//! - Total bytes = 3 segments * ~200KB each = ~600KB
-
 use std::{io::Read, time::Duration};
 
 use kithara::{

@@ -1,5 +1,3 @@
-//! LOC threshold per `.rs` file.
-
 use std::fs;
 
 use anyhow::Result;

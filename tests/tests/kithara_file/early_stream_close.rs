@@ -1,11 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-//! Test: File with early stream close + seek via on-demand Range request.
-//!
-//! Scenario:
-//! 1. HTTP server advertises Content-Length via HEAD but only sends partial data
-//! 2. Sequential stream closes at 512KB of 1MB file
-//! 3. Seek to 700KB triggers on-demand Range request
-//! 4. Data is fetched and read correctly
 
 use std::{
     fs, io,

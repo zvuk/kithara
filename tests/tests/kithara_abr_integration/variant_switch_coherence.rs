@@ -1,9 +1,3 @@
-//! Variant switches under normal playback must not emit `Incoherence`.
-//!
-//! The projection §12 Tier 4 asks that the incoherence watchdog only
-//! fires when the reader is genuinely stuck after a `VariantApplied`
-//! event. A happy-path switch (reader keeps advancing) must stay silent.
-
 use std::{
     sync::{
         Arc,

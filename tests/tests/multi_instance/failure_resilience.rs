@@ -1,9 +1,3 @@
-//! Failure resilience tests.
-//!
-//! Verifies that when some instances are cancelled mid-stream (simulating
-//! a network failure), other instances continue to read PCM data to EOF
-//! without being affected.
-
 use std::{path::Path, sync::Arc};
 
 use kithara::{

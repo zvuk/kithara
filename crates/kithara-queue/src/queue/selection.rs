@@ -1,7 +1,3 @@
-//! Selection state machine: explicit `select`, navigation-driven
-//! `advance_to_next` / `return_to_previous`, pending-select bookkeeping,
-//! and the `spawn_apply_after_load` post-load hookup.
-
 use std::sync::{Arc, PoisonError};
 
 use kithara_events::{QueueEvent, TrackId, TrackStatus};

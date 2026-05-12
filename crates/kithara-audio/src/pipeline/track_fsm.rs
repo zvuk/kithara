@@ -1,9 +1,3 @@
-//! Explicit FSM types for audio track state management.
-//!
-//! Replaces the implicit state scattered across `StreamAudioSource` fields
-//! (`pending_format_change`, `pending_decode_started_epoch`, etc.) with a
-//! single `TrackState` enum that is the sole source of truth.
-
 use kithara_decode::{DecodeError, Decoder};
 use kithara_platform::time::Duration;
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};

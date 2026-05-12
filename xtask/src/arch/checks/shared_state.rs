@@ -1,10 +1,3 @@
-//! Concentration of `Arc<Mutex/RwLock>` (and friends) per file.
-//!
-//! Counts substring occurrences after stripping `//` comments and string-literal
-//! content, and skipping lines inside `#[cfg(test)]` modules — only real
-//! production type-position usage is meant to count, not the rule's own pattern
-//! list, doc-comment examples, or test fixtures.
-
 use std::{collections::HashSet, fs};
 
 use anyhow::Result;

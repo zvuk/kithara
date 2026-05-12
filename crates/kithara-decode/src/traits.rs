@@ -1,5 +1,3 @@
-//! Traits shared between decoder backends.
-
 use std::{
     io::{ErrorKind, Read, Seek},
     num::NonZeroUsize,

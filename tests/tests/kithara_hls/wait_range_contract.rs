@@ -1,10 +1,3 @@
-//! Contract tests for `wait_range` behavior through public `Stream<Hls>` API.
-//!
-//! These tests intentionally avoid touching HLS internals and validate
-//! user-visible guarantees:
-//! 1. Rapid seek burst never returns premature EOF.
-//! 2. After seek burst, sequential tail read is contiguous and exact.
-
 use std::{
     io::{Read, Seek, SeekFrom},
     num::NonZeroUsize,

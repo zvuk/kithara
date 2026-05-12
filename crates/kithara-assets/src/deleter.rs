@@ -1,23 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Single-channel removal API for `kithara-assets`.
-//!
-//! Every path that physically deletes a resource (one file, an entire
-//! `asset_root` directory, or the in-memory `active_resources` map for
-//! the mem backend) goes through [`AssetDeleter`]. The contract is:
-//!
-//! 1. Physical deletion (`FS`, `DashMap` entry) and
-//!    [`AvailabilityIndex`](crate::index::AvailabilityIndex) invalidation
-//!    happen atomically inside one method call.
-//! 2. Direct [`std::fs::remove_file`] / [`std::fs::remove_dir_all`] and
-//!    direct manipulation of the mem backend's `active_resources` map
-//!    are forbidden anywhere outside the implementations of this trait.
-//!
-//! This closes the bypass family pinned by
-//! `red_test_lease_resource_drop_strands_availability_index` and
-//! `red_test_delete_asset_strands_availability_index` in
-//! [`crate::store::tests`].
-
 use crate::{error::AssetsResult, key::ResourceKey};
 
 /// Trait implemented by the disk and mem backends to expose a single

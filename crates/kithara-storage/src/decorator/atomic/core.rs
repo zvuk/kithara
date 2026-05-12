@@ -1,14 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Crash-safe whole-file write decorator.
-//!
-//! [`Atomic<R>`] wraps any [`ResourceExt`] and makes [`write_all()`](ResourceExt::write_all)
-//! crash-safe via the write-temp → rename pattern.
-//!
-//! For file-backed resources, `write_all()` writes to a uniquely-named temp file
-//! (via the `tempfile` crate), then atomically renames over the target path.
-//! For in-memory resources, `write_all()` delegates directly (no filesystem to protect).
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 use std::{io::Write, ops::Range, path::Path};

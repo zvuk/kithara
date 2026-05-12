@@ -1,5 +1,3 @@
-//! WAV file generation helpers for tests.
-
 use crate::signal_pcm::{Finite, SignalPcm, signal};
 
 const WAV_HEADER_SIZE: usize = 44;

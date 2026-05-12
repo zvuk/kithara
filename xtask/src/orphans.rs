@@ -1,15 +1,3 @@
-//! `cargo xtask orphans` — wrapper around `cargo modules orphans`.
-//!
-//! Iterates workspace packages (or those given via `--package`),
-//! filters out helper/macro/fuzz crates, and runs the orphan check
-//! per-package with `--cfg-test` so `#[cfg(test)] mod tests;` is
-//! analyzed too (without the flag, those `mod` items are reported
-//! as orphans).
-//!
-//! Per-package runs use a thread pool because each `cargo modules
-//! orphans` call is dominated by a fresh rust-analyzer SCIP pass
-//! (~12s/crate sequential).
-
 use std::{
     process::{Command, Stdio},
     sync::{Arc, Mutex},

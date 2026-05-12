@@ -1,11 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Crate-private one-slot replace-or-clear demand mailbox.
-//!
-//! Inlined from `kithara-stream`'s legacy `DemandSlot` so the upstream
-//! crate stays free of HLS/file-specific helpers. Plan 05 (`HlsCoord`
-//! rewrite) removes this in favour of a per-variant queue.
-
 use std::sync::Arc;
 
 use kithara_platform::Mutex;

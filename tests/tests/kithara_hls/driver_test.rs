@@ -1,9 +1,3 @@
-//! Isolated tests for HLS driver (Stream<Hls> seek behavior).
-//!
-//! Tests:
-//! - Driver-1: Seek works after all segments downloaded (playlist finished)
-//! - Driver-2: ABR switch + seek backward
-
 use std::{
     io::{Read, Seek, SeekFrom},
     sync::{Arc, Mutex as StdMutex},

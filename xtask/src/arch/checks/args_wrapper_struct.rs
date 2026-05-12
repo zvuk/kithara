@@ -1,38 +1,3 @@
-//! Flag wrapper-structs that exist solely to bypass `clippy::too_many_arguments`.
-//!
-//! Anti-pattern shape:
-//!
-//! ```ignore
-//! pub(crate) struct BuildPair<'a> {
-//!     pub(crate) backend: AssetStore<DecryptContext>,
-//!     pub(crate) config: &'a HlsConfig,
-//!     // ... 6 more fields
-//! }
-//!
-//! pub(crate) fn build_pair(args: BuildPair<'_>) -> (HlsScheduler, HlsSource) {
-//!     let BuildPair { backend, config, /* ... */ } = args;
-//!     // ...
-//! }
-//! ```
-//!
-//! The struct exists only to be passed to `build_pair`, destructured in the
-//! first statement, and discarded. It dodges clippy's argument-count rule
-//! without giving the call sites real cohesion. The fix is one of: split the
-//! function, promote the struct to a real domain type used in ≥2 places, or
-//! invest in a builder.
-//!
-//! Detection (workspace-wide):
-//!
-//! 1. The struct has named fields, declares ≥`min_fields`, and is *not*
-//!    bare `pub` (cross-crate API can be reconstructed externally — we'd be
-//!    blind to those call sites).
-//! 2. The struct has no inherent `impl X { fn ... }` methods. `#[derive(...)]`
-//!    and hand-written `impl Trait for X` (e.g. `Default`) don't count.
-//! 3. There are ≥`min_call_sites` literal sites for `X { ... }`, and *every*
-//!    one of them is a direct argument to the same function.
-//! 4. That function destructures `X` in its first statement
-//!    (`let X { .. } = arg;`).
-
 use anyhow::Result;
 
 use super::{

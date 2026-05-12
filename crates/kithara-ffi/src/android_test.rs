@@ -1,17 +1,3 @@
-//! Android-only diagnostic JNI entrypoint: decode a track through the
-//! production decoder pipeline and write the resulting interleaved
-//! stereo PCM as an IEEE-float WAV.
-//!
-//! Bypasses cpal / AAudio — same `Audio<Stream<FileSource>>` decoder
-//! used in production, but samples go straight to disk instead of to
-//! the audio device. Used to localise Android-only audio artefacts:
-//! a clean WAV points at the output path (cpal/AAudio), a distorted
-//! WAV points at the decoder compiled for android.
-//!
-//! Capture is decoder-only — no firewheel graph, no `PlayerImpl`. The
-//! capture path takes whatever channel/rate the decoder produces and
-//! writes it as-is.
-
 #![allow(deprecated)]
 
 use std::{

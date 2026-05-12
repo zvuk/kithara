@@ -1,14 +1,3 @@
-//! Performance tests for ABR (Adaptive Bitrate) controller.
-//!
-//! Run with: `cargo test --test abr --features perf --release`
-//!
-//! NOTE: The legacy `push_sample` / `decide` / `ThroughputSample` API has
-//! been removed as part of the ABR refactor — the shared `AbrController`
-//! now drives decisions internally via `record_bandwidth` and the Peer
-//! trait. These perf scenarios have been stubbed out; reimplement them
-//! against `AbrController::record_bandwidth` and the new `AbrState` when
-//! perf coverage is restored.
-
 #![cfg(feature = "perf")]
 
 use hotpath::HotpathGuardBuilder;

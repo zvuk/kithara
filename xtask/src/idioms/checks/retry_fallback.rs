@@ -1,27 +1,3 @@
-//! Forbid retry/attempt counters and try-then-fallback chains.
-//!
-//! Patterns this detector flags (always **deny**):
-//!
-//! - **Identifiers** named `attempt`, `attempts`, `retry`, `retries`,
-//!   `retry_count`, `retry_limit`, `max_attempts`, `max_retries`,
-//!   `fallback`, `fallback_*`, `fall_back`. Field names, struct names,
-//!   const names, fn names, let bindings — every binding site.
-//! - **Method/fn names** containing `_retry`, `_with_retries`,
-//!   `_with_fallback`, `try_or_fallback`, `try_then_*`.
-//! - **Comments** mentioning "fallback to", "retry up to N", or
-//!   "best-effort" — written rules are aspirations, code is contract:
-//!   if the primary path may fail, fix the contract, don't paper it
-//!   over with N attempts.
-//!
-//! This rule has no warn level: every match is `deny`. Existing
-//! violations are real bugs (the user's words: "это омерзительно"),
-//! tracked in the baseline as technical debt and fixed by replacing
-//! the retry/fallback with a correct primary path.
-//!
-//! Suppress per-line with `// xtask-lint-ignore: retry_fallback`. Real
-//! suppressions are **rare** — only legitimate user-facing defaults
-//! (config fallback values), not control flow.
-
 use anyhow::Result;
 use syn::{
     Attribute, Field, ImplItemFn, ItemConst, ItemFn, ItemMod, ItemStatic, ItemStruct, Local, Pat,

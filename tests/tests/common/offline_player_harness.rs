@@ -1,15 +1,3 @@
-//! Per-instance offline harness driving the full PlayerImpl chain.
-//!
-//! Owns a manual-mode [`OfflineSession`] plus an [`EngineImpl`] wired
-//! to it via [`EngineConfig::session`]. Auto-advance, `pending_next`
-//! preload, and crossfade activation all exercise the production
-//! [`PlayerImpl`] paths — only the audio backend is swapped from cpal
-//! to a stub that renders on demand.
-//!
-//! Use [`OfflinePlayerHarness::render`] to drive the graph and
-//! `tick_and_drain` to convert audio-thread `PlayerNotification`s
-//! into observable `PlayerEvent`s.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::sync::Arc;

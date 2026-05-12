@@ -1,17 +1,3 @@
-//! Spec-driven HTTP server for integration tests.
-//!
-//! Serves static repo assets, synthetic HLS (`/stream`), and procedural audio (`/signal`).
-//! [`TestServerHelper`] (native) registers specs and returns ready-to-use URLs; callers
-//! do not assemble tokens by hand. For a plain-language overview and run instructions,
-//! see the crate `README.md`.
-//!
-//! Route families:
-//! - `GET /health` — readiness probe for external runners
-//! - `POST /token` — register spec payloads and return UUID tokens
-//! - `GET /assets/{path...}` — static test assets
-//! - `GET /signal/{form}/{spec_with_ext}` — procedural signal generation
-//! - `GET /stream/{hls_spec}` — HLS stream generation
-
 use std::sync::Arc;
 
 use kithara_encode::codec::AudioCodec;

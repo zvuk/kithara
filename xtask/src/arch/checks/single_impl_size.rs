@@ -1,11 +1,3 @@
-//! Per-`impl`-block LOC threshold.
-//!
-//! Catches the case `file_density` misses: a single `impl Trait for X` block
-//! that spans hundreds of lines while the file overall has a healthy `fn`-
-//! to-`type` ratio. Example: a 459-line `impl Source for FileSource` does not
-//! trigger `file_density` (10 fns / 1 type = 10:1, well below 25:1) yet is
-//! clearly a candidate to split by responsibility.
-
 use anyhow::Result;
 use syn::{Item, ItemImpl, Type, spanned::Spanned};
 

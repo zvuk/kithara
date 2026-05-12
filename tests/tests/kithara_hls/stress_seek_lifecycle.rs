@@ -1,19 +1,3 @@
-//! Aggressive lifecycle stress test: rapid seeks and seek-to-zero integrity.
-//!
-//! Designed to catch bugs where:
-//! - `read()` returns 0 after seek (player stalls, never resumes)
-//! - Seek to position 0 after heavy seek activity yields no data
-//!   (first segments not loaded / evicted)
-//!
-//! Setup: 40 segments × 3 ABR variants (ascending, descending, phase-shifted).
-//! V0 segments delayed after segment 3 to trigger ABR downgrade.
-//!
-//! Phases:
-//! 1. **Warmup**: read until ABR switch from V0→V1
-//! 2. **Stress**: 2000 random seeks - verify `read()` always produces data
-//! 3. **Reset**: seek to 0 → read the entire track beginning to end,
-//!    verify saw-tooth continuity on every frame
-
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara::{

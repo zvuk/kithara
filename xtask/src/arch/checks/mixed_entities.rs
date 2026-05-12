@@ -1,9 +1,3 @@
-//! Detect files that mix multiple sizable entities (god-files in disguise).
-//!
-//! A type is "sizable" if its impl surface (`impl X` + `impl Trait for X`)
-//! contains at least `min_fns_per_type` methods. A file with several sizable
-//! types signals that distinct entities should live in separate files.
-
 use anyhow::Result;
 
 use super::{Check, Context};

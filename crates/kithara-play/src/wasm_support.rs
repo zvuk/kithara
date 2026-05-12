@@ -1,8 +1,3 @@
-//! Public helpers for WASM Worker architecture.
-//!
-//! Called by `kithara-wasm` to set up and drive the session host on the
-//! main thread while the player engine runs in a Web Worker.
-
 use kithara_platform::thread::assert_main_thread;
 
 use crate::impls::session_engine;

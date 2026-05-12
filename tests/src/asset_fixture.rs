@@ -1,9 +1,3 @@
-//! Test fixtures for `kithara-assets`.
-//!
-//! Provides convenience wrappers used by integration tests to construct
-//! and mutate the on-disk pins index without depending on the
-//! production crate's private constructors.
-
 #![forbid(unsafe_code)]
 
 use std::collections::HashSet;

@@ -1,10 +1,3 @@
-//! Audio stream types and traits.
-//!
-//! Provides `Stream<T>` - a generic audio stream parameterized by stream type.
-//!
-//! Marker types (`Hls`, `File`) are defined in their respective crates
-//! and implement `StreamType` trait.
-
 #![forbid(unsafe_code)]
 
 use std::{

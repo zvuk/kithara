@@ -1,12 +1,3 @@
-//! Cold-cache mid-track HLS seek through the full Queue → `PlayerImpl`
-//! pipeline against the synthetic `TestServerHelper` HLS fixture.
-//!
-//! Same shape as `cold_seek_cpal::cpal_cold_seek_silvercomet_hls` but
-//! against an in-process fixture and the offline session backend, so it
-//! runs in every `just test` (no real network, no real audio device).
-//! `cpal_cold_seek_silvercomet_hls` keeps the live-CDN + cpal repro
-//! variant under `#[ignore]`/e2e for hang investigations.
-
 #![forbid(unsafe_code)]
 
 use std::{

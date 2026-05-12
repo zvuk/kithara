@@ -1,8 +1,3 @@
-//! 20-iteration stress run mirrored from
-//! `kithara_play/hls_seek_middle_stress.rs`. Lives in `suite_stress`
-//! so the long wall time does not bloat default `just test`. Mirrors
-//! the user-reported 1/N seek flake in `kithara-app`.
-
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};

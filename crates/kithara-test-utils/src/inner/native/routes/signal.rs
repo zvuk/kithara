@@ -1,39 +1,3 @@
-//! # Signal generation route.
-//! Provides procedural signal generation.
-//!
-//! ## Routes:
-//! - `GET /signal/sawtooth/{spec_with_ext}` — ascending saw-tooth.
-//! - `GET /signal/sawtooth-desc/{spec_with_ext}` — descending saw-tooth.
-//! - `GET /signal/sine/{spec_with_ext}` — sine wave.
-//! - `GET /signal/sweep/{spec_with_ext}` — phase-continuous chirp.
-//! - `GET /signal/silence/{spec_with_ext}` — digital silence (all zeros).
-//!
-//! `spec_with_ext` is a single path segment in the form
-//! `<base64url(JSON)>[.<ext>]`, where the optional last `.` separates the
-//! encoded JSON payload from the target format extension.
-//!
-//! ## `spec_with_ext` format
-//!
-//! `spec_with_ext = <base64url(JSON)>[.<ext>]`
-//!
-//! ```json
-//! {
-//!   "ext": "wav",
-//!   "sample_rate": 44100,
-//!   "channels": 2,
-//!   "seconds": 1.0,
-//!   "start_freq": 100.0,
-//!   "end_freq": 8000.0,
-//!   "sweep_mode": "linear"
-//! }
-//! ```
-//!
-//! - `ext`: `wav | mp3 | flac | aac | m4a`; can be passed in the path suffix or in JSON
-//! - length: exactly one of `seconds`, `frames`, `file_bytes`, or `infinite`
-//! - `freq` is required for `/signal/sine/...` and rejected for sawtooth and silence routes
-//! - `start_freq` and `end_freq` are required for `/signal/sweep/...`
-//! - `sweep_mode` is optional for `/signal/sweep/...`; supported values: `linear`, `log`
-
 use std::{convert::Infallible, mem::size_of, sync::Arc};
 
 use axum::{

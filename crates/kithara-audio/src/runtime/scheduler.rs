@@ -1,5 +1,3 @@
-//! The core scheduler loop.
-
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,

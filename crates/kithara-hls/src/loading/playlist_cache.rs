@@ -1,14 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Playlist fetch + parse + cache for HLS.
-//!
-//! Owns master/media playlist state, the disk cache for playlist bodies,
-//! and URL resolution helpers. Network traffic routes through the
-//! shared [`crate::atomic_fetch::fetch_atomic_body`] helper, which in
-//! turn drives the unified [`PeerHandle`]. Clone-friendly — the
-//! `OnceCell` state lives behind `Arc` so clones see the same cached
-//! playlists.
-
 use std::sync::Arc;
 
 use dashmap::DashMap;

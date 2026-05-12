@@ -1,8 +1,3 @@
-//! Per-variant HLS state. Owns planning, indexing, position cursor.
-//!
-//! Plan 03 implements the full module — this file is Pre-Phase 0 skeleton:
-//! types + method signatures with `unimplemented!()` bodies and probe markers.
-
 #![forbid(unsafe_code)]
 
 use std::{

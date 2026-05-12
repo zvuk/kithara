@@ -1,5 +1,3 @@
-//! Watchdog observer for the audio worker.
-
 use kithara_hang_detector::{HangDetector, default_timeout};
 
 use crate::runtime::{SchedulerEvent, SchedulerObserver};

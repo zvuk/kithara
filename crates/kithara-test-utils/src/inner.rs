@@ -1,6 +1,3 @@
-//! Body of `kithara-test-utils` — gated as a whole behind
-//! `feature = "test-utils"` from `lib.rs`.
-
 pub mod consts;
 pub mod fixture_protocol;
 pub mod fixtures;

@@ -1,9 +1,3 @@
-//! Test helpers for `kithara-hls` integration tests.
-//!
-//! Wraps the test-only constructors exposed by `kithara_hls::HlsSource`
-//! with convenience builders that own the asset-store/loader plumbing
-//! tests need but production code does not.
-
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

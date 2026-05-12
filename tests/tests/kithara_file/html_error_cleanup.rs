@@ -1,19 +1,4 @@
 #![forbid(unsafe_code)]
-//! `kithara-file` html-response cleanup invariants.
-//!
-//! Repro path for the user-reported leak: a remote track URL behind a
-//! corporate firewall returns `text/html` (captive-portal / VPN error page).
-//! The `Stream<File>` stays alive in the app (held by the player queue),
-//! so the pre-allocated 64 KB mmap created by
-//! `FileStreamState::create → AssetStore::acquire_resource` survives inside
-//! `FileInner.res` until the app shuts down.
-//!
-//! Invariant under test: after the download task fails with an
-//! `InvalidContent` (html) error, the cache file for the failing URL must
-//! NOT remain on disk — even while `Stream<File>` is still live. Expected
-//! to be RED on main: `run_full_download`'s err path currently only calls
-//! `state.res.fail(...)`, which marks the resource Failed but leaves the
-//! mmap file intact.
 
 use std::{
     net::SocketAddr,

@@ -1,5 +1,3 @@
-//! Stream-based audio source with format change detection.
-
 use std::{
     any::Any,
     io::{self, Read, Seek, SeekFrom},

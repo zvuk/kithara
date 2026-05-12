@@ -1,7 +1,3 @@
-//! Performance tests for buffer pool.
-//!
-//! Run with: `cargo test --test pool --features perf --release`
-
 #![cfg(feature = "perf")]
 
 use std::{mem, sync::Arc, thread};

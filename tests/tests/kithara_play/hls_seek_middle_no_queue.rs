@@ -1,23 +1,3 @@
-//! Pin the contract: **the player must wait for the target segment and
-//! land the seek, regardless of connection speed**.
-//!
-//! Setup: `PackagedTestServer` (3-variant AAC fMP4, segments 0..2) with
-//! a parametric server-side delay applied to the segment that contains
-//! the seek target. The delay simulates a slow link that delivers the
-//! post-seek segment late, but **eventually**.
-//!
-//! Cases sweep `delay_ms` across realistic mobile-network shapes:
-//! `0` (cached / LAN), `500` (good 4G), `2_000` (congested), `5_000`
-//! (very slow), `10_000` (near-broken). Per-case wall-time observation
-//! window scales with `delay_ms` — the test is **not** a timeout race;
-//! it is a contract assertion that, given enough wall-time for the
-//! delayed bytes to arrive, the position advances past the target.
-//!
-//! The 12 s fixture has segments {0: 0–4 s, 1: 4–8 s, 2: 8–12 s}; the
-//! 9 s seek target sits inside segment 2. Warmup (1.5 s render) only
-//! consumes segments 0–1, so segment 2 is **not** committed when the
-//! seek fires — exactly the cold-fetch scenario the prod report flags.
-
 #![forbid(unsafe_code)]
 
 use std::time::Duration;

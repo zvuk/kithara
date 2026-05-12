@@ -1,8 +1,3 @@
-//! Flag hand-rolled `iter::any` — `flag = true` (or `flag |= true`)
-//! inside an `if` inside a `for`/`while`/`loop`, where `flag` is bound
-//! by `let mut name = bool_lit;` outside the loop. Suggest replacing
-//! with `let flag = it.any(|x| pred(x))`.
-
 use std::collections::HashSet;
 
 use anyhow::Result;

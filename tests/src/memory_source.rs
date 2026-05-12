@@ -1,5 +1,3 @@
-//! In-memory Source implementation for testing.
-
 use std::{
     io::Error as IoError,
     num::NonZeroUsize,

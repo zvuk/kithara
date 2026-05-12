@@ -1,5 +1,3 @@
-//! File-system traversal helpers shared across xtask namespaces.
-
 use std::{
     fs,
     path::{Path, PathBuf},

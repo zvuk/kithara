@@ -1,8 +1,3 @@
-//! Crate-level direction check: lower-layer crates must not depend on higher.
-//!
-//! Replaces the legacy `check_dependency_direction` and `check_facade_boundary`
-//! by a single layered model loaded from `direction.toml`.
-
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::Result;

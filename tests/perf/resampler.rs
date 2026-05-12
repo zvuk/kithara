@@ -1,7 +1,3 @@
-//! Performance tests for audio resampler.
-//!
-//! Run with: `cargo test --test resampler --features perf --release`
-
 #![cfg(feature = "perf")]
 
 use std::sync::{Arc, atomic::AtomicU32};

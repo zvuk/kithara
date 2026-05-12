@@ -1,32 +1,3 @@
-//! Stress wrapper for the slow-connection seek scenario.
-//!
-//! User reports a 1/N flake in `kithara-app`: after the timeout fixes
-//! landed, seeks against a slow link mostly succeed but occasionally
-//! still hang. Single-shot tests (`hls_seek_middle_no_queue.rs`) cannot
-//! reproduce this — the race is rare. This file repeats the same
-//! sequence inside one player session, varying the seek target on each
-//! pass so accumulated decoder/timeline state surfaces the residual
-//! bug.
-//!
-//! Layout:
-//! - One `PackagedTestServer` (3-variant AAC fMP4) with a per-segment
-//!   delay applied to the segment that contains the next seek target.
-//! - One `Resource` and `OfflinePlayer` reused across all iterations
-//!   so timeline / consumer-phase state accumulates.
-//! - For each iteration: warmup-render, seek to a target inside a
-//!   delayed segment, render until position advances ≥ 1 s past the
-//!   target, then move on. A single failure in any iteration fails
-//!   the whole stress run with the iteration index reported.
-//!
-//! Two parametrised cases:
-//! - `quick(1)` — sanity sentinel; matches the existing single-shot
-//!   contract. Lives in `suite_light`.
-//! - `stress(20)` — the user-reported flake reproducer (~80 % catch
-//!   rate at 5 % per-iteration failure). Mirrored into
-//!   `tests/tests/kithara_play_stress/hls_seek_middle_stress_long.rs`
-//!   under `suite_stress` so it runs under the CPU-isolated stress
-//!   profile and does not bloat the default `just test` window.
-
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};

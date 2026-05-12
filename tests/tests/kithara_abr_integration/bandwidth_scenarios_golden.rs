@@ -1,10 +1,3 @@
-//! Canonical bandwidth profiles vs. expected `AbrState::decide` output.
-//!
-//! The projection §12 Tier 4 names four scenarios — flat, drop, recover,
-//! oscillate. Here we drive each deterministically through
-//! `AbrState::decide/apply` and lock in the coarse-grained expected
-//! final variant.
-
 use std::time::Duration as StdDuration;
 
 use kithara_abr::{AbrMode, AbrSettings, AbrState, AbrView};

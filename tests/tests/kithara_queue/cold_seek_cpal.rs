@@ -1,8 +1,3 @@
-//! Real-network reproduction of the cold-cache mid-track HLS seek hang
-//! against silvercomet's HLS, using a real cpal backend. Used only by
-//! `just test-e2e`. The synthetic-fixture sibling lives in
-//! `cpal_cold_seek_synthetic.rs` (suite_heavy).
-
 #![forbid(unsafe_code)]
 
 use std::{

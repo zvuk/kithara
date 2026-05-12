@@ -1,12 +1,3 @@
-//! Owned shared state of a session.
-//!
-//! `FileInner` is **immutable after creation** in every meaningful sense:
-//! all fields are either plain owned data (URL, key) or already-thread-safe
-//! handles (`AssetResource`, `EventBus`, `CancellationToken`, `Arc<…>`). The
-//! two genuinely mutable bits — the FSM phase and the content-type codec —
-//! live in `AtomicU8` and `OnceLock` respectively, so the struct can be
-//! shared as `Arc<FileInner>` without a `Mutex` in front of it.
-
 use std::sync::{
     Arc, OnceLock,
     atomic::{AtomicU8, Ordering},

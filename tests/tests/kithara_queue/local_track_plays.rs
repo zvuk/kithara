@@ -1,14 +1,3 @@
-//! Local mirror of `track_plays_end_to_end` from `real_playlist.rs`.
-//!
-//! Runs the full Queue → `PlayerImpl` → `OfflineBackend` pipeline against
-//! `TestServerHelper` fixtures (raw MP3, packaged AAC HLS, packaged
-//! AAC HLS+AES128) instead of silvercomet/zvuk live URLs. Shape of the
-//! scenario is identical: load → play with monotonic progress → 3
-//! random seeks with hang detection → position-consistency window.
-//!
-//! No `#[ignore]` — runs in every `just test` so seek/loader/HLS-DRM
-//! regressions surface without the e2e gate.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 

@@ -1,5 +1,3 @@
-//! `Reuse` trait + canonical `Vec<T>` implementation.
-
 /// Trait for types that can be reused in a pool.
 ///
 /// Implementors must provide logic to clear/reset the value

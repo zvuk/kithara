@@ -1,15 +1,3 @@
-//! `AppleCodec` — Apple `AudioToolbox` `AudioConverter` as a [`FrameCodec`].
-//!
-//! Container parsing happens upstream in a [`crate::Demuxer`]; this codec
-//! consumes already-demuxed frame bytes and produces interleaved f32 PCM.
-//! Magic cookie and ASBD are derived from [`TrackInfo`] alone — no
-//! `AudioFile`, no fragmented-mp4 reader, no per-codec container glue.
-//!
-//! Initial scope: AAC-LC and FLAC, the two codecs that flow through
-//! [`crate::fmp4::Fmp4SegmentDemuxer`] today. ALAC / MP3 require codec-specific
-//! ASBD + magic-cookie parameters that aren't carried by `TrackInfo` yet
-//! and will land alongside the file-Symphonia migration.
-
 #![allow(unsafe_code)]
 
 use std::{ffi::c_void, ptr, time::Duration};

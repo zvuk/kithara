@@ -1,15 +1,3 @@
-//! Probes: `AbrHandle::commit_pending` + `AbrHandle::notify_commit`.
-//!
-//! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-1`
-//!
-//! Plan 00 skeleton — bodies panic via `unimplemented!()`. Scenarios split by
-//! the production seam they actually exercise:
-//! - 4 base scenarios (HlsCoord/HlsTrack routing) — **Plan 06 fills** when
-//!   `HlsTrack::poll_next` invokes `commit_pending` / `notify_commit`
-//!   at fetch boundary.
-//! - 4 T4/T5/T14 scenarios (audio FSM / decoder recreation timing) —
-//!   **Plan 09 fills** after audio pipeline migrates to `Source::position`.
-
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 

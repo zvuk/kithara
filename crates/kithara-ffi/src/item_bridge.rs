@@ -1,5 +1,3 @@
-//! Bridge between resource events and item-level observer callbacks.
-
 use std::sync::Arc;
 
 use kithara::abr::AbrMode;

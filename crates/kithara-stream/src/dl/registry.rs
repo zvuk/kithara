@@ -1,5 +1,3 @@
-//! Peer registry with 2×2 priority slot map.
-
 use std::{
     collections::VecDeque,
     future::poll_fn,

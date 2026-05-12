@@ -1,9 +1,3 @@
-//! Playlist state: single source of truth for parsed HLS playlist data.
-//!
-//! `PlaylistState` holds all variant and segment information parsed from
-//! master and media playlists, with per-variant size maps for byte-offset
-//! resolution. The `PlaylistAccess` trait provides a testable read interface.
-
 use kithara_platform::{RwLock, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;

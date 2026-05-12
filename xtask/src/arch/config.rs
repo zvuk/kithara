@@ -1,8 +1,3 @@
-//! Loaders for `.config/arch/*.toml`.
-//!
-//! Each check has its own typed config section. Missing files default to empty,
-//! which lets checks degrade gracefully when only some configs are present.
-
 use std::{collections::BTreeMap, fs, path::Path};
 
 use anyhow::{Context, Result};

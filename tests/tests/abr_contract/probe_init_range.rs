@@ -1,10 +1,3 @@
-//! Init range — `HlsSegmentView::init_segment_range` follows active variant.
-//!
-//! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-13`
-//!
-//! Plan 00 skeleton — body panics via `unimplemented!()`. Replaces T6.
-//! Plan 10 fills the init-range assertions inside the single body.
-
 use kithara_decode::DecoderBackend;
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;

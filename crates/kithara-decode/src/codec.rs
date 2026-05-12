@@ -1,5 +1,3 @@
-//! [`FrameCodec`] trait — codec-side half of the unified architecture.
-
 use kithara_bufpool::PcmBuf;
 use kithara_platform::time::Duration;
 

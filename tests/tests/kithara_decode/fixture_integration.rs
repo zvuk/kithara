@@ -1,8 +1,3 @@
-//! Integration tests for audio fixtures.
-//!
-//! Tests that verify the audio fixtures work correctly and can be used
-//! by decode tests without external network access.
-
 use std::{fs, io::Cursor, process::Command};
 
 use kithara::{

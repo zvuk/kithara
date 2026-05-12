@@ -1,5 +1,3 @@
-//! Tests for the unified downloader.
-
 use std::{
     net::SocketAddr,
     sync::{

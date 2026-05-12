@@ -1,7 +1,3 @@
-//! Performance tests for audio decoder.
-//!
-//! Run with: `cargo test --test decoder --features perf --release`
-
 #![cfg(feature = "perf")]
 
 use std::io::Cursor;

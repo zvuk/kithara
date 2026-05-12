@@ -1,10 +1,3 @@
-//! Segment size estimation strategies (avoids HEAD requests when possible).
-//!
-//! Tried in order:
-//! 1. `#EXT-X-BYTERANGE` — exact sizes from the media playlist.
-//! 2. Init segment bitrate — `avg_bitrate` from fMP4 `esds` descriptor.
-//! 3. HEAD requests — network fallback.
-
 use kithara_stream::dl::FetchCmd;
 use re_mp4::{Mp4, StsdBoxContent};
 use tracing::debug;

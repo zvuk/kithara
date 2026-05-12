@@ -1,5 +1,3 @@
-//! Command types for main-thread bridge ↔ engine Worker communication.
-
 /// Commands sent from the main-thread bridge to the engine Worker.
 #[derive(Clone)]
 pub(crate) enum WorkerCmd {

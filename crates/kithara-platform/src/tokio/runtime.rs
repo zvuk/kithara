@@ -1,10 +1,3 @@
-//! Cross-platform runtime handle.
-//!
-//! On native, re-exports [`tokio::runtime`] types. On wasm32, provides
-//! a lightweight shim so config structs and `try_current()` work without
-//! `#[cfg]` gates. The wasm32 handle is a no-op marker — actual async
-//! scheduling goes through `tokio_with_wasm`.
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio_alias::runtime::*;
 #[cfg(not(target_arch = "wasm32"))]

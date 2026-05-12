@@ -1,17 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Regression test for "seek past EOF" when actual segment sizes exceed metadata.
-//!
-//! Production scenario:
-//!   1. Metadata via HEAD reports total = X bytes
-//!   2. Actual segments on disk are slightly larger (e.g. HTTP auto-decompression)
-//!   3. `expected_total_length` is set to X (HEAD-based)
-//!   4. Symphonia/reader tries to seek to position > X
-//!   5. Reader rejects seek as "seek past EOF"
-//!
-//! This test simulates the mismatch by having the server return
-//! smaller Content-Length for HEAD than the actual GET body.
-
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{

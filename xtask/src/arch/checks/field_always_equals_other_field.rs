@@ -1,22 +1,3 @@
-//! Flag pairs of struct fields whose initialisation expressions are equal at
-//! *every* call site. One field shadows the other — the second carries no
-//! information the first doesn't already convey.
-//!
-//! Detection (workspace-wide):
-//!
-//! - For every struct with named fields and ≥`min_call_sites` fully-specified
-//!   literal sites, walk every ordered pair `(a, b)` of fields with `a < b`.
-//! - At each site, both fields must be present and their normalised
-//!   expression strings must match.
-//! - Skip the pair if either expression has the trivial form `field` /
-//!   `self.field` for the *same* field name as itself — that's `shorthand`
-//!   noise (`X { a, b }` desugars to `X { a: a, b: b }`; matching `a == b` in
-//!   *that* sense always fails because the expressions read different
-//!   variables, but the reverse — both fields written as the same value — is
-//!   the real smell).
-//! - `pub` (cross-crate) structs are skipped — external callers may build
-//!   them in ways the index can't observe.
-
 use anyhow::Result;
 
 use super::{

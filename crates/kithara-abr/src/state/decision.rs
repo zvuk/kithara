@@ -1,14 +1,3 @@
-//! Pure decision logic for ABR variant switching.
-//!
-//! [`evaluate`] is the entry point — it gathers inputs in parallel, then
-//! dispatches via a single tuple match. Heterogeneous-cascade `if`s with
-//! distinct early-return reasons are an anti-pattern (CPU branch
-//! predictor cannot fold them into a jump table). The match collapses
-//! the dispatch into one site that the compiler can lay out as branchless
-//! / jump-table code while preserving per-gate `AbrReason` attribution
-//! for telemetry. See `xtask/src/idioms/checks/guard_cascade.rs` module
-//! docs for the rationale.
-
 use kithara_events::{AbrMode, AbrReason, AbrVariant};
 use kithara_platform::time::Instant;
 use kithara_test_utils::probes::IntoProbeArg;

@@ -1,11 +1,3 @@
-//! Parity contract for the `GaplessEncoding` axis on packaged audio fixtures.
-//!
-//! For the same `(encoder_delay, trailing_delay)` pair, the decoder's
-//! `probe_mp4_gapless` must report identical `GaplessInfo` regardless of
-//! whether the metadata was written as `edts`, `iTunSMPB`, or both. The
-//! `None` variant must yield no gapless info at all — fixture authors opt
-//! into "raw" containers explicitly.
-
 use std::{io::Cursor, num::NonZeroU32};
 
 use kithara::{decode::probe_mp4_gapless, platform::time::Duration};

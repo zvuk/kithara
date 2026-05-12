@@ -1,5 +1,3 @@
-//! Audio pipeline configuration.
-
 use std::{
     num::{NonZeroU32, NonZeroUsize},
     sync::{

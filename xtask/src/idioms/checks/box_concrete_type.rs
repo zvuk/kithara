@@ -1,22 +1,3 @@
-//! `Box::new(StructLiteral { ... })` — boxing a sized concrete value
-//! that has no obvious need for heap storage.
-//!
-//! `Box<T>` is for two cases: erasing into `Box<dyn Trait>`, or breaking
-//! infinite recursion in enums (`enum E { Node(Box<E>) }`). Wrapping a
-//! sized concrete struct is an extra heap allocation + an extra
-//! indirection on every access, with no readability or polymorphism
-//! benefit.
-//!
-//! Detection is heuristic — without type inference the check can't
-//! prove the value isn't being coerced into `Box<dyn Trait>` later.
-//! It looks for the strongest signal: `Box::new(StructLiteral { ... })`
-//! where the inner expression is a struct literal of a concrete type,
-//! is *not* immediately cast `as Box<dyn _>`, and the constructor isn't
-//! the explicit `Box::<dyn Trait>::new(...)` form. This catches the
-//! common smell (enum variants like `Config(Box<ResourceConfig>)` that
-//! never actually need indirection) without flooding the report with
-//! cases the compiler would justify via inference.
-
 use anyhow::Result;
 use syn::{
     Expr, ExprCall, ExprPath, GenericArgument, PathArguments, Type,

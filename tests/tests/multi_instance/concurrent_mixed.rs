@@ -1,8 +1,3 @@
-//! Mixed concurrent File + HLS instance tests.
-//!
-//! Verifies that File and HLS `Audio` instances can coexist and all
-//! read PCM data to EOF.
-
 use std::sync::Arc;
 
 use kithara::{

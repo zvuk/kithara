@@ -1,12 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Shared helper for fetching small atomic bodies (playlists, DRM keys)
-//! through the disk cache + unified downloader pipeline.
-//!
-//! Both [`crate::playlist_cache::PlaylistCache`] and [`crate::keys::KeyManager`]
-//! call into this helper so the resource lookup, network fallback, and
-//! cache write-back logic is not duplicated.
-
 use bytes::Bytes;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_bufpool::BytePool;

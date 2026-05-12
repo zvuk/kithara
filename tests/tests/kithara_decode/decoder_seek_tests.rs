@@ -1,7 +1,3 @@
-//! Integration tests for Decoder seek operations.
-//!
-//! Tests `Decoder<Stream<File>>` seek forward/backward with real audio.
-
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, PcmReader},

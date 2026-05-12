@@ -1,8 +1,3 @@
-//! `ComposedDecoder<D, C>` — single `Decoder` impl that pairs a
-//! [`Demuxer`] with a [`FrameCodec`]. Used by every backend (Apple
-//! `AudioToolbox`, Android `MediaCodec`, Symphonia, fMP4 segments)
-//! through composition rather than per-backend decoder types.
-
 use std::{
     sync::{
         Arc,
@@ -256,11 +251,6 @@ fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
 
 #[cfg(all(test, feature = "symphonia"))]
 mod smoke_tests {
-    //! White-box smoke tests for `ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>`
-    //! on a real MP3 fixture. Validates that the unified composition path emits
-    //! non-empty `PcmChunk` values and round-trips a seek to start. Migrated from
-    //! `tests/universal_smoke.rs` after the public types were demoted to
-    //! `pub(crate)`.
 
     use std::io::Cursor;
 
@@ -372,11 +362,6 @@ mod smoke_tests {
 
 #[cfg(test)]
 mod test_stub_codec {
-    //! Shared `FrameCodec` stub for `universal.rs` test modules.
-    //! Writes `frames_per_call * channels` zero samples on every
-    //! `decode_frame` call. Hook-tests parameterise with
-    //! `frames_per_call = 1`; pool-budget tests use a larger value
-    //! to fill realistic per-frame buffers.
 
     use kithara_bufpool::PcmBuf;
     use kithara_platform::time::Duration;
@@ -426,10 +411,6 @@ mod test_stub_codec {
 
 #[cfg(test)]
 mod hook_tests {
-    //! Hook-emission tests for `ComposedDecoder`. Validate that the folded-in
-    //! `Option<SharedHooks>` field forwards `next_chunk` / `seek` outcomes to
-    //! the registered observer. Migrated from the former `HookedDecoder`
-    //! decorator, which has been deleted in favour of native hook support.
 
     use std::sync::{Arc, Mutex};
 
@@ -639,17 +620,6 @@ mod hook_tests {
 
 #[cfg(test)]
 mod pool_budget_tests {
-    //! Pool-budget regression tests for the zero-alloc codec path.
-    //!
-    //! Construct a `PcmPool` with a small fixed buffer count, pre-warm it
-    //! with the chunk size we expect, run N decode iterations through a
-    //! stub `FrameCodec`, and assert that `alloc_misses` stays at the
-    //! pre-warm count — i.e. no extra allocations beyond the warm-up.
-    //! The contract: once warm, the hot path recycles buffers; codecs must
-    //! never spawn fresh `Vec<f32>` allocations per frame.
-    //!
-    //! Backend-specific equivalents (Apple/Android FFI cookie code paths)
-    //! live next to those codecs.
 
     use kithara_bufpool::PcmPool;
     use kithara_platform::time::Duration;

@@ -1,5 +1,3 @@
-//! Entry point for spec-driven test server.
-
 #[cfg(target_arch = "wasm32")]
 fn main() {}
 

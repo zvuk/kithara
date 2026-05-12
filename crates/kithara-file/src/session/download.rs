@@ -1,9 +1,3 @@
-//! Async download driver: full-file streaming GET and on-demand range fills.
-//!
-//! Public to `session/`: [`run_full_download`] and [`run_range_watcher`] are
-//! spawned by `FileSource::remote`. All mutation of `FileInner` happens here;
-//! the synchronous `Source` trait methods only read.
-
 use std::{ops::Range, sync::Arc};
 
 use futures::StreamExt;

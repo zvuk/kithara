@@ -1,5 +1,3 @@
-//! `IntoProbeArg` + `Probe` traits and their stock impls.
-
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},

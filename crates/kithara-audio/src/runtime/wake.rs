@@ -1,5 +1,3 @@
-//! Wake primitive for the scheduler.
-
 use kithara_platform::{
     sync::{Condvar, Mutex},
     time::{Duration, Instant},

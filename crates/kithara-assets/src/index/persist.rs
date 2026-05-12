@@ -1,11 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Shared lazy-init helper for disk-backed pin/lru indexes.
-//!
-//! Both `PinsIndex` and `LruIndex` materialise their on-disk file
-//! lazily on the first flush. The same race-tolerant init pattern is
-//! used in both, factored here to avoid drift.
-
 use std::{path::Path, sync::OnceLock};
 
 use kithara_storage::{Atomic, MmapOptions, MmapResource, OpenMode, Resource, StorageError};

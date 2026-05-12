@@ -1,8 +1,3 @@
-//! Publish all public workspace crates to crates.io in dependency order.
-//!
-//! Uses `cargo hakari publish` per crate to temporarily remove the
-//! workspace-hack dependency before each publish.
-
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     process::Command,

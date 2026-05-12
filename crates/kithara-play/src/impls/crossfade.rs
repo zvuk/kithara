@@ -1,8 +1,3 @@
-//! Sequential crossfade configuration and state tracking.
-//!
-//! Maps the rich [`CrossfadeCurve`] enum to firewheel's limited [`FadeCurve`],
-//! and bundles duration + curve into [`CrossfadeSettings`] for the processor.
-
 use derivative::Derivative;
 use firewheel::dsp::fade::FadeCurve;
 

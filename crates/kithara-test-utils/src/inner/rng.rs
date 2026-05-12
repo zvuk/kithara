@@ -1,5 +1,3 @@
-//! Deterministic PRNG for reproducible stress tests.
-
 /// Minimal xorshift64 PRNG — deterministic and reproducible.
 ///
 /// Use a fixed seed to ensure test results are identical across runs.

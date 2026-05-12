@@ -1,14 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! Fixtures use the existing packaged-audio HLS path (`encoder_delay` /
-//! `trailing_delay` are written into the fMP4 edit list by
-//! `kithara-test-utils::fmp4::mux`). The decoder reads `elst` and exposes
-//! `GaplessInfo` to the trimmer; `SilenceTrim` acts on top of that.
-//!
-//! These tests intentionally pin the *length* of the rendered PCM and the
-//! presence/absence of audible gaps, not phase-perfect waveform continuity
-//! across an AAC re-encode boundary.
-
 use std::{num::NonZeroU32, sync::Arc};
 
 use kithara_assets::StoreOptions;

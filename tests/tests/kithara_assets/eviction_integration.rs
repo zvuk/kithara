@@ -1,11 +1,6 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
-//! Eviction integration tests.
-//!
-//! Each `AssetStore` is scoped to a single `asset_root`, so eviction between assets
-//! requires creating multiple `AssetStore` instances with the same `root_dir`.
-
 use std::{fs, path::Path};
 
 use kithara::{

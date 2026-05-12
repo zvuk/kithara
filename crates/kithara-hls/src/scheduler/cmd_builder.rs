@@ -1,10 +1,3 @@
-//! HLS plan → fetch orchestration.
-//!
-//! Extracted from `scheduler/worker.rs` so the fetch pipeline lives in
-//! one place independent of how it is driven. Future work that needs
-//! to build `FetchCmd`s from `HlsPlan`s from outside the worker loop
-//! (e.g. a `Stream<Item = FetchCmd>` adapter) can reuse the same
-//! [`fetch_plan`] helper without pulling in worker/hang-detector state.
 
 use std::{sync::Arc, time::Duration};
 

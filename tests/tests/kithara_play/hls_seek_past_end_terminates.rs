@@ -1,27 +1,3 @@
-//! Pin the production "seek hang" bug observed in `app.log` (2026-04-25):
-//!
-//! After a seek that the decoder cannot satisfy (e.g. Symphonia computes a
-//! byte target outside the file via sidx extrapolation, or a plain
-//! seek-past-EOF), `apply_time_anchor_seek` enters
-//! `recover_from_decoder_seek_error`, recreates the decoder, re-issues the
-//! same seek, fails identically, and loops forever — `request.attempt`
-//! stays at `0` across iterations because the counter is never advanced
-//! when re-entering `RecreateNext::Seek(request)`.
-//!
-//! Symptom: `OfflinePlayer::position()` is frozen at the seek target and
-//! no `TrackError` / `TrackPlaybackStopped` notification ever arrives.
-//!
-//! Contract this test pins:
-//!   - When `decoder.seek` fails deterministically, the FSM must hit a
-//!     terminal state (Failed → `TrackError`) within a bounded number of
-//!     attempts. No infinite recreate loop.
-//!
-//! Trigger: seek to a target far past the track duration (12 s fixture →
-//! 50 s target). Symphonia's `Seek::seek` on the underlying
-//! `MediaSourceStream` returns "seek past EOF", which the audio pipeline
-//! surfaces as `SeekFailed`. That is the same failure class as the prod
-//! `app.log` repro (`SeekFailed("seek past EOF: new_pos=… len=…")`).
-
 #![forbid(unsafe_code)]
 
 use std::time::Duration;

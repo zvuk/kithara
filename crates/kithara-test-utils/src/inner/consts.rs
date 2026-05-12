@@ -1,5 +1,3 @@
-//! Shared constants for test fixtures and specifications.
-
 pub(crate) struct Consts;
 
 impl Consts {

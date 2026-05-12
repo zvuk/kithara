@@ -1,13 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Download cursor — tracks the next segment index the HLS scheduler
-//! should fetch in the current variant.
-//!
-//! The cursor carries a `floor` (the lowest segment index the scheduler
-//! is still responsible for in this download epoch) and a `next` pointer
-//! (the next segment to fetch). `next` is monotonically non-decreasing
-//! within an epoch and is clamped to `>= floor` on rewind.
-
 use std::collections::HashSet;
 
 use crate::ids::SegmentIndex;

@@ -1,7 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! Gapless pipeline integration contracts that need public test helpers.
-
 use kithara_decode::{
     DecoderTrackInfo, GaplessInfo, PcmSpec, mock::scripted_inner_decoder_with_track_info_loose,
 };

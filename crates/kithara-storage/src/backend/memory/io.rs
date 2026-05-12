@@ -1,8 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! [`DriverIo`] impl for [`MemDriver`]: read/write/commit/reactivate
-//! operations against the in-memory pooled buffer.
-
 use std::path::Path;
 
 use crate::{

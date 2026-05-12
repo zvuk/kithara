@@ -1,13 +1,3 @@
-//! Canonical "where to look for the next byte" type for seek lifecycle.
-//!
-//! Before this type, three FSM states stored a byte target in three
-//! different shapes: `SeekMode::Direct { target_byte }`,
-//! `ResumeState::anchor_offset`, and `RecreateState::offset`. Three
-//! helpers queried readiness, source phase, and demand separately
-//! depending on which state the FSM was in. `SeekLocation` consolidates
-//! those sources into one value and owns the readiness / phase /
-//! demand logic against a `SharedStream`.
-
 use kithara_stream::{SourceSeekAnchor, StreamType};
 
 use crate::pipeline::source::SharedStream;

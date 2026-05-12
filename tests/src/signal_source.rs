@@ -1,7 +1,3 @@
-//! On-demand signal generator.
-//!
-//! `SignalPcm<S>` is the PCM-first core that creates interleaved samples.
-
 use std::{
     io::Error as IoError,
     num::NonZeroUsize,

@@ -1,10 +1,3 @@
-//! File-side `DecoderHooks` implementation.
-//!
-//! Emits `FileEvent::ReadProgress` once per chunk and
-//! `FileEvent::ReaderSeek` once per `Decoder::seek`. Mirrors the
-//! HLS hooks but without segment-level bookkeeping (file streams are
-//! a single byte sequence).
-
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},

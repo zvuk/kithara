@@ -1,5 +1,3 @@
-//! `record_bandwidth` + `tick` — drives one peer's decision cycle.
-
 use std::sync::atomic::Ordering;
 
 use kithara_events::{AbrEvent, AbrReason, BandwidthSource, VariantInfo};

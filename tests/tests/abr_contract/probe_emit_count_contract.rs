@@ -1,10 +1,3 @@
-//! Emit-count contract — exactly-once init, zero back-fetches, no overreach.
-//!
-//! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-11`
-//!
-//! Plan 00 skeleton — bodies panic via `unimplemented!()`. Replaces T2.
-//! Plan 10 fills the emit-count scenarios.
-
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 

@@ -1,9 +1,3 @@
-//! Flag nested `if let Some(_)` / `if let Ok(_)` chains on the happy
-//! path. clippy's `collapsible_match` only fires when the inner branch
-//! is a single statement; this catches multi-stmt happy-path pyramids.
-//! Suggest `let-else` for guard form, `?`-propagation, or extracting
-//! a helper that takes the unwrapped values.
-
 use anyhow::Result;
 use syn::{Block, Expr, ExprIf, Pat, PatIdent, PatTupleStruct, Stmt, visit::Visit};
 

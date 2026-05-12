@@ -1,5 +1,3 @@
-//! Node and scheduling types.
-
 /// Priority class for worker scheduling.
 ///
 /// Nodes with higher service class are served first when the scheduler

@@ -1,5 +1,3 @@
-//! [`Downloader`] — unified download orchestrator implementation.
-
 use std::sync::{Arc, atomic::AtomicUsize};
 
 use futures::task::AtomicWaker;

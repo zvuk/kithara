@@ -1,5 +1,3 @@
-//! Subsystem-extraction hint: many sibling `.rs` files in one directory.
-
 use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::Result;

@@ -1,5 +1,3 @@
-//! Xing/Info/LAME tag extraction for MPEG audio gapless metadata.
-
 struct Consts;
 impl Consts {
     const MPEG_HEADER_LEN: usize = 4;

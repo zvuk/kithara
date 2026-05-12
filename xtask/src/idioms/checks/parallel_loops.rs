@@ -1,16 +1,3 @@
-//! Two or more `for`-loops over the same source within one block — a single
-//! pass would replace both with one iterator chain, often with `fold` or
-//! `unzip`. Two-pass is sometimes deliberate for readability or
-//! borrow-checker reasons; treat the hint as a prompt to consider, not a
-//! mechanical conversion.
-//!
-//! Detection: in any block, group `for x in <source>` loops by canonical
-//! source string. ≥2 loops in one group flag the block.
-//!
-//! Caveat: detection trusts the canonical-source equality at the AST level
-//! (`&xs` ≡ `&xs`, but `xs.iter()` and `&xs` look different). False
-//! negatives are accepted; false positives are rare.
-
 use std::collections::BTreeMap;
 
 use anyhow::Result;

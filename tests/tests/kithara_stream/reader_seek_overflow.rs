@@ -1,37 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-//! Defense-in-depth: `Stream::seek()` rejects corrupted byte deltas.
-//!
-//! Production scenario (from real logs, 2026-02-01):
-//!   1. `Stream<Hls>` with fMP4, 37 segments cached, total = `1_890_485` bytes, ~220s
-//!   2. User scrubs to ~80.9s (epoch 10)
-//!   3. Symphonia `IsoMp4Reader` uses sidx for time→byte seek
-//!   4. Because `MediaSource::byte_len()` returns `None`,
-//!      symphonia computes a corrupted `SeekFrom::Current(delta)` — a huge positive
-//!      value instead of a small (possibly negative) delta
-//!   5. Reader adds delta to `current_pos`, gets `new_pos` ≈ 9.2×10¹⁸ → "seek past EOF"
-//!
-//! Two fixes prevent this:
-//!   1. `probe_byte_len()` in decoder.rs — adapters now report `byte_len() -> Some(len)`,
-//!      so symphonia computes correct deltas (even in the legacy seek path).
-//!   2. `seek_time_anchor` (seek refactoring) — HLS seek resolves
-//!      `time→segment→byte_offset`
-//!      at the application layer. Symphonia receives `SeekTo::Time { segment_start }`
-//!      with the stream already positioned at the segment boundary. Symphonia never
-//!      computes byte offsets from sidx → corrupted deltas are architecturally impossible.
-//!
-//! These tests replay the exact corrupted deltas from production and verify that
-//! `Stream::seek()` rejects them gracefully (Err, not panic). This is defense-in-depth:
-//! the primary fix prevents these deltas from being generated, but even if some code path
-//! produced them, `Stream::seek()` bounds-checks and returns an error.
-//!
-//! Log excerpt:
-//!   seek: about to call `decoder.seek()` position=80.926208496s epoch=10
-//!     `stream_pos=538977` `segment_range=Some(1824949..1890485)`
-//!   seek failed e=SeekError("seek past EOF: `new_pos=9223372036854710271`
-//!     len=1890485 `current_pos=595033` `seek_from=Current(9223372036854115238)`")
-
 use std::{
     io::{Error as IoError, Read, Seek, SeekFrom},
     num::NonZeroUsize,

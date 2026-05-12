@@ -1,8 +1,3 @@
-//! Test asset store helpers
-//!
-//! Provides `TestAssets` and helper functions for creating test assets.
-//! On native: disk-backed with temp directory. On WASM: ephemeral (in-memory).
-
 use std::sync::Arc;
 
 use kithara::{

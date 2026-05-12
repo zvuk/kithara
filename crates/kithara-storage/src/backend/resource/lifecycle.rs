@@ -1,10 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! `Resource<D>` lifecycle + inspection bodies: `commit_inner`,
-//! `fail_inner`, `reactivate_inner`, plus the read-only inspectors
-//! (`path_inner`, `len_inner`, `status_inner`, `contains_range_inner`,
-//! `next_gap_inner`).
-
 use std::{ops::Range, path::Path};
 
 use crate::{

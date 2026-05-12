@@ -1,10 +1,3 @@
-//! Items inside `trait { ... }` and `impl { ... }` should be ordered by
-//! `(kind, name)`.
-//!
-//! Default kind order: `type` → `const` → `fn` → `macro`. Within each kind,
-//! items are sorted alphabetically by name. The check applies to traits and
-//! both inherent and trait impls by default; configure `apply_to` to narrow.
-
 use std::{cmp::Ordering, ops::Range};
 
 use anyhow::Result;

@@ -1,13 +1,3 @@
-//! Integration test: ABR auto-switch must happen during HLS playback.
-//!
-//! Two WAV variants: V0 (high bandwidth, delayed after segment 3) and V1 (low
-//! bandwidth, instant). ABR starts on V0 and must down-switch to V1 when V0
-//! throughput drops below the declared bandwidth.
-//!
-//! This test catches the bug where `record_throughput` discarded
-//! `content_duration` for fast downloads, keeping `buffer_level_secs` at
-//! zero and blocking ABR decisions that need a minimum buffer level.
-
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

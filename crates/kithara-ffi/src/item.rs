@@ -1,18 +1,3 @@
-//! FFI wrapper for audio player items.
-//!
-//! `AudioPlayerItem` is a handle, analogous to `AVPlayerItem`. It holds
-//! caller-supplied per-item preferences ([`FfiItemConfig`] — URL,
-//! headers, bitrate caps, ABR mode). Resource loading is owned by
-//! [`crate::player::AudioPlayer`] via `kithara_queue::Queue`:
-//!
-//! 1. `AudioPlayerItem::new(config)` — creates the handle; preferences
-//!    are frozen at construction.
-//! 2. `AudioPlayer::insert(item)` — registers the URL with the Queue,
-//!    which assigns a [`TrackId`] (stored in the item) and starts the
-//!    background load.
-//! 3. Per-item events flow through [`set_observer`] — the bridge
-//!    subscribes to the scoped event bus attached by `insert`.
-
 use std::{collections::HashMap, sync::Arc};
 
 use kithara_events::TrackId;

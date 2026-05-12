@@ -1,11 +1,3 @@
-//! Byte-stream integrity validation for HLS vs DRM across ABR modes and storage backends.
-//!
-//! Scans raw fMP4 box structure from the virtual byte stream to verify that
-//! decrypted segment data is contiguous, box headers are valid, and
-//! `total_bytes` (stream length) matches the actual box coverage.
-//!
-//! Parametrized: `{hls, drm} × {ephemeral, disk} × {manual(0), manual(3), auto(0)}`.
-
 use std::{
     io::{ErrorKind, Read, Seek, SeekFrom},
     num::NonZeroUsize,

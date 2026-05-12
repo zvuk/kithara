@@ -1,26 +1,3 @@
-//! Thread budget tests — enforce upper bounds on OS thread creation.
-//!
-//! An audio player must be a lightweight citizen on the user's machine.
-//! These tests catch regressions where a refactoring or new feature
-//! accidentally creates extra OS threads or tokio runtimes.
-//!
-//! ## Minimum thread model
-//!
-//! The absolute minimum for an audio player with N tracks:
-//! - 1 shared audio worker thread (decode + effects for all tracks)
-//! - 0 downloader threads (async tasks on the caller's tokio runtime)
-//! - 1 cpal audio output thread (OS-managed, not counted)
-//!
-//! Total own threads: **1** (the shared worker), regardless of track count.
-//! Any threads beyond this are waste.
-//!
-//! ## Counting strategy
-//!
-//! All kithara-owned threads are spawned via [`kithara_platform::thread::spawn_named`],
-//! which maintains an atomic counter. Tests read this counter instead of
-//! parsing `ps -M`, making assertions immune to tokio pool noise and
-//! parallel test execution.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::time::{Duration, Instant};

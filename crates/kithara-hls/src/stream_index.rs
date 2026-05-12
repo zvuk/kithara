@@ -1,15 +1,3 @@
-//! Per-variant segment index with independent byte layouts.
-//!
-//! Each variant maintains its own `RangeMap<u64, SegmentIndex>` byte map.
-//! The `layout_variant` field selects which byte map the decoder currently uses.
-//! Switching variants never destroys data — it just changes the active map.
-//!
-//! Key properties:
-//! - Per-variant `VariantSegments` stores actual (post-download) segment data
-//! - Per-variant `RangeMap<u64, SegmentIndex>` provides O(log n) byte offset lookups
-//! - `layout_variant` selects the active byte map for decoder reads
-//! - `total_bytes` is derived (committed actual + estimated remaining), never formula-computed
-
 use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
 use kithara_assets::ResourceKey;

@@ -1,5 +1,3 @@
-//! End-to-end test of the segment-aware decoder pipeline.
-
 use std::{
     io::{Cursor, Seek, SeekFrom},
     ops::Range,

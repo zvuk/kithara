@@ -1,20 +1,3 @@
-//! File-side fMP4 segment index.
-//!
-//! Lazily walks a fully downloaded fragmented mp4 / m4a file and
-//! produces an in-memory list of `(decode_time, duration, byte_range)`
-//! per `moof` fragment. Used by [`super::source::FileSource`] to expose
-//! `Source::init_segment_range / segment_at_time / segment_after_byte /
-//! segment_count`, which in turn lets the decoder factory route
-//! file-fmp4 through `ComposedDecoder<Fmp4SegmentDemuxer,
-//! SymphoniaCodec>` instead of Symphonia's whole-stream `IsoMp4Reader`.
-//!
-//! Scope: only fragmented mp4 (with a non-empty `moof` chain). Classic
-//! mp4 (`stbl`-driven sample table) is not handled here — that path
-//! still flows through the legacy `SymphoniaDecoder` god-type. Streams
-//! whose moov is at the tail (rare for streaming) are also out of scope
-//! because the file may not be fully downloaded when the index is
-//! probed.
-
 use std::{ops::Range, time::Duration};
 
 use kithara_stream::SegmentDescriptor;

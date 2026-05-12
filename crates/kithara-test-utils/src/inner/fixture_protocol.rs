@@ -1,14 +1,3 @@
-//! Shared protocol types for synthetic HLS test fixtures.
-//!
-//! These types are transport-agnostic and contain no platform-specific
-//! dependencies beyond `serde`.
-//!
-//! # Data Generation
-//!
-//! Pure functions for segment/WAV data generation are also defined here, so
-//! both server (generates data) and client (computes `expected_byte_at`)
-//! share the exact same logic.
-
 use std::num::NonZeroU32;
 
 use kithara_encode::codec::AudioCodec;

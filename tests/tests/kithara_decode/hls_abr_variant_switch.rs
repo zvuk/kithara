@@ -1,15 +1,3 @@
-//! Integration test for HLS ABR variant switch with decode pipeline.
-//!
-//! This test reproduces a bug where byte reading skips/glitches during ABR variant switch.
-//! The bug manifests when:
-//! 1. ABR switches from variant A to variant B
-//! 2. Pipeline pre-loads segments from variant B (e.g., segments 4, 5, 6)
-//! 3. Reader seeks backward to load earlier segment (e.g., segment 3)
-//! 4. Segment index gets corrupted, causing byte skips/glitches
-//!
-//! This test verifies that Stream<Hls> reads continuous bytes without skips during ABR
-//! variant switches.
-
 use std::{
     error::Error,
     io::{Read as _, Seek as _, SeekFrom},

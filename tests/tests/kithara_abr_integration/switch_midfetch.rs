@@ -1,7 +1,3 @@
-//! A variant switch while the controller is still ingesting samples for
-//! the previous variant must not apply a stale decision: the decision
-//! function always uses the variant list snapshot in force at call time.
-
 use std::{sync::Arc, time::Duration as StdDuration};
 
 use kithara_abr::{AbrMode, AbrSettings, AbrState, AbrView};

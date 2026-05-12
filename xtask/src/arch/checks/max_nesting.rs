@@ -1,5 +1,3 @@
-//! Path depth under `crates/<crate>/src/` must not exceed `max_depth`.
-
 use std::path::{Component, Path};
 
 use anyhow::Result;

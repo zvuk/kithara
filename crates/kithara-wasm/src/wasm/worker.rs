@@ -1,8 +1,3 @@
-//! Engine Worker entry point.
-//!
-//! Spawned via [`kithara_platform::spawn`]. Owns [`PlayerImpl`] and processes
-//! commands from the main-thread bridge.
-
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_platform::{sync::mpsc, tokio, tokio::task::spawn as task_spawn};

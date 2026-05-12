@@ -1,16 +1,3 @@
-//! Stress test: 1000 random seek+read cycles on `Audio<Stream<Hls>>` (20 MB WAV over HLS).
-//!
-//! Generates a deterministic WAV with a saw-tooth pattern (period = `65_536` frames),
-//! serves it as HLS segments via [`HlsTestServer`], creates `Audio<Stream<Hls>>`,
-//! and performs 1000 random time-based seeks with three-level PCM verification:
-//!
-//! 1. **Integrity**: samples finite, in `[-1.0, 1.0]`, L == R
-//! 2. **Continuity**: consecutive frames follow the saw-tooth pattern
-//! 3. **Position**: decoded phase matches expected position (±50 frames tolerance)
-//!
-//! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
-//! No external network is required.
-
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara::{

@@ -1,10 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! `Resource<D>` struct, internal `Inner`/`CommonState`, constructors,
-//! and the shared `check_health` helper. The actual `*_inner` method
-//! bodies live in sibling modules (`io`, `wait`, `lifecycle`); the
-//! [`ResourceExt`](crate::ResourceExt) trait wiring lives in `ops`.
-
 use std::{
     fmt::{self, Debug},
     sync::Arc,

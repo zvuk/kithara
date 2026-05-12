@@ -1,10 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Source trait for sync random-access data.
-//!
-//! Sources provide sync random-access via `wait_range()` and `read_at()`.
-//! Reader wraps this directly for `Read + Seek`.
-
 use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_platform::time::Duration;

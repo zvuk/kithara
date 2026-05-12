@@ -1,14 +1,3 @@
-//! Unified entry point for the three workspace linters.
-//!
-//! - `cargo xtask lint`         — run arch, style, and idioms in sequence
-//! - `cargo xtask lint arch`    — only architectural fitness functions
-//! - `cargo xtask lint style`   — only code-style checks
-//! - `cargo xtask lint idioms`  — only idiomatic-construction checks
-//!
-//! Each subcommand forwards its full arg surface (`--check`, `--report`,
-//! `--json`, `--update-baseline`, `--config-dir`) to the underlying
-//! namespace.
-
 use std::path::PathBuf;
 
 use anyhow::Result;

@@ -1,16 +1,3 @@
-//! Cross-decoder protocol contract.
-//!
-//! Validates that every `Decoder` backend exposes the same interface
-//! contract on the same input: spec, duration, total frames, seek-then-resume,
-//! and end-of-stream. On macOS with the `apple` feature enabled the test
-//! also compares PCM output between Symphonia and Apple within an L2-norm
-//! tolerance — catching silent divergences between the software and
-//! hardware paths.
-//!
-//! Android is not exercised here because `MediaCodec` is only available on
-//! Android targets; the Android backend's capability matrix has its own
-//! unit tests in `android/format.rs`.
-
 use std::{io::Cursor, time::Duration};
 
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory};

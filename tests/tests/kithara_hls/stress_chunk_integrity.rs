@@ -1,16 +1,3 @@
-//! Stress test: chunk-level ABR integrity via `PcmReader::next_chunk`.
-//!
-//! Same ABR scenario as `stress_seek_abr_audio` (ascending V0, descending V1,
-//! delayed V0 → ABR switch to V1), but reads whole `PcmChunk` values instead
-//! of raw f32 samples. This gives access to `PcmMeta` (`frame_offset`, timestamp,
-//! `segment_index`, `variant_index`, epoch) for precise root-cause diagnosis.
-//!
-//! Four-phase verification:
-//! 1. **Warmup**: read chunks until ABR switches from V0 (ascending) to V1 (descending)
-//! 2. **Post-switch**: 50 sequential V1 chunks with `frame_offset` continuity
-//! 3. **Random seeks**: 200 seek + 5 chunk reads with continuity + saw-tooth checks
-//! 4. **EOF**: seek near end, drain to EOF
-
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{

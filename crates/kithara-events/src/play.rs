@@ -1,9 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Player-level events and supporting types.
-//!
-//! Moved from `kithara-play` so that all event types live in one crate.
-
 use std::{cmp, hash, ops, sync::Arc};
 
 use derivative::Derivative;

@@ -1,5 +1,3 @@
-//! E2E tests verifying `PcmMeta` timeline correctness.
-
 use std::{io::Cursor, time::Duration};
 
 use kithara::decode::{DecoderConfig, DecoderFactory};

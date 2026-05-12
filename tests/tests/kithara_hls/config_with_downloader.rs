@@ -1,10 +1,3 @@
-//! Integration test: [`HlsConfig::with_downloader`] lets two HLS streams
-//! share a single `kithara_stream::dl::Downloader`.
-//!
-//! Protects the phase-02 migration API contract: `Downloader` is the
-//! sole `HttpClient` owner, and callers can pass the same instance to
-//! multiple HLS streams via `HlsConfig::with_downloader(dl.clone())`.
-
 use std::{io::Read, time::Duration};
 
 use kithara::{

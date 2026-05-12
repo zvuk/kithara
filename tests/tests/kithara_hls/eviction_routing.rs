@@ -1,10 +1,3 @@
-//! Probes: `HlsVariant::on_evict`, `on_invalidated` callback.
-//!
-//! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-7`
-//!
-//! Plan 00 skeleton — bodies panic via `unimplemented!()`. Plan 08 fills
-//! the eviction routing scenarios.
-
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 

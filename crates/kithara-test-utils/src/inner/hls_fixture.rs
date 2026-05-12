@@ -1,5 +1,3 @@
-//! Minimal HLS fixture helpers backed by unified `/stream/*` routes.
-
 use std::{sync::Arc, time::Duration};
 
 use url::Url;

@@ -1,7 +1,3 @@
-//! Lock-free `SegmentLayout` adapter that delegates to the active `HlsVariant`.
-//!
-//! Plan 04 implements the full module — this file is Pre-Phase 0 skeleton.
-
 #![forbid(unsafe_code)]
 
 use std::{

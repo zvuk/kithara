@@ -1,29 +1,3 @@
-//! Root-cause isolation for the "seek-to-near-end" hang on streaming tracks.
-//!
-//! Context: `StreamAudioSource::apply_seek_from_decoder` calls
-//! `decoder.seek(target)`. When that call returns an error the FSM can't
-//! proceed, and the symptom bubbles up as a silent hang for the user.
-//!
-//! Empirical finding (documented here so the next reader doesn't repeat
-//! the trail): `test.mp3` ships with a Xing/Info header, so Symphonia's
-//! MP3 format reader reports the *same* track duration whether it probed
-//! 6 % or 100 % of the file. Stale-duration is therefore **not** what
-//! makes `decoder.seek` fail in this scenario — `duration()` is fine.
-//!
-//! What does fail is the read that Symphonia issues *inside* `seek`: it
-//! computes a target byte from the Xing TOC and then tries to read from
-//! that byte. When the source only has a fraction of the file, the read
-//! lands past end-of-data, Symphonia surfaces an I/O error, and the FSM
-//! sees `SeekFailed`. That's the exact callsite we fall back to decoder
-//! recreation for.
-//!
-//! The guards below lock this understanding down:
-//! 1. A partial MP3 decoder still reports the full duration (Xing-driven).
-//! 2. Seeking far into the track on the partial decoder errors because
-//!    the target byte lies past the partially-available data.
-//! 3. The same seek succeeds on a freshly-probed full decoder — proof
-//!    that the fault is stream-coverage, not the target being invalid.
-
 #![forbid(unsafe_code)]
 
 use std::io::Cursor;

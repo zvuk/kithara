@@ -1,15 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Backend driver contracts.
-//!
-//! [`DriverIo`] abstracts backend-specific storage I/O (mmap, in-memory, etc.).
-//! Concrete drivers expose an inherent `open(opts)` returning `(Self,
-//! DriverState)`; the generic [`Resource<D>`](crate::backend::Resource)
-//! state machine then wraps the driver into a usable resource via
-//! per-driver inherent ctors (e.g. `Resource::<MmapDriver>::open`).
-//!
-//! [`AvailabilityObserver`] receives byte-availability notifications.
-
 use std::{ops::Range, path::Path};
 
 use rangemap::RangeSet;

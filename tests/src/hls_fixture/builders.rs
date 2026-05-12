@@ -1,12 +1,3 @@
-//! Reusable HLS stream builders to reduce test setup boilerplate.
-//!
-//! Most HLS tests follow the same pattern:
-//! 1. Create `TestServer`
-//! 2. Build `HlsConfig` with `StoreOptions` + `CancellationToken` + `AbrMode`
-//! 3. Create `Stream<Hls>`
-//!
-//! This module provides [`HlsStreamBuilder`] to condense those steps.
-
 use std::path::Path;
 
 use kithara::{

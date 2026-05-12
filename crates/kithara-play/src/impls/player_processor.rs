@@ -1,10 +1,3 @@
-//! Realtime audio processor for the player node.
-//!
-//! [`PlayerNodeProcessor`] runs on the audio thread and manages multiple
-//! [`PlayerTrack`]s in a thunderdome arena. It receives commands from the
-//! main thread via a bounded channel and renders mixed audio into the
-//! Firewheel output buffers.
-
 use std::{
     collections::VecDeque,
     num::NonZeroU32,

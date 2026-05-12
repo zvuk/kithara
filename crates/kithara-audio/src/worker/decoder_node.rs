@@ -1,5 +1,3 @@
-//! Decoder node for the audio worker.
-
 use std::sync::Arc;
 
 use kithara_decode::PcmChunk;

@@ -1,10 +1,3 @@
-//! Baseline (no switch) — HTTP lifecycle, build_chunk progress, no ABR commits.
-//!
-//! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-10`
-//!
-//! Plan 00 skeleton — body panics via `unimplemented!()`. Replaces T8.
-//! Plan 10 fills the baseline-no-switch assertions inside the single body.
-
 use kithara_decode::DecoderBackend;
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;

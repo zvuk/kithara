@@ -1,8 +1,3 @@
-//! File stream type implementation.
-//!
-//! Provides `File` marker type implementing `StreamType` trait.
-//! All code is synchronous — async HTTP I/O is handled by the [`Downloader`].
-
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{AssetStoreBuilder, ResourceKey, asset_root_for_url};

@@ -1,15 +1,3 @@
-//! Integration tests: ABR mode switching and cache interaction.
-//!
-//! Test 1 (VOD single-track): Manual quality switch mid-playback.
-//!   Start Auto → segments download for initial variant. Switch to Manual(1).
-//!   Future segments must download from variant 1. Already-cached segments
-//!   play out at original quality (industry standard: no cache flush on downswitch).
-//!
-//! Test 2 (multi-track shared ABR): Shared ABR controller across tracks.
-//!   Track 1 Auto, then lower quality, load Track 2 → downloads variant 1.
-//!   Raise quality during playback → switches. Replay Track 1 → cached
-//!   segments served from disk, quality transitions visible from cache.
-
 use std::{
     collections::{HashMap, HashSet},
     sync::{

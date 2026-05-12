@@ -1,10 +1,3 @@
-//! Shared atomic state between the main thread and the audio-thread processor.
-//!
-//! [`SharedPlayerState`] is wrapped in `Arc` and shared between
-//! `PlayerNode` (main thread) and `PlayerNodeProcessor` (audio thread).
-//! All fields use atomic operations or lock-free channels for safe
-//! concurrent access.
-
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use kithara_platform::Mutex;

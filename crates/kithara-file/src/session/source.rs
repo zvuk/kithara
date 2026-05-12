@@ -1,10 +1,3 @@
-//! Public `FileSource` and its `Source` trait implementation.
-//!
-//! `FileSource` is the synchronous Read+Seek-style interface used by the
-//! decoder thread. The async download tasks in [`super::download`] mutate the
-//! shared `FileInner` lock-free (atomics + `OnceLock`); this file only reads
-//! from it.
-
 use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};

@@ -1,34 +1,3 @@
-//! RED test: HLS→MP3 crossfade blocks the render thread.
-//!
-//! # Hypothesis
-//!
-//! When a freshly-loaded MP3 resource (no `preload()` call — production timing)
-//! is crossfaded in while a shared `AudioWorkerHandle` is busy stepping an HLS
-//! track that itself waits for network data, the MP3's `Audio::read()` path
-//! enters `recv_outcome_blocking()` and parks the render thread in a tight
-//! `park_timeout(RECV_BACKOFF)` loop (see
-//! `crates/kithara-audio/src/audio.rs:481` and `:516`). Because the single
-//! shared worker round-robins tracks and spends ~10ms per HLS step inside
-//! `wait_range()` (see `step_track took too long` warnings emitted by
-//! `crates/kithara-audio/src/worker/handle.rs:258`), the MP3 ringbuf stays
-//! empty, and `OfflinePlayer::render(block_frames)` blocks past the block
-//! budget (~11.6 ms at 512 frames / 44.1 kHz).
-//!
-//! The parent test
-//! `kithara_play::resource_regressions::stress_offline_crossfade_no_gaps`
-//! flakes on the same condition — it asserts `slow_renders <= 1` and observes
-//! up to 4 blocks exceeding budget with `max_render` reaching 65–99 ms during
-//! HLS→MP3 transitions.
-//!
-//! # Why this fails
-//!
-//! The offline render thread synchronously calls `PlayerResource::read` →
-//! `Audio::read` → `recv_outcome_blocking` on the non-preloaded MP3. While the
-//! shared worker is busy in an HLS `step_track` for ≥10 ms, no PCM chunks are
-//! delivered to the MP3 ring buffer, so the render thread sits in
-//! `park_timeout(100µs)` for dozens of iterations — well past the 11.6 ms audio
-//! block budget.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 

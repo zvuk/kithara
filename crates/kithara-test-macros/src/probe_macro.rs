@@ -1,18 +1,3 @@
-//! Expansion logic for `#[kithara::probe]` and `#[derive(kithara::Probe)]`.
-//!
-//! Emits two arms per probe site, both gated by
-//! `cfg(any(test, feature = "test-utils"))` of the consumer crate:
-//!
-//! - `kithara_test_utils::probes::fire_N(...)` — USDT entry point.
-//!   Values are converted via `IntoProbeArg::into_probe_arg` to the
-//!   `u64` wire format. The actual inline-asm USDT emission only fires
-//!   when `kithara-test-utils/usdt-probes` is enabled at build time;
-//!   otherwise `fire_N` is a no-op stub.
-//! - `tracing::event!` — observable from
-//!   `kithara_test_utils::probe_capture` and any other tracing
-//!   subscriber. Records the same `u64` slot values for parity with
-//!   the USDT path.
-
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};

@@ -1,8 +1,3 @@
-//! Probe / direct-reader bootstrap parameters.
-//!
-//! Used by [`super::probe::new_direct`] / [`super::probe::probe_with_seek`]
-//! to wire a Symphonia format reader.
-
 use std::sync::{Arc, atomic::AtomicU64};
 
 /// Minimal configuration carried into the probe / direct-reader path.

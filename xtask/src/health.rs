@@ -1,16 +1,3 @@
-//! `cargo xtask health` — comprehensive workspace health check.
-//!
-//! Runs every applicable static analysis and test stage, captures
-//! per-stage stdout/stderr/duration/exit, and emits a markdown report
-//! at `target/health-report.md` with full per-stage logs in
-//! `target/health-logs/<NN>-<name>.log`.
-//!
-//! Stages are fail-tolerant — every stage runs regardless of earlier
-//! failures so the final report always contains the full picture.
-//! Specialised heavy stages (mutants, coverage, e2e, selenium, perf,
-//! benches, memory) are intentionally omitted: they live behind their
-//! own `just`-targets and are gated by hardware/network requirements.
-
 use std::{
     fs,
     path::{Path, PathBuf},

@@ -1,9 +1,3 @@
-//! Queue-level events emitted by `kithara-queue::Queue`.
-//!
-//! Types live here (rather than in `kithara-queue`) so the root
-//! [`Event`](crate::Event) enum can carry a `Queue(QueueEvent)` variant
-//! without a circular dependency.
-
 /// Monotonic identifier for a track inside a single `Queue` instance.
 ///
 /// Stable across removals — when a track is removed and a new one

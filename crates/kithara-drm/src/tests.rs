@@ -1,9 +1,3 @@
-//! Crate-internal tests. Lives in `tests.rs` (not as inline `mod tests`
-//! in each source file) so it's covered by the workspace lint
-//! path-glob ignore for `**/tests.rs` — keeps test-only `expect("…")`
-//! out of the `rust.no-expect-bare-string` audit without per-call
-//! `BUG:` annotations.
-
 mod decrypt {
     use aes::Aes128;
     use cbc::{

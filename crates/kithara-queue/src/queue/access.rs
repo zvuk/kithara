@@ -1,6 +1,3 @@
-//! Read-only API + navigation passthroughs (`subscribe`, `len`, `current`,
-//! `tracks`, `repeat_mode`, …). No state mutation lives here.
-
 use kithara_events::{EventReceiver, TrackId};
 
 use super::Queue;

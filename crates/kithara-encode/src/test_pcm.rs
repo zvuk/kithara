@@ -1,5 +1,3 @@
-//! PCM test fixtures shared by encoder unit tests.
-
 use std::mem::size_of;
 
 use crate::PcmSource;

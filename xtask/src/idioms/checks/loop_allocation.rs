@@ -1,26 +1,3 @@
-//! Heap-allocating expressions inside loop bodies.
-//!
-//! Recognised triggers (each runs once per iteration, allocating from
-//! the global allocator):
-//!
-//! - `format!(...)` / `format_args!(...)` macros
-//! - `.to_string()` / `.to_owned()` / `.to_vec()` method calls
-//! - `Vec::new()` / `String::new()` / `HashMap::new()` /
-//!   `HashSet::new()` / `BTreeMap::new()` / `BTreeSet::new()`
-//! - `Box::new(...)` (every call allocates one box)
-//! - `String::from(...)` / `Vec::from(...)`
-//!
-//! Containers walked: `for`/`while`/`loop` bodies. Iterator-closure
-//! bodies (`.map(|x| ...)`, `.filter(|x| ...)`) are out of scope of
-//! this initial check — the closure-aware variant lives behind a
-//! follow-up extension.
-//!
-//! `Vec::with_capacity(N)` with a literal N is allowed automatically
-//! (it's the allocate-once / reuse pattern this rule promotes). Any
-//! method call that's allocating but legitimate (rare cold paths,
-//! single-iteration loops, etc.) can be silenced with
-//! `// xtask-lint-ignore: loop_allocation`.
-
 use anyhow::Result;
 use syn::{
     Expr, ExprCall, ExprForLoop, ExprLoop, ExprMacro, ExprMethodCall, ExprPath, ExprWhile, Macro,

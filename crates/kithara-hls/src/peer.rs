@@ -920,7 +920,6 @@ fn build_fetch_cmd(
 
 #[cfg(test)]
 mod tests {
-    //! RED tests confirming specific root causes of integration-test failures.
 
     use std::{
         sync::{Arc, atomic::AtomicUsize},

@@ -1,23 +1,3 @@
-//! Reproducer for the user-reported "seek to end of an HLS track hangs,
-//! then logs `seek failed`" bug from `kithara-app`.
-//!
-//! User scenario verbatim: "просто открыл плеер и после этого выбрал hls
-//! и перемотал почти в конец трека". So each iteration constructs a
-//! **fresh** Queue + Player + Track and issues a single near-end seek
-//! after a minimal warmup — there is no carry-over decoder/timeline
-//! state from a previous run.
-//!
-//! What we pin:
-//! - The seek lands at `target ± 1 s` (offline pacing tolerance) and
-//!   playback advances at least `MIN_POST_SEEK_ADVANCE_S` afterwards,
-//!   OR
-//! - The seek raises a hard typed error within `SEEK_BUDGET` (the bug
-//!   user reports is a >10 s hang followed by a delayed `seek failed`,
-//!   so a fast typed error is preferable but still tracked).
-//!
-//! Failures are bucketed (hang vs error) and reported with the
-//! iteration index so the trace log on disk can be inspected.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 

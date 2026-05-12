@@ -1,17 +1,3 @@
-//! In-memory fMP4 init / segment parser.
-//!
-//! Two entry points:
-//! - [`parse_init`] consumes a `ftyp+moov` init blob and returns a
-//!   reusable [`Fmp4InitInfo`] (codec, timescale, codec-specific config
-//!   bytes).
-//! - [`parse_segment_frames`] consumes a `(styp|moof)+mdat` media
-//!   segment and yields per-frame `(decode_time, duration, byte_range)`
-//!   tuples bound to the segment buffer.
-//!
-//! The segment parser is hand-rolled rather than `Mp4::read_bytes`
-//! because HLS media segments don't carry `ftyp+moov` and `re_mp4`
-//! refuses to parse them.
-
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
 use kithara_stream::AudioCodec;

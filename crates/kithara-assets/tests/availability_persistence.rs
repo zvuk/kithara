@@ -1,12 +1,3 @@
-//! Phase P-4 integration tests for
-//! [`AssetStore::checkpoint`]: verify that an explicit checkpoint
-//! persists the in-memory aggregate so a freshly-built store over
-//! the same cache directory observes the same byte-availability state
-//! without ever reopening individual resources.
-//!
-//! These tests also pin the Mem-backend contract: checkpoint is a
-//! no-op and the aggregate is lost on rebuild.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara_assets::{AssetStoreBuilder, ResourceKey};

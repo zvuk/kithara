@@ -1,5 +1,3 @@
-//! `Pooled<'a>` — RAII guard that borrows from a `Pool`.
-
 use std::ops::{Deref, DerefMut};
 
 use super::{core::Pool, reuse::Reuse};

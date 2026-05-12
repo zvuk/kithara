@@ -1,5 +1,3 @@
-//! Audio pipeline struct and public API.
-
 use std::{
     io::{Error as IoError, Read, Seek, SeekFrom},
     marker::PhantomData,

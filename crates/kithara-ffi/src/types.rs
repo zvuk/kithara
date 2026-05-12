@@ -1,5 +1,3 @@
-//! FFI-compatible type conversions between `kithara-play` and platform bindings.
-
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 use kithara_events::TrackStatus as TS;
 use kithara_platform::time::Duration;

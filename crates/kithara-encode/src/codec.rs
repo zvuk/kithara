@@ -1,11 +1,3 @@
-//! Local codec/container/media-info types for the encoding pipeline.
-//!
-//! These mirror `kithara_stream::{AudioCodec, ContainerFormat, MediaInfo}` but
-//! live here so `kithara-encode` does not depend on `kithara-stream`. The
-//! crate is test-only infrastructure (no production consumer in the workspace
-//! depends on it), so a dedicated copy is acceptable and avoids a dependency
-//! cycle when `kithara-test-utils` later participates in the probe runtime.
-
 use std::borrow::Cow;
 
 use derive_setters::Setters;

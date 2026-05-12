@@ -1,20 +1,3 @@
-//! Safe USDT-emit wrappers for `#[kithara::probe]`.
-//!
-//! All `unsafe`-bearing inline asm lives in this single module. The
-//! macro-generated code at the consumer site only ever issues a
-//! `kithara_test_utils::probes::fire_N(...)` function call, so consumer
-//! crates can keep `#![forbid(unsafe_code)]` and still publish probes.
-//!
-//! USDT addressing trade-off: every per-arity entry point lands under
-//! the shared `kithara` provider (`kithara:::probe_<N>`). Per-callsite
-//! distinguishability is preserved through the `name` argument, which
-//! is also the `probe = "..."` field on the paired `tracing::event!`.
-//!
-//! `prov` модуль и реальная USDT-эмиссия гейтятся `feature = "test-utils"`
-//! — без неё `usdt`-крейт не пуллится и `fire_N` остаются no-op stub'ами.
-//! `#[kithara::probe]` уже гейтит свои вызовы `cfg(any(test, feature = "test-utils"))`,
-//! поэтому в прод-сборке потребителя `fire_N` всё равно не вызывается.
-
 #[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
 #[allow(
     clippy::undocumented_unsafe_blocks,

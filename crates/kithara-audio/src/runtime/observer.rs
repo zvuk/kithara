@@ -1,5 +1,3 @@
-//! Observer plugin for the scheduler.
-
 use kithara_platform::time::Duration;
 
 use crate::runtime::SlotId;

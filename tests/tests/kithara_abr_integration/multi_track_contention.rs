@@ -1,7 +1,3 @@
-//! Three parallel peers feed their own variant lists into a shared
-//! `AbrController`; bandwidth records on one peer must never bleed into
-//! another peer's variant index.
-
 use std::sync::Arc;
 
 use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator};

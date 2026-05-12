@@ -1,12 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! DRM key fetch + processor pipeline.
-//!
-//! Owns the disk cache + downloader handles directly — no dependency
-//! on `FetchManager`. Shares the same atomic-body helper as
-//! [`crate::playlist_cache::PlaylistCache`] so the cache lookup,
-//! network fetch, and write-back logic is not duplicated.
-
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},

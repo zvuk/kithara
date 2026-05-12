@@ -1,12 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Segment download + dedup + DRM context resolution.
-//!
-//! Owns the disk cache + downloader handles directly. Pulls media
-//! playlist info from a shared [`PlaylistCache`] and resolves DRM
-//! decryption contexts via an optional [`KeyManager`]. No dependency
-//! on `FetchManager` — all the segment loading state lives here.
-
 use std::{io::Error as IoError, sync::Arc};
 
 use dashmap::DashMap;

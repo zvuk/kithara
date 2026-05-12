@@ -1,37 +1,3 @@
-//! Pin: **once the user picks track B while track A is still loading,
-//! track A must never become the playing track**.
-//!
-//! Reproduces the user-reported "barge-in" bug from `kithara-app`:
-//! "I click track1, nothing happens. I click another track2, that one
-//! plays. After a short pause, track1 barges in." The architectural
-//! cause sits in `Queue::spawn_apply_after_load` (queue.rs:700):
-//! `replace_item(index, resource)` runs **unconditionally** for every
-//! finished load, planting the slow track's resource in its queue slot
-//! even when the user has already moved on. The next auto-advance then
-//! plays that slot, surprising the user.
-//!
-//! Layout:
-//! - `fast` HLS fixture, **1 segment × 2 s**, low per-segment delay.
-//! - `slow` HLS fixture, longer (≥ 12 s), high per-segment delay so its
-//!   loader finishes after `fast` is already playing.
-//! - Append `fast` first (index 0), `slow` second (index 1). Picking
-//!   `fast` lands the player on index 0; when `fast` ends naturally,
-//!   AVQueuePlayer-style auto-advance will move to index 1 (`slow`).
-//!
-//! Sequence per iteration:
-//! 1. `select(slow_id, Transition::None)` — slow goes Pending,
-//!    `pending_select := Some(slow)`, loader spawned.
-//! 2. ~50 ms gap so the slow loader is genuinely Loading.
-//! 3. `select(fast_id, Transition::None)` — `pending_select` overwritten
-//!    to `Some(fast)`. Both loaders now run in parallel.
-//! 4. Wait for both to settle. `fast` lands as current and plays.
-//! 5. Wait long enough for `fast` to end naturally (~3 s).
-//! 6. **Bug surfaces** as `current()` flipping to `slow_id` via
-//!    auto-advance even though the user never asked to play slow.
-//!
-//! Stress: parametrised over `iterations` so a 30-pass run pins the
-//! 1/N flake user reports in `kithara-app`.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 

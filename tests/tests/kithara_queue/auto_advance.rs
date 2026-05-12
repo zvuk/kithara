@@ -1,21 +1,3 @@
-//! End-to-end auto-advance tests: real `Queue` + offline render + PCM check.
-//!
-//! Each test inserts two distinguishable PCM tracks (different constant
-//! signal value), drives the system through `Queue::tick()` (the same
-//! call kithara-app and the FFI use), captures the rendered output, and
-//! asserts the second track's signature is present after the first one
-//! ends. Catches regressions where the queue notices the protocol-level
-//!  events, but the audio thread never actually promotes the next track.
-//!
-//! Bypasses the network loader via `Queue::insert_loaded_for_test`; the
-//! real `Resource::new` URL fetch path is covered by `real_playlist.rs`.
-//!
-//! Cases:
-//! - `cf_zero_queue_tick_advances_to_second_track_audio` — cf=0 path
-//!   (arena handover at EOF).
-//! - `cf_nonzero_queue_tick_crossfades_to_second_track_audio` — cf>0
-//!   path (queue commits on `HandoverRequested`).
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::sync::Arc;

@@ -1,5 +1,3 @@
-//! HLS playlist parsing and data types.
-
 use std::str;
 
 use hls_m3u8::{

@@ -1,10 +1,3 @@
-//!
-//! # Assets route.
-//! Provides direct access to test assets.
-//!
-//! ## Routes:
-//! `GET /assets/{path...}` — static test asset serving.
-
 use std::{path::PathBuf, sync::Arc};
 
 use axum::Router;

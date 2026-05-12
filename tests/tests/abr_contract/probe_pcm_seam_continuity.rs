@@ -1,10 +1,3 @@
-//! Probes: `step_recreating_decoder`, `build_chunk` (unchanged audio FSM probes).
-//!
-//! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-9`
-//!
-//! Plan 00 skeleton — body panics via `unimplemented!()`. Replaces T1+T7.
-//! Plan 10 fills the seam-continuity assertions inside the single body.
-
 use kithara_decode::DecoderBackend;
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;

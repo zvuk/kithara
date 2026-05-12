@@ -1,10 +1,3 @@
-//! Test-only constructors for cross-crate integration tests.
-//!
-//! Lives behind `cfg(any(test, feature = "test-utils"))`. Same-crate
-//! membership keeps internal types (`HlsPeer`, `HlsScheduler::new`)
-//! `pub(crate)` while still giving cross-crate test code a single
-//! entry point per fixture shape.
-
 use std::sync::{Arc, atomic::AtomicUsize};
 
 use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn};

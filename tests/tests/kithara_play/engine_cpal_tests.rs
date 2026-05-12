@@ -1,10 +1,3 @@
-//! Engine lifecycle tests параметризованные по backend (`cpal | offline`).
-//!
-//! Запускают `EngineImpl::start()`/`allocate_slot`/`stop` через
-//! настоящую сессию. `cpal`-вариант поднимает реальное audio-устройство
-//! и поэтому остаётся в `suite_e2e`; `offline`-вариант инжектит
-//! `OfflineSession` через `EngineConfig::session` без касания к hardware.
-
 use kithara_events::EventBus;
 use kithara_integration_tests::offline::OfflineSession;
 use kithara_play::{PlayError, test_helpers::engine::*};

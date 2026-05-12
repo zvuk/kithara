@@ -1,5 +1,3 @@
-//! Token registration route shared by `/signal/*` and `/stream/*`.
-
 use std::sync::Arc;
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};

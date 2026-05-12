@@ -1,24 +1,3 @@
-//! Real-network integration test: silvercomet HLS/MP3/DRM seek hang detection.
-//!
-//! For each of 10 iterations, walks three live silvercomet streams (MP3,
-//! HLS, DRM-HLS), plays each for 3 s wall, seeks to the middle of the
-//! track, plays another 3 s, and asserts:
-//!
-//! 1. `render_offline_window` observes no long silence run — the player
-//!    never parks the render thread waiting for decoded chunks.
-//! 2. `OfflinePlayer::position` advances by ≥1.5 s over each 3 s wall
-//!    window — the `Audio::seek` FSM eventually surfaces chunks at the
-//!    new epoch.
-//!
-//! Rendered interleaved stereo f32 samples are captured and written to
-//! `/tmp/kithara_silvercomet_seek_iter_<N>.wav` (IEEE float PCM) for
-//! post-mortem inspection. Each iteration uses a fresh temp cache
-//! directory so no downloaded segment survives between runs.
-//!
-//! `#[ignore]` — requires live network to silvercomet.top and ~3 minutes
-//! wall clock. Run with:
-//! `cargo nextest run -p kithara-integration-tests kithara_play::silvercomet_seek_hang --run-ignored only --no-capture`
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 

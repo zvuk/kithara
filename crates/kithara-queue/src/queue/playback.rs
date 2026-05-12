@@ -1,6 +1,3 @@
-//! Runtime tick: position cache, crossfade arming, engine event drain
-//! (`ItemDidPlayToEnd` / `CurrentItemChanged`), and `seek`.
-
 use std::sync::PoisonError;
 
 use kithara_events::{Event, PlayerEvent, QueueEvent};

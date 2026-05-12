@@ -1,19 +1,3 @@
-//! Real-network integration tests driving `Queue` against
-//! `AppConfig::DEFAULT_TRACKS` through an offline audio backend.
-//!
-//! Both tests in this file hit the live silvercomet.top / zvq.me
-//! endpoints and run the **exact production pipeline** (`Queue` →
-//! `PlayerImpl` → `SessionState<OfflineBackend>` → firewheel). They are
-//! marked `#[ignore]` because they require the network; run with
-//! `--ignored --nocapture --test-threads=1`.
-//!
-//! DRM tracks currently fail on load (zvq.me stage server returns 403
-//! "User not registered"). The tests document that regression instead
-//! of hiding it — per-track smoke (`track_plays_end_to_end`) isolates
-//! it to specific tracks, and the playlist scenario
-//! (`queue_playlist_behavior`) surfaces it as a structured per-track
-//! failure report.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{sync::Arc, time::Duration};

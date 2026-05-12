@@ -1,22 +1,3 @@
-//! Shared infrastructure for the ABR-switch contract tests
-//! (`tests/tests/kithara_hls/abr_contract/T1..T8`).
-//!
-//! Every helper here is purpose-built for the contract spec at
-//! `.docs/plans/2026-05-03-abr-switch-contract.md`. None of them
-//! relax the contract: assertions are exact and there are no escape
-//! hatches.
-//!
-//! Modules:
-//! * [`phase_oracle`] — analytic 440 Hz phase reference and atan2
-//!   quadrature measurement; reports the exact number of lost or
-//!   repeated samples on a seam violation.
-//! * [`params`] — production-shaped 4-variant wave fixture
-//!   (3×AAC + 1×FLAC), network profiles, and audio-open boilerplate.
-//! * [`counters`] — typed views over `dispatch`,
-//!   `finish_request`, and disk inventory probes.
-//! * [`assertions`] — equality predicates that print a precise diff
-//!   on failure.
-
 /// Single point of truth for every constant the contract suite
 /// shares. Grouped on a uninhabited type so callers spell the
 /// constant out as `Consts::SAMPLE_RATE` etc. — that satisfies the
@@ -55,15 +36,6 @@ impl Consts {
 }
 
 pub(crate) mod phase_oracle {
-    //! 440 Hz sine phase reference per the contract A1.
-    //!
-    //! The wave fixture renders an identical
-    //! `sin(2π · 440 · frame_offset / sample_rate) · 32767` waveform on
-    //! every variant via `kithara_test_utils::signal::SineWave`. The
-    //! decoder pipeline (AAC and FLAC) introduces a static phase
-    //! offset that varies per backend; we calibrate that offset on the
-    //! first PRE-switch chunk and check seam continuity against the
-    //! calibrated baseline.
     use std::f64::consts::TAU;
 
     /// Analytic phase of the source 440 Hz sine at the given absolute
@@ -208,10 +180,6 @@ pub(crate) mod phase_oracle {
 }
 
 pub(crate) mod params {
-    //! 4-variant production-shaped wave fixture: 3×AAC LQ/MQ/HQ +
-    //! 1×FLAC, all rendering the same 440 Hz sine through the
-    //! fixture-server signal pipeline. Network profiles cover the
-    //! `instant`, `slow`, and `flaky` axes called out in the spec.
     use kithara::{
         assets::StoreOptions,
         audio::Audio,
@@ -324,9 +292,6 @@ pub(crate) mod params {
 }
 
 pub(crate) mod counters {
-    //! Typed views over the production probes that the contract
-    //! suite asserts on. Each helper returns concrete, typed events —
-    //! tests should NOT hand-decode tracing fields.
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,
@@ -444,11 +409,6 @@ pub(crate) mod counters {
 }
 
 pub(crate) mod diagnostics {
-    //! On-failure helpers: dump captured probe events so a panic message
-    //! reports WHICH part of the production chain actually executed.
-    //! Per-event formatting comes from `ProbeEvent`'s `Debug` impl, which
-    //! prints only the keys the probe actually carried — no `None`
-    //! placeholders for irrelevant fields.
     use std::collections::BTreeMap;
 
     use kithara_test_utils::probe_capture::Recorder;
@@ -524,18 +484,6 @@ pub(crate) mod diagnostics {
 }
 
 pub(crate) mod probe_contracts {
-    //! Per-thread probe-sequence contracts.
-    //!
-    //! Each contract describes "on thread T, the probes fire in this exact
-    //! order with these args" and produces a precise diff on failure
-    //! (which thread, which `thread_seq`, expected vs observed). This
-    //! replaces "wait for some probe with a 45s budget and panic on
-    //! timeout" — the failure message names the violated invariant
-    //! directly so the operator does not have to scan a 3000-line dump.
-    //!
-    //! The contracts read from the global `Recorder` snapshot; they do
-    //! not block, so call them after the test has finished its runtime
-    //! work (drain done, EOF or budget exhausted).
     use std::collections::{BTreeMap, BTreeSet};
 
     use kithara_test_utils::probe_capture::{ProbeEvent, Recorder};
@@ -935,7 +883,6 @@ pub(crate) mod probe_contracts {
 }
 
 pub(crate) mod assertions {
-    //! Equality predicates with exact failure messages.
     use std::{collections::BTreeSet, fmt::Debug};
 
     /// Assert that `actual == expected`. Failure prints both values

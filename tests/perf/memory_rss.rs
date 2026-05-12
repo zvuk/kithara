@@ -2,13 +2,6 @@
     clippy::cast_precision_loss,
     reason = "RSS values in MB, f64 precision is sufficient"
 )]
-//! RSS memory profiling tests for HLS playback pipeline.
-//!
-//! Measures resident set size (RSS) while running the full pipeline:
-//! HTTP → HLS parsing → segment download → asset store → stream → decode →
-//! resampler → PCM buffers.
-//!
-//! Run with: `cargo test --test memory_rss -- --test-threads=1 --nocapture`
 
 use std::time::Duration;
 

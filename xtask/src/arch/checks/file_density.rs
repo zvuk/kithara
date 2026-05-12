@@ -1,5 +1,3 @@
-//! God-impl detection: high `fn`-to-`type` ratio inside one file.
-
 use anyhow::{Context as _, Result};
 
 use super::{Check, Context};

@@ -1,9 +1,3 @@
-//! Verifies that `#[kithara::test(timeout(...))]` properly kills hanging tests
-//! instead of blocking forever.
-//!
-//! Each test simulates a hang (infinite loop / `spawn_blocking` that never returns)
-//! and expects the timeout mechanism to panic with "timed out".
-
 use std::hint;
 
 use kithara_platform::{

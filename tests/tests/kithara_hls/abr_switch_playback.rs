@@ -1,10 +1,3 @@
-//! Regression test: ABR variant switch during normal playback must not hang.
-//!
-//! Reproduces the production crash where HLS ABR switch causes
-//! `[HangDetector] run_shared_worker_loop no progress for 10s`.
-//!
-//! Uses real fMP4/AAC assets (same as production app) with disk cache.
-
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, ReadOutcome},

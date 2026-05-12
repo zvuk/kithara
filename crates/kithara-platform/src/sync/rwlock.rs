@@ -1,8 +1,3 @@
-//! Platform-optimal [`RwLock`], [`RwLockReadGuard`], and [`RwLockWriteGuard`].
-//!
-//! * **Native** — [`parking_lot::RwLock`].
-//! * **WASM** — [`wasm_safe_thread::rwlock::RwLock`].
-
 use std::ops::{Deref, DerefMut};
 
 #[cfg(not(target_arch = "wasm32"))]
