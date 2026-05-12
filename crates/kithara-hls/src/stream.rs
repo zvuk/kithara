@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex as StdMutex},
-};
+use std::{collections::HashSet, sync::Arc};
 
 use futures::future::{try_join, try_join_all};
 use kithara_assets::{
@@ -9,11 +6,13 @@ use kithara_assets::{
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
-use kithara_platform::Mutex;
+use kithara_platform::tokio as platform_tokio;
 use kithara_stream::{
     SourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig, Peer},
 };
+use platform_tokio::{sync::mpsc, task::spawn as task_spawn};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     HlsResult,
@@ -31,25 +30,43 @@ use crate::{
 /// Marker type for HLS streaming.
 pub struct Hls;
 
-type InvalidationTarget = (Arc<Mutex<StreamIndex>>, Arc<HlsCoord>);
-
-fn make_invalidation_callback(
-    target: Arc<StdMutex<Option<InvalidationTarget>>>,
+fn eviction_callback(
+    evict_tx: mpsc::UnboundedSender<ResourceKey>,
     next: Option<OnInvalidatedFn>,
 ) -> OnInvalidatedFn {
     Arc::new(move |key: &ResourceKey| {
-        if let Some((segments, coord)) = target
-            .lock()
-            .expect("HLS invalidation target lock poisoned")
-            .as_ref()
-            && segments.lock_sync().remove_resource(key)
-        {
-            coord.condvar.notify_all();
-        }
+        let _ = evict_tx.send(key.clone());
         if let Some(ref callback) = next {
             callback(key);
         }
     })
+}
+
+/// Bridge that drains the eviction channel and applies the legacy
+/// `segments.remove_resource` + `coord.condvar.notify_all` behaviour.
+/// Plan 06 collapses this into `HlsTrack::poll_next`, at which point
+/// the bridge is removed and `eviction_rx` flows straight into the
+/// track. Cancel hierarchy: child of the source's master cancel, so the
+/// task exits when the source drops.
+fn spawn_eviction_bridge(
+    mut evict_rx: mpsc::UnboundedReceiver<ResourceKey>,
+    segments: Arc<kithara_platform::Mutex<StreamIndex>>,
+    coord: Arc<HlsCoord>,
+    cancel: CancellationToken,
+) {
+    task_spawn(async move {
+        loop {
+            platform_tokio::select! {
+                () = cancel.cancelled() => break,
+                key = evict_rx.recv() => {
+                    let Some(key) = key else { break };
+                    if segments.lock_sync().remove_resource(&key) {
+                        coord.condvar.notify_all();
+                    }
+                }
+            }
+        }
+    });
 }
 
 impl StreamType for Hls {
@@ -71,8 +88,8 @@ impl StreamType for Hls {
             Downloader::new(dl_config)
         });
 
-        let invalidation_target = Arc::new(StdMutex::new(None));
-        let backend = build_asset_store(&config, &asset_root, cancel.clone(), &invalidation_target);
+        let (evict_tx, evict_rx) = mpsc::unbounded_channel::<ResourceKey>();
+        let backend = build_asset_store(&config, &asset_root, cancel.clone(), evict_tx);
 
         let byte_pool = config
             .pool
@@ -157,10 +174,12 @@ impl StreamType for Hls {
             hls_peer.committed_segment_cursor(),
         );
         let mut source = hls_downloader.spawn_source(hls_peer.reader_segment_cursor());
-        *invalidation_target
-            .lock()
-            .expect("HLS invalidation target lock poisoned") =
-            Some((Arc::clone(&source.segments), Arc::clone(&source.coord)));
+        spawn_eviction_bridge(
+            evict_rx,
+            Arc::clone(&source.segments),
+            Arc::clone(&source.coord),
+            cancel.child_token(),
+        );
 
         hls_peer.activate(hls_downloader, Arc::clone(&loader));
         source.set_peer_handle(peer_handle);
@@ -228,17 +247,14 @@ fn collect_aes128_key_urls(
 fn build_asset_store(
     config: &HlsConfig,
     asset_root: &str,
-    cancel: tokio_util::sync::CancellationToken,
-    invalidation_target: &Arc<StdMutex<Option<InvalidationTarget>>>,
+    cancel: CancellationToken,
+    evict_tx: mpsc::UnboundedSender<ResourceKey>,
 ) -> AssetStore<DecryptContext> {
     let drm_process_fn: ProcessChunkFn<DecryptContext> =
         Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
             aes128_cbc_process_chunk(input, output, ctx, is_last)
         });
-    let on_invalidated = make_invalidation_callback(
-        Arc::clone(invalidation_target),
-        config.store.on_invalidated.clone(),
-    );
+    let on_invalidated = eviction_callback(evict_tx, config.store.on_invalidated.clone());
 
     let mut builder = AssetStoreBuilder::new()
         .process_fn(drm_process_fn)
