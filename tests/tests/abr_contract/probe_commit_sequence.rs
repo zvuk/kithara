@@ -2,50 +2,55 @@
 //!
 //! Spec: `.docs/plans/2026-05-11-abr-pull-driven-simplification.md#file-1`
 //!
-//! Plan 00 skeleton — bodies panic via `unimplemented!()`. Plan 01 fills the
-//! probe-driven scenarios that exercise `commit_pending` / `notify_commit`.
+//! Plan 00 skeleton — bodies panic via `unimplemented!()`. Scenarios split by
+//! the production seam they actually exercise:
+//! - 4 base scenarios (HlsCoord/HlsTrack routing) — **Plan 06 fills** when
+//!   `HlsTrack::poll_next` invokes `commit_pending` / `notify_commit`
+//!   at fetch boundary.
+//! - 4 T4/T5/T14 scenarios (audio FSM / decoder recreation timing) —
+//!   **Plan 09 fills** after audio pipeline migrates to `Source::position`.
 
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn auto_commit_flips_active_variant() {
-    unimplemented!("Plan 01 — auto_commit_flips_active_variant scenario");
+    unimplemented!("Plan 06 — auto_commit_flips_active_variant scenario");
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn manual_set_mode_uses_same_commit_path() {
-    unimplemented!("Plan 01 — manual_set_mode_uses_same_commit_path scenario");
+    unimplemented!("Plan 06 — manual_set_mode_uses_same_commit_path scenario");
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn commit_pending_returns_none_during_seek() {
-    unimplemented!("Plan 01 — commit_pending_returns_none_during_seek scenario");
+    unimplemented!("Plan 06 — commit_pending_returns_none_during_seek scenario");
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn did_change_false_skips_notify() {
-    unimplemented!("Plan 01 — did_change_false_skips_notify scenario");
+    unimplemented!("Plan 06 — did_change_false_skips_notify scenario");
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn abr_frozen_between_seek_and_first_post_seek_chunk_t4() {
-    unimplemented!("Plan 01 — abr_frozen_between_seek_and_first_post_seek_chunk_t4 scenario");
+    unimplemented!("Plan 09 — abr_frozen_between_seek_and_first_post_seek_chunk_t4 scenario");
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn set_mode_to_first_post_chunk_latency_within_segment_duration_t5() {
     unimplemented!(
-        "Plan 01 — set_mode_to_first_post_chunk_latency_within_segment_duration_t5 scenario"
+        "Plan 09 — set_mode_to_first_post_chunk_latency_within_segment_duration_t5 scenario"
     );
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn post_apply_emit_forward_only_t14() {
-    unimplemented!("Plan 01 — post_apply_emit_forward_only_t14 scenario");
+    unimplemented!("Plan 09 — post_apply_emit_forward_only_t14 scenario");
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn noop_set_mode_does_not_violate_forward_only_t14() {
-    unimplemented!("Plan 01 — noop_set_mode_does_not_violate_forward_only_t14 scenario");
+    unimplemented!("Plan 09 — noop_set_mode_does_not_violate_forward_only_t14 scenario");
 }
