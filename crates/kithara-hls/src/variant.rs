@@ -17,78 +17,66 @@ use kithara_platform::time::Duration;
 use kithara_storage::ResourceExt;
 use kithara_stream::{
     SegmentDescriptor,
-    dl::{Downloader, FetchCmd, OnCompleteFn, WriterFn},
+    dl::{FetchCmd, OnCompleteFn, WriterFn},
 };
 use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-pub type AssetId = ResourceKey;
+mod segment_view;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SegmentState {
+enum SegmentState {
     Missing,
     Downloading,
     Loaded,
 }
 
 #[derive(Debug, Clone)]
-pub struct SegmentEntry {
-    pub url: Url,
-    pub asset_id: AssetId,
+struct SegmentEntry {
+    url: Url,
+    resource_id: ResourceKey,
     /// In THIS variant's byte space; starts at `init.size` for seg[0].
-    pub byte_offset: u64,
-    pub size: u64,
-    pub state: SegmentState,
-    pub decrypt_ctx: Option<DecryptContext>,
-    pub decode_time: Duration,
-    pub duration: Duration,
+    byte_offset: u64,
+    size: u64,
+    state: SegmentState,
+    decrypt_ctx: Option<DecryptContext>,
+    decode_time: Duration,
+    duration: Duration,
 }
 
 #[derive(Debug, Clone)]
-pub struct InitEntry {
-    pub url: Url,
-    pub asset_id: AssetId,
-    pub size: u64,
-    pub state: SegmentState,
+struct InitEntry {
+    url: Url,
+    resource_id: ResourceKey,
+    size: u64,
+    state: SegmentState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlannedKind {
-    Init,
-    Segment(u32),
+struct PlannedFetch {
+    variant: usize,
+    segment: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PlannedFetch {
-    pub variant: usize,
-    pub kind: PlannedKind,
+struct PlanCtx {
+    master_cancel: CancellationToken,
+    asset_store: Arc<AssetStore<DecryptContext>>,
+    prefetch_budget: usize,
 }
 
-pub struct PlanCtx {
-    pub master_cancel: CancellationToken,
-    pub asset_store: Arc<AssetStore<DecryptContext>>,
-    pub downloader: Arc<Downloader>,
-    pub prefetch_budget: usize,
-}
-
-pub struct HlsVariant {
-    pub variant: usize,
-    pub init: InitEntry,
-    pub segments: Vec<SegmentEntry>,
-    pub queue: VecDeque<PlannedFetch>,
-    pub cancel: CancellationToken,
-    pub position: Arc<AtomicU64>,
+pub(crate) struct HlsVariant {
+    variant: usize,
+    init: InitEntry,
+    segments: Vec<SegmentEntry>,
+    queue: VecDeque<PlannedFetch>,
+    cancel: CancellationToken,
+    position: Arc<AtomicU64>,
 }
 
 impl HlsVariant {
     #[must_use]
-    pub fn new(
-        variant: usize,
-        init: InitEntry,
-        segments: Vec<SegmentEntry>,
-        ctx: &PlanCtx,
-    ) -> Self {
+    fn new(variant: usize, init: InitEntry, segments: Vec<SegmentEntry>, ctx: &PlanCtx) -> Self {
         Self {
             variant,
             init,
@@ -100,17 +88,17 @@ impl HlsVariant {
     }
 
     #[kithara::probe(variant = self.variant as u64, pos = self.position.load(Ordering::Acquire))]
-    pub fn get_position(&self) -> u64 {
+    fn get_position(&self) -> u64 {
         self.position.load(Ordering::Acquire)
     }
 
     #[kithara::probe(variant = self.variant as u64, n)]
-    pub fn advance(&self, n: u64) {
+    fn advance(&self, n: u64) {
         self.position.fetch_add(n, Ordering::AcqRel);
     }
 
     #[kithara::probe(variant = self.variant as u64, pos)]
-    pub fn set_position(&self, pos: u64) {
+    fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
     }
 
@@ -119,7 +107,7 @@ impl HlsVariant {
         byte_offset,
         found_seg = find_at_offset_probe_seg(self, byte_offset)
     )]
-    pub fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, &SegmentEntry)> {
+    fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, &SegmentEntry)> {
         let idx = self.binary_search_byte(byte_offset)?;
         let entry = &self.segments[idx];
         let idx_u32 = u32::try_from(idx).ok()?;
@@ -127,17 +115,17 @@ impl HlsVariant {
     }
 
     #[kithara::probe(variant = self.variant as u64, total = self.total_bytes_inner())]
-    pub fn total_bytes(&self) -> u64 {
+    fn total_bytes(&self) -> u64 {
         self.total_bytes_inner()
     }
 
     #[must_use]
-    pub fn num_segments(&self) -> u32 {
+    fn num_segments(&self) -> u32 {
         u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
     }
 
     #[kithara::probe(variant = self.variant as u64, size = self.init.size)]
-    pub fn init_byte_range(&self) -> Option<Range<u64>> {
+    fn init_byte_range(&self) -> Option<Range<u64>> {
         if self.init.size > 0 {
             Some(0..self.init.size)
         } else {
@@ -146,7 +134,7 @@ impl HlsVariant {
     }
 
     #[kithara::probe(variant = self.variant as u64)]
-    pub fn descriptor_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+    fn descriptor_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         if self.segments.is_empty() {
             return None;
         }
@@ -156,7 +144,7 @@ impl HlsVariant {
     }
 
     #[kithara::probe(variant = self.variant as u64, byte)]
-    pub fn descriptor_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+    fn descriptor_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         let mut idx = bisect_left_byte_offset(&self.segments, byte);
         if idx >= self.segments.len() {
             return None;
@@ -175,7 +163,7 @@ impl HlsVariant {
         from_seg,
         old_queue_len = self.queue.len() as u64
     )]
-    pub fn rebuild(&mut self, ctx: &PlanCtx, from_seg: u32) {
+    fn rebuild(&mut self, ctx: &PlanCtx, from_seg: u32) {
         self.cancel.cancel();
         self.cancel = ctx.master_cancel.child_token();
         self.queue.clear();
@@ -183,13 +171,13 @@ impl HlsVariant {
     }
 
     #[kithara::probe(variant = self.variant as u64, seg_at_reader)]
-    pub fn on_reader_advance(&mut self, ctx: &PlanCtx, seg_at_reader: u32) {
+    fn on_reader_advance(&mut self, ctx: &PlanCtx, seg_at_reader: u32) {
         if matches!(self.state_of(seg_at_reader), SegmentState::Missing)
             && !self.queue_contains_seg(seg_at_reader)
         {
             self.queue.push_front(PlannedFetch {
                 variant: self.variant,
-                kind: PlannedKind::Segment(seg_at_reader),
+                segment: seg_at_reader,
             });
         }
         let segs_len_u32 = self.num_segments();
@@ -205,21 +193,21 @@ impl HlsVariant {
             {
                 self.queue.push_back(PlannedFetch {
                     variant: self.variant,
-                    kind: PlannedKind::Segment(seg),
+                    segment: seg,
                 });
             }
         }
     }
 
-    /// Returns evicted `seg_idx` (`-1` for init), or `None` if `asset_id` doesn't belong to this variant.
+    /// Returns evicted `seg_idx` (`-1` for init), or `None` if `key` doesn't belong to this variant.
     #[kithara::probe(variant = self.variant as u64)]
-    pub fn on_evict(&mut self, asset_id: &AssetId) -> Option<i32> {
-        if &self.init.asset_id == asset_id {
+    fn on_evict(&mut self, key: &ResourceKey) -> Option<i32> {
+        if &self.init.resource_id == key {
             self.init.state = SegmentState::Missing;
             return Some(-1);
         }
         for (seg_idx, entry) in self.segments.iter_mut().enumerate() {
-            if &entry.asset_id == asset_id {
+            if &entry.resource_id == key {
                 entry.state = SegmentState::Missing;
                 return i32::try_from(seg_idx).ok();
             }
@@ -232,7 +220,7 @@ impl HlsVariant {
         budget = budget as u64,
         queue_len = self.queue.len() as u64
     )]
-    pub fn dispatch(&mut self, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
+    fn dispatch(&mut self, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
         let mut out = Vec::new();
         let mut remaining = budget;
         if matches!(self.init.state, SegmentState::Missing) && remaining > 0 {
@@ -244,9 +232,7 @@ impl HlsVariant {
             let Some(planned) = self.queue.pop_front() else {
                 break;
             };
-            let PlannedKind::Segment(seg_idx) = planned.kind else {
-                continue;
-            };
+            let seg_idx = planned.segment;
             let Some(entry_state) = self.segments.get(seg_idx as usize).map(|e| e.state) else {
                 continue;
             };
@@ -311,7 +297,7 @@ impl HlsVariant {
             if matches!(self.state_of(seg), SegmentState::Missing) {
                 self.queue.push_back(PlannedFetch {
                     variant: self.variant,
-                    kind: PlannedKind::Segment(seg),
+                    segment: seg,
                 });
             }
         }
@@ -324,22 +310,17 @@ impl HlsVariant {
     }
 
     fn queue_contains_seg(&self, seg_idx: u32) -> bool {
-        self.queue
-            .iter()
-            .any(|p| matches!(p.kind, PlannedKind::Segment(s) if s == seg_idx))
+        self.queue.iter().any(|p| p.segment == seg_idx)
     }
 
     fn last_planned_seg(&self) -> Option<u32> {
-        self.queue.iter().rev().find_map(|p| match p.kind {
-            PlannedKind::Segment(s) => Some(s),
-            PlannedKind::Init => None,
-        })
+        self.queue.iter().rev().next().map(|p| p.segment)
     }
 
     fn build_init_cmd(&self, ctx: &PlanCtx) -> FetchCmd {
         let resource = ctx
             .asset_store
-            .acquire_resource(&self.init.asset_id)
+            .acquire_resource(&self.init.resource_id)
             .expect("acquire_resource for init must succeed");
         let position = Arc::clone(&self.position);
         let init_size = self.init.size;
@@ -360,12 +341,12 @@ impl HlsVariant {
         let resource = entry.decrypt_ctx.clone().map_or_else(
             || {
                 ctx.asset_store
-                    .acquire_resource(&entry.asset_id)
+                    .acquire_resource(&entry.resource_id)
                     .expect("acquire_resource for segment must succeed")
             },
             |ctx_inner| {
                 ctx.asset_store
-                    .acquire_resource_with_ctx(&entry.asset_id, Some(ctx_inner))
+                    .acquire_resource_with_ctx(&entry.resource_id, Some(ctx_inner))
                     .expect("acquire_resource_with_ctx for segment must succeed")
             },
         );
@@ -461,7 +442,6 @@ fn find_at_offset_probe_seg(v: &HlsVariant, byte_offset: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
-    use kithara_stream::dl::{Downloader, DownloaderConfig};
 
     use super::*;
 
@@ -479,23 +459,19 @@ mod tests {
                 .process_fn(passthrough)
                 .build(),
         );
-        let downloader = Arc::new(Downloader::new(
-            DownloaderConfig::default().with_cancel(cancel.child_token()),
-        ));
         PlanCtx {
             master_cancel: cancel,
             asset_store: backend,
-            downloader,
             prefetch_budget,
         }
     }
 
     fn make_init(size: u64) -> InitEntry {
         let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
-        let asset_id = ResourceKey::from_url(&url);
+        let resource_id = ResourceKey::from_url(&url);
         InitEntry {
             url,
-            asset_id,
+            resource_id,
             size,
             state: SegmentState::Missing,
         }
@@ -505,10 +481,10 @@ mod tests {
         let url: Url = format!("https://example.com/seg{idx}.m4s")
             .parse()
             .expect("valid url");
-        let asset_id = ResourceKey::from_url(&url);
+        let resource_id = ResourceKey::from_url(&url);
         SegmentEntry {
             url,
-            asset_id,
+            resource_id,
             byte_offset,
             size,
             state: SegmentState::Missing,
@@ -586,8 +562,12 @@ mod tests {
             ],
             &ctx,
         );
-        let (idx, _) = v.find_at_offset(750).expect("hit");
-        assert_eq!(idx, 1);
+        let (idx, _) = v.find_at_offset(750).expect("mid-segment");
+        assert_eq!(idx, 1, "750 lies inside segments[1] (600..1000)");
+        let (idx, _) = v.find_at_offset(1399).expect("last byte of seg 2");
+        assert_eq!(idx, 2);
+        let (idx, _) = v.find_at_offset(1400).expect("first byte of seg 3");
+        assert_eq!(idx, 3);
     }
 
     #[kithara::test]
@@ -682,7 +662,7 @@ mod tests {
         );
         v.queue.push_back(PlannedFetch {
             variant: 0,
-            kind: PlannedKind::Segment(0),
+            segment: 0,
         });
         let old_token = v.cancel.clone();
         assert!(!old_token.is_cancelled());
@@ -690,14 +670,7 @@ mod tests {
         assert!(old_token.is_cancelled(), "old token must be cancelled");
         assert!(!v.cancel.is_cancelled(), "fresh token must be live");
         // Queue should be refilled from seg 2 onwards (bounded by prefetch_budget=3).
-        let seg_indices: Vec<u32> = v
-            .queue
-            .iter()
-            .filter_map(|p| match p.kind {
-                PlannedKind::Segment(s) => Some(s),
-                PlannedKind::Init => None,
-            })
-            .collect();
+        let seg_indices: Vec<u32> = v.queue.iter().map(|p| p.segment).collect();
         assert_eq!(seg_indices, vec![2, 3, 4, 5]);
     }
 
@@ -714,14 +687,22 @@ mod tests {
             ],
             &ctx,
         );
+        let init_url = v.init.url.clone();
+        let seg0_url = v.segments[0].url.clone();
+        let seg1_url = v.segments[1].url.clone();
+        let seg2_url = v.segments[2].url.clone();
         v.fill_queue(&ctx, 0);
         let cmds = v.dispatch(&ctx, 10);
-        // 1 init + 3 segments = 4 cmds.
+        // 1 init + 3 segments = 4 cmds in dispatch order.
         assert_eq!(cmds.len(), 4);
-        assert_eq!(cmds[0].url, v.init.url);
+        assert_eq!(cmds[0].url, init_url, "init dispatched first");
+        assert_eq!(cmds[1].url, seg0_url);
+        assert_eq!(cmds[2].url, seg1_url);
+        assert_eq!(cmds[3].url, seg2_url);
         for cmd in &cmds {
             assert!(cmd.cancel.is_some(), "every cmd carries a cancel token");
         }
+        assert_eq!(v.init.state, SegmentState::Downloading);
     }
 
     #[kithara::test]
@@ -741,14 +722,7 @@ mod tests {
         let cmds = v.dispatch(&ctx, 3);
         assert_eq!(cmds.len(), 3);
         // Remaining queue holds segments 3..=5 (fill_queue stopped at prefetch_budget=5).
-        let seg_indices: Vec<u32> = v
-            .queue
-            .iter()
-            .filter_map(|p| match p.kind {
-                PlannedKind::Segment(s) => Some(s),
-                PlannedKind::Init => None,
-            })
-            .collect();
+        let seg_indices: Vec<u32> = v.queue.iter().map(|p| p.segment).collect();
         assert_eq!(seg_indices, vec![3, 4, 5]);
     }
 
@@ -772,7 +746,7 @@ mod tests {
         for seg in 0..3_u32 {
             v.queue.push_back(PlannedFetch {
                 variant: 0,
-                kind: PlannedKind::Segment(seg),
+                segment: seg,
             });
         }
         let cmds = v.dispatch(&ctx, 10);
@@ -783,12 +757,27 @@ mod tests {
     #[kithara::test]
     fn on_evict_returns_minus_one_for_init() {
         let ctx = test_ctx(3);
-        let mut v = HlsVariant::new(0, make_init(200), vec![make_seg(0, 200, 100)], &ctx);
+        let mut v = HlsVariant::new(
+            0,
+            make_init(200),
+            vec![
+                make_seg(0, 200, 100),
+                make_seg(1, 300, 100),
+                make_seg(2, 400, 100),
+            ],
+            &ctx,
+        );
         v.init.state = SegmentState::Loaded;
-        let asset_id = v.init.asset_id.clone();
-        let res = v.on_evict(&asset_id);
+        v.segments[1].state = SegmentState::Loaded;
+        let key = v.init.resource_id.clone();
+        let res = v.on_evict(&key);
         assert_eq!(res, Some(-1));
         assert_eq!(v.init.state, SegmentState::Missing);
+        assert_eq!(
+            v.segments[1].state,
+            SegmentState::Loaded,
+            "init eviction must not touch segment states"
+        );
     }
 
     #[kithara::test]
@@ -801,8 +790,8 @@ mod tests {
             &ctx,
         );
         v.segments[1].state = SegmentState::Loaded;
-        let asset_id = v.segments[1].asset_id.clone();
-        let res = v.on_evict(&asset_id);
+        let key = v.segments[1].resource_id.clone();
+        let res = v.on_evict(&key);
         assert_eq!(res, Some(1));
         assert_eq!(v.segments[1].state, SegmentState::Missing);
     }
@@ -829,14 +818,7 @@ mod tests {
             &ctx,
         );
         v.on_reader_advance(&ctx, 2);
-        let seg_indices: Vec<u32> = v
-            .queue
-            .iter()
-            .filter_map(|p| match p.kind {
-                PlannedKind::Segment(s) => Some(s),
-                PlannedKind::Init => None,
-            })
-            .collect();
+        let seg_indices: Vec<u32> = v.queue.iter().map(|p| p.segment).collect();
         assert_eq!(seg_indices, vec![2, 3, 4, 5]);
     }
 
@@ -858,7 +840,7 @@ mod tests {
         let mut v = HlsVariant::new(0, init, vec![seg], &ctx);
         v.queue.push_back(PlannedFetch {
             variant: 0,
-            kind: PlannedKind::Segment(0),
+            segment: 0,
         });
         let cmds = v.dispatch(&ctx, 10);
         // build_seg_cmd must take the DRM branch (acquire_resource_with_ctx)
@@ -867,5 +849,142 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert!(cmds[0].cancel.is_some());
         assert_eq!(v.segments[0].state, SegmentState::Downloading);
+    }
+
+    #[kithara::test]
+    fn positions_of_two_variants_are_independent_after_flip() {
+        let ctx = test_ctx(3);
+        let v_old = HlsVariant::new(
+            0,
+            make_init(0),
+            (0..20)
+                .map(|i| make_seg(i, u64::from(i) * 400, 400))
+                .collect(),
+            &ctx,
+        );
+        let v_new = HlsVariant::new(
+            1,
+            make_init(0),
+            (0..20)
+                .map(|i| make_seg(i, u64::from(i) * 800, 800))
+                .collect(),
+            &ctx,
+        );
+        v_old.set_position(5000);
+        v_new.set_position(v_new.segments[10].byte_offset);
+        assert_eq!(v_old.get_position(), 5000);
+        assert_eq!(v_new.get_position(), v_new.segments[10].byte_offset);
+
+        v_new.advance(123);
+        assert_eq!(
+            v_old.get_position(),
+            5000,
+            "advance(V_new) must not touch V_old"
+        );
+        assert_eq!(v_new.get_position(), v_new.segments[10].byte_offset + 123);
+    }
+
+    #[kithara::test]
+    fn position_advances_are_strictly_monotonic() {
+        let ctx = test_ctx(3);
+        let v = HlsVariant::new(0, make_init(0), vec![make_seg(0, 0, 100)], &ctx);
+        let mut expected = 0_u64;
+        let mut observed = Vec::new();
+        for n in [10_u64, 25, 7, 64, 1, 100] {
+            v.advance(n);
+            expected += n;
+            observed.push(v.get_position());
+            assert_eq!(v.get_position(), expected);
+        }
+        let mut sorted = observed.clone();
+        sorted.sort_unstable();
+        assert_eq!(observed, sorted);
+    }
+
+    #[kithara::test]
+    fn dispatch_cmd_cancel_shares_cancellation_with_variant_cancel() {
+        let ctx = test_ctx(5);
+        let mut init = make_init(0);
+        init.state = SegmentState::Loaded;
+        let mut v = HlsVariant::new(
+            0,
+            init,
+            vec![make_seg(0, 0, 100), make_seg(1, 100, 100)],
+            &ctx,
+        );
+        let variant_cancel = v.cancel.clone();
+        for seg in 0..2_u32 {
+            v.queue.push_back(PlannedFetch {
+                variant: 0,
+                segment: seg,
+            });
+        }
+        let cmds = v.dispatch(&ctx, 10);
+        for cmd in &cmds {
+            let token = cmd.cancel.as_ref().expect("cmd carries cancel");
+            assert!(!token.is_cancelled());
+        }
+        variant_cancel.cancel();
+        for cmd in &cmds {
+            let token = cmd.cancel.as_ref().expect("cmd carries cancel");
+            assert!(
+                token.is_cancelled(),
+                "cmd cancel must follow variant.cancel"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn variant_flip_cancels_v_old_and_replaces_v_new_token_via_rebuild() {
+        let ctx = test_ctx(3);
+        let segs_old: Vec<SegmentEntry> = (0..20)
+            .map(|i| make_seg(i, u64::from(i) * 100, 100))
+            .collect();
+        let segs_new: Vec<SegmentEntry> = (0..20)
+            .map(|i| make_seg(i, u64::from(i) * 200, 200))
+            .collect();
+        let mut init_old = make_init(0);
+        init_old.state = SegmentState::Loaded;
+        let mut init_new = make_init(0);
+        init_new.state = SegmentState::Loaded;
+        let v_old = HlsVariant::new(0, init_old, segs_old, &ctx);
+        let mut v_new = HlsVariant::new(1, init_new, segs_new, &ctx);
+        let v_old_token = v_old.cancel.clone();
+        let v_new_token_before = v_new.cancel.clone();
+
+        let from_seg = 7_u32;
+        v_new.set_position(v_new.segments[from_seg as usize].byte_offset);
+        v_old.cancel.cancel();
+        v_new.rebuild(&ctx, from_seg);
+
+        assert!(v_old_token.is_cancelled());
+        assert!(v_new_token_before.is_cancelled(), "rebuild reissues cancel");
+        assert!(!v_new.cancel.is_cancelled());
+        assert_eq!(
+            v_new.get_position(),
+            v_new.segments[from_seg as usize].byte_offset
+        );
+    }
+
+    #[kithara::test]
+    fn rebuild_skips_loaded_segment_at_front_of_queue() {
+        let ctx = test_ctx(3);
+        let mut init = make_init(0);
+        init.state = SegmentState::Loaded;
+        let mut segs: Vec<SegmentEntry> = (0..20)
+            .map(|i| make_seg(i, u64::from(i) * 100, 100))
+            .collect();
+        segs[10].state = SegmentState::Loaded;
+        let mut v = HlsVariant::new(0, init, segs, &ctx);
+
+        v.rebuild(&ctx, 10);
+
+        let first_seg = v
+            .queue
+            .front()
+            .map(|p| p.segment)
+            .expect("queue has at least one segment after rebuild");
+        assert_ne!(first_seg, 10, "Loaded segment must not be requeued");
+        assert_eq!(first_seg, 11, "first MISSING segment from from_seg");
     }
 }

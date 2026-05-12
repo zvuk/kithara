@@ -12,19 +12,19 @@ use kithara_platform::time::Duration;
 use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
 
-use crate::variant::HlsVariant;
+use super::HlsVariant;
 
 /// Lock-free `SegmentLayout` impl. Active variant lookup via `Acquire` load
 /// on `AtomicUsize`; variant shape (`Arc<Vec<HlsVariant>>`) is immutable.
 #[non_exhaustive]
-pub struct HlsSegmentView {
-    pub variants: Arc<Vec<HlsVariant>>,
-    pub active_variant: Arc<AtomicUsize>,
+pub(crate) struct HlsSegmentView {
+    variants: Arc<Vec<HlsVariant>>,
+    active_variant: Arc<AtomicUsize>,
 }
 
 impl HlsSegmentView {
     #[must_use]
-    pub fn new(variants: Arc<Vec<HlsVariant>>, active_variant: Arc<AtomicUsize>) -> Self {
+    pub(crate) fn new(variants: Arc<Vec<HlsVariant>>, active_variant: Arc<AtomicUsize>) -> Self {
         Self {
             variants,
             active_variant,
@@ -74,12 +74,13 @@ mod tests {
 
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
     use kithara_drm::DecryptContext;
-    use kithara_stream::dl::{Downloader, DownloaderConfig};
     use tokio_util::sync::CancellationToken;
     use url::Url;
 
-    use super::*;
-    use crate::variant::{InitEntry, PlanCtx, SegmentEntry, SegmentState};
+    use super::{
+        super::{HlsVariant, InitEntry, PlanCtx, SegmentEntry, SegmentState},
+        *,
+    };
 
     fn test_ctx() -> PlanCtx {
         let cancel = CancellationToken::new();
@@ -95,13 +96,9 @@ mod tests {
                 .process_fn(passthrough)
                 .build(),
         );
-        let downloader = Arc::new(Downloader::new(
-            DownloaderConfig::default().with_cancel(cancel.child_token()),
-        ));
         PlanCtx {
             master_cancel: cancel,
             asset_store: backend,
-            downloader,
             prefetch_budget: 3,
         }
     }
@@ -110,10 +107,10 @@ mod tests {
         let url: Url = format!("https://example.com/{tag}/init.mp4")
             .parse()
             .expect("valid url");
-        let asset_id = ResourceKey::from_url(&url);
+        let resource_id = ResourceKey::from_url(&url);
         InitEntry {
             url,
-            asset_id,
+            resource_id,
             size,
             state: SegmentState::Missing,
         }
@@ -123,10 +120,10 @@ mod tests {
         let url: Url = format!("https://example.com/{tag}/seg{idx}.m4s")
             .parse()
             .expect("valid url");
-        let asset_id = ResourceKey::from_url(&url);
+        let resource_id = ResourceKey::from_url(&url);
         SegmentEntry {
             url,
-            asset_id,
+            resource_id,
             byte_offset,
             size,
             state: SegmentState::Missing,
@@ -270,6 +267,9 @@ mod tests {
                     }
                     if let Some(desc) = view.segment_at_time(Duration::from_secs(2)) {
                         assert!(matches!(desc.variant_index, 0 | 1));
+                    }
+                    if let Some(count) = view.segment_count() {
+                        assert_eq!(count, 3, "both variants have 3 segments — no torn read");
                     }
                 }
             }));

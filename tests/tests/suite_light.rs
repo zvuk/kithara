@@ -54,11 +54,9 @@ mod kithara_hls {
     mod deferred_abr;
     mod driver_test;
     mod ephemeral;
-    mod eviction_routing;
     #[cfg(not(target_arch = "wasm32"))]
     mod html_error_body;
     mod html_error_cleanup;
-    mod init_byte_space;
     mod keys_integration;
     mod playlist_integration;
     mod prefetch_403_fails_open;
@@ -67,11 +65,9 @@ mod kithara_hls {
     mod red_leak_small_cache_seek;
     mod seek_past_eof;
     mod seek_variant_switch_after_eof;
-    mod segment_view_lockfree;
     mod smoke_test;
     mod source_seek;
     mod sync_reader_hls_test;
-    mod variant_position_independence;
     mod wait_range_contract;
 }
 

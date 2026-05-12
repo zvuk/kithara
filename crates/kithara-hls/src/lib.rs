@@ -32,14 +32,10 @@ mod scheduler;
 mod source;
 mod stream;
 mod stream_index;
-
-#[cfg(any(test, feature = "test-utils"))]
-pub mod segment_view;
-#[cfg(any(test, feature = "test-utils"))]
-pub mod variant;
-
-#[cfg(any(test, feature = "test-utils"))]
-pub mod test_utils;
+// Plan 03/04 scaffolding — Plan 05 wires HlsVariant into HlsCoord and
+// HlsSegmentView into Source::as_segment_layout. Test-only until then.
+#[cfg(test)]
+mod variant;
 
 pub use config::{HlsConfig, KeyOptions};
 pub use coord::{HlsCoord, SegmentRequest};

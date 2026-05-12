@@ -15,5 +15,3 @@ mod probe_emit_count_contract;
 mod probe_init_range;
 mod probe_pcm_seam_continuity;
 mod probe_track_continuity_invariants;
-mod probe_variant_dispatch;
-mod probe_variant_rebuild;
