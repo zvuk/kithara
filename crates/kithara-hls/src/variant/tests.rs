@@ -31,6 +31,9 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
 }
 
 fn make_init(size: u64) -> InitEntry {
+    if size == 0 {
+        return InitEntry::empty();
+    }
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let resource_id = ResourceKey::from_url(&url);
     InitEntry {

@@ -7,6 +7,7 @@ schema_version = 1
 "crates/kithara-audio/src/audio.rs::Audio::create_decoder_factory" = 1
 "crates/kithara-ffi/src/event_bridge.rs::EventBridge::spawn" = 1
 "crates/kithara-file/src/session/source.rs::FileSource::remote" = 1
+"crates/kithara-hls/src/peer.rs::HlsPeer::activate" = 1
 "crates/kithara-hls/src/stream.rs::Hls::create" = 1
 "crates/kithara-hls/src/variant/segment_view.rs::tests::concurrent_reads_consistent_with_flips" = 1
 "crates/kithara-play/src/impls/player.rs::PlayerImpl::arm_next" = 1
@@ -76,6 +77,7 @@ schema_version = 1
 [field_always_constant]
 "crates/kithara-abr/src/handle.rs:207:StatefulPeer::state" = 1
 "crates/kithara-hls/src/variant.rs:57:SegmentEntry::state" = 1
+"crates/kithara-hls/src/variant.rs:83:InitEntry::state" = 1
 
 [field_passthrough]
 "crates/kithara-app/src/state.rs:79:StateController::cancel" = 1
@@ -236,8 +238,6 @@ schema_version = 1
 "crates/kithara-hls/src/loading/atomic_fetch.rs::write_back_cache" = 1
 "crates/kithara-hls/src/loading/keys.rs::KeyManager::from_options" = 1
 "crates/kithara-hls/src/loading/keys.rs::KeyManager::new" = 1
-"crates/kithara-hls/src/loading/size_estimation.rs::estimate_variant_size_map" = 1
-"crates/kithara-hls/src/loading/size_estimation.rs::try_head_requests" = 1
 "crates/kithara-net/src/types.rs::tests::test_retry_policy_delay_for_attempt_custom" = 1
 "crates/kithara-play/src/impls/player_track.rs::PlayerTrack::new" = 1
 "crates/kithara-queue/src/queue/playback.rs::tests::should_arm_crossfade_cases" = 1
@@ -458,8 +458,8 @@ schema_version = 1
 "crates/kithara-events/src/play.rs:68:MediaTime" = 1
 "crates/kithara-file/src/session/source.rs:35:FileSource" = 1
 "crates/kithara-hls/src/loading/keys.rs:46:KeyManager" = 1
-"crates/kithara-hls/src/playlist.rs:58:PlaylistState" = 1
-"crates/kithara-hls/src/variant.rs:123:HlsVariant" = 1
+"crates/kithara-hls/src/playlist.rs:67:PlaylistState" = 1
+"crates/kithara-hls/src/variant.rs:143:HlsVariant" = 1
 "crates/kithara-net/src/traits.rs:48:ByteStream" = 1
 "crates/kithara-net/src/types.rs:55:RangeSpec" = 1
 "crates/kithara-play/src/impls/engine.rs:124:EngineImpl" = 1
@@ -582,7 +582,7 @@ xtask = 1
 
 [redundant_reexport]
 "crates/kithara-hls/config.rs:5:0::kithara_abr::AbrMode" = 1
-"crates/kithara-hls/stream.rs:47:9::Hls::Source" = 1
+"crates/kithara-hls/stream.rs:46:9::Hls::Source" = 1
 "crates/kithara-integration-tests/offline/backend.rs:43:9::OfflineBackend::Config" = 1
 "crates/kithara-integration-tests/offline/backend.rs:46:9::OfflineBackend::StartStreamError" = 1
 "crates/kithara-integration-tests/offline/backend.rs:47:9::OfflineBackend::StreamError" = 1

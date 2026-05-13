@@ -90,6 +90,23 @@ struct InitEntry {
 }
 
 impl InitEntry {
+    /// Variants without `#EXT-X-MAP` carry this stub. `size == 0` is the
+    /// single source of truth for "no init"; `state == Loaded` keeps
+    /// `dispatch` from ever emitting a fetch (it only triggers on
+    /// `Missing`). The `url`/`resource_id` placeholders are never read
+    /// because the size-zero check on every consumer path returns early.
+    fn empty() -> Self {
+        let url: Url = "about:blank"
+            .parse()
+            .expect("static placeholder URL parses");
+        Self {
+            resource_id: ResourceKey::from_url(&url),
+            url,
+            size: 0,
+            state: SegmentState::Loaded.into(),
+        }
+    }
+
     fn state(&self) -> SegmentState {
         SegmentState::from(self.state.load(Ordering::Acquire))
     }
@@ -113,6 +130,9 @@ pub(crate) struct PlanCtx {
 
 pub(crate) struct HlsVariant {
     variant: usize,
+    /// fMP4 init metadata. For raw TS/AAC variants `init.size == 0` and
+    /// `init.state == Loaded` — `dispatch` then skips the init step
+    /// naturally because no `Missing` transition is possible.
     init: InitEntry,
     segments: Vec<SegmentEntry>,
     queue: Mutex<VecDeque<PlannedFetch>>,
@@ -160,24 +180,14 @@ impl HlsVariant {
     }
 
     fn build_init_entry(playlist_state: &PlaylistState, variant_idx: usize) -> InitEntry {
-        let Some(url) = playlist_state.init_url(variant_idx) else {
-            // Variants without an fMP4 init segment (raw AAC/TS) carry a
-            // synthetic placeholder marked `Loaded` so dispatch never tries
-            // to fetch it.
-            let placeholder: Url = "data:,".parse().expect("static data URL");
-            return InitEntry {
-                resource_id: ResourceKey::from_url(&placeholder),
-                url: placeholder,
-                size: 0,
-                state: SegmentState::Loaded.into(),
-            };
-        };
-        InitEntry {
-            resource_id: ResourceKey::from_url(&url),
-            url,
-            size: playlist_state.init_size(variant_idx),
-            state: SegmentState::Missing.into(),
-        }
+        playlist_state
+            .init_url(variant_idx)
+            .map_or_else(InitEntry::empty, |url| InitEntry {
+                resource_id: ResourceKey::from_url(&url),
+                url,
+                size: playlist_state.init_size(variant_idx),
+                state: SegmentState::Missing.into(),
+            })
     }
 
     fn build_segment_entries(
@@ -261,29 +271,33 @@ impl HlsVariant {
         u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
     }
 
+    /// Index of the first non-`Loaded` segment — interpreted as the
+    /// "download head" by the ABR controller. Returns `num_segments()`
+    /// when every segment is `Loaded`. Scans linearly; cheap because it
+    /// only runs from `Abr::progress` (ABR tick cadence).
+    pub(crate) fn download_head(&self) -> u32 {
+        let head = self
+            .segments
+            .iter()
+            .position(|s| !matches!(s.state(), SegmentState::Loaded))
+            .unwrap_or(self.segments.len());
+        u32::try_from(head).unwrap_or(u32::MAX)
+    }
+
     #[kithara::probe(variant = self.variant as u64, size = self.init.size)]
     pub(crate) fn init_byte_range(&self) -> Option<Range<u64>> {
-        if self.init.size > 0 {
-            Some(0..self.init.size)
-        } else {
-            None
-        }
+        (self.init.size > 0).then_some(0..self.init.size)
     }
 
     /// Resource key for the variant's init segment — `None` when the
-    /// playlist has no `#EXT-X-MAP` (raw TS/AAC) and the init slot is a
-    /// synthetic placeholder.
+    /// playlist has no `#EXT-X-MAP` (raw TS/AAC).
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
-        if self.init.size > 0 {
-            Some(self.init.resource_id.clone())
-        } else {
-            None
-        }
+        (self.init.size > 0).then(|| self.init.resource_id.clone())
     }
 
     /// Cached init segment size; the first [`Self::init_size`] bytes of
     /// segment 0 in variant-byte space resolve to the init resource
-    /// rather than the media resource.
+    /// rather than the media resource. Zero when no init exists.
     pub(crate) fn init_size(&self) -> u64 {
         self.init.size
     }
@@ -389,7 +403,7 @@ impl HlsVariant {
     /// Returns evicted `seg_idx` (`-1` for init), or `None` if `key` doesn't belong to this variant.
     #[kithara::probe(variant = self.variant as u64)]
     pub(crate) fn on_evict(&self, key: &ResourceKey) -> Option<i32> {
-        if &self.init.resource_id == key {
+        if self.init.size > 0 && &self.init.resource_id == key {
             self.init.set_state(SegmentState::Missing);
             return Some(-1);
         }

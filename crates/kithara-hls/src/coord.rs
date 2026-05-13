@@ -2,13 +2,13 @@
 
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
 };
 
 use kithara_abr::AbrHandle;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_platform::{time::Instant, tokio::sync::Notify};
+use kithara_platform::time::Instant;
 use kithara_stream::Timeline;
 use tokio_util::sync::CancellationToken;
 
@@ -30,8 +30,6 @@ pub(crate) struct HlsCoord {
     pub(crate) variants: Arc<Vec<HlsVariant>>,
     pub(crate) active_variant: Arc<AtomicUsize>,
     pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
-    pub(crate) reader_advanced: Arc<Notify>,
-    pub(crate) stopped: AtomicBool,
     segment_view: Arc<HlsSegmentView>,
 }
 
@@ -56,8 +54,6 @@ impl HlsCoord {
             active_variant,
             asset_store: env.asset_store,
             segment_view,
-            reader_advanced: Arc::new(Notify::new()),
-            stopped: AtomicBool::new(false),
         }
     }
 
@@ -92,6 +88,12 @@ impl HlsCoord {
 
     pub(crate) fn variant_index(&self) -> usize {
         self.active_variant.load(Ordering::Acquire)
+    }
+
+    /// Number of consecutive `Loaded` segments from the start of the
+    /// active variant — the ABR controller's "download head" signal.
+    pub(crate) fn download_head(&self) -> u32 {
+        self.active().map_or(0, HlsVariant::download_head)
     }
 
     pub(crate) fn segment_view(&self) -> Arc<HlsSegmentView> {

@@ -14,7 +14,10 @@ use kithara_events::{AbrMode, AbrProgressSnapshot, AbrVariant, VariantDuration};
 use kithara_platform::{
     Mutex,
     time::Duration,
-    tokio::{self, sync::mpsc},
+    tokio::{
+        self,
+        sync::{Notify, mpsc},
+    },
 };
 use kithara_stream::{
     Timeline,
@@ -46,8 +49,13 @@ struct HlsTrackState {
 pub(crate) struct HlsPeer {
     abr: Arc<AbrState>,
     reader_segment: Arc<AtomicUsize>,
-    committed_segment: Arc<AtomicUsize>,
     state: Arc<Mutex<Option<HlsTrackState>>>,
+    /// Reader→peer wake channel. The HLS `Source` fires this whenever it
+    /// advances the byte cursor or completes a seek, so `poll_next` runs
+    /// again without waiting for the next downloader-driven wakeup. Owned
+    /// here (not on `HlsCoord`) because the wake mechanism is a property
+    /// of the peer, not of shared state.
+    reader_advanced: Arc<Notify>,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
     /// cancellation of work — fires from `teardown()` / `Drop`.
     /// // kithara:cancel:owner
@@ -65,8 +73,14 @@ impl HlsPeer {
             wake_signal: CancellationToken::new(), // kithara:cancel:owner
             abr: Arc::new(AbrState::new(Vec::new(), initial_mode)),
             reader_segment: Arc::new(AtomicUsize::new(0)),
-            committed_segment: Arc::new(AtomicUsize::new(0)),
+            reader_advanced: Arc::new(Notify::new()),
         }
+    }
+
+    /// Shared `Notify` handle that the `Source` clones to wake `poll_next`
+    /// after every reader progress event.
+    pub(crate) fn reader_wake(&self) -> Arc<Notify> {
+        Arc::clone(&self.reader_advanced)
     }
 
     pub(crate) fn activate(
@@ -75,7 +89,7 @@ impl HlsPeer {
         eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
         prefetch_budget: usize,
     ) {
-        let reader_advanced = coord.reader_advanced.clone();
+        let reader_advanced = Arc::clone(&self.reader_advanced);
         let cancel = coord.cancel.clone();
 
         // Activation is the analogue of crossing into segment 0 — arm
@@ -163,12 +177,15 @@ impl Abr for HlsPeer {
             VariantDuration::Total(_) | VariantDuration::Unknown => return None,
         };
         let reader_idx = self.reader_segment.load(Ordering::Acquire);
-        let committed = self.committed_segment.load(Ordering::Acquire);
+        let download_head = self
+            .state
+            .lock_sync()
+            .as_ref()
+            .map_or(0, |s| s.coord.download_head() as usize);
         let reader_clamped = reader_idx.min(durations.len());
-        let committed_clamped = committed.min(durations.len());
+        let head_clamped = download_head.min(durations.len());
         let reader_playback_time: Duration = durations[..reader_clamped].iter().copied().sum();
-        let download_head_playback_time: Duration =
-            durations[..committed_clamped].iter().copied().sum();
+        let download_head_playback_time: Duration = durations[..head_clamped].iter().copied().sum();
         Some(AbrProgressSnapshot {
             reader_playback_time,
             download_head_playback_time,
@@ -259,7 +276,7 @@ impl HlsPeer {
         state.waker = Some(cx.waker().clone());
 
         let coord = Arc::clone(&state.coord);
-        if coord.stopped.load(Ordering::Acquire) || coord.cancel.is_cancelled() {
+        if coord.cancel.is_cancelled() {
             return PollPhase::Terminated;
         }
         let ctx = state.plan_ctx();

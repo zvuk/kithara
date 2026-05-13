@@ -104,6 +104,9 @@ mod tests {
     }
 
     fn make_init(size: u64, tag: &str) -> InitEntry {
+        if size == 0 {
+            return InitEntry::empty();
+        }
         let url: Url = format!("https://example.com/{tag}/init.mp4")
             .parse()
             .expect("valid url");

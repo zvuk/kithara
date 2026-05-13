@@ -1,14 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    io::ErrorKind,
-    num::NonZeroUsize,
-    ops::Range,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{io::ErrorKind, num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_assets::{AssetsError, ResourceKey};
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    time::{Duration, Instant},
+    tokio::sync::Notify,
+};
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
     PendingReason, ReadOutcome, SegmentLayout, Source, SourcePhase, SourceSeekAnchor, StreamError,
@@ -32,6 +30,10 @@ pub struct HlsSource {
     playlist_state: Arc<PlaylistState>,
     hls_peer: Option<Arc<HlsPeer>>,
     peer_handle: Option<kithara_stream::dl::PeerHandle>,
+    /// Reader→peer wake handle. Cloned from the owning `HlsPeer` once it
+    /// is bound via [`Self::set_hls_peer`]; firing it makes the peer's
+    /// `poll_next` resume on the next event loop tick.
+    peer_wake: Option<Arc<Notify>>,
 }
 
 impl HlsSource {
@@ -41,15 +43,23 @@ impl HlsSource {
             playlist_state,
             hls_peer: None,
             peer_handle: None,
+            peer_wake: None,
         }
     }
 
     pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
+        self.peer_wake = Some(peer.reader_wake());
         self.hls_peer = Some(peer);
     }
 
     pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
         self.peer_handle = Some(handle);
+    }
+
+    fn wake_peer(&self) {
+        if let Some(ref n) = self.peer_wake {
+            n.notify_one();
+        }
     }
 
     /// Locate the segment covering `byte_offset` and resolve the init /
@@ -163,16 +173,16 @@ impl Source for HlsSource {
     }
 
     fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
-        let notify = Arc::clone(&self.coord.reader_advanced);
+        let notify = self.peer_wake.clone()?;
         Some(Box::new(move || notify.notify_one()))
     }
 
     fn notify_waiting(&self) {
-        self.coord.reader_advanced.notify_one();
+        self.wake_peer();
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        if self.coord.cancel.is_cancelled() || self.coord.stopped.load(Ordering::Acquire) {
+        if self.coord.cancel.is_cancelled() {
             return SourcePhase::Cancelled;
         }
         if self.range_ready(&range) {
@@ -258,12 +268,12 @@ impl Source for HlsSource {
             .with_segment_index(seg_idx_u32)
             .with_variant_index(variant);
         self.coord.set_position(byte_offset);
-        self.coord.reader_advanced.notify_one();
+        self.wake_peer();
         Ok(Some(anchor))
     }
 
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {
-        self.coord.reader_advanced.notify_one();
+        self.wake_peer();
     }
 
     fn timeline(&self) -> Timeline {
@@ -290,7 +300,7 @@ impl Source for HlsSource {
     ) -> StreamResult<WaitOutcome> {
         let started_at = Instant::now();
         loop {
-            if self.coord.cancel.is_cancelled() || self.coord.stopped.load(Ordering::Acquire) {
+            if self.coord.cancel.is_cancelled() {
                 return Err(StreamError::Source(HlsError::Cancelled.into()));
             }
             if self.range_ready(&range) {
@@ -309,7 +319,7 @@ impl Source for HlsSource {
             {
                 return Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()));
             }
-            self.coord.reader_advanced.notify_one();
+            self.wake_peer();
             hang_tick!();
             std::thread::sleep(Duration::from_millis(2));
         }
