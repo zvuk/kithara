@@ -29,19 +29,23 @@ pub(crate) mod segment_view;
 #[cfg(test)]
 mod tests;
 
+/// Two-valued cache state. Transitions happen only at the data layer:
+/// `Missing -> Loaded` when a successful settle commits the resource;
+/// `Loaded -> Missing` when the asset store evicts the resource. No
+/// transient "Downloading" state — dedup of in-flight fetches lives
+/// purely in the queue (each segment enters the queue exactly once per
+/// rebuild epoch via [`HlsVariant::rebuild`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum SegmentState {
     Missing = 0,
-    Downloading = 1,
-    Loaded = 2,
+    Loaded = 1,
 }
 
 impl From<u8> for SegmentState {
     fn from(v: u8) -> Self {
         match v {
-            1 => Self::Downloading,
-            2 => Self::Loaded,
+            1 => Self::Loaded,
             _ => Self::Missing,
         }
     }
@@ -59,10 +63,10 @@ struct SegmentEntry {
     resource_id: ResourceKey,
     byte_offset: u64,
     size: u64,
-    /// Shared with the segment's `OnCompleteFn` closure so the
-    /// Downloader thread can flip `Downloading -> Loaded` (or back to
-    /// `Missing` on error) without re-entering the variant from
-    /// outside.
+    /// Cache state. Shared with the segment's `FetchSlot`: settle on
+    /// success stores `Loaded`; evict stores `Missing`. Stale settles
+    /// (cancelled before completion) are gated by `FetchSlot.cancel` and
+    /// never reach the store.
     state: Arc<AtomicU8>,
     decrypt_ctx: Option<DecryptContext>,
     decode_time: Duration,
@@ -116,10 +120,13 @@ impl InitEntry {
     }
 }
 
+/// One unit of pending fetch work for the variant. `Init` is the only
+/// non-segment entry — placed at the front of the queue by `rebuild` so
+/// the fMP4 init prefix is fetched before any media segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PlannedFetch {
-    variant: usize,
-    segment: u32,
+enum PlannedFetch {
+    Init,
+    Segment(u32),
 }
 
 pub(crate) struct PlanCtx {
@@ -131,8 +138,7 @@ pub(crate) struct PlanCtx {
 pub(crate) struct HlsVariant {
     variant: usize,
     /// fMP4 init metadata. For raw TS/AAC variants `init.size == 0` and
-    /// `init.state == Loaded` — `dispatch` then skips the init step
-    /// naturally because no `Missing` transition is possible.
+    /// `init.state == Loaded` — `rebuild` then never enqueues `Init`.
     init: InitEntry,
     segments: Vec<SegmentEntry>,
     queue: Mutex<VecDeque<PlannedFetch>>,
@@ -351,8 +357,23 @@ impl HlsVariant {
         self.rebuild(ctx, from_seg);
     }
 
-    /// Reissue the variant's cancel token and refill the queue starting at `from_seg`.
-    /// Old token is cancelled — any `FetchCmd` holding a clone observes cancellation.
+    /// Single entry point that rebuilds the per-variant fetch queue.
+    ///
+    /// 1. Bumps the cancel epoch (reissues child token) — every in-flight
+    ///    `FetchCmd` on the previous token observes cancellation and its
+    ///    `FetchSlot::settle` becomes a no-op via the captured token's
+    ///    `is_cancelled()` check. The asset resource is still failed so
+    ///    the store can clean up, but no state writes leak across epochs.
+    /// 2. Clears `init_pending` so a fresh init dispatch can fire if the
+    ///    init slot is still `Missing`.
+    /// 3. Replaces the queue with `[from_seg .. num_segments)` — the full
+    ///    forward window. Throttling lives at `dispatch`'s budget and at
+    ///    the Downloader's per-peer concurrency, not in the queue size.
+    ///
+    /// All callers that need to invalidate the in-flight set must go
+    /// through this method: seek (`seek_to`), ABR variant flip
+    /// (`activate_at_segment`), eviction of an active-variant resource,
+    /// and the initial peer activation.
     #[kithara::probe(
         variant = self.variant as u64,
         from_seg,
@@ -365,42 +386,22 @@ impl HlsVariant {
             std::mem::replace(&mut *guard, new_token)
         };
         old_token.cancel();
-        self.queue.lock_sync().clear();
-        self.fill_queue(ctx, from_seg);
-    }
-
-    #[kithara::probe(variant = self.variant as u64, seg_at_reader)]
-    pub(crate) fn on_reader_advance(&self, ctx: &PlanCtx, seg_at_reader: u32) {
-        let segs_len_u32 = self.num_segments();
-        if segs_len_u32 == 0 {
-            return;
-        }
+        let segs_len = self.num_segments();
         let mut queue = self.queue.lock_sync();
-        if matches!(self.state_of(seg_at_reader), SegmentState::Missing)
-            && !queue_contains_seg(&queue, seg_at_reader)
-        {
-            queue.push_front(PlannedFetch {
-                variant: self.variant,
-                segment: seg_at_reader,
-            });
+        queue.clear();
+        if self.init.size > 0 && matches!(self.init.state(), SegmentState::Missing) {
+            queue.push_back(PlannedFetch::Init);
         }
-        let budget = u32::try_from(ctx.prefetch_budget).unwrap_or(u32::MAX);
-        let end = seg_at_reader.saturating_add(budget).min(segs_len_u32 - 1);
-        let last_planned = queue.iter().next_back().map(|p| p.segment);
-        let start = last_planned.map_or(seg_at_reader, |s| s.saturating_add(1));
-        for seg in start..=end {
-            if matches!(self.state_of(seg), SegmentState::Missing)
-                && !queue_contains_seg(&queue, seg)
-            {
-                queue.push_back(PlannedFetch {
-                    variant: self.variant,
-                    segment: seg,
-                });
-            }
+        for seg in from_seg..segs_len {
+            queue.push_back(PlannedFetch::Segment(seg));
         }
     }
 
     /// Returns evicted `seg_idx` (`-1` for init), or `None` if `key` doesn't belong to this variant.
+    /// State flips `Loaded -> Missing`; queue reseeding is the caller's job
+    /// (see `HlsCoord::broadcast_eviction` → `rebuild` for the active
+    /// variant; non-active variants' queues are rebuilt lazily on the
+    /// next ABR flip).
     #[kithara::probe(variant = self.variant as u64)]
     pub(crate) fn on_evict(&self, key: &ResourceKey) -> Option<i32> {
         if self.init.size > 0 && &self.init.resource_id == key {
@@ -424,24 +425,27 @@ impl HlsVariant {
     pub(crate) fn dispatch(&self, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
         let mut out = Vec::new();
         let mut remaining = budget;
-        if matches!(self.init.state(), SegmentState::Missing) && remaining > 0 {
-            self.init.set_state(SegmentState::Downloading);
-            out.push(self.build_init_cmd(ctx));
-            remaining -= 1;
-        }
         while remaining > 0 {
             let Some(planned) = self.queue.lock_sync().pop_front() else {
                 break;
             };
-            let seg_idx = planned.segment;
-            let Some(entry) = self.segments.get(seg_idx as usize) else {
-                continue;
-            };
-            if !matches!(entry.state(), SegmentState::Missing) {
-                continue;
+            match planned {
+                PlannedFetch::Init => {
+                    if matches!(self.init.state(), SegmentState::Loaded) {
+                        continue;
+                    }
+                    out.push(self.build_init_cmd(ctx));
+                }
+                PlannedFetch::Segment(seg_idx) => {
+                    let Some(entry) = self.segments.get(seg_idx as usize) else {
+                        continue;
+                    };
+                    if matches!(entry.state(), SegmentState::Loaded) {
+                        continue;
+                    }
+                    out.push(self.build_seg_cmd(ctx, seg_idx));
+                }
             }
-            entry.set_state(SegmentState::Downloading);
-            out.push(self.build_seg_cmd(ctx, seg_idx));
             remaining -= 1;
         }
         out
@@ -512,43 +516,16 @@ impl HlsVariant {
         ))
     }
 
-    fn fill_queue(&self, ctx: &PlanCtx, from_seg: u32) {
-        let segs_len_u32 = self.num_segments();
-        if segs_len_u32 == 0 {
-            return;
-        }
-        let budget = u32::try_from(ctx.prefetch_budget).unwrap_or(u32::MAX);
-        let end = from_seg.saturating_add(budget).min(segs_len_u32 - 1);
-        let mut queue = self.queue.lock_sync();
-        for seg in from_seg..=end {
-            if matches!(self.state_of(seg), SegmentState::Missing) {
-                queue.push_back(PlannedFetch {
-                    variant: self.variant,
-                    segment: seg,
-                });
-            }
-        }
-    }
-
-    fn state_of(&self, seg_idx: u32) -> SegmentState {
-        self.segments
-            .get(seg_idx as usize)
-            .map_or(SegmentState::Missing, SegmentEntry::state)
-    }
-
     fn build_init_cmd(&self, ctx: &PlanCtx) -> FetchCmd {
         let resource = ctx
             .asset_store
             .acquire_resource(&self.init.resource_id)
             .expect("acquire_resource for init must succeed");
-        let slot = FetchSlot {
-            resource: resource.clone(),
-            state: Arc::clone(&self.init.state),
-        };
-        FetchCmd::get(self.init.url.clone())
-            .cancel(Some(self.cancel_handle()))
-            .writer(slot.writer())
-            .on_complete(slot.into_on_complete())
+        self.build_cmd(
+            self.init.url.clone(),
+            resource,
+            Arc::clone(&self.init.state),
+        )
     }
 
     fn build_seg_cmd(&self, ctx: &PlanCtx, seg_idx: u32) -> FetchCmd {
@@ -565,23 +542,41 @@ impl HlsVariant {
                     .expect("acquire_resource_with_ctx for segment must succeed")
             },
         );
+        self.build_cmd(entry.url.clone(), resource, Arc::clone(&entry.state))
+    }
+
+    /// Common assembly for init and segment fetches. Both go through the
+    /// same `FetchSlot`: writer streams to the asset resource, `on_complete`
+    /// runs `settle` which observes `cancel.is_cancelled()` as the epoch
+    /// gate.
+    fn build_cmd(
+        &self,
+        url: Url,
+        resource: AssetResource<DecryptContext>,
+        state: Arc<AtomicU8>,
+    ) -> FetchCmd {
+        let cancel = self.cancel_handle();
         let slot = FetchSlot {
             resource,
-            state: Arc::clone(&entry.state),
+            state,
+            cancel: cancel.clone(),
         };
-        FetchCmd::get(entry.url.clone())
-            .cancel(Some(self.cancel_handle()))
+        FetchCmd::get(url)
+            .cancel(Some(cancel))
             .writer(slot.writer())
             .on_complete(slot.into_on_complete())
     }
 }
 
-/// Pairs a freshly-acquired [`AssetResource`] with the shared state flag
-/// observed by the scheduler. Owns the closures emitted on a [`FetchCmd`] so
-/// settlement (commit-or-fail + state transition) lives in one place.
+/// Pairs the freshly-acquired [`AssetResource`] with the entry's state
+/// atom and the cancel token captured at dispatch time. `settle` reads
+/// `cancel.is_cancelled()` as the rebuild-epoch marker: a stale fetch
+/// (cancelled before completion) does not write to state — `rebuild`
+/// has already taken over and the asset slot belongs to the new epoch.
 struct FetchSlot {
     resource: AssetResource<DecryptContext>,
     state: Arc<AtomicU8>,
+    cancel: CancellationToken,
 }
 
 impl FetchSlot {
@@ -599,23 +594,30 @@ impl FetchSlot {
     }
 
     fn settle(&self, err: Option<&NetError>) {
-        let next = err.map_or_else(
-            || {
-                self.resource
-                    .commit(None)
-                    .map_or(SegmentState::Missing, |()| SegmentState::Loaded)
-            },
-            |e| {
+        // Stale settle from a cancelled epoch — rebuild already replaced
+        // the cancel token, so any state we'd write here would clobber
+        // whatever the new epoch put in. Only the asset-store failure
+        // hint propagates (so the store can clean up).
+        if self.cancel.is_cancelled() {
+            if let Some(e) = err {
                 self.resource.fail(e.to_string());
-                SegmentState::Missing
-            },
-        );
-        self.state.store(next as u8, Ordering::Release);
+            }
+            return;
+        }
+        match err {
+            None => {
+                if self.resource.commit(None).is_ok() {
+                    self.state
+                        .store(SegmentState::Loaded as u8, Ordering::Release);
+                }
+            }
+            Some(e) => {
+                self.resource.fail(e.to_string());
+                // state stays Missing — Downloader's retry policy or the
+                // next eviction-triggered rebuild will redrive the fetch.
+            }
+        }
     }
-}
-
-fn queue_contains_seg(queue: &VecDeque<PlannedFetch>, seg_idx: u32) -> bool {
-    queue.iter().any(|p| p.segment == seg_idx)
 }
 
 fn bisect_right_decode_time(segments: &[SegmentEntry], t: Duration) -> usize {

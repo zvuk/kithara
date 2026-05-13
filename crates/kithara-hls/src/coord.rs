@@ -143,27 +143,23 @@ impl HlsCoord {
         true
     }
 
-    /// Process one evicted resource key. Broadcasts to every variant so
-    /// they mark the lost segment Missing. For the active variant, if
-    /// the eviction lands inside the prefetch window, hands off to
-    /// `on_reader_advance` to put the segment back on the queue.
+    /// Process one evicted resource key. Marks the lost segment `Missing`
+    /// on every variant that owned it. When the active variant is among
+    /// them, fires a full `rebuild` from the reader's current segment so
+    /// the queue is refilled with the now-Missing slot reincluded.
+    /// Non-active variants stay in a relaxed state — their next
+    /// activation (ABR flip) calls `rebuild` and picks up the Missing
+    /// entries then.
     pub(crate) fn broadcast_eviction(&self, ctx: &PlanCtx, key: &ResourceKey, seg_at_reader: u32) {
         let active_idx = self.variant_index();
-        let budget = u32::try_from(ctx.prefetch_budget).unwrap_or(u32::MAX);
-        let window_end = seg_at_reader.saturating_add(budget);
+        let mut active_lost = false;
         for (v_idx, v) in self.variants.iter().enumerate() {
-            let Some(evicted_seg) = v.on_evict(key) else {
-                continue;
-            };
-            if v_idx != active_idx || evicted_seg < 0 {
-                continue;
+            if v.on_evict(key).is_some() && v_idx == active_idx {
+                active_lost = true;
             }
-            let Ok(evicted_u32) = u32::try_from(evicted_seg) else {
-                continue;
-            };
-            if (seg_at_reader..=window_end).contains(&evicted_u32) {
-                v.on_reader_advance(ctx, evicted_u32);
-            }
+        }
+        if active_lost && let Some(active) = self.active() {
+            active.rebuild(ctx, seg_at_reader);
         }
     }
 }

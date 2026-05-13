@@ -76,8 +76,8 @@ schema_version = 1
 
 [field_always_constant]
 "crates/kithara-abr/src/handle.rs:207:StatefulPeer::state" = 1
-"crates/kithara-hls/src/variant.rs:57:SegmentEntry::state" = 1
-"crates/kithara-hls/src/variant.rs:83:InitEntry::state" = 1
+"crates/kithara-hls/src/variant.rs:61:SegmentEntry::state" = 1
+"crates/kithara-hls/src/variant.rs:87:InitEntry::state" = 1
 
 [field_passthrough]
 "crates/kithara-app/src/state.rs:79:StateController::cancel" = 1
@@ -459,7 +459,7 @@ schema_version = 1
 "crates/kithara-file/src/session/source.rs:35:FileSource" = 1
 "crates/kithara-hls/src/loading/keys.rs:46:KeyManager" = 1
 "crates/kithara-hls/src/playlist.rs:67:PlaylistState" = 1
-"crates/kithara-hls/src/variant.rs:143:HlsVariant" = 1
+"crates/kithara-hls/src/variant.rs:149:HlsVariant" = 1
 "crates/kithara-net/src/traits.rs:48:ByteStream" = 1
 "crates/kithara-net/src/types.rs:55:RangeSpec" = 1
 "crates/kithara-play/src/impls/engine.rs:124:EngineImpl" = 1

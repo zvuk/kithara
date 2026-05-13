@@ -62,14 +62,18 @@ fn make_seg(idx: u32, byte_offset: u64, size: u64) -> SegmentEntry {
 }
 
 fn push_planned(v: &HlsVariant, seg: u32) {
-    v.queue.lock_sync().push_back(PlannedFetch {
-        variant: v.variant,
-        segment: seg,
-    });
+    v.queue.lock_sync().push_back(PlannedFetch::Segment(seg));
 }
 
 fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
-    v.queue.lock_sync().iter().map(|p| p.segment).collect()
+    v.queue
+        .lock_sync()
+        .iter()
+        .filter_map(|p| match p {
+            PlannedFetch::Segment(seg) => Some(*seg),
+            PlannedFetch::Init => None,
+        })
+        .collect()
 }
 
 #[kithara::test]
@@ -265,7 +269,7 @@ fn dispatch_emits_init_first_then_segments_under_budget() {
     let seg0_url = v.segments[0].url.clone();
     let seg1_url = v.segments[1].url.clone();
     let seg2_url = v.segments[2].url.clone();
-    v.fill_queue(&ctx, 0);
+    v.rebuild(&ctx, 0);
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 4);
     assert_eq!(cmds[0].url, init_url, "init dispatched first");
@@ -275,14 +279,12 @@ fn dispatch_emits_init_first_then_segments_under_budget() {
     for cmd in &cmds {
         assert!(cmd.cancel.is_some(), "every cmd carries a cancel token");
     }
-    assert_eq!(v.init.state(), SegmentState::Downloading);
 }
 
 #[kithara::test]
 fn dispatch_respects_budget() {
     let ctx = test_ctx(5);
     let init = make_init(0);
-    init.set_state(SegmentState::Loaded);
     let v = HlsVariant::from_parts(
         0,
         init,
@@ -291,10 +293,12 @@ fn dispatch_respects_budget() {
             .collect(),
         &ctx,
     );
-    v.fill_queue(&ctx, 0);
+    v.rebuild(&ctx, 0);
     let cmds = v.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
-    assert_eq!(queue_seg_indices(&v), vec![3, 4, 5]);
+    // rebuild pushes every segment in the forward window; dispatch pops
+    // exactly `budget` and leaves the remainder for subsequent ticks.
+    assert_eq!(queue_seg_indices(&v), vec![3, 4, 5, 6, 7, 8, 9]);
 }
 
 #[kithara::test]
@@ -375,7 +379,7 @@ fn on_evict_returns_none_for_foreign_asset() {
 }
 
 #[kithara::test]
-fn on_reader_advance_extends_prefetch_tail() {
+fn rebuild_fills_forward_window_from_seg() {
     let ctx = test_ctx(3);
     let v = HlsVariant::from_parts(
         0,
@@ -385,8 +389,8 @@ fn on_reader_advance_extends_prefetch_tail() {
             .collect(),
         &ctx,
     );
-    v.on_reader_advance(&ctx, 2);
-    assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
+    v.rebuild(&ctx, 2);
+    assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5, 6, 7, 8, 9]);
 }
 
 #[kithara::test]
@@ -409,7 +413,9 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1);
     assert!(cmds[0].cancel.is_some());
-    assert_eq!(v.segments[0].state(), SegmentState::Downloading);
+    // state stays Missing until the FetchSlot settles successfully —
+    // the cancel-token-as-epoch design has no transient Downloading.
+    assert_eq!(v.segments[0].state(), SegmentState::Missing);
 }
 
 #[kithara::test]
@@ -525,24 +531,24 @@ fn variant_flip_cancels_v_old_and_replaces_v_new_token_via_rebuild() {
 }
 
 #[kithara::test]
-fn rebuild_skips_loaded_segment_at_front_of_queue() {
+fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     let ctx = test_ctx(3);
     let init = make_init(0);
-    init.set_state(SegmentState::Loaded);
     let segs: Vec<SegmentEntry> = (0..20)
         .map(|i| make_seg(i, u64::from(i) * 100, 100))
         .collect();
     segs[10].set_state(SegmentState::Loaded);
     let v = HlsVariant::from_parts(0, init, segs, &ctx);
 
+    // rebuild pushes EVERY segment from from_seg onward — Loaded ones
+    // included. dispatch skips them without consuming budget so the
+    // emitted batch is exactly `budget` Missing segments.
     v.rebuild(&ctx, 10);
-
-    let first_seg = v
-        .queue
-        .lock_sync()
-        .front()
-        .map(|p| p.segment)
-        .expect("queue has at least one segment after rebuild");
-    assert_ne!(first_seg, 10, "Loaded segment must not be requeued");
-    assert_eq!(first_seg, 11, "first MISSING segment from from_seg");
+    let cmds = v.dispatch(&ctx, 3);
+    assert_eq!(cmds.len(), 3);
+    let seg10_url = v.segments[10].url.clone();
+    assert!(
+        cmds.iter().all(|c| c.url != seg10_url),
+        "Loaded seg 10 must not be re-emitted"
+    );
 }

@@ -92,10 +92,8 @@ impl HlsPeer {
         let reader_advanced = Arc::clone(&self.reader_advanced);
         let cancel = coord.cancel.clone();
 
-        // Activation is the analogue of crossing into segment 0 — arm
-        // the prefetch queue so `poll_next` does not have to special-case
-        // the first poll. After this, `reader_segment` always carries a
-        // real index and boundary detection is plain "current != stored".
+        // Initial queue arming for segment 0 (or the segment the reader
+        // is already positioned in). `rebuild` is the sole queue-filler.
         let initial_seg = coord
             .find_at_offset(coord.position())
             .map_or(0, |(idx, _, _)| idx);
@@ -105,7 +103,7 @@ impl HlsPeer {
                 asset_store: Arc::clone(&coord.asset_store),
                 prefetch_budget,
             };
-            active.on_reader_advance(&plan_ctx, initial_seg);
+            active.rebuild(&plan_ctx, initial_seg);
         }
         self.reader_segment
             .store(initial_seg as usize, Ordering::Release);
@@ -327,10 +325,10 @@ impl HlsTrackState {
     }
 
     /// Resolve the reader's current segment from `coord.position()` and,
-    /// on a segment-boundary crossing, commit any pending ABR decision
-    /// or nudge the active variant's prefetch tail forward. The initial
-    /// arming for segment 0 happens in [`HlsPeer::activate`], so this
-    /// path can treat the stored value as authoritative.
+    /// on a segment-boundary crossing, commit any pending ABR decision.
+    /// The persistent variant queue (filled once by `rebuild`) advances
+    /// the prefetch tail automatically as `dispatch` pops, so a boundary
+    /// crossing alone does not need to refill the queue.
     fn apply_boundary_crossing(&mut self, coord: &HlsCoord, ctx: &PlanCtx) -> u32 {
         let pos = coord.position();
         let prev = self.reader_segment.load(Ordering::Acquire);
@@ -340,11 +338,7 @@ impl HlsTrackState {
         let resolved_us = resolved as usize;
         if prev != resolved_us {
             self.reader_segment.store(resolved_us, Ordering::Release);
-            if !coord.commit_variant_switch(ctx, resolved)
-                && let Some(active) = coord.active()
-            {
-                active.on_reader_advance(ctx, resolved);
-            }
+            coord.commit_variant_switch(ctx, resolved);
         }
         resolved
     }
