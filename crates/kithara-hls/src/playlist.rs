@@ -29,6 +29,10 @@ pub struct VariantSizeMap {
     pub segment_sizes: Vec<u64>,
     /// Total size of the variant (init + all segments).
     pub total: u64,
+    /// Standalone init segment size in bytes — the first `init_size` bytes
+    /// of segment 0 in variant-byte space resolve to the init resource.
+    /// Zero for raw TS/AAC variants without `#EXT-X-MAP`.
+    pub init_size: u64,
 }
 
 /// Per-variant parsed data.
@@ -194,54 +198,28 @@ impl PlaylistState {
     }
 }
 
-/// Read-only access to parsed playlist data.
+/// Crate-internal namespace bundle for cross-module read access to
+/// parsed playlist data. Not used polymorphically — the trait exists
+/// solely to group the visibility of N methods under a single
+/// `pub(crate)` marker rather than annotating each one individually.
 pub(crate) trait PlaylistAccess: Send + Sync {
-    /// Resolve a target time to a deterministic segment.
-    ///
-    /// Returns segment index and time boundaries of the selected segment.
     fn find_seek_point_for_time(
         &self,
         variant: VariantIndex,
         target: Duration,
     ) -> Option<(SegmentIndex, Duration, Duration)>;
 
-    /// Find which segment contains the given byte offset (binary search on offsets).
-    fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<SegmentIndex>;
-
-    /// Whether the variant has a size map.
     fn has_size_map(&self, variant: VariantIndex) -> bool;
-
-    /// Absolute URL of the init segment for a variant.
     fn init_url(&self, variant: VariantIndex) -> Option<Url>;
-
-    /// Byte offset of a specific segment within the variant's virtual stream.
+    fn init_size(&self, variant: VariantIndex) -> u64;
     fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64>;
-
-    /// Cumulative `[start, end)` decode-time range for a specific
-    /// segment within a variant.
-    ///
-    /// `start` is the sum of preceding segments' `EXTINF`,
-    /// `end = start + this segment's EXTINF`.
     fn segment_decode_range(
         &self,
         variant: VariantIndex,
         index: SegmentIndex,
     ) -> Option<(Duration, Duration)>;
-
-    /// Size of a specific segment in bytes (from `VariantSizeMap`).
-    fn segment_size(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64>;
-
-    /// Absolute URL of a specific segment.
     fn segment_url(&self, variant: VariantIndex, index: SegmentIndex) -> Option<Url>;
-
-    /// Total size of a variant in bytes (init + all segments).
     fn total_variant_size(&self, variant: VariantIndex) -> Option<u64>;
-
-    /// Audio codec for a variant.
-    fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec>;
-
-    /// Container format for a variant.
-    fn variant_container(&self, variant: VariantIndex) -> Option<ContainerFormat>;
 }
 
 impl PlaylistAccess for PlaylistState {
@@ -279,20 +257,6 @@ impl PlaylistAccess for PlaylistState {
         result
     }
 
-    fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<SegmentIndex> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
-        let result = state.size_map.as_ref().and_then(|size_map| {
-            if size_map.offsets.is_empty() || offset >= size_map.total {
-                return None;
-            }
-            let pos = size_map.offsets.partition_point(|&o| o <= offset);
-            if pos == 0 { None } else { Some(pos - 1) }
-        });
-        drop(state);
-        result
-    }
-
     fn has_size_map(&self, variant: VariantIndex) -> bool {
         let Some(lock) = self.variants.get(variant) else {
             return false;
@@ -305,6 +269,14 @@ impl PlaylistAccess for PlaylistState {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.init_url.clone()
+    }
+
+    fn init_size(&self, variant: VariantIndex) -> u64 {
+        let Some(lock) = self.variants.get(variant) else {
+            return 0;
+        };
+        let state = lock.lock_sync_read();
+        state.size_map.as_ref().map_or(0, |sm| sm.init_size)
     }
 
     fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64> {
@@ -337,17 +309,6 @@ impl PlaylistAccess for PlaylistState {
         result
     }
 
-    fn segment_size(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
-        let result = state
-            .size_map
-            .as_ref()
-            .and_then(|size_map| size_map.segment_sizes.get(index).copied());
-        drop(state);
-        result
-    }
-
     fn segment_url(&self, variant: VariantIndex, index: SegmentIndex) -> Option<Url> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
@@ -359,13 +320,33 @@ impl PlaylistAccess for PlaylistState {
         let state = lock.lock_sync_read();
         state.size_map.as_ref().map(|sm| sm.total)
     }
+}
 
+#[cfg(test)]
+impl PlaylistState {
+    /// Find which segment contains the given byte offset (binary search on offsets).
+    fn find_segment_at_offset(&self, variant: VariantIndex, offset: u64) -> Option<SegmentIndex> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.lock_sync_read();
+        let result = state.size_map.as_ref().and_then(|size_map| {
+            if size_map.offsets.is_empty() || offset >= size_map.total {
+                return None;
+            }
+            let pos = size_map.offsets.partition_point(|&o| o <= offset);
+            if pos == 0 { None } else { Some(pos - 1) }
+        });
+        drop(state);
+        result
+    }
+
+    /// Audio codec for a variant.
     fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
         state.codec
     }
 
+    /// Container format for a variant.
     fn variant_container(&self, variant: VariantIndex) -> Option<ContainerFormat> {
         let lock = self.variants.get(variant)?;
         let state = lock.lock_sync_read();
@@ -435,6 +416,7 @@ mod tests {
             segment_sizes,
             offsets,
             total: cumulative,
+            init_size,
         }
     }
 

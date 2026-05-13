@@ -1,515 +1,317 @@
+#![forbid(unsafe_code)]
+
 use std::{
+    io::ErrorKind,
+    num::NonZeroUsize,
     ops::Range,
-    sync::{Arc, atomic::AtomicUsize},
+    sync::{Arc, atomic::Ordering},
 };
 
-use kithara_assets::AssetStore;
-use kithara_drm::DecryptContext;
-use kithara_events::EventBus;
-use kithara_platform::Mutex;
-use kithara_test_utils::kithara;
-use tracing::trace;
+use kithara_assets::{AssetsError, ResourceKey};
+use kithara_platform::time::{Duration, Instant};
+use kithara_storage::{ResourceExt, WaitOutcome};
+use kithara_stream::{
+    PendingReason, ReadOutcome, SegmentLayout, Source, SourcePhase, SourceSeekAnchor, StreamError,
+    StreamResult, Timeline,
+};
 
 use crate::{
+    HlsError,
     coord::HlsCoord,
-    ids::{SegmentIndex, VariantIndex},
     peer::HlsPeer,
     playlist::{PlaylistAccess, PlaylistState},
-    source::HlsSegmentView,
-    stream_index::StreamIndex,
 };
 
 /// HLS source: provides random-access reading from loaded segments.
 ///
-/// Reads bytes directly from the [`AssetStore`] backend — segment
-/// downloading is the Downloader's job via `poll_next`, not the
-/// source's. Holds an optional [`PeerHandle`](kithara_stream::dl::PeerHandle)
-/// that cancels in-flight fetches when the source is dropped.
+/// Reads bytes directly from the [`AssetStore`](kithara_assets::AssetStore)
+/// backend — segment downloading is the Downloader's job via `poll_next`,
+/// not the source's.
 pub struct HlsSource {
-    pub(crate) coord: Arc<HlsCoord>,
-    pub(crate) playlist_state: Arc<PlaylistState>,
-    /// Shared with `HlsPeer::reader_segment` — `read_at` updates this
-    /// cursor after each successful read so `HlsPeer::progress` can report
-    /// `reader_playback_time` to the ABR controller.
-    pub(crate) reader_segment: Arc<AtomicUsize>,
-    /// Segment-aware metadata view passed into segment-by-segment
-    /// decoders via `Source::as_segmented`. Aggregates `Arc` clones of
-    /// `coord`, `playlist_state`, and `segments` so the decoder can query
-    /// segment byte ranges and decode-time mappings without holding a
-    /// reference back to `HlsSource`.
-    pub(crate) segmented_view: Arc<HlsSegmentView>,
-    pub(crate) segments: Arc<Mutex<StreamIndex>>,
-    pub(crate) backend: AssetStore<DecryptContext>,
-    pub(crate) bus: EventBus,
-    /// HLS peer. Cloned from the Downloader's registry; `Drop` tears down
-    /// its [`HlsState`] so the stashed [`SegmentLoader`]'s internal
-    /// `PeerHandle` clones release `PeerInner.cancel`, letting the
-    /// registry remove its own `Arc<HlsPeer>`. Without this the whole
-    /// peer graph leaks until the Downloader itself is dropped.
-    pub(crate) _hls_peer: Option<Arc<HlsPeer>>,
-    /// Peer handle. Dropped with this source, cancelling the peer.
-    pub(crate) _peer_handle: Option<kithara_stream::dl::PeerHandle>,
-    /// Variant fence: auto-detected on first read, blocks cross-variant reads.
-    pub(crate) variant_fence: Option<VariantIndex>,
+    coord: Arc<HlsCoord>,
+    playlist_state: Arc<PlaylistState>,
+    hls_peer: Option<Arc<HlsPeer>>,
+    peer_handle: Option<kithara_stream::dl::PeerHandle>,
+}
+
+impl HlsSource {
+    pub(crate) fn new(coord: Arc<HlsCoord>, playlist_state: Arc<PlaylistState>) -> Self {
+        Self {
+            coord,
+            playlist_state,
+            hls_peer: None,
+            peer_handle: None,
+        }
+    }
+
+    pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
+        self.hls_peer = Some(peer);
+    }
+
+    pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
+        self.peer_handle = Some(handle);
+    }
+
+    /// Locate the segment covering `byte_offset` and resolve the init /
+    /// media resource split. Segment 0 of an fMP4 variant is the only
+    /// place where `init_len > 0`; for raw TS/AAC variants and for
+    /// segments >= 1 the init portion is empty and reads go straight to
+    /// the media resource.
+    fn segment_resource_key(&self, byte_offset: u64) -> Option<SegmentRead> {
+        let (seg_idx, seg_byte_offset, seg_size) = self.coord.find_at_offset(byte_offset)?;
+        let active = self.coord.active()?;
+        let media_key = active.segment_resource(seg_idx)?;
+        let init = (seg_idx == 0)
+            .then(|| active.init_resource().map(|key| (key, active.init_size())))
+            .flatten();
+        Some(SegmentRead {
+            media_key,
+            init,
+            segment_byte_offset: seg_byte_offset,
+            segment_size: seg_size,
+        })
+    }
+
+    fn range_ready(&self, range: &Range<u64>) -> bool {
+        let Some(seg) = self.segment_resource_key(range.start) else {
+            return false;
+        };
+        let seg_end = seg.segment_byte_offset + seg.segment_size;
+        let read_end = range.end.min(seg_end);
+        let local_start = range.start.saturating_sub(seg.segment_byte_offset);
+        let local_end = read_end.saturating_sub(seg.segment_byte_offset);
+        if local_start >= local_end {
+            return true;
+        }
+        seg.split(local_start, local_end).iter().all(|chunk| {
+            self.coord
+                .asset_store
+                .contains_range(chunk.key, chunk.range.clone())
+        })
+    }
 }
 
 impl Drop for HlsSource {
     fn drop(&mut self) {
-        if let Some(ref peer) = self._hls_peer {
+        if let Some(ref peer) = self.hls_peer {
             peer.teardown();
         }
     }
 }
 
-impl HlsSource {
-    #[doc(hidden)]
-    #[must_use]
-    pub fn backend(&self) -> &AssetStore<DecryptContext> {
-        &self.backend
-    }
+struct SegmentRead {
+    media_key: ResourceKey,
+    /// Init resource paired with its prefix size in segment-local bytes;
+    /// `None` when the segment has no init prefix.
+    init: Option<(ResourceKey, u64)>,
+    segment_byte_offset: u64,
+    segment_size: u64,
+}
 
-    pub(super) fn byte_offset_for_segment(
-        &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-    ) -> Option<u64> {
-        let segments = self.segments.lock_sync();
-        if let Some(range) = segments.item_range((variant, segment_index)) {
-            return Some(range.start);
+/// One slice of a segment-local range mapped onto a single resource.
+/// `range` is local to the resource (offset 0 = start of init or media).
+struct ResourceSlice<'a> {
+    key: &'a ResourceKey,
+    range: Range<u64>,
+}
+
+impl SegmentRead {
+    /// Split a segment-local range `[local_start, local_end)` into the
+    /// init prefix and media body slices. Returns one or two entries —
+    /// `local_end <= init_len` yields init only, `local_start >= init_len`
+    /// yields media only, the rest yields both.
+    fn split(&self, local_start: u64, local_end: u64) -> Vec<ResourceSlice<'_>> {
+        let mut out = Vec::with_capacity(2);
+        if let Some((ref init_key, init_len)) = self.init {
+            let init_cut = local_end.min(init_len);
+            if local_start < init_cut {
+                out.push(ResourceSlice {
+                    key: init_key,
+                    range: local_start..init_cut,
+                });
+            }
+            if local_end > init_len {
+                let media_start = local_start.saturating_sub(init_len);
+                let media_end = local_end - init_len;
+                out.push(ResourceSlice {
+                    key: &self.media_key,
+                    range: media_start..media_end,
+                });
+            }
+        } else {
+            out.push(ResourceSlice {
+                key: &self.media_key,
+                range: local_start..local_end,
+            });
         }
-        let layout_offset =
-            segments.layout_offset_for_segment(segment_index, self.playlist_state.as_ref());
-        drop(segments);
-        self.playlist_state
-            .segment_byte_offset(variant, segment_index)
-            .or(layout_offset)
+        out
+    }
+}
+
+impl Source for HlsSource {
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.peer_handle.as_ref().map(|h| h.abr().clone())
     }
 
-    /// Whether a transition from `from_variant` to `to_variant` can keep
-    /// the underlying stream state intact: true only if both variants
-    /// share the same audio codec (the playlist's `variant_codec` fingerprint).
-    /// A false answer means the reader must reset on the variant boundary.
-    #[must_use]
-    pub fn can_cross_variant_without_reset(
-        &self,
-        from_variant: VariantIndex,
-        to_variant: VariantIndex,
-    ) -> bool {
-        self.playlist_state.variant_codec(from_variant)
-            == self.playlist_state.variant_codec(to_variant)
+    fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
+        Some(self.coord.segment_view() as Arc<dyn SegmentLayout>)
     }
 
-    #[doc(hidden)]
-    #[must_use]
-    pub fn coord(&self) -> &Arc<HlsCoord> {
-        &self.coord
-    }
-
-    /// Returns the variant of the current committed byte layout.
-    ///
-    /// Priority: committed segment at reader position → last committed segment
-    /// → `variant_fence` → `None` (forces Reset).
-    ///
-    /// Does NOT fall back to ABR hint — ABR hint is the *target*, not the
-    /// *current* layout. Using it would misclassify cross-variant seeks as
-    /// Preserve when `variant_fence` was cleared before `seek_time_anchor()`.
-    pub(super) fn current_layout_variant(&self) -> Option<VariantIndex> {
-        let pos = self.coord.position();
-        let segments = self.segments.lock_sync();
-        if let Some(seg_ref) = segments.find_at_offset(pos).filter(|s| s.data.is_some()) {
-            return Some(seg_ref.variant);
-        }
-        if segments.max_end_offset() > 0
-            && let Some(seg_ref) = segments
-                .find_at_offset(segments.max_end_offset().saturating_sub(1))
-                .filter(|s| s.data.is_some())
-        {
-            return Some(seg_ref.variant);
-        }
-        drop(segments);
-        self.variant_fence
-    }
-
-    /// Returns `(variant, segment_index)` for the segment at the current reader position,
-    /// falling back to the last committed segment if no segment covers the exact position.
-    pub(super) fn current_loaded_segment_key(&self) -> Option<(VariantIndex, SegmentIndex)> {
-        let reader_offset = self.coord.position();
-        let segments = self.segments.lock_sync();
-        let result = segments
-            .find_at_offset(reader_offset)
-            .filter(|s| s.data.is_some())
-            .or_else(|| {
-                let max = segments.max_end_offset();
-                (max > 0)
-                    .then(|| {
-                        segments
-                            .find_at_offset(max.saturating_sub(1))
-                            .filter(|s| s.data.is_some())
-                    })
-                    .flatten()
-            })
-            .map(|seg_ref| (seg_ref.variant, seg_ref.segment_index));
-        drop(segments);
-        result
-    }
-
-    pub(super) fn current_segment_index(&self) -> Option<SegmentIndex> {
-        self.current_loaded_segment_key()
-            .map(|(_, seg_idx)| seg_idx)
-    }
-
-    pub(super) fn effective_total_bytes(&self) -> Option<u64> {
-        let total = self
-            .segments
-            .lock_sync()
-            .effective_total(self.playlist_state.as_ref());
+    fn len(&self) -> Option<u64> {
+        let total = self.coord.total_bytes();
         (total > 0).then_some(total)
     }
 
-    fn find_segment_for_offset(
-        &self,
-        range_start: u64,
-    ) -> Option<(VariantIndex, SegmentIndex, &'static str)> {
-        if let Some((variant, segment_index)) = self.layout_segment_for_offset(range_start) {
-            return Some((variant, segment_index, "layout_segment_for_offset"));
-        }
-        let variant = self.resolve_current_variant();
-        if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
-            return Some((variant, segment_index, "committed_segment_for_offset"));
-        }
-        let segment_index = self
-            .playlist_state
-            .find_segment_at_offset(variant, range_start)?;
-        Some((variant, segment_index, "playlist.find_segment_at_offset"))
+    fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
+        let notify = Arc::clone(&self.coord.reader_advanced);
+        Some(Box::new(move || notify.notify_one()))
     }
 
-    #[kithara::probe(probe_return)]
-    pub(super) fn init_segment_range_for_variant(
-        &self,
-        variant: VariantIndex,
-    ) -> InitRangeResolution {
-        let segments = self.segments.lock_sync();
-        let Some(vs) = segments.variant_segments(variant) else {
-            return InitRangeResolution::none(variant, 0, None, InitRangeOutcome::NoneNoVariant);
-        };
-        let committed_count = vs.iter().count() as u64;
-        let Some((seg_idx, seg_data)) = vs.iter().find(|(_, data)| data.init_len > 0) else {
-            return InitRangeResolution::none(
-                variant,
-                committed_count,
-                None,
-                InitRangeOutcome::NoneNoCommittedInit,
-            );
-        };
+    fn notify_waiting(&self) {
+        self.coord.reader_advanced.notify_one();
+    }
 
-        if seg_idx == 0 {
-            let Some(seg_range) = segments.item_range((variant, 0)) else {
-                return InitRangeResolution::none(
-                    variant,
-                    committed_count,
-                    Some(0),
-                    InitRangeOutcome::NoneSeg0NoRange,
-                );
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        if self.coord.cancel.is_cancelled() || self.coord.stopped.load(Ordering::Acquire) {
+            return SourcePhase::Cancelled;
+        }
+        if self.range_ready(&range) {
+            return SourcePhase::Ready;
+        }
+        if self.coord.timeline.is_flushing() {
+            return SourcePhase::Seeking;
+        }
+        let total = self.coord.total_bytes();
+        if total > 0 && range.start >= total {
+            return SourcePhase::Eof;
+        }
+        SourcePhase::Waiting
+    }
+
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+        let total = self.coord.total_bytes();
+        if total > 0 && offset >= total {
+            return Ok(ReadOutcome::Eof);
+        }
+        let Some(seg) = self.segment_resource_key(offset) else {
+            return Ok(ReadOutcome::Pending(PendingReason::Retry));
+        };
+        let local_offset = offset.saturating_sub(seg.segment_byte_offset);
+        let buf_len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
+        let local_end = (local_offset + buf_len).min(seg.segment_size);
+        let mut written: usize = 0;
+        for chunk in seg.split(local_offset, local_end) {
+            let take = usize::try_from(chunk.range.end - chunk.range.start).unwrap_or(usize::MAX);
+            let dst = &mut buf[written..written + take];
+            let resource = match self.coord.asset_store.open_resource(chunk.key) {
+                Ok(res) => res,
+                Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => break,
+                Err(e) => return Err(StreamError::Source(HlsError::from(e).into())),
             };
-            if seg_data.init_url.is_none() {
-                drop(segments);
-                if let Some(metadata_range) = self.metadata_range_for_segment(variant, 0) {
-                    return InitRangeResolution::ok(
-                        variant,
-                        committed_count,
-                        Some(0),
-                        InitRangeOutcome::OkMetadataFallback,
-                        metadata_range,
-                    );
-                }
-                return InitRangeResolution::ok(
-                    variant,
-                    committed_count,
-                    Some(0),
-                    InitRangeOutcome::OkSeg0,
-                    seg_range.start..seg_range.end,
-                );
+            let n = resource
+                .read_at(chunk.range.start, dst)
+                .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
+            written += n;
+            if n < take {
+                break;
             }
-            return InitRangeResolution::ok(
-                variant,
-                committed_count,
-                Some(0),
-                InitRangeOutcome::OkSeg0,
-                seg_range.start..seg_range.end,
-            );
         }
-
-        if let Some(seg0_range) = segments.item_range((variant, 0)) {
-            return InitRangeResolution::ok(
-                variant,
-                committed_count,
-                Some(seg_idx as u64),
-                InitRangeOutcome::OkSeg0ViaRange,
-                seg0_range,
-            );
-        }
-        drop(segments);
-        self.metadata_range_for_segment(variant, 0).map_or_else(
-            || {
-                InitRangeResolution::none(
-                    variant,
-                    committed_count,
-                    Some(seg_idx as u64),
-                    InitRangeOutcome::NoneFallback,
-                )
-            },
-            |metadata_range| {
-                InitRangeResolution::ok(
-                    variant,
-                    committed_count,
-                    Some(seg_idx as u64),
-                    InitRangeOutcome::OkMetadataFallback,
-                    metadata_range,
-                )
-            },
-        )
+        Ok(NonZeroUsize::new(written).map_or(
+            ReadOutcome::Pending(PendingReason::Retry),
+            ReadOutcome::Bytes,
+        ))
     }
 
-    pub(super) fn is_past_eof(&self, segments: &StreamIndex, range: &Range<u64>) -> bool {
-        let known_total = segments.effective_total(self.playlist_state.as_ref());
-        let loaded_total = segments.max_end_offset();
-        let effective_total = loaded_total.max(known_total);
-        if effective_total == 0 || range.start < effective_total {
-            return false;
-        }
-
-        true
-    }
-
-    pub(super) fn layout_segment_for_offset(
-        &self,
-        offset: u64,
-    ) -> Option<(VariantIndex, SegmentIndex)> {
-        self.segments
-            .lock_sync()
-            .segment_for_offset(offset, self.playlist_state.as_ref())
-    }
-
-    pub(super) fn loaded_segment_ready(
-        &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-    ) -> bool {
-        let segments = self.segments.lock_sync();
-        if !segments.is_visible(variant, segment_index) {
-            return false;
-        }
-        segments
-            .range_for(variant, segment_index)
-            .is_some_and(|range| self.range_ready_from_segments(&segments, &range))
-    }
-
-    pub(super) fn metadata_range_for_segment(
-        &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-    ) -> Option<Range<u64>> {
-        let start = self
+    fn seek_time_anchor(&mut self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
+        let variant = self.coord.variant_index();
+        let Some((segment_index, segment_start, segment_end)) = self
             .playlist_state
-            .segment_byte_offset(variant, segment_index)?;
-        let end = self
-            .playlist_state
-            .segment_byte_offset(variant, segment_index + 1)
-            .or_else(|| self.playlist_state.total_variant_size(variant))?;
-        (end > start).then_some(start..end)
-    }
-
-    pub(super) fn push_segment_request(
-        &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-        seek_epoch: u64,
-    ) -> bool {
-        self.coord
-            .enqueue_segment_request(crate::coord::SegmentRequest {
-                segment_index,
-                variant,
-                seek_epoch,
-            })
-    }
-
-    /// Hand a resolved `(variant, segment_index)` pair off to the
-    /// coord's demand slot for the given seek epoch. The probe records
-    /// the (`seek_epoch`, `segment_index`, `offset`) tuple at the
-    /// precise point the offset-driven path commits a request to the
-    /// queue, so `probe_capture` consumers can match this against the
-    /// scheduler's `fetch_cmd_emitted` for the same epoch+segment.
-    #[kithara::probe(seek_epoch, segment_index, offset)]
-    fn queue_resolved_segment_request(
-        &self,
-        seek_epoch: u64,
-        segment_index: SegmentIndex,
-        variant: VariantIndex,
-        offset: u64,
-    ) -> bool {
-        let _ = offset;
-        self.push_segment_request(variant, segment_index, seek_epoch)
-    }
-
-    /// Try to resolve and enqueue a segment request for `range_start`.
-    /// Returns `true` if a segment could be resolved (even if the request
-    /// was already pending). Returns `false` only when no resolution path
-    /// can map the offset to a segment — a true metadata miss.
-    pub(super) fn queue_segment_request_for_offset(
-        &self,
-        range_start: u64,
-        seek_epoch: u64,
-    ) -> bool {
-        let Some((variant, segment_index, via)) = self.find_segment_for_offset(range_start) else {
-            trace!(
-                target: "hls_seek_diag",
-                range_start,
-                seek_epoch,
-                "queue_segment_request_for_offset: no resolution (size map not ready)"
-            );
-            return false;
+            .find_seek_point_for_time(variant, position)
+        else {
+            return Err(StreamError::Source(
+                HlsError::SegmentNotFound(format!(
+                    "seek point not found: variant={variant} target_ms={}",
+                    position.as_millis()
+                ))
+                .into(),
+            ));
         };
-        trace!(
-            target: "hls_seek_diag",
-            range_start,
-            seek_epoch,
-            variant,
-            segment_index,
-            via,
-            "queue_segment_request_for_offset: enqueue"
-        );
-        self.queue_resolved_segment_request(seek_epoch, segment_index, variant, range_start)
+        let byte_offset = self
+            .coord
+            .active()
+            .and_then(|v| v.segment_byte_offset(segment_index.try_into().unwrap_or(u32::MAX)))
+            .or_else(|| {
+                self.playlist_state
+                    .segment_byte_offset(variant, segment_index)
+            })
+            .ok_or_else(|| {
+                StreamError::Source(
+                    HlsError::SegmentNotFound(format!(
+                        "seek offset not found: variant={variant} segment={segment_index}"
+                    ))
+                    .into(),
+                )
+            })?;
+        let seg_idx_u32 = u32::try_from(segment_index).unwrap_or(u32::MAX);
+        let anchor = SourceSeekAnchor::new(byte_offset, segment_start)
+            .with_segment_end(segment_end)
+            .with_segment_index(seg_idx_u32)
+            .with_variant_index(variant);
+        self.coord.set_position(byte_offset);
+        self.coord.reader_advanced.notify_one();
+        Ok(Some(anchor))
     }
 
-    /// Current variant for source operations (read, seek, demand).
-    ///
-    /// Always uses `layout_variant` — ABR only affects playback via
-    /// `media_info()` → `format_change` detection → layout switch.
-    pub(super) fn resolve_current_variant(&self) -> VariantIndex {
-        self.segments.lock_sync().layout_variant()
+    fn set_seek_epoch(&mut self, _seek_epoch: u64) {
+        self.coord.reader_advanced.notify_one();
     }
 
-    pub(super) fn resolve_segment_for_offset(
-        &self,
-        range_start: u64,
-        variant: VariantIndex,
-    ) -> Option<SegmentIndex> {
-        if let Some(segment_index) = self.committed_segment_for_offset(range_start, variant) {
-            return Some(segment_index);
-        }
-        self.playlist_state
-            .find_segment_at_offset(variant, range_start)
+    fn timeline(&self) -> Timeline {
+        self.coord.timeline()
     }
 
-    /// Store the `Arc<HlsPeer>` so `Drop` can tear down its state and
-    /// break the `Registry → HlsPeer → HlsState::loader → PeerHandle`
-    /// reference cycle.
-    pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
-        self._hls_peer = Some(peer);
+    fn position(&self) -> u64 {
+        self.coord.position()
     }
 
-    /// Set the peer handle (called after the peer is activated).
-    pub(crate) fn set_peer_handle(&mut self, handle: kithara_stream::dl::PeerHandle) {
-        self._peer_handle = Some(handle);
+    fn advance(&self, n: u64) {
+        self.coord.advance(n);
     }
 
-    /// Override the variant fence — escape hatch for test scenarios that
-    /// bypass the auto-detection that normally sets the fence on first read.
-    #[cfg(any(test, feature = "test-utils"))]
-    #[doc(hidden)]
-    pub fn set_variant_fence(&mut self, fence: Option<VariantIndex>) {
-        self.variant_fence = fence;
-    }
-}
-
-/// Outcome of [`HlsSource::init_segment_range_for_variant`].
-///
-/// Encodes which path resolved the byte range (or why it could not).
-/// On the synthetic contract fixtures every variant's seg-0 is committed
-/// upfront with an explicit `init_url`, so anything other than
-/// [`InitRangeOutcome::OkSeg0`] in production logs is a code smell:
-/// either the cache lost seg-0, the resolver raced against an ABR
-/// mid-stream switch, or the byte map for seg-0 never committed.
-///
-/// Wire encoding (`u64`) is stable across versions and consumed by
-/// `probe_capture` filters — do NOT renumber.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum InitRangeOutcome {
-    /// Segment 0 was committed and its byte map produced a valid range.
-    OkSeg0 = 0,
-    /// Segment 0 was committed without an explicit `init_url`; the
-    /// range came from the playlist's metadata-derived byte offsets.
-    OkMetadataFallback = 1,
-    /// The init-bearing segment was not segment 0 (mid-stream ABR
-    /// commit race); the returned range covers seg-0 instead.
-    OkSeg0ViaRange = 2,
-    /// The variant has no `VariantSegments` entry yet (variant index
-    /// is out of range or the layout has not been populated).
-    NoneNoVariant = 3,
-    /// No committed segment carries init data — the resolver cannot
-    /// produce a range until at least one segment with `init_len > 0`
-    /// commits.
-    NoneNoCommittedInit = 4,
-    /// Seg-0 was found but its `item_range` lookup failed (corrupt
-    /// byte map, transient race against `commit_segment`).
-    NoneSeg0NoRange = 5,
-    /// All fallbacks (committed seg-0 range, then metadata range)
-    /// returned `None`. Resolver gave up.
-    NoneFallback = 6,
-}
-
-impl kithara_test_utils::probes::IntoProbeArg for InitRangeOutcome {
-    fn into_probe_arg(self) -> u64 {
-        self as u64
-    }
-}
-
-/// Result of [`HlsSource::init_segment_range_for_variant`]: the resolved
-/// byte range plus the trace fields that explain *how* it was resolved.
-///
-/// Carries the wire payload of the `record_init_range_for_variant_outcome`
-/// tracing probe; the `probe_return` mode picks the inherent
-/// `record_probe` (from `derive(kithara::Probe)`) off the return value
-/// automatically.
-#[derive(Clone, kithara::Probe)]
-pub(crate) struct InitRangeResolution {
-    pub(crate) outcome: InitRangeOutcome,
-    #[probe(skip)]
-    pub(crate) range: Option<Range<u64>>,
-    pub(crate) seg_idx_with_init: Option<u64>,
-    pub(crate) committed_count: u64,
-    pub(crate) variant: u64,
-}
-
-impl InitRangeResolution {
-    pub(crate) fn none(
-        variant: VariantIndex,
-        committed_count: u64,
-        seg_idx_with_init: Option<u64>,
-        outcome: InitRangeOutcome,
-    ) -> Self {
-        Self {
-            outcome,
-            committed_count,
-            seg_idx_with_init,
-            variant: variant as u64,
-            range: None,
-        }
+    fn set_position(&self, pos: u64) {
+        self.coord.set_position(pos);
     }
 
-    pub(crate) fn ok(
-        variant: VariantIndex,
-        committed_count: u64,
-        seg_idx_with_init: Option<u64>,
-        outcome: InitRangeOutcome,
+    #[kithara_hang_detector::hang_watchdog]
+    fn wait_range(
+        &mut self,
         range: Range<u64>,
-    ) -> Self {
-        Self {
-            outcome,
-            committed_count,
-            seg_idx_with_init,
-            variant: variant as u64,
-            range: Some(range),
+        timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        let started_at = Instant::now();
+        loop {
+            if self.coord.cancel.is_cancelled() || self.coord.stopped.load(Ordering::Acquire) {
+                return Err(StreamError::Source(HlsError::Cancelled.into()));
+            }
+            if self.range_ready(&range) {
+                hang_reset!();
+                return Ok(WaitOutcome::Ready);
+            }
+            if self.coord.timeline.is_flushing() {
+                return Ok(WaitOutcome::Interrupted);
+            }
+            let total = self.coord.total_bytes();
+            if total > 0 && range.start >= total {
+                return Ok(WaitOutcome::Eof);
+            }
+            if let Some(budget) = timeout
+                && started_at.elapsed() > budget
+            {
+                return Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()));
+            }
+            self.coord.reader_advanced.notify_one();
+            hang_tick!();
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
 }

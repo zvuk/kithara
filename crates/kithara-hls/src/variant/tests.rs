@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::AtomicU8};
+use std::sync::Arc;
 
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
@@ -37,7 +37,7 @@ fn make_init(size: u64) -> InitEntry {
         url,
         resource_id,
         size,
-        state: AtomicU8::new(SegmentState::Missing as u8),
+        state: SegmentState::Missing.into(),
     }
 }
 
@@ -51,7 +51,7 @@ fn make_seg(idx: u32, byte_offset: u64, size: u64) -> SegmentEntry {
         resource_id,
         byte_offset,
         size,
-        state: AtomicU8::new(SegmentState::Missing as u8),
+        state: SegmentState::Missing.into(),
         decrypt_ctx: None,
         decode_time: Duration::from_millis(u64::from(idx) * 2000),
         duration: Duration::from_secs(2),
@@ -72,14 +72,14 @@ fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
 #[kithara::test]
 fn position_starts_at_zero() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(0, make_init(200), vec![make_seg(0, 200, 400)], &ctx);
+    let v = HlsVariant::from_parts(0, make_init(200), vec![make_seg(0, 200, 400)], &ctx);
     assert_eq!(v.get_position(), 0);
 }
 
 #[kithara::test]
 fn advance_increments_position() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(0, make_init(200), vec![make_seg(0, 200, 400)], &ctx);
+    let v = HlsVariant::from_parts(0, make_init(200), vec![make_seg(0, 200, 400)], &ctx);
     v.advance(64);
     assert_eq!(v.get_position(), 64);
     v.advance(36);
@@ -89,7 +89,7 @@ fn advance_increments_position() {
 #[kithara::test]
 fn set_position_overrides_cursor() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(0, make_init(200), vec![make_seg(0, 200, 400)], &ctx);
+    let v = HlsVariant::from_parts(0, make_init(200), vec![make_seg(0, 200, 400)], &ctx);
     v.advance(50);
     v.set_position(1234);
     assert_eq!(v.get_position(), 1234);
@@ -98,7 +98,7 @@ fn set_position_overrides_cursor() {
 #[kithara::test]
 fn find_at_offset_below_init_returns_none() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(200),
         vec![make_seg(0, 200, 400), make_seg(1, 600, 400)],
@@ -111,7 +111,7 @@ fn find_at_offset_below_init_returns_none() {
 #[kithara::test]
 fn find_at_offset_at_init_size_returns_segment_zero() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(200),
         vec![make_seg(0, 200, 400), make_seg(1, 600, 400)],
@@ -125,7 +125,7 @@ fn find_at_offset_at_init_size_returns_segment_zero() {
 #[kithara::test]
 fn find_at_offset_mid_segment_binary_search() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(0),
         vec![
@@ -147,7 +147,7 @@ fn find_at_offset_mid_segment_binary_search() {
 #[kithara::test]
 fn total_bytes_includes_segments() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(200),
         vec![
@@ -164,21 +164,21 @@ fn total_bytes_includes_segments() {
 #[kithara::test]
 fn init_byte_range_present_when_size_positive() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(0, make_init(200), vec![], &ctx);
+    let v = HlsVariant::from_parts(0, make_init(200), vec![], &ctx);
     assert_eq!(v.init_byte_range(), Some(0..200));
 }
 
 #[kithara::test]
 fn init_byte_range_absent_when_size_zero() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(0, make_init(0), vec![], &ctx);
+    let v = HlsVariant::from_parts(0, make_init(0), vec![], &ctx);
     assert!(v.init_byte_range().is_none());
 }
 
 #[kithara::test]
 fn descriptor_at_time_clamps_to_last() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(0),
         vec![
@@ -201,7 +201,7 @@ fn descriptor_at_time_clamps_to_last() {
 #[kithara::test]
 fn descriptor_after_byte_finds_next_segment() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(0),
         vec![
@@ -220,7 +220,7 @@ fn descriptor_after_byte_finds_next_segment() {
 #[kithara::test]
 fn rebuild_cancels_old_token_and_refills_queue() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(0),
         vec![
@@ -248,7 +248,7 @@ fn rebuild_cancels_old_token_and_refills_queue() {
 #[kithara::test]
 fn dispatch_emits_init_first_then_segments_under_budget() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(200),
         vec![
@@ -280,7 +280,7 @@ fn dispatch_respects_budget() {
     let ctx = test_ctx(5);
     let init = make_init(0);
     init.set_state(SegmentState::Loaded);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         init,
         (0..10)
@@ -299,7 +299,7 @@ fn dispatch_skips_non_missing_segments() {
     let ctx = test_ctx(5);
     let init = make_init(0);
     init.set_state(SegmentState::Loaded);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         init,
         vec![
@@ -322,7 +322,7 @@ fn dispatch_skips_non_missing_segments() {
 #[kithara::test]
 fn on_evict_returns_minus_one_for_init() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(200),
         vec![
@@ -348,7 +348,7 @@ fn on_evict_returns_minus_one_for_init() {
 #[kithara::test]
 fn on_evict_returns_seg_idx_for_segment() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(0),
         vec![make_seg(0, 0, 100), make_seg(1, 100, 100)],
@@ -364,7 +364,7 @@ fn on_evict_returns_seg_idx_for_segment() {
 #[kithara::test]
 fn on_evict_returns_none_for_foreign_asset() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(0, make_init(0), vec![make_seg(0, 0, 100)], &ctx);
+    let v = HlsVariant::from_parts(0, make_init(0), vec![make_seg(0, 0, 100)], &ctx);
     let foreign: Url = "https://other.example.com/x.m4s".parse().expect("url");
     let foreign_key = ResourceKey::from_url(&foreign);
     let res = v.on_evict(&foreign_key);
@@ -374,7 +374,7 @@ fn on_evict_returns_none_for_foreign_asset() {
 #[kithara::test]
 fn on_reader_advance_extends_prefetch_tail() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         make_init(0),
         (0..10)
@@ -389,7 +389,7 @@ fn on_reader_advance_extends_prefetch_tail() {
 #[kithara::test]
 fn skeleton_types_instantiate() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(0, make_init(200), Vec::new(), &ctx);
+    let v = HlsVariant::from_parts(0, make_init(200), Vec::new(), &ctx);
     assert_eq!(v.num_segments(), 0);
 }
 
@@ -401,7 +401,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let mut seg = make_seg(0, 0, 100);
     let key = *b"0123456789abcdef";
     seg.decrypt_ctx = Some(DecryptContext::new(key, [0u8; 16]));
-    let v = HlsVariant::new(0, init, vec![seg], &ctx);
+    let v = HlsVariant::from_parts(0, init, vec![seg], &ctx);
     push_planned(&v, 0);
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1);
@@ -412,7 +412,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
 #[kithara::test]
 fn positions_of_two_variants_are_independent_after_flip() {
     let ctx = test_ctx(3);
-    let v_old = HlsVariant::new(
+    let v_old = HlsVariant::from_parts(
         0,
         make_init(0),
         (0..20)
@@ -420,7 +420,7 @@ fn positions_of_two_variants_are_independent_after_flip() {
             .collect(),
         &ctx,
     );
-    let v_new = HlsVariant::new(
+    let v_new = HlsVariant::from_parts(
         1,
         make_init(0),
         (0..20)
@@ -445,7 +445,7 @@ fn positions_of_two_variants_are_independent_after_flip() {
 #[kithara::test]
 fn position_advances_are_strictly_monotonic() {
     let ctx = test_ctx(3);
-    let v = HlsVariant::new(0, make_init(0), vec![make_seg(0, 0, 100)], &ctx);
+    let v = HlsVariant::from_parts(0, make_init(0), vec![make_seg(0, 0, 100)], &ctx);
     let mut expected = 0_u64;
     let mut observed = Vec::new();
     for n in [10_u64, 25, 7, 64, 1, 100] {
@@ -464,7 +464,7 @@ fn dispatch_cmd_cancel_shares_cancellation_with_variant_cancel() {
     let ctx = test_ctx(5);
     let init = make_init(0);
     init.set_state(SegmentState::Loaded);
-    let v = HlsVariant::new(
+    let v = HlsVariant::from_parts(
         0,
         init,
         vec![make_seg(0, 0, 100), make_seg(1, 100, 100)],
@@ -502,8 +502,8 @@ fn variant_flip_cancels_v_old_and_replaces_v_new_token_via_rebuild() {
     init_old.set_state(SegmentState::Loaded);
     let init_new = make_init(0);
     init_new.set_state(SegmentState::Loaded);
-    let v_old = HlsVariant::new(0, init_old, segs_old, &ctx);
-    let v_new = HlsVariant::new(1, init_new, segs_new, &ctx);
+    let v_old = HlsVariant::from_parts(0, init_old, segs_old, &ctx);
+    let v_new = HlsVariant::from_parts(1, init_new, segs_new, &ctx);
     let v_old_token = v_old.cancel_handle();
     let v_new_token_before = v_new.cancel_handle();
 
@@ -530,7 +530,7 @@ fn rebuild_skips_loaded_segment_at_front_of_queue() {
         .map(|i| make_seg(i, u64::from(i) * 100, 100))
         .collect();
     segs[10].set_state(SegmentState::Loaded);
-    let v = HlsVariant::new(0, init, segs, &ctx);
+    let v = HlsVariant::from_parts(0, init, segs, &ctx);
 
     v.rebuild(&ctx, 10);
 

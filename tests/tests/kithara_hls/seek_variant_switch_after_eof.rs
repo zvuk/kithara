@@ -58,7 +58,8 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
         }
         info!("All variant 0 data read to EOF");
 
-        pin_abr_variant(&stream.source().coord().abr_state, 1);
+        let abr = stream.abr_handle().expect("HLS source exposes AbrHandle");
+        pin_abr_variant(&abr, 1);
         info!("ABR variant switched 0 → 1");
 
         let seek_pos = 200_000u64;

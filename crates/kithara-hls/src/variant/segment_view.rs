@@ -67,7 +67,7 @@ mod tests {
     use std::{
         sync::{
             Barrier,
-            atomic::{AtomicBool, AtomicU8, Ordering as TestOrdering},
+            atomic::{AtomicBool, Ordering as TestOrdering},
         },
         thread,
     };
@@ -112,7 +112,7 @@ mod tests {
             url,
             resource_id,
             size,
-            state: AtomicU8::new(SegmentState::Missing as u8),
+            state: SegmentState::Missing.into(),
         }
     }
 
@@ -126,7 +126,7 @@ mod tests {
             resource_id,
             byte_offset,
             size,
-            state: AtomicU8::new(SegmentState::Missing as u8),
+            state: SegmentState::Missing.into(),
             decrypt_ctx: None,
             decode_time: Duration::from_millis(u64::from(idx) * 2000),
             duration: Duration::from_secs(2),
@@ -134,7 +134,7 @@ mod tests {
     }
 
     fn variant_low(ctx: &PlanCtx) -> HlsVariant {
-        HlsVariant::new(
+        HlsVariant::from_parts(
             0,
             make_init(100, "lo"),
             vec![
@@ -147,7 +147,7 @@ mod tests {
     }
 
     fn variant_high(ctx: &PlanCtx) -> HlsVariant {
-        HlsVariant::new(
+        HlsVariant::from_parts(
             1,
             make_init(300, "hi"),
             vec![

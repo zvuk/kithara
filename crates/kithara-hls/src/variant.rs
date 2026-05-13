@@ -23,6 +23,8 @@ use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use crate::playlist::{PlaylistAccess, PlaylistState};
+
 pub(crate) mod segment_view;
 #[cfg(test)]
 mod tests;
@@ -45,13 +47,23 @@ impl From<u8> for SegmentState {
     }
 }
 
+impl From<SegmentState> for Arc<AtomicU8> {
+    fn from(state: SegmentState) -> Self {
+        Self::new(AtomicU8::new(state as u8))
+    }
+}
+
 #[derive(Debug)]
 struct SegmentEntry {
     url: Url,
     resource_id: ResourceKey,
     byte_offset: u64,
     size: u64,
-    state: AtomicU8,
+    /// Shared with the segment's `OnCompleteFn` closure so the
+    /// Downloader thread can flip `Downloading -> Loaded` (or back to
+    /// `Missing` on error) without re-entering the variant from
+    /// outside.
+    state: Arc<AtomicU8>,
     decrypt_ctx: Option<DecryptContext>,
     decode_time: Duration,
     duration: Duration,
@@ -72,7 +84,9 @@ struct InitEntry {
     url: Url,
     resource_id: ResourceKey,
     size: u64,
-    state: AtomicU8,
+    /// Shared with the init segment's `OnCompleteFn`; see
+    /// [`SegmentEntry::state`].
+    state: Arc<AtomicU8>,
 }
 
 impl InitEntry {
@@ -107,8 +121,34 @@ pub(crate) struct HlsVariant {
 }
 
 impl HlsVariant {
+    /// Production constructor. Reads parsed playlist metadata and assembles
+    /// the per-variant index, init/segment entries, queue, and cancel
+    /// hierarchy. `decrypt_contexts[i]` carries the pre-resolved
+    /// [`DecryptContext`] for segment `i` (or `None` for cleartext
+    /// segments) — the caller resolves AES-128 keys through [`KeyManager`](
+    /// crate::loading::KeyManager) before construction.
     #[must_use]
-    fn new(variant: usize, init: InitEntry, segments: Vec<SegmentEntry>, ctx: &PlanCtx) -> Self {
+    pub(crate) fn new(
+        variant: usize,
+        playlist_state: &PlaylistState,
+        decrypt_contexts: &[Option<DecryptContext>],
+        ctx: &PlanCtx,
+    ) -> Self {
+        let init = Self::build_init_entry(playlist_state, variant);
+        let segments = Self::build_segment_entries(playlist_state, decrypt_contexts, variant);
+        Self::from_parts(variant, init, segments, ctx)
+    }
+
+    /// Bare assembly: the supplied `init` and `segments` lists are taken
+    /// verbatim. Used by unit tests inside this module to construct
+    /// variants from hand-built fixtures without parsing a playlist.
+    #[must_use]
+    fn from_parts(
+        variant: usize,
+        init: InitEntry,
+        segments: Vec<SegmentEntry>,
+        ctx: &PlanCtx,
+    ) -> Self {
         Self {
             variant,
             init,
@@ -117,6 +157,68 @@ impl HlsVariant {
             cancel: RwLock::new(ctx.master_cancel.child_token()),
             position: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    fn build_init_entry(playlist_state: &PlaylistState, variant_idx: usize) -> InitEntry {
+        let Some(url) = playlist_state.init_url(variant_idx) else {
+            // Variants without an fMP4 init segment (raw AAC/TS) carry a
+            // synthetic placeholder marked `Loaded` so dispatch never tries
+            // to fetch it.
+            let placeholder: Url = "data:,".parse().expect("static data URL");
+            return InitEntry {
+                resource_id: ResourceKey::from_url(&placeholder),
+                url: placeholder,
+                size: 0,
+                state: SegmentState::Loaded.into(),
+            };
+        };
+        InitEntry {
+            resource_id: ResourceKey::from_url(&url),
+            url,
+            size: playlist_state.init_size(variant_idx),
+            state: SegmentState::Missing.into(),
+        }
+    }
+
+    fn build_segment_entries(
+        playlist_state: &PlaylistState,
+        decrypt_contexts: &[Option<DecryptContext>],
+        variant_idx: usize,
+    ) -> Vec<SegmentEntry> {
+        let Some(num) = playlist_state.num_segments(variant_idx) else {
+            return Vec::new();
+        };
+        let mut decode_time = Duration::ZERO;
+        let mut out = Vec::with_capacity(num);
+        for seg_idx in 0..num {
+            let Some(url) = playlist_state.segment_url(variant_idx, seg_idx) else {
+                break;
+            };
+            let byte_offset = playlist_state
+                .segment_byte_offset(variant_idx, seg_idx)
+                .unwrap_or(0);
+            let next_off = playlist_state
+                .segment_byte_offset(variant_idx, seg_idx + 1)
+                .or_else(|| playlist_state.total_variant_size(variant_idx))
+                .unwrap_or(byte_offset);
+            let size = next_off.saturating_sub(byte_offset);
+            let duration = playlist_state
+                .segment_decode_range(variant_idx, seg_idx)
+                .map_or(Duration::ZERO, |(start, end)| end.saturating_sub(start));
+            let decrypt_ctx = decrypt_contexts.get(seg_idx).cloned().flatten();
+            out.push(SegmentEntry {
+                resource_id: ResourceKey::from_url(&url),
+                url,
+                byte_offset,
+                size,
+                state: SegmentState::Missing.into(),
+                decrypt_ctx,
+                decode_time,
+                duration,
+            });
+            decode_time = decode_time.saturating_add(duration);
+        }
+        out
     }
 
     #[kithara::probe(variant = self.variant as u64, pos = self.position.load(Ordering::Acquire))]
@@ -137,7 +239,10 @@ impl HlsVariant {
     #[kithara::probe(
         variant = self.variant as u64,
         byte_offset,
-        found_seg = find_at_offset_probe_seg(self, byte_offset)
+        found_seg = self
+            .binary_search_byte(byte_offset)
+            .and_then(|i| u64::try_from(i).ok())
+            .unwrap_or(u64::MAX)
     )]
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
         let idx = self.binary_search_byte(byte_offset)?;
@@ -165,6 +270,24 @@ impl HlsVariant {
         }
     }
 
+    /// Resource key for the variant's init segment — `None` when the
+    /// playlist has no `#EXT-X-MAP` (raw TS/AAC) and the init slot is a
+    /// synthetic placeholder.
+    pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
+        if self.init.size > 0 {
+            Some(self.init.resource_id.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Cached init segment size; the first [`Self::init_size`] bytes of
+    /// segment 0 in variant-byte space resolve to the init resource
+    /// rather than the media resource.
+    pub(crate) fn init_size(&self) -> u64 {
+        self.init.size
+    }
+
     #[kithara::probe(variant = self.variant as u64)]
     pub(crate) fn descriptor_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         if self.segments.is_empty() {
@@ -188,6 +311,30 @@ impl HlsVariant {
             return None;
         }
         self.descriptor(idx)
+    }
+
+    /// Reposition the cursor to the segment that covers `target` and
+    /// rebuild the queue from there. Returns the resolved segment index,
+    /// or `None` when the variant carries no segments.
+    pub(crate) fn seek_to(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {
+        let seg = self.segment_index_at_time(target)?;
+        let byte = self.segment_byte_offset(seg)?;
+        self.set_position(byte);
+        self.rebuild(ctx, seg);
+        Some(seg)
+    }
+
+    /// Take ownership of the reader after an ABR variant flip: place
+    /// the cursor at the start of `from_seg` (or `total_bytes()` when
+    /// `from_seg` overshoots this variant) and rebuild the queue.
+    pub(crate) fn activate_at_segment(&self, ctx: &PlanCtx, from_seg: u32) {
+        let byte = if from_seg < self.num_segments() {
+            self.segment_byte_offset(from_seg).unwrap_or(0)
+        } else {
+            self.total_bytes()
+        };
+        self.set_position(byte);
+        self.rebuild(ctx, from_seg);
     }
 
     /// Reissue the variant's cancel token and refill the queue starting at `from_seg`.
@@ -298,6 +445,12 @@ impl HlsVariant {
         self.segments.get(seg_idx as usize).map(|e| e.byte_offset)
     }
 
+    pub(crate) fn segment_resource(&self, seg_idx: u32) -> Option<ResourceKey> {
+        self.segments
+            .get(seg_idx as usize)
+            .map(|e| e.resource_id.clone())
+    }
+
     pub(crate) fn segment_index_at_time(&self, t: Duration) -> Option<u32> {
         if self.segments.is_empty() {
             return None;
@@ -374,17 +527,14 @@ impl HlsVariant {
             .asset_store
             .acquire_resource(&self.init.resource_id)
             .expect("acquire_resource for init must succeed");
-        let position = Arc::clone(&self.position);
-        let init_size = self.init.size;
-        let writer = make_writer(resource.clone());
-        let variant = self.variant;
-        let on_complete: OnCompleteFn = Box::new(move |_bytes_written, err| {
-            finalize_init(&resource, err, variant, init_size, &position);
-        });
+        let slot = FetchSlot {
+            resource: resource.clone(),
+            state: Arc::clone(&self.init.state),
+        };
         FetchCmd::get(self.init.url.clone())
             .cancel(Some(self.cancel_handle()))
-            .writer(writer)
-            .on_complete(on_complete)
+            .writer(slot.writer())
+            .on_complete(slot.into_on_complete())
     }
 
     fn build_seg_cmd(&self, ctx: &PlanCtx, seg_idx: u32) -> FetchCmd {
@@ -401,56 +551,57 @@ impl HlsVariant {
                     .expect("acquire_resource_with_ctx for segment must succeed")
             },
         );
-        let writer = make_writer(resource.clone());
-        let variant = self.variant;
-        let on_complete: OnCompleteFn = Box::new(move |_bytes_written, err| {
-            finalize_seg(&resource, err, variant, seg_idx);
-        });
+        let slot = FetchSlot {
+            resource,
+            state: Arc::clone(&entry.state),
+        };
         FetchCmd::get(entry.url.clone())
             .cancel(Some(self.cancel_handle()))
-            .writer(writer)
-            .on_complete(on_complete)
+            .writer(slot.writer())
+            .on_complete(slot.into_on_complete())
+    }
+}
+
+/// Pairs a freshly-acquired [`AssetResource`] with the shared state flag
+/// observed by the scheduler. Owns the closures emitted on a [`FetchCmd`] so
+/// settlement (commit-or-fail + state transition) lives in one place.
+struct FetchSlot {
+    resource: AssetResource<DecryptContext>,
+    state: Arc<AtomicU8>,
+}
+
+impl FetchSlot {
+    fn writer(&self) -> WriterFn {
+        let resource = self.resource.clone();
+        let offset = Arc::new(AtomicU64::new(0));
+        Box::new(move |chunk: &[u8]| {
+            let pos = offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            resource.write_at(pos, chunk).map_err(IoError::other)
+        })
+    }
+
+    fn into_on_complete(self) -> OnCompleteFn {
+        Box::new(move |_bytes_written, err| self.settle(err))
+    }
+
+    fn settle(&self, err: Option<&NetError>) {
+        let next = err.map_or_else(
+            || {
+                self.resource
+                    .commit(None)
+                    .map_or(SegmentState::Missing, |()| SegmentState::Loaded)
+            },
+            |e| {
+                self.resource.fail(e.to_string());
+                SegmentState::Missing
+            },
+        );
+        self.state.store(next as u8, Ordering::Release);
     }
 }
 
 fn queue_contains_seg(queue: &VecDeque<PlannedFetch>, seg_idx: u32) -> bool {
     queue.iter().any(|p| p.segment == seg_idx)
-}
-
-fn make_writer(resource: AssetResource<DecryptContext>) -> WriterFn {
-    let offset = Arc::new(AtomicU64::new(0));
-    Box::new(move |chunk: &[u8]| {
-        let pos = offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-        resource.write_at(pos, chunk).map_err(IoError::other)
-    })
-}
-
-fn finalize_init(
-    resource: &AssetResource<DecryptContext>,
-    err: Option<&NetError>,
-    _variant: usize,
-    init_size: u64,
-    _position: &Arc<AtomicU64>,
-) {
-    if err.is_some() {
-        resource.fail("init fetch failed".to_string());
-        let _ = init_size;
-        return;
-    }
-    let _ = resource.commit(None);
-}
-
-fn finalize_seg(
-    resource: &AssetResource<DecryptContext>,
-    err: Option<&NetError>,
-    _variant: usize,
-    _seg_idx: u32,
-) {
-    if err.is_some() {
-        resource.fail("segment fetch failed".to_string());
-        return;
-    }
-    let _ = resource.commit(None);
 }
 
 fn bisect_right_decode_time(segments: &[SegmentEntry], t: Duration) -> usize {
@@ -479,10 +630,4 @@ fn bisect_left_byte_offset(segments: &[SegmentEntry], byte: u64) -> usize {
         }
     }
     lo
-}
-
-fn find_at_offset_probe_seg(v: &HlsVariant, byte_offset: u64) -> u64 {
-    v.binary_search_byte(byte_offset)
-        .and_then(|i| u64::try_from(i).ok())
-        .unwrap_or(u64::MAX)
 }

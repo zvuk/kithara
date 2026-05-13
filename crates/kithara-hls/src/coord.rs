@@ -2,147 +2,166 @@
 
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use kithara_abr::AbrState;
-use kithara_platform::{Condvar, tokio::sync::Notify};
+use kithara_abr::AbrHandle;
+use kithara_assets::{AssetStore, ResourceKey};
+use kithara_drm::DecryptContext;
+use kithara_platform::{time::Instant, tokio::sync::Notify};
 use kithara_stream::Timeline;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    demand::DemandSlot,
-    ids::{SegmentIndex, VariantIndex},
-};
+use crate::variant::{HlsVariant, PlanCtx, segment_view::HlsSegmentView};
 
-/// Request to load a specific segment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SegmentRequest {
-    pub segment_index: SegmentIndex,
-    pub variant: VariantIndex,
-    pub seek_epoch: u64,
+/// Infrastructure handles shared with every [`HlsCoord`]:
+/// the parent cancel token (cancel hierarchy owner of `HlsCoord.cancel`)
+/// and the per-track [`AssetStore`] used by reader paths and by every
+/// variant's `dispatch` closures.
+pub(crate) struct HlsCoordEnv {
+    pub(crate) cancel: CancellationToken,
+    pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
-impl kithara_test_utils::probes::IntoProbeArg for SegmentRequest {
-    /// Pack `(variant, segment_index)` into a single `u64` so the field
-    /// can ride a `#[kithara::probe(request, …)]` site without
-    /// unpacking the struct in the production signature. `seek_epoch`
-    /// is dropped — it is not load-bearing for the seg-routing
-    /// diagnostics that consume this probe (`commit_fetch_inline`
-    /// epoch handling fires its own `seek_epoch_reset` probe). Layout:
-    ///
-    /// ```text
-    /// bits 63..32  variant
-    /// bits 31..00  segment_index
-    /// ```
-    ///
-    /// `from_probe_arg` round-trips `(variant, segment_index)` and
-    /// reconstructs `SegmentRequest` with `seek_epoch = 0` (the lossy
-    /// field documented above) so tests can read it via
-    /// `SegmentRequest::from_probe_arg(event.u64("request").unwrap())`
-    /// without writing a private decode helper.
-    fn into_probe_arg(self) -> u64 {
-        ((self.variant as u64) << 32) | (self.segment_index as u64 & 0xFFFF_FFFF)
-    }
-
-    fn from_probe_arg(packed: u64) -> Self {
-        Self {
-            variant: (packed >> 32) as VariantIndex,
-            segment_index: (packed & 0xFFFF_FFFF) as SegmentIndex,
-            seek_epoch: 0,
-        }
-    }
-}
-
-pub struct HlsCoord {
-    /// Shared ABR state — the only authoritative source of the current
-    /// variant index. Held as an `Arc<AbrState>` so HLS reads stay
-    /// lock-free (`current_variant_index()` is one `Acquire` atomic load)
-    /// while writes are gated behind `pub(crate)` `apply()` inside
-    /// `kithara-abr` — HLS cannot bypass the controller.
-    pub abr_state: Arc<AbrState>,
-    /// `Arc<Notify>` so the handle can be cloned out to components that
-    /// need an owned `'static` wake primitive (e.g. a future
-    /// `Stream<Item = FetchCmd>` adapter that registers the notify in
-    /// its own `poll_next` context). All existing `.notify_one()` and
-    /// `.notified()` calls continue to work via `Deref` to [`Notify`].
-    pub reader_advanced: Arc<Notify>,
-    pub had_midstream_switch: AtomicBool,
-    pub stopped: AtomicBool,
-    pub cancel: CancellationToken,
-    pub condvar: Condvar,
-    demand: DemandSlot<SegmentRequest>,
-    /// Authoritative byte cursor for this HLS source (transitional
-    /// home — Plan 03 moves ownership to the active `HlsVariant`).
-    position: Arc<AtomicU64>,
-    timeline: Timeline,
+pub(crate) struct HlsCoord {
+    pub(crate) cancel: CancellationToken,
+    pub(crate) timeline: Timeline,
+    pub(crate) abr: AbrHandle,
+    pub(crate) variants: Arc<Vec<HlsVariant>>,
+    pub(crate) active_variant: Arc<AtomicUsize>,
+    pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
+    pub(crate) reader_advanced: Arc<Notify>,
+    pub(crate) stopped: AtomicBool,
+    segment_view: Arc<HlsSegmentView>,
 }
 
 impl HlsCoord {
-    #[must_use]
-    pub fn new(cancel: CancellationToken, timeline: Timeline, abr_state: Arc<AbrState>) -> Self {
+    pub(crate) fn new(
+        env: HlsCoordEnv,
+        timeline: Timeline,
+        abr: AbrHandle,
+        variants: Arc<Vec<HlsVariant>>,
+    ) -> Self {
+        let initial = abr.current_variant_index().unwrap_or(0);
+        let active_variant = Arc::new(AtomicUsize::new(initial));
+        let segment_view = Arc::new(HlsSegmentView::new(
+            Arc::clone(&variants),
+            Arc::clone(&active_variant),
+        ));
         Self {
-            abr_state,
-            cancel,
+            cancel: env.cancel,
             timeline,
-            condvar: Condvar::new(),
-            had_midstream_switch: AtomicBool::new(false),
+            abr,
+            variants,
+            active_variant,
+            asset_store: env.asset_store,
+            segment_view,
             reader_advanced: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
-            demand: DemandSlot::new(),
-            position: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    #[must_use]
-    pub(crate) fn position(&self) -> u64 {
-        self.position.load(Ordering::Acquire)
+    pub(crate) fn active(&self) -> Option<&HlsVariant> {
+        let idx = self.active_variant.load(Ordering::Acquire);
+        self.variants.get(idx)
     }
 
-    pub(crate) fn advance_position(&self, n: u64) {
-        self.position.fetch_add(n, Ordering::AcqRel);
+    pub(crate) fn position(&self) -> u64 {
+        self.active().map_or(0, HlsVariant::get_position)
+    }
+
+    pub(crate) fn advance(&self, n: u64) {
+        if let Some(v) = self.active() {
+            v.advance(n);
+        }
     }
 
     pub(crate) fn set_position(&self, pos: u64) {
-        self.position.store(pos, Ordering::Release);
-    }
-
-    pub(crate) fn clear_pending_segment_request(&self, request: SegmentRequest) {
-        if self.demand.peek() == Some(request) {
-            self.demand.clear();
+        if let Some(v) = self.active() {
+            v.set_position(pos);
         }
     }
 
-    pub(crate) fn clear_segment_requests(&self) {
-        self.demand.clear();
+    pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
+        self.active()?.find_at_offset(byte_offset)
     }
 
-    pub(crate) fn enqueue_segment_request(&self, request: SegmentRequest) -> bool {
-        let inserted = self.demand.did_replace(request);
-        self.reader_advanced.notify_one();
-        inserted
+    pub(crate) fn total_bytes(&self) -> u64 {
+        self.active().map_or(0, HlsVariant::total_bytes)
     }
 
-    pub fn peek_segment_request(&self) -> Option<SegmentRequest> {
-        self.demand.peek()
+    pub(crate) fn variant_index(&self) -> usize {
+        self.active_variant.load(Ordering::Acquire)
     }
 
-    pub fn take_segment_request(&self) -> Option<SegmentRequest> {
-        self.demand.take()
+    pub(crate) fn segment_view(&self) -> Arc<HlsSegmentView> {
+        Arc::clone(&self.segment_view)
     }
 
-    #[must_use]
     pub(crate) fn timeline(&self) -> Timeline {
         self.timeline.clone()
     }
 
-    /// Read the current variant index from the shared ABR state.
-    ///
-    /// One `Acquire` atomic load — same hot-path cost as the previous
-    /// `coord.abr_variant_index.load(Ordering::Acquire)` direct read.
-    #[must_use]
-    pub fn variant_index(&self) -> usize {
-        self.abr_state.current_variant_index()
+    /// Mirror `abr.lock()` state to `timeline.is_seek_pending()`.
+    pub(crate) fn sync_abr_lock(&self) {
+        let pending = self.timeline.is_seek_pending();
+        let locked = self.abr.is_locked();
+        if pending && !locked {
+            self.abr.lock();
+        } else if !pending && locked {
+            self.abr.unlock();
+        }
+    }
+
+    /// Commit any ABR pending decision at the reader's segment boundary.
+    /// On a real switch: cancels the outgoing variant, positions the
+    /// incoming variant at `from_seg`, atomically flips `active_variant`,
+    /// rebuilds the new variant's queue, and emits `notify_commit`.
+    /// Returns `true` when a switch landed.
+    pub(crate) fn commit_variant_switch(&self, ctx: &PlanCtx, from_seg: u32) -> bool {
+        let Some(decision) = self.abr.commit_pending(Instant::now()) else {
+            return false;
+        };
+        if !decision.did_change {
+            return false;
+        }
+        let current_before = self.variant_index();
+        let new_v = decision.target_variant_index;
+        let Some(v_new) = self.variants.get(new_v) else {
+            return false;
+        };
+        if let Some(v_old) = self.variants.get(current_before) {
+            v_old.cancel();
+        }
+        v_new.activate_at_segment(ctx, from_seg);
+        self.active_variant.store(new_v, Ordering::Release);
+        let reader_pt = self.timeline.committed_position();
+        self.abr
+            .notify_commit(decision, current_before, reader_pt, Instant::now());
+        true
+    }
+
+    /// Process one evicted resource key. Broadcasts to every variant so
+    /// they mark the lost segment Missing. For the active variant, if
+    /// the eviction lands inside the prefetch window, hands off to
+    /// `on_reader_advance` to put the segment back on the queue.
+    pub(crate) fn broadcast_eviction(&self, ctx: &PlanCtx, key: &ResourceKey, seg_at_reader: u32) {
+        let active_idx = self.variant_index();
+        let budget = u32::try_from(ctx.prefetch_budget).unwrap_or(u32::MAX);
+        let window_end = seg_at_reader.saturating_add(budget);
+        for (v_idx, v) in self.variants.iter().enumerate() {
+            let Some(evicted_seg) = v.on_evict(key) else {
+                continue;
+            };
+            if v_idx != active_idx || evicted_seg < 0 {
+                continue;
+            }
+            let Ok(evicted_u32) = u32::try_from(evicted_seg) else {
+                continue;
+            };
+            if (seg_at_reader..=window_end).contains(&evicted_u32) {
+                v.on_reader_advance(ctx, evicted_u32);
+            }
+        }
     }
 }
