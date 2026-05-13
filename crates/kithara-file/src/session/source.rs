@@ -5,7 +5,7 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
-    MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline,
+    MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline, dl::PeerHandle,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
@@ -28,6 +28,12 @@ pub struct FileSource {
     /// don't have to dereference the inner Arc.
     coord: Arc<FileCoord>,
     inner: Arc<FileInner>,
+    /// Peer registration handle returned by `Downloader::register`.
+    /// Held here (mirroring `HlsSource::set_peer_handle`) so the peer
+    /// stays registered for the source's lifetime — dropping the last
+    /// handle would trigger `PeerInner::drop` and cancel in-flight
+    /// fetches. `None` on the `local()` fast path (no Downloader at all).
+    peer_handle: Option<PeerHandle>,
 }
 
 impl FileSource {
@@ -82,7 +88,11 @@ impl FileSource {
             },
             FilePhase::Complete,
         ));
-        Self { coord, inner }
+        Self {
+            coord,
+            inner,
+            peer_handle: None,
+        }
     }
 
     /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
@@ -90,7 +100,20 @@ impl FileSource {
     /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
     /// loop, so this constructor does nothing async.
     pub(crate) fn from_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
-        Self { coord, inner }
+        Self {
+            coord,
+            inner,
+            peer_handle: None,
+        }
+    }
+
+    /// Pin the Downloader peer registration to this source's lifetime.
+    /// Called once after `Downloader::register`; mirrors
+    /// `HlsSource::set_peer_handle`. Without this the handle returned by
+    /// `register` drops immediately and `PeerInner::Drop` cancels every
+    /// in-flight fetch.
+    pub(crate) fn set_peer_handle(&mut self, handle: PeerHandle) {
+        self.peer_handle = Some(handle);
     }
 }
 

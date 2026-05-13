@@ -158,10 +158,12 @@ impl File {
             FilePhase::Init,
         ));
 
-        let _peer_handle = downloader
+        let peer_handle = downloader
             .register(Arc::new(FilePeer::new(Arc::clone(&inner))))
             .with_bus(state.bus.clone());
 
-        Ok(FileSource::from_inner(inner, coord))
+        let mut source = FileSource::from_inner(inner, coord);
+        source.set_peer_handle(peer_handle);
+        Ok(source)
     }
 }
