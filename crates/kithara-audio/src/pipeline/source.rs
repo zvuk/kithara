@@ -67,7 +67,6 @@ impl<T: StreamType> SharedStream<T> {
             fn current_segment_range(&self) -> Option<Range<u64>>;
             fn format_change_segment_range(&self) -> Option<Range<u64>>;
             pub(crate) fn clear_variant_fence(&self);
-            pub(crate) fn commit_variant_layout(&self);
             pub(crate) fn set_seek_epoch(&self, seek_epoch: u64);
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
@@ -1716,7 +1715,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             TrackState::RecreatingDecoder(recreate) => recreate.clone(),
             _ => return TrackStep::StateChanged,
         };
-        self.shared_stream.commit_variant_layout();
         if !self.source_is_ready_for_boundary(recreate.offset) {
             return self.wait_for_source_on_recreate(recreate.offset);
         }

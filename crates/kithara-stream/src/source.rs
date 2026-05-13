@@ -195,13 +195,6 @@ pub trait Source: Send + Sync + 'static {
     /// Default no-op for sources that do not need post-seek reconciliation.
     fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
 
-    /// Switch layout to the ABR target variant before decoder recreation.
-    ///
-    /// Transitional — removed in Plan 09 once the audio FSM stops calling
-    /// it on every recreate; HLS uses per-variant position to keep the
-    /// reader stable.
-    fn commit_variant_layout(&mut self) {}
-
     /// Current segment byte range (HLS-only).
     ///
     /// Transitional — removed in Plan 06 once the audio FSM consumes
