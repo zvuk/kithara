@@ -116,6 +116,20 @@ impl HlsCoord {
         })
     }
 
+    /// Header (init / segment-0) virtual byte range of the most recent
+    /// archived variant that still has one. After an ABR commit the
+    /// active variant's `served_from > 0` and its own init lives in
+    /// natural space only; this fallback hands the audio FSM the init
+    /// range of the variant the reader was on just before the switch
+    /// (same-codec ABR can reuse its moov for the recreated decoder).
+    pub(crate) fn last_header_byte_range_in_history(&self) -> Option<Range<u64>> {
+        self.history
+            .lock_sync_read()
+            .iter()
+            .rev()
+            .find_map(|v| v.header_byte_range())
+    }
+
     /// Init prefix descriptor (key + size) for the byte at `byte_offset`,
     /// resolved against active + historical variants. Returns `None` when
     /// the byte falls outside any variant's init range.

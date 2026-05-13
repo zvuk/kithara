@@ -219,7 +219,18 @@ impl Source for HlsSource {
     }
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
-        self.coord.active()?.header_byte_range()
+        if let Some(active) = self.coord.active()
+            && let Some(range) = active.header_byte_range()
+        {
+            return Some(range);
+        }
+        // After an ABR commit the active variant has `served_from > 0`,
+        // so its init prefix lives in a historical variant's territory.
+        // The audio FSM still needs a virtual offset it can pass to the
+        // recreated decoder for the format-change resync (fmp4 moov);
+        // give it the most recent variant whose init range is still
+        // mapped into virtual byte space.
+        self.coord.last_header_byte_range_in_history()
     }
 
     fn notify_waiting(&self) {
