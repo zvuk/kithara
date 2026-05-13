@@ -9,8 +9,8 @@ use kithara_platform::{
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
-    PendingReason, ReadOutcome, SegmentLayout, Source, SourcePhase, SourceSeekAnchor, StreamError,
-    StreamResult, Timeline,
+    MediaInfo, PendingReason, ReadOutcome, SegmentLayout, Source, SourcePhase, SourceSeekAnchor,
+    StreamError, StreamResult, Timeline,
 };
 
 use crate::{
@@ -208,6 +208,14 @@ impl Source for HlsSource {
     fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
         let notify = self.peer_wake.clone()?;
         Some(Box::new(move || notify.notify_one()))
+    }
+
+    fn media_info(&self) -> Option<MediaInfo> {
+        let variant = self.coord.variant_index();
+        let codec = self.playlist_state.variant_codec(variant);
+        let container = self.playlist_state.variant_container(variant);
+        let variant_u32 = u32::try_from(variant).unwrap_or(u32::MAX);
+        Some(MediaInfo::new(codec, container).with_variant_index(variant_u32))
     }
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {

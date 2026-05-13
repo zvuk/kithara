@@ -332,6 +332,22 @@ impl PlaylistAccess for PlaylistState {
     }
 }
 
+impl PlaylistState {
+    /// Audio codec for a variant.
+    pub(crate) fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.lock_sync_read();
+        state.codec
+    }
+
+    /// Container format for a variant.
+    pub(crate) fn variant_container(&self, variant: VariantIndex) -> Option<ContainerFormat> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.lock_sync_read();
+        state.container
+    }
+}
+
 #[cfg(test)]
 impl PlaylistState {
     /// Find which segment contains the given byte offset (binary search on offsets).
@@ -347,20 +363,6 @@ impl PlaylistState {
         });
         drop(state);
         result
-    }
-
-    /// Audio codec for a variant.
-    fn variant_codec(&self, variant: VariantIndex) -> Option<AudioCodec> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
-        state.codec
-    }
-
-    /// Container format for a variant.
-    fn variant_container(&self, variant: VariantIndex) -> Option<ContainerFormat> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
-        state.container
     }
 }
 
