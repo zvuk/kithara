@@ -62,12 +62,15 @@ impl HlsSource {
         }
     }
 
-    /// Init prefix descriptor: `(resource_key, size)` when the variant
-    /// has an `#EXT-X-MAP` init segment. Init occupies `[0, size)` in
-    /// variant-byte space; media segments start at offset `size`.
-    fn init_descriptor(&self) -> Option<(ResourceKey, u64)> {
-        let active = self.coord.active()?;
-        Some((active.init_resource()?, active.init_size()))
+    /// Init prefix descriptor: `(resource_key, range)` covering
+    /// `byte_offset`, resolved against active + historical variants. The
+    /// returned `range` is in the combined byte stream's virtual space,
+    /// so callers translate to the local resource offset by subtracting
+    /// `range.start`. `None` when the byte lies outside any variant's
+    /// init prefix (typically the case for byte offsets inside media
+    /// segments).
+    fn init_descriptor_at(&self, byte_offset: u64) -> Option<(ResourceKey, Range<u64>)> {
+        self.coord.init_descriptor_at(byte_offset)
     }
 
     /// Open the resource and read the requested range. Returns
@@ -107,10 +110,12 @@ impl HlsSource {
     /// Media descriptor for the segment covering `byte_offset` —
     /// `(resource_key, segment_byte_offset, segment_size)`. Returns
     /// `None` when the offset falls in the init prefix or past the last
-    /// media segment.
+    /// media segment. Cross-variant aware: resolves through active +
+    /// historical variants via `HlsCoord::resolve_variant`.
     fn media_descriptor(&self, byte_offset: u64) -> Option<(ResourceKey, u64, u64)> {
-        let (seg_idx, seg_byte_offset, seg_size) = self.coord.find_at_offset(byte_offset)?;
-        let key = self.coord.active()?.segment_resource(seg_idx)?;
+        let (variant, seg_idx, seg_byte_offset, seg_size) =
+            self.coord.resolve_variant(byte_offset)?;
+        let key = variant.segment_resource(seg_idx)?;
         Some((key, seg_byte_offset, seg_size))
     }
 
@@ -130,29 +135,33 @@ impl HlsSource {
             return true;
         }
 
-        let init_end = self.init_descriptor().map_or(0, |(_, size)| size);
         let mut cursor = range.start;
-
-        // Init prefix portion.
-        if cursor < init_end {
-            let Some((ref key, size)) = self.init_descriptor() else {
-                return false;
-            };
-            let slice_end = end.min(size);
+        // Init prefix portion (cross-variant aware).
+        while let Some((ref key, init_range)) = self.init_descriptor_at(cursor) {
+            if cursor >= init_range.end {
+                break;
+            }
+            let slice_end = end.min(init_range.end);
+            let local_start = cursor - init_range.start;
+            let local_end = slice_end - init_range.start;
             if !self
                 .coord
                 .asset_store
-                .contains_range(key, cursor..slice_end)
+                .contains_range(key, local_start..local_end)
             {
                 return false;
             }
             cursor = slice_end;
+            if cursor >= end {
+                return true;
+            }
         }
         if cursor >= end {
             return true;
         }
 
-        // Media portion: may span multiple segments.
+        // Media portion: may span multiple segments (and multiple variants
+        // after an Auto switch).
         while cursor < end {
             let Some((ref key, seg_off, seg_size)) = self.media_descriptor(cursor) else {
                 return false;
@@ -232,26 +241,32 @@ impl Source for HlsSource {
             return Ok(ReadOutcome::Eof);
         }
 
-        let init_end = self.init_descriptor().map_or(0, |(_, size)| size);
         let buf_len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
         let mut written: usize = 0;
         let mut cursor = offset;
         let read_end = offset.saturating_add(buf_len);
 
-        // Init prefix: variant byte range [0, init_size) reads from the
-        // init resource at its local offset (0-based).
-        if cursor < init_end {
-            let Some((ref key, init_size)) = self.init_descriptor() else {
-                return Ok(ReadOutcome::Pending(PendingReason::Retry));
-            };
-            let slice_end = read_end.min(init_size);
-            let take = usize::try_from(slice_end - cursor).unwrap_or(usize::MAX);
+        // Init prefix (cross-variant aware): walks every init region that
+        // covers `cursor`. After an Auto switch the active variant's
+        // init lives outside `[0, init_size)`, so this only fires for
+        // bytes that fall in the most-recent activator's init range.
+        while let Some((ref key, init_range)) = self.init_descriptor_at(cursor) {
+            if cursor >= init_range.end {
+                break;
+            }
+            let slice_end = read_end.min(init_range.end);
+            let local_start = cursor - init_range.start;
+            let local_end = slice_end - init_range.start;
+            let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
             let dst = &mut buf[written..written + take];
-            match self.read_resource(key, cursor..slice_end, dst)? {
+            match self.read_resource(key, local_start..local_end, dst)? {
                 Some(n) => {
                     written += n;
                     cursor += n as u64;
                     if n < take {
+                        return Ok(Self::wrap(written));
+                    }
+                    if cursor >= read_end {
                         return Ok(Self::wrap(written));
                     }
                 }

@@ -6,7 +6,7 @@ use std::{
     ops::Range,
     sync::{
         Arc, Weak,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering},
     },
 };
 
@@ -184,6 +184,36 @@ pub(crate) struct HlsVariant {
     /// sizes are upper bounds; without recompute the reader spins on
     /// padding bytes that don't exist on disk.
     offsets: RwLock<Vec<u64>>,
+    /// Frozen `init.size` used as the seed in `recompute_offsets` for
+    /// **switched** variants (those activated via Auto-mode mid-stream
+    /// with `byte_shift != 0`). `byte_shift` is pinned against the
+    /// natural offsets observed at activation; if a later init-segment
+    /// decrypt shrunk `init.size`, recomputing against the dynamic
+    /// `init.size` would slide every segment offset back by the
+    /// PKCS7-stripped delta and break the cross-variant byte address
+    /// space alignment. `0` means "no override — use current
+    /// `init.size`" (the initial-activation path).
+    init_seed: AtomicU64,
+    /// Virtual = natural + `byte_shift`. Initial activate keeps shift = 0
+    /// so reader sees init at `[0, init_size)` and segments naturally.
+    /// Auto-mode variant switch pins shift = `seg_boundary` - natural
+    /// offset of `from_seg`, so `v_new`'s `from_seg` lands exactly on the
+    /// outgoing variant's segment boundary — the combined byte stream
+    /// stays contiguous across switches and fMP4 box addresses remain
+    /// aligned.
+    byte_shift: AtomicI64,
+    /// First media segment served by this variant in the combined byte
+    /// stream (inclusive). Initial activate: 0. After switch: the
+    /// `from_seg` passed to `activate_at_segment`. Segments < this index
+    /// are NOT downloaded and their byte ranges fall in previous
+    /// variants' territory.
+    served_from: AtomicU32,
+    /// Last media segment served (exclusive). For active variant equals
+    /// `num_segments()`; for historical (previously-active) variants
+    /// shrunk to the successor's `served_from` when deactivated, so
+    /// historical lookups only see the segments this variant actually
+    /// streamed.
+    served_until: AtomicU32,
     queue: Mutex<VecDeque<PlannedFetch>>,
     cancel: RwLock<CancellationToken>,
     position: Arc<AtomicU64>,
@@ -222,11 +252,16 @@ impl HlsVariant {
         segments: Vec<SegmentEntry>,
         ctx: &PlanCtx,
     ) -> Arc<Self> {
+        let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
         let variant_ref = Self {
             variant,
             init,
             segments,
             offsets: RwLock::new(Vec::new()),
+            init_seed: AtomicU64::new(0),
+            byte_shift: AtomicI64::new(0),
+            served_from: AtomicU32::new(0),
+            served_until: AtomicU32::new(num),
             queue: Mutex::new(VecDeque::new()),
             cancel: RwLock::new(ctx.master_cancel.child_token()),
             position: Arc::new(AtomicU64::new(0)),
@@ -329,15 +364,57 @@ impl HlsVariant {
         Some(self.segments.get(idx)?.size.load(Ordering::Acquire))
     }
 
+    /// Reader-facing lookup in **virtual** byte space. Subtracts the
+    /// variant's `byte_shift` so the inner binary search runs against the
+    /// natural offset table (`offsets[]`), then re-shifts the segment's
+    /// reported `byte_offset` back into virtual space. Returns `None` when
+    /// the byte falls outside the variant's served range
+    /// `[served_from..served_until)` so cross-variant lookups in
+    /// [`HlsCoord::find_at_offset`] fall through to the previous variant.
     #[kithara::probe(
         variant = self.variant as u64,
         byte_offset,
         found_seg = self
-            .find_at_offset_inner(byte_offset)
+            .find_virtual(byte_offset)
             .map_or(u64::MAX, |(i, _, _)| u64::from(i))
     )]
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        self.find_at_offset_inner(byte_offset)
+        self.find_virtual(byte_offset)
+    }
+
+    pub(crate) fn byte_shift(&self) -> i64 {
+        self.byte_shift.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn served_from(&self) -> u32 {
+        self.served_from.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn served_until(&self) -> u32 {
+        self.served_until.load(Ordering::Acquire)
+    }
+
+    /// Set the upper bound (exclusive) of segments this variant serves.
+    /// Called from [`HlsCoord::commit_variant_switch`] when archiving the
+    /// outgoing variant — every segment with index `>= until` belongs to
+    /// the successor in the combined byte stream.
+    pub(crate) fn set_served_until(&self, until: u32) {
+        self.served_until.store(until, Ordering::Release);
+    }
+
+    fn find_virtual(&self, byte_virtual: u64) -> Option<(u32, u64, u64)> {
+        let shift = self.byte_shift();
+        let byte_natural = i64::try_from(byte_virtual).ok()?.checked_sub(shift)?;
+        if byte_natural < 0 {
+            return None;
+        }
+        let byte_natural = u64::try_from(byte_natural).ok()?;
+        let (idx, off_nat, size) = self.find_at_offset_inner(byte_natural)?;
+        if idx < self.served_from() || idx >= self.served_until() {
+            return None;
+        }
+        let off_virtual = u64::try_from(i64::try_from(off_nat).ok()?.checked_add(shift)?).ok()?;
+        Some((idx, off_virtual, size))
     }
 
     /// Snapshot `(byte_offset, size)` pairs under the read lock so the
@@ -379,11 +456,27 @@ impl HlsVariant {
 
     fn total_bytes_inner(&self) -> u64 {
         let offsets = self.offsets.lock_sync_read();
-        match (offsets.last(), self.segments.len().checked_sub(1)) {
-            (Some(&off), Some(idx)) => off + self.segment_size(idx).unwrap_or(0),
+        let last_idx = (self.served_until() as usize).saturating_sub(1);
+        let natural = if let (Some(off), Some(_seg)) =
+            (offsets.get(last_idx).copied(), self.segments.get(last_idx))
+        {
+            off + self.segment_size(last_idx).unwrap_or(0)
+        } else if let Some(idx) = self.segments.len().checked_sub(1)
+            && let Some(off) = offsets.get(idx).copied()
+        {
+            off + self.segment_size(idx).unwrap_or(0)
+        } else {
             // No segments — total is just the init prefix (zero for raw
             // TS/AAC variants, `init.size` for fMP4).
-            _ => self.init_size(),
+            self.init_size()
+        };
+        let shift = self.byte_shift();
+        let adjusted = i64::try_from(natural)
+            .ok()
+            .and_then(|n| n.checked_add(shift));
+        match adjusted {
+            Some(v) if v >= 0 => u64::try_from(v).unwrap_or(0),
+            _ => 0,
         }
     }
 
@@ -405,10 +498,19 @@ impl HlsVariant {
         u32::try_from(head).unwrap_or(u32::MAX)
     }
 
+    /// Init range in **virtual** byte space. Initial activate keeps
+    /// `byte_shift == 0` so the init occupies `[0, init_size)`. After an
+    /// Auto-mode switch the variant starts serving at `from_seg` (past
+    /// init), so the init prefix lives entirely in the previous variant's
+    /// territory — return `None` to signal "no init in this variant's
+    /// virtual range".
     #[kithara::probe(variant = self.variant as u64, size = self.init_size())]
     pub(crate) fn init_byte_range(&self) -> Option<Range<u64>> {
         let size = self.init_size();
-        (size > 0).then_some(0..size)
+        if size == 0 || self.served_from() > 0 {
+            return None;
+        }
+        Some(0..size)
     }
 
     /// Byte range a demuxer should read to re-establish container state
@@ -472,16 +574,57 @@ impl HlsVariant {
         Some(seg)
     }
 
-    /// Take ownership of the reader after an ABR variant flip: place
-    /// the cursor at the start of `from_seg` (or `total_bytes()` when
-    /// `from_seg` overshoots this variant) and rebuild the queue.
-    pub(crate) fn activate_at_segment(&self, ctx: &PlanCtx, from_seg: u32) {
-        let byte = if from_seg < self.num_segments() {
-            self.segment_byte_offset(from_seg).unwrap_or(0)
-        } else {
-            self.total_bytes()
-        };
-        self.set_position(byte);
+    /// Auto-mode switch activation. Two byte positions matter:
+    ///
+    /// - `seg_boundary` — the **virtual** byte where this variant's
+    ///   segment `from_seg` should start in the combined stream. The
+    ///   caller should pass the outgoing variant's segment boundary
+    ///   (e.g. `v_old.segment_byte_offset(from_seg)`) so the byte
+    ///   address space joins without gaps or overlaps; box scans across
+    ///   the boundary stay correctly aligned.
+    /// - `reader_pos` — the reader's current source position. Stored as
+    ///   the new variant's `position` so `coord.position()` stays
+    ///   monotonic after the active variant flips. May be `>= seg_boundary`
+    ///   when the reader had already partially read into `from_seg`'s
+    ///   byte range from the outgoing variant before the commit fired.
+    ///
+    /// `byte_shift` is derived from `seg_boundary`, not `reader_pos`, so
+    /// segment offsets pin to actual fMP4 box boundaries.
+    pub(crate) fn activate_at_segment_with_shift(
+        &self,
+        ctx: &PlanCtx,
+        from_seg: u32,
+        seg_boundary: u64,
+        reader_pos: u64,
+    ) {
+        let from_seg = from_seg.min(self.num_segments());
+        // Freeze the init.size contribution to the offset table BEFORE
+        // computing `byte_shift`: any later init-segment decrypt commit
+        // for this variant must NOT shrink the seed used for offset
+        // recomputation, otherwise every segment offset slides back by
+        // the PKCS7 delta and the cross-variant byte address space
+        // collapses around `byte_shift`. Use a non-zero sentinel — a
+        // raw-TS variant with `init.size == 0` falls through to the
+        // dynamic path in `recompute_offsets_locked`.
+        let init_at_activation = self.init_size().max(1);
+        self.init_seed.store(init_at_activation, Ordering::Release);
+        // Force an immediate recompute under the frozen seed so the
+        // offset snapshot read below uses the same baseline as later
+        // commit-time recomputes.
+        self.recompute_offsets();
+        let natural_offset = self
+            .segment_byte_offset_natural(from_seg)
+            .unwrap_or_else(|| self.total_bytes_inner());
+        let shift = i64::try_from(seg_boundary)
+            .ok()
+            .zip(i64::try_from(natural_offset).ok())
+            .and_then(|(v, n)| v.checked_sub(n))
+            .unwrap_or(0);
+        self.byte_shift.store(shift, Ordering::Release);
+        self.served_from.store(from_seg, Ordering::Release);
+        self.served_until
+            .store(self.num_segments(), Ordering::Release);
+        self.set_position(reader_pos.max(seg_boundary));
         self.rebuild(ctx, from_seg);
     }
 
@@ -603,7 +746,21 @@ impl HlsVariant {
         self.cancel.lock_sync_read().cancel();
     }
 
+    /// Virtual byte offset of segment `seg_idx` in the combined stream.
+    /// For the initial variant (`byte_shift == 0`) this equals the natural
+    /// offset; after an Auto-mode switch this places the segment relative
+    /// to the reader's current byte position at the switch boundary.
     pub(crate) fn segment_byte_offset(&self, seg_idx: u32) -> Option<u64> {
+        let natural = self.segment_byte_offset_natural(seg_idx)?;
+        let shift = self.byte_shift();
+        let virt = i64::try_from(natural).ok()?.checked_add(shift)?;
+        u64::try_from(virt).ok()
+    }
+
+    /// Natural byte offset of segment `seg_idx` — i.e. without applying
+    /// `byte_shift`. Used internally by `activate_*` to compute the
+    /// shift needed to pin a segment at a given virtual byte.
+    pub(crate) fn segment_byte_offset_natural(&self, seg_idx: u32) -> Option<u64> {
         self.segment_byte_offset_usize(seg_idx as usize)
     }
 
@@ -636,7 +793,14 @@ impl HlsVariant {
 
     fn recompute_offsets_locked(&self, offsets: &mut Vec<u64>) {
         offsets.resize(self.segments.len(), 0);
-        let mut cum = self.init_size();
+        // Switched variants pin offsets to the init.size observed at
+        // activation (`init_seed`) so a later init-decrypt shrink can't
+        // slide every segment offset back and invalidate the pinned
+        // `byte_shift`. Initial-activation variants use the live
+        // `init.size` (which after the first decrypt commit reflects the
+        // actual post-PKCS7 prefix length).
+        let seed = self.init_seed.load(Ordering::Acquire);
+        let mut cum = if seed > 0 { seed } else { self.init_size() };
         for (i, s) in self.segments.iter().enumerate() {
             offsets[i] = cum;
             cum += s.size.load(Ordering::Acquire);

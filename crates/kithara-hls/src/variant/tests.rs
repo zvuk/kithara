@@ -66,7 +66,7 @@ fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) 
     let segments: Vec<SegmentEntry> = media_sizes
         .iter()
         .enumerate()
-        .map(|(i, &size)| make_seg(i as u32, size))
+        .map(|(i, &size)| make_seg(u32::try_from(i).expect("segment index < u32::MAX"), size))
         .collect();
     HlsVariant::from_parts(variant, init, segments, ctx)
 }

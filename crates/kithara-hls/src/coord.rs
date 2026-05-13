@@ -11,7 +11,10 @@ use std::{
 use kithara_abr::AbrHandle;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_platform::time::{Duration, Instant};
+use kithara_platform::{
+    RwLock,
+    time::{Duration, Instant},
+};
 use kithara_stream::{SegmentDescriptor, SegmentLayout, Timeline};
 use tokio_util::sync::CancellationToken;
 
@@ -33,6 +36,12 @@ pub(crate) struct HlsCoord {
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
     pub(crate) active_variant: Arc<AtomicUsize>,
     pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
+    /// Archive of variants that previously held the reader, ordered by
+    /// activation time (most-recent last). Each entry retains its own
+    /// `byte_shift` / `served_from..served_until` window so cross-variant
+    /// reads (e.g. Phase 2 box scan after an Auto switch) can resolve a
+    /// byte to the variant that actually streamed it.
+    history: RwLock<Vec<Arc<HlsVariant>>>,
 }
 
 impl HlsCoord {
@@ -51,6 +60,7 @@ impl HlsCoord {
             variants,
             active_variant,
             asset_store: env.asset_store,
+            history: RwLock::new(Vec::new()),
         }
     }
 
@@ -76,11 +86,66 @@ impl HlsCoord {
     }
 
     pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        self.active()?.find_at_offset(byte_offset)
+        if let Some(active) = self.active()
+            && let Some(r) = active.find_at_offset(byte_offset)
+        {
+            return Some(r);
+        }
+        self.history
+            .lock_sync_read()
+            .iter()
+            .rev()
+            .find_map(|v| v.find_at_offset(byte_offset))
+    }
+
+    /// Locate the variant that serves `byte_offset` in the combined byte
+    /// stream. Mirrors [`Self::find_at_offset`] but also returns the
+    /// variant itself so callers can read its init / segment resource.
+    pub(crate) fn resolve_variant(
+        &self,
+        byte_offset: u64,
+    ) -> Option<(Arc<HlsVariant>, u32, u64, u64)> {
+        if let Some(active) = self.active()
+            && let Some((idx, off, size)) = active.find_at_offset(byte_offset)
+        {
+            return Some((Arc::clone(active), idx, off, size));
+        }
+        self.history.lock_sync_read().iter().rev().find_map(|v| {
+            v.find_at_offset(byte_offset)
+                .map(|(idx, off, size)| (Arc::clone(v), idx, off, size))
+        })
+    }
+
+    /// Init prefix descriptor (key + size) for the byte at `byte_offset`,
+    /// resolved against active + historical variants. Returns `None` when
+    /// the byte falls outside any variant's init range.
+    pub(crate) fn init_descriptor_at(&self, byte_offset: u64) -> Option<(ResourceKey, Range<u64>)> {
+        if let Some(active) = self.active()
+            && let Some(range) = active.init_byte_range()
+            && range.contains(&byte_offset)
+            && let Some(key) = active.init_resource()
+        {
+            return Some((key, range));
+        }
+        self.history.lock_sync_read().iter().rev().find_map(|v| {
+            let range = v.init_byte_range()?;
+            if !range.contains(&byte_offset) {
+                return None;
+            }
+            Some((v.init_resource()?, range))
+        })
     }
 
     pub(crate) fn total_bytes(&self) -> u64 {
-        self.active().map_or(0, |v| v.total_bytes())
+        let active_total = self.active().map_or(0, |v| v.total_bytes());
+        let history_max = self
+            .history
+            .lock_sync_read()
+            .iter()
+            .map(|v| v.total_bytes())
+            .max()
+            .unwrap_or(0);
+        active_total.max(history_max)
     }
 
     pub(crate) fn variant_index(&self) -> usize {
@@ -109,9 +174,21 @@ impl HlsCoord {
     }
 
     /// Commit any ABR pending decision at the reader's segment boundary.
-    /// On a real switch: cancels the outgoing variant, positions the
-    /// incoming variant at `from_seg`, atomically flips `active_variant`,
-    /// rebuilds the new variant's queue, and emits `notify_commit`.
+    /// On a real switch:
+    /// 1. caps the outgoing variant's `served_until` to `from_seg` and
+    ///    archives it to `history` — future cross-variant reads (Phase 2
+    ///    box scan, etc.) resolve bytes below the boundary through the
+    ///    archived variant's resources;
+    /// 2. positions the incoming variant at `from_seg` with `byte_shift`
+    ///    pinned to the **segment boundary** (`v_old.segment_byte_offset(
+    ///    from_seg)`) so fMP4 box addresses across the join stay
+    ///    aligned; reader's cursor stays continuous via `reader_pos`
+    ///    (which may sit a few bytes past the boundary when the reader
+    ///    had partially crossed into the outgoing variant's `from_seg`
+    ///    before the commit fired);
+    /// 3. rebuilds the incoming variant's queue, atomically flips
+    ///    `active_variant`, and emits `notify_commit`.
+    ///
     /// Returns `true` when a switch landed.
     pub(crate) fn commit_variant_switch(&self, ctx: &PlanCtx, from_seg: u32) -> bool {
         let Some(decision) = self.abr.commit_pending(Instant::now()) else {
@@ -125,10 +202,17 @@ impl HlsCoord {
         let Some(v_new) = self.variants.get(new_v) else {
             return false;
         };
-        if let Some(v_old) = self.variants.get(current_before) {
+        let reader_pos = self.position();
+        let v_old_opt = self.variants.get(current_before);
+        let seg_boundary = v_old_opt
+            .and_then(|v| v.segment_byte_offset(from_seg))
+            .unwrap_or(reader_pos);
+        if let Some(v_old) = v_old_opt {
             v_old.cancel();
+            v_old.set_served_until(from_seg);
+            self.history.lock_sync_write().push(Arc::clone(v_old));
         }
-        v_new.activate_at_segment(ctx, from_seg);
+        v_new.activate_at_segment_with_shift(ctx, from_seg, seg_boundary, reader_pos);
         self.active_variant.store(new_v, Ordering::Release);
         let reader_pt = self.timeline.committed_position();
         self.abr

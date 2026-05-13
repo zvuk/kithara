@@ -1,44 +1,135 @@
-use kithara_platform::time::Duration;
+//! `commit_pending` mechanics — boundary commit invariants from
+//! `.docs/plans/2026-05-12-abr-pull-driven-06-D-track-poll-next.md` and
+//! the AbrState contract docs.
+//!
+//! These tests sit at the AbrState / AbrDecision API level rather than
+//! the full HLS+probe pipeline: the four invariants below are
+//! data-flow contracts that don't need a Recorder to verify, and the
+//! cross-variant byte continuity already has end-to-end coverage in
+//! `drm_stream_integrity`.
+
+use kithara_abr::{AbrMode, AbrReason, AbrState, AbrVariant};
+use kithara_events::VariantDuration;
+use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
+
+fn variant(index: usize, bandwidth_bps: u64) -> AbrVariant {
+    AbrVariant {
+        duration: VariantDuration::Unknown,
+        bandwidth_bps,
+        variant_index: index,
+    }
+}
+
+fn fresh_state(initial: usize) -> AbrState {
+    AbrState::new(
+        vec![
+            variant(0, 66_000),
+            variant(1, 134_000),
+            variant(2, 270_000),
+            variant(3, 988_000),
+        ],
+        AbrMode::Auto(Some(initial)),
+    )
+}
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn auto_commit_flips_active_variant() {
-    unimplemented!("Plan 06 — auto_commit_flips_active_variant scenario");
-}
+    let state = fresh_state(0);
+    state.request_target(3, AbrReason::AlreadyOptimal);
+    assert_eq!(state.pending_target(), Some(3));
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
-async fn manual_set_mode_uses_same_commit_path() {
-    unimplemented!("Plan 06 — manual_set_mode_uses_same_commit_path scenario");
-}
+    let decision = state
+        .commit_pending(Instant::now())
+        .expect("auto commit must surface a decision when a pending switch differs from current");
 
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
-async fn commit_pending_returns_none_during_seek() {
-    unimplemented!("Plan 06 — commit_pending_returns_none_during_seek scenario");
-}
-
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
-async fn did_change_false_skips_notify() {
-    unimplemented!("Plan 06 — did_change_false_skips_notify scenario");
-}
-
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
-async fn abr_frozen_between_seek_and_first_post_seek_chunk_t4() {
-    unimplemented!("Plan 09 — abr_frozen_between_seek_and_first_post_seek_chunk_t4 scenario");
-}
-
-#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
-async fn set_mode_to_first_post_chunk_latency_within_segment_duration_t5() {
-    unimplemented!(
-        "Plan 09 — set_mode_to_first_post_chunk_latency_within_segment_duration_t5 scenario"
+    assert!(
+        decision.did_change,
+        "auto commit must mark the decision as a real change"
+    );
+    assert_eq!(decision.target_variant_index, 3);
+    assert_eq!(
+        state.current_variant_index(),
+        3,
+        "current variant must follow the committed decision"
+    );
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "pending must drain on commit so a stale intent can't fire twice"
     );
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
-async fn post_apply_emit_forward_only_t14() {
-    unimplemented!("Plan 09 — post_apply_emit_forward_only_t14 scenario");
+async fn manual_set_mode_uses_same_commit_path() {
+    let state = fresh_state(0);
+    state.set_mode(AbrMode::Manual(2)).expect("manual mode set");
+    // Manual mode surfaces its target through the same pending-decision
+    // channel Auto uses, so commit_pending consumes both with one code
+    // path. The scheduler doesn't need to special-case manual switches.
+    state.request_target(2, AbrReason::AlreadyOptimal);
+
+    let decision = state
+        .commit_pending(Instant::now())
+        .expect("manual commit must travel the same boundary path as auto");
+
+    assert!(decision.did_change);
+    assert_eq!(decision.target_variant_index, 2);
+    assert_eq!(state.current_variant_index(), 2);
+    assert!(matches!(state.mode(), AbrMode::Manual(2)));
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
-async fn noop_set_mode_does_not_violate_forward_only_t14() {
-    unimplemented!("Plan 09 — noop_set_mode_does_not_violate_forward_only_t14 scenario");
+async fn commit_pending_returns_none_during_seek() {
+    let state = fresh_state(0);
+    state.request_target(2, AbrReason::AlreadyOptimal);
+
+    state.lock();
+    let blocked = state.commit_pending(Instant::now());
+    assert!(
+        blocked.is_none(),
+        "ABR locked (seek pending / blender fence) must block boundary commits"
+    );
+    assert_eq!(
+        state.current_variant_index(),
+        0,
+        "locked commit must not advance current_variant"
+    );
+    assert_eq!(
+        state.pending_target(),
+        Some(2),
+        "locked commit must preserve the pending intent for the next boundary"
+    );
+
+    state.unlock();
+    let resumed = state
+        .commit_pending(Instant::now())
+        .expect("unlock releases the fence — same pending intent must commit");
+    assert!(resumed.did_change);
+    assert_eq!(resumed.target_variant_index, 2);
+}
+
+#[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+async fn did_change_false_skips_notify() {
+    // A no-op pending (target == current) must NOT commit — `commit_pending`
+    // returns `None` so `notify_commit` never fires. The `did_change`
+    // field on `AbrDecision` is the guard the scheduler reads downstream;
+    // proving the no-op path stays at `None` is the equivalent contract.
+    let state = fresh_state(1);
+    state.request_target(1, AbrReason::AlreadyOptimal);
+
+    assert_eq!(state.pending_target(), Some(1));
+    let outcome = state.commit_pending(Instant::now());
+    assert!(
+        outcome.is_none(),
+        "no-op switch (target == current) must not surface a decision — \
+         coord::commit_variant_switch would otherwise call notify_commit \
+         for a flip that didn't happen"
+    );
+    assert_eq!(state.current_variant_index(), 1);
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "consumed pending must drain even when the decision was a no-op"
+    );
 }
