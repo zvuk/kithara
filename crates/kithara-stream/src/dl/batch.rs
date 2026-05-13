@@ -189,6 +189,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let mut cmd = internal.cmd;
     let writer = cmd.writer.take();
     let on_complete_cb = cmd.on_complete.take();
+    let on_response_cb = cmd.on_response.take();
     let bus = internal.bus;
     let cancel = internal.cancel.clone();
     let epoch_cancel = cmd.cancel.clone();
@@ -212,6 +213,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
                 result,
                 writer,
                 on_complete_cb,
+                on_response_cb,
                 abr,
                 peer_id,
                 started,
@@ -363,6 +365,7 @@ struct DeliveryContext<'a> {
     bus: Option<EventBus>,
     epoch_cancel: Option<&'a CancellationToken>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,
+    on_response_cb: Option<super::cmd::OnResponseFn>,
     writer: Option<super::cmd::WriterFn>,
     target: ResponseTarget,
     result: Result<FetchResponse, NetError>,
@@ -377,6 +380,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
         result,
         mut writer,
         on_complete_cb,
+        on_response_cb,
         abr,
         peer_id,
         started,
@@ -393,6 +397,9 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
             Ok(resp) => {
                 if let Some(ref mut w) = writer {
                     let headers = resp.headers.clone();
+                    if let Some(cb) = on_response_cb {
+                        cb(&headers);
+                    }
                     let write_result = resp.body.write_all(|chunk| w(chunk)).await;
                     let elapsed = started.elapsed();
                     match write_result {

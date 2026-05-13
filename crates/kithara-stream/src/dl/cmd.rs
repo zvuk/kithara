@@ -9,6 +9,14 @@ use url::Url;
 /// Per-command body writer. Downloader calls it for each chunk.
 pub type WriterFn = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 
+/// Per-command response callback. Fires once on the streaming path
+/// when the HTTP response is in hand — past validation, headers
+/// available, body about to stream. Mirrors [`OnCompleteFn`] on the
+/// other end of the fetch lifecycle: peers use it to seed metadata
+/// (Content-Length, Content-Type) eagerly so a reader blocked on the
+/// first byte already sees a populated coord.
+pub type OnResponseFn = Box<dyn FnOnce(&Headers) + Send>;
+
 /// Per-command completion handler. Called when the fetch completes.
 ///
 /// Receives `(bytes_written, response_headers, error)`. Headers are
@@ -41,6 +49,11 @@ pub struct FetchCmd {
     /// Streaming path completion handler. `None` for channel path (`execute`/`batch`).
     #[setters(skip)]
     pub on_complete: Option<OnCompleteFn>,
+    /// Streaming path response callback — fires once when the
+    /// response is ready, before the body streams. `None` for the
+    /// channel path (`execute`/`batch`).
+    #[setters(skip)]
+    pub on_response: Option<OnResponseFn>,
     /// Optional byte range (HTTP Range request).
     pub range: Option<RangeSpec>,
     /// Optional per-request response validator.
@@ -79,6 +92,15 @@ impl FetchCmd {
         self
     }
 
+    /// Set the per-command response callback (streaming path). Fires
+    /// once when the HTTP response is ready (headers available, past
+    /// validation), before any body chunks reach the writer.
+    #[must_use]
+    pub fn on_response(mut self, cb: OnResponseFn) -> Self {
+        self.on_response = Some(cb);
+        self
+    }
+
     /// Build a [`FetchCmd`] with the given method and URL; all other
     /// fields start unset.
     fn with_method(method: RequestMethod, url: Url) -> Self {
@@ -90,6 +112,7 @@ impl FetchCmd {
             cancel: None,
             writer: None,
             on_complete: None,
+            on_response: None,
             validator: None,
         }
     }

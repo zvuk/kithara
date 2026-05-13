@@ -105,7 +105,12 @@ impl File {
         let asset_root = asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()))
+            // child_token, not clone — `DownloaderInner::Drop` cancels
+            // its own token; handing the caller's master cancel here
+            // would tear down the whole stream on any speculative
+            // drop (e.g. when the file turns out to be fully cached
+            // and the downloader is never used). Mirrors HLS.
+            Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()))
         });
 
         let backend_builder = AssetStoreBuilder::new()

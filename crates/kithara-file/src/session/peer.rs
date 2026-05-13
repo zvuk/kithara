@@ -1,17 +1,15 @@
 use std::{
     io,
-    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    task::{Context, Poll, Waker},
+    task::{Context, Poll},
 };
 
 use kithara_abr::Abr;
 use kithara_events::{FileError, FileEvent};
-use kithara_net::{Headers, NetError};
-use kithara_platform::Mutex;
+use kithara_net::{Headers, NetError, RangeSpec};
 use kithara_storage::ResourceExt;
 use kithara_stream::{
     AudioCodec,
@@ -20,57 +18,80 @@ use kithara_stream::{
 
 use super::inner::{FileInner, FilePhase};
 
-/// File-track Peer: one full-file GET, fully driven by the
-/// [`kithara_stream::dl::Downloader`].
+/// File-track Peer: gap-driven downloader over a single remote file.
 ///
-/// `poll_next` yields a single `FetchCmd` on its first call (Downloader
-/// pulls bytes via the `writer` closure and finalizes through
-/// `on_complete`); subsequent calls return `Ready(None)` — no per-track
-/// download loop on our side.
+/// Each `poll_next` issues at most one fetch and remains pending until
+/// the previous fetch finalises. On finalise the peer re-polls,
+/// inspects the resource's remaining gap and emits a Range GET for the
+/// next missing range — so partial / truncated transfers resume
+/// transparently. Returns `Ready(None)` only once the resource has no
+/// gaps left.
 pub(crate) struct FilePeer {
     inner: Arc<FileInner>,
-    started: AtomicBool,
-    waker: Mutex<Option<Waker>>,
+    /// `true` while a fetch issued by this peer is still in flight.
+    /// Cleared from the `on_complete` callback before the Downloader
+    /// re-polls.
+    inflight: Arc<AtomicBool>,
 }
 
 impl FilePeer {
     pub(crate) fn new(inner: Arc<FileInner>) -> Self {
         Self {
             inner,
-            started: AtomicBool::new(false),
-            waker: Mutex::new(None),
+            inflight: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    fn build_fetch_cmd(&self) -> FetchCmd {
+    fn build_fetch_cmd(&self, resume_from: u64) -> FetchCmd {
         let url = self.inner.asset.url.clone();
         let headers = self.inner.asset.headers.clone();
         let cancel = self.inner.source.cancel.clone();
 
         let resource = self.inner.asset.res.clone();
         let coord_writer = Arc::clone(&self.inner.source.coord);
-        let offset = Arc::new(AtomicU64::new(0));
-        let writer = {
-            let resource = resource.clone();
-            Box::new(move |chunk: &[u8]| -> io::Result<()> {
-                let pos = offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-                resource.write_at(pos, chunk).map_err(io::Error::other)?;
-                coord_writer.set_download_pos(pos + chunk.len() as u64);
-                Ok(())
-            })
-        };
+        // Shared between writer and on_complete: the writer increments
+        // it on every chunk, the on_complete reads it to report the
+        // real bytes-written count even when the body stream errors
+        // mid-transfer (the deliver-path `total` is lost on `?`).
+        let offset = Arc::new(AtomicU64::new(resume_from));
+        let writer_offset = Arc::clone(&offset);
+        let writer = Box::new(move |chunk: &[u8]| -> io::Result<()> {
+            let pos = writer_offset.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            resource.write_at(pos, chunk).map_err(io::Error::other)?;
+            coord_writer.set_download_pos(pos + chunk.len() as u64);
+            Ok(())
+        });
+
+        // Seed Content-Length / Content-Type up front so a reader
+        // already blocked on `wait_range(0..1)` sees a populated coord
+        // (`Source::len() = Some(_)`) the instant the first byte
+        // arrives — `seek(SeekFrom::End)` relies on this.
+        let inner_for_resp = Arc::clone(&self.inner);
+        let on_response = Box::new(move |headers: &Headers| {
+            inner_for_resp.capture_content_metadata(headers, resume_from);
+        });
 
         let inner = Arc::clone(&self.inner);
+        let inflight = Arc::clone(&self.inflight);
+        let cb_offset = Arc::clone(&offset);
         let on_complete = Box::new(
-            move |bytes_written: u64, headers: Option<&Headers>, err: Option<&NetError>| {
-                finalize(&inner, bytes_written, headers, err);
+            move |_reported_total: u64, _headers: Option<&Headers>, err: Option<&NetError>| {
+                let written = cb_offset
+                    .load(Ordering::Relaxed)
+                    .saturating_sub(resume_from);
+                inner.finalize_fetch(resume_from, written, err);
+                inflight.store(false, Ordering::Release);
             },
         );
 
         let mut cmd = FetchCmd::get(url)
             .cancel(Some(cancel))
             .writer(writer)
-            .with_validator(reject_html_response);
+            .with_validator(reject_html_response)
+            .on_response(on_response);
+        if resume_from > 0 {
+            cmd = cmd.range(Some(RangeSpec::new(resume_from, None)));
+        }
         if let Some(h) = headers {
             cmd = cmd.headers(Some(h));
         }
@@ -81,13 +102,26 @@ impl FilePeer {
 impl Abr for FilePeer {}
 
 impl Peer for FilePeer {
-    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
-        if self.started.swap(true, Ordering::AcqRel) {
+    fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+        if self.inflight.load(Ordering::Acquire) {
+            return Poll::Pending;
+        }
+        // Terminal resource state (Failed / Cancelled): stop the peer
+        // so a captive-portal HTML response or a cancelled fetch
+        // doesn't loop us into a retry storm.
+        if !matches!(
+            self.inner.asset.res.status(),
+            kithara_storage::ResourceStatus::Active
+                | kithara_storage::ResourceStatus::Committed { .. }
+        ) {
             return Poll::Ready(None);
         }
-        let _ = Pin::new(&mut *self.waker.lock_sync()).replace(cx.waker().clone());
+        let Some(gap_start) = self.inner.next_gap_start() else {
+            return Poll::Ready(None);
+        };
+        self.inflight.store(true, Ordering::Release);
         self.inner.set_phase(FilePhase::Downloading);
-        Poll::Ready(Some(vec![self.build_fetch_cmd()]))
+        Poll::Ready(Some(vec![self.build_fetch_cmd(gap_start)]))
     }
 
     fn priority(&self) -> RequestPriority {
@@ -99,59 +133,100 @@ impl Peer for FilePeer {
     }
 }
 
-/// Commit / fail / publish error based on the fetch result.
-fn finalize(
-    inner: &Arc<FileInner>,
-    bytes_written: u64,
-    headers: Option<&Headers>,
-    err: Option<&NetError>,
-) {
-    if let Some(h) = headers {
-        capture_content_metadata(inner, h);
+impl FileInner {
+    /// Start of the next missing byte range on this resource, or
+    /// `None` when the resource is fully covered. Upper bound is the
+    /// known total — committed length (when reactivating a partial)
+    /// or the discovered `Content-Length` (after the first response
+    /// headers seed `coord.total_bytes`). Without either, falls back
+    /// to `u64::MAX` so the gap walker scans the whole space.
+    fn next_gap_start(&self) -> Option<u64> {
+        let upper = self
+            .asset
+            .res
+            .len()
+            .or_else(|| self.source.coord.total_bytes())
+            .unwrap_or(u64::MAX);
+        self.asset.res.next_gap(0, upper).map(|gap| gap.start)
     }
 
-    if let Some(e) = err {
-        let msg = e.to_string();
-        if bytes_written == 0 {
-            inner.fail_and_evict(&msg);
-            inner.source.bus.publish(FileEvent::Error {
-                error: FileError::Io(msg),
-            });
-        } else {
-            inner.set_phase(FilePhase::Complete);
+    /// Apply the result of a streaming fetch to the resource.
+    ///
+    /// * commits the resource once the full byte space is covered
+    /// * on a transient error with bytes already received, leaves the
+    ///   resource active so the peer's next `poll_next` issues a
+    ///   Range GET for the remaining gap
+    /// * on a terminal error (non-retryable, or hard failure with no
+    ///   bytes received), fails+evicts the resource and publishes a
+    ///   `FileEvent::Error`
+    ///
+    /// Header capture (`Content-Length` / `Content-Type`) happens
+    /// eagerly in `on_response`, not here, so a reader blocked on the
+    /// first byte sees the seeded coord the instant `write_at` fires.
+    fn finalize_fetch(&self, resume_from: u64, bytes_written: u64, err: Option<&NetError>) {
+        if let Some(e) = err {
+            let terminal = !e.is_retryable() || (resume_from == 0 && bytes_written == 0);
+            if terminal {
+                let msg = e.to_string();
+                self.fail_and_evict(&msg);
+                self.source.bus.publish(FileEvent::Error {
+                    error: FileError::Io(msg),
+                });
+            }
+            // Retryable mid-transfer error with bytes on disk: leave
+            // resource active, peer re-polls and emits a new Range
+            // GET starting at the current gap.
+            return;
         }
-        return;
-    }
 
-    match inner.asset.res.commit(Some(bytes_written)) {
-        Ok(()) => inner.set_phase(FilePhase::Complete),
-        Err(e) => {
-            let msg = e.to_string();
-            inner.fail_and_evict(&msg);
-            inner.source.bus.publish(FileEvent::Error {
-                error: FileError::Io(msg),
-            });
+        // Stream completed without error. Only commit when the resource
+        // is fully covered — a single Range response may still leave a
+        // tail gap (e.g. server closed after a partial body), in which
+        // case the peer will re-poll and fill it.
+        if self.next_gap_start().is_some() {
+            return;
+        }
+
+        let final_len = self
+            .source
+            .coord
+            .total_bytes()
+            .unwrap_or(resume_from + bytes_written);
+        match self.asset.res.commit(Some(final_len)) {
+            Ok(()) => self.set_phase(FilePhase::Complete),
+            Err(e) => {
+                let msg = e.to_string();
+                self.fail_and_evict(&msg);
+                self.source.bus.publish(FileEvent::Error {
+                    error: FileError::Io(msg),
+                });
+            }
         }
     }
-}
 
-/// Pull `Content-Length` and `Content-Type` out of the response headers
-/// and seed the coord / codec hint. Both lookups try the lower-cased
-/// header first (per HTTP/2 RFC) and fall back to the title-cased form
-/// from older HTTP/1.1 servers.
-fn capture_content_metadata(inner: &Arc<FileInner>, headers: &Headers) {
-    let content_length = headers
-        .get("content-length")
-        .or_else(|| headers.get("Content-Length"))
-        .and_then(|v| v.parse::<u64>().ok());
-    if let Some(len) = content_length {
-        inner.source.coord.set_total_bytes(Some(len));
-    }
-    let codec = headers
-        .get("content-type")
-        .or_else(|| headers.get("Content-Type"))
-        .and_then(AudioCodec::from_mime);
-    if let Some(c) = codec {
-        let _ = inner.content_type_codec.set(c);
+    /// Pull `Content-Length` and `Content-Type` out of the response
+    /// headers and seed the coord / codec hint. Both lookups try the
+    /// lower-cased header first (per HTTP/2 RFC) and fall back to the
+    /// title-cased form from older HTTP/1.1 servers.
+    ///
+    /// `resume_from` is the byte offset our Range request started at:
+    /// on a `206 Partial Content` response, `Content-Length` describes
+    /// the partial body length, so the resource's full size is
+    /// `resume_from + content_length`.
+    fn capture_content_metadata(&self, headers: &Headers, resume_from: u64) {
+        let content_length = headers
+            .get("content-length")
+            .or_else(|| headers.get("Content-Length"))
+            .and_then(|v| v.parse::<u64>().ok());
+        if let Some(len) = content_length {
+            self.source.coord.set_total_bytes(Some(resume_from + len));
+        }
+        let codec = headers
+            .get("content-type")
+            .or_else(|| headers.get("Content-Type"))
+            .and_then(AudioCodec::from_mime);
+        if let Some(c) = codec {
+            let _ = self.content_type_codec.set(c);
+        }
     }
 }
