@@ -1,18 +1,21 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use kithara_abr::AbrHandle;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_platform::time::Instant;
-use kithara_stream::Timeline;
+use kithara_platform::time::{Duration, Instant};
+use kithara_stream::{SegmentDescriptor, SegmentLayout, Timeline};
 use tokio_util::sync::CancellationToken;
 
-use crate::variant::{HlsVariant, PlanCtx, segment_view::HlsSegmentView};
+use crate::variant::{HlsVariant, PlanCtx};
 
 /// Infrastructure handles shared with every [`HlsCoord`]:
 /// the parent cancel token (cancel hierarchy owner of `HlsCoord.cancel`)
@@ -27,10 +30,9 @@ pub(crate) struct HlsCoord {
     pub(crate) cancel: CancellationToken,
     pub(crate) timeline: Timeline,
     pub(crate) abr: AbrHandle,
-    pub(crate) variants: Arc<Vec<HlsVariant>>,
+    pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
     pub(crate) active_variant: Arc<AtomicUsize>,
     pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
-    segment_view: Arc<HlsSegmentView>,
 }
 
 impl HlsCoord {
@@ -38,14 +40,10 @@ impl HlsCoord {
         env: HlsCoordEnv,
         timeline: Timeline,
         abr: AbrHandle,
-        variants: Arc<Vec<HlsVariant>>,
+        variants: Arc<Vec<Arc<HlsVariant>>>,
     ) -> Self {
         let initial = abr.current_variant_index().unwrap_or(0);
         let active_variant = Arc::new(AtomicUsize::new(initial));
-        let segment_view = Arc::new(HlsSegmentView::new(
-            Arc::clone(&variants),
-            Arc::clone(&active_variant),
-        ));
         Self {
             cancel: env.cancel,
             timeline,
@@ -53,17 +51,16 @@ impl HlsCoord {
             variants,
             active_variant,
             asset_store: env.asset_store,
-            segment_view,
         }
     }
 
-    pub(crate) fn active(&self) -> Option<&HlsVariant> {
+    pub(crate) fn active(&self) -> Option<&Arc<HlsVariant>> {
         let idx = self.active_variant.load(Ordering::Acquire);
         self.variants.get(idx)
     }
 
     pub(crate) fn position(&self) -> u64 {
-        self.active().map_or(0, HlsVariant::get_position)
+        self.active().map_or(0, |v| v.get_position())
     }
 
     pub(crate) fn advance(&self, n: u64) {
@@ -83,7 +80,7 @@ impl HlsCoord {
     }
 
     pub(crate) fn total_bytes(&self) -> u64 {
-        self.active().map_or(0, HlsVariant::total_bytes)
+        self.active().map_or(0, |v| v.total_bytes())
     }
 
     pub(crate) fn variant_index(&self) -> usize {
@@ -93,11 +90,7 @@ impl HlsCoord {
     /// Number of consecutive `Loaded` segments from the start of the
     /// active variant — the ABR controller's "download head" signal.
     pub(crate) fn download_head(&self) -> u32 {
-        self.active().map_or(0, HlsVariant::download_head)
-    }
-
-    pub(crate) fn segment_view(&self) -> Arc<HlsSegmentView> {
-        Arc::clone(&self.segment_view)
+        self.active().map_or(0, |v| v.download_head())
     }
 
     pub(crate) fn timeline(&self) -> Timeline {
@@ -161,5 +154,30 @@ impl HlsCoord {
         if active_lost && let Some(active) = self.active() {
             active.rebuild(ctx, seg_at_reader);
         }
+    }
+}
+
+/// `SegmentLayout` delegates to whichever variant is currently active —
+/// `HlsCoord` already owns the variants and the active index, so we
+/// implement the trait here instead of a separate view wrapper.
+impl SegmentLayout for HlsCoord {
+    fn init_segment_range(&self) -> Option<Range<u64>> {
+        self.active()?.init_byte_range()
+    }
+
+    fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        self.active()?.descriptor_after_byte(byte)
+    }
+
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.active()?.descriptor_at_time(t)
+    }
+
+    fn segment_count(&self) -> Option<u32> {
+        Some(self.active()?.num_segments())
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(self.active()?.total_bytes())
     }
 }

@@ -62,42 +62,115 @@ impl HlsSource {
         }
     }
 
-    /// Locate the segment covering `byte_offset` and resolve the init /
-    /// media resource split. Segment 0 of an fMP4 variant is the only
-    /// place where `init_len > 0`; for raw TS/AAC variants and for
-    /// segments >= 1 the init portion is empty and reads go straight to
-    /// the media resource.
-    fn segment_resource_key(&self, byte_offset: u64) -> Option<SegmentRead> {
-        let (seg_idx, seg_byte_offset, seg_size) = self.coord.find_at_offset(byte_offset)?;
+    /// Init prefix descriptor: `(resource_key, size)` when the variant
+    /// has an `#EXT-X-MAP` init segment. Init occupies `[0, size)` in
+    /// variant-byte space; media segments start at offset `size`.
+    fn init_descriptor(&self) -> Option<(ResourceKey, u64)> {
         let active = self.coord.active()?;
-        let media_key = active.segment_resource(seg_idx)?;
-        let init = (seg_idx == 0)
-            .then(|| active.init_resource().map(|key| (key, active.init_size())))
-            .flatten();
-        Some(SegmentRead {
-            media_key,
-            init,
-            segment_byte_offset: seg_byte_offset,
-            segment_size: seg_size,
-        })
+        Some((active.init_resource()?, active.init_size()))
+    }
+
+    /// Open the resource and read the requested range. Returns
+    /// `Ok(None)` when the resource was evicted between `wait_range`
+    /// metadata visibility and this call — the caller should treat it
+    /// as "no more bytes available right now" (drives `Retry`).
+    fn read_resource(
+        &self,
+        key: &ResourceKey,
+        range: Range<u64>,
+        dst: &mut [u8],
+    ) -> StreamResult<Option<usize>> {
+        let resource = match self.coord.asset_store.open_resource(key) {
+            Ok(res) => res,
+            Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(StreamError::Source(HlsError::from(e).into())),
+        };
+        // For DRM (`ProcessedResource`) this closes the race between
+        // `inner.commit()` and `mark_ready()`. For plain resources it's
+        // effectively a no-op.
+        resource
+            .wait_range(range.clone())
+            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
+        let n = resource
+            .read_at(range.start, dst)
+            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
+        Ok(Some(n))
+    }
+
+    fn wrap(written: usize) -> ReadOutcome {
+        NonZeroUsize::new(written).map_or(
+            ReadOutcome::Pending(PendingReason::Retry),
+            ReadOutcome::Bytes,
+        )
+    }
+
+    /// Media descriptor for the segment covering `byte_offset` —
+    /// `(resource_key, segment_byte_offset, segment_size)`. Returns
+    /// `None` when the offset falls in the init prefix or past the last
+    /// media segment.
+    fn media_descriptor(&self, byte_offset: u64) -> Option<(ResourceKey, u64, u64)> {
+        let (seg_idx, seg_byte_offset, seg_size) = self.coord.find_at_offset(byte_offset)?;
+        let key = self.coord.active()?.segment_resource(seg_idx)?;
+        Some((key, seg_byte_offset, seg_size))
     }
 
     fn range_ready(&self, range: &Range<u64>) -> bool {
-        let Some(seg) = self.segment_resource_key(range.start) else {
-            return false;
+        // Clamp to the variant's current total — for DRM the total
+        // shrinks on every commit (PKCS7 strip), so a 64KiB-aligned
+        // read range often extends past the last byte. Without the
+        // clamp the loop below would search for a segment to cover
+        // those non-existent bytes and report `false` forever.
+        let total = self.coord.total_bytes();
+        let end = if total > 0 {
+            range.end.min(total)
+        } else {
+            range.end
         };
-        let seg_end = seg.segment_byte_offset + seg.segment_size;
-        let read_end = range.end.min(seg_end);
-        let local_start = range.start.saturating_sub(seg.segment_byte_offset);
-        let local_end = read_end.saturating_sub(seg.segment_byte_offset);
-        if local_start >= local_end {
+        if range.start >= end {
             return true;
         }
-        seg.split(local_start, local_end).iter().all(|chunk| {
-            self.coord
+
+        let init_end = self.init_descriptor().map_or(0, |(_, size)| size);
+        let mut cursor = range.start;
+
+        // Init prefix portion.
+        if cursor < init_end {
+            let Some((ref key, size)) = self.init_descriptor() else {
+                return false;
+            };
+            let slice_end = end.min(size);
+            if !self
+                .coord
                 .asset_store
-                .contains_range(chunk.key, chunk.range.clone())
-        })
+                .contains_range(key, cursor..slice_end)
+            {
+                return false;
+            }
+            cursor = slice_end;
+        }
+        if cursor >= end {
+            return true;
+        }
+
+        // Media portion: may span multiple segments.
+        while cursor < end {
+            let Some((ref key, seg_off, seg_size)) = self.media_descriptor(cursor) else {
+                return false;
+            };
+            let seg_end = seg_off + seg_size;
+            let slice_end = end.min(seg_end);
+            let local_start = cursor - seg_off;
+            let local_end = slice_end - seg_off;
+            if !self
+                .coord
+                .asset_store
+                .contains_range(key, local_start..local_end)
+            {
+                return false;
+            }
+            cursor = slice_end;
+        }
+        cursor >= end
     }
 }
 
@@ -109,62 +182,13 @@ impl Drop for HlsSource {
     }
 }
 
-struct SegmentRead {
-    media_key: ResourceKey,
-    /// Init resource paired with its prefix size in segment-local bytes;
-    /// `None` when the segment has no init prefix.
-    init: Option<(ResourceKey, u64)>,
-    segment_byte_offset: u64,
-    segment_size: u64,
-}
-
-/// One slice of a segment-local range mapped onto a single resource.
-/// `range` is local to the resource (offset 0 = start of init or media).
-struct ResourceSlice<'a> {
-    key: &'a ResourceKey,
-    range: Range<u64>,
-}
-
-impl SegmentRead {
-    /// Split a segment-local range `[local_start, local_end)` into the
-    /// init prefix and media body slices. Returns one or two entries —
-    /// `local_end <= init_len` yields init only, `local_start >= init_len`
-    /// yields media only, the rest yields both.
-    fn split(&self, local_start: u64, local_end: u64) -> Vec<ResourceSlice<'_>> {
-        let mut out = Vec::with_capacity(2);
-        if let Some((ref init_key, init_len)) = self.init {
-            let init_cut = local_end.min(init_len);
-            if local_start < init_cut {
-                out.push(ResourceSlice {
-                    key: init_key,
-                    range: local_start..init_cut,
-                });
-            }
-            if local_end > init_len {
-                let media_start = local_start.saturating_sub(init_len);
-                let media_end = local_end - init_len;
-                out.push(ResourceSlice {
-                    key: &self.media_key,
-                    range: media_start..media_end,
-                });
-            }
-        } else {
-            out.push(ResourceSlice {
-                key: &self.media_key,
-                range: local_start..local_end,
-            });
-        }
-        out
-    }
-}
-
 impl Source for HlsSource {
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.peer_handle.as_ref().map(|h| h.abr().clone())
     }
 
     fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
-        Some(self.coord.segment_view() as Arc<dyn SegmentLayout>)
+        Some(Arc::clone(&self.coord) as Arc<dyn SegmentLayout>)
     }
 
     fn len(&self) -> Option<u64> {
@@ -207,33 +231,60 @@ impl Source for HlsSource {
         if total > 0 && offset >= total {
             return Ok(ReadOutcome::Eof);
         }
-        let Some(seg) = self.segment_resource_key(offset) else {
-            return Ok(ReadOutcome::Pending(PendingReason::Retry));
-        };
-        let local_offset = offset.saturating_sub(seg.segment_byte_offset);
+
+        let init_end = self.init_descriptor().map_or(0, |(_, size)| size);
         let buf_len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
-        let local_end = (local_offset + buf_len).min(seg.segment_size);
         let mut written: usize = 0;
-        for chunk in seg.split(local_offset, local_end) {
-            let take = usize::try_from(chunk.range.end - chunk.range.start).unwrap_or(usize::MAX);
-            let dst = &mut buf[written..written + take];
-            let resource = match self.coord.asset_store.open_resource(chunk.key) {
-                Ok(res) => res,
-                Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => break,
-                Err(e) => return Err(StreamError::Source(HlsError::from(e).into())),
+        let mut cursor = offset;
+        let read_end = offset.saturating_add(buf_len);
+
+        // Init prefix: variant byte range [0, init_size) reads from the
+        // init resource at its local offset (0-based).
+        if cursor < init_end {
+            let Some((ref key, init_size)) = self.init_descriptor() else {
+                return Ok(ReadOutcome::Pending(PendingReason::Retry));
             };
-            let n = resource
-                .read_at(chunk.range.start, dst)
-                .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
-            written += n;
-            if n < take {
-                break;
+            let slice_end = read_end.min(init_size);
+            let take = usize::try_from(slice_end - cursor).unwrap_or(usize::MAX);
+            let dst = &mut buf[written..written + take];
+            match self.read_resource(key, cursor..slice_end, dst)? {
+                Some(n) => {
+                    written += n;
+                    cursor += n as u64;
+                    if n < take {
+                        return Ok(Self::wrap(written));
+                    }
+                }
+                None => return Ok(Self::wrap(written)),
             }
         }
-        Ok(NonZeroUsize::new(written).map_or(
-            ReadOutcome::Pending(PendingReason::Retry),
-            ReadOutcome::Bytes,
-        ))
+
+        // Media: walk segments while the read range remains. The reader
+        // pulls 64KiB at a time but segments are larger, so this loop
+        // usually runs once.
+        while cursor < read_end {
+            let Some((key, seg_off, seg_size)) = self.media_descriptor(cursor) else {
+                break;
+            };
+            let seg_end = seg_off + seg_size;
+            let slice_end = read_end.min(seg_end);
+            let local_start = cursor - seg_off;
+            let local_end = slice_end - seg_off;
+            let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
+            let dst = &mut buf[written..written + take];
+            match self.read_resource(&key, local_start..local_end, dst)? {
+                Some(n) => {
+                    written += n;
+                    cursor += n as u64;
+                    if n < take {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+
+        Ok(Self::wrap(written))
     }
 
     fn seek_time_anchor(&mut self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {

@@ -331,6 +331,34 @@ impl KeyManager {
             .collect()
     }
 
+    /// Resolve the [`DecryptContext`] for a variant's init segment.
+    /// Returns `None` when the playlist has no init segment, when the
+    /// init segment carries no key (cleartext), or when key resolution
+    /// fails (same fallback policy as media segments).
+    pub(crate) fn resolve_init_decrypt_ctx(
+        &self,
+        playlist: &crate::parsing::MediaPlaylist,
+    ) -> Option<DecryptContext> {
+        let init = playlist.init_segment.as_ref()?;
+        let key = init.key.as_ref()?;
+        if !matches!(key.method, crate::parsing::EncryptionMethod::Aes128) {
+            return None;
+        }
+        let key_info = key.key_info.as_ref()?;
+        let init_url = playlist.url.join(&init.uri).ok()?;
+        match self.resolve_decrypt_ctx(key_info, &init_url, 0) {
+            Ok(ctx) => Some(ctx),
+            Err(e) => {
+                tracing::warn!(
+                    url = %init_url,
+                    error = %e,
+                    "resolve_init_decrypt_ctx failed; init will be unreadable",
+                );
+                None
+            }
+        }
+    }
+
     fn resolve_segment_decrypt_ctx(
         &self,
         media_url: &Url,

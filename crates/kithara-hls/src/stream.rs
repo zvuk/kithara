@@ -136,12 +136,19 @@ impl StreamType for Hls {
             prefetch_budget: config.download_batch_size.max(1),
         };
 
-        let variants: Vec<HlsVariant> = media_playlists
+        let variants: Vec<Arc<HlsVariant>> = media_playlists
             .iter()
             .enumerate()
             .map(|(idx, mp)| {
+                let init_decrypt_ctx = key_manager.resolve_init_decrypt_ctx(mp);
                 let decrypt_contexts = key_manager.resolve_variant_decrypt_contexts(mp);
-                HlsVariant::new(idx, &playlist_state, &decrypt_contexts, &plan_ctx)
+                HlsVariant::new(
+                    idx,
+                    &playlist_state,
+                    init_decrypt_ctx,
+                    &decrypt_contexts,
+                    &plan_ctx,
+                )
             })
             .collect();
         let variants = Arc::new(variants);
