@@ -96,13 +96,11 @@ impl PlaylistCache {
     /// yet. After `Hls::create()` all playlists are pre-populated so
     /// this always succeeds during playback.
     #[must_use]
-    pub fn get_media_playlist_sync(&self, variant: usize) -> Option<(Url, MediaPlaylist)> {
-        let master_url = self.config.lock_sync_read().master_url.clone()?;
+    pub fn get_media_playlist_sync(&self, variant: usize) -> Option<MediaPlaylist> {
         let master = self.master.get()?;
-        let variant_stream = master.variants.get(variant)?;
-        let media_url = self.resolve_url(&master_url, &variant_stream.uri).ok()?;
+        master.variants.get(variant)?;
         let playlist = self.media.get(&VariantId(variant))?.get()?.clone();
-        Some((media_url, playlist))
+        Some(playlist)
     }
 
     #[must_use]
@@ -117,7 +115,7 @@ impl PlaylistCache {
     /// # Errors
     /// Returns an error when the master playlist, URL resolution, or
     /// media playlist fetch fails.
-    pub async fn load_media_playlist(&self, variant: usize) -> HlsResult<(Url, MediaPlaylist)> {
+    pub async fn load_media_playlist(&self, variant: usize) -> HlsResult<MediaPlaylist> {
         let master_url = self.master_url_clone()?;
         let master = self.master_playlist(&master_url).await?;
 
@@ -127,9 +125,7 @@ impl PlaylistCache {
             .ok_or_else(|| HlsError::VariantNotFound(format!("variant {variant}")))?;
 
         let media_url = self.resolve_url(&master_url, &variant_stream.uri)?;
-        let playlist = self.media_playlist(&media_url, VariantId(variant)).await?;
-
-        Ok((media_url, playlist))
+        self.media_playlist(&media_url, VariantId(variant)).await
     }
 
     /// Load and parse the master playlist. First call fetches from the
@@ -174,8 +170,10 @@ impl PlaylistCache {
 
         let playlist = cell
             .get_or_try_init(|| async {
-                self.fetch_and_parse(url, "media_playlist", parse_media_playlist)
-                    .await
+                self.fetch_and_parse(url, "media_playlist", |bytes| {
+                    parse_media_playlist(url.clone(), bytes)
+                })
+                .await
             })
             .await?;
         Ok(playlist.clone())

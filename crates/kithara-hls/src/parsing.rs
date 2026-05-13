@@ -8,6 +8,7 @@ use hls_m3u8::{
 use kithara_abr::VariantInfo;
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat};
+use url::Url;
 
 use crate::HlsResult;
 
@@ -104,6 +105,8 @@ pub struct InitSegment {
 /// Parsed media playlist.
 #[derive(Debug, Clone)]
 pub struct MediaPlaylist {
+    /// Absolute URL of the media playlist itself (the `.m3u8`).
+    pub url: Url,
     /// Container format detected from segment/init URIs.
     pub detected_container: Option<ContainerFormat>,
     /// Optional initialization segment (for fMP4 streams).
@@ -194,11 +197,14 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
     Ok(MasterPlaylist { variants })
 }
 
-/// Parses a media playlist (M3U8) into [`MediaPlaylist`].
+/// Parses a media playlist (M3U8) into [`MediaPlaylist`]. `url` is the
+/// absolute URL the playlist was fetched from; it is stored on the
+/// returned [`MediaPlaylist`] so downstream consumers do not have to
+/// keep it in a side channel.
 ///
 /// # Errors
 /// Returns an error when UTF-8 decoding or playlist parsing fails.
-pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
+pub fn parse_media_playlist(url: Url, data: &[u8]) -> HlsResult<MediaPlaylist> {
     fn map_encryption_method(m: HlsEncryptionMethod) -> EncryptionMethod {
         match m {
             HlsEncryptionMethod::Aes128 => EncryptionMethod::Aes128,
@@ -290,6 +296,7 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
         });
 
     Ok(MediaPlaylist {
+        url,
         detected_container,
         init_segment,
         segments,
@@ -401,7 +408,8 @@ audio_flac.m3u8";
     #[kithara::test]
     fn test_parse_simple_media_playlist() {
         let simple_media_playlist_data = fixtures::SIMPLE_MEDIA_PLAYLIST;
-        let result = parse_media_playlist(simple_media_playlist_data);
+        let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
+        let result = parse_media_playlist(url, simple_media_playlist_data);
         assert!(
             result.is_ok(),
             "Failed to parse media playlist: {:?}",
@@ -421,7 +429,8 @@ audio_flac.m3u8";
     #[kithara::test]
     fn test_parse_media_playlist_with_init_segment() {
         let media_playlist_with_init_data = fixtures::MEDIA_PLAYLIST_WITH_INIT;
-        let result = parse_media_playlist(media_playlist_with_init_data);
+        let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
+        let result = parse_media_playlist(url, media_playlist_with_init_data);
         assert!(
             result.is_ok(),
             "Failed to parse media playlist with init: {:?}",
@@ -582,7 +591,8 @@ audio_flac.m3u8";
     #[case(b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXTINF:4.0,\nseg2.ts", 2)]
     #[case(b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXTINF:4.0,\nseg2.ts\n#EXTINF:4.0,\nseg3.ts\n#EXT-X-ENDLIST", 3)]
     fn test_media_playlist_segment_count(#[case] data: &[u8], #[case] expected_segments: usize) {
-        let result = parse_media_playlist(data);
+        let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
+        let result = parse_media_playlist(url, data);
         assert!(
             result.is_ok(),
             "Failed to parse playlist: {:?}",

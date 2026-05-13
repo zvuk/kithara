@@ -13,7 +13,6 @@ use kithara_stream::{
     dl::{Downloader, DownloaderConfig, Peer},
 };
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
 use crate::{
     config::HlsConfig,
@@ -90,13 +89,13 @@ impl StreamType for Hls {
 
         let master = playlist_cache.master_playlist(&config.url).await?;
 
-        let mut media_playlists = Vec::new();
+        let mut media_playlists: Vec<MediaPlaylist> = Vec::new();
         for variant in &master.variants {
             let media_url = playlist_cache.resolve_url(&config.url, &variant.uri)?;
             let playlist = playlist_cache
                 .media_playlist(&media_url, crate::parsing::VariantId(variant.id.0))
                 .await?;
-            media_playlists.push((media_url, playlist));
+            media_playlists.push(playlist);
         }
 
         let playlist_state = Arc::new(PlaylistState::from_parsed(
@@ -111,13 +110,20 @@ impl StreamType for Hls {
             .await
             .map_err(SourceError::from)?;
 
-        crate::loading::size_estimation::estimate_size_maps(
-            &peer_handle,
-            &playlist_state,
-            &media_playlists,
-            config.headers.as_ref(),
+        let estimation = crate::loading::size_estimation::SizeEstimator::new(
+            peer_handle.clone(),
+            Arc::clone(&playlist_state),
+            media_playlists,
+            config.headers.clone(),
         )
+        .estimate()
         .await;
+        let media_playlists = estimation.media_playlists;
+        for (variant, map) in estimation.size_maps.into_iter().enumerate() {
+            if !map.is_empty() {
+                playlist_state.set_size_map(variant, map);
+            }
+        }
 
         let _ = variant_info_from_master;
 
@@ -133,8 +139,8 @@ impl StreamType for Hls {
         let variants: Vec<HlsVariant> = media_playlists
             .iter()
             .enumerate()
-            .map(|(idx, (media_url, mp))| {
-                let decrypt_contexts = key_manager.resolve_variant_decrypt_contexts(media_url, mp);
+            .map(|(idx, mp)| {
+                let decrypt_contexts = key_manager.resolve_variant_decrypt_contexts(mp);
                 HlsVariant::new(idx, &playlist_state, &decrypt_contexts, &plan_ctx)
             })
             .collect();
@@ -199,12 +205,12 @@ fn build_asset_store(
 
 fn build_abr_variants(
     master_variants: &[crate::parsing::VariantStream],
-    media_playlists: &[(Url, MediaPlaylist)],
+    media_playlists: &[MediaPlaylist],
 ) -> Vec<kithara_events::AbrVariant> {
     master_variants
         .iter()
         .zip(media_playlists.iter())
-        .map(|(v, (_, playlist))| {
+        .map(|(v, playlist)| {
             let duration = if playlist.segments.is_empty() {
                 kithara_events::VariantDuration::Unknown
             } else {

@@ -286,7 +286,7 @@ impl KeyManager {
     /// Returns the first [`HlsError`] from an underlying key fetch.
     pub(crate) async fn prefetch_aes128_keys(
         &self,
-        media_playlists: &[(Url, crate::parsing::MediaPlaylist)],
+        media_playlists: &[crate::parsing::MediaPlaylist],
     ) -> HlsResult<()> {
         let urls = Self::aes128_key_urls(media_playlists);
         let futs = urls
@@ -296,14 +296,14 @@ impl KeyManager {
         Ok(())
     }
 
-    fn aes128_key_urls(media_playlists: &[(Url, crate::parsing::MediaPlaylist)]) -> HashSet<Url> {
+    fn aes128_key_urls(media_playlists: &[crate::parsing::MediaPlaylist]) -> HashSet<Url> {
         let mut urls: HashSet<Url> = HashSet::new();
-        for (media_url, playlist) in media_playlists {
+        for playlist in media_playlists {
             for segment in &playlist.segments {
                 if let Some(ref seg_key) = segment.key
                     && matches!(seg_key.method, crate::parsing::EncryptionMethod::Aes128)
                     && let Some(ref key_info) = seg_key.key_info
-                    && let Ok(seg_url) = media_url.join(&segment.uri)
+                    && let Ok(seg_url) = playlist.url.join(&segment.uri)
                     && let Ok(key_url) = Self::resolve_key_url(key_info, &seg_url)
                 {
                     urls.insert(key_url);
@@ -322,13 +322,12 @@ impl KeyManager {
     /// shipping garbage bytes.
     pub(crate) fn resolve_variant_decrypt_contexts(
         &self,
-        media_url: &Url,
         playlist: &crate::parsing::MediaPlaylist,
     ) -> Vec<Option<DecryptContext>> {
         playlist
             .segments
             .iter()
-            .map(|segment| self.resolve_segment_decrypt_ctx(media_url, segment))
+            .map(|segment| self.resolve_segment_decrypt_ctx(&playlist.url, segment))
             .collect()
     }
 

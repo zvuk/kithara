@@ -20,7 +20,7 @@ pub struct SegmentState {
 /// Uses a 0-based offset model: the first segment starts at offset 0 and
 /// includes init data, so `segment_sizes[0]` already folds the init
 /// size into the segment-0 total.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct VariantSizeMap {
     /// Cumulative byte offsets. `offsets[0]` = 0, `offsets[i]` = sum of `segment_sizes[0..i]`.
     pub offsets: Vec<u64>,
@@ -33,6 +33,15 @@ pub struct VariantSizeMap {
     /// of segment 0 in variant-byte space resolve to the init resource.
     /// Zero for raw TS/AAC variants without `#EXT-X-MAP`.
     pub init_size: u64,
+}
+
+impl VariantSizeMap {
+    /// `true` when this map carries no usable data — used by callers to
+    /// skip applying a placeholder map produced by a failed estimation.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.total == 0 && self.segment_sizes.is_empty()
+    }
 }
 
 /// Per-variant parsed data.
@@ -71,12 +80,13 @@ impl PlaylistState {
     #[must_use]
     pub fn from_parsed(
         variants: &[crate::parsing::VariantStream],
-        media_playlists: &[(Url, crate::parsing::MediaPlaylist)],
+        media_playlists: &[crate::parsing::MediaPlaylist],
     ) -> Self {
         let variant_states: Vec<VariantState> = variants
             .iter()
             .zip(media_playlists.iter())
-            .map(|(variant, (media_url, playlist))| {
+            .map(|(variant, playlist)| {
+                let media_url = &playlist.url;
                 let codec = variant.codec.as_ref().and_then(|ci| ci.audio_codec);
                 let container = variant
                     .codec
@@ -636,8 +646,8 @@ mod tests {
             }),
         }];
 
-        let media_url = test_url("https://cdn.example.com/audio/v0.m3u8");
         let playlist = MediaPlaylist {
+            url: test_url("https://cdn.example.com/audio/v0.m3u8"),
             segments: vec![
                 MediaSegment {
                     sequence: 0,
@@ -661,7 +671,7 @@ mod tests {
             detected_container: Some(ContainerFormat::Fmp4),
         };
 
-        let media_playlists = vec![(media_url, playlist)];
+        let media_playlists = vec![playlist];
         let state = PlaylistState::from_parsed(&variants, &media_playlists);
 
         assert_eq!(state.num_variants(), 1);
