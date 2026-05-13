@@ -392,13 +392,14 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
         ResponseTarget::Streaming => match result {
             Ok(resp) => {
                 if let Some(ref mut w) = writer {
+                    let headers = resp.headers.clone();
                     let write_result = resp.body.write_all(|chunk| w(chunk)).await;
                     let elapsed = started.elapsed();
                     match write_result {
                         Ok(total) => {
                             finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
                             if let Some(cb) = on_complete_cb {
-                                cb(total, None);
+                                cb(total, Some(&headers), None);
                             }
                         }
                         Err(ref e) => {
@@ -412,7 +413,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
                                 downloader_cancel,
                             );
                             if let Some(cb) = on_complete_cb {
-                                cb(0, Some(e));
+                                cb(0, Some(&headers), Some(e));
                             }
                         }
                     }
@@ -429,7 +430,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
                     downloader_cancel,
                 );
                 if let Some(cb) = on_complete_cb {
-                    cb(0, Some(e));
+                    cb(0, None, Some(e));
                 }
             }
         },
@@ -483,7 +484,7 @@ pub(super) fn deliver_cancelled(target: ResponseTarget, mut cmd: FetchCmd) {
         }
         ResponseTarget::Streaming => {
             if let Some(cb) = cmd.on_complete.take() {
-                cb(0, Some(&err));
+                cb(0, None, Some(&err));
             }
         }
     }

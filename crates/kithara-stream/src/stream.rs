@@ -230,10 +230,6 @@ impl<T: StreamType> Stream<T> {
             pub fn clear_variant_fence(&mut self);
             /// Set seek epoch for stale request invalidation.
             pub fn set_seek_epoch(&mut self, seek_epoch: u64);
-            /// Signal that the given byte range will be needed soon.
-            ///
-            /// Transitional — removed in Plan 06.
-            pub fn demand_range(&self, range: Range<u64>);
             /// Wake any blocked `wait_range()` calls.
             pub fn notify_waiting(&self);
             /// Create a lock-free callback for waking blocked `wait_range()`.

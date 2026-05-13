@@ -82,8 +82,6 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.
             pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-            /// Signal that the given byte range will be needed soon.
-            pub(crate) fn demand_range(&self, range: Range<u64>);
             /// Wake blocked `wait_range()` calls and downstream waiters.
             ///
             /// Safe to call outside of `read()`; briefly takes the inner mutex.
@@ -968,7 +966,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 reason,
                 context: WaitContext::ApplySeek(applying),
             });
-            self.submit_demand_for_current_state();
             return false;
         }
 
@@ -1511,22 +1508,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
         )
     }
-
-    /// Submit a demand signal for the byte range corresponding to the
-    /// current `WaitingForSource` state. This is a non-blocking hint
-    /// that tells the source (and transitively the downloader) which
-    /// data the worker needs next.
-    ///
-    /// The byte target is resolved through `TrackState::seek_location()`
-    /// so the dispatch over `WaitContext × SeekMode` lives in one place.
-    fn submit_demand_for_current_state(&self) {
-        if !matches!(self.state, TrackState::WaitingForSource { .. }) {
-            return;
-        }
-        self.state
-            .seek_location()
-            .submit_demand(&self.shared_stream);
-    }
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -1770,7 +1751,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         };
 
         if let Some(reason) = map_source_phase(phase) {
-            self.submit_demand_for_current_state();
             return TrackStep::Blocked(reason);
         }
 
@@ -1840,7 +1820,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 reason,
                 context: WaitContext::Recreation(recreate),
             });
-            self.submit_demand_for_current_state();
             return TrackStep::Blocked(reason);
         }
         if phase == SourcePhase::Cancelled {

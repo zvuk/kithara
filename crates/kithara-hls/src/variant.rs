@@ -956,7 +956,7 @@ impl FetchSlot {
     }
 
     fn into_on_complete(self) -> OnCompleteFn {
-        Box::new(move |bytes_written, err| self.settle(bytes_written, err))
+        Box::new(move |bytes_written, _headers, err| self.settle(bytes_written, err))
     }
 
     /// On success, commits the resource. `bytes_written` is forwarded as

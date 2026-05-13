@@ -15,7 +15,6 @@
 
 mod config;
 mod coord;
-mod demand;
 mod error;
 mod session;
 mod stream;

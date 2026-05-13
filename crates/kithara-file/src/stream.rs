@@ -13,7 +13,9 @@ use crate::{
     config::{FileConfig, FileSrc},
     coord::FileCoord,
     error::SourceError,
-    session::{FilePeer, FileSource, FileStreamState},
+    session::{
+        FileAssetCtx, FileInner, FilePeer, FilePhase, FileSource, FileSourceCtx, FileStreamState,
+    },
 };
 
 /// Marker type for file streaming.
@@ -140,20 +142,26 @@ impl File {
             ));
         }
 
-        let peer_handle = downloader
-            .register(Arc::new(FilePeer::new(coord.timeline())))
+        let inner = Arc::new(FileInner::new(
+            FileSourceCtx {
+                coord: Arc::clone(&coord),
+                cancel,
+                bus: state.bus.clone(),
+            },
+            FileAssetCtx {
+                headers: config.headers,
+                url,
+                backend: Arc::clone(&state.backend),
+                res: state.res.clone(),
+                key: state.key.clone(),
+            },
+            FilePhase::Init,
+        ));
+
+        let _peer_handle = downloader
+            .register(Arc::new(FilePeer::new(Arc::clone(&inner))))
             .with_bus(state.bus.clone());
 
-        let source = FileSource::remote(
-            &state,
-            coord,
-            cancel,
-            url,
-            config.headers,
-            config.look_ahead_bytes,
-            peer_handle,
-        );
-
-        Ok(source)
+        Ok(FileSource::from_inner(inner, coord))
     }
 }

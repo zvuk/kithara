@@ -684,7 +684,9 @@ impl Peer for TaggedPriorityPeer {
                 FetchCmd::get(self.url.clone())
                     .writer(Box::new(|_chunk: &[u8]| Ok(())))
                     .on_complete(Box::new(
-                        move |_bytes, _err: Option<&kithara_net::NetError>| {
+                        move |_bytes,
+                              _headers: Option<&kithara_net::Headers>,
+                              _err: Option<&kithara_net::NetError>| {
                             let order = counter.fetch_add(1, Ordering::SeqCst);
                             log.lock_sync().push((tag, order));
                         },

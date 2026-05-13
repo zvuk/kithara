@@ -29,7 +29,6 @@ use kithara_test_utils::kithara;
 
 struct TestSourceState {
     data: Vec<u8>,
-    last_demand_range: Option<Range<u64>>,
     len: Option<u64>,
     media_info: Option<MediaInfo>,
     ready_until: Option<u64>,
@@ -59,7 +58,6 @@ impl TestSource {
         Self {
             state: Arc::new(Mutex::new(TestSourceState {
                 data,
-                last_demand_range: None,
                 len,
                 media_info: None,
                 ready_until: None,
@@ -230,10 +228,6 @@ impl Source for TestSource {
             return SourcePhase::Eof;
         }
         SourcePhase::Ready
-    }
-
-    fn demand_range(&self, range: Range<u64>) {
-        self.state.lock_sync().last_demand_range = Some(range);
     }
 }
 

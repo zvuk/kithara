@@ -55,30 +55,6 @@ fn test_file_coord_set_and_get_positions(#[case] value: u64, #[case] read_pos: b
 }
 
 #[kithara::test]
-fn file_coord_range_request_starts_empty() {
-    let coord = FileCoord::new(Timeline::new());
-    assert_eq!(coord.take_range_request(), None);
-}
-
-#[kithara::test]
-fn file_coord_range_request_replaces_previous() {
-    let coord = FileCoord::new(Timeline::new());
-    assert!(coord.request_range(0..50));
-    assert!(coord.request_range(50..100));
-    assert_eq!(coord.take_range_request(), Some(50..100));
-    assert_eq!(coord.take_range_request(), None);
-}
-
-#[kithara::test]
-fn file_coord_range_request_dedupes_identical_request() {
-    let coord = FileCoord::new(Timeline::new());
-    assert!(coord.request_range(0..50));
-    assert!(!coord.request_range(0..50));
-    assert_eq!(coord.take_range_request(), Some(0..50));
-    assert_eq!(coord.take_range_request(), None);
-}
-
-#[kithara::test]
 fn file_coord_total_bytes_roundtrip() {
     let coord = FileCoord::new(Timeline::new());
     assert_eq!(coord.total_bytes(), None);
@@ -253,20 +229,6 @@ fn file_source_wait_range_returns_interrupted_while_flushing() {
 
     let result = Source::wait_range(&mut source, 50..60, Some(Duration::from_secs(1)));
     assert_eq!(result.unwrap(), WaitOutcome::Interrupted);
-}
-
-#[kithara::test]
-fn file_source_demand_range_requests_downloader() {
-    let res = create_committed_resource(b"abcdef");
-    let coord = make_coord(Timeline::new());
-    let bus = EventBus::new(16);
-    let source = make_source(res, Arc::clone(&coord), bus);
-
-    assert_eq!(coord.take_range_request(), None);
-
-    Source::demand_range(&source, 512..513);
-
-    assert_eq!(coord.take_range_request(), Some(512..513));
 }
 
 #[kithara::test]

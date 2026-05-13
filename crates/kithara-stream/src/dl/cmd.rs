@@ -10,7 +10,12 @@ use url::Url;
 pub type WriterFn = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 
 /// Per-command completion handler. Called when the fetch completes.
-pub type OnCompleteFn = Box<dyn FnOnce(u64, Option<&NetError>) + Send>;
+///
+/// Receives `(bytes_written, response_headers, error)`. Headers are
+/// `Some` once the HTTP response made it past validation (so `Content-Type`,
+/// `Content-Length`, etc. can be captured); `None` when the fetch failed
+/// before headers were received.
+pub type OnCompleteFn = Box<dyn FnOnce(u64, Option<&Headers>, Option<&NetError>) + Send>;
 
 /// Optional response-header validator for a single `FetchCmd`.
 ///

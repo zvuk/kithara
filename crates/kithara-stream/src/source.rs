@@ -203,12 +203,6 @@ pub trait Source: Send + Sync + 'static {
         None
     }
 
-    /// On-demand range hint to the source's downloader.
-    ///
-    /// Transitional — removed in Plan 06 once HLS/file sources drive
-    /// fetches purely through the pull-driven scheduler.
-    fn demand_range(&self, _range: Range<u64>) {}
-
     /// Byte range of the first segment with the current format after
     /// a format change (HLS ABR switch).
     ///
