@@ -295,6 +295,26 @@ impl HlsVariant {
         (self.init.size > 0).then_some(0..self.init.size)
     }
 
+    /// Byte range a demuxer should read to re-establish container state
+    /// after a format change (HLS variant flip or codec change).
+    ///
+    /// fMP4 variants advertise an `#EXT-X-MAP` init segment — its range
+    /// is `0..init.size`. Containers that embed the file header inside
+    /// the first media segment (raw WAV / PCM with leading header) fall
+    /// back to segment 0's byte range so the demuxer can re-parse the
+    /// header from there. Containers with implicit framing (AAC ADTS,
+    /// MP3, MPEG-TS) do not need this range — the caller filters via
+    /// `container_needs_init_range` before reading.
+    pub(crate) fn header_byte_range(&self) -> Option<Range<u64>> {
+        if let Some(range) = self.init_byte_range() {
+            return Some(range);
+        }
+        self.segments.first().map(|seg| {
+            let start = seg.byte_offset;
+            start..(start + seg.size)
+        })
+    }
+
     /// Resource key for the variant's init segment — `None` when the
     /// playlist has no `#EXT-X-MAP` (raw TS/AAC).
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
@@ -595,13 +615,11 @@ impl FetchSlot {
 
     fn settle(&self, err: Option<&NetError>) {
         // Stale settle from a cancelled epoch — rebuild already replaced
-        // the cancel token, so any state we'd write here would clobber
-        // whatever the new epoch put in. Only the asset-store failure
-        // hint propagates (so the store can clean up).
+        // the cancel token. Skip both state and `resource.fail()`: a
+        // fresh dispatch on the same resource key is in flight (or about
+        // to be) and `fail` would mark the asset poisoned for the new
+        // acquirer.
         if self.cancel.is_cancelled() {
-            if let Some(e) = err {
-                self.resource.fail(e.to_string());
-            }
             return;
         }
         match err {
@@ -613,8 +631,6 @@ impl FetchSlot {
             }
             Some(e) => {
                 self.resource.fail(e.to_string());
-                // state stays Missing — Downloader's retry policy or the
-                // next eviction-triggered rebuild will redrive the fetch.
             }
         }
     }

@@ -177,6 +177,10 @@ impl Source for HlsSource {
         Some(Box::new(move || notify.notify_one()))
     }
 
+    fn format_change_segment_range(&self) -> Option<Range<u64>> {
+        self.coord.active()?.header_byte_range()
+    }
+
     fn notify_waiting(&self) {
         self.wake_peer();
     }
