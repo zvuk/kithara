@@ -200,6 +200,24 @@ impl Source for HlsSource {
         Some(Arc::clone(&self.coord) as Arc<dyn SegmentLayout>)
     }
 
+    /// Byte range of the segment that covers the reader's current
+    /// position. For HLS this is the active variant's init prefix
+    /// (`[0, init_size)`) while the reader is inside init, then each
+    /// media segment's `[byte_offset, byte_offset + size)` afterwards.
+    /// The audio FSM uses this to gate `source_is_ready` on the segment
+    /// boundary instead of a fixed 32 `KiB` read-ahead — short HLS
+    /// segments (a few `KiB` at low bitrates) otherwise spill the
+    /// readiness check across multiple segments and stall startup
+    /// whenever any of them are still in-flight.
+    fn current_segment_range(&self) -> Option<Range<u64>> {
+        let pos = self.coord.position();
+        if let Some((_, init_range)) = self.init_descriptor_at(pos) {
+            return Some(init_range);
+        }
+        let (_, seg_off, seg_size) = self.media_descriptor(pos)?;
+        Some(seg_off..seg_off + seg_size)
+    }
+
     fn len(&self) -> Option<u64> {
         let total = self.coord.total_bytes();
         (total > 0).then_some(total)
