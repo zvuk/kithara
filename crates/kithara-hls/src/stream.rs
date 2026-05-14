@@ -134,6 +134,7 @@ impl StreamType for Hls {
             master_cancel: cancel.clone(),
             asset_store: Arc::clone(&asset_store),
             prefetch_budget: config.download_batch_size.max(1),
+            seek_epoch: timeline.seek_epoch(),
         };
 
         let variants: Vec<Arc<HlsVariant>> = media_playlists

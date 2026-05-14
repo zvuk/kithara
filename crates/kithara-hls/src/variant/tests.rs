@@ -27,6 +27,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         master_cancel: cancel,
         asset_store: backend,
         prefetch_budget,
+        seek_epoch: 0,
     }
 }
 

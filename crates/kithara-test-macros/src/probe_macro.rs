@@ -263,6 +263,22 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let arg_consume: Vec<TokenStream2> =
         arg_idents.iter().map(|a| quote! { let _ = &#a; }).collect();
 
+    // Reference computed expressions unconditionally so production
+    // builds (no `test-utils` feature → probe expansion compiled out)
+    // still see the underlying fields/methods used and avoid spurious
+    // `dead_code` warnings on probe-only payload fields. Gated behind
+    // `if false` so LLVM constant-folds the call out — zero runtime cost.
+    let computed_consume: Vec<TokenStream2> = computed
+        .iter()
+        .map(|(_, expr)| {
+            quote! {
+                if false {
+                    let _ = #expr;
+                }
+            }
+        })
+        .collect();
+
     let fire_fn = format_ident!("fire_{}", total_wire);
 
     let mut probe_slot_idents: Vec<Ident> = Vec::with_capacity(total_wire);
@@ -337,6 +353,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         #track_caller_attr
         #vis #sig {
             #(#arg_consume)*
+            #(#computed_consume)*
             #(#arg_bindings)*
             #(#computed_bindings)*
             #emit_entry_event

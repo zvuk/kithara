@@ -169,6 +169,11 @@ pub(crate) struct PlanCtx {
     pub(crate) master_cancel: CancellationToken,
     pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
     pub(crate) prefetch_budget: usize,
+    /// Snapshot of `Timeline::seek_epoch()` at plan-time. Tagged on
+    /// every emitted `FetchCmd`'s probe so integration tests can
+    /// distinguish fetches that pre-date a user seek from those that
+    /// the scheduler issued *after* observing the new epoch.
+    pub(crate) seek_epoch: u64,
 }
 
 pub(crate) struct HlsVariant {
@@ -726,7 +731,7 @@ impl HlsVariant {
                         continue;
                     }
                     debug!(target: "kithara_hls::dispatch", v = self.variant, seg = seg_idx, "emit seg");
-                    out.push(self.build_seg_cmd(ctx, seg_idx));
+                    out.push(self.emit_fetch_cmd(ctx, seg_idx));
                 }
             }
             remaining -= 1;
@@ -890,7 +895,12 @@ impl HlsVariant {
         )
     }
 
-    fn build_seg_cmd(self: &Arc<Self>, ctx: &PlanCtx, seg_idx: u32) -> FetchCmd {
+    #[kithara::probe(
+        seek_epoch = ctx.seek_epoch,
+        segment_index = u64::from(seg_idx),
+        variant = self.variant as u64
+    )]
+    fn emit_fetch_cmd(self: &Arc<Self>, ctx: &PlanCtx, seg_idx: u32) -> FetchCmd {
         let entry = &self.segments[seg_idx as usize];
         let resource = entry.decrypt_ctx.clone().map_or_else(
             || {

@@ -102,6 +102,7 @@ impl HlsPeer {
                 master_cancel: coord.cancel.clone(),
                 asset_store: Arc::clone(&coord.asset_store),
                 prefetch_budget,
+                seek_epoch: coord.timeline.seek_epoch(),
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -304,6 +305,7 @@ impl HlsTrackState {
             master_cancel: self.coord.cancel.clone(),
             asset_store: Arc::clone(&self.coord.asset_store),
             prefetch_budget: self.prefetch_budget,
+            seek_epoch: self.coord.timeline.seek_epoch(),
         }
     }
 
