@@ -372,9 +372,13 @@ pub trait Source: Send + Sync + 'static {
 /// segment-aware return `None` from [`Source::as_segment_layout`].
 pub trait SegmentLayout: Send + Sync + 'static {
     /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
-    /// current layout variant. Returns `None` until the init segment is
-    /// announced.
-    fn init_segment_range(&self) -> Option<Range<u64>>;
+    /// current layout variant. Returns an **empty** range (`0..0`) when
+    /// the layout has no init segment (raw TS/AAC/MPEG-ES) or when the
+    /// active variant has not yet announced one. Callers that require an
+    /// init must check `Range::is_empty()` — distinguishing "no init"
+    /// from "init at offset 0..0" is unsupported because every init we
+    /// emit is non-empty by construction.
+    fn init_segment_range(&self) -> Range<u64>;
 
     /// Whether the layout currently reports zero bytes. `len()` is `Option`
     /// because some segmented sources do not know their total upfront, so

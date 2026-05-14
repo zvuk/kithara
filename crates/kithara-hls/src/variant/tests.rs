@@ -156,14 +156,14 @@ fn total_bytes_includes_init_and_segments() {
 fn init_byte_range_present_when_size_positive() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[], &ctx);
-    assert_eq!(v.init_byte_range(), Some(0..200));
+    assert_eq!(v.init_byte_range(), 0..200);
 }
 
 #[kithara::test]
-fn init_byte_range_absent_when_size_zero() {
+fn init_byte_range_empty_when_size_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[], &ctx);
-    assert!(v.init_byte_range().is_none());
+    assert!(v.init_byte_range().is_empty());
 }
 
 #[kithara::test]

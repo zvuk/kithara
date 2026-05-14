@@ -56,8 +56,8 @@ struct FakeSegmented {
 }
 
 impl SegmentLayout for FakeSegmented {
-    fn init_segment_range(&self) -> Option<Range<u64>> {
-        Some(self.init_range.clone())
+    fn init_segment_range(&self) -> Range<u64> {
+        self.init_range.clone()
     }
 
     fn len(&self) -> Option<u64> {

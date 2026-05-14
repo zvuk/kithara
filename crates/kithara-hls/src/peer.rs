@@ -307,21 +307,37 @@ impl HlsTrackState {
         }
     }
 
-    /// Detect a seek-epoch bump on the [`Timeline`]; if the active
-    /// variant can be repositioned to the target time, sync the
-    /// tracked `last_seg_at_reader` with the new reader segment.
-    fn apply_seek_change(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
-        let cur_seek = coord.timeline.seek_epoch();
-        if cur_seek == self.last_seek_epoch {
-            return;
-        }
-        self.last_seek_epoch = cur_seek;
+    /// React to a confirmed seek-epoch bump: reposition the active
+    /// variant at the new target time and sync `reader_segment`.
+    /// Extracted from [`Self::apply_seek_change`] so the actual reset
+    /// work owns a USDT probe (`kithara_hls_probe::seek_epoch_reset`)
+    /// — integration tests key off this probe to detect scheduler
+    /// epoch resets without polling cycles flooding the wire.
+    #[kithara::probe(
+        seek_epoch = coord.timeline.seek_epoch(),
+        segment_index = self.reader_segment.load(Ordering::Acquire),
+        variant = coord.variant_index()
+    )]
+    fn seek_epoch_reset(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
         if let Some(target) = coord.timeline.seek_target()
             && let Some(active) = coord.active()
             && let Some(seg) = active.seek_to(ctx, target)
         {
             self.reader_segment.store(seg as usize, Ordering::Release);
         }
+    }
+
+    /// Detect a seek-epoch bump on the [`Timeline`] and delegate the
+    /// reset work to [`Self::seek_epoch_reset`] (which carries the
+    /// probe). Called every poll cycle; the equality short-circuit
+    /// keeps it free in the steady state.
+    fn apply_seek_change(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
+        let cur_seek = coord.timeline.seek_epoch();
+        if cur_seek == self.last_seek_epoch {
+            return;
+        }
+        self.last_seek_epoch = cur_seek;
+        self.seek_epoch_reset(coord, ctx);
     }
 
     /// Resolve the reader's current segment from `coord.position()` and,

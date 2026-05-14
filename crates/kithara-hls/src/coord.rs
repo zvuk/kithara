@@ -132,18 +132,29 @@ impl HlsCoord {
 
     /// Init prefix descriptor (key + size) for the byte at `byte_offset`,
     /// resolved against active + historical variants. Returns `None` when
-    /// the byte falls outside any variant's init range.
+    /// the byte falls outside any variant's *virtually addressable* init
+    /// range — the active variant's init only counts when its
+    /// `served_from() == 0` (post-commit, its init is orphaned in
+    /// natural space and the historical predecessor is the right owner
+    /// of that virtual prefix).
     pub(crate) fn init_descriptor_at(&self, byte_offset: u64) -> Option<(ResourceKey, Range<u64>)> {
         if let Some(active) = self.active()
-            && let Some(range) = active.init_byte_range()
-            && range.contains(&byte_offset)
-            && let Some(key) = active.init_resource()
+            && active.served_from() == 0
         {
-            return Some((key, range));
+            let range = active.init_byte_range();
+            if !range.is_empty()
+                && range.contains(&byte_offset)
+                && let Some(key) = active.init_resource()
+            {
+                return Some((key, range));
+            }
         }
         self.history.lock_sync_read().iter().rev().find_map(|v| {
-            let range = v.init_byte_range()?;
-            if !range.contains(&byte_offset) {
+            if v.served_from() > 0 {
+                return None;
+            }
+            let range = v.init_byte_range();
+            if range.is_empty() || !range.contains(&byte_offset) {
                 return None;
             }
             Some((v.init_resource()?, range))
@@ -259,8 +270,18 @@ impl HlsCoord {
 /// `HlsCoord` already owns the variants and the active index, so we
 /// implement the trait here instead of a separate view wrapper.
 impl SegmentLayout for HlsCoord {
-    fn init_segment_range(&self) -> Option<Range<u64>> {
-        self.active()?.init_byte_range()
+    fn init_segment_range(&self) -> Range<u64> {
+        if let Some(active) = self.active() {
+            let range = active.init_byte_range();
+            if !range.is_empty() {
+                return range;
+            }
+        }
+        // Active's init is orphaned post-ABR commit (served_from > 0). The
+        // demuxer reads via the byte-virtual source; v_prev still serves
+        // [0..init_size] virtually, and same-codec ABR keeps the same moov
+        // there. Mirror `format_change_segment_range`'s history fallback.
+        self.last_header_byte_range_in_history().unwrap_or(0..0)
     }
 
     fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {

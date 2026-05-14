@@ -498,19 +498,19 @@ impl HlsVariant {
         u32::try_from(head).unwrap_or(u32::MAX)
     }
 
-    /// Init range in **virtual** byte space. Initial activate keeps
-    /// `byte_shift == 0` so the init occupies `[0, init_size)`. After an
-    /// Auto-mode switch the variant starts serving at `from_seg` (past
-    /// init), so the init prefix lives entirely in the previous variant's
-    /// territory — return `None` to signal "no init in this variant's
-    /// virtual range".
+    /// Init segment range in **natural** byte space — always
+    /// `0..init_size`, regardless of post-commit `served_from`. Returns
+    /// an empty range (`0..0`) when the variant has no `#EXT-X-MAP`
+    /// init (raw TS/AAC/MPEG-ES).
+    ///
+    /// The "is this init addressable in the merged virtual space?"
+    /// question lives in the *caller* (e.g. `init_descriptor_at`) which
+    /// combines this with `served_from()` — keeping virtual-space
+    /// concerns out of a per-variant primitive avoids silently dropping
+    /// post-commit inits at the `SegmentLayout` boundary.
     #[kithara::probe(variant = self.variant as u64, size = self.init_size())]
-    pub(crate) fn init_byte_range(&self) -> Option<Range<u64>> {
-        let size = self.init_size();
-        if size == 0 || self.served_from() > 0 {
-            return None;
-        }
-        Some(0..size)
+    pub(crate) fn init_byte_range(&self) -> Range<u64> {
+        0..self.init_size()
     }
 
     /// Byte range a demuxer should read to re-establish container state
@@ -523,9 +523,17 @@ impl HlsVariant {
     /// header from there. Containers with implicit framing (AAC ADTS,
     /// MP3, MPEG-TS) do not need this range — the caller filters via
     /// `container_needs_init_range` before reading.
+    ///
+    /// Returns the post-commit-aware range: when `served_from() > 0` the
+    /// variant's own init bytes are orphaned in virtual space, so we
+    /// only return the natural init range when it is still virtually
+    /// addressable (`served_from() == 0`).
     pub(crate) fn header_byte_range(&self) -> Option<Range<u64>> {
-        if let Some(range) = self.init_byte_range() {
-            return Some(range);
+        if self.served_from() == 0 {
+            let range = self.init_byte_range();
+            if !range.is_empty() {
+                return Some(range);
+            }
         }
         let (_, off, size) = self.find_at_offset_inner(0)?;
         Some(off..(off + size))

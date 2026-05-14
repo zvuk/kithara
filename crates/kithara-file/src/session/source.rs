@@ -255,8 +255,10 @@ impl FileSegmentLayout {
 }
 
 impl kithara_stream::SegmentLayout for FileSegmentLayout {
-    fn init_segment_range(&self) -> Option<Range<u64>> {
-        self.segment_index().map(FileSegmentIndex::init_range)
+    fn init_segment_range(&self) -> Range<u64> {
+        self.segment_index()
+            .map(FileSegmentIndex::init_range)
+            .unwrap_or(0..0)
     }
 
     fn len(&self) -> Option<u64> {

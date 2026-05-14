@@ -89,9 +89,12 @@ impl Fmp4SegmentDemuxer {
         mut source: BoxedSource,
         segments: Arc<dyn SegmentLayout>,
     ) -> DecodeResult<Self> {
-        let init_range = segments.init_segment_range().ok_or_else(|| {
-            DecodeError::InvalidData("HLS init segment range not announced".into())
-        })?;
+        let init_range = segments.init_segment_range();
+        if init_range.is_empty() {
+            return Err(DecodeError::InvalidData(
+                "HLS init segment range not announced".into(),
+            ));
+        }
         let mut init_state = SegmentReadState::new(init_range);
         if let FillStatus::Pending(_) = fill_segment_buffer(&mut source, &mut init_state)? {
             return Err(DecodeError::Interrupted);
