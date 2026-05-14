@@ -153,8 +153,10 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         }
     }
 
+    #[kithara_hang_detector::hang_watchdog]
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
+            hang_tick!();
             let frame = match self.demuxer.next_frame()? {
                 DemuxOutcome::Frame(frame) => frame,
                 DemuxOutcome::Pending(reason) => {
@@ -162,6 +164,9 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 }
                 DemuxOutcome::Eof => return Ok(DecoderChunkOutcome::Eof),
             };
+            // Got a frame from the demuxer — forward motion through the
+            // stream regardless of whether we decode it or skip past it.
+            hang_reset!();
             if let Some(target) = self.pending_seek_target {
                 let frame_end = frame.pts.saturating_add(frame.duration);
                 if frame_end <= target {

@@ -23,6 +23,7 @@ kithara-abr = { workspace = true }
 kithara-assets = { workspace = true, optional = true }
 kithara-net = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
+kithara-hang-detector = { workspace = true }
 kithara-test-macros = { workspace = true }
 num-traits = { workspace = true }
 

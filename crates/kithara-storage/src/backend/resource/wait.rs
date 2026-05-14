@@ -16,6 +16,7 @@ use crate::{
 
 impl<D: DriverIo> Resource<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara_hang_detector::hang_watchdog]
     pub(super) fn wait_range_inner(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         const WAIT_SPIN_TIMEOUT_MS: u64 = 50;
 
@@ -31,6 +32,7 @@ impl<D: DriverIo> Resource<D> {
         }
 
         loop {
+            hang_tick!();
             if self.inner.driver.try_fast_check(&range) {
                 return Ok(WaitOutcome::Ready);
             }

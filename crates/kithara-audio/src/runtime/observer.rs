@@ -26,6 +26,14 @@ pub(crate) enum SchedulerEvent {
     Progress,
     /// All nodes are terminal.
     Idle,
+    /// At least one node has a non-terminal slot but produced no progress
+    /// this pass (slot blocked on the source). Distinct from `Idle`
+    /// (which means "no work expected"): `Waiting` is the cooperative-yield
+    /// state where the audio worker *should* be making progress but is
+    /// parked. The `HangWatchdogObserver` ticks the watchdog here so a
+    /// blocked-forever source surfaces as a hang panic instead of an
+    /// indefinite park.
+    Waiting,
     /// A node took too long to tick.
     SlowTick {
         /// The ID of the slow node.

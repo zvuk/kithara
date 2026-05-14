@@ -428,9 +428,11 @@ impl SessionClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[kithara_hang_detector::hang_watchdog]
     fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
         let mut pending = msg;
         loop {
+            hang_tick!();
             match self.cmd_tx.lock_sync().try_push(pending) {
                 Ok(()) => {
                     self.engine_thread.unpark();

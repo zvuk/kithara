@@ -685,10 +685,12 @@ impl HlsVariant {
         budget = budget as u64,
         queue_len = self.queue.lock_sync().len() as u64
     )]
+    #[kithara_hang_detector::hang_watchdog]
     pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
         let mut out = Vec::new();
         let mut remaining = budget;
         while remaining > 0 {
+            hang_tick!();
             let Some(planned) = self.queue.lock_sync().pop_front() else {
                 break;
             };

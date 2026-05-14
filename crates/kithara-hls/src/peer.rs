@@ -280,14 +280,14 @@ impl HlsPeer {
         let ctx = state.plan_ctx();
 
         state.apply_seek_change(&coord, &ctx);
-        coord.sync_abr_lock();
         let seg_at_reader = state.apply_boundary_crossing(&coord, &ctx);
         let evictions = state.drain_evictions();
-        // Release the state lock before the lock-free dispatch + eviction
-        // broadcast in the caller. `coord`, `ctx`, `seg_at_reader`, and
-        // `evictions` are all owned, so the borrow of `state` from `guard`
-        // ends here and no later code reaches back into the peer state.
+        // Release the state lock before `sync_abr_lock`: the AbrController's
+        // `unlock`/`lock` synchronously ticks the controller, which calls
+        // `HlsPeer::progress()` — and `progress` re-locks `self.state`,
+        // producing a reentrant parking_lot deadlock if we still hold it.
         drop(guard);
+        coord.sync_abr_lock();
 
         PollPhase::Continue(PollOutcome {
             coord,

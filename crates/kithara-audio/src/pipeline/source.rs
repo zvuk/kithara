@@ -1449,14 +1449,20 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// decode. Returns `true` for `Ready`, `Eof`, or `Seeking` phases.
     fn source_is_ready(&self) -> bool {
         let pos = self.shared_stream.position();
+        let lookahead_end = pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
+        // Clamp the read-ahead window to the next segment boundary on
+        // segmented sources. Short HLS segments (a few `KiB`) otherwise
+        // let the 32 `KiB` window span into the *next* segment — a
+        // delayed neighbour then blocks gapless startup. For long
+        // segments the boundary is past `lookahead_end`, so the clamp
+        // is a no-op and behaviour matches the non-segmented default.
         let check_end = self
             .shared_stream
-            .current_segment_range()
-            .filter(|seg| seg.start <= pos && pos < seg.end)
-            .map_or_else(
-                || pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES),
-                |seg| seg.end,
-            );
+            .as_segment_layout()
+            .and_then(|layout| layout.segment_after_byte(pos))
+            .map_or(lookahead_end, |next| {
+                next.byte_range.start.min(lookahead_end)
+            });
         let check_end = self
             .shared_stream
             .len()

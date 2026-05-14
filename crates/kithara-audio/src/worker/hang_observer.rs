@@ -18,8 +18,19 @@ impl HangWatchdogObserver {
 impl SchedulerObserver for HangWatchdogObserver {
     fn on_event(&mut self, event: SchedulerEvent) {
         match event {
+            // Real audio progress (PCM chunk produced) clears the deadline.
+            // `Idle` also clears it — no slots at all means no work expected
+            // (paused / nothing loaded); ticking here would false-positive
+            // an idle player as a hang.
             SchedulerEvent::Progress | SchedulerEvent::Idle => {
                 self.detector.reset();
+            }
+            // A slot exists but produced nothing this pass — the audio
+            // worker is parked on a blocked source. Tick the watchdog so
+            // a never-ready source surfaces as a panic at the default
+            // budget instead of an indefinite park.
+            SchedulerEvent::Waiting => {
+                self.detector.tick();
             }
             SchedulerEvent::SlowTick { slot, elapsed } => {
                 tracing::debug!(

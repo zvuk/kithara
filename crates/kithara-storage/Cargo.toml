@@ -15,6 +15,7 @@ default = []
 test-utils = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 disable-hang-detector = [
+    "kithara-hang-detector/disable-hang-detector",
     "kithara-platform/disable-hang-detector",
 ]
 
@@ -26,6 +27,7 @@ thiserror = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-hang-detector = { workspace = true }
 kithara-test-macros = { workspace = true }
 
 # range tracking + sync primitives (wasm32-compatible)

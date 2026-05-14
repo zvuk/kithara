@@ -228,7 +228,7 @@ fn cancel_and_drain<N: Node>(
 fn report_outcome<O: SchedulerObserver>(observer: &mut O, outcome: PassOutcome) {
     match outcome {
         PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress),
-        PassOutcome::Waiting => {}
+        PassOutcome::Waiting => observer.on_event(SchedulerEvent::Waiting),
         PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle),
     }
 }
