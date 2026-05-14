@@ -407,6 +407,22 @@ impl HlsVariant {
         self.served_until.store(until, Ordering::Release);
     }
 
+    /// Reset variant to a "fresh" single-variant layout: `byte_shift = 0`,
+    /// `served_from = 0`, `served_until = num_segments`. Called from
+    /// [`HlsCoord::reset_for_seek`] so a random seek collapses the
+    /// cross-variant byte continuity layering — variants archived from
+    /// earlier auto-switches no longer co-serve the byte address space,
+    /// and the (single) active variant addresses its segments by their
+    /// natural offsets. Subsequent ABR commits at boundary will re-build
+    /// the layering as usual.
+    pub(crate) fn reset_to_full_range(&self) {
+        self.byte_shift.store(0, Ordering::Release);
+        self.served_from.store(0, Ordering::Release);
+        self.served_until
+            .store(self.num_segments(), Ordering::Release);
+        self.recompute_offsets();
+    }
+
     fn find_virtual(&self, byte_virtual: u64) -> Option<(u32, u64, u64)> {
         let shift = self.byte_shift();
         let byte_natural = i64::try_from(byte_virtual).ok()?.checked_sub(shift)?;

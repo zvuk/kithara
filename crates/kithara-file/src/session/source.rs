@@ -37,28 +37,6 @@ pub struct FileSource {
 }
 
 impl FileSource {
-    /// Try to populate the lazy fragmented-mp4 segment index from the
-    /// fully cached file bytes. No-op when the file is still
-    /// downloading or the index is already set.
-    fn ensure_segment_index(&self) -> Option<&FileSegmentIndex> {
-        if let Some(idx) = self.inner.segment_index.get() {
-            return Some(idx);
-        }
-        let total = self.inner.asset.res.len()?;
-        if total == 0 {
-            return None;
-        }
-        if !self.inner.asset.res.contains_range(0..total) {
-            return None;
-        }
-        let total_usize = usize::try_from(total).ok()?;
-        let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
-        self.inner.asset.res.read_at(0, &mut buf).ok()?;
-        let index = FileSegmentIndex::try_build(&buf)?;
-        let _ = self.inner.segment_index.set(index);
-        self.inner.segment_index.get()
-    }
-
     /// Create a source for a local/cached file (no downloads needed).
     ///
     /// `cancel` is a child of the file config master so a track drop
@@ -119,7 +97,7 @@ impl FileSource {
 
 impl kithara_stream::Source for FileSource {
     fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>> {
-        self.ensure_segment_index()?;
+        self.inner.segment_index.get()?;
         Some(Arc::new(FileSegmentLayout {
             inner: Arc::clone(&self.inner),
         }))

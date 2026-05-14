@@ -198,6 +198,21 @@ impl HlsCoord {
         }
     }
 
+    /// Collapse cross-variant byte-continuity layering on seek. A random
+    /// seek lands at an arbitrary virtual byte that may fall inside an
+    /// archived variant's `served_from..served_until` window — without
+    /// this reset the reader would pull bytes from a `history` entry
+    /// even though the active variant is the one ABR currently wants.
+    /// Cross-variant continuity is meant for forward-playback continuity
+    /// across a boundary commit, not for jumping back into pre-switch
+    /// territory.
+    pub(crate) fn reset_for_seek(&self) {
+        self.history.lock_sync_write().clear();
+        if let Some(active) = self.active() {
+            active.reset_to_full_range();
+        }
+    }
+
     /// Commit any ABR pending decision at the reader's segment boundary.
     /// On a real switch:
     /// 1. caps the outgoing variant's `served_until` to `from_seg` and
