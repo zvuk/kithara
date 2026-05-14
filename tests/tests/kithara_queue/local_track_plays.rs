@@ -252,6 +252,9 @@ async fn local_track_plays_end_to_end(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let url = build_fixture_url(kind, &helper).await;
     let label = format!("{kind:?}/{backend:?}");
@@ -363,6 +366,9 @@ where
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let kinds = [
         LocalSource::Mp3,

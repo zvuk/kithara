@@ -100,6 +100,9 @@ async fn wait_for_position_at_least(
     kithara_queue::cold_seek_cpal::cpal_cold_seek_silvercomet_hls \
     -- --ignored --nocapture --test-threads=1"]
 async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     install_tracing();
 
     const URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";

@@ -390,6 +390,9 @@ async fn live_ephemeral_revisit_sequence_regression(
     temp_dir: TestTempDir,
     _abr_fast: kithara_abr::AbrSettings,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let store = StoreOptions::new(temp_dir.path())

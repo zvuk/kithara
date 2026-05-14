@@ -333,6 +333,9 @@ async fn hls_seek_near_end_fresh_player_stress(
     #[case] backend: DecoderBackend,
     #[case] include_sidx: bool,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let url = build_hls(&helper, include_sidx).await;
 

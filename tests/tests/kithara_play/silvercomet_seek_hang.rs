@@ -213,6 +213,9 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let trace_log = std::fs::OpenOptions::new()
         .create(true)
         .write(true)

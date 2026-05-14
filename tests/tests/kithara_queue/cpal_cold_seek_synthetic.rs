@@ -70,6 +70,9 @@ async fn wait_for_position_at_least(
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
         .variant_count(3)

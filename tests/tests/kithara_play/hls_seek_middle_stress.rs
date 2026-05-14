@@ -91,6 +91,9 @@ async fn hls_seek_middle_repeated_seeks_stress(
     #[case] iterations: u32,
     #[case] backend: DecoderBackend,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = PackagedTestServer::with_delay_rules(vec![DelayRule {
         variant: None,
         segment_eq: None,

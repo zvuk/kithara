@@ -162,6 +162,9 @@ async fn decoder_file_seek_multiple(
     temp_dir: TestTempDir,
     #[case] backend: DecoderBackend,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = server.await;
     let mut decoder = open_test_mp3(&server, &temp_dir, backend, None).await;
 

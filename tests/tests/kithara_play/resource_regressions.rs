@@ -457,6 +457,9 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestHttpServer::new(test_app()).await;
     let store = store_options(&temp_dir, true);
     let ok_url = server.url("/ok.mp3");
@@ -531,6 +534,9 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestHttpServer::new(test_app()).await;
     let store = store_options(&temp_dir, ephemeral);
     let ok_url = server.url("/ok.mp3");
@@ -589,6 +595,9 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let player = PlayerImpl::new(PlayerConfig::default());
@@ -654,6 +663,9 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let worker = AudioWorkerHandle::new();
@@ -760,6 +772,9 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     #[case] teardown: WarmupTeardown,
     #[case] backend: DecoderBackend,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server_a = open_audio_hls_server().await;
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
@@ -866,6 +881,9 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     use kithara_integration_tests::offline::OfflinePlayer;
 
     let (_server, url) = create_packaged_single_variant_fixture(codec).await;
@@ -985,6 +1003,9 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let player = PlayerImpl::new(PlayerConfig::default());
@@ -1220,6 +1241,9 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestHttpServer::new(test_app()).await;
     let url = server.url(path);
     let store = store_options(&temp_dir, true);
@@ -1389,6 +1413,9 @@ async fn live_remote_resource_decodes_with_duration(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let store = store_options(&temp_dir, true);
     let net = NetOptions::default()
         .with_inactivity_timeout(Duration::from_secs(25))
@@ -1501,6 +1528,9 @@ async fn player_mp3_duration_matches_app_flow(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let store = store_options(&temp_dir, true);
 
     let player = PlayerImpl::new(PlayerConfig::default());

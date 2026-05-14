@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -12,6 +12,8 @@
 )]
 
 pub mod abr_fixtures;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub mod apple_warmup;
 pub mod asset_fixture;
 pub mod audio_fixture;
 pub mod audio_mock;

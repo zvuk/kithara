@@ -164,6 +164,9 @@ struct PostSeekObservation {
     case::apple(DecoderBackend::Apple)
 )]
 async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let probe_recorder = probe_capture::install();
 
     let helper = TestServerHelper::new().await;

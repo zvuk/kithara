@@ -510,6 +510,9 @@ async fn track_plays_end_to_end(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let ctx = shared_test_ctx().await;
     let source = build_track_source(url, ctx, backend, abr);
     let mut rx = ctx.queue.subscribe();
@@ -606,6 +609,9 @@ where
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let ctx = shared_test_ctx().await;
     let urls: Vec<&'static str> = AppConfig::DEFAULT_TRACKS.to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");

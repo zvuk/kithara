@@ -148,6 +148,9 @@ async fn build_resource(
     case::android(DecoderBackend::Android, AbrMode::Auto(None))
 )]
 async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] abr: AbrMode) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
         .variant_count(3)

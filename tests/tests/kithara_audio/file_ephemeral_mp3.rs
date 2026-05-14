@@ -163,6 +163,9 @@ async fn audio_file_mp3_decodes_with_duration(
     #[case] hint: Option<&str>,
     #[case] backend: DecoderBackend,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestHttpServer::new(app()).await;
     let temp_dir = TestTempDir::new();
 
