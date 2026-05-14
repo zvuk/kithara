@@ -3,14 +3,15 @@
 use std::{io::ErrorKind, num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_assets::{AssetsError, ResourceKey};
+use kithara_events::EventBus;
 use kithara_platform::{
     time::{Duration, Instant},
     tokio::sync::Notify,
 };
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
-    MediaInfo, PendingReason, ReadOutcome, SegmentLayout, Source, SourcePhase, SourceSeekAnchor,
-    StreamError, StreamResult, Timeline,
+    MediaInfo, PendingReason, ReadOutcome, SegmentLayout, SharedHooks, Source, SourcePhase,
+    SourceSeekAnchor, StreamError, StreamResult, Timeline,
 };
 
 use crate::{
@@ -18,6 +19,7 @@ use crate::{
     coord::HlsCoord,
     peer::HlsPeer,
     playlist::{PlaylistAccess, PlaylistState},
+    reader::HlsReaderHooks,
 };
 
 /// HLS source: provides random-access reading from loaded segments.
@@ -34,16 +36,26 @@ pub struct HlsSource {
     /// is bound via [`Self::set_hls_peer`]; firing it makes the peer's
     /// `poll_next` resume on the next event loop tick.
     peer_wake: Option<Arc<Notify>>,
+    /// Event bus the track was created against. Forwarded to
+    /// [`HlsReaderHooks`] in [`Source::take_reader_hooks`] so the
+    /// decoder's per-seek / per-chunk signals reach test subscribers
+    /// as `HlsEvent::ReaderSeek` / `HlsEvent::ReadProgress`.
+    bus: EventBus,
 }
 
 impl HlsSource {
-    pub(crate) fn new(coord: Arc<HlsCoord>, playlist_state: Arc<PlaylistState>) -> Self {
+    pub(crate) fn new(
+        coord: Arc<HlsCoord>,
+        playlist_state: Arc<PlaylistState>,
+        bus: EventBus,
+    ) -> Self {
         Self {
             coord,
             playlist_state,
             hls_peer: None,
             peer_handle: None,
             peer_wake: None,
+            bus,
         }
     }
 
@@ -208,6 +220,15 @@ impl Source for HlsSource {
     fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
         let notify = self.peer_wake.clone()?;
         Some(Box::new(move || notify.notify_one()))
+    }
+
+    fn take_reader_hooks(&mut self) -> Option<SharedHooks> {
+        let hooks = HlsReaderHooks::new(
+            self.bus.clone(),
+            Arc::clone(&self.coord),
+            self.coord.timeline.seek_epoch_handle(),
+        );
+        Some(Arc::new(std::sync::Mutex::new(hooks)))
     }
 
     fn media_info(&self) -> Option<MediaInfo> {

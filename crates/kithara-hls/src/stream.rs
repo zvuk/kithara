@@ -164,7 +164,8 @@ impl StreamType for Hls {
             Arc::clone(&variants),
         ));
 
-        let mut source = HlsSource::new(Arc::clone(&coord), Arc::clone(&playlist_state));
+        let mut source =
+            HlsSource::new(Arc::clone(&coord), Arc::clone(&playlist_state), bus.clone());
 
         hls_peer.activate(coord, evict_rx, config.download_batch_size.max(1));
 

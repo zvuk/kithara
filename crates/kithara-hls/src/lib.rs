@@ -9,6 +9,7 @@ mod loading;
 mod parsing;
 mod peer;
 mod playlist;
+mod reader;
 mod source;
 mod stream;
 mod variant;
