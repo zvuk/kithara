@@ -1,6 +1,5 @@
 pub use kithara_events::{
-    AbrMode, AbrProgressSnapshot, AbrReason, AbrVariant, BandwidthSource, VariantDuration,
-    VariantInfo,
+    AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, VariantDuration, VariantInfo,
 };
 
 pub use crate::{

@@ -1,4 +1,4 @@
-use kithara_events::{AbrMode, AbrReason, AbrVariant};
+use kithara_events::{AbrMode, AbrReason, VariantInfo};
 use kithara_platform::time::Instant;
 use kithara_test_utils::probes::IntoProbeArg;
 use num_traits::ToPrimitive;
@@ -103,11 +103,16 @@ pub(super) fn decision(current: usize, target: usize, reason: AbrReason) -> AbrD
     }
 }
 
-fn sorted_candidates(variants: &[AbrVariant], max_bw: Option<u64>) -> Vec<(usize, u64)> {
+fn sorted_candidates(variants: &[VariantInfo], max_bw: Option<u64>) -> Vec<(usize, u64)> {
+    // Variants without a declared bandwidth (HLS master without
+    // `BANDWIDTH=...`) collapse to 0 — same fallback the legacy
+    // `build_abr_variants` used. Dropping them here would silently
+    // remove the variant from the candidate set and break ABR auto
+    // switching on minimal fixtures that omit the attribute.
     let mut out: Vec<(usize, u64)> = variants
         .iter()
-        .filter(|v| max_bw.is_none_or(|cap| v.bandwidth_bps <= cap))
-        .map(|v| (v.variant_index, v.bandwidth_bps))
+        .map(|v| (v.variant_index, v.bandwidth_bps.unwrap_or(0)))
+        .filter(|(_, bw)| max_bw.is_none_or(|cap| *bw <= cap))
         .collect();
     out.sort_by_key(|(_, bw)| *bw);
     out

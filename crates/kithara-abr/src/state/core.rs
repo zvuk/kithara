@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use kithara_events::{AbrMode, AbrReason, AbrVariant};
+use kithara_events::{AbrMode, AbrReason};
 use kithara_platform::{
     Mutex,
     time::{Duration, Instant},
@@ -11,9 +11,14 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{decision::AbrDecision, error::AbrError, view::AbrView};
+use super::{decision::AbrDecision, view::AbrView};
 
 /// Per-peer ABR state owned by a peer and shared with the controller.
+///
+/// Variants live in the peer (single source of truth) and reach the
+/// state's `decide()` via [`AbrView::variants`]. The state itself only
+/// tracks runtime control: current index, mode, switch timing, locks,
+/// pending boundary commit.
 pub struct AbrState {
     current_variant: Arc<AtomicUsize>,
     last_switch_at_nanos: AtomicU64,
@@ -21,7 +26,6 @@ pub struct AbrState {
     lock_count: AtomicUsize,
     mode: AtomicUsize,
     reference_instant: Instant,
-    variants: Mutex<Vec<AbrVariant>>,
     /// Phase 2 boundary-commit slot. `Some` means a switch has been
     /// requested via [`request_target`](AbrState::request_target) and
     /// the scheduler has not yet observed it on a segment boundary.
@@ -46,7 +50,7 @@ impl AbrState {
 
     /// Build an `AbrState` with the initial variant set from `mode`.
     #[must_use]
-    pub fn new(variants: Vec<AbrVariant>, mode: AbrMode) -> Self {
+    pub fn new(mode: AbrMode) -> Self {
         let initial_variant = match mode {
             AbrMode::Auto(Some(idx)) | AbrMode::Manual(idx) => idx,
             AbrMode::Auto(None) => 0,
@@ -58,7 +62,6 @@ impl AbrState {
             lock_count: AtomicUsize::new(0),
             mode: AtomicUsize::new(mode.into()),
             reference_instant: Instant::now(),
-            variants: Mutex::new(variants),
             pending: Mutex::new(None),
         }
     }
@@ -73,21 +76,6 @@ impl AbrState {
     ///    layout switch and the ABR state stay in sync.
     #[kithara::probe(d)]
     pub fn apply(&self, d: &AbrDecision, now: Instant) {
-        if cfg!(debug_assertions) {
-            let variants = self.variants.lock_sync();
-            if !variants.is_empty() {
-                let ok = variants
-                    .iter()
-                    .any(|v| v.variant_index == d.target_variant_index);
-                let available: Vec<usize> = variants.iter().map(|v| v.variant_index).collect();
-                drop(variants);
-                debug_assert!(
-                    ok,
-                    "ABR decision references nonexistent variant {} (available: {:?})",
-                    d.target_variant_index, available
-                );
-            }
-        }
         let current = self.current_variant.load(Ordering::Acquire);
         if d.target_variant_index == current {
             return;
@@ -218,38 +206,16 @@ impl AbrState {
             .store(cap.unwrap_or(Self::NO_BANDWIDTH_CAP), Ordering::Release);
     }
 
-    /// Apply a new mode.
-    ///
-    /// # Errors
-    /// Returns [`AbrError::VariantOutOfBounds`] if `mode` is
-    /// `AbrMode::Manual(idx)` and `idx` is not a known variant index.
-    pub fn set_mode(&self, mode: AbrMode) -> Result<(), AbrError> {
-        if let AbrMode::Manual(idx) = mode {
-            let variants = self.variants.lock_sync();
-            if !variants.iter().any(|v| v.variant_index == idx) {
-                return Err(AbrError::VariantOutOfBounds {
-                    requested: idx,
-                    available: variants.len(),
-                });
-            }
-        }
+    /// Apply a new mode. Caller is responsible for validating that
+    /// `Manual(idx)` references a known variant — variants live on the
+    /// peer, not the state, so validation must happen against
+    /// [`Abr::variants()`](crate::Abr::variants) at the call site.
+    pub fn set_mode(&self, mode: AbrMode) {
         self.mode.store(mode.into(), Ordering::Release);
-        Ok(())
-    }
-
-    /// Replace the variant list. Used at setup; not a hot path.
-    pub fn set_variants(&self, variants: Vec<AbrVariant>) {
-        *self.variants.lock_sync() = variants;
     }
 
     pub fn unlock(&self) {
         let prev = self.lock_count.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(prev > 0, "unlock called without matching lock");
-    }
-
-    /// Take a snapshot of the current variant list (cloned).
-    #[must_use]
-    pub fn variants_snapshot(&self) -> Vec<AbrVariant> {
-        self.variants.lock_sync().clone()
     }
 }

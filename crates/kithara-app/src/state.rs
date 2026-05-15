@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use kithara::{
-    abr::VariantInfo,
-    events::{AbrEvent, AppEvent, EngineEvent, Event, PlayerEvent},
-};
+use kithara::events::{AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo};
 use kithara_platform::sync::Mutex;
 use kithara_queue::{Queue, QueueEvent, TrackEntry};
 use tokio::sync::broadcast::error::RecvError;
@@ -148,7 +145,6 @@ fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: Cancell
 
     tokio::spawn(async move {
         let mut variants_cache: Vec<VariantInfo> = Vec::new();
-
         loop {
             let event = tokio::select! {
                 biased;
@@ -171,6 +167,7 @@ fn apply_event(
     state: &Mutex<UiState>,
     variants_cache: &mut Vec<VariantInfo>,
 ) {
+    use kithara::events::AbrEvent;
     match event {
         Event::Abr(AbrEvent::VariantsRegistered { variants, initial }) => {
             *variants_cache = variants;
@@ -178,7 +175,7 @@ fn apply_event(
             st.variant_label = variant_display_label(variants_cache, initial);
             st.abr_variants = variants_cache
                 .iter()
-                .map(|vi| (vi.index, variant_short_label(vi)))
+                .map(|v| (v.variant_index, variant_short_label(v)))
                 .collect();
         }
         Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
@@ -230,22 +227,27 @@ fn apply_event(
 }
 
 fn variant_display_label(variants: &[VariantInfo], index: usize) -> String {
-    variants.get(index).map_or_else(
-        || format!("variant {index}"),
-        |v| {
-            v.name.clone().unwrap_or_else(|| {
-                v.bandwidth_bps.map_or_else(
-                    || format!("variant {index}"),
-                    |b| format!("{} kbps", b / 1000),
-                )
-            })
-        },
-    )
+    variants
+        .iter()
+        .find(|v| v.variant_index == index)
+        .map_or_else(
+            || format!("variant {index}"),
+            |v| {
+                v.name.clone().unwrap_or_else(|| {
+                    v.bandwidth_bps.map_or_else(
+                        || format!("variant {index}"),
+                        |b| format!("{} kbps", b / 1000),
+                    )
+                })
+            },
+        )
 }
 
 fn variant_short_label(v: &VariantInfo) -> String {
     v.name.clone().unwrap_or_else(|| {
-        v.bandwidth_bps
-            .map_or_else(|| format!("v{}", v.index), |b| format!("{}k", b / 1000))
+        v.bandwidth_bps.map_or_else(
+            || format!("v{}", v.variant_index),
+            |b| format!("{}k", b / 1000),
+        )
     })
 }

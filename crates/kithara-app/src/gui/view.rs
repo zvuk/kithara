@@ -263,7 +263,7 @@ fn view_now_playing(state: &Kithara) -> Element<'_, Message> {
     .spacing(Consts::COMPACT_SPACING);
 
     let variant_text = if state.ui_state.variant_label.is_empty() {
-        " "
+        "—"
     } else {
         &state.ui_state.variant_label
     };

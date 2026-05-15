@@ -15,7 +15,7 @@ use crate::{abr::Abr, state::AbrState};
 
 /// Per-peer bookkeeping shared by tick orchestration, throttling, and the
 /// incoherence watcher.
-pub(super) struct PeerEntry {
+pub(crate) struct PeerEntry {
     pub(super) bus: Arc<RwLock<Option<EventBus>>>,
     pub(super) variants_registered_published: AtomicBool,
     pub(super) warmup_completed: AtomicBool,
@@ -24,7 +24,7 @@ pub(super) struct PeerEntry {
     pub(super) last_variant_switch: Mutex<Option<(Instant, Duration)>>,
     pub(super) throttle: Mutex<EventThrottleCache>,
     pub(super) state: Option<Arc<AbrState>>,
-    pub(super) peer_weak: Weak<dyn Abr>,
+    pub(crate) peer_weak: Weak<dyn Abr>,
 }
 
 impl PeerEntry {

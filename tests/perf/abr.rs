@@ -1,19 +1,22 @@
 #![cfg(feature = "perf")]
 
 use hotpath::HotpathGuardBuilder;
-use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrVariant};
-use kithara_events::VariantDuration;
+use kithara_abr::{AbrController, AbrMode, AbrSettings};
+use kithara_events::{VariantDuration, VariantInfo};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
-fn create_variants(bitrates: &[u64]) -> Vec<AbrVariant> {
+fn create_variants(bitrates: &[u64]) -> Vec<VariantInfo> {
     bitrates
         .iter()
         .enumerate()
-        .map(|(idx, &bandwidth_bps)| AbrVariant {
+        .map(|(idx, &bandwidth_bps)| VariantInfo {
             variant_index: idx,
-            bandwidth_bps,
+            bandwidth_bps: Some(bandwidth_bps),
             duration: VariantDuration::Total(Duration::ZERO),
+            name: None,
+            codecs: None,
+            container: None,
         })
         .collect()
 }

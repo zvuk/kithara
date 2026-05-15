@@ -89,16 +89,27 @@ impl AbrHandle {
     /// Returns [`AbrError::VariantOutOfBounds`] when `mode` is
     /// `AbrMode::Manual(idx)` and `idx` is not in the peer's variant list.
     pub fn set_mode(&self, mode: AbrMode) -> Result<(), AbrError> {
-        match self.inner.state.as_ref() {
-            Some(state) => {
-                state.set_mode(mode)?;
-                self.inner
-                    .controller
-                    .on_mode_changed(self.inner.peer_id, mode);
-                Ok(())
+        let Some(state) = self.inner.state.as_ref() else {
+            return Ok(());
+        };
+        if let AbrMode::Manual(idx) = mode {
+            let entry = self.inner.controller.peer_entry(self.inner.peer_id);
+            let peer: Option<Arc<dyn crate::Abr>> = entry.and_then(|e| e.peer_weak.upgrade());
+            if let Some(peer) = peer {
+                let variants = peer.variants();
+                if !variants.iter().any(|v| v.variant_index == idx) {
+                    return Err(AbrError::VariantOutOfBounds {
+                        requested: idx,
+                        available: variants.len(),
+                    });
+                }
             }
-            None => Ok(()),
         }
+        state.set_mode(mode);
+        self.inner
+            .controller
+            .on_mode_changed(self.inner.peer_id, mode);
+        Ok(())
     }
 
     /// Release one lock level.
@@ -164,8 +175,8 @@ impl Drop for HandleInner {
 #[cfg(test)]
 mod tests {
     use kithara_events::{
-        AbrEvent, AbrReason, AbrVariant, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus,
-        VariantDuration,
+        AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus, VariantDuration,
+        VariantInfo,
     };
     use kithara_test_utils::kithara;
 
@@ -175,22 +186,31 @@ mod tests {
         state::{AbrDecision, AbrState},
     };
 
-    fn test_variants_3() -> Vec<AbrVariant> {
+    fn test_variants_3() -> Vec<VariantInfo> {
         vec![
-            AbrVariant {
+            VariantInfo {
                 variant_index: 0,
-                bandwidth_bps: 256_000,
+                bandwidth_bps: Some(256_000),
                 duration: VariantDuration::Unknown,
+                name: None,
+                codecs: None,
+                container: None,
             },
-            AbrVariant {
+            VariantInfo {
                 variant_index: 1,
-                bandwidth_bps: 512_000,
+                bandwidth_bps: Some(512_000),
                 duration: VariantDuration::Unknown,
+                name: None,
+                codecs: None,
+                container: None,
             },
-            AbrVariant {
+            VariantInfo {
                 variant_index: 2,
-                bandwidth_bps: 1_024_000,
+                bandwidth_bps: Some(1_024_000),
                 duration: VariantDuration::Unknown,
+                name: None,
+                codecs: None,
+                container: None,
             },
         ]
     }
@@ -206,13 +226,14 @@ mod tests {
 
     struct StatefulPeer {
         state: Arc<AbrState>,
+        variants: Vec<VariantInfo>,
     }
     impl Abr for StatefulPeer {
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
-        fn variants(&self) -> Vec<AbrVariant> {
-            self.state.variants_snapshot()
+        fn variants(&self) -> Vec<VariantInfo> {
+            self.variants.clone()
         }
     }
 
@@ -222,9 +243,10 @@ mod tests {
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
-        let state = Arc::new(AbrState::new(test_variants_3(), AbrMode::Auto(Some(0))));
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
+            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
@@ -244,9 +266,10 @@ mod tests {
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
-        let state = Arc::new(AbrState::new(test_variants_3(), AbrMode::Auto(Some(0))));
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
+            variants: test_variants_3(),
         });
         let handle = controller.register(&peer);
 
@@ -268,9 +291,10 @@ mod tests {
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
-        let state = Arc::new(AbrState::new(test_variants_3(), AbrMode::Auto(Some(0))));
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
+            variants: test_variants_3(),
         });
 
         let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);

@@ -1253,9 +1253,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     #[kithara_hang_detector::hang_watchdog]
     fn decode_next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
-            hang_tick!();
-            yield_now();
-
             if self.timeline.is_flushing() || self.timeline.is_seek_pending() {
                 return Err(DecodeError::Interrupted);
             }
@@ -1265,6 +1262,11 @@ impl<T: StreamType> StreamAudioSource<T> {
             }
 
             match self.decoder_next_chunk_safe() {
+                Ok(DecoderChunkOutcome::Pending(_reason)) => {
+                    hang_tick!();
+                    yield_now();
+                    continue;
+                }
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
                     let current_epoch = self.epoch.load(Ordering::Acquire);
                     let chunk = match self.apply_seek_skip(current_epoch, chunk) {
@@ -1278,6 +1280,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                         continue;
                     }
                     hang_reset!();
+                    yield_now();
                     self.track_chunk(&chunk);
                     self.gapless.push(chunk);
                     continue;
@@ -1291,9 +1294,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                         DecodeAction::Yield => return Err(DecodeError::Interrupted),
                         DecodeAction::Return(result) => return result,
                     }
-                }
-                Ok(DecoderChunkOutcome::Pending(_reason)) => {
-                    continue;
                 }
                 Err(e) => match e.classify() {
                     ErrorClass::VariantChange => match self.handle_variant_change(e) {

@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration as StdDuration};
 
-use kithara_events::{AbrMode, AbrReason, AbrVariant, BandwidthSource, VariantDuration};
+use kithara_events::{AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantInfo};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
@@ -10,22 +10,31 @@ use crate::{Abr, AbrController, AbrSettings, ThroughputEstimator};
 
 /// Canonical 3-variant fixture used by every test in this module. Private
 /// to the test module so it never leaks into the public API.
-fn test_variants_3() -> Vec<AbrVariant> {
+fn test_variants_3() -> Vec<VariantInfo> {
     vec![
-        AbrVariant {
+        VariantInfo {
             variant_index: 0,
-            bandwidth_bps: 256_000,
+            bandwidth_bps: Some(256_000),
             duration: VariantDuration::Unknown,
+            name: None,
+            codecs: None,
+            container: None,
         },
-        AbrVariant {
+        VariantInfo {
             variant_index: 1,
-            bandwidth_bps: 512_000,
+            bandwidth_bps: Some(512_000),
             duration: VariantDuration::Unknown,
+            name: None,
+            codecs: None,
+            container: None,
         },
-        AbrVariant {
+        VariantInfo {
             variant_index: 2,
-            bandwidth_bps: 1_024_000,
+            bandwidth_bps: Some(1_024_000),
             duration: VariantDuration::Unknown,
+            name: None,
+            codecs: None,
+            container: None,
         },
     ]
 }
@@ -41,7 +50,7 @@ fn settings_fast() -> AbrSettings {
 
 fn view_with_bw<'a>(
     bps: Option<u64>,
-    variants: &'a [AbrVariant],
+    variants: &'a [VariantInfo],
     settings: &'a AbrSettings,
 ) -> AbrView<'a> {
     AbrView {
@@ -55,7 +64,7 @@ fn view_with_bw<'a>(
 
 #[kithara::test]
 fn decide_locked_never_switches() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.lock();
     let variants = test_variants_3();
     let settings = settings_fast();
@@ -67,7 +76,7 @@ fn decide_locked_never_switches() {
 
 #[kithara::test]
 fn decide_many_samples_during_lock_never_switches() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     let initial = state.current_variant_index();
     state.lock();
     let variants = test_variants_3();
@@ -81,7 +90,7 @@ fn decide_many_samples_during_lock_never_switches() {
 
 #[kithara::test]
 fn decide_warmup_blocks_switch() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     let variants = test_variants_3();
     let settings = AbrSettings {
         warmup_min_bytes: 128 * 1024,
@@ -103,7 +112,7 @@ fn decide_warmup_blocks_switch() {
 
 #[kithara::test]
 fn decide_manual_mode_always_target() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Manual(2));
+    let state = AbrState::new(AbrMode::Manual(2));
     let variants = test_variants_3();
     let settings = settings_fast();
     let view = view_with_bw(None, &variants, &settings);
@@ -114,7 +123,7 @@ fn decide_manual_mode_always_target() {
 
 #[kithara::test]
 fn decide_no_estimate_stays_put() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(1)));
+    let state = AbrState::new(AbrMode::Auto(Some(1)));
     let variants = test_variants_3();
     let settings = settings_fast();
     let view = view_with_bw(None, &variants, &settings);
@@ -125,7 +134,7 @@ fn decide_no_estimate_stays_put() {
 
 #[kithara::test]
 fn decide_upswitch_when_bandwidth_allows() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     let variants = test_variants_3();
     let settings = settings_fast();
     let view = view_with_bw(Some(3_000_000), &variants, &settings);
@@ -136,7 +145,7 @@ fn decide_upswitch_when_bandwidth_allows() {
 
 #[kithara::test]
 fn decide_downswitch_when_bandwidth_drops() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(2)));
+    let state = AbrState::new(AbrMode::Auto(Some(2)));
     let variants = test_variants_3();
     let settings = settings_fast();
     let view = view_with_bw(Some(300_000), &variants, &settings);
@@ -147,7 +156,7 @@ fn decide_downswitch_when_bandwidth_drops() {
 
 #[kithara::test]
 fn decide_urgent_downswitch_when_buffer_low() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(2)));
+    let state = AbrState::new(AbrMode::Auto(Some(2)));
     let variants = test_variants_3();
     let settings = AbrSettings {
         urgent_downswitch_buffer: Duration::from_secs(5),
@@ -169,7 +178,7 @@ fn decide_urgent_downswitch_when_buffer_low() {
 
 #[kithara::test]
 fn decide_buffer_too_low_for_upswitch() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     let variants = test_variants_3();
     let settings = AbrSettings {
         min_buffer_for_up_switch: Duration::from_secs(10),
@@ -191,7 +200,7 @@ fn decide_buffer_too_low_for_upswitch() {
 
 #[kithara::test]
 fn apply_updates_current_variant_and_timestamp() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.apply(
         &AbrDecision {
             reason: AbrReason::UpSwitch,
@@ -205,7 +214,7 @@ fn apply_updates_current_variant_and_timestamp() {
 
 #[kithara::test]
 fn apply_noop_when_same_variant() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(1)));
+    let state = AbrState::new(AbrMode::Auto(Some(1)));
     state.apply(
         &AbrDecision {
             reason: AbrReason::AlreadyOptimal,
@@ -217,22 +226,13 @@ fn apply_noop_when_same_variant() {
     assert_eq!(state.current_variant_index(), 1);
 }
 
-#[kithara::test]
-fn set_mode_rejects_out_of_bounds_manual() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
-    let err = state.set_mode(AbrMode::Manual(10)).unwrap_err();
-    assert_eq!(
-        err,
-        AbrError::VariantOutOfBounds {
-            requested: 10,
-            available: 3,
-        }
-    );
-}
+// `set_mode_rejects_out_of_bounds_manual` removed — variant validation
+// is now `AbrHandle::set_mode`'s responsibility (variants live on the
+// peer, not the state). See handle.rs tests for the corresponding cover.
 
 #[kithara::test]
 fn lock_is_refcounted() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(None));
+    let state = AbrState::new(AbrMode::Auto(None));
     state.lock();
     state.lock();
     assert!(state.is_locked());
@@ -247,13 +247,13 @@ fn lock_is_refcounted() {
 
 #[kithara::test]
 fn pending_target_is_empty_on_fresh_state() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     assert_eq!(state.pending_target(), None);
 }
 
 #[kithara::test]
 fn request_target_records_intent_without_committing() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.request_target(2, AbrReason::UpSwitch);
     assert_eq!(state.pending_target(), Some(2));
     assert_eq!(
@@ -265,7 +265,7 @@ fn request_target_records_intent_without_committing() {
 
 #[kithara::test]
 fn request_target_replace_pending_latest_wins() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.request_target(1, AbrReason::UpSwitch);
     state.request_target(2, AbrReason::UpSwitch);
     assert_eq!(
@@ -277,14 +277,14 @@ fn request_target_replace_pending_latest_wins() {
 
 #[kithara::test]
 fn commit_pending_returns_none_when_no_request() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     assert!(state.commit_pending(Instant::now()).is_none());
     assert_eq!(state.current_variant_index(), 0);
 }
 
 #[kithara::test]
 fn commit_pending_moves_current_variant_and_clears_slot() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.request_target(2, AbrReason::UpSwitch);
     let decision = state
         .commit_pending(Instant::now())
@@ -302,7 +302,7 @@ fn commit_pending_moves_current_variant_and_clears_slot() {
 
 #[kithara::test]
 fn commit_pending_returns_none_when_locked() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.request_target(2, AbrReason::UpSwitch);
     state.lock();
     assert!(
@@ -320,7 +320,7 @@ fn commit_pending_returns_none_when_locked() {
 
 #[kithara::test]
 fn commit_pending_after_unlock_applies_pending_intent() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.lock();
     state.request_target(2, AbrReason::UpSwitch);
     assert!(state.commit_pending(Instant::now()).is_none());
@@ -334,7 +334,7 @@ fn commit_pending_after_unlock_applies_pending_intent() {
 
 #[kithara::test]
 fn commit_pending_returns_none_when_target_equals_current() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(1)));
+    let state = AbrState::new(AbrMode::Auto(Some(1)));
     state.request_target(1, AbrReason::AlreadyOptimal);
     assert!(
         state.commit_pending(Instant::now()).is_none(),
@@ -346,7 +346,7 @@ fn commit_pending_returns_none_when_target_equals_current() {
 
 #[kithara::test]
 fn min_switch_interval_prevents_oscillation() {
-    let state = AbrState::new(test_variants_3(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     let variants = test_variants_3();
     let settings = AbrSettings {
         min_switch_interval: Duration::from_secs(30),
@@ -383,7 +383,7 @@ fn locked_state_rejects_switch(
 ) {
     let variants = test_variants_3();
     let settings = settings_fast();
-    let state = AbrState::new(variants.clone(), AbrMode::Auto(Some(locked_variant)));
+    let state = AbrState::new(AbrMode::Auto(Some(locked_variant)));
     state.lock();
 
     let now = Instant::now();
@@ -403,19 +403,21 @@ async fn lock_refcount_holds_across_record_bandwidth() {
 
     struct LockedPeer {
         state: Arc<AbrState>,
+        variants: Vec<VariantInfo>,
     }
     impl Abr for LockedPeer {
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
-        fn variants(&self) -> Vec<AbrVariant> {
-            self.state.variants_snapshot()
+        fn variants(&self) -> Vec<VariantInfo> {
+            self.variants.clone()
         }
     }
-    let state = Arc::new(AbrState::new(test_variants_3(), AbrMode::Auto(Some(0))));
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
     state.lock();
     let peer: Arc<dyn Abr> = Arc::new(LockedPeer {
         state: Arc::clone(&state),
+        variants: test_variants_3(),
     });
     let handle = controller.register(&peer);
 
@@ -489,7 +491,7 @@ proptest! {
     fn abr_state_respects_invariants(ops in proptest::collection::vec(arb_op(), 1..80)) {
         let variants = test_variants_3();
         let settings = settings_fast();
-        let state = AbrState::new(variants.clone(), AbrMode::Auto(Some(0)));
+        let state = AbrState::new(AbrMode::Auto(Some(0)));
 
         let mut lock_depth = 0usize;
         let mut variant_at_lock = None;
@@ -569,7 +571,7 @@ proptest! {
     ) {
         let variants = test_variants_3();
         let settings = settings_fast();
-        let state = AbrState::new(variants.clone(), AbrMode::Auto(Some(0)));
+        let state = AbrState::new(AbrMode::Auto(Some(0)));
 
         let mut cumulative_bps: u64 = 0;
         let mut prev_variant: Option<usize> = None;

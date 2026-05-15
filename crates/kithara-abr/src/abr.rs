@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara_events::{AbrProgressSnapshot, AbrVariant};
+use kithara_events::{AbrProgressSnapshot, VariantInfo};
 use kithara_test_utils::kithara;
 
 use crate::state::AbrState;
@@ -26,7 +26,7 @@ pub trait Abr: Send + Sync + 'static {
     }
 
     /// All variants known to the peer.
-    fn variants(&self) -> Vec<AbrVariant> {
+    fn variants(&self) -> Vec<VariantInfo> {
         Vec::new()
     }
 }

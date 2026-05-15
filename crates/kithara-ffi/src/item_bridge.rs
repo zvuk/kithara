@@ -107,9 +107,9 @@ impl ItemEventBridge {
                 let ffi_variants: Vec<crate::types::FfiVariant> = v
                     .iter()
                     .filter_map(|vi| {
-                        let Ok(index) = u32::try_from(vi.index) else {
+                        let Ok(index) = u32::try_from(vi.variant_index) else {
                             tracing::error!(
-                                idx = vi.index,
+                                idx = vi.variant_index,
                                 "BUG: HLS variant index exceeds u32::MAX, dropped from FFI list"
                             );
                             return None;

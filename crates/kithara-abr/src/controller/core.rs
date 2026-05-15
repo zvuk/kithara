@@ -169,7 +169,7 @@ impl AbrController {
         self.tick(peer_id, Instant::now());
     }
 
-    pub(super) fn peer_entry(&self, id: AbrPeerId) -> Option<Arc<PeerEntry>> {
+    pub(crate) fn peer_entry(&self, id: AbrPeerId) -> Option<Arc<PeerEntry>> {
         self.peers.lock_sync().get(&id).cloned()
     }
 

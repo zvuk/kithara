@@ -1,19 +1,22 @@
 #![forbid(unsafe_code)]
 
 use kithara::hls::{MasterPlaylist, parse_master_playlist};
-use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrVariant};
-use kithara_events::VariantDuration;
+use kithara_abr::{AbrController, AbrMode, AbrSettings};
+use kithara_events::{VariantDuration, VariantInfo};
 use kithara_platform::time::Duration;
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
-fn variants_from_master(master: &MasterPlaylist) -> Vec<AbrVariant> {
+fn variants_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
     master
         .variants
         .iter()
-        .map(|v| AbrVariant {
+        .map(|v| VariantInfo {
             variant_index: v.id.0,
-            bandwidth_bps: v.bandwidth.unwrap_or(0),
+            bandwidth_bps: Some(v.bandwidth.unwrap_or(0)),
             duration: VariantDuration::Total(Duration::ZERO),
+            name: None,
+            codecs: None,
+            container: None,
         })
         .collect()
 }
@@ -44,7 +47,7 @@ fn parsed_master_playlist(test_master_playlist_data: &str) -> MasterPlaylist {
 }
 
 #[kithara::fixture]
-fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<AbrVariant> {
+fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<VariantInfo> {
     variants_from_master(&parsed_master_playlist)
 }
 
@@ -59,7 +62,7 @@ fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<
 #[case(3)]
 fn test_manual_selector_different_indices(
     #[case] selector_index: usize,
-    variants_from_parsed_playlist: Vec<AbrVariant>,
+    variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
     let controller = AbrController::new(AbrSettings::default());
     let _ = controller.settings().warmup_min_bytes;
@@ -70,7 +73,7 @@ fn test_manual_selector_different_indices(
 #[kithara::test]
 fn test_abr_controller_no_selector(
     abr_settings_default: AbrSettings,
-    variants_from_parsed_playlist: Vec<AbrVariant>,
+    variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
     let controller = AbrController::new(abr_settings_default);
     assert!(controller.current_bandwidth_estimate_bps().is_none());
@@ -86,7 +89,7 @@ fn test_abr_controller_no_selector(
 fn test_abr_decision_with_different_conditions(
     #[case] _buffer_secs: f64,
     #[case] _time_since_last_switch_secs: f64,
-    variants_from_parsed_playlist: Vec<AbrVariant>,
+    variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
     let controller = AbrController::new(AbrSettings::default());
     assert!(controller.current_bandwidth_estimate_bps().is_none());
@@ -99,9 +102,9 @@ fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
 
     assert_eq!(variants.len(), 3);
 
-    assert_eq!(variants[0].bandwidth_bps, 2000000);
-    assert_eq!(variants[1].bandwidth_bps, 1000000);
-    assert_eq!(variants[2].bandwidth_bps, 500000);
+    assert_eq!(variants[0].bandwidth_bps, Some(2000000));
+    assert_eq!(variants[1].bandwidth_bps, Some(1000000));
+    assert_eq!(variants[2].bandwidth_bps, Some(500000));
 
     assert_eq!(variants[0].variant_index, 0);
     assert_eq!(variants[1].variant_index, 1);

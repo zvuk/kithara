@@ -448,13 +448,8 @@ impl ResamplerProcessor {
     }
 
     /// Turn the accumulated planar output into an interleaved `PcmChunk`.
-    fn finalize_resample_chunk(&self, input_frames: usize) -> Option<PcmChunk> {
+    fn finalize_resample_chunk(&self, _input_frames: usize) -> Option<PcmChunk> {
         if self.temp_output_all[0].is_empty() {
-            trace!(
-                buffered = self.input_buffer[0].len(),
-                needed = input_frames,
-                "Accumulating data"
-            );
             return None;
         }
 
@@ -576,14 +571,6 @@ impl ResamplerProcessor {
     }
 
     fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
-        debug!(
-            new_ratio,
-            source_rate = self.source_rate,
-            target_rate,
-            quality = ?self.quality,
-            "Resampler activated"
-        );
-
         match Self::create_resampler(
             self.quality,
             new_ratio,
@@ -616,11 +603,6 @@ impl ResamplerProcessor {
         let channels = self.channels;
 
         if self.input_buffer[0].len() < input_frames {
-            trace!(
-                buffered = self.input_buffer[0].len(),
-                needed = input_frames,
-                "Accumulating data"
-            );
             return None;
         }
 
@@ -752,13 +734,6 @@ impl ResamplerProcessor {
 
     /// React to a changed channel count in incoming chunks (ABR switch).
     fn handle_channel_change(&mut self, chunk_channels: usize, chunk_rate: u32) {
-        debug!(
-            old_channels = self.channels,
-            new_channels = chunk_channels,
-            old_rate = self.source_rate,
-            new_rate = chunk_rate,
-            "Channel count changed, recreating resampler"
-        );
         self.channels = chunk_channels;
         self.source_rate = chunk_rate;
         self.input_buffer = smallvec_new_vecs(chunk_channels);
@@ -773,11 +748,6 @@ impl ResamplerProcessor {
 
     /// React to a changed source sample rate while channel count is stable.
     fn handle_source_rate_change(&mut self, chunk_rate: u32) {
-        debug!(
-            old_rate = self.source_rate,
-            new_rate = chunk_rate,
-            "Source sample rate changed, updating ratio dynamically"
-        );
         self.source_rate = chunk_rate;
         for buf in &mut self.input_buffer {
             buf.clear();
@@ -786,12 +756,6 @@ impl ResamplerProcessor {
 
     /// Passthrough path: take the chunk, stamp the current output spec, return it.
     fn passthrough_chunk(&self, mut chunk: PcmChunk) -> PcmChunk {
-        trace!(
-            source_rate = self.source_rate,
-            target_rate = self.output_spec.sample_rate,
-            chunk_samples = chunk.pcm.len(),
-            "Resampler passthrough (no resampling)"
-        );
         chunk.meta.spec = self.output_spec;
         chunk
     }
@@ -808,19 +772,10 @@ impl AudioEffect for ResamplerProcessor {
         let chunk_channels = chunk.spec().channels as usize;
 
         self.apply_source_spec_changes(chunk_channels, chunk_rate);
-
         self.update_resampler_if_needed();
-
         if self.is_passthrough() {
             return Some(self.passthrough_chunk(chunk));
         }
-
-        trace!(
-            source_rate = self.source_rate,
-            target_rate = self.output_spec.sample_rate,
-            input_frames = chunk.frames(),
-            "Resampling"
-        );
         self.resample(&chunk)
     }
 

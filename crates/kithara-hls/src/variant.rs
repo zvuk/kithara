@@ -16,6 +16,7 @@ use kithara_drm::DecryptContext;
 use kithara_net::NetError;
 use kithara_platform::{
     Mutex, RwLock,
+    thread::sleep,
     time::{Duration, Instant},
     tokio::sync::Notify,
 };
@@ -575,7 +576,7 @@ impl HlsVariant {
             }
             self.wake_peer();
             hang_tick!();
-            std::thread::sleep(Duration::from_millis(2));
+            sleep(Duration::from_millis(2));
         }
     }
 

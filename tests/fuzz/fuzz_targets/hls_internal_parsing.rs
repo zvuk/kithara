@@ -15,7 +15,7 @@ fuzz_target!(|input: Input| {
     data.truncate(16 * 1024);
 
     if let Ok(master) = parse_master_playlist(&data) {
-        let infos = variant_info_from_master(&master);
+        let infos = variant_info_from_master(&master, &[]);
         assert_eq!(infos.len(), master.variants.len());
     }
 

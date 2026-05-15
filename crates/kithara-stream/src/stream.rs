@@ -248,6 +248,27 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Stream<T> {
+    /// Short timeout keeps the audio worker responsive for round-robin
+    /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
+    /// lasts ~46ms. A 10ms budget gives the worker time to serve other
+    /// tracks and still refill the ringbuf before the audio callback drains it.
+    const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
+
+    /// Maximum `wait_range` retries before returning
+    /// `Pending(NotReady)` to the caller. Each retry takes
+    /// `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
+    /// Prevents the hang detector from firing when data is
+    /// legitimately not yet available (e.g. encrypted HLS startup).
+    const MAX_WAIT_SPINS: u32 = 50;
+
+    /// `Seek` calls `wait_range(new_pos..new_pos+1)` to prime metadata
+    /// (so `source.len()` answers before the seek-past-EOF check). A
+    /// hard cap is required because a broken downloader would otherwise
+    /// hang the seek forever; on the happy path local metadata resolves
+    /// well under this budget. Matches the read path's total budget
+    /// (`WAIT_RANGE_TIMEOUT * MAX_WAIT_SPINS`).
+    const SEEK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
+
     /// Typed read — returns a [`StreamReadOutcome`] discriminating
     /// progress (`Bytes` with [`NonZeroUsize`]) from non-progress
     /// (`Pending` with a typed [`PendingReason`]) and natural EOF.
@@ -257,19 +278,6 @@ impl<T: StreamType> Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara_hang_detector::hang_watchdog]
     pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
-        /// Short timeout keeps the audio worker responsive for round-robin
-        /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
-        /// lasts ~46ms. A 10ms budget gives the worker time to serve other
-        /// tracks and still refill the ringbuf before the audio callback drains it.
-        const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
-
-        /// Maximum `wait_range` retries before returning
-        /// `Pending(NotReady)` to the caller. Each retry takes
-        /// `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
-        /// Prevents the hang detector from firing when data is
-        /// legitimately not yet available (e.g. encrypted HLS startup).
-        const MAX_WAIT_SPINS: u32 = 50;
-
         if buf.is_empty() {
             return Ok(StreamReadOutcome::Eof {
                 byte_position: self.source.position(),
@@ -284,7 +292,9 @@ impl<T: StreamType> Stream<T> {
             let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
-            let wait_result = self.source.wait_range(range, Some(WAIT_RANGE_TIMEOUT));
+            let wait_result = self
+                .source
+                .wait_range(range, Some(Self::WAIT_RANGE_TIMEOUT));
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
@@ -292,7 +302,7 @@ impl<T: StreamType> Stream<T> {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     wait_spins += 1;
-                    if wait_spins >= MAX_WAIT_SPINS {
+                    if wait_spins >= Self::MAX_WAIT_SPINS {
                         return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
                     }
                     hang_tick!();
@@ -311,7 +321,7 @@ impl<T: StreamType> Stream<T> {
                 WaitOutcome::Interrupted => {
                     if !timeline.is_flushing() {
                         wait_spins += 1;
-                        if wait_spins >= MAX_WAIT_SPINS {
+                        if wait_spins >= Self::MAX_WAIT_SPINS {
                             return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
                         }
                         hang_tick!();
@@ -412,9 +422,10 @@ impl<T: StreamType> Seek for Stream<T> {
 
         let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX);
 
-        let _ = self
-            .source
-            .wait_range(new_pos..new_pos.saturating_add(1), None);
+        let _ = self.source.wait_range(
+            new_pos..new_pos.saturating_add(1),
+            Some(Self::SEEK_WAIT_TIMEOUT),
+        );
 
         if let Some(len) = self.source.len()
             && new_pos > len

@@ -1,18 +1,21 @@
 use std::time::Duration as StdDuration;
 
 use kithara_abr::{AbrMode, AbrSettings, AbrState, AbrView};
-use kithara_events::{AbrVariant, VariantDuration};
+use kithara_events::{VariantDuration, VariantInfo};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 
-fn variants() -> Vec<AbrVariant> {
+fn variants() -> Vec<VariantInfo> {
     [300_000u64, 900_000, 3_000_000]
         .iter()
         .enumerate()
-        .map(|(i, bps)| AbrVariant {
+        .map(|(i, bps)| VariantInfo {
             variant_index: i,
-            bandwidth_bps: *bps,
+            bandwidth_bps: Some(*bps),
             duration: VariantDuration::Unknown,
+            name: None,
+            codecs: None,
+            container: None,
         })
         .collect()
 }
@@ -25,7 +28,7 @@ fn fast_settings() -> AbrSettings {
 }
 
 fn run_profile(profile: &[u64]) -> usize {
-    let state = AbrState::new(variants(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     let settings = fast_settings();
     let variants = variants();
     let base = Instant::now();

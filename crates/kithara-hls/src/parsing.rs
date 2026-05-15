@@ -303,22 +303,46 @@ pub fn parse_media_playlist(url: Url, data: &[u8]) -> HlsResult<MediaPlaylist> {
     })
 }
 
-/// Extract extended variant metadata from master playlist.
+/// Extract variant metadata from master playlist + parsed media playlists.
+///
+/// `media_playlists` must align with `master.variants` by index. Each
+/// produced [`VariantInfo`] carries duration shape derived from the
+/// matching media playlist's segments — `Segmented(per-segment)` when
+/// segments are present, otherwise `Unknown`.
 #[must_use]
-pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
+pub fn variant_info_from_master(
+    master: &MasterPlaylist,
+    media_playlists: &[MediaPlaylist],
+) -> Vec<VariantInfo> {
     master
         .variants
         .iter()
-        .map(|v| VariantInfo {
-            index: v.id.0,
-            bandwidth_bps: v.bandwidth,
-            name: v.name.clone(),
-            codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),
-            container: v
-                .codec
-                .as_ref()
-                .and_then(|c| c.container)
-                .map(|fmt| format!("{fmt:?}")),
+        .enumerate()
+        .map(|(idx, v)| {
+            let duration = media_playlists.get(idx).map_or(
+                kithara_events::VariantDuration::Unknown,
+                |playlist| {
+                    if playlist.segments.is_empty() {
+                        kithara_events::VariantDuration::Unknown
+                    } else {
+                        kithara_events::VariantDuration::Segmented(
+                            playlist.segments.iter().map(|s| s.duration).collect(),
+                        )
+                    }
+                },
+            );
+            VariantInfo {
+                variant_index: v.id.0,
+                bandwidth_bps: v.bandwidth,
+                duration,
+                name: v.name.clone(),
+                codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),
+                container: v
+                    .codec
+                    .as_ref()
+                    .and_then(|c| c.container)
+                    .map(|fmt| format!("{fmt:?}")),
+            }
         })
         .collect()
 }

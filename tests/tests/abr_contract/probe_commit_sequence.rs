@@ -8,29 +8,12 @@
 //! cross-variant byte continuity already has end-to-end coverage in
 //! `drm_stream_integrity`.
 
-use kithara_abr::{AbrMode, AbrReason, AbrState, AbrVariant};
-use kithara_events::VariantDuration;
+use kithara_abr::{AbrMode, AbrReason, AbrState};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 
-fn variant(index: usize, bandwidth_bps: u64) -> AbrVariant {
-    AbrVariant {
-        duration: VariantDuration::Unknown,
-        bandwidth_bps,
-        variant_index: index,
-    }
-}
-
 fn fresh_state(initial: usize) -> AbrState {
-    AbrState::new(
-        vec![
-            variant(0, 66_000),
-            variant(1, 134_000),
-            variant(2, 270_000),
-            variant(3, 988_000),
-        ],
-        AbrMode::Auto(Some(initial)),
-    )
+    AbrState::new(AbrMode::Auto(Some(initial)))
 }
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
@@ -63,7 +46,7 @@ async fn auto_commit_flips_active_variant() {
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
 async fn manual_set_mode_uses_same_commit_path() {
     let state = fresh_state(0);
-    state.set_mode(AbrMode::Manual(2)).expect("manual mode set");
+    state.set_mode(AbrMode::Manual(2));
     // Manual mode surfaces its target through the same pending-decision
     // channel Auto uses, so commit_pending consumes both with one code
     // path. The scheduler doesn't need to special-case manual switches.

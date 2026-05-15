@@ -362,10 +362,11 @@ impl PlayerImpl {
 
     /// ABR handle of the currently loaded item, if any.
     ///
-    /// Returns `Some` while an adaptive (HLS) resource is active; `None`
-    /// otherwise. In the production-port wiring this is sourced from the
-    /// currently mounted `Resource::abr()` rather than a cached field; the
-    /// queue layer threads runtime ABR through this accessor.
+    /// Returns `Some` while an adaptive (HLS) resource is queued (not yet
+    /// taken into the processor); `None` once `enqueue_to_processor` has
+    /// moved the resource out. Phase 6 of the variant-pull refactor will
+    /// expose the runtime variant via the `Source` chain instead, freeing
+    /// this from queue-state coupling.
     #[must_use]
     pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         let idx = self.current_index.load(Ordering::Relaxed);

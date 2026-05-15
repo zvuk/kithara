@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use kithara_events::{AbrEvent, AbrReason, BandwidthSource, VariantInfo};
+use kithara_events::{AbrEvent, AbrReason, BandwidthSource};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 
@@ -87,16 +87,6 @@ impl AbrController {
             .load(Ordering::Acquire)
             && let Some(ref bus) = bus
         {
-            let infos: Vec<VariantInfo> = variants
-                .iter()
-                .map(|v| VariantInfo {
-                    index: v.variant_index,
-                    bandwidth_bps: Some(v.bandwidth_bps),
-                    name: None,
-                    codecs: None,
-                    container: None,
-                })
-                .collect();
             let initial = ctx
                 .entry
                 .state
@@ -104,7 +94,7 @@ impl AbrController {
                 .map_or(0, |s| s.current_variant_index());
             bus.publish(AbrEvent::VariantsRegistered {
                 initial,
-                variants: infos,
+                variants: variants.clone(),
             });
             ctx.entry
                 .variants_registered_published

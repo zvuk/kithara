@@ -103,7 +103,7 @@ impl StreamType for Hls {
             &media_playlists,
         ));
 
-        hls_peer.set_abr_variants(build_abr_variants(&master.variants, &media_playlists));
+        hls_peer.set_abr_variants(variant_info_from_master(&master, &media_playlists));
 
         key_manager
             .prefetch_aes128_keys(&media_playlists)
@@ -124,8 +124,6 @@ impl StreamType for Hls {
                 playlist_state.set_size_map(variant, map);
             }
         }
-
-        let _ = variant_info_from_master;
 
         timeline.set_total_duration(playlist_state.track_duration());
 
@@ -217,28 +215,4 @@ fn build_asset_store(
         builder = builder.flush_hub(Arc::clone(hub));
     }
     builder.build()
-}
-
-fn build_abr_variants(
-    master_variants: &[crate::parsing::VariantStream],
-    media_playlists: &[MediaPlaylist],
-) -> Vec<kithara_events::AbrVariant> {
-    master_variants
-        .iter()
-        .zip(media_playlists.iter())
-        .map(|(v, playlist)| {
-            let duration = if playlist.segments.is_empty() {
-                kithara_events::VariantDuration::Unknown
-            } else {
-                kithara_events::VariantDuration::Segmented(
-                    playlist.segments.iter().map(|s| s.duration).collect(),
-                )
-            };
-            kithara_events::AbrVariant {
-                duration,
-                variant_index: v.id.0,
-                bandwidth_bps: v.bandwidth.unwrap_or(0),
-            }
-        })
-        .collect()
 }

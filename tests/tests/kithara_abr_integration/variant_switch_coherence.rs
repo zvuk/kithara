@@ -8,8 +8,8 @@ use std::{
 
 use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator};
 use kithara_events::{
-    AbrEvent, AbrProgressSnapshot, AbrVariant, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY, Event,
-    EventBus, VariantDuration,
+    AbrEvent, AbrProgressSnapshot, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY, Event, EventBus,
+    VariantDuration, VariantInfo,
 };
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
@@ -27,11 +27,12 @@ struct AdvancingPeer {
     reader: Arc<AtomicUsize>,
     committed: Arc<AtomicUsize>,
     durations: Vec<Duration>,
+    variants: Vec<VariantInfo>,
 }
 
 impl kithara_abr::Abr for AdvancingPeer {
-    fn variants(&self) -> Vec<AbrVariant> {
-        self.state.variants_snapshot()
+    fn variants(&self) -> Vec<VariantInfo> {
+        self.variants.clone()
     }
     fn state(&self) -> Option<Arc<AbrState>> {
         Some(Arc::clone(&self.state))
@@ -54,17 +55,20 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
     let mut rx = bus.subscribe();
 
     let durations: Vec<Duration> = (0..40).map(|_| Duration::from_secs(2)).collect();
-    let variants: Vec<AbrVariant> = [300_000u64, 900_000, 3_000_000]
+    let variants: Vec<VariantInfo> = [300_000u64, 900_000, 3_000_000]
         .iter()
         .enumerate()
-        .map(|(i, bps)| AbrVariant {
+        .map(|(i, bps)| VariantInfo {
             variant_index: i,
-            bandwidth_bps: *bps,
+            bandwidth_bps: Some(*bps),
             duration: VariantDuration::Segmented(durations.clone()),
+            name: None,
+            codecs: None,
+            container: None,
         })
         .collect();
 
-    let state = Arc::new(AbrState::new(variants, AbrMode::Auto(Some(0))));
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
     let reader = Arc::new(AtomicUsize::new(0));
     let committed = Arc::new(AtomicUsize::new(3));
     let peer: Arc<dyn kithara_abr::Abr> = Arc::new(AdvancingPeer {
@@ -72,6 +76,7 @@ async fn normal_switch_keeps_reader_advancing_no_incoherence() {
         reader: Arc::clone(&reader),
         committed: Arc::clone(&committed),
         durations,
+        variants,
     });
 
     let controller = AbrController::with_estimator(

@@ -10,7 +10,7 @@ use std::{
 
 use kithara_abr::{Abr, AbrState};
 use kithara_assets::ResourceKey;
-use kithara_events::{AbrMode, AbrProgressSnapshot, AbrVariant, VariantDuration};
+use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
 use kithara_platform::{
     Mutex,
     time::Duration,
@@ -25,7 +25,6 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 
 use crate::{coord::HlsCoord, variant::PlanCtx};
 
@@ -51,6 +50,12 @@ struct HlsTrackState {
 /// next batch of `FetchCmd`s (thin event router per spec).
 pub(crate) struct HlsPeer {
     abr: Arc<AbrState>,
+    /// Single source of truth for variant metadata visible to ABR
+    /// controller via [`Abr::variants()`] and to UI/FFI via the
+    /// `Source::current_variant()` chain. Populated once by
+    /// [`Self::set_abr_variants`] after the master + media playlists
+    /// have been parsed; never mutated again for the peer's lifetime.
+    variants: Mutex<Vec<VariantInfo>>,
     reader_segment: Arc<AtomicUsize>,
     state: Arc<Mutex<Option<HlsTrackState>>>,
     /// Reader→peer wake channel. The HLS `Source` fires this whenever it
@@ -74,7 +79,8 @@ impl HlsPeer {
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::new(None),
             wake_signal: CancellationToken::new(), // kithara:cancel:owner
-            abr: Arc::new(AbrState::new(Vec::new(), initial_mode)),
+            abr: Arc::new(AbrState::new(initial_mode)),
+            variants: Mutex::new(Vec::new()),
             reader_segment: Arc::new(AtomicUsize::new(0)),
             reader_advanced: Arc::new(Notify::new()),
         }
@@ -153,8 +159,8 @@ impl HlsPeer {
         });
     }
 
-    pub(crate) fn set_abr_variants(&self, variants: Vec<AbrVariant>) {
-        self.abr.set_variants(variants);
+    pub(crate) fn set_abr_variants(&self, variants: Vec<VariantInfo>) {
+        *self.variants.lock_sync() = variants;
     }
 
     /// Release the stashed [`HlsTrackState`] and cancel the waker task so
@@ -175,12 +181,15 @@ impl Drop for HlsPeer {
 impl Abr for HlsPeer {
     fn progress(&self) -> Option<AbrProgressSnapshot> {
         let current = self.abr.current_variant_index();
-        let variants = self.abr.variants_snapshot();
-        let variant = variants.iter().find(|v| v.variant_index == current)?;
-        let durations = match &variant.duration {
-            VariantDuration::Segmented(d) => d.as_slice(),
-            VariantDuration::Total(_) | VariantDuration::Unknown => return None,
-        };
+        let durations: Vec<Duration> = self
+            .variants
+            .lock_sync()
+            .iter()
+            .find(|v| v.variant_index == current)
+            .and_then(|v| match &v.duration {
+                VariantDuration::Segmented(d) => Some(d.clone()),
+                VariantDuration::Total(_) | VariantDuration::Unknown => None,
+            })?;
         let reader_idx = self.reader_segment.load(Ordering::Acquire);
         let download_head = self
             .state
@@ -201,8 +210,8 @@ impl Abr for HlsPeer {
         Some(Arc::clone(&self.abr))
     }
 
-    fn variants(&self) -> Vec<AbrVariant> {
-        self.abr.variants_snapshot()
+    fn variants(&self) -> Vec<VariantInfo> {
+        self.variants.lock_sync().clone()
     }
 }
 
@@ -233,7 +242,6 @@ impl Peer for HlsPeer {
             .map(|active| active.dispatch(&outcome.ctx, outcome.ctx.prefetch_budget))
             .unwrap_or_default();
         if cmds.is_empty() {
-            debug!(seg = outcome.seg_at_reader, "hls poll_next: no commands");
             return Poll::Pending;
         }
         Poll::Ready(Some(cmds))

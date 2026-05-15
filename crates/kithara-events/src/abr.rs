@@ -74,15 +74,7 @@ pub enum BandwidthSource {
     Cache,
 }
 
-/// Variant known to the ABR controller (bandwidth + duration shape).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AbrVariant {
-    pub duration: VariantDuration,
-    pub bandwidth_bps: u64,
-    pub variant_index: usize,
-}
-
-/// Duration shape for an `AbrVariant`.
+/// Duration shape for a variant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VariantDuration {
     /// Single total duration (e.g. MP3, WAV).
@@ -100,14 +92,18 @@ pub struct AbrProgressSnapshot {
     pub reader_playback_time: Duration,
 }
 
-/// Extended variant metadata for UI and monitoring.
+/// Variant metadata. Single source of truth across HLS parsing, ABR
+/// scheduler, event payload, and UI surfaces. Replaces the historical
+/// split between `AbrVariant` (bandwidth + duration) and a separate
+/// `VariantInfo` for UI metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VariantInfo {
+    pub variant_index: usize,
     pub bandwidth_bps: Option<u64>,
+    pub duration: VariantDuration,
+    pub name: Option<String>,
     pub codecs: Option<String>,
     pub container: Option<String>,
-    pub name: Option<String>,
-    pub index: usize,
 }
 
 /// Events emitted by the ABR controller for a single registered peer.
