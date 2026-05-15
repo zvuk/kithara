@@ -116,7 +116,12 @@ impl Node for DecoderNode {
         self.sync_seek_epoch();
 
         if !self.outlet.flush() {
-            return TickResult::Waiting;
+            // PCM ring is full and the overflow slot still holds the
+            // last produced chunk — the consumer is not draining. This
+            // is the paused/idle state, not a stuck source, so
+            // distinguish it from `Waiting` (which the hang watchdog
+            // *does* tick on). See `runtime::observer::PassOutcome`.
+            return TickResult::Backpressured;
         }
 
         if self.runtime.chunks_sent >= self.preload_chunks && !self.runtime.preloaded {

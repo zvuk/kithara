@@ -4,14 +4,23 @@ use crate::runtime::SlotId;
 
 /// Best result from a single round-robin pass over all nodes.
 ///
-/// Ordered by priority: `Produced > Waiting > Idle`.
+/// Ordered by priority: `Produced > Waiting > Backpressured > Idle`.
 /// A single node returning `Progress` overrides everything else.
+/// `Waiting` (upstream-blocked) outranks `Backpressured`
+/// (downstream-not-pulling) so a real source hang is still detected
+/// when at least one slot is genuinely stuck.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PassOutcome {
     /// At least one node made progress.
     Produced,
-    /// No progress made, but at least one node is waiting (e.g. backpressure).
+    /// No progress made and at least one node is upstream-blocked
+    /// (source not ready). Ticking the hang watchdog here turns a
+    /// forever-stuck source into a panic at the configured budget.
     Waiting,
+    /// No progress made and every non-terminal node is downstream-
+    /// backpressured (PCM ring full / consumer not pulling). The hang
+    /// watchdog must NOT tick — this is the paused/idle player state.
+    Backpressured,
     /// All nodes are terminal (Done) — legitimately idle.
     Idle,
 }
@@ -34,6 +43,12 @@ pub(crate) enum SchedulerEvent {
     /// blocked-forever source surfaces as a hang panic instead of an
     /// indefinite park.
     Waiting,
+    /// Every non-terminal slot is downstream-backpressured (its
+    /// downstream consumer is not pulling, so the PCM ring is full
+    /// and the node cannot push more). Progress is not expected until
+    /// the consumer drains the ring, so this state must NOT tick the
+    /// hang watchdog — an idle/paused player is the typical cause.
+    Backpressured,
     /// A node took too long to tick.
     SlowTick {
         /// The ID of the slow node.

@@ -2,21 +2,27 @@
 
 use std::{
     collections::VecDeque,
-    io::Error as IoError,
+    io::{Error as IoError, ErrorKind},
+    num::NonZeroUsize,
     ops::Range,
     sync::{
-        Arc, Weak,
+        Arc, OnceLock, Weak,
         atomic::{AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering},
     },
 };
 
-use kithara_assets::{AssetResource, AssetResourceState, AssetStore, ResourceKey};
+use kithara_assets::{AssetResource, AssetResourceState, AssetStore, AssetsError, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_net::NetError;
-use kithara_platform::{Mutex, RwLock, time::Duration};
-use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_platform::{
+    Mutex, RwLock,
+    time::{Duration, Instant},
+    tokio::sync::Notify,
+};
+use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
-    SegmentDescriptor,
+    AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor,
+    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, Timeline,
     dl::{FetchCmd, OnCompleteFn, WriterFn},
 };
 use kithara_test_utils::kithara;
@@ -24,7 +30,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use url::Url;
 
-use crate::playlist::{PlaylistAccess, PlaylistState};
+use crate::{
+    HlsError,
+    playlist::{PlaylistAccess, PlaylistState},
+};
 
 #[cfg(test)]
 mod tests;
@@ -60,7 +69,7 @@ impl From<SegmentState> for Arc<AtomicU8> {
 }
 
 #[derive(Debug)]
-struct SegmentEntry {
+pub(crate) struct SegmentEntry {
     url: Url,
     resource_id: ResourceKey,
     /// Cache state. Shared with the segment's `FetchSlot`: settle on
@@ -103,7 +112,7 @@ impl SegmentEntry {
 }
 
 #[derive(Debug)]
-struct InitEntry {
+pub(crate) struct InitEntry {
     url: Url,
     resource_id: ResourceKey,
     /// Shared with the init segment's `OnCompleteFn`; see
@@ -174,10 +183,48 @@ pub(crate) struct PlanCtx {
     /// distinguish fetches that pre-date a user seek from those that
     /// the scheduler issued *after* observing the new epoch.
     pub(crate) seek_epoch: u64,
+    /// Max bytes the downloader may be ahead of the reader before
+    /// `dispatch` pauses emitting `FetchCmd`s. Mirrors
+    /// `HlsConfig::look_ahead_bytes`:
+    /// - `Some(n)` — when a segment's start offset exceeds
+    ///   `variant.position() + n`, leave it (and everything after)
+    ///   in the queue; further prefetch waits for the reader to
+    ///   advance.
+    /// - `None` — no cap (download as fast as possible).
+    ///
+    /// `Init` is always emitted regardless — the fMP4 demuxer needs
+    /// it before any segment can decode.
+    pub(crate) look_ahead_bytes: Option<u64>,
 }
 
 pub(crate) struct HlsVariant {
     variant: usize,
+    /// Per-track asset store — used by reader paths (`read_at`,
+    /// `wait_range`, `range_ready`) for `open_resource` /
+    /// `contains_range` and by `dispatch` (already accessed via
+    /// `PlanCtx`) for `acquire_resource`. Cloned from `PlanCtx` at
+    /// construction so reader-side methods don't have to thread `ctx`
+    /// through.
+    asset_store: Arc<AssetStore<DecryptContext>>,
+    /// Parsed master/media-playlist data. Owned by `Arc` so multiple
+    /// variants share a single immutable view; used by
+    /// `seek_time_anchor` (`find_seek_point_for_time`) and as the
+    /// source for the cached [`Self::codec`] / [`Self::container`].
+    playlist_state: Arc<PlaylistState>,
+    /// Track timeline — used by reader-path methods (`phase_at`,
+    /// `wait_range`) for `is_flushing` checks. Cheap to clone.
+    timeline: Timeline,
+    /// Reader→peer wake handle, installed once when the owning `HlsPeer`
+    /// binds. `wait_range` / `seek_time_anchor` fire it so
+    /// `HlsPeer::poll_next` resumes on the next event loop tick.
+    /// Empty until [`Self::set_peer_wake`] is called by `HlsCoord`.
+    peer_wake: OnceLock<Arc<Notify>>,
+    /// Cached audio codec — pulled from `playlist_state` at construction
+    /// time. The reader's hot path (`media_info`) reads this without
+    /// taking the playlist's per-variant `RwLock`.
+    codec: Option<AudioCodec>,
+    /// Cached container format — see [`Self::codec`].
+    container: Option<ContainerFormat>,
     /// fMP4 init metadata. For raw TS/AAC variants `init.size == 0` and
     /// `init.state == Loaded` — `rebuild` then never enqueues `Init`.
     init: InitEntry,
@@ -224,6 +271,19 @@ pub(crate) struct HlsVariant {
     position: Arc<AtomicU64>,
 }
 
+/// Media payload + shared-dep snapshot for [`HlsVariant::from_parts`].
+/// Pulled out of the constructor's argument list so the call site stays
+/// readable — `new()` builds this from parsed playlist metadata, tests
+/// build it inline from synthesised fixtures.
+pub(crate) struct VariantParts {
+    pub(crate) playlist_state: Arc<PlaylistState>,
+    pub(crate) timeline: Timeline,
+    pub(crate) codec: Option<AudioCodec>,
+    pub(crate) container: Option<ContainerFormat>,
+    pub(crate) init: InitEntry,
+    pub(crate) segments: Vec<SegmentEntry>,
+}
+
 impl HlsVariant {
     /// Production constructor. Reads parsed playlist metadata and assembles
     /// the per-variant index, init/segment entries, queue, and cancel
@@ -234,34 +294,49 @@ impl HlsVariant {
     #[must_use]
     pub(crate) fn new(
         variant: usize,
-        playlist_state: &PlaylistState,
+        playlist_state: &Arc<PlaylistState>,
+        timeline: &Timeline,
         init_decrypt_ctx: Option<DecryptContext>,
         decrypt_contexts: &[Option<DecryptContext>],
         ctx: &PlanCtx,
     ) -> Arc<Self> {
-        let init = Self::build_init_entry(playlist_state, variant, init_decrypt_ctx);
+        let init = Self::build_init_entry(playlist_state.as_ref(), variant, init_decrypt_ctx);
         let segments = Self::build_segment_entries(
-            playlist_state,
+            playlist_state.as_ref(),
             decrypt_contexts,
             variant,
             init.size.load(Ordering::Acquire),
         );
-        Self::from_parts(variant, init, segments, ctx)
+        let codec = playlist_state.variant_codec(variant);
+        let container = playlist_state.variant_container(variant);
+        Self::from_parts(
+            variant,
+            VariantParts {
+                playlist_state: Arc::clone(playlist_state),
+                timeline: timeline.clone(),
+                codec,
+                container,
+                init,
+                segments,
+            },
+            ctx,
+        )
     }
 
     /// Bare assembly used by unit tests inside this module.
     #[must_use]
-    fn from_parts(
-        variant: usize,
-        init: InitEntry,
-        segments: Vec<SegmentEntry>,
-        ctx: &PlanCtx,
-    ) -> Arc<Self> {
-        let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
+    fn from_parts(variant: usize, parts: VariantParts, ctx: &PlanCtx) -> Arc<Self> {
+        let num = u32::try_from(parts.segments.len()).unwrap_or(u32::MAX);
         let variant_ref = Self {
             variant,
-            init,
-            segments,
+            asset_store: Arc::clone(&ctx.asset_store),
+            playlist_state: parts.playlist_state,
+            timeline: parts.timeline,
+            peer_wake: OnceLock::new(),
+            codec: parts.codec,
+            container: parts.container,
+            init: parts.init,
+            segments: parts.segments,
             offsets: RwLock::new(Vec::new()),
             init_seed: AtomicU64::new(0),
             byte_shift: AtomicI64::new(0),
@@ -273,6 +348,276 @@ impl HlsVariant {
         };
         variant_ref.recompute_offsets();
         Arc::new(variant_ref)
+    }
+
+    /// Install the wake handle that the owning peer listens on. Called
+    /// once by `HlsCoord` after the peer is bound. Subsequent calls
+    /// silently keep the first registration.
+    pub(crate) fn set_peer_wake(&self, notify: Arc<Notify>) {
+        let _ = self.peer_wake.set(notify);
+    }
+
+    pub(crate) fn wake_peer(&self) {
+        if let Some(notify) = self.peer_wake.get() {
+            notify.notify_one();
+        }
+    }
+
+    /// Init prefix descriptor for the byte at `byte_offset`. Returns
+    /// `None` when the byte falls outside this variant's *virtually
+    /// addressable* init range — the init only counts when
+    /// `served_from() == 0` (post-commit, init is orphaned in natural
+    /// space).
+    pub(crate) fn init_descriptor_at(&self, byte_offset: u64) -> Option<(ResourceKey, Range<u64>)> {
+        if self.served_from() != 0 {
+            return None;
+        }
+        let range = self.init_byte_range();
+        if range.is_empty() || !range.contains(&byte_offset) {
+            return None;
+        }
+        Some((self.init_resource()?, range))
+    }
+
+    /// Media descriptor for the segment covering `byte_offset` —
+    /// `(resource_key, segment_byte_offset, segment_size)`.
+    pub(crate) fn media_descriptor(&self, byte_offset: u64) -> Option<(ResourceKey, u64, u64)> {
+        let (seg_idx, seg_off, seg_size) = self.find_at_offset(byte_offset)?;
+        let key = self.segment_resource(seg_idx)?;
+        Some((key, seg_off, seg_size))
+    }
+
+    pub(crate) fn media_info(&self) -> MediaInfo {
+        let variant_u32 = u32::try_from(self.variant).unwrap_or(u32::MAX);
+        MediaInfo::new(self.codec, self.container).with_variant_index(variant_u32)
+    }
+
+    /// Header byte range for format-change resync — alias for
+    /// [`Self::header_byte_range`] under the `Source` trait's name.
+    pub(crate) fn format_change_segment_range(&self) -> Option<Range<u64>> {
+        self.header_byte_range()
+    }
+
+    fn read_resource(
+        &self,
+        key: &ResourceKey,
+        range: Range<u64>,
+        dst: &mut [u8],
+    ) -> StreamResult<Option<usize>> {
+        let resource = match self.asset_store.open_resource(key) {
+            Ok(res) => res,
+            Err(AssetsError::Io(e)) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(StreamError::Source(HlsError::from(e).into())),
+        };
+        resource
+            .wait_range(range.clone())
+            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
+        let n = resource
+            .read_at(range.start, dst)
+            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
+        Ok(Some(n))
+    }
+
+    fn wrap(written: usize) -> ReadOutcome {
+        NonZeroUsize::new(written).map_or(
+            ReadOutcome::Pending(PendingReason::Retry),
+            ReadOutcome::Bytes,
+        )
+    }
+
+    pub(crate) fn range_ready(&self, range: &Range<u64>) -> bool {
+        let total = self.total_bytes();
+        let end = if total > 0 {
+            range.end.min(total)
+        } else {
+            range.end
+        };
+        if range.start >= end {
+            return true;
+        }
+
+        let mut cursor = range.start;
+        while let Some((ref key, init_range)) = self.init_descriptor_at(cursor) {
+            if cursor >= init_range.end {
+                break;
+            }
+            let slice_end = end.min(init_range.end);
+            let local_start = cursor - init_range.start;
+            let local_end = slice_end - init_range.start;
+            if !self.asset_store.contains_range(key, local_start..local_end) {
+                return false;
+            }
+            cursor = slice_end;
+            if cursor >= end {
+                return true;
+            }
+        }
+        if cursor >= end {
+            return true;
+        }
+
+        while cursor < end {
+            let Some((ref key, seg_off, seg_size)) = self.media_descriptor(cursor) else {
+                return false;
+            };
+            let seg_end = seg_off + seg_size;
+            let slice_end = end.min(seg_end);
+            let local_start = cursor - seg_off;
+            let local_end = slice_end - seg_off;
+            if !self.asset_store.contains_range(key, local_start..local_end) {
+                return false;
+            }
+            cursor = slice_end;
+        }
+        cursor >= end
+    }
+
+    pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        if self.range_ready(&range) {
+            return SourcePhase::Ready;
+        }
+        if self.timeline.is_flushing() {
+            return SourcePhase::Seeking;
+        }
+        let total = self.total_bytes();
+        if total > 0 && range.start >= total {
+            return SourcePhase::Eof;
+        }
+        SourcePhase::Waiting
+    }
+
+    #[kithara_hang_detector::hang_watchdog]
+    pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+        let total = self.total_bytes();
+        if total > 0 && offset >= total {
+            return Ok(ReadOutcome::Eof);
+        }
+
+        let buf_len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
+        let mut written: usize = 0;
+        let mut cursor = offset;
+        let read_end = offset.saturating_add(buf_len);
+
+        while let Some((ref key, init_range)) = self.init_descriptor_at(cursor) {
+            hang_tick!();
+            if cursor >= init_range.end {
+                break;
+            }
+            let slice_end = read_end.min(init_range.end);
+            let local_start = cursor - init_range.start;
+            let local_end = slice_end - init_range.start;
+            let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
+            let dst = &mut buf[written..written + take];
+            match self.read_resource(key, local_start..local_end, dst)? {
+                Some(n) => {
+                    written += n;
+                    cursor += n as u64;
+                    if n < take {
+                        return Ok(Self::wrap(written));
+                    }
+                    if cursor >= read_end {
+                        return Ok(Self::wrap(written));
+                    }
+                }
+                None => return Ok(Self::wrap(written)),
+            }
+        }
+
+        while cursor < read_end {
+            hang_tick!();
+            let Some((key, seg_off, seg_size)) = self.media_descriptor(cursor) else {
+                break;
+            };
+            let seg_end = seg_off + seg_size;
+            let slice_end = read_end.min(seg_end);
+            let local_start = cursor - seg_off;
+            let local_end = slice_end - seg_off;
+            let take = usize::try_from(local_end - local_start).unwrap_or(usize::MAX);
+            let dst = &mut buf[written..written + take];
+            match self.read_resource(&key, local_start..local_end, dst)? {
+                Some(n) => {
+                    written += n;
+                    cursor += n as u64;
+                    if n < take {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+
+        Ok(Self::wrap(written))
+    }
+
+    #[kithara_hang_detector::hang_watchdog]
+    pub(crate) fn wait_range(
+        &self,
+        range: Range<u64>,
+        timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        let started_at = Instant::now();
+        loop {
+            if self.range_ready(&range) {
+                hang_reset!();
+                return Ok(WaitOutcome::Ready);
+            }
+            if self.timeline.is_flushing() {
+                return Ok(WaitOutcome::Interrupted);
+            }
+            let total = self.total_bytes();
+            if total > 0 && range.start >= total {
+                return Ok(WaitOutcome::Eof);
+            }
+            if let Some(budget) = timeout
+                && started_at.elapsed() > budget
+            {
+                return Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()));
+            }
+            self.wake_peer();
+            hang_tick!();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    pub(crate) fn seek_time_anchor(
+        &self,
+        position: Duration,
+    ) -> StreamResult<Option<SourceSeekAnchor>> {
+        let variant = self.variant;
+        let Some((segment_index, segment_start, segment_end)) = self
+            .playlist_state
+            .find_seek_point_for_time(variant, position)
+        else {
+            return Err(StreamError::Source(
+                HlsError::SegmentNotFound(format!(
+                    "seek point not found: variant={variant} target_ms={}",
+                    position.as_millis()
+                ))
+                .into(),
+            ));
+        };
+        let byte_offset = self
+            .segment_byte_offset(segment_index.try_into().unwrap_or(u32::MAX))
+            .or_else(|| {
+                self.playlist_state
+                    .segment_byte_offset(variant, segment_index)
+            })
+            .ok_or_else(|| {
+                StreamError::Source(
+                    HlsError::SegmentNotFound(format!(
+                        "seek offset not found: variant={variant} segment={segment_index}"
+                    ))
+                    .into(),
+                )
+            })?;
+        let seg_idx_u32 = u32::try_from(segment_index).unwrap_or(u32::MAX);
+        let anchor = SourceSeekAnchor::new(byte_offset, segment_start)
+            .with_segment_end(segment_end)
+            .with_segment_index(seg_idx_u32)
+            .with_variant_index(variant);
+        self.set_position(byte_offset);
+        self.wake_peer();
+        Ok(Some(anchor))
     }
 
     fn build_init_entry(
@@ -399,10 +744,13 @@ impl HlsVariant {
         self.served_until.load(Ordering::Acquire)
     }
 
-    /// Set the upper bound (exclusive) of segments this variant serves.
-    /// Called from [`HlsCoord::commit_variant_switch`] when archiving the
-    /// outgoing variant — every segment with index `>= until` belongs to
-    /// the successor in the combined byte stream.
+    /// Cap the upper bound (exclusive) of segments this variant serves.
+    /// Called from [`HlsCoord::commit_variant_switch`] on same-codec ABR
+    /// commit so the outgoing variant's `find_at_offset` returns `None`
+    /// for segments at or past the boundary — gates the reader's
+    /// `SegmentReadStart` events against the post-switch range owned by
+    /// the incoming variant, preventing a duplicate `(v_old, from_seg)`
+    /// emit when the reader cursor lingers in the boundary segment.
     pub(crate) fn set_served_until(&self, until: u32) {
         self.served_until.store(until, Ordering::Release);
     }
@@ -718,11 +1066,32 @@ impl HlsVariant {
     pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
         let mut out = Vec::new();
         let mut remaining = budget;
+        let prefetch_byte_cap = ctx
+            .look_ahead_bytes
+            .map(|n| self.get_position().saturating_add(n));
         while remaining > 0 {
             hang_tick!();
-            let Some(planned) = self.queue.lock_sync().pop_front() else {
-                break;
+            // Peek-then-conditional-pop so a too-far-ahead segment
+            // stays at the queue front for later — once the reader
+            // advances, the next dispatch finds it ready to emit.
+            // `look_ahead_bytes = None` disables the cap entirely.
+            let planned = {
+                let mut queue = self.queue.lock_sync();
+                match queue.front().copied() {
+                    None => break,
+                    Some(PlannedFetch::Init) => queue.pop_front(),
+                    Some(PlannedFetch::Segment(seg_idx)) => {
+                        if let Some(cap) = prefetch_byte_cap
+                            && let Some(seg_off) = self.segment_byte_offset(seg_idx)
+                            && seg_off > cap
+                        {
+                            break;
+                        }
+                        queue.pop_front()
+                    }
+                }
             };
+            let Some(planned) = planned else { break };
             match planned {
                 PlannedFetch::Init => {
                     if !self.init.try_claim_for_download() {

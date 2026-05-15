@@ -20,15 +20,19 @@ impl SchedulerObserver for HangWatchdogObserver {
         match event {
             // Real audio progress (PCM chunk produced) clears the deadline.
             // `Idle` also clears it — no slots at all means no work expected
-            // (paused / nothing loaded); ticking here would false-positive
-            // an idle player as a hang.
-            SchedulerEvent::Progress | SchedulerEvent::Idle => {
+            // (paused / nothing loaded). `Backpressured` clears it as well:
+            // every non-terminal slot is parked because its downstream
+            // consumer is not pulling, so progress is *not* expected until
+            // the consumer drains — ticking the watchdog here would
+            // false-positive an idle/paused player as a hang.
+            SchedulerEvent::Progress | SchedulerEvent::Idle | SchedulerEvent::Backpressured => {
                 self.detector.reset();
             }
-            // A slot exists but produced nothing this pass — the audio
-            // worker is parked on a blocked source. Tick the watchdog so
-            // a never-ready source surfaces as a panic at the default
-            // budget instead of an indefinite park.
+            // A slot exists, the downstream is pulling, but the source
+            // produced nothing this pass — the audio worker is parked on
+            // a blocked source. Tick the watchdog so a never-ready source
+            // surfaces as a panic at the configured budget instead of an
+            // indefinite park.
             SchedulerEvent::Waiting => {
                 self.detector.tick();
             }

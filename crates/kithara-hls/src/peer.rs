@@ -40,6 +40,9 @@ struct HlsTrackState {
     reader_segment: Arc<AtomicUsize>,
     waker: Option<Waker>,
     prefetch_budget: usize,
+    /// Mirrors `HlsConfig::look_ahead_bytes` — capped idle prefetch
+    /// budget threaded into every `PlanCtx` constructed for `dispatch`.
+    look_ahead_bytes: Option<u64>,
 }
 
 /// HLS peer — one per track. Pre-init: `poll_next` returns Pending.
@@ -88,6 +91,7 @@ impl HlsPeer {
         coord: Arc<HlsCoord>,
         eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
         prefetch_budget: usize,
+        look_ahead_bytes: Option<u64>,
     ) {
         let reader_advanced = Arc::clone(&self.reader_advanced);
         let cancel = coord.cancel.clone();
@@ -103,6 +107,7 @@ impl HlsPeer {
                 asset_store: Arc::clone(&coord.asset_store),
                 prefetch_budget,
                 seek_epoch: coord.timeline.seek_epoch(),
+                look_ahead_bytes,
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -118,6 +123,7 @@ impl HlsPeer {
                 reader_segment: Arc::clone(&self.reader_segment),
                 waker: None,
                 prefetch_budget,
+                look_ahead_bytes,
             });
         }
 
@@ -306,6 +312,7 @@ impl HlsTrackState {
             asset_store: Arc::clone(&self.coord.asset_store),
             prefetch_budget: self.prefetch_budget,
             seek_epoch: self.coord.timeline.seek_epoch(),
+            look_ahead_bytes: self.look_ahead_bytes,
         }
     }
 

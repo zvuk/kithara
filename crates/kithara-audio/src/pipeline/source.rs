@@ -1366,8 +1366,16 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
 
         self.shared_stream.set_seek_epoch(epoch);
-        self.shared_stream.clear_variant_fence();
+        // Resolve the anchor BEFORE clearing the variant fence: a
+        // concurrent ABR commit may have just bumped
+        // `variant_generation`, in which case `seek_time_anchor` must
+        // observe the new active variant — but readers must stay
+        // gated until we have committed to the resolved position.
+        // Clearing the fence first opens the gate for `v_new` while
+        // the anchor is still being computed against the snapshot we
+        // are about to apply.
         let anchor_result = self.shared_stream.seek_time_anchor(position);
+        self.shared_stream.clear_variant_fence();
         self.timeline.complete_seek(epoch);
         self.shared_stream.notify_waiting();
 

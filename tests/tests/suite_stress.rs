@@ -16,6 +16,7 @@ mod kithara_hls {
     mod abr_auto_switch;
     mod abr_mode_switch;
     mod abr_switch_playback;
+    mod idle_behavior;
     mod live_stress_real_stream;
     mod red_flaky_small_cache_hot_refetch;
     mod red_leak_native_drm_seek_resume;

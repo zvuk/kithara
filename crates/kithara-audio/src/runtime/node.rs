@@ -18,8 +18,20 @@ pub enum ServiceClass {
 pub(crate) enum TickResult {
     /// Node made progress (produced or consumed data, applied internal state change).
     Progress,
-    /// Node is alive but waiting (backpressure, source not ready yet).
+    /// Node is alive but waiting on an upstream source (`step_track()`
+    /// returned `Blocked`). The scheduler interprets this as
+    /// "progress is *expected* but not happening" — the hang watchdog
+    /// ticks here so a forever-blocked source surfaces as a panic
+    /// instead of an indefinite park.
     Waiting,
+    /// Node is alive but its downstream consumer is not pulling
+    /// (PCM ring full / outlet overflow). The scheduler treats this
+    /// as a paused/idle player — progress is *not expected* until the
+    /// consumer drains the ring, so the hang watchdog must NOT tick.
+    /// Distinguishing this from `Waiting` is what keeps an idle
+    /// `Audio` handle from panicking after the watchdog budget
+    /// expires (the symptom that prompted bug #1).
+    Backpressured,
     /// Node has finished its work (EOF, failed, terminal).
     Done,
 }

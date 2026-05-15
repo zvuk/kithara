@@ -135,6 +135,7 @@ impl StreamType for Hls {
             asset_store: Arc::clone(&asset_store),
             prefetch_budget: config.download_batch_size.max(1),
             seek_epoch: timeline.seek_epoch(),
+            look_ahead_bytes: config.look_ahead_bytes,
         };
 
         let variants: Vec<Arc<HlsVariant>> = media_playlists
@@ -146,6 +147,7 @@ impl StreamType for Hls {
                 HlsVariant::new(
                     idx,
                     &playlist_state,
+                    &timeline,
                     init_decrypt_ctx,
                     &decrypt_contexts,
                     &plan_ctx,
@@ -162,12 +164,17 @@ impl StreamType for Hls {
             timeline,
             peer_handle.abr().clone(),
             Arc::clone(&variants),
+            Arc::clone(&playlist_state),
         ));
 
-        let mut source =
-            HlsSource::new(Arc::clone(&coord), Arc::clone(&playlist_state), bus.clone());
+        let mut source = HlsSource::new(Arc::clone(&coord), bus.clone());
 
-        hls_peer.activate(coord, evict_rx, config.download_batch_size.max(1));
+        hls_peer.activate(
+            coord,
+            evict_rx,
+            config.download_batch_size.max(1),
+            config.look_ahead_bytes,
+        );
 
         source.set_peer_handle(peer_handle);
         source.set_hls_peer(hls_peer);

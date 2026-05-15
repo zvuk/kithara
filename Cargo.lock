@@ -4378,6 +4378,7 @@ dependencies = [
  "bytes",
  "cbc",
  "dashmap",
+ "delegate",
  "derivative",
  "derive_setters",
  "futures",

@@ -69,8 +69,20 @@ pub struct HlsConfig {
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
-    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
-    /// - `None` — no backpressure, download as fast as possible
+    /// - `Some(n)` — pause when a segment's start offset is more than
+    ///   `n` bytes past the reader's current position. `HlsVariant::
+    ///   dispatch` keeps further segments in the queue until the reader
+    ///   advances — caps idle prefetch so an unread `Audio` handle does
+    ///   not drain the entire playlist into the asset cache.
+    /// - `None` — no cap, download as fast as possible (the legacy
+    ///   behavior that caused bug #2: an idle queue accumulating every
+    ///   segment of every active variant).
+    ///
+    /// Default: ~2 `MiB`. Generous enough to keep ~3-4 hi-bitrate FLAC
+    /// segments queued ahead during steady playback, but small enough
+    /// that a paused player tops out at a couple of segments instead
+    /// of the whole track.
+    #[derivative(Default(value = "Some(2 * 1024 * 1024)"))]
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
     ///

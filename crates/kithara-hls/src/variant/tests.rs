@@ -3,11 +3,15 @@ use std::sync::{Arc, atomic::AtomicU64};
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_platform::time::Duration;
+use kithara_stream::Timeline;
 use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::{HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentEntry, SegmentState};
+use super::{
+    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentEntry, SegmentState, VariantParts,
+};
+use crate::playlist::PlaylistState;
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     let cancel = CancellationToken::new();
@@ -28,6 +32,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         asset_store: backend,
         prefetch_budget,
         seek_epoch: 0,
+        look_ahead_bytes: None,
     }
 }
 
@@ -69,7 +74,18 @@ fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) 
         .enumerate()
         .map(|(i, &size)| make_seg(u32::try_from(i).expect("segment index < u32::MAX"), size))
         .collect();
-    HlsVariant::from_parts(variant, init, segments, ctx)
+    HlsVariant::from_parts(
+        variant,
+        VariantParts {
+            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+            timeline: Timeline::new(),
+            codec: None,
+            container: None,
+            init,
+            segments,
+        },
+        ctx,
+    )
 }
 
 fn push_planned(v: &HlsVariant, seg: u32) {
@@ -323,7 +339,18 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
         decode_time: Duration::ZERO,
         duration: Duration::from_secs(2),
     };
-    let v = HlsVariant::from_parts(0, init, vec![seg], &ctx);
+    let v = HlsVariant::from_parts(
+        0,
+        VariantParts {
+            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+            timeline: Timeline::new(),
+            codec: None,
+            container: None,
+            init,
+            segments: vec![seg],
+        },
+        &ctx,
+    );
     push_planned(&v, 0);
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1);
