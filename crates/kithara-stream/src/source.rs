@@ -7,7 +7,11 @@ use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
-use crate::{Timeline, error::StreamResult, media::MediaInfo};
+use crate::{
+    Timeline,
+    error::{SourceError, StreamError, StreamResult},
+    media::MediaInfo,
+};
 
 /// Per-segment metadata exposed by segmented sources (HLS).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,12 +208,25 @@ pub trait Source: Send + Sync + 'static {
         None
     }
 
-    /// Byte range of the first segment with the current format after
-    /// a format change (HLS ABR switch).
+    /// Byte range of the header (init segment or first served segment)
+    /// the decoder must read to re-establish container state after a
+    /// format change (HLS ABR cross-codec switch).
+    ///
+    /// Returns `Ok(range)` — header byte range that `apply_format_change`
+    /// seeks to and the decoder factory's probe reads.
+    ///
+    /// # Errors
+    ///
+    /// `Err(SourceError::FormatChangeNotApplicable)` — source has no
+    /// HLS-style format-change recovery (file source — default impl) or
+    /// the active HLS variant was activated with `served_from > 0` so
+    /// the init prefix lives outside the served virtual byte range.
+    /// Callers should fall back to a non-init recovery anchor (e.g.
+    /// the current segment boundary).
     ///
     /// Transitional — removed in Plan 06.
-    fn format_change_segment_range(&self) -> Option<Range<u64>> {
-        None
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        Err(StreamError::Source(SourceError::FormatChangeNotApplicable))
     }
 
     /// Whether the source currently reports zero bytes. Default mirrors
@@ -277,6 +294,21 @@ pub trait Source: Send + Sync + 'static {
     /// Returns the current [`SourcePhase`] without blocking. Used internally
     /// by `wait_range()` implementations for fast-path dispatch.
     fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+
+    /// `true` if a cross-variant transition is in-flight and `read_at` /
+    /// `wait_range` are short-circuited to `Pending(VariantChange)` /
+    /// `Interrupted` until the decoder acks the switch via
+    /// `clear_variant_fence` (HLS) or equivalent.
+    ///
+    /// Sources without a variant fence keep the default `false`. Used by
+    /// the audio decode loop to break out of `Ok(Pending(_))` retry spin
+    /// when Symphonia / other demuxers absorb the underlying
+    /// `VariantChangeError` and surface only an opaque pending — without
+    /// this polled check the loop would yield forever while the fence
+    /// stays closed waiting for a recreate that never starts.
+    fn has_variant_change_pending(&self) -> bool {
+        false
+    }
 
     /// Read data at offset into buffer.
     ///

@@ -169,36 +169,56 @@ impl AbrState {
         self.pending.lock_sync().as_ref().map(|p| p.target)
     }
 
-    /// Phase 2 boundary commit: if a switch is pending and ABR is not
-    /// locked (the blender-fence / seek-no-switch invariant), atomically
-    /// move `current_variant` to the pending target, record the switch
-    /// timestamp, and return the resulting [`AbrDecision`]. Returns
-    /// `None` when no pending intent exists, when ABR is locked, or
-    /// when the pending target equals `current_variant` (no-op switch).
+    /// Read-only peek at the pending decision. Returns the
+    /// [`AbrDecision`] that [`apply_decision`](Self::apply_decision)
+    /// would publish, or `None` when:
+    /// - pending slot is empty;
+    /// - state is locked (the seek-no-switch / blender invariant);
+    /// - pending target equals `current` (no-op switch).
     ///
-    /// Phase 3: the scheduler calls this at each detected segment
-    /// boundary; the gating on [`is_locked`](Self::is_locked) prevents
-    /// a chain switch from committing while the blender period (held
-    /// open by `lock`) is still draining the previous `V_old` → `V_new`
-    /// crossfade.
+    /// Does not mutate. `current` is supplied by the caller to avoid a
+    /// race with concurrent reads of [`current_variant_index`]; pass
+    /// `self.current_variant_index()` if you do not need an externally
+    /// pinned snapshot.
     #[must_use]
-    pub fn commit_pending(&self, now: Instant) -> Option<AbrDecision> {
+    pub fn peek_pending_decision(&self, current: usize) -> Option<AbrDecision> {
         if self.is_locked() {
             return None;
         }
-        let pending = self.pending.lock_sync().take()?;
-        let current = self.current_variant.load(Ordering::Acquire);
+        let pending = *self.pending.lock_sync().as_ref()?;
         if pending.target == current {
             return None;
         }
-        self.current_variant
-            .store(pending.target, Ordering::Release);
-        self.record_switch(now);
         Some(AbrDecision {
             target_variant_index: pending.target,
             reason: pending.reason,
             did_change: true,
         })
+    }
+
+    /// Publish the switch: atomically clear the pending slot **iff** it
+    /// still references the same target as `decision`, then store
+    /// `current_variant := decision.target_variant_index` and record
+    /// the switch timestamp.
+    ///
+    /// The "iff" rule preserves the replace-pending semantic: if an
+    /// external `request_target` overwrote the slot with a different
+    /// target between [`peek_pending_decision`](Self::peek_pending_decision)
+    /// and this call, the new pending stays untouched and the next
+    /// boundary commits it. The captured `decision` still publishes —
+    /// the caller has already prepared `v_new` for that target.
+    pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
+        let mut slot = self.pending.lock_sync();
+        if slot
+            .as_ref()
+            .is_some_and(|p| p.target == decision.target_variant_index)
+        {
+            *slot = None;
+        }
+        drop(slot);
+        self.current_variant
+            .store(decision.target_variant_index, Ordering::Release);
+        self.record_switch(now);
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {

@@ -157,16 +157,23 @@ impl AbrHandle {
         self
     }
 
-    /// Boundary commit of pending ABR decision. Called by HLS scheduler at fetch boundary.
-    ///
-    /// Returns `Some(decision)` when a pending decision was committed (state.current updated).
-    /// Returns `None` when no pending decision, or `is_locked()` blocks the commit.
+    /// Read-only: peek at the pending boundary commit. Mirrors
+    /// [`AbrState::peek_pending_decision`].
+    #[must_use]
     #[kithara::probe]
-    pub fn commit_pending(&self, now: Instant) -> Option<AbrDecision> {
-        self.inner
-            .state
-            .as_ref()
-            .and_then(|s| s.commit_pending(now))
+    pub fn peek_pending_decision(&self) -> Option<AbrDecision> {
+        let state = self.inner.state.as_ref()?;
+        state.peek_pending_decision(state.current_variant_index())
+    }
+
+    /// Apply a decision previously obtained from
+    /// [`peek_pending_decision`](Self::peek_pending_decision). Mirrors
+    /// [`AbrState::apply_decision`]. No-op for stateless handles.
+    #[kithara::probe(decision)]
+    pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
+        if let Some(state) = self.inner.state.as_ref() {
+            state.apply_decision(decision, now);
+        }
     }
 
     /// Side-effects after HLS scheduler committed a variant switch:
@@ -265,7 +272,7 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn commit_pending_happy_path() {
+    async fn peek_then_apply_happy_path() {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
@@ -279,16 +286,20 @@ mod tests {
 
         state.request_target(2, AbrReason::UpSwitch);
 
-        let decision = handle.commit_pending(Instant::now());
-        let decision = decision.expect("commit_pending must return Some when pending is set");
+        let decision = handle
+            .peek_pending_decision()
+            .expect("peek must return Some when pending is set");
         assert_eq!(decision.target_variant_index, 2);
         assert_eq!(decision.reason, AbrReason::UpSwitch);
         assert!(decision.did_change);
+        assert_eq!(state.current_variant_index(), 0, "peek must not mutate");
+
+        handle.apply_decision(&decision, Instant::now());
         assert_eq!(state.current_variant_index(), 2);
     }
 
     #[kithara::test(tokio)]
-    async fn commit_pending_returns_none_when_locked() {
+    async fn peek_pending_decision_returns_none_when_locked() {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
@@ -303,10 +314,9 @@ mod tests {
         handle.lock();
         state.request_target(2, AbrReason::UpSwitch);
 
-        let decision = handle.commit_pending(Instant::now());
         assert!(
-            decision.is_none(),
-            "commit_pending must return None while locked"
+            handle.peek_pending_decision().is_none(),
+            "peek must return None while locked"
         );
         assert_eq!(state.current_variant_index(), 0);
         assert_eq!(state.pending_target(), Some(2));

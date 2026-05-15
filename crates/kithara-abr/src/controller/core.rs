@@ -84,12 +84,13 @@ pub struct AbrSettings {
     /// candidate bandwidth by this factor).
     #[derivative(Default(value = "1.3"))]
     pub up_hysteresis_ratio: f64,
-    /// Minimum download duration (ms) to record a bandwidth sample — fetches
-    /// faster than this are ignored.
-    #[derivative(Default(value = "10"))]
-    pub min_throughput_record_ms: u128,
     /// Number of bytes that must be downloaded before ABR will switch.
-    #[derivative(Default(value = "128 * 1024"))]
+    /// `warmup_min_bytes` is an estimator-smoothing gate: small CDN
+    /// segments (~50 KB) reach the gate after one or two fetches, which
+    /// matches the realistic interval where bandwidth samples carry
+    /// statistical weight. Larger thresholds silently freeze ABR on
+    /// production traffic.
+    #[derivative(Default(value = "32 * 1024"))]
     pub warmup_min_bytes: u64,
 }
 

@@ -110,6 +110,54 @@ fn position_starts_at_zero() {
     assert_eq!(v.get_position(), 0);
 }
 
+/// Phase K.0.2 invariant. `HlsCoord::commit_variant_switch`
+/// (same-codec branch) calls `activate_at_segment_with_shift` BEFORE
+/// `abr.apply_decision`, so a reader observing `current_variant := new`
+/// must see `v_new` with all activation atomics published. This test
+/// asserts the variant-side half of that contract: every relevant
+/// atomic carries the post-activation value the moment the call
+/// returns.
+#[kithara::test]
+fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
+    let pre_shift = v.byte_shift();
+    let pre_served_from = v.served_from();
+    let pre_served_until = v.served_until();
+    assert_eq!(pre_shift, 0);
+    assert_eq!(pre_served_from, 0);
+    assert_eq!(pre_served_until, v.num_segments());
+
+    let from_seg: u32 = 2;
+    let seg_boundary: u64 = 1_500;
+    let reader_pos: u64 = 1_600;
+    v.activate_at_segment_with_shift(&ctx, from_seg, seg_boundary, reader_pos);
+
+    assert_eq!(
+        v.served_from(),
+        from_seg,
+        "served_from must equal the activation segment after return"
+    );
+    assert_eq!(
+        v.served_until(),
+        v.num_segments(),
+        "served_until must equal num_segments after a fresh activate"
+    );
+    assert_eq!(
+        v.get_position(),
+        reader_pos.max(seg_boundary),
+        "position must follow the requested reader_pos / seg_boundary"
+    );
+    // byte_shift = seg_boundary - natural_offset(from_seg). With
+    // init_size=200 and 400-byte segments, natural offset for seg=2
+    // is 200 + 2*400 = 1000. seg_boundary=1500 ⇒ shift=500.
+    assert_eq!(
+        v.byte_shift(),
+        500,
+        "byte_shift must reflect (seg_boundary - natural_offset)"
+    );
+}
+
 #[kithara::test]
 fn advance_increments_position() {
     let ctx = test_ctx(3);

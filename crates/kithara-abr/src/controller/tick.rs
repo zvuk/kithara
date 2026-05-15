@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use kithara_events::{AbrEvent, AbrReason, BandwidthSource};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
+use tracing::{debug, trace};
 
 use super::{
     core::{AbrController, AbrPeerId},
@@ -21,7 +22,11 @@ impl AbrController {
         fetch_duration: Duration,
         source: BandwidthSource,
     ) {
-        if fetch_duration.as_millis() < self.settings.min_throughput_record_ms {
+        if fetch_duration.is_zero() {
+            debug!(
+                ?peer_id,
+                bytes, "ABR: bandwidth sample dropped — zero fetch duration"
+            );
             return;
         }
         self.estimator.push_sample(bytes, fetch_duration, source);
@@ -118,6 +123,12 @@ impl AbrController {
 
         if decision.did_change {
             state.request_target(decision.target_variant_index, decision.reason);
+            // Wake the peer so `apply_boundary_crossing` observes the
+            // freshly written pending decision. Without this hook, a
+            // peer parked idle (e.g. all segments cached) would keep
+            // playing the old variant until an unrelated event (seek,
+            // eviction) happens to wake it.
+            ctx.peer.wake();
         } else if decision.reason != AbrReason::AlreadyOptimal
             && let Some(ref bus) = bus
         {
@@ -125,6 +136,18 @@ impl AbrController {
                 reason: decision.reason,
             });
         }
+
+        trace!(
+            ?peer_id,
+            reason = ?decision.reason,
+            did_change = decision.did_change,
+            target = decision.target_variant_index,
+            estimate_bps,
+            warmup_completed = ctx.entry.warmup_completed.load(Ordering::Acquire),
+            mode = ?state.mode(),
+            pending_target_after = ?state.pending_target(),
+            "ABR: tick"
+        );
     }
 }
 

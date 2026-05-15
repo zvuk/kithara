@@ -5,7 +5,7 @@ use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
 
-use super::{AbrDecision, AbrError, AbrState, AbrView};
+use super::{AbrDecision, AbrState, AbrView};
 use crate::{Abr, AbrController, AbrSettings, ThroughputEstimator};
 
 /// Canonical 3-variant fixture used by every test in this module. Private
@@ -276,72 +276,111 @@ fn request_target_replace_pending_latest_wins() {
 }
 
 #[kithara::test]
-fn commit_pending_returns_none_when_no_request() {
+fn peek_pending_decision_returns_none_when_no_request() {
     let state = AbrState::new(AbrMode::Auto(Some(0)));
-    assert!(state.commit_pending(Instant::now()).is_none());
+    assert!(state.peek_pending_decision(0).is_none());
     assert_eq!(state.current_variant_index(), 0);
 }
 
 #[kithara::test]
-fn commit_pending_moves_current_variant_and_clears_slot() {
+fn peek_pending_decision_does_not_mutate_current_variant() {
     let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.request_target(2, AbrReason::UpSwitch);
     let decision = state
-        .commit_pending(Instant::now())
+        .peek_pending_decision(0)
         .expect("pending request must produce a decision");
     assert_eq!(decision.target_variant_index, 2);
     assert_eq!(decision.reason, AbrReason::UpSwitch);
     assert!(decision.did_change);
-    assert_eq!(state.current_variant_index(), 2);
+    assert_eq!(state.current_variant_index(), 0, "peek must not mutate");
     assert_eq!(
         state.pending_target(),
-        None,
-        "commit_pending must drain the pending slot atomically"
+        Some(2),
+        "peek must not consume pending"
     );
 }
 
 #[kithara::test]
-fn commit_pending_returns_none_when_locked() {
+fn apply_decision_publishes_and_clears_matching_pending() {
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    state.request_target(2, AbrReason::UpSwitch);
+    let decision = state
+        .peek_pending_decision(0)
+        .expect("pending request must produce a decision");
+    state.apply_decision(&decision, Instant::now());
+    assert_eq!(state.current_variant_index(), 2);
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "matching pending must be cleared atomically"
+    );
+}
+
+#[kithara::test]
+fn apply_decision_preserves_pending_overwritten_after_peek() {
+    // Race: external request_target overwrites pending between peek and
+    // apply. Our captured decision still publishes; the new pending
+    // stays for the next boundary commit.
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    state.request_target(2, AbrReason::UpSwitch);
+    let decision = state
+        .peek_pending_decision(0)
+        .expect("pending request must produce a decision");
+    state.request_target(3, AbrReason::DownSwitch);
+    state.apply_decision(&decision, Instant::now());
+    assert_eq!(
+        state.current_variant_index(),
+        2,
+        "captured decision applies regardless of later pending overwrite"
+    );
+    assert_eq!(
+        state.pending_target(),
+        Some(3),
+        "new pending must survive an apply for a different target"
+    );
+}
+
+#[kithara::test]
+fn peek_pending_decision_honors_is_locked() {
     let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.request_target(2, AbrReason::UpSwitch);
     state.lock();
     assert!(
-        state.commit_pending(Instant::now()).is_none(),
-        "locked AbrState must defer the commit"
+        state.peek_pending_decision(0).is_none(),
+        "locked state must not surface pending decisions"
     );
     assert_eq!(state.current_variant_index(), 0);
     assert_eq!(
         state.pending_target(),
         Some(2),
-        "deferred commit must keep the pending intent so the next \
-         post-unlock commit_pending can apply it"
+        "deferred decision must remain pending until unlock"
     );
 }
 
 #[kithara::test]
-fn commit_pending_after_unlock_applies_pending_intent() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    state.lock();
-    state.request_target(2, AbrReason::UpSwitch);
-    assert!(state.commit_pending(Instant::now()).is_none());
-    state.unlock();
-    let decision = state
-        .commit_pending(Instant::now())
-        .expect("post-unlock commit must apply the still-pending intent");
-    assert_eq!(decision.target_variant_index, 2);
-    assert_eq!(state.current_variant_index(), 2);
-}
-
-#[kithara::test]
-fn commit_pending_returns_none_when_target_equals_current() {
+fn peek_pending_decision_returns_none_when_target_equals_current() {
     let state = AbrState::new(AbrMode::Auto(Some(1)));
     state.request_target(1, AbrReason::AlreadyOptimal);
     assert!(
-        state.commit_pending(Instant::now()).is_none(),
+        state.peek_pending_decision(1).is_none(),
         "self-switch (target == current) must not produce a decision"
     );
     assert_eq!(state.current_variant_index(), 1);
-    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test]
+fn apply_decision_after_unlock_applies_still_pending_intent() {
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
+    state.lock();
+    state.request_target(2, AbrReason::UpSwitch);
+    assert!(state.peek_pending_decision(0).is_none());
+    state.unlock();
+    let decision = state
+        .peek_pending_decision(0)
+        .expect("post-unlock peek must surface the still-pending intent");
+    state.apply_decision(&decision, Instant::now());
+    assert_eq!(decision.target_variant_index, 2);
+    assert_eq!(state.current_variant_index(), 2);
 }
 
 #[kithara::test]
@@ -508,7 +547,7 @@ proptest! {
                     current_bps = Some(bps);
                 }
                 Op::SetMode(mode_op) => {
-                    let _ = state.set_mode(mode_from(mode_op));
+                    state.set_mode(mode_from(mode_op));
                 }
                 Op::Lock => {
                     if lock_depth == 0 {

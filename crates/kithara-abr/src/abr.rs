@@ -29,4 +29,18 @@ pub trait Abr: Send + Sync + 'static {
     fn variants(&self) -> Vec<VariantInfo> {
         Vec::new()
     }
+
+    /// Wake the peer's poll loop. Called by the controller after
+    /// `request_target` writes a pending decision (e.g. on
+    /// `AbrHandle::set_mode`) so the peer observes the pending intent
+    /// without waiting for an unrelated event (seek, eviction, …).
+    ///
+    /// Without this hook the prod path "all variant segments cached
+    /// → user clicks Manual(N)" silently drops the request: the peer
+    /// is parked in `Poll::Pending` (nothing to fetch), `set_mode`
+    /// updates the state slot, but the boundary-commit code in
+    /// `apply_boundary_crossing` never runs and the variant never
+    /// flips. The default `no-op` is correct for peers without
+    /// variants — `HlsPeer` overrides it to wake `reader_advanced`.
+    fn wake(&self) {}
 }

@@ -65,8 +65,9 @@ impl<T: StreamType> SharedStream<T> {
             fn media_info(&self) -> Option<MediaInfo>;
             pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             fn current_segment_range(&self) -> Option<Range<u64>>;
-            fn format_change_segment_range(&self) -> Option<Range<u64>>;
+            fn format_change_segment_range(&self) -> kithara_stream::StreamResult<Range<u64>>;
             pub(crate) fn clear_variant_fence(&self);
+            pub(crate) fn has_variant_change_pending(&self) -> bool;
             pub(crate) fn set_seek_epoch(&self, seek_epoch: u64);
             fn seek_time_anchor(&self, position: Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             fn commit_seek_landing(&self, anchor: Option<SourceSeekAnchor>);
@@ -318,7 +319,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                     .as_ref()
                     .and_then(|info| info.container)
             });
-        let init_range = self.shared_stream.format_change_segment_range();
+        // `seek_anchor_alignment` runs on user seek, not as a format-
+        // change recovery — convert a typed `Err` (NotApplicable for
+        // file source, InitOrphaned for byte-shifted HLS variant) to
+        // "no init range usable here" so downstream `container_needs_init_resync`
+        // gate falls back to non-recreate path. The InitOrphaned case
+        // surfaces explicitly through `detect_format_change`'s own
+        // call site.
+        let init_range = self.shared_stream.format_change_segment_range().ok();
         let init_offset = init_range.as_ref().map(|range| range.start);
         let is_init_bearing = target_container.is_some_and(container_needs_init_range);
         let already_at_init = init_offset.is_some_and(|o| o == self.session.base_offset);
@@ -461,7 +469,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         let stream_pos = self.shared_stream.position();
         let segment_range = self.shared_stream.current_segment_range();
 
-        if let Some((new_info, target_offset)) = self.detect_format_change() {
+        if let FormatChangeDetection::Applicable {
+            target: new_info,
+            target_offset,
+        } = self.detect_format_change()
+        {
             debug!(
                 ?position,
                 epoch,
@@ -657,13 +669,38 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn decoder_next_chunk_safe(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        match catch_unwind(AssertUnwindSafe(|| self.session.decoder.next_chunk())) {
-            Ok(result) => result,
-            Err(payload) => Err(DecodeError::InvalidData(format!(
-                "decoder panic during next_chunk: {}",
-                Self::decode_panic_message(payload)
-            ))),
+        let outcome: DecodeResult<DecoderChunkOutcome> =
+            match catch_unwind(AssertUnwindSafe(|| self.session.decoder.next_chunk())) {
+                Ok(result) => result,
+                Err(payload) => Err(DecodeError::InvalidData(format!(
+                    "decoder panic during next_chunk: {}",
+                    Self::decode_panic_message(payload)
+                ))),
+            };
+        // Phase R diagnostic: surface decoder Eof / Err once at the edge.
+        // Pending is hot-path and would flood — handled via the polled
+        // `has_variant_change_pending` check in `decode_next_chunk`.
+        match &outcome {
+            Ok(DecoderChunkOutcome::Eof) => {
+                debug!(
+                    chunks = self.chunks_decoded,
+                    samples = self.total_samples,
+                    pos = self.shared_stream.position(),
+                    "decoder_next_chunk_safe: Eof"
+                );
+            }
+            Err(e) => {
+                debug!(
+                    error_class = ?e.classify(),
+                    chunks = self.chunks_decoded,
+                    samples = self.total_samples,
+                    pos = self.shared_stream.position(),
+                    "decoder_next_chunk_safe: Err {e}"
+                );
+            }
+            Ok(DecoderChunkOutcome::Chunk(_) | DecoderChunkOutcome::Pending(_)) => {}
         }
+        outcome
     }
 
     fn decoder_seek_safe(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -682,11 +719,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         outcome
     }
 
-    /// Detect `media_info` change and return the init-bearing boundary.
-    ///
-    /// The variant fence in `Source::read_at()` prevents the old decoder
-    /// from reading data from a new variant. This causes Symphonia to hit
-    /// EOF naturally, after which `fetch_next` recreates the decoder.
+    /// Detect `media_info` change and return the recovery anchor.
     ///
     /// Triggers on variant-index change. Codec/container are NOT
     /// re-derived from `current_info`: the source's `media_info()` may
@@ -694,20 +727,41 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// `EXT-X-MAP` URL extension) that disagrees with the bytes the
     /// decoder is actually reading. The cached `session.media_info`
     /// reflects what was probed and built successfully — that's the
-    /// authoritative decoder type. True codec/container transitions
-    /// (rare in real HLS) are surfaced through decode errors and
-    /// recovered via `recover_from_decoder_seek_error`.
+    /// authoritative decoder type.
+    ///
+    /// Two recovery anchors, picked in order:
+    /// - cross-codec: init-segment offset via `format_change_segment_range`;
+    /// - byte-shifted same-codec / non-init-bearing: current segment
+    ///   start via `current_segment_range` (decoder re-parses format
+    ///   markers from the new variant's segment boundary).
+    /// `NoChange` when neither applies.
     #[kithara::probe]
-    fn detect_format_change(&self) -> Option<(MediaInfo, u64)> {
-        let current_info = self.shared_stream.media_info()?;
-        let target = resolve_format_change_target(self.session.media_info.as_ref(), &current_info)?;
-
-        let seg_range = self
-            .shared_stream
-            .format_change_segment_range()
-            .or_else(|| self.shared_stream.current_segment_range());
-
-        seg_range.map(|range| (target, range.start))
+    fn detect_format_change(&self) -> FormatChangeDetection {
+        let current_info = self.shared_stream.media_info();
+        let session_info = self.session.media_info.as_ref();
+        let Some(target) = current_info
+            .as_ref()
+            .and_then(|cur| resolve_format_change_target(session_info, cur))
+        else {
+            return FormatChangeDetection::NoChange;
+        };
+        // Pick the recovery anchor by source state: cross-codec recovery
+        // uses the init segment; byte-shifted same-codec / non-init-bearing
+        // sources fall through to the current segment boundary so the
+        // new decoder re-parses format markers from there. Two distinct
+        // strategies, not a fallback chain — neither is an error recovery
+        // for the other.
+        let range = if let Ok(init) = self.shared_stream.format_change_segment_range() {
+            init
+        } else if let Some(current) = self.shared_stream.current_segment_range() {
+            current
+        } else {
+            return FormatChangeDetection::NoChange;
+        };
+        FormatChangeDetection::Applicable {
+            target,
+            target_offset: range.start,
+        }
     }
 
     fn duration_for_frames(spec: PcmSpec, frames: usize) -> Duration {
@@ -1096,6 +1150,16 @@ impl<T: StreamType> StreamAudioSource<T> {
         offset: u64,
         attempt: u8,
     ) {
+        // Phase R.1 diagnostic: see whether the FSM actually enters the
+        // RecreatingDecoder state when cross-codec ABR fires.
+        debug!(
+            ?cause,
+            codec = ?media_info.codec,
+            container = ?media_info.container,
+            target_offset = offset,
+            attempt,
+            "start_recreating_decoder"
+        );
         self.update_state(TrackState::RecreatingDecoder(RecreateState {
             media_info,
             cause,
@@ -1163,6 +1227,26 @@ impl<T: StreamType> StreamAudioSource<T> {
 }
 
 /// Whether the decode loop should continue or return.
+/// Three-state outcome from [`StreamAudioSource::detect_format_change`].
+/// Each variant has a distinct caller action:
+///
+/// - [`NoChange`](Self::NoChange): decoder continues on the current
+///   session — no recreate, no action.
+/// - [`Applicable`](Self::Applicable): a format-change recovery target
+///   was identified; caller should `start_recreating_decoder` with
+///   `target` as the new info and `target_offset` as the byte position
+///   to seek the stream to before the decoder factory probes init.
+///
+/// The third logical state — invariant violation — flows through the
+/// outer `DecodeResult` as `Err`, not through this enum.
+enum FormatChangeDetection {
+    NoChange,
+    Applicable {
+        target: MediaInfo,
+        target_offset: u64,
+    },
+}
+
 enum DecodeAction {
     Yield,
     Return(DecodeResult<DecoderChunkOutcome>),
@@ -1180,7 +1264,11 @@ impl<T: StreamType> StreamAudioSource<T> {
     #[cold]
     fn handle_decode_eof(&mut self) -> DecodeAction {
         let pos_at_eof = self.shared_stream.position();
-        if let Some((new_info, target_offset)) = self.detect_format_change() {
+        if let FormatChangeDetection::Applicable {
+            target: new_info,
+            target_offset,
+        } = self.detect_format_change()
+        {
             debug!(
                 pos_at_eof,
                 chunks = self.chunks_decoded,
@@ -1220,28 +1308,50 @@ impl<T: StreamType> StreamAudioSource<T> {
         DecodeAction::Return(Err(e))
     }
 
-    /// Handle an explicit source-level variant boundary signal.
+    /// Handle a variant-change signal from the source. Driven by both:
+    /// - `Err(DecodeError)` classified as `VariantChange` from the
+    ///   `Err`-side of `decode_next_chunk`, AND
+    /// - `Ok(Pending(VariantChange))` polled directly on the
+    ///   `Ok(Pending(_))` branch (Symphonia and some demuxers absorb
+    ///   the underlying `VariantChangeError` as opaque retryable I/O
+    ///   and surface only `Pending`).
+    ///
+    /// `no_change_err` is what the caller returns when
+    /// `detect_format_change` reports `NoChange` — for the `Err` path
+    /// it's the original decode error (proxied through); for the
+    /// `Pending` path it's an explicit `InvalidData` contract violation
+    /// because per [`HlsCoord::commit_variant_switch`] the fence
+    /// closes BEFORE `abr.apply_decision`, so by the time the FSM
+    /// reacts a format transition MUST be observable.
     #[cold]
-    fn handle_variant_change(&mut self, e: DecodeError) -> DecodeAction {
-        if let Some((new_info, target_offset)) = self.detect_format_change() {
-            debug!(
-                target_offset,
+    fn handle_variant_change(&mut self, no_change_err: DecodeError) -> DecodeAction {
+        let FormatChangeDetection::Applicable {
+            target: new_info,
+            target_offset,
+        } = self.detect_format_change()
+        else {
+            warn!(
+                ?no_change_err,
                 chunks = self.chunks_decoded,
                 samples = self.total_samples,
-                "Decoder reached variant boundary, recreating decoder"
+                "variant change signal without observable format transition"
             );
-            self.start_recreating_decoder(
-                RecreateCause::FormatBoundary,
-                new_info,
-                RecreateNext::Decode,
-                target_offset,
-                0,
-            );
-            return DecodeAction::Yield;
-        }
-
-        warn!(?e, "variant change without codec-changing media info");
-        DecodeAction::Return(Err(e))
+            return DecodeAction::Return(Err(no_change_err));
+        };
+        debug!(
+            target_offset,
+            chunks = self.chunks_decoded,
+            samples = self.total_samples,
+            "variant change — recreating decoder"
+        );
+        self.start_recreating_decoder(
+            RecreateCause::FormatBoundary,
+            new_info,
+            RecreateNext::Decode,
+            target_offset,
+            0,
+        );
+        DecodeAction::Yield
     }
 }
 
@@ -1262,7 +1372,33 @@ impl<T: StreamType> StreamAudioSource<T> {
             }
 
             match self.decoder_next_chunk_safe() {
+                Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
+                    match self.handle_variant_change(DecodeError::InvalidData(
+                        "variant change signal without observable format transition".into(),
+                    )) {
+                        DecodeAction::Yield => return Err(DecodeError::Interrupted),
+                        DecodeAction::Return(result) => return result,
+                    }
+                }
                 Ok(DecoderChunkOutcome::Pending(_reason)) => {
+                    // Demuxers (Symphonia, …) absorb `IoError(VariantChangeError)`
+                    // from `Stream::read` as opaque retryable I/O and surface
+                    // only an opaque `Pending` to the decoder, so the
+                    // `Pending(VariantChange)` arm above never fires for
+                    // cross-codec switches. Without a polled check we'd
+                    // yield forever while the variant fence stays closed
+                    // waiting for a recreate that no Err/Pending(VC) ever
+                    // triggers. Source's `has_variant_change_pending` is
+                    // the explicit signal — kick recovery as if we'd seen
+                    // `Pending(VariantChange)` directly.
+                    if self.shared_stream.has_variant_change_pending() {
+                        match self.handle_variant_change(DecodeError::InvalidData(
+                            "variant change signal without observable format transition".into(),
+                        )) {
+                            DecodeAction::Yield => return Err(DecodeError::Interrupted),
+                            DecodeAction::Return(result) => return result,
+                        }
+                    }
                     hang_tick!();
                     yield_now();
                     continue;
@@ -1493,6 +1629,24 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.source_ready_for_range(start..end)
     }
 
+    /// Readiness for decoder recreation. For `FormatBoundary` the
+    /// probe only needs the init range — `decoder_seek_safe` then
+    /// jumps to `timeline.committed_position()`, which lands in the
+    /// segment `HlsCoord::commit_variant_switch` already scheduled
+    /// via `rebuild(target_seg)`. Waiting for `DEFAULT_READ_AHEAD`
+    /// from byte 0 would block on segment 0, which the cross-codec
+    /// branch intentionally skips — the production hang reported in
+    /// `app.log` (2026-05-15, `runtime_cross_codec_manual_switch_no_hang`).
+    fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
+        if matches!(recreate.cause, RecreateCause::FormatBoundary)
+            && matches!(recreate.next, RecreateNext::Decode)
+            && let Ok(init_range) = self.shared_stream.format_change_segment_range()
+        {
+            return self.source_ready_for_range(init_range);
+        }
+        self.source_is_ready_for_boundary(recreate.offset)
+    }
+
     fn source_phase_for_boundary(&self, start: u64) -> SourcePhase {
         let end = self.boundary_end(start);
         self.shared_stream.phase_at(start..end)
@@ -1564,7 +1718,30 @@ impl<T: StreamType> StreamAudioSource<T> {
         if recreate.cause == RecreateCause::FormatBoundary
             && matches!(recreate.next, RecreateNext::Decode)
         {
-            return Some(self.apply_format_change(&recreate.media_info, recreate.offset));
+            if !self.apply_format_change(&recreate.media_info, recreate.offset) {
+                return Some(false);
+            }
+            // Cross-codec recreate leaves the new decoder positioned at
+            // byte 0 (init prefix). Without an explicit time seek it
+            // would replay from segment 0 — but the user expects
+            // playback to continue at the current timeline position.
+            // Ask Symphonia to seek to `timeline.committed_position()`
+            // so its `MediaSourceStream` advances to the matching media
+            // offset on `v_new` (which `HlsCoord::commit_variant_switch`
+            // already pinned via `set_position(target_byte)` +
+            // `rebuild(target_seg)`).
+            let target_time = self.timeline.committed_position();
+            if !target_time.is_zero()
+                && let Err(e) = self.decoder_seek_safe(target_time)
+            {
+                warn!(
+                    ?e,
+                    ?target_time,
+                    "Failed to seek decoder to timeline position after cross-codec recreate"
+                );
+                return Some(false);
+            }
+            return Some(true);
         }
         self.shared_stream.clear_variant_fence();
         if self
@@ -1671,7 +1848,10 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn step_decoding(&mut self) -> TrackStep<PcmChunk> {
         if !self.source_is_ready() {
             if !self.timeline.is_seek_pending()
-                && let Some((new_info, target_offset)) = self.detect_format_change()
+                && let FormatChangeDetection::Applicable {
+                    target: new_info,
+                    target_offset,
+                } = self.detect_format_change()
             {
                 self.start_recreating_decoder(
                     RecreateCause::FormatBoundary,
@@ -1710,7 +1890,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             TrackState::RecreatingDecoder(recreate) => recreate.clone(),
             _ => return TrackStep::StateChanged,
         };
-        if !self.source_is_ready_for_boundary(recreate.offset) {
+        if !self.source_ready_for_recreate(&recreate) {
             return self.wait_for_source_on_recreate(recreate.offset);
         }
 
@@ -2000,8 +2180,14 @@ fn resolve_recreate_offset<T: StreamType>(
     anchor_byte_offset: u64,
 ) -> Option<u64> {
     let needs_init = target_container.is_some_and(container_needs_init_range);
+    // `seek_anchor_alignment` runs on a user seek (not a typed
+    // recovery context) — InitOrphaned / NotApplicable here both
+    // collapse to "no init offset available at this site"; the
+    // invariant is surfaced from the audio FSM's
+    // `detect_format_change` call sites, not from this helper.
     let init_offset = shared
         .format_change_segment_range()
+        .ok()
         .map(|range| range.start);
     if needs_init {
         init_offset

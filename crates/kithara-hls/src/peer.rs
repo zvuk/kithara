@@ -213,6 +213,14 @@ impl Abr for HlsPeer {
     fn variants(&self) -> Vec<VariantInfo> {
         self.variants.lock_sync().clone()
     }
+
+    fn wake(&self) {
+        // Wake `poll_next` so it runs `apply_boundary_crossing` and
+        // observes any pending decision written by the controller —
+        // critical when all segments are cached and the peer would
+        // otherwise stay parked indefinitely.
+        self.reader_advanced.notify_one();
+    }
 }
 
 impl Peer for HlsPeer {
@@ -363,11 +371,26 @@ impl HlsTrackState {
         self.seek_epoch_reset(coord, ctx);
     }
 
-    /// Resolve the reader's current segment from `coord.position()` and,
-    /// on a segment-boundary crossing, commit any pending ABR decision.
-    /// The persistent variant queue (filled once by `rebuild`) advances
-    /// the prefetch tail automatically as `dispatch` pops, so a boundary
-    /// crossing alone does not need to refill the queue.
+    /// Resolve the reader's current segment from `coord.position()` and
+    /// drive any pending ABR commit. The persistent variant queue (filled
+    /// once by `rebuild`) advances the prefetch tail automatically as
+    /// `dispatch` pops, so a boundary crossing alone does not need to
+    /// refill the queue.
+    ///
+    /// Decide when to call `commit_variant_switch`:
+    ///
+    /// - **Auto mode**: commit fires only on *actual* boundary crossings
+    ///   (`prev != resolved`). Pending decisions from the bandwidth
+    ///   controller wait for the reader to physically advance to the
+    ///   next segment, so an aggressive in-segment up-switch does not
+    ///   pin `v_new` prematurely.
+    /// - **Manual mode**: commit fires on every poll. User click
+    ///   `handle.set_mode(Manual(N))` is an explicit intent — wait for
+    ///   a boundary cross that may never come (all-cached, idle peer)
+    ///   makes the switch silently fail. The cross-variant byte
+    ///   routing in [`HlsCoord::variant_serving`] + the no-forward-jump
+    ///   guarantee in `activate_at_segment_with_shift` keep decoder
+    ///   continuity intact even when commit lands mid-segment.
     fn apply_boundary_crossing(&mut self, coord: &HlsCoord, ctx: &PlanCtx) -> u32 {
         let pos = coord.position();
         let prev = self.reader_segment.load(Ordering::Acquire);
@@ -375,8 +398,12 @@ impl HlsTrackState {
             .find_at_offset(pos)
             .map_or_else(|| u32::try_from(prev).unwrap_or(0), |(idx, _, _)| idx);
         let resolved_us = resolved as usize;
-        if prev != resolved_us {
+        let boundary_crossed = prev != resolved_us;
+        if boundary_crossed {
             self.reader_segment.store(resolved_us, Ordering::Release);
+        }
+        let manual_mode = matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)));
+        if boundary_crossed || manual_mode {
             coord.commit_variant_switch(ctx, resolved);
         }
         resolved

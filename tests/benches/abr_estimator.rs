@@ -15,7 +15,6 @@ fn settings() -> AbrSettings {
         .with_warmup_min_bytes(0)
         .with_min_switch_interval(Duration::ZERO)
         .with_min_buffer_for_up_switch(Duration::ZERO)
-        .with_min_throughput_record_ms(0)
 }
 
 fn variants_4() -> Vec<AbrVariant> {

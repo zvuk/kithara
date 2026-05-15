@@ -84,7 +84,7 @@ impl Source for HlsSource {
             fn set_position(&self, pos: u64);
             fn timeline(&self) -> Timeline;
             fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-            fn format_change_segment_range(&self) -> Option<Range<u64>>;
+            fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
             fn notify_waiting(&self);
             fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
             fn wait_range(
@@ -98,6 +98,7 @@ impl Source for HlsSource {
             ) -> StreamResult<Option<SourceSeekAnchor>>;
             fn set_seek_epoch(&mut self, seek_epoch: u64);
             fn clear_variant_fence(&mut self);
+            fn has_variant_change_pending(&self) -> bool;
         }
     }
 

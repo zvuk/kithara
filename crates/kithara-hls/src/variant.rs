@@ -23,7 +23,7 @@ use kithara_platform::{
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor,
-    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, Timeline,
+    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, Timeline,
     dl::{FetchCmd, OnCompleteFn, WriterFn},
 };
 use kithara_test_utils::kithara;
@@ -268,6 +268,15 @@ pub(crate) struct HlsVariant {
     /// streamed.
     served_until: AtomicU32,
     queue: Mutex<VecDeque<PlannedFetch>>,
+    /// Track-level cancel parent (mirror of `coord.cancel` =
+    /// `PlanCtx::master_cancel`). Survives variant re-activation:
+    /// a cross-codec `commit_variant_switch` may flip from `v_old` to
+    /// `v_new` and back to `v_old`, and the second activation of `v_old`
+    /// must dispatch fetches under a *live* cancel — see
+    /// [`Self::rearm_cancel`]. Cancel hierarchy: `master_cancel` is the
+    /// per-track parent created by `HlsPeer`; `cancel` (below) is a
+    /// child of `master_cancel`, rotated on every re-activation.
+    master_cancel: CancellationToken,
     cancel: RwLock<CancellationToken>,
     position: Arc<AtomicU64>,
 }
@@ -344,6 +353,7 @@ impl HlsVariant {
             served_from: AtomicU32::new(0),
             served_until: AtomicU32::new(num),
             queue: Mutex::new(VecDeque::new()),
+            master_cancel: ctx.master_cancel.clone(),
             cancel: RwLock::new(ctx.master_cancel.child_token()),
             position: Arc::new(AtomicU64::new(0)),
         };
@@ -395,7 +405,7 @@ impl HlsVariant {
 
     /// Header byte range for format-change resync — alias for
     /// [`Self::header_byte_range`] under the `Source` trait's name.
-    pub(crate) fn format_change_segment_range(&self) -> Option<Range<u64>> {
+    pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
         self.header_byte_range()
     }
 
@@ -770,6 +780,11 @@ impl HlsVariant {
         self.served_until
             .store(self.num_segments(), Ordering::Release);
         self.recompute_offsets();
+        // Cross-codec `commit_variant_switch` calls this on `v_new`
+        // after cancelling `v_old`. If `v_new` was active earlier and
+        // cancelled by a prior switch, its `cancel` token is still
+        // tripped — rearm so dispatched fetches are not stillborn.
+        self.rearm_cancel();
     }
 
     fn find_virtual(&self, byte_virtual: u64) -> Option<(u32, u64, u64)> {
@@ -894,19 +909,37 @@ impl HlsVariant {
     /// MP3, MPEG-TS) do not need this range — the caller filters via
     /// `container_needs_init_range` before reading.
     ///
-    /// Returns the post-commit-aware range: when `served_from() > 0` the
-    /// variant's own init bytes are orphaned in virtual space, so we
-    /// only return the natural init range when it is still virtually
-    /// addressable (`served_from() == 0`).
-    pub(crate) fn header_byte_range(&self) -> Option<Range<u64>> {
-        if self.served_from() == 0 {
-            let range = self.init_byte_range();
-            if !range.is_empty() {
-                return Some(range);
-            }
+    /// Header byte range for cross-codec format-change recovery.
+    ///
+    /// `Ok(range)` only when recovery is actually applicable:
+    /// - `served_from() == 0` AND `init.size > 0`: virtual init range
+    ///   `[0..init_size)`. The decoder factory's Symphonia probe re-
+    ///   reads init from here.
+    /// - `served_from() == 0` AND `init.size == 0` (raw TS/AAC): start
+    ///   of segment 0 — the demuxer re-parses the header from there.
+    ///
+    /// `Err(FormatChangeNotApplicable)` when the variant was
+    /// activated by [`Self::activate_at_segment_with_shift`]
+    /// (same-codec ABR commit) and has `served_from() > 0`. Init
+    /// bytes live at natural `[0..init_size)` while virtual space
+    /// starts at `byte_shift` — same-codec playback continues
+    /// through the byte-shift without needing init recovery. Format-
+    /// change recovery by design does not apply to byte-shifted
+    /// variants; cross-codec recovery only runs after
+    /// [`Self::reset_to_full_range`] zeroes the shift.
+    pub(crate) fn header_byte_range(&self) -> StreamResult<Range<u64>> {
+        if self.served_from() != 0 {
+            return Err(StreamError::Source(SourceError::FormatChangeNotApplicable));
         }
-        let (_, off, size) = self.find_at_offset_inner(0)?;
-        Some(off..(off + size))
+        if self.init_size() > 0 {
+            return Ok(self.init_byte_range());
+        }
+        let (_, off, size) = self.find_at_offset_inner(0).ok_or_else(|| {
+            StreamError::Source(SourceError::Other(Box::new(IoError::other(
+                "variant has no segments — cannot derive header range",
+            ))))
+        })?;
+        Ok(off..(off + size))
     }
 
     /// Resource key for the variant's init segment — `None` when the
@@ -975,6 +1008,9 @@ impl HlsVariant {
         seg_boundary: u64,
         reader_pos: u64,
     ) {
+        // Same-codec re-activation may target a variant whose previous
+        // stint was cancelled. Rearm before dispatching the new queue.
+        self.rearm_cancel();
         let from_seg = from_seg.min(self.num_segments());
         // Freeze the init.size contribution to the offset table BEFORE
         // computing `byte_shift`: any later init-segment decrypt commit
@@ -1002,7 +1038,16 @@ impl HlsVariant {
         self.served_from.store(from_seg, Ordering::Release);
         self.served_until
             .store(self.num_segments(), Ordering::Release);
-        self.set_position(reader_pos.max(seg_boundary));
+        // Do NOT forward-jump position to `seg_boundary` — `coord.position()`
+        // doubles as the reader's cursor (`Stream::try_read` calls
+        // `source.position()` each iteration). If `reader_pos < seg_boundary`
+        // the reader is still mid-segment in v_old's range; advancing to
+        // `seg_boundary` would skip the rest of that segment and break
+        // decoder continuity. Cross-variant byte routing in
+        // [`HlsCoord::variant_serving`] keeps both v_old (`[0..switch_at)`)
+        // and v_new (`[switch_at..N)`) readable from `reader_pos`'s
+        // perspective until the reader physically crosses the boundary.
+        self.set_position(reader_pos);
         self.rebuild(ctx, from_seg);
     }
 
@@ -1145,6 +1190,21 @@ impl HlsVariant {
 
     pub(crate) fn cancel(&self) {
         self.cancel.lock_sync_read().cancel();
+    }
+
+    /// Replace the cancel token with a fresh child of `master_cancel`.
+    /// Called on every re-activation path ([`Self::reset_to_full_range`]
+    /// and [`Self::activate_at_segment_with_shift`]) so a variant that
+    /// was deactivated (cancelled) on a prior ABR commit can dispatch
+    /// fetches again. Without this, the second activation of the same
+    /// `HlsVariant` instance enqueues `FetchCmd`s under a permanently
+    /// cancelled token — every fetch settles immediately as
+    /// `stale (cancelled)` and the reader hangs on `wait_range`.
+    /// In-flight clones held by prior fetches stay cancelled (correct —
+    /// they belong to the previous epoch and must not write).
+    pub(crate) fn rearm_cancel(&self) {
+        let fresh = self.master_cancel.child_token();
+        *self.cancel.lock_sync_write() = fresh;
     }
 
     /// Virtual byte offset of segment `seg_idx` in the combined stream.

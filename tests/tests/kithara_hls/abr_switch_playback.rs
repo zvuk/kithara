@@ -730,3 +730,135 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         "playback must continue after seek (got {resume_chunks} chunks)"
     );
 }
+
+/// Phase P.0 regression: production bug repro from app.log (2026-05-15).
+///
+/// Scenario in prod (app.log:103-104):
+/// `commit_variant_switch from=0 to=3 cross_codec=true reason=UpSwitch`
+/// fires on the FIRST boundary crossing. Decoder produces some samples
+/// then stalls; `decode_next_chunk` hangs ~10s later. User experience:
+/// "пропал звук, слайдер двигался, потом крэш".
+///
+/// `abr_switch_real_assets_does_not_hang` and `runtime_cross_codec_manual_switch_no_hang`
+/// already cover the cross-codec path but their assertions accept
+/// `total_samples > 0` / `> 1000` — a single post-init buffer satisfies
+/// them, masking a stall. Sustained playback requires a much higher bar.
+///
+/// Deterministic structure: open Auto(0)=AAC, read >=200 ms of audio to
+/// confirm AAC decoder warmed, then trigger Manual(3)=FLAC. The Manual
+/// path runs through the same `commit_variant_switch` cross-codec branch
+/// as Auto — deterministic timing avoids the Auto-only flakiness where
+/// the bandwidth estimator may or may not commit the switch within the
+/// test window.
+///
+/// Real assets: `assets/hls/master.m3u8` carries variants 0-2 AAC
+/// (mp4a.40.2) and variant 3 FLAC (fLaC) — 37 segments × 4s each =
+/// 148 s of audio. Reading 15 s post-switch must produce at least
+/// `15 × 44_100 × 2 × 0.5 = 661_500` samples (50 % of nominal rate).
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(60)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let url = server.asset("hls/master.m3u8");
+
+    let cancel = CancellationToken::new();
+    let bus = EventBus::new(256);
+    let mut hls_rx = bus.subscribe();
+
+    let hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel)
+        .with_events(bus.clone())
+        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+
+    let config = AudioConfig::<Hls>::new(hls_config);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+    let _ = audio.preload();
+
+    // Phase 1 — AAC warmup. Read until we have at least 200 ms of audio
+    // (44_100 × 2 × 0.2 = 17_640 frames) so AAC decoder is fully primed.
+    let mut buf = vec![0f32; 4096];
+    let mut pre_samples = 0u64;
+    let warmup_deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < warmup_deadline && pre_samples < 17_640 {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => pre_samples += count.get() as u64,
+            Ok(ReadOutcome::Pending { .. }) => sleep(Duration::from_millis(20)).await,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error during AAC warmup: {e}"),
+        }
+    }
+    assert!(
+        pre_samples >= 17_640,
+        "AAC warmup must produce ≥17_640 frames before the cross-codec flip; \
+         got {pre_samples}"
+    );
+
+    // Phase 2 — trigger cross-codec Manual switch to FLAC.
+    let handle = audio
+        .abr_handle()
+        .expect("HLS stream must expose AbrHandle");
+    handle
+        .set_mode(AbrMode::Manual(3))
+        .expect("Manual(3) (FLAC) target must be valid");
+
+    // Phase 3 — sustained post-switch playback. Read for 15 s; collect
+    // VariantApplied events alongside.
+    let post_deadline = Instant::now() + Duration::from_secs(15);
+    let mut post_samples = 0u64;
+    let mut applied_targets: Vec<usize> = Vec::new();
+    let mut last_progress = Instant::now();
+    let mut max_stall_ms = 0u128;
+    while Instant::now() < post_deadline {
+        while let Ok(ev) = hls_rx.try_recv() {
+            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
+                applied_targets.push(to);
+            }
+        }
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                let frames = count.get() as u64;
+                post_samples += frames;
+                if frames > 0 {
+                    last_progress = Instant::now();
+                }
+            }
+            Ok(ReadOutcome::Pending { .. }) => sleep(Duration::from_millis(20)).await,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error post-switch: {e}"),
+        }
+        let stalled = Instant::now().duration_since(last_progress).as_millis();
+        if stalled > max_stall_ms {
+            max_stall_ms = stalled;
+        }
+    }
+
+    info!(
+        ?applied_targets,
+        pre_samples, post_samples, max_stall_ms, "Phase P.0: cross-codec switch sustained playback"
+    );
+
+    assert!(
+        applied_targets.iter().any(|&t| t == 3),
+        "Manual(3) must surface VariantApplied{{to:3}} (FLAC) — \
+         applied_targets={applied_targets:?}"
+    );
+    assert!(
+        post_samples >= 660_000,
+        "sustained FLAC playback after cross-codec flip must produce \
+         ≥660_000 frames in 15 s (≈50 % nominal 44.1 kHz × 15 s × 2 ch); \
+         got {post_samples}. Prod symptom: decoder stalls after the switch."
+    );
+    assert!(
+        max_stall_ms < 5_000,
+        "decoder must not stall longer than 5 s after the cross-codec flip; \
+         longest stall window was {max_stall_ms} ms"
+    );
+}

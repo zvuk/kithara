@@ -221,15 +221,22 @@ impl<T: StreamType> Stream<T> {
             /// Get total length if known.
             pub fn len(&self) -> Option<u64>;
             /// Get current segment byte range (for segmented sources like HLS).
-            ///
             /// Transitional — removed in Plan 06.
             pub fn current_segment_range(&self) -> Option<Range<u64>>;
-            /// Get byte range of first segment with current format after ABR switch.
-            ///
+            /// Header byte range for decoder recreate after a format change.
             /// Transitional — removed in Plan 06.
-            pub fn format_change_segment_range(&self) -> Option<Range<u64>>;
+            ///
+            /// # Errors
+            ///
+            /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS
+            /// sources or HLS variants activated with `served_from > 0`
+            /// (init prefix unreachable via Stream reads).
+            pub fn format_change_segment_range(&self) -> crate::error::StreamResult<Range<u64>>;
             /// Clear variant fence, allowing reads from the next variant.
             pub fn clear_variant_fence(&mut self);
+            /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
+            /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
+            pub fn has_variant_change_pending(&self) -> bool;
             /// Set seek epoch for stale request invalidation.
             pub fn set_seek_epoch(&mut self, seek_epoch: u64);
             /// Wake any blocked `wait_range()` calls.

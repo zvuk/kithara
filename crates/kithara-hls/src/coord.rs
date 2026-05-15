@@ -4,7 +4,7 @@ use std::{
     ops::Range,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -22,9 +22,10 @@ use kithara_stream::{
     SourceSeekAnchor, StreamResult, Timeline,
 };
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 use crate::{
-    playlist::PlaylistState,
+    playlist::{PlaylistAccess, PlaylistState},
     variant::{HlsVariant, PlanCtx},
 };
 
@@ -38,18 +39,17 @@ pub(crate) struct HlsCoordEnv {
 }
 
 /// Thin router over a fixed `Vec<Arc<HlsVariant>>`. Every `Source`-side
-/// reader op is delegated to `self.active()` (the variant pinned by
-/// `active_variant`). The coord owns only what is genuinely
-/// cross-variant: the active-index atomic, the ABR handle, the
-/// cancel-hierarchy parent, the variant-change fence, and the per-track
-/// playlist/asset/timeline references it hands to variants and to peer
-/// `PlanCtx`-builders.
+/// reader op is delegated to `self.active()` (the variant whose index
+/// `AbrState::current_variant_index` resolves to). The coord owns only
+/// what is genuinely cross-variant: the ABR handle (single source of
+/// truth for variant index), the cancel-hierarchy parent, the
+/// variant-change fence, and the per-track playlist/asset/timeline
+/// references it hands to variants and to peer `PlanCtx`-builders.
 pub(crate) struct HlsCoord {
     pub(crate) cancel: CancellationToken,
     pub(crate) timeline: Timeline,
     pub(crate) abr: AbrHandle,
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
-    pub(crate) active_variant: Arc<AtomicUsize>,
     pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
     playlist_state: Arc<PlaylistState>,
     /// Reader→peer wake handle, installed once when the owning `HlsPeer`
@@ -84,14 +84,15 @@ impl HlsCoord {
             !variants.is_empty(),
             "HlsCoord constructed without variants — caller must supply at least one"
         );
-        let initial = abr.current_variant_index().unwrap_or(0);
-        let active_variant = Arc::new(AtomicUsize::new(initial));
+        assert!(
+            abr.current_variant_index().is_some(),
+            "HlsCoord requires an AbrHandle with state — HlsPeer must construct AbrState"
+        );
         Self {
             cancel: env.cancel,
             timeline,
             abr,
             variants,
-            active_variant,
             asset_store: env.asset_store,
             playlist_state,
             peer_wake: OnceLock::new(),
@@ -120,21 +121,29 @@ impl HlsCoord {
     }
 
     pub(crate) fn active(&self) -> Option<&Arc<HlsVariant>> {
-        let idx = self.active_variant.load(Ordering::Acquire);
-        self.variants.get(idx)
+        self.variants.get(self.variant_index())
     }
 
-    /// Variants `Vec` is constructed non-empty (asserted in [`Self::new`])
-    /// and `active_variant` is initialised from `abr.current_variant_index()`
-    /// or 0; this lookup therefore always succeeds. Used by `delegate!`
-    /// targets so trait methods don't need to thread `Option`s.
+    /// `AbrState` always returns a valid index (constructor asserts
+    /// stateful handle), and `variants` is non-empty (asserted in
+    /// [`Self::new`]). This lookup therefore always succeeds. Used by
+    /// `delegate!` targets so trait methods don't need to thread
+    /// `Option`s.
     fn active_required(&self) -> &Arc<HlsVariant> {
         self.active()
             .expect("HlsCoord constructed without variants — bug")
     }
 
+    /// Single source of truth: the variant index lives in
+    /// [`AbrState::current_variant`]. The previous duplicate
+    /// `HlsCoord::active_variant` was removed — `apply_decision`
+    /// publishes the switch after `v_new` is fully prepared, so a
+    /// reader observing `current_variant := new` is guaranteed to see
+    /// `v_new` ready.
     pub(crate) fn variant_index(&self) -> usize {
-        self.active_variant.load(Ordering::Acquire)
+        self.abr
+            .current_variant_index()
+            .expect("HlsCoord requires AbrHandle with state — checked in new()")
     }
 
     pub(crate) fn timeline(&self) -> Timeline {
@@ -148,14 +157,70 @@ impl HlsCoord {
             pub(crate) fn advance(&self, n: u64);
             pub(crate) fn set_position(&self, pos: u64);
             pub(crate) fn total_bytes(&self) -> u64;
-            pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)>;
             pub(crate) fn download_head(&self) -> u32;
-            pub(crate) fn format_change_segment_range(&self) -> Option<Range<u64>>;
+            pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
             pub(crate) fn seek_time_anchor(
                 &self,
                 position: Duration,
             ) -> StreamResult<Option<SourceSeekAnchor>>;
         }
+    }
+
+    /// Find the variant whose served range covers `offset`. Priority:
+    ///
+    /// 1. The ABR-active variant — the normal steady-state hit.
+    /// 2. Any non-active variant whose served range has been *shrunk*
+    ///    from its default span by a prior ABR commit (i.e.
+    ///    `served_from > 0` or `served_until < num_segments`). These
+    ///    are `v_old`s that still serve their pre-switch byte range so
+    ///    a reader crossing the boundary mid-buffer hits the right
+    ///    payload.
+    ///
+    /// Idle variants with default served bounds are deliberately
+    /// excluded: their layout overlaps the active range but their
+    /// resources were never fetched, so routing to them would return
+    /// `NotFound` / `Pending(Retry)`.
+    pub(crate) fn variant_serving(&self, offset: u64) -> &Arc<HlsVariant> {
+        let active = self.active_required();
+        if active.init_descriptor_at(offset).is_some() || active.find_at_offset(offset).is_some() {
+            return active;
+        }
+        for v in self.variants.iter() {
+            if Arc::ptr_eq(v, active) {
+                continue;
+            }
+            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
+            if !shrunk {
+                continue;
+            }
+            if v.init_descriptor_at(offset).is_some() || v.find_at_offset(offset).is_some() {
+                return v;
+            }
+        }
+        active
+    }
+
+    /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
+    /// priority: active first, then shrunk `v_old`s. Returns `None` if no
+    /// engaged variant claims the offset.
+    pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
+        let active = self.active_required();
+        if let Some(found) = active.find_at_offset(byte_offset) {
+            return Some(found);
+        }
+        for v in self.variants.iter() {
+            if Arc::ptr_eq(v, active) {
+                continue;
+            }
+            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
+            if !shrunk {
+                continue;
+            }
+            if let Some(found) = v.find_at_offset(byte_offset) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     /// Active variant's media info. `HlsCoord` is constructed
@@ -167,13 +232,14 @@ impl HlsCoord {
     }
 
     /// Track-level phase. Master-cancel takes precedence (terminal
-    /// `Cancelled`); otherwise the active variant's view of `range_ready`
-    /// / `is_flushing` / `total_bytes` decides.
+    /// `Cancelled`); otherwise the variant that currently serves
+    /// `range.start` decides — mid-buffer boundary cross resolves to
+    /// the right `range_ready` / `is_flushing` / `total_bytes` view.
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if self.cancel.is_cancelled() {
             return SourcePhase::Cancelled;
         }
-        self.active_required().phase_at(range)
+        self.variant_serving(range.start).phase_at(range)
     }
 
     /// Total bytes are >0 — the value used by `Source::len` accessor.
@@ -221,39 +287,61 @@ impl HlsCoord {
     /// `Pending(VariantChange)` / `Interrupted` until the audio FSM
     /// recreates the decoder and acks via [`Self::clear_variant_fence`].
     pub(crate) fn commit_variant_switch(&self, ctx: &PlanCtx, from_seg: u32) -> bool {
-        let Some(decision) = self.abr.commit_pending(Instant::now()) else {
+        let current_before = self.variant_index();
+        let Some(decision) = self.abr.peek_pending_decision() else {
             return false;
         };
-        if !decision.did_change {
-            return false;
-        }
-        let current_before = self.variant_index();
         let new_v = decision.target_variant_index;
         let Some(v_new) = self.variants.get(new_v) else {
             return false;
         };
         let v_old = self.variants.get(current_before);
         let codec_changed = self.cross_codec(current_before, new_v);
+        let reader_pos_at_entry = self.position();
+        info!(
+            from_variant = current_before,
+            to_variant = new_v,
+            cross_codec = codec_changed,
+            from_seg,
+            reader_pos = reader_pos_at_entry,
+            reason = ?decision.reason,
+            "HlsCoord: commit_variant_switch"
+        );
         if codec_changed {
             if let Some(v_old) = v_old {
                 v_old.cancel();
             }
             v_new.reset_to_full_range();
-            v_new.set_position(0);
-            // Close the fence BEFORE flipping `active_variant`. Reversed
-            // order would leave a window where a reader observes the new
-            // active but `variant_change_pending()` is still false —
-            // pulling stale bytes from `v_new.position = 0` and an
-            // uninitialised init range. The audio FSM acks the switch
-            // via `clear_variant_fence` after recreating the decoder.
+            // Pin `v_new`'s reader cursor and fetch queue to the segment
+            // that covers the current timeline position. Without this
+            // we'd `set_position(0)` + `rebuild(0)`, redownload every
+            // segment the user already listened past, and play `v_new`
+            // from byte 0 — `feedback_no_situational_fixing`: replaying
+            // from the start of every cross-codec flip is the symptom
+            // the user reported (`app.log` 2026-05-15).
+            let target_time = self.timeline.committed_position();
+            let target_seg: u32 = self
+                .playlist_state
+                .find_seek_point_for_time(new_v, target_time)
+                .and_then(|(seg, _, _)| u32::try_from(seg).ok())
+                .unwrap_or(0);
+            let target_byte = v_new.segment_byte_offset_natural(target_seg).unwrap_or(0);
+            v_new.set_position(target_byte);
+            // Close the fence BEFORE publishing the switch. Reader
+            // observes `Pending(VariantChange)` until the audio FSM
+            // acks via `clear_variant_fence`; `variant_index()` may
+            // briefly still resolve to `current_before` between this
+            // fetch_add and `apply_decision` below, but that's fine —
+            // the fence short-circuits `read_at` / `wait_range` before
+            // they consult the variant pointer.
             self.variant_generation.fetch_add(1, Ordering::Release);
-            self.active_variant.store(new_v, Ordering::Release);
+            self.abr.apply_decision(&decision, Instant::now());
             // Seed `v_new`'s fetch queue: cross-codec landed without a
             // segment boundary, so unlike `activate_at_segment_with_shift`
             // (same-codec branch) we never rebuilt the queue. The peer
             // would otherwise spin on `no commands seg=1` while the audio
             // FSM waits for an init segment that nobody dispatches.
-            v_new.rebuild(ctx, 0);
+            v_new.rebuild(ctx, target_seg);
         } else {
             // `from_seg` is the segment the reader has just entered;
             // pin v_new to the *next* segment so v_old keeps serving
@@ -270,8 +358,13 @@ impl HlsCoord {
                 v_old.cancel();
                 v_old.set_served_until(switch_at);
             }
+            // Prepare v_new BEFORE publishing the switch. When the
+            // reader subsequently observes `current_variant := new`
+            // via `variant_index()`, v_new's byte_shift / served_from
+            // / served_until / position / fetch queue are already
+            // committed.
             v_new.activate_at_segment_with_shift(ctx, switch_at, seg_boundary, reader_pos);
-            self.active_variant.store(new_v, Ordering::Release);
+            self.abr.apply_decision(&decision, Instant::now());
         }
         let reader_pt = self.timeline.committed_position();
         self.abr
@@ -289,6 +382,13 @@ impl HlsCoord {
         self.variant_generation.load(Ordering::Acquire) > self.fence_at.load(Ordering::Acquire)
     }
 
+    /// Public-API mirror of [`Self::variant_change_pending`] used by the
+    /// audio decode loop to bail out of an `Ok(Pending(_))` spin when
+    /// the underlying `VariantChangeError` was absorbed by the demuxer.
+    pub(crate) fn has_variant_change_pending(&self) -> bool {
+        self.variant_change_pending()
+    }
+
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         if self.cancel.is_cancelled() {
             return Err(kithara_stream::StreamError::Source(
@@ -298,7 +398,7 @@ impl HlsCoord {
         if self.variant_change_pending() {
             return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
         }
-        self.active_required().read_at(offset, buf)
+        self.variant_serving(offset).read_at(offset, buf)
     }
 
     pub(crate) fn wait_range(
@@ -314,7 +414,7 @@ impl HlsCoord {
         if self.variant_change_pending() {
             return Ok(WaitOutcome::Interrupted);
         }
-        self.active_required().wait_range(range, timeout)
+        self.variant_serving(range.start).wait_range(range, timeout)
     }
 
     /// Wake the peer on receipt of a new seek epoch. The epoch value
@@ -328,10 +428,15 @@ impl HlsCoord {
     /// generation. Called from `HlsSource::clear_variant_fence` after
     /// the decoder has been recreated against the new variant.
     pub(crate) fn clear_variant_fence(&self) {
-        self.fence_at.store(
-            self.variant_generation.load(Ordering::Acquire),
-            Ordering::Release,
-        );
+        let current_gen = self.variant_generation.load(Ordering::Acquire);
+        let prev = self.fence_at.swap(current_gen, Ordering::AcqRel);
+        if prev != current_gen {
+            info!(
+                fence_was = prev,
+                fence_now = current_gen,
+                "HlsCoord: clear_variant_fence"
+            );
+        }
     }
 
     /// External signal that the reader is blocked — wake the peer so

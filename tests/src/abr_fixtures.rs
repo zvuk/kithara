@@ -16,7 +16,6 @@ pub fn abr_switch_trigger() -> AbrSettings {
         .with_throughput_safety_factor(1.0)
         .with_up_hysteresis_ratio(1.0)
         .with_down_hysteresis_ratio(1.0)
-        .with_min_throughput_record_ms(0)
 }
 
 /// ABR settings for fast-reacting tests (sub-second switch interval).
@@ -31,7 +30,6 @@ pub fn abr_fast() -> AbrSettings {
         .with_throughput_safety_factor(1.0)
         .with_up_hysteresis_ratio(2.0)
         .with_down_hysteresis_ratio(0.9)
-        .with_min_throughput_record_ms(0)
 }
 
 /// Default initial ABR mode for test fixtures — Auto starting at variant 0.

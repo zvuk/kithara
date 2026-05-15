@@ -181,8 +181,14 @@ impl Source for TestSource {
         self.state.lock_sync().segment_range.clone()
     }
 
-    fn format_change_segment_range(&self) -> Option<Range<u64>> {
-        self.state.lock_sync().format_change_range.clone()
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        self.state
+            .lock_sync()
+            .format_change_range
+            .clone()
+            .ok_or(StreamError::Source(
+                kithara_stream::SourceError::FormatChangeNotApplicable,
+            ))
     }
 
     fn seek_time_anchor(&mut self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
