@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara_events::{AbrEvent, AbrMode, EventBus};
+use kithara_events::{AbrEvent, AbrMode, EventBus, VariantInfo};
 use kithara_platform::{
     RwLock,
     time::{Duration, Instant},
@@ -51,6 +51,33 @@ impl AbrHandle {
     #[must_use]
     pub fn current_variant_index(&self) -> Option<usize> {
         self.inner.state.as_ref().map(|s| s.current_variant_index())
+    }
+
+    /// Pull the live variant list from the peer. Returns an empty vec
+    /// when the peer has been dropped or has no variants — callers
+    /// should treat empty the same as "not yet registered".
+    #[must_use]
+    pub fn variants(&self) -> Vec<VariantInfo> {
+        self.inner
+            .controller
+            .peer_entry(self.inner.peer_id)
+            .and_then(|e| e.peer_weak.upgrade())
+            .map(|peer| peer.variants())
+            .unwrap_or_default()
+    }
+
+    /// Current variant's full metadata (bandwidth, name, codecs,
+    /// container, duration shape). Pulled live each call — no caching.
+    #[must_use]
+    pub fn current_variant(&self) -> Option<VariantInfo> {
+        let idx = self.current_variant_index()?;
+        self.variants().into_iter().find(|v| v.variant_index == idx)
+    }
+
+    /// Current ABR mode (Auto / Manual). `None` for peers without state.
+    #[must_use]
+    pub fn mode(&self) -> Option<AbrMode> {
+        self.inner.state.as_ref().map(|s| s.mode())
     }
 
     #[must_use]
@@ -283,6 +310,69 @@ mod tests {
         );
         assert_eq!(state.current_variant_index(), 0);
         assert_eq!(state.pending_target(), Some(2));
+    }
+
+    #[kithara::test(tokio)]
+    async fn handle_pulls_live_variants_from_peer() {
+        let controller = AbrController::with_estimator(
+            settings_fast(),
+            Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        );
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(1))));
+        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            state: Arc::clone(&state),
+            variants: test_variants_3(),
+        });
+        let handle = controller.register(&peer);
+
+        let variants = handle.variants();
+        assert_eq!(variants.len(), 3);
+        assert_eq!(variants[2].bandwidth_bps, Some(1_024_000));
+
+        let current = handle.current_variant().expect("current variant");
+        assert_eq!(current.variant_index, 1);
+        assert_eq!(current.bandwidth_bps, Some(512_000));
+
+        // Switching the state must surface live through the handle —
+        // no caching on the AbrHandle side.
+        state.apply(
+            &AbrDecision {
+                target_variant_index: 2,
+                reason: AbrReason::UpSwitch,
+                did_change: true,
+            },
+            Instant::now(),
+        );
+        let after = handle
+            .current_variant()
+            .expect("current variant after switch");
+        assert_eq!(after.variant_index, 2);
+        assert_eq!(after.bandwidth_bps, Some(1_024_000));
+    }
+
+    #[kithara::test(tokio)]
+    async fn handle_returns_empty_variants_when_peer_dropped() {
+        let controller = AbrController::with_estimator(
+            settings_fast(),
+            Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        );
+        let state = Arc::new(AbrState::new(AbrMode::Auto(Some(0))));
+        let handle = {
+            let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+                state: Arc::clone(&state),
+                variants: test_variants_3(),
+            });
+            let h = controller.register(&peer);
+            // Confirm baseline: pull returns 3 variants while peer alive.
+            assert_eq!(h.variants().len(), 3);
+            h
+            // `peer` Arc drops here.
+        };
+        assert!(
+            handle.variants().is_empty(),
+            "Weak<Abr>::upgrade fails after peer drop — variants() must collapse to empty"
+        );
+        assert!(handle.current_variant().is_none());
     }
 
     #[kithara::test(tokio)]

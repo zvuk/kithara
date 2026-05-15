@@ -109,6 +109,10 @@ impl Source for HlsSource {
         self.peer_handle.as_ref().map(|h| h.abr().clone())
     }
 
+    fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
+        self.abr_handle()?.current_variant()
+    }
+
     fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
         Some(Arc::clone(&self.coord) as Arc<dyn SegmentLayout>)
     }

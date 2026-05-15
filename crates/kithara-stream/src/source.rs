@@ -2,6 +2,7 @@
 
 use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Arc};
 
+use kithara_events::VariantInfo;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
@@ -238,6 +239,14 @@ pub trait Source: Send + Sync + 'static {
 
     /// Get media info if available.
     fn media_info(&self) -> Option<MediaInfo> {
+        None
+    }
+
+    /// Current variant's full metadata. Adaptive sources (HLS) return
+    /// the live `VariantInfo` for the active variant — pulled from the
+    /// peer on every call so the UI never sees a stale label. Non-adaptive
+    /// sources keep the default `None`.
+    fn current_variant(&self) -> Option<VariantInfo> {
         None
     }
 

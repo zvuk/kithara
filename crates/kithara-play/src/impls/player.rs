@@ -155,6 +155,13 @@ pub struct PlayerImpl {
     /// Items drop before engine — Audio tracks unregister from worker
     /// while it is still alive.
     items: Mutex<Vec<Option<QueuedResource>>>,
+    /// Live `AbrHandle` of the resource currently in the processor.
+    /// Populated by [`Self::enqueue_to_processor`] just before moving
+    /// the resource out of `items`, and replaced on every subsequent
+    /// load. Lets callers query the active variant after playback has
+    /// started — `items[idx]` is `None` then, so the queue-state lookup
+    /// can't answer.
+    current_abr_handle: Mutex<Option<kithara_abr::AbrHandle>>,
     pending_next: Mutex<Option<PendingNext>>,
     status: Mutex<PlayerStatus>,
     pcm_pool: PcmPool,
@@ -362,18 +369,13 @@ impl PlayerImpl {
 
     /// ABR handle of the currently loaded item, if any.
     ///
-    /// Returns `Some` while an adaptive (HLS) resource is queued (not yet
-    /// taken into the processor); `None` once `enqueue_to_processor` has
-    /// moved the resource out. Phase 6 of the variant-pull refactor will
-    /// expose the runtime variant via the `Source` chain instead, freeing
-    /// this from queue-state coupling.
+    /// ABR handle of the resource currently running in the processor.
+    /// Reads the stash populated by [`Self::enqueue_to_processor`] —
+    /// stays valid for the whole life of the track, including after
+    /// `items[idx]` has been emptied by the load handoff.
     #[must_use]
     pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        let idx = self.current_index.load(Ordering::Relaxed);
-        let items = self.items.lock_sync();
-        let handle = items.get(idx)?.as_ref()?.resource.abr_handle();
-        drop(items);
-        handle
+        self.current_abr_handle.lock_sync().clone()
     }
 
     /// Current item index in the queue.
@@ -450,6 +452,12 @@ impl PlayerImpl {
 
         let queued = items[index].take()?;
         let QueuedResource { item_id, resource } = queued;
+
+        // Stash the ABR handle before moving the resource into the
+        // processor — once it crosses into the worker thread, the
+        // queue-state lookup (`items[idx]`) returns `None` and the only
+        // surviving reference to the handle lives here.
+        *self.current_abr_handle.lock_sync() = resource.abr_handle();
 
         let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
         resource.set_playback_rate(current_rate);
@@ -642,6 +650,7 @@ impl PlayerImpl {
             default_rate: AtomicF32::new(config.default_rate),
             bus,
             items: Mutex::new(Vec::new()),
+            current_abr_handle: Mutex::new(None),
             muted: AtomicBool::new(false),
             pcm_pool: resolved_pool,
             playback_rate_shared: Arc::new(AtomicF32::new(config.default_rate)),

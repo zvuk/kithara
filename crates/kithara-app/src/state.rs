@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use kithara::events::{AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo};
+use kithara::{
+    abr::AbrHandle,
+    events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo},
+};
 use kithara_platform::sync::Mutex;
 use kithara_queue::{Queue, QueueEvent, TrackEntry};
 use tokio::sync::broadcast::error::RecvError;
@@ -107,11 +110,16 @@ impl StateController {
         self.state.lock_sync().clone()
     }
 
-    /// Pull the continuous values (position, duration, volume, tracks)
-    /// from the queue. Event-driven mirrors keep the rest in sync.
+    /// Pull the continuous values (position, duration, volume, tracks,
+    /// active variant) from the queue. Event-driven mirrors keep the
+    /// rest in sync.
     pub fn refresh_continuous(&self) {
         let position = self.queue.position_seconds().unwrap_or(0.0);
         let duration = self.queue.duration_seconds().unwrap_or(0.0);
+        let abr = self.queue.current_abr_handle();
+        let current_variant = abr.as_ref().and_then(AbrHandle::current_variant);
+        let variants = abr.as_ref().map(AbrHandle::variants).unwrap_or_default();
+        let mode = abr.as_ref().and_then(AbrHandle::mode);
         let mut st = self.state.lock_sync();
         st.playing = self.queue.is_playing();
         st.volume = self.queue.volume();
@@ -120,6 +128,18 @@ impl StateController {
         if let Some(idx) = self.queue.current_index() {
             st.current_track_index = Some(idx);
         }
+        st.variant_label = current_variant
+            .as_ref()
+            .map(variant_display_label_from_info)
+            .unwrap_or_default();
+        st.abr_variants = variants
+            .iter()
+            .map(|v| (v.variant_index, variant_short_label(v)))
+            .collect();
+        st.abr_mode_is_auto = match mode {
+            Some(AbrMode::Manual(_)) => false,
+            Some(AbrMode::Auto(_)) | None => true,
+        };
     }
 
     /// Apply a closure under the lock. Returns the closure's result.
@@ -144,7 +164,6 @@ fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: Cancell
     let mut rx = queue.subscribe();
 
     tokio::spawn(async move {
-        let mut variants_cache: Vec<VariantInfo> = Vec::new();
         loop {
             let event = tokio::select! {
                 biased;
@@ -153,7 +172,7 @@ fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: Cancell
             };
 
             match event {
-                Ok(event) => apply_event(event, &queue, &state, &mut variants_cache),
+                Ok(event) => apply_event(event, &queue, &state),
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             }
@@ -161,38 +180,18 @@ fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: Cancell
     });
 }
 
-fn apply_event(
-    event: Event,
-    queue: &Queue,
-    state: &Mutex<UiState>,
-    variants_cache: &mut Vec<VariantInfo>,
-) {
-    use kithara::events::AbrEvent;
+fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
     match event {
-        Event::Abr(AbrEvent::VariantsRegistered { variants, initial }) => {
-            *variants_cache = variants;
-            let mut st = state.lock_sync();
-            st.variant_label = variant_display_label(variants_cache, initial);
-            st.abr_variants = variants_cache
-                .iter()
-                .map(|v| (v.variant_index, variant_short_label(v)))
-                .collect();
-        }
-        Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
-            let mut st = state.lock_sync();
-            st.variant_label = variant_display_label(variants_cache, to);
-        }
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
-            variants_cache.clear();
             let mut st = state.lock_sync();
             st.current_track_index = current_index;
             st.track_name = current_index
                 .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
                 .unwrap_or_default();
-            st.variant_label.clear();
-            st.abr_variants.clear();
-            st.abr_mode_is_auto = true;
+            // Variant fields are pulled live by `refresh_continuous`;
+            // reset the user-selected override so the renderer doesn't
+            // surface a stale manual selection across track switches.
             st.selected_variant = None;
             st.is_seeking = false;
         }
@@ -226,21 +225,13 @@ fn apply_event(
     }
 }
 
-fn variant_display_label(variants: &[VariantInfo], index: usize) -> String {
-    variants
-        .iter()
-        .find(|v| v.variant_index == index)
-        .map_or_else(
-            || format!("variant {index}"),
-            |v| {
-                v.name.clone().unwrap_or_else(|| {
-                    v.bandwidth_bps.map_or_else(
-                        || format!("variant {index}"),
-                        |b| format!("{} kbps", b / 1000),
-                    )
-                })
-            },
+fn variant_display_label_from_info(v: &VariantInfo) -> String {
+    v.name.clone().unwrap_or_else(|| {
+        v.bandwidth_bps.map_or_else(
+            || format!("variant {}", v.variant_index),
+            |b| format!("{} kbps", b / 1000),
         )
+    })
 }
 
 fn variant_short_label(v: &VariantInfo) -> String {

@@ -201,6 +201,23 @@ impl<S> Audio<S> {
         self.timeline.total_duration()
     }
 
+    /// Runtime ABR handle (cloned from the stream's source at
+    /// construction). `Some` for adaptive sources (HLS), `None` for
+    /// file/non-adaptive sources.
+    #[must_use]
+    pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.abr_handle.clone()
+    }
+
+    /// Current variant's metadata. Pulled live from the ABR peer on
+    /// every call — no caching — so the UI never sees a stale label
+    /// after an ABR switch. `None` for non-adaptive sources or peers
+    /// that have not yet registered variants.
+    #[must_use]
+    pub fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
+        self.abr_handle.as_ref()?.current_variant()
+    }
+
     fn emit_audio_event(&self, event: AudioEvent) {
         self.bus.publish(event);
     }

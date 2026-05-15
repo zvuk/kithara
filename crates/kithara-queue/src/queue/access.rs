@@ -27,6 +27,15 @@ impl Queue {
         self.player.current_abr_handle()
     }
 
+    /// Live variant metadata of the currently playing adaptive item.
+    /// Pulled from the player's stashed ABR handle on every call so a
+    /// renderer can poll for the up-to-date label after every frame
+    /// without depending on event delivery.
+    #[must_use]
+    pub fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
+        self.current_abr_handle()?.current_variant()
+    }
+
     /// The currently playing track's queue index (player-reported).
     #[must_use]
     pub fn current_index(&self) -> Option<usize> {
