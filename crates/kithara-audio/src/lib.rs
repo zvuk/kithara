@@ -48,6 +48,7 @@ pub(crate) mod worker;
 
 pub use audio::Audio;
 pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands};
+pub use effects::timestretch::TimeStretchProcessor;
 pub use pipeline::{
     config::AudioConfig,
     fetch::{EpochValidator, Fetch},

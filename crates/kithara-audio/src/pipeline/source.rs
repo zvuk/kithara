@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    collections::VecDeque,
     io::{self, Read, Seek, SeekFrom},
     ops::Range,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -35,7 +36,7 @@ use crate::{
         },
     },
     traits::AudioEffect,
-    worker::{AudioWorkerSource, apply_effects, flush_effects, reset_effects},
+    worker::{AudioWorkerSource, apply_effects, drain_effects, reset_effects},
 };
 
 /// Shared stream wrapper for format change detection.
@@ -219,6 +220,9 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     peer_wake: Option<Box<dyn Fn() + Send + Sync>>,
     shared_stream: SharedStream<T>,
     effects: Vec<Box<dyn AudioEffect>>,
+    /// Buffered effect-chain tail produced by a single end-of-stream drain (`drain_effects`).
+    /// `None` until true EOF arms it.
+    eof_drain_queue: Option<VecDeque<PcmChunk>>,
     chunks_decoded: u64,
     total_samples: u64,
     /// `(seek_epoch, target)` of the most recent applied seek.
@@ -268,6 +272,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             decoder_factory,
             epoch,
             effects,
+            eof_drain_queue: None,
             timeline,
             gapless_mode,
             gapless,
@@ -478,7 +483,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         location: SegmentLocation,
         anchor_offset: Option<u64>,
     ) {
-        reset_effects(&mut self.effects);
+        self.reset_effect_chain();
         self.resume_target = Some((epoch, position));
         self.emit_seek_lifecycle(SeekLifecycleStage::SeekApplied, epoch, location);
         self.update_state(TrackState::AwaitingResume(ResumeState {
@@ -956,6 +961,14 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Reset the effect chain and discard any armed `eof_drain_queue`.
+    /// Used on seek / decoder recreation, so a buffering effect's stale tail never leaks past
+    /// the discontinuity and a seek-after-EOF re-arms the drain from scratch.
+    fn reset_effect_chain(&mut self) {
+        reset_effects(&mut self.effects);
+        self.eof_drain_queue = None;
+    }
+
     /// Drain ready chunks from the gapless trimmer through the effect
     /// chain, returning the first chunk that survives effects.
     ///
@@ -1384,13 +1397,19 @@ impl<T: StreamType> StreamAudioSource<T> {
             "decode complete (true EOF)"
         );
 
-        if let Some(flushed) = flush_effects(&mut self.effects) {
-            self.emit_event(AudioEvent::EndOfStream);
-            return DecodeAction::Return(Ok(DecoderChunkOutcome::Chunk(flushed)));
+        if self.eof_drain_queue.is_none() {
+            let tail = drain_effects(&mut self.effects);
+            self.eof_drain_queue = Some(VecDeque::from(tail));
         }
 
-        self.emit_event(AudioEvent::EndOfStream);
-        DecodeAction::Return(Ok(DecoderChunkOutcome::Eof))
+        match self.eof_drain_queue.as_mut().and_then(VecDeque::pop_front) {
+            Some(chunk) => DecodeAction::Return(Ok(DecoderChunkOutcome::Chunk(chunk))),
+            None => {
+                // The source and the whole effect chain are fully drained - nothing left to hear.
+                self.emit_event(AudioEvent::EndOfStream);
+                DecodeAction::Return(Ok(DecoderChunkOutcome::Eof))
+            }
+        }
     }
 
     /// Handle decode error without boundary fallback.
@@ -1859,7 +1878,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn apply_recreate_next(&mut self, next: &RecreateNext) -> TrackStep<PcmChunk> {
         match *next {
             RecreateNext::Decode => {
-                reset_effects(&mut self.effects);
+                self.reset_effect_chain();
                 self.update_state(TrackState::Decoding);
                 TrackStep::StateChanged
             }
@@ -2251,7 +2270,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 },
                 ..Default::default()
             }));
-            reset_effects(&mut self.effects);
+            self.reset_effect_chain();
             self.gapless.notify_seek();
             return TrackStep::StateChanged;
         }
