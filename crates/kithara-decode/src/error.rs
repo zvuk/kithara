@@ -203,11 +203,30 @@ mod tests {
         assert_eq!(error.to_string(), expected);
     }
 
+    #[derive(Debug, Clone, Copy)]
+    enum ExpectedKind {
+        Io,
+        Interrupted,
+    }
+
     #[kithara::test]
-    fn test_decode_error_from_io() {
-        let io_err = IoError::new(ErrorKind::NotFound, "file not found");
+    #[case::not_found_becomes_io(ErrorKind::NotFound, "file not found", ExpectedKind::Io)]
+    #[case::interrupted_becomes_interrupted(
+        ErrorKind::Interrupted,
+        "seek pending",
+        ExpectedKind::Interrupted
+    )]
+    fn test_decode_error_from_io(
+        #[case] kind: ErrorKind,
+        #[case] msg: &str,
+        #[case] expected: ExpectedKind,
+    ) {
+        let io_err = IoError::new(kind, msg);
         let decode_err: DecodeError = io_err.into();
-        assert!(matches!(decode_err, DecodeError::Io(_)));
+        match expected {
+            ExpectedKind::Io => assert!(matches!(decode_err, DecodeError::Io(_))),
+            ExpectedKind::Interrupted => assert!(matches!(decode_err, DecodeError::Interrupted)),
+        }
     }
 
     #[kithara::test]
@@ -224,29 +243,16 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_io_interrupted_becomes_decode_interrupted() {
-        let io_err = IoError::new(ErrorKind::Interrupted, "seek pending");
-        let decode_err: DecodeError = io_err.into();
-        assert!(matches!(decode_err, DecodeError::Interrupted));
-    }
-
-    #[kithara::test]
-    fn test_io_other_stays_io_variant() {
-        let io_err = IoError::new(ErrorKind::NotFound, "missing");
-        let decode_err: DecodeError = io_err.into();
-        assert!(matches!(decode_err, DecodeError::Io(_)));
-    }
-
-    #[kithara::test]
-    fn test_backend_seek_pending_counts_as_interrupted() {
-        let decode_err = DecodeError::Backend(Box::new(IoError::other(PendingReason::SeekPending)));
-        assert!(decode_err.is_interrupted());
-    }
-
-    #[kithara::test]
-    fn test_backend_other_io_is_not_interrupted() {
-        let decode_err = DecodeError::Backend(Box::new(IoError::other("other backend error")));
-        assert!(!decode_err.is_interrupted());
+    #[case::seek_pending_counts_as_interrupted(
+        DecodeError::Backend(Box::new(IoError::other(PendingReason::SeekPending))),
+        true
+    )]
+    #[case::other_io_is_not_interrupted(
+        DecodeError::Backend(Box::new(IoError::other("other backend error"))),
+        false
+    )]
+    fn test_backend_is_interrupted(#[case] decode_err: DecodeError, #[case] expected: bool) {
+        assert_eq!(decode_err.is_interrupted(), expected);
     }
 
     #[kithara::test]

@@ -773,22 +773,30 @@ async fn test_net_builder_with_custom_options() {
 }
 
 #[kithara::test(tokio)]
-async fn test_key_request_headers_passthrough() {
+#[case::headers_passthrough("/key-with-auth", Some("secret-key-token"), 0xab)]
+#[case::query_params_passthrough(
+    "/key-with-params?drm_id=test123&version=1.0&extra=ignored",
+    None,
+    0xfe
+)]
+async fn test_key_request_passthrough(
+    #[case] path: &str,
+    #[case] bearer: Option<&str>,
+    #[case] expected_first_byte: u8,
+) {
     let server = key_test_server().await;
     let client = HttpClient::new(NetOptions::default());
-    let url = server.url("/key-with-auth");
+    let url = server.url(path);
+    let headers = bearer.map(auth_bearer);
 
-    let mut stream = client
-        .stream(url, Some(auth_bearer("secret-key-token")))
-        .await
-        .unwrap();
+    let mut stream = client.stream(url, headers).await.unwrap();
     let mut collected = Vec::new();
     while let Some(chunk) = stream.next().await {
         collected.extend_from_slice(&chunk.unwrap());
     }
 
     assert_eq!(collected.len(), 16);
-    assert_eq!(collected[0], 0xab);
+    assert_eq!(collected[0], expected_first_byte);
 }
 
 #[kithara::test(tokio)]
@@ -819,24 +827,6 @@ async fn test_key_request_rejects_bad_credentials(
 
     let result = client.stream(url, headers).await;
     assert_http_status(result.map(|_| "stream"), expected_status, context);
-}
-
-#[kithara::test(tokio)]
-async fn test_key_request_query_params_passthrough() {
-    let server = key_test_server().await;
-    let client = HttpClient::new(NetOptions::default());
-    let url = server.url("/key-with-params?drm_id=test123&version=1.0&extra=ignored");
-
-    let mut stream = client.stream(url, None).await.unwrap();
-    let mut collected = Vec::new();
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.unwrap();
-        collected.extend_from_slice(&chunk);
-    }
-
-    assert_eq!(collected.len(), 16);
-    assert_eq!(collected[0], 0xfe);
 }
 
 #[kithara::test(tokio)]

@@ -223,45 +223,38 @@ mod registry {
     }
 
     #[kithara::test]
-    fn registry_returns_per_rule_headers() {
+    #[case::headers(
+        "X-Encrypted-Key",
+        "seed123",
+        (|rule: KeyProcessorRule, kv: HashMap<String, String>| rule.with_headers(kv)) as fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
+        (|rule: &KeyProcessorRule| rule.headers.as_ref()) as fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>
+    )]
+    #[case::query_params(
+        "token",
+        "xyz",
+        (|rule: KeyProcessorRule, kv: HashMap<String, String>| rule.with_query_params(kv)) as fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
+        (|rule: &KeyProcessorRule| rule.query_params.as_ref()) as fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>
+    )]
+    fn registry_returns_per_rule_field(
+        #[case] map_key: &str,
+        #[case] map_val: &str,
+        #[case] attach: fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
+        #[case] field: fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>,
+    ) {
         let mut reg = KeyProcessorRegistry::new();
-        let mut headers = HashMap::new();
-        headers.insert("X-Encrypted-Key".to_string(), "seed123".to_string());
-        reg.add(
-            KeyProcessorRule::new(["*.zvuk.com"], noop_processor()).with_headers(headers.clone()),
-        );
+        let mut kv = HashMap::new();
+        kv.insert(map_key.to_string(), map_val.to_string());
+        let rule_with_field = attach(KeyProcessorRule::new(["*.zvuk.com"], noop_processor()), kv);
+        reg.add(rule_with_field);
         reg.add(KeyProcessorRule::new(["silvercomet.top"], noop_processor()));
 
         let url = Url::parse("https://cdn.zvuk.com/key.bin").expect("url");
         let rule = reg.find(&url).expect("matched");
-        assert_eq!(
-            rule.headers.as_ref().expect("headers")["X-Encrypted-Key"],
-            "seed123"
-        );
+        assert_eq!(field(rule).expect("field present")[map_key], map_val);
 
         let url = Url::parse("https://silvercomet.top/key.bin").expect("url");
         let rule = reg.find(&url).expect("matched");
-        assert!(rule.headers.is_none());
-    }
-
-    #[kithara::test]
-    fn registry_returns_per_rule_query_params() {
-        let mut reg = KeyProcessorRegistry::new();
-        let mut params = HashMap::new();
-        params.insert("token".to_string(), "xyz".to_string());
-        reg.add(
-            KeyProcessorRule::new(["*.zvuk.com"], noop_processor())
-                .with_query_params(params.clone()),
-        );
-        reg.add(KeyProcessorRule::new(["silvercomet.top"], noop_processor()));
-
-        let url = Url::parse("https://cdn.zvuk.com/key.bin").expect("url");
-        let rule = reg.find(&url).expect("matched");
-        assert_eq!(rule.query_params.as_ref().expect("params")["token"], "xyz");
-
-        let url = Url::parse("https://silvercomet.top/key.bin").expect("url");
-        let rule = reg.find(&url).expect("matched");
-        assert!(rule.query_params.is_none());
+        assert!(field(rule).is_none());
     }
 
     #[kithara::test]

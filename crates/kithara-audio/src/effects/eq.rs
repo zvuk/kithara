@@ -1181,14 +1181,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn db_to_linear_unity_at_zero() {
-        assert!((db_to_linear(0.0) - 1.0).abs() < 0.001);
-    }
-
-    #[kithara::test]
-    fn db_to_linear_boost_at_6db() {
-        let gain = db_to_linear(6.0);
-        assert!((gain - 2.0).abs() < 0.02, "+6dB should be ~2.0, got {gain}");
+    #[case::unity_at_zero(0.0, 1.0, 0.001)]
+    #[case::boost_at_6db(6.0, 2.0, 0.02)]
+    fn db_to_linear_maps_to_gain(#[case] db: f32, #[case] expected_gain: f32, #[case] eps: f32) {
+        let gain = db_to_linear(db);
+        assert!(
+            (gain - expected_gain).abs() < eps,
+            "{db}dB should be ~{expected_gain}, got {gain}"
+        );
     }
 
     #[kithara::test]

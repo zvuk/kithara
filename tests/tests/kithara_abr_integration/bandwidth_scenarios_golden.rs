@@ -49,29 +49,26 @@ fn run_profile(profile: &[u64]) -> usize {
     state.current_variant_index()
 }
 
-#[kithara::test]
-fn flat_low_bandwidth_holds_bottom_variant() {
-    let profile: Vec<u64> = (0..20).map(|_| 150_000).collect();
-    assert_eq!(run_profile(&profile), 0);
+fn flat(bps: u64, n: usize) -> Vec<u64> {
+    (0..n).map(|_| bps).collect()
 }
 
 #[kithara::test]
-fn flat_high_bandwidth_reaches_top_variant() {
-    let profile: Vec<u64> = (0..20).map(|_| 20_000_000).collect();
-    assert_eq!(run_profile(&profile), 2);
-}
-
-#[kithara::test]
-fn drop_after_peak_down_switches() {
-    let mut profile: Vec<u64> = (0..15).map(|_| 20_000_000).collect();
-    profile.extend((0..15).map(|_| 200_000));
-    assert_eq!(run_profile(&profile), 0);
-}
-
-#[kithara::test]
-fn recover_after_drop_up_switches_again() {
-    let mut profile: Vec<u64> = (0..10).map(|_| 20_000_000).collect();
-    profile.extend((0..10).map(|_| 200_000));
-    profile.extend((0..20).map(|_| 20_000_000));
-    assert_eq!(run_profile(&profile), 2);
+#[case::flat_low_bandwidth_holds_bottom_variant(flat(150_000, 20), 0)]
+#[case::flat_high_bandwidth_reaches_top_variant(flat(20_000_000, 20), 2)]
+#[case::drop_after_peak_down_switches(
+    { let mut p = flat(20_000_000, 15); p.extend(flat(200_000, 15)); p },
+    0
+)]
+#[case::recover_after_drop_up_switches_again(
+    {
+        let mut p = flat(20_000_000, 10);
+        p.extend(flat(200_000, 10));
+        p.extend(flat(20_000_000, 20));
+        p
+    },
+    2
+)]
+fn bandwidth_profile_drives_variant(#[case] profile: Vec<u64>, #[case] expected: usize) {
+    assert_eq!(run_profile(&profile), expected);
 }

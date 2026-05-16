@@ -890,37 +890,27 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_accumulates_small_chunks() {
+    #[case::small(100, false)]
+    #[case::large(16384, true)]
+    fn test_chunk_size_threshold(#[case] interleaved_len: usize, #[case] produces_output: bool) {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
-        let small_chunk = test_chunk(
+        let chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 48000,
             },
-            vec![0.1; 100],
+            vec![0.1; interleaved_len],
         );
 
-        let result = processor.process(small_chunk);
-        assert!(result.is_none());
-        assert_eq!(processor.input_buffer[0].len(), 50);
-    }
-
-    #[kithara::test]
-    fn test_processes_large_chunks() {
-        let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
-
-        let large_chunk = test_chunk(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 48000,
-            },
-            vec![0.1; 16384],
-        );
-
-        let result = processor.process(large_chunk);
-        assert!(result.is_some());
-        assert!(!result.unwrap().pcm.is_empty());
+        let result = processor.process(chunk);
+        if produces_output {
+            assert!(result.is_some());
+            assert!(!result.unwrap().pcm.is_empty());
+        } else {
+            assert!(result.is_none());
+            assert_eq!(processor.input_buffer[0].len(), interleaved_len / 2);
+        }
     }
 
     #[kithara::test]
@@ -1002,8 +992,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_playback_rate_2x_halves_output() {
-        let rate = Arc::new(AtomicF32::new(2.0));
+    #[case::rate_2x_halves(2.0, true, 5000)]
+    #[case::rate_half_doubles(0.5, false, 12000)]
+    fn test_playback_rate_scales_output(
+        #[case] rate_value: f32,
+        #[case] expect_less_than: bool,
+        #[case] threshold: usize,
+    ) {
+        let rate = Arc::new(AtomicF32::new(rate_value));
         let mut processor =
             ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
         assert!(!processor.is_passthrough());
@@ -1017,29 +1013,17 @@ mod tests {
         let result = processor.process(chunk);
         assert!(result.is_some());
         let output_frames = result.unwrap().frames();
-        assert!(output_frames < 5000, "Expected ~4096, got {output_frames}");
-    }
-
-    #[kithara::test]
-    fn test_playback_rate_half_doubles_output() {
-        let rate = Arc::new(AtomicF32::new(0.5));
-        let mut processor =
-            ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
-        assert!(!processor.is_passthrough());
-        let chunk = test_chunk(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 44100,
-            },
-            vec![0.1; 16384],
-        );
-        let result = processor.process(chunk);
-        assert!(result.is_some());
-        let output_frames = result.unwrap().frames();
-        assert!(
-            output_frames > 12000,
-            "Expected ~16384, got {output_frames}"
-        );
+        if expect_less_than {
+            assert!(
+                output_frames < threshold,
+                "Expected < {threshold}, got {output_frames}"
+            );
+        } else {
+            assert!(
+                output_frames > threshold,
+                "Expected > {threshold}, got {output_frames}"
+            );
+        }
     }
 
     #[kithara::test]

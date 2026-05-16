@@ -48,29 +48,18 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn paused_state_uses_slower_tick() {
-        let cfg = subscription_config(false);
-        assert_eq!(
-            cfg.tick_interval_ms, TICK_INTERVAL_IDLE_MS,
-            "paused subscription must slow the tick to reduce Main Thread \
-             redraws while idle (see CPU audit §11)"
-        );
+    #[case::paused(false, TICK_INTERVAL_IDLE_MS)]
+    #[case::playing(true, TICK_INTERVAL_ACTIVE_MS)]
+    fn subscription_tick_matches_playback_state(
+        #[case] playing: bool,
+        #[case] expected_tick_ms: u64,
+    ) {
+        let cfg = subscription_config(playing);
+        assert_eq!(cfg.tick_interval_ms, expected_tick_ms);
         assert!(
             cfg.is_keyboard_enabled,
-            "keyboard listener must stay active even while paused \
-             (Delete must work to remove a highlighted row)"
+            "keyboard listener must stay active in both states"
         );
-    }
-
-    #[kithara::test]
-    fn playing_state_uses_responsive_tick() {
-        let cfg = subscription_config(true);
-        assert_eq!(
-            cfg.tick_interval_ms, TICK_INTERVAL_ACTIVE_MS,
-            "playing subscription must stay at 100 ms so the position slider \
-             appears smooth during playback"
-        );
-        assert!(cfg.is_keyboard_enabled);
     }
 
     #[kithara::test]

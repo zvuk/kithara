@@ -686,15 +686,20 @@ mod tests {
 
     #[test]
     fn computed_keyword_name_is_rejected() {
-        let err = parse_filter(quote!(probe_return = self.foo)).expect_err("reserved keyword");
-        let msg = err.to_string();
-        assert!(msg.contains("probe_return"));
-        assert!(msg.contains("reserved keyword"));
-    }
-
-    #[test]
-    fn caller_as_computed_name_is_rejected() {
-        let err = parse_filter(quote!(caller = self.foo)).expect_err("reserved keyword");
-        assert!(err.to_string().contains("caller"));
+        for keyword in ["probe_return", "caller"] {
+            let input: proc_macro2::TokenStream = format!("{keyword} = self.foo")
+                .parse()
+                .expect("valid tokens");
+            let err = parse_filter(input).expect_err("reserved keyword");
+            let msg = err.to_string();
+            assert!(
+                msg.contains(keyword),
+                "case {keyword}: missing keyword in {msg}"
+            );
+            assert!(
+                msg.contains("reserved keyword"),
+                "case {keyword}: missing 'reserved keyword' in {msg}"
+            );
+        }
     }
 }

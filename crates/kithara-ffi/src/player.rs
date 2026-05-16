@@ -799,17 +799,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn eq_set_without_engine_returns_error() {
+    #[case::set_gain((|p: &AudioPlayer| p.set_eq_gain(0, 3.0).is_err()) as fn(&AudioPlayer) -> bool)]
+    #[case::reset((|p: &AudioPlayer| p.reset_eq().is_err()) as fn(&AudioPlayer) -> bool)]
+    fn eq_mutation_without_engine_returns_error(#[case] op_errs: fn(&AudioPlayer) -> bool) {
         let player = AudioPlayer::new(FfiPlayerConfig::default());
-        let result = player.set_eq_gain(0, 3.0);
-        assert!(result.is_err());
-    }
-
-    #[kithara::test]
-    fn eq_reset_without_engine_returns_error() {
-        let player = AudioPlayer::new(FfiPlayerConfig::default());
-        let result = player.reset_eq();
-        assert!(result.is_err());
+        assert!(op_errs(&player));
     }
 
     #[kithara::test]

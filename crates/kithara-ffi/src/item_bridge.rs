@@ -288,15 +288,16 @@ mod tests {
     use crate::types::FfiError;
 
     #[kithara::test]
-    fn scaled_seconds_clamps_to_duration() {
-        let buffered = ItemEventBridge::scaled_seconds(150, 100, 10.0);
-        assert_eq!(buffered, Some(10.0));
-    }
-
-    #[kithara::test]
-    fn scaled_seconds_rejects_zero_total() {
-        let buffered = ItemEventBridge::scaled_seconds(10, 0, 10.0);
-        assert_eq!(buffered, None);
+    #[case::clamps_to_duration(150, 100, 10.0, Some(10.0))]
+    #[case::rejects_zero_total(10, 0, 10.0, None)]
+    fn scaled_seconds_handles_boundary_inputs(
+        #[case] position: u64,
+        #[case] total: u64,
+        #[case] duration: f64,
+        #[case] expected: Option<f64>,
+    ) {
+        let buffered = ItemEventBridge::scaled_seconds(position, total, duration);
+        assert_eq!(buffered, expected);
     }
 
     #[kithara::test]

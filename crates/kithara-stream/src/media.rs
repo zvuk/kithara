@@ -195,15 +195,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_media_info_new() {
-        let info = MediaInfo::default();
-        assert_eq!(info.container, None);
-        assert_eq!(info.codec, None);
-        assert_eq!(info.sample_rate, None);
-        assert_eq!(info.channels, None);
-    }
-
-    #[kithara::test]
     fn test_media_info_default() {
         let info = MediaInfo::default();
         assert_eq!(info.container, None);

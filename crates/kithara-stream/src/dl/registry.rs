@@ -436,7 +436,6 @@ mod classify_progress_tests {
 
     #[kithara::test]
     #[case(0, 0)]
-    #[case(0, 0)]
     fn idle_when_no_work_anywhere(#[case] inflight_enter: usize, #[case] inflight_exit: usize) {
         let out = classify_progress(inflight_enter, inflight_exit, stats(0, 0), 0);
         assert_eq!(out, FetchProgress::Idle);
@@ -509,22 +508,6 @@ mod classify_progress_tests {
     fn inflight_decrement_alone_yields_advanced() {
         assert_eq!(
             classify_progress(3, 2, stats(0, 0), 0),
-            FetchProgress::Advanced
-        );
-    }
-
-    #[kithara::test]
-    fn single_counter_wins_over_empty_inflight() {
-        assert_eq!(
-            classify_progress(0, 0, stats(1, 0), 0),
-            FetchProgress::Advanced
-        );
-        assert_eq!(
-            classify_progress(0, 0, stats(0, 1), 0),
-            FetchProgress::Advanced
-        );
-        assert_eq!(
-            classify_progress(0, 0, stats(0, 0), 1),
             FetchProgress::Advanced
         );
     }

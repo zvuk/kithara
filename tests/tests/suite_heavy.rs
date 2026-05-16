@@ -13,7 +13,6 @@ mod gapless_common;
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_audio {
     mod alloc_free_hotpath;
-    mod gapless_crossfade;
 }
 
 mod kithara_decode {
@@ -39,9 +38,6 @@ mod kithara_hls {
     mod stress_chunk_integrity;
     mod stress_seek_random;
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-mod kithara_queue;
 
 mod kithara_wasm;
 mod multi_instance;

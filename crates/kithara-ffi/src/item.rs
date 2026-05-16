@@ -221,10 +221,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn new_item_has_unique_audio_id() {
+    #[case::audio_id((|a: &AudioPlayerItem, b: &AudioPlayerItem| a.audio_id() != b.audio_id()) as fn(&AudioPlayerItem, &AudioPlayerItem) -> bool)]
+    #[case::uuid_i64((|a: &AudioPlayerItem, b: &AudioPlayerItem| a.uuid_i64() != b.uuid_i64()) as fn(&AudioPlayerItem, &AudioPlayerItem) -> bool)]
+    fn new_items_have_unique_identifiers(
+        #[case] differ: fn(&AudioPlayerItem, &AudioPlayerItem) -> bool,
+    ) {
         let a = item_for("https://example.com/a.mp3");
         let b = item_for("https://example.com/b.mp3");
-        assert_ne!(a.audio_id(), b.audio_id());
+        assert!(differ(&a, &b));
     }
 
     #[kithara::test]
@@ -270,13 +274,6 @@ mod tests {
         let first = item.uuid_i64();
         let second = item.uuid_i64();
         assert_eq!(first, second);
-    }
-
-    #[kithara::test]
-    fn uuid_i64_differs_across_items() {
-        let a = item_for("https://example.com/a.mp3");
-        let b = item_for("https://example.com/b.mp3");
-        assert_ne!(a.uuid_i64(), b.uuid_i64());
     }
 
     #[kithara::test]

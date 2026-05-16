@@ -88,25 +88,18 @@ fn test_audio_config_with_media_info() {
 }
 
 #[kithara::test]
-fn test_audio_config_with_gapless_mode_codec_priming() {
-    let config = AudioConfig::<kithara_file::File>::new(FileConfig::default())
-        .with_gapless_mode(GaplessMode::CodecPriming);
+#[case::codec_priming(GaplessMode::CodecPriming)]
+#[case::silence_trim(GaplessMode::SilenceTrim(SilenceTrimParams {
+    threshold_db: 50.0,
+    min_trim_frames: 128,
+    scan_window_frames: 2_048,
+    trim_trailing: true,
+}))]
+fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
+    let config =
+        AudioConfig::<kithara_file::File>::new(FileConfig::default()).with_gapless_mode(mode);
 
-    assert_eq!(config.gapless_mode, GaplessMode::CodecPriming);
-}
-
-#[kithara::test]
-fn test_audio_config_with_gapless_mode_silence_trim() {
-    let params = SilenceTrimParams {
-        threshold_db: 50.0,
-        min_trim_frames: 128,
-        scan_window_frames: 2_048,
-        trim_trailing: true,
-    };
-    let config = AudioConfig::<kithara_file::File>::new(FileConfig::default())
-        .with_gapless_mode(GaplessMode::SilenceTrim(params));
-
-    assert_eq!(config.gapless_mode, GaplessMode::SilenceTrim(params));
+    assert_eq!(config.gapless_mode, mode);
 }
 
 #[kithara::test(tokio)]

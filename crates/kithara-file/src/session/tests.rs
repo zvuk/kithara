@@ -124,95 +124,60 @@ fn test_file_source_len() {
 }
 
 #[kithara::test]
-fn file_source_phase_ready_when_range_present() {
-    let data = b"hello world";
+#[case::ready_when_range_present(b"hello world", 11, 0..5, SourcePhase::Ready)]
+#[case::eof_past_known_length(b"abc", 3, 100..110, SourcePhase::Eof)]
+fn file_source_phase_at_range(
+    #[case] data: &[u8],
+    #[case] total_bytes: u64,
+    #[case] range: std::ops::Range<u64>,
+    #[case] expected: SourcePhase,
+) {
     let res = create_committed_resource(data);
     let coord = make_coord(Timeline::new());
     let bus = EventBus::new(16);
-    coord.set_total_bytes(Some(data.len() as u64));
+    coord.set_total_bytes(Some(total_bytes));
     let source = make_source(res, coord, bus);
 
-    assert_eq!(source.phase_at(0..5), SourcePhase::Ready);
+    assert_eq!(source.phase_at(range), expected);
 }
 
 #[kithara::test]
-fn file_source_phase_seeking_when_data_not_ready() {
-    let data = b"hello world";
-    let res = create_committed_resource(data);
-    let timeline = Timeline::new();
-    let coord = make_coord(timeline.clone());
-    let bus = EventBus::new(16);
-    coord.set_total_bytes(Some(100));
-    let source = make_source(res, coord, bus);
-
-    let _ = timeline.initiate_seek(Duration::from_secs(0));
-
-    assert_eq!(source.phase_at(50..60), SourcePhase::Seeking);
-}
-
-#[kithara::test]
-fn file_source_phase_ready_beats_seeking_when_data_present() {
+#[case::seeking_when_data_not_ready(100, 50..60, SourcePhase::Seeking)]
+#[case::ready_beats_seeking_when_data_present(11, 0..5, SourcePhase::Ready)]
+fn file_source_phase_during_seek(
+    #[case] total_bytes: u64,
+    #[case] range: std::ops::Range<u64>,
+    #[case] expected: SourcePhase,
+) {
     let data = b"hello world";
     let res = create_committed_resource(data);
     let timeline = Timeline::new();
     let coord = make_coord(timeline.clone());
     let bus = EventBus::new(16);
-    coord.set_total_bytes(Some(data.len() as u64));
+    coord.set_total_bytes(Some(total_bytes));
     let source = make_source(res, coord, bus);
 
     let _ = timeline.initiate_seek(Duration::from_secs(0));
 
-    assert_eq!(source.phase_at(0..5), SourcePhase::Ready);
+    assert_eq!(source.phase_at(range), expected);
 }
 
 #[kithara::test]
-fn file_source_phase_eof_past_known_length() {
-    let data = b"abc";
-    let res = create_committed_resource(data);
-    let coord = make_coord(Timeline::new());
-    let bus = EventBus::new(16);
-    coord.set_total_bytes(Some(data.len() as u64));
-    let source = make_source(res, coord, bus);
-
-    assert_eq!(source.phase_at(100..110), SourcePhase::Eof);
-}
-
-#[kithara::test]
-fn file_source_phase_parameterless_ready_when_current_byte_is_available() {
+#[case::ready_when_current_byte_is_available(0, SourcePhase::Ready)]
+#[case::waiting_when_current_byte_is_missing(32, SourcePhase::Waiting)]
+#[case::eof_at_end(64, SourcePhase::Eof)]
+fn file_source_phase_parameterless(#[case] position: u64, #[case] expected: SourcePhase) {
     let data = [0xABu8; 64];
     let res = create_committed_resource(&data[..16]);
     let coord = make_coord(Timeline::new());
     let bus = EventBus::new(16);
     coord.set_total_bytes(Some(data.len() as u64));
+    if position > 0 {
+        coord.set_position(position);
+    }
     let source = make_source(res, coord, bus);
 
-    assert_eq!(Source::phase(&source), SourcePhase::Ready);
-}
-
-#[kithara::test]
-fn file_source_phase_parameterless_waiting_when_current_byte_is_missing() {
-    let data = [0xABu8; 64];
-    let res = create_committed_resource(&data[..16]);
-    let coord = make_coord(Timeline::new());
-    let bus = EventBus::new(16);
-    coord.set_total_bytes(Some(data.len() as u64));
-    coord.set_position(32);
-    let source = make_source(res, coord, bus);
-
-    assert_eq!(Source::phase(&source), SourcePhase::Waiting);
-}
-
-#[kithara::test]
-fn file_source_phase_parameterless_eof_at_end() {
-    let data = b"tiny";
-    let res = create_committed_resource(data);
-    let coord = make_coord(Timeline::new());
-    let bus = EventBus::new(16);
-    coord.set_total_bytes(Some(data.len() as u64));
-    coord.set_position(data.len() as u64);
-    let source = make_source(res, coord, bus);
-
-    assert_eq!(Source::phase(&source), SourcePhase::Eof);
+    assert_eq!(Source::phase(&source), expected);
 }
 
 #[kithara::test]
