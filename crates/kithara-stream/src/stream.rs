@@ -431,10 +431,19 @@ impl<T: StreamType> Seek for Stream<T> {
 
         let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX);
 
-        let _ = self.source.wait_range(
-            new_pos..new_pos.saturating_add(1),
-            Some(Self::SEEK_WAIT_TIMEOUT),
-        );
+        // Seeking to the start of the format-change segment range is
+        // `apply_format_change`'s recreate-decoder entry: the decoder
+        // factory will read the *entire* init payload synchronously,
+        // so a 1-byte readiness hint here would underfill the
+        // source's pre-fetch window. Other seek targets are point
+        // queries — keep the historical 1-byte hint.
+        let wait_range = match self.source.format_change_segment_range() {
+            Ok(range) if range.start == new_pos => range,
+            _ => new_pos..new_pos.saturating_add(1),
+        };
+        let _ = self
+            .source
+            .wait_range(wait_range, Some(Self::SEEK_WAIT_TIMEOUT));
 
         if let Some(len) = self.source.len()
             && new_pos > len

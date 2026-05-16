@@ -32,6 +32,7 @@ pub(crate) struct ResolvedHlsSpec {
     pub(crate) segment_size: usize,
     pub(crate) segments_per_variant: usize,
     pub(crate) variant_count: usize,
+    pub(crate) codecs: Option<String>,
     cache_key: String,
 }
 
@@ -212,6 +213,7 @@ where
         delay_rules: spec.delay_rules,
         error_rules: spec.error_rules,
         head_reported_segment_size: spec.head_reported_segment_size,
+        codecs: spec.codecs,
     })
 }
 
@@ -602,7 +604,7 @@ mod tests {
                 encoder_delay: None,
                 trailing_delay: None,
                 source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 50_000.0 }),
-                gapless_encoding: Default::default(),
+                gapless_encoding: GaplessEncoding::default(),
                 variant_overrides: Vec::new(),
             }),
             ..HlsSpec::default()
@@ -624,7 +626,7 @@ mod tests {
                 encoder_delay: None,
                 trailing_delay: None,
                 source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: 440.0 }),
-                gapless_encoding: Default::default(),
+                gapless_encoding: GaplessEncoding::default(),
                 variant_overrides: Vec::new(),
             }),
             ..HlsSpec::default()

@@ -18,8 +18,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout, SourcePhase,
-    SourceSeekAnchor, StreamResult, Timeline,
+    ContainerFormat, MediaInfo, PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout,
+    SourcePhase, SourceSeekAnchor, StreamResult, Timeline,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -273,19 +273,22 @@ impl HlsCoord {
     /// Commit any ABR pending decision at the reader's segment boundary.
     /// Returns `true` when a switch landed.
     ///
-    /// Same-codec (FLAC@hi → FLAC@lo, AAC@hi → AAC@lo): smooth ABR via
-    /// [`HlsVariant::activate_at_segment_with_shift`] — `byte_shift`
-    /// pins `v_new`'s `from_seg` to the outgoing variant's segment
-    /// boundary so fMP4 box addresses across the join stay aligned and
-    /// the decoder reads forward without a pause.
+    /// Two branches, selected by the new variant's container:
     ///
-    /// Cross-codec (FLAC ↔ AAC, fmp4 ↔ aac, …): hard reset on `v_new`
-    /// via [`HlsVariant::reset_to_full_range`] (own native space, init
-    /// at `[0, init_size)`), reader position seeded to 0, and
-    /// `variant_generation` bumped — the next [`Self::read_at`] /
-    /// [`Self::wait_range`] short-circuits with
-    /// `Pending(VariantChange)` / `Interrupted` until the audio FSM
-    /// recreates the decoder and acks via [`Self::clear_variant_fence`].
+    /// - **Byte-continuity containers** (raw PCM in RIFF — `WAV`): the
+    ///   decoder cannot be recreated mid-track (must read the header
+    ///   at byte 0 and then consume PCM sequentially). Activate
+    ///   `v_new` at the boundary segment with `byte_shift` so the
+    ///   existing decoder keeps reading aligned bytes from the new
+    ///   variant. No fence, no recreate.
+    /// - **Structured containers** (fMP4, MPEG-TS, FLAC, …): hard
+    ///   reset on `v_new` via [`HlsVariant::reset_to_full_range`],
+    ///   reader position seeded to the segment covering the current
+    ///   timeline position, and `variant_generation` bumped — the
+    ///   next [`Self::read_at`] / [`Self::wait_range`]
+    ///   short-circuits with `Pending(VariantChange)` /
+    ///   `Interrupted` until the audio FSM recreates the decoder and
+    ///   acks via [`Self::clear_variant_fence`].
     pub(crate) fn commit_variant_switch(&self, ctx: &PlanCtx, from_seg: u32) -> bool {
         let current_before = self.variant_index();
         let Some(decision) = self.abr.peek_pending_decision() else {
@@ -296,59 +299,26 @@ impl HlsCoord {
             return false;
         };
         let v_old = self.variants.get(current_before);
-        let codec_changed = self.cross_codec(current_before, new_v);
         let reader_pos_at_entry = self.position();
+        // Raw PCM in RIFF is the only container we can't decode-recreate
+        // mid-track (header at offset 0, payload byte-sequential, no
+        // time-based seek). Such switches keep the decoder alive and
+        // align bytes via `activate_at_segment_with_shift`; every other
+        // container goes through the fence + recreate flow.
+        let needs_byte_continuity = matches!(
+            self.playlist_state.variant_container(new_v),
+            Some(ContainerFormat::Wav)
+        );
         info!(
             from_variant = current_before,
             to_variant = new_v,
-            cross_codec = codec_changed,
             from_seg,
             reader_pos = reader_pos_at_entry,
+            needs_byte_continuity,
             reason = ?decision.reason,
             "HlsCoord: commit_variant_switch"
         );
-        if codec_changed {
-            if let Some(v_old) = v_old {
-                v_old.cancel();
-            }
-            v_new.reset_to_full_range();
-            // Pin `v_new`'s reader cursor and fetch queue to the segment
-            // that covers the current timeline position. Without this
-            // we'd `set_position(0)` + `rebuild(0)`, redownload every
-            // segment the user already listened past, and play `v_new`
-            // from byte 0 — `feedback_no_situational_fixing`: replaying
-            // from the start of every cross-codec flip is the symptom
-            // the user reported (`app.log` 2026-05-15).
-            let target_time = self.timeline.committed_position();
-            let target_seg: u32 = self
-                .playlist_state
-                .find_seek_point_for_time(new_v, target_time)
-                .and_then(|(seg, _, _)| u32::try_from(seg).ok())
-                .unwrap_or(0);
-            let target_byte = v_new.segment_byte_offset_natural(target_seg).unwrap_or(0);
-            v_new.set_position(target_byte);
-            // Close the fence BEFORE publishing the switch. Reader
-            // observes `Pending(VariantChange)` until the audio FSM
-            // acks via `clear_variant_fence`; `variant_index()` may
-            // briefly still resolve to `current_before` between this
-            // fetch_add and `apply_decision` below, but that's fine —
-            // the fence short-circuits `read_at` / `wait_range` before
-            // they consult the variant pointer.
-            self.variant_generation.fetch_add(1, Ordering::Release);
-            self.abr.apply_decision(&decision, Instant::now());
-            // Seed `v_new`'s fetch queue: cross-codec landed without a
-            // segment boundary, so unlike `activate_at_segment_with_shift`
-            // (same-codec branch) we never rebuilt the queue. The peer
-            // would otherwise spin on `no commands seg=1` while the audio
-            // FSM waits for an init segment that nobody dispatches.
-            v_new.rebuild(ctx, target_seg);
-        } else {
-            // `from_seg` is the segment the reader has just entered;
-            // pin v_new to the *next* segment so v_old keeps serving
-            // the in-progress one (avoids a duplicate
-            // `SegmentReadStart(v_old, from_seg)` + `SegmentReadStart(
-            // v_new, from_seg)` pair when the reader cursor lingers
-            // across the boundary).
+        if needs_byte_continuity {
             let switch_at = from_seg.saturating_add(1).min(v_new.num_segments());
             let reader_pos = self.position();
             let seg_boundary = v_old
@@ -358,24 +328,29 @@ impl HlsCoord {
                 v_old.cancel();
                 v_old.set_served_until(switch_at);
             }
-            // Prepare v_new BEFORE publishing the switch. When the
-            // reader subsequently observes `current_variant := new`
-            // via `variant_index()`, v_new's byte_shift / served_from
-            // / served_until / position / fetch queue are already
-            // committed.
             v_new.activate_at_segment_with_shift(ctx, switch_at, seg_boundary, reader_pos);
             self.abr.apply_decision(&decision, Instant::now());
+        } else {
+            if let Some(v_old) = v_old {
+                v_old.cancel();
+            }
+            v_new.reset_to_full_range();
+            let target_time = self.timeline.committed_position();
+            let target_seg: u32 = self
+                .playlist_state
+                .find_seek_point_for_time(new_v, target_time)
+                .and_then(|(seg, _, _)| u32::try_from(seg).ok())
+                .unwrap_or(0);
+            let target_byte = v_new.segment_byte_offset_natural(target_seg).unwrap_or(0);
+            v_new.set_position(target_byte);
+            self.variant_generation.fetch_add(1, Ordering::Release);
+            self.abr.apply_decision(&decision, Instant::now());
+            v_new.rebuild(ctx, target_seg);
         }
         let reader_pt = self.timeline.committed_position();
         self.abr
             .notify_commit(decision, current_before, reader_pt, Instant::now());
         true
-    }
-
-    fn cross_codec(&self, old: usize, new: usize) -> bool {
-        let p = &self.playlist_state;
-        p.variant_codec(old) != p.variant_codec(new)
-            || p.variant_container(old) != p.variant_container(new)
     }
 
     fn variant_change_pending(&self) -> bool {

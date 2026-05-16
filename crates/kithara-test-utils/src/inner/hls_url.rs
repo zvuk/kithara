@@ -119,6 +119,12 @@ pub struct HlsSpec {
         skip_serializing_if = "is_default_variant_count"
     )]
     pub variant_count: usize,
+    /// Optional `CODECS` attribute to attach to every Legacy
+    /// `EXT-X-STREAM-INF`. Tests serving synthetic payloads under
+    /// non-matching URI extensions (e.g. raw PCM under `.m4s`) use
+    /// this to signal the actual container to the HLS parser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codecs: Option<String>,
 }
 
 impl Default for HlsSpec {
@@ -138,6 +144,7 @@ impl Default for HlsSpec {
             key_hex: None,
             key_blob_ref: None,
             packaged_audio: None,
+            codecs: None,
         }
     }
 }

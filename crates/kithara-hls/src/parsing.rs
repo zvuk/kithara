@@ -138,8 +138,25 @@ fn detect_container_from_uri(uri: &str) -> Option<ContainerFormat> {
     match ext.as_str() {
         "ts" | "m2ts" => Some(ContainerFormat::MpegTs),
         "mp4" | "m4s" | "m4a" | "m4v" => Some(ContainerFormat::Fmp4),
+        "wav" => Some(ContainerFormat::Wav),
         _ => None,
     }
+}
+
+/// Container inferred from a CODECS attribute string. HLS / RFC 6381
+/// have no standard fourcc for raw RIFF WAV, so the recognised tokens
+/// here are deliberately conservative — `wav` / `pcm` / `lpcm` cover
+/// internal byte-continuity fixtures that ship PCM payloads under
+/// arbitrary URI extensions.
+fn detect_container_from_codecs(codecs: &str) -> Option<ContainerFormat> {
+    let normalised = codecs.to_lowercase();
+    normalised
+        .split(',')
+        .map(|c| c.trim().trim_matches('"'))
+        .find_map(|token| match token {
+            "wav" | "pcm" | "lpcm" => Some(ContainerFormat::Wav),
+            _ => None,
+        })
 }
 
 /// Parses a master playlist (M3U8) into [`MasterPlaylist`].
@@ -175,7 +192,8 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                     .map(|codec| codec.trim_matches('"'))
                     .find_map(AudioCodec::from_hls_codec);
 
-                let container = detect_container_from_uri(&uri);
+                let container =
+                    detect_container_from_codecs(&c).or_else(|| detect_container_from_uri(&uri));
 
                 CodecInfo {
                     audio_codec,

@@ -589,9 +589,14 @@ fn build_master_playlist(spec: &ResolvedHlsSpec, body: &MaterializedHlsBody) -> 
     }
     for (variant, bandwidth) in spec.variant_bandwidths.iter().copied().enumerate() {
         match body {
-            MaterializedHlsBody::Legacy { .. } => playlist.push_str(&format!(
-                "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}\n{{spec}}/v{variant}.m3u8\n"
-            )),
+            MaterializedHlsBody::Legacy { .. } => match spec.codecs.as_deref() {
+                Some(codecs) => playlist.push_str(&format!(
+                    "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth},CODECS=\"{codecs}\"\n{{spec}}/v{variant}.m3u8\n"
+                )),
+                None => playlist.push_str(&format!(
+                    "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}\n{{spec}}/v{variant}.m3u8\n"
+                )),
+            },
             MaterializedHlsBody::Packaged { variants } => {
                 let codecs = variants
                     .get(variant)
@@ -700,7 +705,8 @@ mod tests {
     use super::*;
     use crate::{
         fixture_protocol::{
-            DataMode, EncryptionRequest, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
+            DataMode, EncryptionRequest, GaplessEncoding, PackagedAudioRequest,
+            PackagedAudioSource, PackagedSignal,
         },
         hls_spec::parse_hls_spec_with,
         hls_url::{HlsSpec, encode_hls_spec},
@@ -784,7 +790,7 @@ mod tests {
                 encoder_delay: NonZeroU32::new(2_112),
                 trailing_delay: NonZeroU32::new(960),
                 source: PackagedAudioSource::Signal(PackagedSignal::Sawtooth),
-                gapless_encoding: Default::default(),
+                gapless_encoding: GaplessEncoding::default(),
                 variant_overrides: Vec::new(),
             })
             .into_inline_spec();

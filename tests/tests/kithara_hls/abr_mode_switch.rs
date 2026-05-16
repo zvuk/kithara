@@ -9,6 +9,7 @@ use std::{
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
+    decode::DecoderBackend,
     events::{AbrEvent, DownloaderEvent, Event, EventBus, HlsEvent, RequestId},
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
@@ -216,6 +217,7 @@ async fn vod_manual_switch_affects_future_segments() {
         custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        codecs: Some("wav".to_string()),
         delay_rules: vec![DelayRule {
             variant: Some(0),
             segment_gte: Some(5),
@@ -480,6 +482,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        codecs: Some("wav".to_string()),
         delay_rules: vec![DelayRule {
             variant: Some(0),
             segment_gte: Some(5),
@@ -1128,5 +1131,193 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
          (header_byte_range of v_new == None with byte_shift), EOS \
          emitted, kithara-queue auto-seeks, hang panic at 10s. \
          post_total={post_total}"
+    );
+}
+
+/// Production replay (app.log 2026-05-16 09:39–09:42): user plays
+/// FLAC near the end of the track, seeks backwards to ~25%, switches
+/// to a same-codec lower-bitrate AAC variant, then sees a premature
+/// `decoder_next_chunk_safe: Eof` and the playlist advances.
+///
+/// Reduced sequence captured here:
+/// 1. Auto(0) starts on the highest AAC variant.
+/// 2. Play near the end of the track using the `OfflinePlayer`
+///    (real-time rendering — matches CPAL cadence so the reader is
+///    not racing ahead in lock-step with the network).
+/// 3. Backwards seek to ~25 % of the track.
+/// 4. `Manual(low_variant)` — same-codec AAC downswitch (no fence
+///    bump, no decoder recreate).
+/// 5. Continue rendering — assert sustained samples; the bug surfaces
+///    as `EndOfStream` ~hundreds of KB into the new variant.
+///
+/// Uses a packaged AAC fmp4 fixture with `DelayRule` on the high
+/// variant to imitate the real-world CDN latency that lets the reader
+/// land mid-segment when the user clicks lq.
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(90)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "15")
+)]
+#[case::sw(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hw(DecoderBackend::Apple)
+)]
+async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
+    #[case] backend: DecoderBackend,
+) {
+    use kithara_platform::time::sleep;
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let server = TestServerHelper::new().await;
+    let url = server.asset("hls/master.m3u8");
+    // assets/hls/master.m3u8: variants 0..2 AAC (mp4a.40.2), variant 3 FLAC.
+    // The duration of every variant ≈ 220 s. We start on shq (v=2) so we
+    // can downswitch to slq (v=0) for the same-codec scenario.
+
+    let temp_dir = TestTempDir::new();
+    let cancel = CancellationToken::new();
+    let bus = EventBus::new(8192);
+
+    let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
+    let applied_bg = Arc::clone(&applied_targets);
+    let mut applied_rx = bus.subscribe();
+    spawn(async move {
+        loop {
+            let ev = match applied_rx.recv().await {
+                Ok(ev) => ev,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
+                applied_bg.lock_sync().push(to);
+            }
+        }
+    });
+
+    let hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel)
+        .with_events(bus.clone())
+        .with_initial_abr_mode(AbrMode::Manual(2));
+
+    let config = AudioConfig::<Hls>::new(hls_config)
+        .with_events(bus)
+        .with_decoder_backend(backend);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+
+    // Real-time-ish reader: each read pulls a 4096-frame buffer
+    // (~93 ms @ 44.1 kHz) and we sleep 50 ms between iterations so
+    // the network DelayRule-like cadence of the real CDN is imitated.
+    // Without the sleep the in-process server feeds the whole track
+    // before any switch can land mid-segment.
+    let buf_frames = 4096usize;
+    let read_pace = Duration::from_millis(50);
+
+    // Phase 1 — play near end. Track ≈ 220 s; pump 180 s of decoded
+    // audio so the seek-back step targets a position well before the
+    // current playback head.
+    let mut buf = vec![0f32; buf_frames * 2];
+    let target_samples_phase1: u64 = 180 * 44_100;
+    let mut samples_phase1 = 0u64;
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while samples_phase1 < target_samples_phase1 && Instant::now() < deadline {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => samples_phase1 += count.get() as u64,
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("phase 1 decode error: {e}"),
+        }
+        sleep(read_pace).await;
+    }
+    info!(samples_phase1, "phase 1 done");
+    assert!(
+        samples_phase1 > 4 * 44_100,
+        "phase 1 must produce at least a few seconds of audio, got {samples_phase1}"
+    );
+
+    // Phase 2 — seek backwards to ~25 % of the track (~55 s).
+    audio
+        .seek(Duration::from_secs(55))
+        .expect("seek backwards must succeed");
+
+    // Pump some samples so the post-seek decoder lands mid-segment
+    // before the downswitch fires.
+    let mut samples_phase2 = 0u64;
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while samples_phase2 < 2 * 44_100 && Instant::now() < deadline {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => samples_phase2 += count.get() as u64,
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                panic!("unexpected EOF during phase 2 post-seek read")
+            }
+            Err(e) => panic!("phase 2 decode error: {e}"),
+        }
+        sleep(read_pace).await;
+    }
+    info!(samples_phase2, "phase 2 done");
+
+    // Phase 3 — same-codec downswitch shq (v=2, 270 kbps) → slq
+    // (v=0, 66 kbps). Both are mp4a.40.2, no cross-codec fence, no
+    // decoder recreate.
+    let handle = audio
+        .abr_handle()
+        .expect("HLS stream must expose AbrHandle");
+    handle
+        .set_mode(AbrMode::Manual(0))
+        .expect("Manual(0) (slq AAC) target valid");
+
+    // Phase 4 — read 10 s post-switch. Bug repro: decoder emits a
+    // false `decoder_next_chunk_safe: Eof` ~hundreds of KB after the
+    // switch and `handle_decode_eof` surfaces it as terminal EOS.
+    let mut samples_phase4 = 0u64;
+    let mut saw_eof_phase4 = false;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let post_pace = Duration::from_millis(30);
+    while Instant::now() < deadline {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => samples_phase4 += count.get() as u64,
+            Ok(ReadOutcome::Pending { .. }) => {}
+            Ok(ReadOutcome::Eof { .. }) => {
+                saw_eof_phase4 = true;
+                break;
+            }
+            Err(e) => panic!("phase 4 decode error: {e}"),
+        }
+        sleep(post_pace).await;
+    }
+
+    let targets = applied_targets.lock_sync().clone();
+    info!(
+        ?targets,
+        samples_phase1, samples_phase2, samples_phase4, saw_eof_phase4, "repro result"
+    );
+
+    assert!(
+        targets.iter().any(|&t| t == 0),
+        "Manual(0) (slq AAC) must publish VariantApplied, saw: {targets:?}"
+    );
+
+    // Bug surfaces as samples_phase4 ≪ expected. 10 s @ 44.1 kHz
+    // stereo ≈ 882 000 samples if playback continues. In prod
+    // (app.log 2026-05-16 09:42:28) decoder produced ~95 K samples
+    // after the switch then EOS; threshold above that exposes the
+    // regression.
+    assert!(
+        !saw_eof_phase4,
+        "phase 4 EOF after same-codec downswitch — false EOS bug \
+         (app.log 2026-05-16 09:42:28). samples_phase4={samples_phase4}"
+    );
+    assert!(
+        samples_phase4 > 300_000,
+        "phase 4 (post same-codec downswitch) must yield sustained \
+         playback. samples_phase4={samples_phase4}"
     );
 }

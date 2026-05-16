@@ -87,6 +87,7 @@ async fn abr_auto_switch_during_playback(
         custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        codecs: Some("wav".to_string()),
         delay_rules: vec![DelayRule {
             variant: Some(0),
             segment_gte: Some(3),

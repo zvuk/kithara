@@ -197,6 +197,16 @@ impl HlsFixtureBuilder {
         self
     }
 
+    /// Set the `CODECS` attribute for all Legacy variant streams. Used
+    /// by fixtures that ship synthetic payloads under generic URIs
+    /// (e.g. raw PCM under `.m4s`) to signal the real container to
+    /// the HLS parser.
+    #[must_use]
+    pub fn codecs(mut self, codecs: String) -> Self {
+        self.spec.codecs = Some(codecs);
+        self
+    }
+
     /// Toggle the optional `sidx` index in the init segment of packaged
     /// fMP4 fixtures. Default is `false` — bit-stable with existing
     /// fixtures. Set to `true` to mirror real-world packagers (DASH,

@@ -200,6 +200,13 @@ pub struct HlsTestServerConfig {
     pub segment_size: usize,
     pub segments_per_variant: usize,
     pub variant_count: usize,
+    /// Optional `CODECS` attribute emitted on every `EXT-X-STREAM-INF`
+    /// in the master playlist. Lets fixtures with synthetic payloads
+    /// (raw PCM under `.m4s` URIs) signal the real container so the
+    /// HLS coordinator routes ABR switches through the right path
+    /// (e.g. `"wav"` keeps the existing decoder for byte-continuity
+    /// containers; `Fmp4` is otherwise inferred from URI extension).
+    pub codecs: Option<String>,
 }
 
 impl Default for HlsTestServerConfig {
@@ -216,6 +223,7 @@ impl Default for HlsTestServerConfig {
             delay_rules: Vec::new(),
             encryption: None,
             head_reported_segment_size: None,
+            codecs: None,
         }
     }
 }
@@ -615,8 +623,13 @@ fn builder_from_config(config: &HlsTestServerConfig) -> HlsFixtureBuilder {
     } else {
         builder
     };
-    if let Some(data) = config.init_data_per_variant.as_ref() {
+    let builder = if let Some(data) = config.init_data_per_variant.as_ref() {
         builder.init_data_per_variant(data.clone())
+    } else {
+        builder
+    };
+    if let Some(codecs) = config.codecs.as_ref() {
+        builder.codecs(codecs.clone())
     } else {
         builder
     }
