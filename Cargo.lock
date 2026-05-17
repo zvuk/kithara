@@ -4233,10 +4233,9 @@ name = "kithara-drm"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "bon",
  "bytes",
  "cbc",
- "derivative",
- "derive_setters",
  "kithara-drm",
  "kithara-test-utils",
  "kithara-workspace-hack",

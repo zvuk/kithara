@@ -146,14 +146,10 @@ impl PeakBitrate {
 fn build_processor_rule(rule: FfiKeyRule) -> KeyProcessorRule {
     let salt = rule.salt.unwrap_or_default();
     let proc = build_processor_closure(rule.processor, salt);
-    let mut built = KeyProcessorRule::new(&rule.domains, proc);
-    if let Some(h) = rule.headers {
-        built = built.with_headers(h);
-    }
-    if let Some(q) = rule.query_params {
-        built = built.with_query_params(q);
-    }
-    built
+    KeyProcessorRule::for_domains(&rule.domains, proc)
+        .maybe_headers(rule.headers)
+        .maybe_query_params(rule.query_params)
+        .build()
 }
 
 /// Convert the FFI-level [`crate::types::FfiKeyOptions`] into the

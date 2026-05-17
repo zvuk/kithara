@@ -195,9 +195,10 @@ mod registry {
         let mut params = HashMap::new();
         params.insert("token".to_string(), "abc".to_string());
 
-        let rule = KeyProcessorRule::new(["*.zvuk.com"], noop_processor())
-            .with_headers(headers.clone())
-            .with_query_params(params.clone());
+        let rule = KeyProcessorRule::for_domains(["*.zvuk.com"], noop_processor())
+            .headers(headers.clone())
+            .query_params(params.clone())
+            .build();
 
         assert_eq!(rule.headers.as_ref().expect("headers"), &headers);
         assert_eq!(rule.query_params.as_ref().expect("params"), &params);
@@ -226,13 +227,13 @@ mod registry {
     #[case::headers(
         "X-Encrypted-Key",
         "seed123",
-        (|rule: KeyProcessorRule, kv: HashMap<String, String>| rule.with_headers(kv)) as fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
+        (|mut rule: KeyProcessorRule, kv: HashMap<String, String>| { rule.headers = Some(kv); rule }) as fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
         (|rule: &KeyProcessorRule| rule.headers.as_ref()) as fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>
     )]
     #[case::query_params(
         "token",
         "xyz",
-        (|rule: KeyProcessorRule, kv: HashMap<String, String>| rule.with_query_params(kv)) as fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
+        (|mut rule: KeyProcessorRule, kv: HashMap<String, String>| { rule.query_params = Some(kv); rule }) as fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
         (|rule: &KeyProcessorRule| rule.query_params.as_ref()) as fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>
     )]
     fn registry_returns_per_rule_field(
