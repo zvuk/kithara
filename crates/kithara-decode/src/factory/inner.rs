@@ -35,9 +35,26 @@ use crate::{
 pub enum DecoderBackend {
     /// Apple `AudioToolbox` (macOS/iOS, requires the `apple` feature).
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    #[cfg_attr(
+        all(
+            not(feature = "symphonia"),
+            feature = "apple",
+            any(target_os = "macos", target_os = "ios")
+        ),
+        default
+    )]
     Apple,
     /// Android `MediaCodec` (Android, requires the `android` feature).
     #[cfg(all(feature = "android", target_os = "android"))]
+    #[cfg_attr(
+        all(
+            not(feature = "symphonia"),
+            feature = "android",
+            target_os = "android",
+            not(all(feature = "apple", any(target_os = "macos", target_os = "ios")))
+        ),
+        default
+    )]
     Android,
     /// Symphonia software decoder (cross-platform, requires the
     /// `symphonia` feature).
@@ -253,7 +270,6 @@ fn create_apple(
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::apple::AppleCodec;
 
-    #[cfg(feature = "symphonia")]
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
@@ -267,14 +283,16 @@ fn create_apple(
                 AppleCodec::open_with_config(track, gapless)
             });
         }
+        #[cfg(feature = "symphonia")]
         return create_fmp4_segment_symphonia(source, codec, layout, config);
+        #[cfg(not(feature = "symphonia"))]
+        {
+            let _ = layout;
+            return Err(DecodeError::UnsupportedCodec(codec));
+        }
     }
 
-    // Apple-native standalone path only for file-like sources. HLS
-    // (`segment_layout = Some(_)`) feeds AudioFileServices through random
-    // seeks on a streaming source, which is too slow for the seek-stress
-    // workload; HLS WAV/MP3/ALAC keeps going through Symphonia.
-    if config.segment_layout.is_none() && apple_standalone_supports(codec, container) {
+    if apple_standalone_supports(codec, container) {
         tracing::debug!(
             ?codec,
             ?container,
@@ -353,7 +371,6 @@ fn create_android(
 ) -> DecodeResult<Box<dyn Decoder>> {
     use crate::android::AndroidCodec;
 
-    #[cfg(feature = "symphonia")]
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
@@ -367,14 +384,16 @@ fn create_android(
                 AndroidCodec::open_with_config(track, gapless)
             });
         }
+        #[cfg(feature = "symphonia")]
         return create_fmp4_segment_symphonia(source, codec, layout, config);
+        #[cfg(not(feature = "symphonia"))]
+        {
+            let _ = layout;
+            return Err(DecodeError::UnsupportedCodec(codec));
+        }
     }
 
-    // Android-native standalone path only for file-like sources. HLS
-    // streams stay on Symphonia for the same reason as Apple — random
-    // seeks through `AMediaDataSource` callbacks on a streaming source
-    // are too slow for the seek-stress workload.
-    if config.segment_layout.is_none() && android_standalone_supports(codec, container) {
+    if android_standalone_supports(codec, container) {
         tracing::debug!(
             ?codec,
             ?container,
@@ -556,7 +575,6 @@ fn create_file_symphonia_universal(
 /// surfaced `SegmentedSource` (HLS) through `Fmp4SegmentDecoder`. File
 /// sources without segment metadata fall through to the legacy
 /// `IsoMp4Reader` path.
-#[cfg(feature = "symphonia")]
 fn should_use_segment_aware(
     codec: AudioCodec,
     container: Option<ContainerFormat>,
@@ -598,7 +616,6 @@ fn create_fmp4_segment_symphonia(
 /// [`Fmp4SegmentDemuxer`] open + pool-resolution + [`ComposedDecoder`]
 /// boilerplate so apple/android/symphonia call-sites collapse into a
 /// single closure that opens the codec from `TrackInfo`.
-#[cfg(feature = "symphonia")]
 fn build_fmp4_segment_decoder<C, F>(
     source: BoxedSource,
     layout: Arc<dyn SegmentLayout>,
