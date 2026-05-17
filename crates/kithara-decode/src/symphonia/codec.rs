@@ -142,6 +142,7 @@ impl FrameCodec for SymphoniaCodec {
         &mut self,
         frame_data: &[u8],
         pts: Duration,
+        _packet_desc: &[u8],
         out: &mut PcmBuf,
     ) -> DecodeResult<u32> {
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate);

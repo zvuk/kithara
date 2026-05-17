@@ -171,6 +171,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
                 data,
                 pts,
                 duration: dur,
+                packet_desc: &[],
             }));
         }
     }

@@ -175,7 +175,9 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 self.pending_seek_target = None;
             }
             let mut buf = self.pool.get();
-            let frames = self.codec.decode_frame(frame.data, frame.pts, &mut buf)?;
+            let frames =
+                self.codec
+                    .decode_frame(frame.data, frame.pts, frame.packet_desc, &mut buf)?;
             if frames == 0 {
                 continue;
             }
@@ -393,6 +395,7 @@ mod test_stub_codec {
             &mut self,
             _bytes: &[u8],
             _pts: Duration,
+            _packet_desc: &[u8],
             out: &mut PcmBuf,
         ) -> DecodeResult<u32> {
             let samples = self.frames_per_call as usize * self.spec.channels as usize;
@@ -515,6 +518,7 @@ mod hook_tests {
                         pts,
                         duration,
                         data: &self.held,
+                        packet_desc: &[],
                     }))
                 }
                 Some(StubOutcome::Pending(reason)) => Ok(DemuxOutcome::Pending(reason)),
@@ -642,7 +646,7 @@ mod pool_budget_tests {
         for _ in 0..200 {
             let mut buf = pool.get();
             let frames = codec
-                .decode_frame(&[], Duration::ZERO, &mut buf)
+                .decode_frame(&[], Duration::ZERO, &[], &mut buf)
                 .expect("BUG: decode_frame");
             assert_eq!(frames, 1024);
         }

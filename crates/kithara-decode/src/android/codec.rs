@@ -139,6 +139,7 @@ impl FrameCodec for AndroidCodec {
         &mut self,
         frame_data: &[u8],
         pts: Duration,
+        _packet_desc: &[u8],
         out: &mut PcmBuf,
     ) -> DecodeResult<u32> {
         if frame_data.is_empty() {

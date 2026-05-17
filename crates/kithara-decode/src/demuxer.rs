@@ -92,6 +92,12 @@ pub(crate) struct Frame<'a> {
     pub duration: Duration,
     /// Presentation time of this frame.
     pub pts: Duration,
+    /// Opaque per-packet metadata for codecs that need it for VBR
+    /// decoding. Apple-native MP3 / ALAC paths pass a serialized
+    /// `AudioStreamPacketDescription` here; the codec interprets the
+    /// bytes. Demuxers without VBR descriptors leave this empty.
+    /// Borrow lifetime mirrors `data`.
+    pub packet_desc: &'a [u8],
 }
 
 /// Result of a [`Demuxer::next_frame`] call.

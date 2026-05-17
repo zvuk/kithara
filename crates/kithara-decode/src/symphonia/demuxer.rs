@@ -209,6 +209,7 @@ impl Demuxer for SymphoniaDemuxer {
                 data,
                 duration,
                 pts,
+                packet_desc: &[],
             }));
         }
     }

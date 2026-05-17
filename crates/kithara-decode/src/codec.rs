@@ -25,6 +25,12 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// for diagnostics — decoded sample count + sample rate are the
     /// authoritative duration source.
     ///
+    /// `packet_desc` carries opaque per-packet metadata from the
+    /// demuxer for VBR codecs (Apple MP3/ALAC pass a serialized
+    /// `AudioStreamPacketDescription` here). Empty when the demuxer
+    /// produces CBR frames or doesn't model per-packet descriptors;
+    /// codecs that don't need it ignore the slot.
+    ///
     /// # Errors
     ///
     /// Returns a [`crate::DecodeError`] when the underlying decoder
@@ -34,6 +40,7 @@ pub(crate) trait FrameCodec: Send + 'static {
         &mut self,
         frame_data: &[u8],
         pts: Duration,
+        packet_desc: &[u8],
         out: &mut PcmBuf,
     ) -> DecodeResult<u32>;
 
