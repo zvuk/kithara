@@ -12,6 +12,6 @@ pub use info::GaplessInfo;
 #[cfg(feature = "symphonia")]
 pub(crate) use mp3::{LAME_DECODER_DELAY, read_lame_trim};
 pub use mp4::probe_mp4_gapless;
-#[cfg(feature = "symphonia")]
+#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
 pub(crate) use mp4::probe_mp4_gapless_dyn;
 pub use trimmer::{GaplessOutput, GaplessTrimmer};
