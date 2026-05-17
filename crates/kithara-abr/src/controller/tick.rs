@@ -35,8 +35,7 @@ impl AbrController {
             return;
         };
 
-        let prev = entry.bytes_downloaded.fetch_add(bytes, Ordering::AcqRel);
-        let now_total = prev.saturating_add(bytes);
+        entry.bytes_downloaded.fetch_add(bytes, Ordering::AcqRel);
 
         let now = Instant::now();
         let bus = entry.bus();
@@ -56,22 +55,11 @@ impl AbrController {
             }
         }
 
-        if !entry.warmup_completed.load(Ordering::Acquire)
-            && now_total >= self.settings.warmup_min_bytes
-            && entry
-                .warmup_completed
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            && let Some(ref bus) = bus
-        {
-            bus.publish(AbrEvent::WarmupCompleted);
-        }
-
         self.tick(peer_id, now);
     }
 
     #[kithara::probe(peer_id)]
-    pub(super) fn tick(&self, peer_id: AbrPeerId, now: Instant) {
+    pub(crate) fn tick(&self, peer_id: AbrPeerId, now: Instant) {
         let Some(ctx) = TickContext::resolve(self, peer_id) else {
             return;
         };
@@ -143,7 +131,6 @@ impl AbrController {
             did_change = decision.did_change,
             target = decision.target_variant_index,
             estimate_bps,
-            warmup_completed = ctx.entry.warmup_completed.load(Ordering::Acquire),
             mode = ?state.mode(),
             pending_target_after = ?state.pending_target(),
             "ABR: tick"

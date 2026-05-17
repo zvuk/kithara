@@ -84,14 +84,15 @@ pub struct AbrSettings {
     /// candidate bandwidth by this factor).
     #[derivative(Default(value = "1.3"))]
     pub up_hysteresis_ratio: f64,
-    /// Number of bytes that must be downloaded before ABR will switch.
-    /// `warmup_min_bytes` is an estimator-smoothing gate: small CDN
-    /// segments (~50 KB) reach the gate after one or two fetches, which
-    /// matches the realistic interval where bandwidth samples carry
-    /// statistical weight. Larger thresholds silently freeze ABR on
-    /// production traffic.
-    #[derivative(Default(value = "32 * 1024"))]
-    pub warmup_min_bytes: u64,
+    /// Seed throughput estimate (bps) applied at controller construction.
+    /// Lets `decide()` pick the right variant on the first tick, before
+    /// any real samples land — eliminates the cold-start LQ spike and
+    /// wasted disk segments. `None` preserves the historical cold-start
+    /// path (`AbrReason::NoEstimate` → stays on `current_variant`).
+    /// 2 Mbps covers Wi-Fi and most 4G; 3G/EDGE down-switches after the
+    /// first real sample.
+    #[derivative(Default(value = "Some(2_000_000)"))]
+    pub initial_throughput_bps: Option<u64>,
 }
 
 /// Shared per-player ABR controller.
@@ -115,6 +116,12 @@ impl AbrController {
     #[must_use]
     pub fn new(settings: AbrSettings) -> Arc<Self> {
         Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()))
+    }
+
+    fn seed_estimator(settings: &AbrSettings, estimator: &Arc<dyn Estimator>) {
+        if let Some(bps) = settings.initial_throughput_bps {
+            estimator.seed_initial_bps(bps);
+        }
     }
 
     pub(super) fn allocate_peer_id(&self) -> AbrPeerId {
@@ -185,7 +192,6 @@ impl AbrController {
             peer_weak,
             bus: Arc::clone(&bus),
             variants_registered_published: AtomicBool::new(false),
-            warmup_completed: AtomicBool::new(false),
             bytes_downloaded: AtomicU64::new(0),
             incoherence_cancel: Mutex::new(None),
             last_variant_switch: Mutex::new(None),
@@ -215,6 +221,7 @@ impl AbrController {
     /// inject a mock.
     #[must_use]
     pub fn with_estimator(settings: AbrSettings, estimator: Arc<dyn Estimator>) -> Arc<Self> {
+        Self::seed_estimator(&settings, &estimator);
         Arc::new_cyclic(|weak| Self {
             settings,
             estimator,

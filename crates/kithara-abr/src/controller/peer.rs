@@ -18,7 +18,6 @@ use crate::{abr::Abr, state::AbrState};
 pub(crate) struct PeerEntry {
     pub(super) bus: Arc<RwLock<Option<EventBus>>>,
     pub(super) variants_registered_published: AtomicBool,
-    pub(super) warmup_completed: AtomicBool,
     pub(super) bytes_downloaded: AtomicU64,
     pub(super) incoherence_cancel: Mutex<Option<CancellationToken>>,
     pub(super) last_variant_switch: Mutex<Option<(Instant, Duration)>>,

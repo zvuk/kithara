@@ -41,7 +41,6 @@ fn test_variants_3() -> Vec<VariantInfo> {
 
 fn settings_fast() -> AbrSettings {
     AbrSettings {
-        warmup_min_bytes: 0,
         min_switch_interval: Duration::ZERO,
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
@@ -86,28 +85,6 @@ fn decide_many_samples_during_lock_never_switches() {
         let _ = state.decide(&view, Instant::now() + Duration::from_secs(i * 60));
     }
     assert_eq!(state.current_variant_index(), initial);
-}
-
-#[kithara::test]
-fn decide_warmup_blocks_switch() {
-    let state = AbrState::new(AbrMode::Auto(Some(0)));
-    let variants = test_variants_3();
-    let settings = AbrSettings {
-        warmup_min_bytes: 128 * 1024,
-        min_switch_interval: Duration::ZERO,
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    };
-    let view = AbrView {
-        estimate_bps: Some(10_000_000),
-        buffer_ahead: None,
-        bytes_downloaded: 1024,
-        variants: &variants,
-        settings: &settings,
-    };
-    let d = state.decide(&view, Instant::now());
-    assert_eq!(d.reason, AbrReason::Warmup);
-    assert!(!d.did_change);
 }
 
 #[kithara::test]
@@ -162,7 +139,6 @@ fn decide_urgent_downswitch_when_buffer_low() {
         urgent_downswitch_buffer: Duration::from_secs(5),
         down_hysteresis_ratio: 0.01,
         min_switch_interval: Duration::ZERO,
-        warmup_min_bytes: 0,
         ..AbrSettings::default()
     };
     let view = AbrView {
@@ -183,7 +159,6 @@ fn decide_buffer_too_low_for_upswitch() {
     let settings = AbrSettings {
         min_buffer_for_up_switch: Duration::from_secs(10),
         min_switch_interval: Duration::ZERO,
-        warmup_min_bytes: 0,
         ..AbrSettings::default()
     };
     let view = AbrView {
@@ -389,7 +364,6 @@ fn min_switch_interval_prevents_oscillation() {
     let variants = test_variants_3();
     let settings = AbrSettings {
         min_switch_interval: Duration::from_secs(30),
-        warmup_min_bytes: 0,
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
     };
@@ -432,6 +406,87 @@ fn locked_state_rejects_switch(
         assert!(!d.did_change, "locked state decided to switch at iter {i}");
     }
     assert_eq!(state.current_variant_index(), locked_variant);
+}
+
+struct SeedPeer {
+    state: Arc<AbrState>,
+    variants: Vec<VariantInfo>,
+}
+
+impl Abr for SeedPeer {
+    fn state(&self) -> Option<Arc<AbrState>> {
+        Some(Arc::clone(&self.state))
+    }
+    fn variants(&self) -> Vec<VariantInfo> {
+        self.variants.clone()
+    }
+}
+
+fn audio_variants_4tier() -> Vec<VariantInfo> {
+    [66_000_u64, 134_000, 270_000, 900_000]
+        .into_iter()
+        .enumerate()
+        .map(|(i, bps)| VariantInfo {
+            variant_index: i,
+            bandwidth_bps: Some(bps),
+            duration: VariantDuration::Unknown,
+            name: None,
+            codecs: None,
+            container: None,
+        })
+        .collect()
+}
+
+/// Cold-start with the default `initial_throughput_bps = Some(2 Mbps)`
+/// seed: first `tick` must request the highest variant fitting under
+/// `2 Mbps / safety_factor (1.5) ≈ 1.33 Mbps` — variant 3 (900 kbps).
+/// Without the seed (pre-refactor), `estimate_bps()` returns `None` →
+/// `AbrReason::NoEstimate` → no pending switch and the player would
+/// stay on the initial LQ variant until samples accumulate.
+#[kithara::test(tokio)]
+async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
+    let settings = AbrSettings::default()
+        .with_min_switch_interval(Duration::ZERO)
+        .with_min_buffer_for_up_switch(Duration::ZERO);
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
+    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        state: Arc::clone(&state),
+        variants: audio_variants_4tier(),
+    });
+    let handle = controller.register(&peer);
+    controller.tick(handle.peer_id(), Instant::now());
+    assert_eq!(
+        state.pending_target(),
+        Some(3),
+        "cold-start with default 2 Mbps seed must request the top variant"
+    );
+    drop(handle);
+}
+
+/// Explicit opt-out: `initial_throughput_bps = None` preserves the
+/// historical cold-start path. First `tick` sees no estimate, returns
+/// `AbrReason::NoEstimate`, no pending switch — player stays on the
+/// initial variant (0).
+#[kithara::test(tokio)]
+async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
+    let settings = AbrSettings {
+        initial_throughput_bps: None,
+        min_switch_interval: Duration::ZERO,
+        min_buffer_for_up_switch: Duration::ZERO,
+        ..AbrSettings::default()
+    };
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
+    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        state: Arc::clone(&state),
+        variants: audio_variants_4tier(),
+    });
+    let handle = controller.register(&peer);
+    controller.tick(handle.peer_id(), Instant::now());
+    assert_eq!(state.current_variant_index(), 0);
+    assert_eq!(state.pending_target(), None);
+    drop(handle);
 }
 
 #[kithara::test(tokio)]

@@ -9,7 +9,6 @@ use kithara_test_utils::kithara;
 #[kithara::fixture]
 pub fn abr_switch_trigger() -> AbrSettings {
     AbrSettings::default()
-        .with_warmup_min_bytes(0)
         .with_min_buffer_for_up_switch(Duration::ZERO)
         .with_urgent_downswitch_buffer(Duration::ZERO)
         .with_min_switch_interval(Duration::ZERO)
@@ -23,7 +22,6 @@ pub fn abr_switch_trigger() -> AbrSettings {
 #[kithara::fixture]
 pub fn abr_fast() -> AbrSettings {
     AbrSettings::default()
-        .with_warmup_min_bytes(0)
         .with_min_buffer_for_up_switch(Duration::ZERO)
         .with_urgent_downswitch_buffer(Duration::ZERO)
         .with_min_switch_interval(Duration::from_secs(1))

@@ -293,11 +293,20 @@ async fn vod_manual_switch_affects_future_segments() {
 
 /// Multi-track shared ABR: quality persists across tracks, cache serves on replay.
 ///
-/// 1. Track 1, Auto → plays, ABR picks V0 (highest, no delays)
-/// 2. Switch to Manual(1) — lower quality
-/// 3. Track 2 with same shared ABR → downloads V1 segments
-/// 4. Switch to Manual(0) during T2 playback → future segments switch to V0
-/// 5. Replay Track 1 → all segments served from cache (cached=true)
+/// 1. Track 1, Auto(Some(0)) → plays V0 (1 Mbps); the default
+///    `initial_throughput_bps = Some(2 Mbps)` seed picks V0 as the
+///    highest variant fitting under `2 Mbps / 1.5 ≈ 1.33 Mbps`, so
+///    `decide` issues no boundary switch and V0 segments populate the
+///    cache.
+/// 2. Switch to Manual(1) — V1 (3 Mbps).
+/// 3. Track 2 with Manual(1) → downloads V1 segments.
+/// 4. Switch to Manual(0) for Track 1 replay → future segments switch to V0.
+/// 5. Replay Track 1 → V0 segments served from cache (cached=true).
+///
+/// Variants are ordered `[V0=1 Mbps, V1=3 Mbps]` so the seed lands on V0
+/// — historically the test used `[3 Mbps, 1 Mbps]` and relied on the
+/// pre-seed cold-start behaviour where `Auto(Some(0))` stayed on V0
+/// only because `decide` returned `NoEstimate` until samples arrived.
 #[kithara::test(
     native,
     tokio,
@@ -330,8 +339,8 @@ async fn multi_track_shared_abr_with_cache() {
         }
     };
 
-    let server1 = make_server(vec![3_000_000, 1_000_000]).await;
-    let server2 = make_server(vec![3_000_000, 1_000_000]).await;
+    let server1 = make_server(vec![1_000_000, 3_000_000]).await;
+    let server2 = make_server(vec![1_000_000, 3_000_000]).await;
 
     let url1 = server1.url("/master.m3u8");
     let url2 = server2.url("/master.m3u8");
@@ -879,28 +888,27 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
 
 /// Phase P.0' regression: production bug from app.log (2026-05-15).
 ///
-/// User opens a track in Auto mode. With Phase M defaults removed
-/// (`min_throughput_record_ms = 0`, `warmup_min_bytes = 32 KB`),
-/// a fast CDN delivers the first ~50 KB segment in a few milliseconds.
-/// `record_bandwidth` accepts the sample, estimator surfaces hundreds of
-/// Mbps, ABR `up_switch` candidate is the highest variant with headroom
+/// User opens a track in Auto mode. A fast CDN delivers the first
+/// ~50 KB segment in a few milliseconds. `record_bandwidth` accepts
+/// the sample, estimator surfaces hundreds of Mbps, ABR `up_switch`
+/// candidate is the highest variant with headroom
 /// ≫ `up_hysteresis_ratio = 1.3`, and `commit_variant_switch` fires on
 /// the FIRST segment boundary — across codecs in real assets, the user
 /// observes "sound disappears, slider keeps moving, then crash".
 ///
-/// Expected behaviour: ABR must wait for at least a couple of segments
-/// of evidence before committing an up-switch. The first boundary
-/// crossing must not produce a `VariantApplied` event under default
-/// settings on a fast local server. Tests that previously masked this
-/// with `abr_fast` fixtures stay green — this one specifically uses
+/// Expected behaviour: ABR must wait for enough buffer before
+/// committing an up-switch. The first boundary crossing must not
+/// produce a `VariantApplied` event under default settings on a fast
+/// local server: `min_buffer_for_up_switch = 10s` keeps the up-switch
+/// candidate gated behind `AbrReason::BufferTooLowForUpSwitch` until
+/// the buffer fills. Tests that previously masked this with
+/// `abr_fast` fixtures stay green — this one specifically uses
 /// **default** `AbrSettings` to lock down production defaults.
 ///
 /// Deterministic fixture: 3 same-codec AAC variants on `HlsTestServer`,
-/// no delay rules → fastest possible fetch path. If Phase M.2 keeps
-/// warmup_min_bytes at 32 KB, the very first ~50 KB segment crosses the
-/// gate and an aggressive up-switch lands at segment 1. With a sane
-/// warmup threshold (≥ a few segments' worth of bytes) the first
-/// boundary stays neutral.
+/// no delay rules → fastest possible fetch path. Without the buffer
+/// gate an aggressive up-switch would land at segment 1; with it the
+/// first boundary stays neutral.
 #[kithara::test(
     native,
     tokio,

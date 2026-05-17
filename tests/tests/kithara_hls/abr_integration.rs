@@ -64,8 +64,7 @@ fn test_manual_selector_different_indices(
     #[case] selector_index: usize,
     variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
-    let controller = AbrController::new(AbrSettings::default());
-    let _ = controller.settings().warmup_min_bytes;
+    let _ = AbrController::new(AbrSettings::default());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
     let _ = AbrMode::Manual(selector_index);
 }
@@ -76,7 +75,11 @@ fn test_abr_controller_no_selector(
     variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
     let controller = AbrController::new(abr_settings_default);
-    assert!(controller.current_bandwidth_estimate_bps().is_none());
+    // Default settings now seed `initial_throughput_bps = Some(2 Mbps)` so
+    // ABR can pick a sensible variant on the first tick instead of starting
+    // at LQ. `is_some()` keeps the assertion future-proof against the exact
+    // seed value.
+    assert!(controller.current_bandwidth_estimate_bps().is_some());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
 }
 
@@ -92,7 +95,9 @@ fn test_abr_decision_with_different_conditions(
     variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
     let controller = AbrController::new(AbrSettings::default());
-    assert!(controller.current_bandwidth_estimate_bps().is_none());
+    // Default settings seed an initial throughput hint — see
+    // `test_abr_controller_no_selector` for the rationale.
+    assert!(controller.current_bandwidth_estimate_bps().is_some());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
 }
 
@@ -114,6 +119,9 @@ fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn test_abr_controller_async_usage() {
     let controller = AbrController::new(AbrSettings::default());
-    assert!(controller.current_bandwidth_estimate_bps().is_none());
+    // Default settings seed an initial throughput estimate (see
+    // `test_abr_controller_no_selector`) — `is_some()` keeps the
+    // assertion stable against the exact seed value.
+    assert!(controller.current_bandwidth_estimate_bps().is_some());
     let _ = AbrMode::Manual(0);
 }

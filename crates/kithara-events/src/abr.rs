@@ -57,8 +57,6 @@ pub enum AbrReason {
     DownSwitch,
     MinInterval,
     NoEstimate,
-    /// Bandwidth samples below warmup threshold — no switching yet.
-    Warmup,
     BufferTooLowForUpSwitch,
     /// Buffer ahead below urgent-threshold; force down-switch.
     UrgentDownSwitch,
@@ -143,7 +141,6 @@ pub enum AbrEvent {
     DecisionSkipped {
         reason: AbrReason,
     },
-    WarmupCompleted,
     /// Reader did not advance within `incoherence_deadline` after a
     /// `VariantApplied` event. Signals a potential deadlock between the
     /// scheduler and the reader.

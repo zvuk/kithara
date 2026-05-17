@@ -251,7 +251,6 @@ mod tests {
 
     fn settings_fast() -> AbrSettings {
         AbrSettings {
-            warmup_min_bytes: 0,
             min_switch_interval: Duration::ZERO,
             min_buffer_for_up_switch: Duration::ZERO,
             ..AbrSettings::default()

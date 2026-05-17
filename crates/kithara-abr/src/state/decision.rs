@@ -41,16 +41,14 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
         AbrMode::Auto(_) => None,
     };
     let cant_switch = !state.can_switch_now(now, view.settings.min_switch_interval);
-    let warming = view.bytes_downloaded < view.settings.warmup_min_bytes;
     let estimate_bps = view.estimate_bps;
 
-    let estimate_bps: u64 = match (locked, manual_target, cant_switch, warming, estimate_bps) {
-        (true, _, _, _, _) => return decision(current, current, AbrReason::Locked),
-        (_, Some(idx), _, _, _) => return decision(current, idx, AbrReason::ManualOverride),
-        (_, _, true, _, _) => return decision(current, current, AbrReason::MinInterval),
-        (_, _, _, true, _) => return decision(current, current, AbrReason::Warmup),
-        (_, _, _, _, None) => return decision(current, current, AbrReason::NoEstimate),
-        (false, None, false, false, Some(bps)) => bps,
+    let estimate_bps: u64 = match (locked, manual_target, cant_switch, estimate_bps) {
+        (true, _, _, _) => return decision(current, current, AbrReason::Locked),
+        (_, Some(idx), _, _) => return decision(current, idx, AbrReason::ManualOverride),
+        (_, _, true, _) => return decision(current, current, AbrReason::MinInterval),
+        (_, _, _, None) => return decision(current, current, AbrReason::NoEstimate),
+        (false, None, false, Some(bps)) => bps,
     };
 
     let max_bw = state.max_bandwidth_bps();
