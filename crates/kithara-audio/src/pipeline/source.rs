@@ -1629,20 +1629,31 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.source_ready_for_range(start..end)
     }
 
-    /// Readiness for decoder recreation. For `FormatBoundary` the
-    /// probe only needs the init range — `decoder_seek_safe` then
-    /// jumps to `timeline.committed_position()`, which lands in the
-    /// segment `HlsCoord::commit_variant_switch` already scheduled
-    /// via `rebuild(target_seg)`. Waiting for `DEFAULT_READ_AHEAD`
-    /// from byte 0 would block on segment 0, which the cross-codec
-    /// branch intentionally skips — the production hang reported in
-    /// `app.log` (2026-05-15, `runtime_cross_codec_manual_switch_no_hang`).
+    /// Readiness for decoder recreation. When the source advertises a
+    /// **separate** init segment (CMAF `EXT-X-MAP` init box — typically
+    /// well under `DEFAULT_READ_AHEAD_BYTES`), the decoder factory's
+    /// probe only needs that init range to construct the codec; the
+    /// post-recreate `Seek` / `ApplySeek` / `Decode` action then
+    /// repositions via `decoder_seek_safe`. Gating on the init range
+    /// alone is required because after a backwards seek the HLS
+    /// scheduler emits segments around the reader byte cursor (past
+    /// `seg 0`) and never schedules `[0..DEFAULT_READ_AHEAD)`, which
+    /// produces the hang in `app.log` (2026-05-16 22:23 same-codec
+    /// V0→V2, 2026-05-17 09:08 cross-codec V3→V1).
+    ///
+    /// When the source has no separate init (raw containers like WAV,
+    /// where `format_change_segment_range` falls back to the full
+    /// `seg 0` byte range and is therefore much larger than the
+    /// read-ahead window), gating on `seg 0` is unsafe by the same
+    /// argument and we fall through to the `[offset..offset +
+    /// DEFAULT_READ_AHEAD)` slow path, whose window the scheduler
+    /// actively keeps in flight around the reader.
     fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
-        if matches!(recreate.cause, RecreateCause::FormatBoundary)
-            && matches!(recreate.next, RecreateNext::Decode)
-            && let Ok(init_range) = self.shared_stream.format_change_segment_range()
-        {
-            return self.source_ready_for_range(init_range);
+        if let Ok(init_range) = self.shared_stream.format_change_segment_range() {
+            let init_len = init_range.end.saturating_sub(init_range.start);
+            if init_len <= Self::DEFAULT_READ_AHEAD_BYTES {
+                return self.source_ready_for_range(init_range);
+            }
         }
         self.source_is_ready_for_boundary(recreate.offset)
     }

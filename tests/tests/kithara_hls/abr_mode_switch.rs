@@ -1329,3 +1329,215 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
          playback. samples_phase4={samples_phase4}"
     );
 }
+
+/// Production replay (app.log 2026-05-16 22:23 and 2026-05-17 09:08):
+/// after a manual ABR switch to a variant whose `seg 0` is NOT in the
+/// cache, a seek **backwards to a non-zero offset** (37 s in app.log)
+/// makes `start_recreating_decoder` fire but `Recreating decoder for
+/// new format` never logs — the FSM parks in `RecreatingDecoder` and
+/// `audio_worker_loop` panics on `HangDetector` after 10 s.
+///
+/// Root cause (kithara-audio/src/pipeline/source.rs:1640
+/// `source_ready_for_recreate`): for `RecreateCause::VariantSwitch`
+/// the fast path that probes only the init range is skipped — the
+/// code falls back to `source_is_ready_for_boundary(offset)` which
+/// waits for `[0..32 KiB)` to be `Ready`. After a seek-backwards the
+/// reader byte cursor is far past byte 0, the HLS scheduler emits
+/// segments around that cursor (seg N+), and **nobody asks for
+/// `seg 0` of the new variant** — the readiness gate never opens.
+/// The init bytes are already cached (`emit init v=N`,
+/// `bytes_written=627` in app.log), so the recreate could complete
+/// — but the gate blocks on a range no one schedules.
+///
+/// Distinction from the existing fast path: it covers only
+/// `FormatBoundary + Decode`, where the decoder afterwards
+/// `decode`s from `offset`. `VariantSwitch + Seek/ApplySeek` uses the
+/// same factory contract (decoder needs only the init range to
+/// initialise; the seek that follows lands wherever the pending
+/// request asks for) but was left in the slow path.
+///
+/// Reproduces both production runs by seeking to a non-zero offset
+/// after a manual switch to an uncached variant. Seek-to-0 does NOT
+/// reproduce — that resets `reader_pos` to 0 and the scheduler then
+/// schedules `seg 0` of the new variant, so the gate eventually
+/// opens.
+///
+/// Four cases × `(DecoderBackend, target_variant)`:
+/// - `sw_same_codec_aac_low_to_high`: V0 (slq AAC) → V2 (shq AAC),
+///   same-codec recreate.
+/// - `sw_cross_codec_aac_to_flac`: V0 (slq AAC) → V3 (slossless
+///   FLAC), cross-codec recreate.
+/// - `hw_*` mirror the above on the Apple backend.
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(60)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+#[case::sw_same_codec_aac_low_to_high(DecoderBackend::Symphonia, 2usize)]
+#[case::sw_cross_codec_aac_to_flac(DecoderBackend::Symphonia, 3usize)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hw_same_codec_aac_low_to_high(DecoderBackend::Apple, 2usize)
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::hw_cross_codec_aac_to_flac(DecoderBackend::Apple, 3usize)
+)]
+async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
+    #[case] backend: DecoderBackend,
+    #[case] target_variant: usize,
+) {
+    use kithara_platform::time::sleep;
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let server = TestServerHelper::new().await;
+    let url = server.asset("hls/master.m3u8");
+    // assets/hls/master.m3u8: v=0..2 AAC (mp4a.40.2, fmp4), v=3 FLAC
+    // (fLaC, fmp4). Track ≈ 220 s, 37 segments each (~6 s).
+
+    let temp_dir = TestTempDir::new();
+    let cancel = CancellationToken::new();
+    let bus = EventBus::new(8192);
+
+    let applied_targets: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
+    let applied_bg = Arc::clone(&applied_targets);
+    let mut applied_rx = bus.subscribe();
+    spawn(async move {
+        loop {
+            match applied_rx.recv().await {
+                Ok(Event::Abr(AbrEvent::VariantApplied { to, .. })) => {
+                    applied_bg.lock_sync().push(to);
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    let hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel)
+        .with_events(bus.clone())
+        .with_initial_abr_mode(AbrMode::Manual(0));
+
+    let config = AudioConfig::<Hls>::new(hls_config)
+        .with_events(bus)
+        .with_decoder_backend(backend);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+
+    // Phase 1 — play V0 long enough that reader_pos is past seg 6
+    // (the seek target ≈ 37 s lands in seg 6). The blocking read
+    // loop is parked on the tokio blocking pool so that
+    // `recv_outcome_blocking` (`park_timeout` on the current thread)
+    // does NOT freeze the tokio worker that drives `Downloader`.
+    let (mut audio, samples_phase1) = spawn_blocking(move || {
+        let target_samples: u64 = 25 * 44_100;
+        let mut samples = 0u64;
+        let mut buf = vec![0f32; 4096 * 2];
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while samples < target_samples && Instant::now() < deadline {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => break,
+                Err(e) => panic!("phase 1 decode error: {e}"),
+            }
+        }
+        (audio, samples)
+    })
+    .await
+    .expect("phase 1 join");
+
+    assert!(
+        samples_phase1 > 4 * 44_100,
+        "phase 1 must produce > 4 s of V0 audio before the switch, \
+         got {samples_phase1}"
+    );
+
+    // Phase 2 — manual switch to the target variant. Its seg 0 and
+    // (typically) seg 6 at the seek-to-37 s position are NOT cached.
+    let handle = audio
+        .abr_handle()
+        .expect("HLS stream must expose AbrHandle");
+    handle
+        .set_mode(AbrMode::Manual(target_variant))
+        .expect("Manual target valid");
+
+    // Mirror the production gap between `set_mode` and seek so the
+    // scheduler has time to emit V_new init + a few media segments
+    // around the current reader_pos (matches the app.log emit
+    // sequence preceding the hang).
+    sleep(Duration::from_millis(300)).await;
+
+    // Phase 3 — seek BACKWARDS to a non-zero offset (37 s, as in
+    // app.log run 1). reader_pos ends up at ≈ seg 6 byte-coords of
+    // the new variant. The scheduler emits segments around that
+    // cursor — seg 0 of the new variant is NEVER scheduled, even
+    // though the recreate readiness gate currently waits for
+    // `[0..32 KiB)` to be Ready.
+    audio
+        .seek(Duration::from_secs(37))
+        .expect("seek to 37 s must succeed");
+
+    // Phase 4 — pump up to ~12 s of wall-clock and expect samples
+    // to flow from the new variant. Regression surface: zero
+    // samples produced (FSM parked in `RecreatingDecoder`) and the
+    // audio worker panics via `HangDetector` after
+    // `KITHARA_HANG_TIMEOUT_SECS = 5`. The outer test will then fail
+    // with `kithara-audio-worker-0 panicked` rather than this
+    // assertion.
+    let (samples_phase4, saw_eof_phase4) = spawn_blocking(move || {
+        let mut samples = 0u64;
+        let mut saw_eof = false;
+        let mut buf = vec![0f32; 4096 * 2];
+        let deadline = Instant::now() + Duration::from_secs(12);
+        while Instant::now() < deadline && samples < 2 * 44_100 {
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Frames { count, .. }) => samples += count.get() as u64,
+                Ok(ReadOutcome::Pending { .. }) => {}
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    break;
+                }
+                Err(e) => panic!("phase 4 decode error: {e}"),
+            }
+        }
+        (samples, saw_eof)
+    })
+    .await
+    .expect("phase 4 join");
+
+    let targets = applied_targets.lock_sync().clone();
+    info!(
+        ?backend,
+        target_variant,
+        samples_phase1,
+        samples_phase4,
+        saw_eof_phase4,
+        ?targets,
+        "seek_backwards_after_switch_to_uncached repro result"
+    );
+
+    assert!(
+        !saw_eof_phase4,
+        "phase 4 unexpected EOF after seek-backwards-to-37 s following \
+         Manual({target_variant}) switch — samples_phase4={samples_phase4}"
+    );
+    assert!(
+        samples_phase4 > 0,
+        "post-seek-backwards-to-37 s playback after Manual({target_variant}) \
+         switch must yield samples, got {samples_phase4}. Regression — \
+         see app.log 2026-05-16 22:23 (V0→V2 AAC same-codec) and \
+         2026-05-17 09:08 (V0→V3 FLAC cross-codec, then V3→V1 AAC \
+         cross-codec). Root cause: `source_ready_for_recreate` slow \
+         path waits for `[0..32 KiB)` Ready on `VariantSwitch`, but \
+         the scheduler never schedules `seg 0` after a backwards seek."
+    );
+}
