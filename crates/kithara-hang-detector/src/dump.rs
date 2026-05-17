@@ -29,6 +29,7 @@ impl Serialize for NoContext {
 /// Replace every character outside `[A-Za-z0-9_-]` with `.` so the
 /// label is safe to embed in a file path. Used for the filename segment
 /// of hang-dump files.
+#[cfg(not(feature = "disable-hang-detector"))]
 #[must_use]
 pub(crate) fn sanitize_label(label: &str) -> String {
     label
@@ -41,7 +42,7 @@ pub(crate) fn sanitize_label(label: &str) -> String {
 }
 
 /// Native file-writing dump path. WASM falls through to `wasm::write_dump`.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "disable-hang-detector")))]
 mod native {
     use std::{
         fs::File,
@@ -116,7 +117,7 @@ mod native {
 }
 
 /// WASM dump path — no filesystem, just a `tracing::error!`.
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "disable-hang-detector")))]
 mod wasm {
     use std::path::Path;
 
@@ -132,9 +133,13 @@ mod wasm {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), test))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(feature = "disable-hang-detector"),
+    test
+))]
 pub(crate) use native::resolve_dump_dir;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "disable-hang-detector")))]
 pub(crate) use native::write_dump;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "disable-hang-detector")))]
 pub(crate) use wasm::write_dump;

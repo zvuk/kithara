@@ -135,7 +135,7 @@ fn blanket_impl_serializes_serde_type() {
     assert_eq!(parsed["name"], "x");
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "disable-hang-detector")))]
 mod dump_tests {
     use std::path::PathBuf;
 
