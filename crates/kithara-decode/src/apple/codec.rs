@@ -50,6 +50,12 @@ pub(crate) struct AppleCodec {
     /// converter writes directly into pool memory — no internal scratch
     /// buffer needed.
     frames_per_packet: u32,
+    /// Input ASBD `mBytesPerPacket` snapshot, copied at open. Non-zero
+    /// for CBR codecs (`LinearPCM`); zero for VBR (AAC/MP3/ALAC/FLAC).
+    /// `decode_frame` uses this to size the `AudioConverter` output to
+    /// match the actual input packet count when the demuxer batched
+    /// multiple packets into one `Frame`.
+    input_bytes_per_packet: u32,
 }
 
 // SAFETY: `AudioConverterRef` is an opaque CoreAudio handle. Apple's
@@ -72,6 +78,7 @@ impl AppleCodec {
             frames_per_packet,
             cookie,
         } = build_input_format(track)?;
+        let input_bytes_per_packet = input_format.mBytesPerPacket;
         let output_format = build_pcm_output_format(track.sample_rate, track.channels);
 
         let mut converter: AudioConverterRef = ptr::null_mut();
@@ -116,6 +123,7 @@ impl AppleCodec {
             converter,
             spec,
             frames_per_packet,
+            input_bytes_per_packet,
             input_state: Box::new(ConverterInputState::new()),
             track_info: DecoderTrackInfo::default(),
             last_prime_info: None,
@@ -241,7 +249,25 @@ impl FrameCodec for AppleCodec {
         self.input_state.set(frame_data, desc);
 
         let channels = self.spec.channels as usize;
-        let target_frames = self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET);
+        // CBR codecs (LinearPCM): the demuxer batches many packets into
+        // one `Frame` for HLS streaming amortisation, so the AudioConverter
+        // output must be sized from the actual input packet count, not the
+        // codec's natural packet size. VBR codecs (AAC/MP3/ALAC/FLAC):
+        // `input_bytes_per_packet == 0`, fall back to the codec-natural
+        // `frames_per_packet` capped at the AAC block size.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "frame_data length divided by mBytesPerPacket is bounded by packet count"
+        )]
+        let target_frames = if self.input_bytes_per_packet > 0 {
+            (frame_data.len() / self.input_bytes_per_packet as usize) as u32
+        } else {
+            self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
+        };
+        if target_frames == 0 {
+            out.clear();
+            return Ok(0);
+        }
         let needed_samples = target_frames as usize * channels;
         out.ensure_len(needed_samples)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;

@@ -32,7 +32,17 @@ pub(crate) struct AppleAudioFileDemuxer {
     next_packet: u64,
     total_packets: u64,
     frames_per_packet: u32,
+    /// `Some(packets_per_call)` for CBR (`LinearPCM`) — every `next_frame`
+    /// issues one batched `AudioFileReadPacketData` for that many
+    /// packets. `None` for VBR (MP3, ALAC) — one packet per call so
+    /// each `Frame` carries its own `AudioStreamPacketDescription`.
+    cbr_batch_packets: Option<u32>,
 }
+
+/// Target ~16 `KiB` per CBR read — large enough to amortise the source
+/// `wait_range` cost on streamed sources (HLS), small enough to keep
+/// the in-flight buffer bounded.
+const CBR_BATCH_TARGET_BYTES: u32 = 16 * 1024;
 
 impl AppleAudioFileDemuxer {
     pub(crate) fn open_wav(source: BoxedSource) -> DecodeResult<Self> {
@@ -97,7 +107,24 @@ impl AppleAudioFileDemuxer {
             sample_rate,
         };
 
-        let buf_cap = usize::try_from(file.max_packet_size().max(4096)).unwrap_or(64 * 1024);
+        // CBR: `mBytesPerPacket > 0` and the packet table is implicit
+        // (LinearPCM). Batch reads to amortise per-packet source I/O.
+        // VBR: every packet has its own `AudioStreamPacketDescription`,
+        // so we keep a single-packet rhythm and forward `packet_desc` to
+        // the codec.
+        let (cbr_batch_packets, buf_cap) = if asbd.mBytesPerPacket > 0 {
+            let packets = (CBR_BATCH_TARGET_BYTES / asbd.mBytesPerPacket).max(1);
+            let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
+            (
+                Some(packets),
+                usize::try_from(bytes).unwrap_or(CBR_BATCH_TARGET_BYTES as usize),
+            )
+        } else {
+            (
+                None,
+                usize::try_from(file.max_packet_size().max(4096)).unwrap_or(64 * 1024),
+            )
+        };
 
         Ok(Self {
             file,
@@ -108,6 +135,7 @@ impl AppleAudioFileDemuxer {
             next_packet: 0,
             total_packets,
             frames_per_packet,
+            cbr_batch_packets,
         })
     }
 }
@@ -122,10 +150,43 @@ impl Demuxer for AppleAudioFileDemuxer {
             return Ok(DemuxOutcome::Eof);
         }
 
-        let Some((bytes, desc)) = self
-            .file
-            .read_packet(self.next_packet, &mut self.read_buf)?
-        else {
+        let rate = f64::from(self.track_info.sample_rate.max(1));
+        let start_packet = self.next_packet;
+        let frame_idx = start_packet.saturating_mul(u64::from(self.frames_per_packet));
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "frame index fits well within f64 precision for sub-day audio"
+        )]
+        let pts = Duration::from_secs_f64(frame_idx as f64 / rate);
+
+        if let Some(batch_packets) = self.cbr_batch_packets {
+            let remaining =
+                u32::try_from(self.total_packets.saturating_sub(start_packet)).unwrap_or(u32::MAX);
+            let want = batch_packets.min(remaining);
+            let (bytes, packets_read) =
+                self.file
+                    .read_packets_cbr(start_packet, want, &mut self.read_buf)?;
+            if packets_read == 0 {
+                return Ok(DemuxOutcome::Eof);
+            }
+            self.last_read_len = bytes as usize;
+            let total_frames =
+                u64::from(packets_read).saturating_mul(u64::from(self.frames_per_packet));
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "total_frames * fpp within f64 precision for sub-day audio"
+            )]
+            let dur = Duration::from_secs_f64(total_frames as f64 / rate);
+            self.next_packet = start_packet.saturating_add(u64::from(packets_read));
+            return Ok(DemuxOutcome::Frame(Frame {
+                data: &self.read_buf[..self.last_read_len],
+                duration: dur,
+                pts,
+                packet_desc: &[],
+            }));
+        }
+
+        let Some((bytes, desc)) = self.file.read_packet(start_packet, &mut self.read_buf)? else {
             return Ok(DemuxOutcome::Eof);
         };
 
@@ -141,15 +202,6 @@ impl Demuxer for AppleAudioFileDemuxer {
             );
         }
 
-        let rate = f64::from(self.track_info.sample_rate.max(1));
-        let frame_idx = self
-            .next_packet
-            .saturating_mul(u64::from(self.frames_per_packet));
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "frame index fits well within f64 precision for sub-day audio"
-        )]
-        let pts = Duration::from_secs_f64(frame_idx as f64 / rate);
         let frames = if desc.mVariableFramesInPacket > 0 {
             u64::from(desc.mVariableFramesInPacket)
         } else {
@@ -168,7 +220,7 @@ impl Demuxer for AppleAudioFileDemuxer {
             packet_desc: &self.last_packet_desc_blob,
         };
 
-        self.next_packet = self.next_packet.saturating_add(1);
+        self.next_packet = start_packet.saturating_add(1);
         Ok(DemuxOutcome::Frame(frame))
     }
 
