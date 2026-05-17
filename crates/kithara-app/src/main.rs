@@ -99,7 +99,11 @@ fn main() -> AppResult {
 
     let mut net = NetOptions::default();
     net.is_insecure = args.insecure;
-    let downloader = Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .client(HttpClient::new(net))
+            .build(),
+    );
     let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default()); // kithara:cancel:owner
     let config = AppConfig::new(downloader, flush_hub)
         .with_tracks(args.tracks)

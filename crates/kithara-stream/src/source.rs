@@ -133,29 +133,16 @@ pub enum ReadOutcome {
 ///
 /// Represents a deterministic mapping from target playback time to a byte
 /// position and segment context inside the source.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, derive_setters::Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bon::Builder)]
 #[non_exhaustive]
 pub struct SourceSeekAnchor {
+    #[builder(default)]
     pub segment_start: Duration,
     pub segment_end: Option<Duration>,
     pub segment_index: Option<u32>,
     pub variant_index: Option<usize>,
+    #[builder(default)]
     pub byte_offset: u64,
-}
-
-impl SourceSeekAnchor {
-    /// Create a minimal anchor with just a byte offset and segment start
-    /// time. Optional fields default to `None`; set them via the
-    /// `with_*` builders.
-    #[must_use]
-    pub fn new(byte_offset: u64, segment_start: Duration) -> Self {
-        Self {
-            segment_start,
-            byte_offset,
-            ..Self::default()
-        }
-    }
 }
 
 /// Sync random-access source.

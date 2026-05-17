@@ -70,7 +70,7 @@ impl Peer for SelfReferencingPeer {
 async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancellationToken::new();
-    let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
+    let downloader = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();
@@ -110,7 +110,7 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancellationToken::new();
-    let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
+    let downloader = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();

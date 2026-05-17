@@ -1417,10 +1417,15 @@ async fn live_remote_resource_decodes_with_duration(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let store = store_options(&temp_dir, true);
-    let net = NetOptions::default()
-        .with_inactivity_timeout(Duration::from_secs(25))
-        .with_total_timeout(Duration::from_secs(25));
-    let downloader = Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_secs(25))
+        .total_timeout(Duration::from_secs(25))
+        .build();
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .client(HttpClient::new(net))
+            .build(),
+    );
     let mut config = ResourceConfig::new(url)
         .expect("valid URL")
         .with_store(store)

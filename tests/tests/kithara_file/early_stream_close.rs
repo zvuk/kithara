@@ -174,13 +174,15 @@ async fn file_stream_closes_early_seek_still_works() {
     let (url, _call_count, _server) = setup_server(file_data).await;
 
     let dl = Downloader::new(
-        DownloaderConfig::default()
-            .with_client(kithara_net::HttpClient::new(
-                kithara_net::NetOptions::default()
-                    .with_inactivity_timeout(Duration::from_secs(1))
-                    .with_total_timeout(Duration::from_secs(1)),
+        DownloaderConfig::builder()
+            .client(kithara_net::HttpClient::new(
+                kithara_net::NetOptions::builder()
+                    .inactivity_timeout(Duration::from_secs(1))
+                    .total_timeout(Duration::from_secs(1))
+                    .build(),
             ))
-            .with_cancel(cancel_token.clone()),
+            .cancel(cancel_token.clone())
+            .build(),
     );
 
     let config = FileConfig::new(FileSrc::Remote(url))

@@ -59,7 +59,7 @@ pub(crate) type ItemRegistry = HashMap<TrackId, Arc<AudioPlayerItem>>;
 /// validate TLS.
 fn default_net_options() -> NetOptions {
     const INSECURE: bool = cfg!(feature = "dev");
-    NetOptions::default().with_is_insecure(INSECURE)
+    NetOptions::builder().is_insecure(INSECURE).build()
 }
 
 /// FFI-facing audio player.
@@ -196,9 +196,10 @@ impl AudioPlayer {
         let queue_config = QueueConfig::default().with_player(player);
         let net = default_net_options();
         let downloader = Downloader::new(
-            DownloaderConfig::default()
-                .with_client(HttpClient::new(net))
-                .with_runtime(crate::FFI_RUNTIME.clone()),
+            DownloaderConfig::builder()
+                .client(HttpClient::new(net))
+                .runtime(crate::FFI_RUNTIME.clone())
+                .build(),
         );
         let (key_options, player_headers) = build_initial_key_state(config.key_options);
         Arc::new(Self {

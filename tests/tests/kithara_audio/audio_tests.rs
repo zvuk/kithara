@@ -73,9 +73,10 @@ async fn test_audio_receive_chunks() {
 
 #[kithara::test]
 fn test_audio_config_with_media_info() {
-    let info = MediaInfo::default()
-        .with_container(ContainerFormat::Wav)
-        .with_sample_rate(44100);
+    let info = MediaInfo::builder()
+        .container(ContainerFormat::Wav)
+        .sample_rate(44100)
+        .build();
 
     let config =
         AudioConfig::<kithara_file::File>::new(FileConfig::default()).with_media_info(info.clone());

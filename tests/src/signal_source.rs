@@ -69,11 +69,12 @@ impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
 
     fn media_info(&self) -> Option<MediaInfo> {
         Some(
-            MediaInfo::default()
-                .with_channels(self.pcm.channels())
-                .with_codec(AudioCodec::Pcm)
-                .with_container(ContainerFormat::Wav)
-                .with_sample_rate(self.pcm.sample_rate()),
+            MediaInfo::builder()
+                .channels(self.pcm.channels())
+                .codec(AudioCodec::Pcm)
+                .container(ContainerFormat::Wav)
+                .sample_rate(self.pcm.sample_rate())
+                .build(),
         )
     }
 

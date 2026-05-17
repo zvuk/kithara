@@ -34,7 +34,11 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     .await;
 
     let cancel = CancellationToken::new();
-    let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .cancel(cancel.child_token())
+            .build(),
+    );
 
     let temp_a = temp_dir.path().join("stream_a");
     let temp_b = temp_dir.path().join("stream_b");

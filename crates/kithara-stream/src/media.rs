@@ -1,4 +1,4 @@
-use derive_setters::Setters;
+use bon::Builder;
 
 /// Container format type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,8 +57,7 @@ pub enum AudioCodec {
 /// - File extension
 /// - HTTP Content-Type header
 /// - Container metadata
-#[derive(Debug, Clone, Default, PartialEq, Eq, Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Builder)]
 #[non_exhaustive]
 pub struct MediaInfo {
     /// Number of audio channels
@@ -214,7 +213,7 @@ mod tests {
     #[case(ContainerFormat::Caf)]
     #[case(ContainerFormat::Mkv)]
     fn test_media_info_with_container(#[case] container: ContainerFormat) {
-        let info = MediaInfo::default().with_container(container);
+        let info = MediaInfo::builder().container(container).build();
         assert_eq!(info.container, Some(container));
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, None);
@@ -228,7 +227,7 @@ mod tests {
     #[case(96000)]
     #[case(192000)]
     fn test_media_info_with_sample_rate(#[case] sample_rate: u32) {
-        let info = MediaInfo::default().with_sample_rate(sample_rate);
+        let info = MediaInfo::builder().sample_rate(sample_rate).build();
         assert_eq!(info.container, None);
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, Some(sample_rate));
@@ -241,7 +240,7 @@ mod tests {
     #[case(6)]
     #[case(8)]
     fn test_media_info_with_channels(#[case] channels: u16) {
-        let info = MediaInfo::default().with_channels(channels);
+        let info = MediaInfo::builder().channels(channels).build();
         assert_eq!(info.container, None);
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, None);
@@ -250,10 +249,11 @@ mod tests {
 
     #[kithara::test]
     fn test_media_info_builder_chain() {
-        let mut info = MediaInfo::default()
-            .with_container(ContainerFormat::Fmp4)
-            .with_sample_rate(44100)
-            .with_channels(2);
+        let mut info = MediaInfo::builder()
+            .container(ContainerFormat::Fmp4)
+            .sample_rate(44100)
+            .channels(2)
+            .build();
         info.codec = Some(AudioCodec::AacLc);
 
         assert_eq!(info.container, Some(ContainerFormat::Fmp4));
@@ -264,7 +264,7 @@ mod tests {
 
     #[kithara::test]
     fn test_media_info_partial_builder() {
-        let mut info = MediaInfo::default().with_sample_rate(48000);
+        let mut info = MediaInfo::builder().sample_rate(48000).build();
         info.codec = Some(AudioCodec::Mp3);
 
         assert_eq!(info.container, None);
@@ -289,7 +289,9 @@ mod tests {
 
     #[kithara::test]
     fn test_media_info_clone() {
-        let mut info = MediaInfo::default().with_container(ContainerFormat::Fmp4);
+        let mut info = MediaInfo::builder()
+            .container(ContainerFormat::Fmp4)
+            .build();
         info.codec = Some(AudioCodec::AacLc);
 
         let cloned = info.clone();

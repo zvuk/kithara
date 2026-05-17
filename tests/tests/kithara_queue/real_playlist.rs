@@ -58,9 +58,12 @@ mod test_statics {
 async fn shared_test_ctx() -> &'static TestCtx {
     test_statics::TEST_CTX
         .get_or_init(|| async {
-            let net = NetOptions::default().with_is_insecure(true);
-            let downloader =
-                Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
+            let net = NetOptions::builder().is_insecure(true).build();
+            let downloader = Downloader::new(
+                DownloaderConfig::builder()
+                    .client(HttpClient::new(net))
+                    .build(),
+            );
             let flush_hub = FlushHub::new(
                 tokio_util::sync::CancellationToken::new(),
                 FlushPolicy::default(),

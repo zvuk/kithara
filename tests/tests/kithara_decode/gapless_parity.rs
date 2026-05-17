@@ -152,9 +152,12 @@ async fn generated_aac_elst_fixture(
 
     GaplessFixture {
         bytes,
-        media_info: MediaInfo::new(Some(StreamAudioCodec::AacLc), Some(ContainerFormat::Fmp4))
-            .with_sample_rate(GAPLESS_SAMPLE_RATE)
-            .with_channels(GAPLESS_CHANNELS),
+        media_info: MediaInfo::builder()
+            .codec(StreamAudioCodec::AacLc)
+            .container(ContainerFormat::Fmp4)
+            .sample_rate(GAPLESS_SAMPLE_RATE)
+            .channels(GAPLESS_CHANNELS)
+            .build(),
         expected_visible_frames: crate::gapless_common::generated_aac_elst_visible_frames(),
     }
 }

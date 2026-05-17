@@ -450,9 +450,7 @@ mod tests {
 
     #[kithara::test]
     fn decoder_session_construction() {
-        let media_info = MediaInfo::default()
-            .with_channels(2)
-            .with_sample_rate(44100);
+        let media_info = MediaInfo::builder().channels(2).sample_rate(44100).build();
         let stop = Arc::new(AtomicBool::new(false));
         let (decoder, _logs) = infinite_decoder_loose(PcmSpec::default(), stop);
         let session = DecoderSession {

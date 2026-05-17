@@ -754,14 +754,15 @@ async fn test_net_builder_creates_functional_client() {
 
 #[kithara::test(tokio)]
 async fn test_net_builder_with_custom_options() {
-    let opts = NetOptions::default()
-        .with_inactivity_timeout(Duration::from_millis(100))
-        .with_total_timeout(Duration::from_millis(100))
-        .with_retry_policy(RetryPolicy::new(
+    let opts = NetOptions::builder()
+        .inactivity_timeout(Duration::from_millis(100))
+        .total_timeout(Duration::from_millis(100))
+        .retry_policy(RetryPolicy::new(
             2,
             Duration::from_millis(50),
             Duration::from_millis(200),
-        ));
+        ))
+        .build();
 
     let client = HttpClient::new(opts);
 

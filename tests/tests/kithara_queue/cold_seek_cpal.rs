@@ -109,8 +109,12 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
-    let net = NetOptions::default().with_is_insecure(true);
-    let downloader = Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
+    let net = NetOptions::builder().is_insecure(true).build();
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .client(HttpClient::new(net))
+            .build(),
+    );
 
     let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));

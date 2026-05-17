@@ -91,7 +91,7 @@ async fn body_stream_empty_collects_to_empty() {
 
 #[kithara::test(tokio)]
 async fn peer_handle_cancel_scoped_to_peer() {
-    let dl = Downloader::new(DownloaderConfig::default());
+    let dl = Downloader::new(DownloaderConfig::builder().build());
     let peer_a = dl.register(Arc::new(MockPeer));
     let peer_b = dl.register(Arc::new(MockPeer));
 
@@ -125,10 +125,15 @@ async fn peer_handle_cancel_fires_on_last_clone_drop() {
 
 #[kithara::test(tokio)]
 async fn peer_handle_execute_returns_error_on_unreachable() {
-    let net = NetOptions::default()
-        .with_inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .with_total_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS));
-    let dl = Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .total_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .build();
+    let dl = Downloader::new(
+        DownloaderConfig::builder()
+            .client(HttpClient::new(net))
+            .build(),
+    );
     let handle = dl.register(Arc::new(MockPeer));
 
     let h2 = handle.clone();
@@ -160,7 +165,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
 #[kithara::test(tokio)]
 async fn peer_handle_downloader_cancel_cascades() {
     let cancel = CancellationToken::new();
-    let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
+    let dl = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
     let handle = dl.register(Arc::new(MockPeer));
 
     cancel.cancel();
@@ -517,7 +522,9 @@ async fn shared_client_keepalive_bounds_socket_count() {
 
     let url = Url::parse(&format!("http://{addr}/head")).expect("url");
     let shared_client = HttpClient::new(
-        NetOptions::default().with_pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT),
+        NetOptions::builder()
+            .pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT)
+            .build(),
     );
 
     let mut total_ok = 0;
@@ -600,8 +607,9 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     });
     let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
 
-    let config =
-        DownloaderConfig::default().with_soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS));
+    let config = DownloaderConfig::builder()
+        .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
+        .build();
     let dl = Downloader::new(config);
 
     let root = EventBus::new(EVENT_BUS_CAPACITY);

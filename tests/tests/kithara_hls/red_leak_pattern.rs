@@ -54,7 +54,7 @@ impl Peer for ImmortalPeer {
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
     let cancel = CancellationToken::new();
-    let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
+    let downloader = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
 
     let peer: Arc<ImmortalPeer> = Arc::new(ImmortalPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();
@@ -106,8 +106,11 @@ async fn red_hls_source_drop_leaks_peer(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
 
-    let downloader =
-        Downloader::new(DownloaderConfig::default().with_cancel(CancellationToken::new()));
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .cancel(CancellationToken::new())
+            .build(),
+    );
 
     {
         let stream = Stream::<Hls>::new(

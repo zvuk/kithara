@@ -110,7 +110,11 @@ impl File {
             // would tear down the whole stream on any speculative
             // drop (e.g. when the file turns out to be fully cached
             // and the downloader is never used). Mirrors HLS.
-            Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()))
+            Downloader::new(
+                DownloaderConfig::builder()
+                    .cancel(cancel.child_token())
+                    .build(),
+            )
         });
 
         let backend_builder = AssetStoreBuilder::new()

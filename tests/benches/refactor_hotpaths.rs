@@ -333,9 +333,11 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
             |temp_dir| {
                 let url = master_url.clone();
                 rt.block_on(async move {
-                    let net = NetOptions::default().with_pool_max_idle_per_host(8);
+                    let net = NetOptions::builder().pool_max_idle_per_host(8).build();
                     let downloader = Downloader::new(
-                        DownloaderConfig::default().with_client(HttpClient::new(net)),
+                        DownloaderConfig::builder()
+                            .client(HttpClient::new(net))
+                            .build(),
                     );
                     let store = StoreOptions::new(temp_dir.path())
                         .with_is_ephemeral(true)

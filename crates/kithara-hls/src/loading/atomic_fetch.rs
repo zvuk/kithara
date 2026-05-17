@@ -122,7 +122,7 @@ async fn download_atomic_bytes(
 ) -> HlsResult<Bytes> {
     let cmd = FetchCmd::get(url)
         .headers(headers)
-        .with_validator(reject_html_response);
+        .validator(reject_html_response);
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
     resp.body.collect().await.map_err(HlsError::from)
 }

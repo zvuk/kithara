@@ -106,8 +106,11 @@ fn build_queue_with_tick(
             }
         }
     });
-    let downloader =
-        Downloader::new(DownloaderConfig::default().with_max_concurrent(Consts::MAX_CONCURRENT));
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .max_concurrent(Consts::MAX_CONCURRENT)
+            .build(),
+    );
     let store = StoreOptions::new(temp_dir.path());
     (queue, player, downloader, store, tick_handle)
 }

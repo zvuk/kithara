@@ -15,8 +15,8 @@ test-utils = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
+bon = { workspace = true }
 derivative = { workspace = true }
-derive_setters = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 bytes = { workspace = true }

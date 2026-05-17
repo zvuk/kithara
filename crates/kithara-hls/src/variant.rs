@@ -402,7 +402,11 @@ impl HlsVariant {
 
     pub(crate) fn media_info(&self) -> MediaInfo {
         let variant_u32 = u32::try_from(self.variant).unwrap_or(u32::MAX);
-        MediaInfo::new(self.codec, self.container).with_variant_index(variant_u32)
+        MediaInfo::builder()
+            .maybe_codec(self.codec)
+            .maybe_container(self.container)
+            .variant_index(variant_u32)
+            .build()
     }
 
     /// Header byte range for format-change resync — alias for
@@ -624,10 +628,13 @@ impl HlsVariant {
                 )
             })?;
         let seg_idx_u32 = u32::try_from(segment_index).unwrap_or(u32::MAX);
-        let anchor = SourceSeekAnchor::new(byte_offset, segment_start)
-            .with_segment_end(segment_end)
-            .with_segment_index(seg_idx_u32)
-            .with_variant_index(variant);
+        let anchor = SourceSeekAnchor::builder()
+            .byte_offset(byte_offset)
+            .segment_start(segment_start)
+            .segment_end(segment_end)
+            .segment_index(seg_idx_u32)
+            .variant_index(variant)
+            .build();
         self.set_position(byte_offset);
         self.wake_peer();
         Ok(Some(anchor))

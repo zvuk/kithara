@@ -446,9 +446,12 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
     mp4_bytes.extend_from_slice(&init);
     mp4_bytes.extend_from_slice(&segment);
 
-    let media_info = MediaInfo::new(Some(codec), Some(ContainerFormat::Fmp4))
-        .with_sample_rate(44_100)
-        .with_channels(2);
+    let media_info = MediaInfo::builder()
+        .codec(codec)
+        .container(ContainerFormat::Fmp4)
+        .sample_rate(44_100)
+        .channels(2)
+        .build();
     let box_tags = scan_top_level_box_tags(&mp4_bytes);
     let box_summaries = scan_top_level_box_summaries(&mp4_bytes);
     assert!(

@@ -1,6 +1,5 @@
 use std::io;
 
-use derive_setters::Setters;
 use kithara_events::RequestMethod;
 use kithara_net::{Headers, NetError, NetResult, RangeSpec};
 use tokio_util::sync::CancellationToken;
@@ -39,37 +38,30 @@ pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
 /// establishes the HTTP connection and returns a
 /// [`FetchResponse`](super::FetchResponse) with headers and a body stream.
 #[non_exhaustive]
-#[derive(Setters)]
 pub struct FetchCmd {
+    /// HTTP method.
+    pub method: RequestMethod,
+    /// URL to fetch.
+    pub url: Url,
     /// Epoch cancel token from the Peer. When set, the Downloader
     /// combines it with the track-level cancel via [`CancelGroup`].
     pub cancel: Option<CancellationToken>,
     /// Additional HTTP headers for this request.
     pub headers: Option<Headers>,
     /// Streaming path completion handler. `None` for channel path (`execute`/`batch`).
-    #[setters(skip)]
     pub on_complete: Option<OnCompleteFn>,
     /// Streaming path response callback — fires once when the
     /// response is ready, before the body streams. `None` for the
     /// channel path (`execute`/`batch`).
-    #[setters(skip)]
     pub on_response: Option<OnResponseFn>,
     /// Optional byte range (HTTP Range request).
     pub range: Option<RangeSpec>,
     /// Optional per-request response validator.
     /// Called with the response headers after a successful HTTP response.
     /// Return `Err` to reject the response before the body is consumed.
-    #[setters(skip)]
     pub validator: Option<ResponseValidator>,
     /// Streaming path body writer. `None` for channel path (`execute`/`batch`).
-    #[setters(skip)]
     pub writer: Option<WriterFn>,
-    /// HTTP method (default: [`RequestMethod::Get`]).
-    #[setters(skip)]
-    pub method: RequestMethod,
-    /// URL to fetch.
-    #[setters(skip)]
-    pub url: Url,
 }
 
 impl FetchCmd {
@@ -85,24 +77,6 @@ impl FetchCmd {
         Self::with_method(RequestMethod::Head, url)
     }
 
-    /// Set the per-command completion handler (streaming path).
-    #[must_use]
-    pub fn on_complete(mut self, cb: OnCompleteFn) -> Self {
-        self.on_complete = Some(cb);
-        self
-    }
-
-    /// Set the per-command response callback (streaming path). Fires
-    /// once when the HTTP response is ready (headers available, past
-    /// validation), before any body chunks reach the writer.
-    #[must_use]
-    pub fn on_response(mut self, cb: OnResponseFn) -> Self {
-        self.on_response = Some(cb);
-        self
-    }
-
-    /// Build a [`FetchCmd`] with the given method and URL; all other
-    /// fields start unset.
     fn with_method(method: RequestMethod, url: Url) -> Self {
         Self {
             method,
@@ -117,10 +91,24 @@ impl FetchCmd {
         }
     }
 
-    /// Set the per-request response validator.
+    /// Attach an epoch cancel token.
     #[must_use]
-    pub fn with_validator(mut self, f: fn(&Headers) -> NetResult<()>) -> Self {
-        self.validator = Some(f);
+    pub fn cancel(mut self, cancel: Option<CancellationToken>) -> Self {
+        self.cancel = cancel;
+        self
+    }
+
+    /// Set additional HTTP headers.
+    #[must_use]
+    pub fn headers(mut self, headers: Option<Headers>) -> Self {
+        self.headers = headers;
+        self
+    }
+
+    /// Set byte range (HTTP Range request).
+    #[must_use]
+    pub fn range(mut self, range: Option<RangeSpec>) -> Self {
+        self.range = range;
         self
     }
 
@@ -128,6 +116,27 @@ impl FetchCmd {
     #[must_use]
     pub fn writer(mut self, w: WriterFn) -> Self {
         self.writer = Some(w);
+        self
+    }
+
+    /// Set the per-command completion handler (streaming path).
+    #[must_use]
+    pub fn on_complete(mut self, cb: OnCompleteFn) -> Self {
+        self.on_complete = Some(cb);
+        self
+    }
+
+    /// Set the per-command response callback (streaming path).
+    #[must_use]
+    pub fn on_response(mut self, cb: OnResponseFn) -> Self {
+        self.on_response = Some(cb);
+        self
+    }
+
+    /// Set the per-request response validator.
+    #[must_use]
+    pub fn validator(mut self, f: fn(&Headers) -> NetResult<()>) -> Self {
+        self.validator = Some(f);
         self
     }
 }
@@ -145,7 +154,7 @@ impl std::fmt::Debug for FetchCmd {
 /// Reject responses with `content-type: text/html`.
 ///
 /// Protects against CDN soft-error pages that return `200 OK` with an HTML
-/// body. Pass as the validator argument to [`FetchCmd::with_validator`].
+/// body. Pass as the validator argument to [`FetchCmd::validator`].
 ///
 /// # Errors
 ///

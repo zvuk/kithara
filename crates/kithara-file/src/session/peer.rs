@@ -87,7 +87,7 @@ impl FilePeer {
         let mut cmd = FetchCmd::get(url)
             .cancel(Some(cancel))
             .writer(writer)
-            .with_validator(reject_html_response)
+            .validator(reject_html_response)
             .on_response(on_response);
         if resume_from > 0 {
             cmd = cmd.range(Some(RangeSpec::new(resume_from, None)));

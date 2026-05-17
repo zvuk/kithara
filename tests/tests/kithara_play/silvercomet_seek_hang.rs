@@ -106,8 +106,12 @@ fn blocks_for_seconds(secs: f64) -> u32 {
 }
 
 fn fresh_downloader() -> Downloader {
-    let net = NetOptions::default().with_is_insecure(true);
-    Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)))
+    let net = NetOptions::builder().is_insecure(true).build();
+    Downloader::new(
+        DownloaderConfig::builder()
+            .client(HttpClient::new(net))
+            .build(),
+    )
 }
 
 async fn build_resource(

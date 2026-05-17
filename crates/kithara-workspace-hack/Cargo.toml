@@ -109,6 +109,7 @@ indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -116,6 +117,7 @@ rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
@@ -154,6 +156,7 @@ indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -161,6 +164,7 @@ rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
@@ -194,6 +198,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -201,6 +206,7 @@ rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
@@ -234,6 +240,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -241,6 +248,7 @@ rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
@@ -272,6 +280,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -279,6 +288,7 @@ rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
@@ -312,6 +322,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
@@ -319,6 +330,7 @@ rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }

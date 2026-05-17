@@ -330,34 +330,38 @@ fn v3_spec() -> PcmSpec {
 }
 
 fn v0_info() -> MediaInfo {
-    MediaInfo::default()
-        .with_codec(AudioCodec::AacLc)
-        .with_sample_rate(44100)
-        .with_channels(2)
+    MediaInfo::builder()
+        .codec(AudioCodec::AacLc)
+        .sample_rate(44100)
+        .channels(2)
+        .build()
 }
 
 fn v3_info() -> MediaInfo {
-    MediaInfo::default()
-        .with_codec(AudioCodec::Flac)
-        .with_sample_rate(96000)
-        .with_channels(2)
+    MediaInfo::builder()
+        .codec(AudioCodec::Flac)
+        .sample_rate(96000)
+        .channels(2)
+        .build()
 }
 
 fn aac_variant_info(variant_index: u32) -> MediaInfo {
-    MediaInfo::default()
-        .with_codec(AudioCodec::AacLc)
-        .with_sample_rate(44100)
-        .with_channels(2)
-        .with_variant_index(variant_index)
+    MediaInfo::builder()
+        .codec(AudioCodec::AacLc)
+        .sample_rate(44100)
+        .channels(2)
+        .variant_index(variant_index)
+        .build()
 }
 
 fn aac_fmp4_variant_info(variant_index: u32) -> MediaInfo {
-    MediaInfo::default()
-        .with_codec(AudioCodec::AacLc)
-        .with_container(ContainerFormat::Fmp4)
-        .with_sample_rate(44100)
-        .with_channels(2)
-        .with_variant_index(variant_index)
+    MediaInfo::builder()
+        .codec(AudioCodec::AacLc)
+        .container(ContainerFormat::Fmp4)
+        .sample_rate(44100)
+        .channels(2)
+        .variant_index(variant_index)
+        .build()
 }
 
 #[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
@@ -852,10 +856,11 @@ fn v1_spec() -> PcmSpec {
 }
 
 fn v1_info() -> MediaInfo {
-    MediaInfo::default()
-        .with_codec(AudioCodec::Flac)
-        .with_sample_rate(48000)
-        .with_channels(1)
+    MediaInfo::builder()
+        .codec(AudioCodec::Flac)
+        .sample_rate(48000)
+        .channels(1)
+        .build()
 }
 
 /// **End-to-end ABR switch test** — verify no samples lost during decoder recreation.
@@ -912,10 +917,11 @@ fn abr_switch_must_not_lose_samples() {
         channels: 1,
         sample_rate: 44100,
     };
-    let v0_mono_info = MediaInfo::default()
-        .with_codec(AudioCodec::AacLc)
-        .with_sample_rate(44100)
-        .with_channels(1);
+    let v0_mono_info = MediaInfo::builder()
+        .codec(AudioCodec::AacLc)
+        .sample_rate(44100)
+        .channels(1)
+        .build();
     let initial_decoder = {
         let reader = new_offset_reader(shared.clone(), 0);
         Box::new(EncodedDecoder::new(

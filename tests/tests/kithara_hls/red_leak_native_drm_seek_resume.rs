@@ -100,8 +100,11 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     let server = TestServerHelper::new().await;
     let shared_worker = AudioWorkerHandle::new();
 
-    let downloader =
-        Downloader::new(DownloaderConfig::default().with_cancel(CancellationToken::new()));
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .cancel(CancellationToken::new())
+            .build(),
+    );
 
     run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;
     sleep(Duration::from_millis(Consts::SETTLE_MS)).await;

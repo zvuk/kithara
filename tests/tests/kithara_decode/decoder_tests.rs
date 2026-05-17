@@ -19,14 +19,15 @@ fn audio() -> EmbeddedAudio {
 
 #[kithara::fixture]
 fn wav_media_info() -> MediaInfo {
-    MediaInfo::default().with_container(ContainerFormat::Wav)
+    MediaInfo::builder().container(ContainerFormat::Wav).build()
 }
 
 #[kithara::fixture]
 fn mp3_media_info() -> MediaInfo {
-    MediaInfo::default()
-        .with_codec(AudioCodec::Mp3)
-        .with_container(ContainerFormat::MpegAudio)
+    MediaInfo::builder()
+        .codec(AudioCodec::Mp3)
+        .container(ContainerFormat::MpegAudio)
+        .build()
 }
 
 #[kithara::test]
