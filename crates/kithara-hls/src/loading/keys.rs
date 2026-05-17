@@ -228,7 +228,7 @@ impl KeyManager {
         }
         let headers = self.merged_headers(rule.headers.as_ref());
 
-        let cmd = FetchCmd::get(fetch_url).headers(headers);
+        let cmd = FetchCmd::get(fetch_url).maybe_headers(headers).build();
         let resp = self.downloader.execute(cmd).await.map_err(HlsError::from)?;
         let raw_key = resp.body.collect().await.map_err(HlsError::from)?;
 

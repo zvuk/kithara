@@ -281,7 +281,7 @@ impl ResourceConfig {
             .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
         let mut store = self.store;
         if let Some(hub) = self.flush_hub {
-            store = store.with_flush_hub(hub);
+            store.flush_hub = Some(hub);
         }
         let mut file_config = FileConfig::new(file_src)
             .with_store(store)
@@ -351,7 +351,7 @@ impl ResourceConfig {
 
         let mut store = self.store;
         if let Some(hub) = self.flush_hub {
-            store = store.with_flush_hub(hub);
+            store.flush_hub = Some(hub);
         }
         let mut hls_config = HlsConfig::new(url).with_store(store).with_keys(self.keys);
         if let Some(dl) = self.downloader {

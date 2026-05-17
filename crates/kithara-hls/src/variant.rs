@@ -1418,9 +1418,10 @@ impl HlsVariant {
             planned,
         };
         FetchCmd::get(url)
-            .cancel(Some(cancel))
+            .cancel(cancel)
             .writer(slot.writer())
             .on_complete(slot.into_on_complete())
+            .build()
     }
 }
 

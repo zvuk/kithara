@@ -122,7 +122,12 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let cancel = CancellationToken::new();
 
     let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()).with_is_ephemeral(true))
+        .with_store(
+            StoreOptions::builder()
+                .cache_dir(temp_dir.path().into())
+                .is_ephemeral(true)
+                .build(),
+        )
         .with_cancel(cancel)
         .with_initial_abr_mode(AbrMode::Manual(0));
 

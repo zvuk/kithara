@@ -339,9 +339,11 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                             .client(HttpClient::new(net))
                             .build(),
                     );
-                    let store = StoreOptions::new(temp_dir.path())
-                        .with_is_ephemeral(true)
-                        .with_max_bytes(200_000);
+                    let store = StoreOptions::builder()
+                        .cache_dir(temp_dir.path().into())
+                        .is_ephemeral(true)
+                        .max_bytes(200_000)
+                        .build();
                     let config = HlsConfig::new(url)
                         .with_store(store)
                         .with_initial_abr_mode(AbrMode::Auto(Some(1)))

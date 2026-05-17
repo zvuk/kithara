@@ -179,7 +179,9 @@ impl SizeEstimator {
     }
 
     fn head_cmd(&self, url: Url) -> FetchCmd {
-        FetchCmd::head(url).headers(self.headers.clone())
+        FetchCmd::head(url)
+            .maybe_headers(self.headers.clone())
+            .build()
     }
 
     fn content_length(resp: &FetchResponse) -> u64 {

@@ -1,5 +1,6 @@
 use std::io;
 
+use bon::Builder;
 use kithara_events::RequestMethod;
 use kithara_net::{Headers, NetError, NetResult, RangeSpec};
 use tokio_util::sync::CancellationToken;
@@ -37,6 +38,8 @@ pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
 /// [`PeerHandle::execute`](super::PeerHandle::execute). The downloader
 /// establishes the HTTP connection and returns a
 /// [`FetchResponse`](super::FetchResponse) with headers and a body stream.
+#[derive(Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct FetchCmd {
     /// HTTP method.
@@ -65,79 +68,18 @@ pub struct FetchCmd {
 }
 
 impl FetchCmd {
-    /// HTTP GET command for the given URL.
-    #[must_use]
-    pub fn get(url: Url) -> Self {
-        Self::with_method(RequestMethod::Get, url)
+    /// Builder for an HTTP GET command targeting the given URL.
+    pub fn get(
+        url: Url,
+    ) -> FetchCmdBuilder<fetch_cmd_builder::SetUrl<fetch_cmd_builder::SetMethod>> {
+        Self::builder().method(RequestMethod::Get).url(url)
     }
 
-    /// HTTP HEAD command for the given URL.
-    #[must_use]
-    pub fn head(url: Url) -> Self {
-        Self::with_method(RequestMethod::Head, url)
-    }
-
-    fn with_method(method: RequestMethod, url: Url) -> Self {
-        Self {
-            method,
-            url,
-            range: None,
-            headers: None,
-            cancel: None,
-            writer: None,
-            on_complete: None,
-            on_response: None,
-            validator: None,
-        }
-    }
-
-    /// Attach an epoch cancel token.
-    #[must_use]
-    pub fn cancel(mut self, cancel: Option<CancellationToken>) -> Self {
-        self.cancel = cancel;
-        self
-    }
-
-    /// Set additional HTTP headers.
-    #[must_use]
-    pub fn headers(mut self, headers: Option<Headers>) -> Self {
-        self.headers = headers;
-        self
-    }
-
-    /// Set byte range (HTTP Range request).
-    #[must_use]
-    pub fn range(mut self, range: Option<RangeSpec>) -> Self {
-        self.range = range;
-        self
-    }
-
-    /// Set the per-command body writer (streaming path).
-    #[must_use]
-    pub fn writer(mut self, w: WriterFn) -> Self {
-        self.writer = Some(w);
-        self
-    }
-
-    /// Set the per-command completion handler (streaming path).
-    #[must_use]
-    pub fn on_complete(mut self, cb: OnCompleteFn) -> Self {
-        self.on_complete = Some(cb);
-        self
-    }
-
-    /// Set the per-command response callback (streaming path).
-    #[must_use]
-    pub fn on_response(mut self, cb: OnResponseFn) -> Self {
-        self.on_response = Some(cb);
-        self
-    }
-
-    /// Set the per-request response validator.
-    #[must_use]
-    pub fn validator(mut self, f: fn(&Headers) -> NetResult<()>) -> Self {
-        self.validator = Some(f);
-        self
+    /// Builder for an HTTP HEAD command targeting the given URL.
+    pub fn head(
+        url: Url,
+    ) -> FetchCmdBuilder<fetch_cmd_builder::SetUrl<fetch_cmd_builder::SetMethod>> {
+        Self::builder().method(RequestMethod::Head).url(url)
     }
 }
 

@@ -95,13 +95,11 @@ impl HlsStreamBuilder {
             None => temp_path.to_path_buf(),
         };
 
-        let mut store_opts = StoreOptions::new(&store_path);
-        if let Some(max) = self.max_assets {
-            store_opts = store_opts.with_max_assets(max);
-        }
-        if let Some(max) = self.max_bytes {
-            store_opts = store_opts.with_max_bytes(max);
-        }
+        let store_opts = StoreOptions::builder()
+            .cache_dir(store_path)
+            .maybe_max_assets(self.max_assets)
+            .maybe_max_bytes(self.max_bytes)
+            .build();
 
         let config = HlsConfig::new(url)
             .with_store(store_opts)

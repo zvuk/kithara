@@ -34,9 +34,11 @@ async fn build_small_cache_stream(
     cancel: CancellationToken,
 ) -> Stream<Hls> {
     let url = server.url("/master.m3u8");
-    let store = StoreOptions::new(temp_path)
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_path.into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
+        .build();
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)

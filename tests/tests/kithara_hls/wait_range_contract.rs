@@ -41,9 +41,11 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     .await;
     let url = server.url("/master.m3u8");
 
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(ephemeral)
-        .with_cache_capacity(NonZeroUsize::new(256).unwrap());
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(ephemeral)
+        .cache_capacity(NonZeroUsize::new(256).unwrap())
+        .build();
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())
@@ -150,9 +152,11 @@ async fn ephemeral_small_cache_reads_entire_stream() {
     let url = server.url("/master.m3u8");
     let total_bytes = server.total_bytes();
 
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(5).expect("5 > 0"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(5).expect("5 > 0"))
+        .build();
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())

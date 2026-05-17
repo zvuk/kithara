@@ -32,9 +32,11 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(1).expect("nonzero"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(1).expect("nonzero"))
+        .build();
 
     let hls_config = HlsConfig::new(url)
         .with_store(store)

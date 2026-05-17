@@ -84,18 +84,15 @@ impl FilePeer {
             },
         );
 
-        let mut cmd = FetchCmd::get(url)
-            .cancel(Some(cancel))
+        FetchCmd::get(url)
+            .cancel(cancel)
             .writer(writer)
             .validator(reject_html_response)
-            .on_response(on_response);
-        if resume_from > 0 {
-            cmd = cmd.range(Some(RangeSpec::new(resume_from, None)));
-        }
-        if let Some(h) = headers {
-            cmd = cmd.headers(Some(h));
-        }
-        cmd.on_complete(on_complete)
+            .on_response(on_response)
+            .maybe_range((resume_from > 0).then(|| RangeSpec::new(resume_from, None)))
+            .maybe_headers(headers)
+            .on_complete(on_complete)
+            .build()
     }
 }
 

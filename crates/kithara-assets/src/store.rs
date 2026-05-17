@@ -4,8 +4,8 @@
 use std::env;
 use std::{fmt, hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
+use bon::Builder;
 use dashmap::DashMap;
-use derive_setters::Setters;
 use kithara_bufpool::BytePool;
 use kithara_storage::StorageResource;
 use tokio_util::sync::CancellationToken;
@@ -40,10 +40,12 @@ pub type OnInvalidatedFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 ///
 /// Used by higher-level crates (kithara-file, kithara-hls) for unified configuration.
 /// This provides a user-friendly API that hides internal details like `asset_root`.
-#[derive(Clone, Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct StoreOptions {
+    /// Directory for persistent cache storage (required).
+    pub cache_dir: PathBuf,
     /// In-memory LRU cache capacity for opened resources.
     pub cache_capacity: Option<NonZeroUsize>,
     /// Shared flush coordinator for the on-disk indexes (`pins.bin`,
@@ -55,22 +57,19 @@ pub struct StoreOptions {
     /// `AssetStore`s to share a single worker. Use
     /// [`FlushHub::with_worker`] in production for debounced /
     /// coalesced background flushing.
-    #[setters(skip)]
     pub flush_hub: Option<Arc<FlushHub>>,
     /// Maximum number of assets to keep (soft cap for LRU eviction).
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
     pub max_bytes: Option<u64>,
     /// Called when a cached resource is invalidated (displaced from LRU cache).
-    #[setters(skip)]
     pub on_invalidated: Option<OnInvalidatedFn>,
-    /// Directory for persistent cache storage (required).
-    pub cache_dir: PathBuf,
     /// Use ephemeral (in-memory) storage instead of disk.
     ///
     /// When `true`, the asset store uses `MemAssetStore` instead of
     /// `DiskAssetStore`. Data is never written to disk.
     /// Default: `false`.
+    #[builder(default)]
     pub is_ephemeral: bool,
 }
 
@@ -93,33 +92,29 @@ impl fmt::Debug for StoreOptions {
 
 impl Default for StoreOptions {
     fn default() -> Self {
-        Self {
-            #[cfg(not(target_arch = "wasm32"))]
-            cache_dir: env::temp_dir().join("kithara"),
-            #[cfg(target_arch = "wasm32")]
-            cache_dir: PathBuf::from("/kithara"),
-            cache_capacity: None,
-            is_ephemeral: false,
-            flush_hub: None,
-            max_assets: None,
-            max_bytes: None,
-            on_invalidated: None,
-        }
+        Self::default_builder().build()
     }
 }
 
 impl StoreOptions {
-    /// Create new store options with the given cache directory.
-    pub fn new<P: Into<PathBuf>>(cache_dir: P) -> Self {
-        Self {
-            cache_dir: cache_dir.into(),
-            cache_capacity: None,
-            is_ephemeral: false,
-            flush_hub: None,
-            max_assets: None,
-            max_bytes: None,
-            on_invalidated: None,
-        }
+    /// Create options with `cache_dir` set and all other fields at their builder defaults.
+    pub fn new<P>(cache_dir: P) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        Self::builder().cache_dir(cache_dir.into()).build()
+    }
+
+    /// Builder pre-populated with the platform default `cache_dir`.
+    ///
+    /// Allows `StoreOptions::default_builder().is_ephemeral(true).build()` —
+    /// the chainable counterpart to `StoreOptions::default()`.
+    pub fn default_builder() -> StoreOptionsBuilder<store_options_builder::SetCacheDir> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let cache_dir = env::temp_dir().join("kithara");
+        #[cfg(target_arch = "wasm32")]
+        let cache_dir = PathBuf::from("/kithara");
+        Self::builder().cache_dir(cache_dir)
     }
 
     /// Effective LRU cache capacity (explicit or default).
@@ -136,17 +131,6 @@ impl StoreOptions {
             max_assets: self.max_assets,
             max_bytes: self.max_bytes,
         }
-    }
-
-    /// Reuse an externally-owned [`FlushHub`] for the on-disk indexes.
-    ///
-    /// Several stores can share the same hub — useful when one
-    /// process owns multiple [`AssetStore`]s and wants a single
-    /// background flush worker covering them all.
-    #[must_use]
-    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
-        self.flush_hub = Some(hub);
-        self
     }
 }
 
@@ -503,7 +487,7 @@ where
     }
 
     /// Reuse an externally-owned [`FlushHub`] for the on-disk indexes.
-    /// See [`StoreOptions::with_flush_hub`].
+    /// See [`StoreOptions`] builder's `flush_hub` setter.
     #[must_use]
     pub fn flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
         self.flush_hub = Some(hub);

@@ -4106,10 +4106,10 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "bitflags 2.11.1",
+ "bon",
  "cbc",
  "dashmap",
  "delegate",
- "derive_setters",
  "hex",
  "kithara-assets",
  "kithara-bufpool",
