@@ -50,12 +50,10 @@ impl Resource {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
         match source_type {
-            #[cfg(feature = "file")]
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.into_file_config();
                 Self::from_stream_audio(audio_config, src).await
             }
-            #[cfg(feature = "hls")]
             SourceType::HlsStream(_) => {
                 let audio_config = config.into_hls_config()?;
                 Self::from_stream_audio(audio_config, src).await

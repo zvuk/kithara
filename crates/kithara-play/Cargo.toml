@@ -17,11 +17,11 @@ kithara-decode = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
-kithara-file = { workspace = true, optional = true }
-kithara-hls = { workspace = true, optional = true }
+kithara-file = { workspace = true }
+kithara-hls = { workspace = true }
 kithara-abr = { workspace = true }
-kithara-assets = { workspace = true, optional = true }
-kithara-net = { workspace = true, optional = true }
+kithara-assets = { workspace = true }
+kithara-net = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-hang-detector = { workspace = true }
 kithara-test-macros = { workspace = true }
@@ -54,9 +54,7 @@ bevy_platform = { workspace = true }
 firewheel-web-audio = { workspace = true, optional = true }
 
 [features]
-default = ["file", "hls", "backend-cpal"]
-file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
-hls = ["dep:kithara-hls", "dep:kithara-assets", "dep:kithara-net"]
+default = ["backend-cpal"]
 backend-cpal = ["firewheel/cpal"]
 backend-web-audio = ["dep:firewheel-web-audio"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]

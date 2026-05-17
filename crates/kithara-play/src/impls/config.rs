@@ -6,34 +6,26 @@ use std::{
 };
 
 use derive_setters::Setters;
-#[cfg(feature = "hls")]
 use kithara_abr::AbrMode;
-#[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::{FlushHub, StoreOptions};
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
-#[cfg(feature = "file")]
 use kithara_file::{FileConfig, FileSrc};
-#[cfg(feature = "hls")]
 use kithara_hls::{HlsConfig, KeyOptions};
-#[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::Headers;
-#[cfg(any(feature = "file", feature = "hls"))]
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-#[cfg(feature = "file")]
 fn derive_remote_file_hint(url: &Url) -> Option<String> {
     url.path_segments()
         .and_then(|mut segments| segments.next_back())
         .and_then(derive_extension_hint)
 }
 
-#[cfg(feature = "file")]
 fn derive_extension_hint(segment: &str) -> Option<String> {
     let (_, extension) = segment.rsplit_once('.')?;
     if extension.is_empty() || !extension.chars().all(|ch| ch.is_ascii_alphanumeric()) {
@@ -103,7 +95,6 @@ pub struct ResourceConfig {
     /// Initial ABR mode passed to the HLS stream. The shared
     /// `AbrController` lives on the `Downloader` and runs per-sample
     /// decisions; this field only seeds the starting variant.
-    #[cfg(feature = "hls")]
     pub initial_abr_mode: AbrMode,
     /// Unified event bus for streaming, decode, and audio events.
     ///
@@ -121,12 +112,10 @@ pub struct ResourceConfig {
     #[setters(skip)]
     pub hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
-    #[cfg(feature = "hls")]
     pub hls_base_url: Option<Url>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
     /// Encryption key handling configuration.
-    #[cfg(feature = "hls")]
     pub keys: KeyOptions,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
@@ -141,7 +130,6 @@ pub struct ResourceConfig {
     #[setters(skip)]
     pub name: Option<String>,
     /// Additional HTTP headers to include in all network requests.
-    #[cfg(any(feature = "file", feature = "hls"))]
     pub headers: Option<Headers>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
@@ -176,14 +164,12 @@ pub struct ResourceConfig {
     /// Audio resource source (URL or local path).
     pub src: ResourceSrc,
     /// Storage configuration (cache directory, eviction limits).
-    #[cfg(any(feature = "file", feature = "hls"))]
     pub store: StoreOptions,
     /// Shared downloader instance.
     ///
     /// When set, the underlying `FileConfig` / `HlsConfig` reuses this
     /// downloader instead of spawning a private one. Lets multiple
     /// resources share a single HTTP pool and runtime handle.
-    #[cfg(any(feature = "file", feature = "hls"))]
     #[setters(skip)]
     pub downloader: Option<Downloader>,
     /// Shared flush coordinator for `AssetStore` on-disk indexes.
@@ -192,7 +178,6 @@ pub struct ResourceConfig {
     /// of the per-store default. Lets multiple tracks coalesce index
     /// flushes through a single (optionally worker-backed) coordinator
     /// — analogous to a shared [`Downloader`] or audio worker.
-    #[cfg(any(feature = "file", feature = "hls"))]
     #[setters(skip)]
     pub flush_hub: Option<Arc<FlushHub>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
@@ -249,18 +234,14 @@ impl ResourceConfig {
 
         Ok(Self {
             src,
-            #[cfg(feature = "hls")]
             initial_abr_mode: AbrMode::default(),
             bus: None,
             byte_pool: None,
             cancel: None,
             hint: None,
-            #[cfg(any(feature = "file", feature = "hls"))]
             headers: None,
-            #[cfg(feature = "hls")]
             hls_base_url: None,
             host_sample_rate: None,
-            #[cfg(feature = "hls")]
             keys: KeyOptions::default(),
             look_ahead_bytes: None,
             name: None,
@@ -271,11 +252,8 @@ impl ResourceConfig {
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             decoder_backend: DecoderBackend::default(),
             resampler_quality: ResamplerQuality::default(),
-            #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
-            #[cfg(any(feature = "file", feature = "hls"))]
             downloader: None,
-            #[cfg(any(feature = "file", feature = "hls"))]
             flush_hub: None,
             worker: None,
             gapless_mode: kithara_decode::GaplessMode::default(),
@@ -283,7 +261,6 @@ impl ResourceConfig {
     }
 
     /// Convert into an `AudioConfig<File>`.
-    #[cfg(feature = "file")]
     pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
         let (file_src, hint) = match self.src {
             ResourceSrc::Url(url) => {
@@ -361,7 +338,6 @@ impl ResourceConfig {
     }
 
     /// Convert into an `AudioConfig<Hls>`.
-    #[cfg(feature = "hls")]
     pub(crate) fn into_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
         let url = match self.src {
             ResourceSrc::Url(url) => url,
@@ -439,7 +415,6 @@ impl ResourceConfig {
     }
 
     /// Set a shared downloader for the underlying stream.
-    #[cfg(any(feature = "file", feature = "hls"))]
     #[must_use]
     pub fn with_downloader(mut self, dl: Downloader) -> Self {
         self.downloader = Some(dl);
@@ -448,7 +423,6 @@ impl ResourceConfig {
 
     /// Set a shared [`FlushHub`] for the underlying `AssetStore`.
     /// When omitted, each store gets its own no-worker hub.
-    #[cfg(any(feature = "file", feature = "hls"))]
     #[must_use]
     pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
         self.flush_hub = Some(hub);
@@ -491,7 +465,6 @@ mod tests {
         assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == "https"));
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn config_file_url_derives_extension_hint_from_last_path_segment() {
         let config = ResourceConfig::new("https://example.com/audio/get-mp3/song.MP3?sign=test")
@@ -501,7 +474,6 @@ mod tests {
         assert_eq!(config.hint.as_deref(), Some("mp3"));
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn config_file_url_without_extension_does_not_derive_hint() {
         let config = ResourceConfig::new("https://example.com/get-mp3/42?sign=test")
@@ -539,7 +511,6 @@ mod tests {
         assert_eq!(config.bus.is_some(), with_events);
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn config_bus_propagates_to_file_config() {
         let bus = EventBus::new(32);
@@ -550,7 +521,6 @@ mod tests {
         assert!(audio_config.stream.bus.is_some());
     }
 
-    #[cfg(feature = "hls")]
     #[kithara::test]
     fn config_bus_propagates_to_hls_config() {
         let bus = EventBus::new(32);
@@ -561,7 +531,6 @@ mod tests {
         assert!(audio_config.stream.bus.is_some());
     }
 
-    #[cfg(any(feature = "file", feature = "hls"))]
     #[kithara::test]
     fn config_with_headers() {
         let mut headers = Headers::new();
@@ -599,7 +568,6 @@ mod tests {
         assert!((config.preferred_peak_bitrate_for_expensive_networks - 0.0).abs() < f64::EPSILON);
     }
 
-    #[cfg(feature = "hls")]
     #[kithara::test]
     fn config_bitrate_propagates_to_hls_abr() {
         let config = ResourceConfig::new("https://example.com/live.m3u8")
@@ -624,7 +592,6 @@ mod tests {
         worker.shutdown();
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn config_worker_propagates_to_file_config() {
         let worker = AudioWorkerHandle::new();
@@ -636,7 +603,6 @@ mod tests {
         worker.shutdown();
     }
 
-    #[cfg(feature = "hls")]
     #[kithara::test]
     fn config_worker_propagates_to_hls_config() {
         let worker = AudioWorkerHandle::new();
@@ -648,7 +614,6 @@ mod tests {
         worker.shutdown();
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn file_hint_none_for_url_without_extension() {
         let config =
@@ -660,7 +625,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     #[case("https://example.com/song.mp3", Some("mp3"))]
     #[case("https://example.com/audio.flac", Some("flac"))]

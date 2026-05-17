@@ -19,7 +19,7 @@ backend-web-audio = ["kithara-play/backend-web-audio"]
 test-utils = ["kithara-play/test-utils"]
 
 [dependencies]
-kithara-play = { workspace = true, features = ["file", "hls"] }
+kithara-play = { workspace = true }
 kithara-abr = { workspace = true }
 kithara-events = { workspace = true }
 
