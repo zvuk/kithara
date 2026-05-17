@@ -886,6 +886,142 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     );
 }
 
+/// MSW-3 regression: production bug from app.log (2026-05-17 15:26..15:27).
+///
+/// Sequence reproduced from the GUI smoke run:
+/// 1. Cold start V0, play a bit, switch up to V3.
+/// 2. Switch back to V0 — scheduler emits all remaining V0 segments, then
+///    parks idle (peer fully cached).
+/// 3. Seek somewhere (reader moves but no new fetches required — every
+///    target segment is cached).
+/// 4. `handle.set_mode(Manual(1))` — `GUI: set_mode accepted` logs, but
+///    `commit_variant_switch` never fires. Every subsequent Manual click
+///    is silently dropped — player keeps playing V0.
+///
+/// Existing `runtime_manual_switch_works_when_all_segments_cached` covers
+/// bulk-cache + Manual but NOT the seek-in-the-middle case. The seek
+/// re-runs the peer's `apply_seek_change` path which mutates state
+/// without going through the ABR controller, masking the wake hook from
+/// `on_mode_changed → tick`.
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+async fn runtime_manual_switch_works_after_cache_and_seek() {
+    let segment_count: usize = 8;
+    let init_segment = Arc::new(create_wav_init_segment());
+    let pcm_data = Arc::new(create_pcm_segments(segment_count));
+
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        variant_count: 2,
+        segments_per_variant: segment_count,
+        segment_size: D.segment_size,
+        segment_duration_secs: segment_duration_secs(),
+        custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+        init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+        variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        ..Default::default()
+    })
+    .await;
+
+    let url = server.url("/master.m3u8");
+    let temp_dir = TestTempDir::new();
+    let cancel = CancellationToken::new();
+    let bus = EventBus::new(8192);
+    let collector = EventCollector::new(&bus);
+
+    // Manual(0) initial so Auto-decision doesn't fire an UpSwitch/
+    // DownSwitch that races against the explicit Manual(1) below.
+    let hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel)
+        .with_events(bus.clone())
+        .with_initial_abr_mode(AbrMode::Manual(0))
+        .with_download_batch_size(segment_count * 2);
+
+    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
+    let config = AudioConfig::<Hls>::new(hls_config)
+        .with_events(bus)
+        .with_media_info(wav_info);
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+
+    // Tiny warmup so the peer is actually pumping. Drop the reader to
+    // let the prefetch finish in the background.
+    let mut buf = vec![0.0f32; 4096];
+    let mut warmup_samples = 0u64;
+    let warmup_deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < warmup_deadline && warmup_samples < 8_192 {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
+            Ok(ReadOutcome::Pending { .. }) | Ok(ReadOutcome::Eof { .. }) => {}
+            Err(e) => panic!("decode error in warmup: {e}"),
+        }
+    }
+    assert!(warmup_samples > 0, "warmup must produce some audio");
+
+    kithara_platform::time::sleep(Duration::from_secs(2)).await;
+
+    let v0_fetched = collector
+        .segments()
+        .iter()
+        .filter(|s| s.variant == 0 && !s.cached)
+        .count();
+    assert!(
+        v0_fetched >= segment_count,
+        "all v0 segments must be cached before seek+Manual — \
+         saw {v0_fetched}/{segment_count}"
+    );
+
+    // Seek into a cached region — this is the production trigger. The
+    // peer's `apply_seek_change` resets the queue cursor, leaves the
+    // peer parked (every target seg is cached), and (the bug) wipes
+    // whatever invariant lets `on_mode_changed → tick → peer.wake()`
+    // reach `apply_boundary_crossing → commit_variant_switch`.
+    let seek_target_secs = segment_duration_secs() * ((segment_count / 2) as f64);
+    audio
+        .seek(Duration::from_secs_f64(seek_target_secs))
+        .expect("seek must succeed");
+
+    // Let the peer process the seek epoch bump and re-park itself.
+    kithara_platform::time::sleep(Duration::from_millis(300)).await;
+
+    let handle = audio
+        .abr_handle()
+        .expect("HLS stream must expose AbrHandle");
+    let pre_switch = collector.switch_count();
+    handle
+        .set_mode(AbrMode::Manual(1))
+        .expect("Manual(1) target must be valid");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && collector.switch_count() == pre_switch {
+        kithara_platform::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let post_switch = collector.switch_count();
+    info!(
+        pre_switch,
+        post_switch, v0_fetched, seek_target_secs, "MSW-3: all-cached + seek + Manual click result"
+    );
+
+    assert!(
+        post_switch > pre_switch,
+        "Manual(1) after all-cached prefetch + seek must fire VariantApplied \
+         (pre={pre_switch}, post={post_switch}). Production regression: \
+         after `audio.seek({seek_target_secs}s)` the peer parks and \
+         subsequent `handle.set_mode(...)` no longer reaches \
+         `commit_variant_switch` — observed in app.log 2026-05-17 \
+         15:26:54..15:27:46 where six successive Manual clicks were \
+         silently dropped after V1→V0 commit + bulk-cache + 3 seeks. \
+         seek_target_secs={seek_target_secs}"
+    );
+}
+
 /// Phase P.0' regression: production bug from app.log (2026-05-15).
 ///
 /// User opens a track in Auto mode. A fast CDN delivers the first

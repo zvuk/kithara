@@ -204,6 +204,14 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     emit: Option<Box<dyn Fn(AudioEvent) + Send>>,
     last_spec: Option<PcmSpec>,
     shared_stream: SharedStream<T>,
+    /// Lock-free wake callback resolved from
+    /// [`Source::make_notify_fn`] at construction. Captures the source's
+    /// peer-wake `Arc<Notify>` directly, so calling it never re-enters
+    /// the `SharedStream` mutex — the FSM holds that lock for every
+    /// `clear_seek_pending` callsite, which makes
+    /// `shared_stream.notify_waiting()` unsafe to call from inside the
+    /// FSM (recursive mutex acquisition = stack overflow).
+    peer_wake: Option<Box<dyn Fn() + Send + Sync>>,
     effects: Vec<Box<dyn AudioEffect>>,
     chunks_decoded: u64,
     total_samples: u64,
@@ -226,6 +234,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         gapless_mode: GaplessMode,
     ) -> Self {
         let timeline = shared_stream.timeline();
+        let peer_wake = shared_stream.make_notify_fn();
         let gapless =
             GaplessStage::from_decoder(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
         let session = DecoderSession {
@@ -248,6 +257,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             total_samples: 0,
             last_spec: None,
             emit: None,
+            peer_wake,
         }
     }
 
@@ -836,7 +846,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             target: request.seek.target,
             attempts: request.attempt.saturating_add(1),
         });
-        self.timeline.clear_seek_pending(request.seek.epoch);
+        self.finalize_seek_pending(request.seek.epoch);
         self.update_state(TrackState::Failed(TrackFailure::Decode(err)));
     }
 
@@ -1104,7 +1114,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             attempts: request.attempt.saturating_add(1),
         });
         self.epoch.store(request.seek.epoch, Ordering::Release);
-        self.timeline.clear_seek_pending(request.seek.epoch);
+        self.finalize_seek_pending(request.seek.epoch);
         self.update_state(TrackState::Decoding);
     }
 
@@ -1448,6 +1458,27 @@ impl<T: StreamType> StreamAudioSource<T> {
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
+    /// Clear the seek-pending flag and wake the source's peer in one step.
+    ///
+    /// `Timeline::clear_seek_pending` only flips the atomic flag — it does
+    /// not wake anything. The HLS peer's `sync_abr_lock()` is invoked only
+    /// inside `poll_next`, so when every requested segment is cached and
+    /// the peer parks itself in `Poll::Pending`, the ABR lock acquired on
+    /// seek-initiate stays held indefinitely. Subsequent `set_mode(Manual)`
+    /// calls then hit `AbrReason::Locked` in `decide()` and silently fail
+    /// to commit — observed in app.log 2026-05-17 15:26:54..15:27:46.
+    ///
+    /// Notifying the source's waiter (`make_notify_fn` → `HlsCoord::wake_peer`)
+    /// after every seek-completion ensures the peer runs one more
+    /// `poll_next` cycle, which sees `is_seek_pending() == false` and
+    /// releases the ABR lock through `sync_abr_lock`.
+    fn finalize_seek_pending(&self, epoch: u64) {
+        self.timeline.clear_seek_pending(epoch);
+        if let Some(ref wake) = self.peer_wake {
+            wake();
+        }
+    }
+
     /// Apply a pending seek from the Timeline.
     ///
     /// Reads epoch/target from Timeline and resolves the seek mode.
@@ -1459,7 +1490,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let position = request.seek.target;
         if self.timeline.seek_target().is_none() {
             self.timeline.complete_seek(epoch);
-            self.timeline.clear_seek_pending(epoch);
+            self.finalize_seek_pending(epoch);
             self.update_state(TrackState::Decoding);
             return;
         }
@@ -1467,7 +1498,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let current_epoch = self.epoch.load(Ordering::Acquire);
         if epoch <= current_epoch {
             self.timeline.complete_seek(epoch);
-            self.timeline.clear_seek_pending(epoch);
+            self.finalize_seek_pending(epoch);
             self.update_state(TrackState::Decoding);
             return;
         }
@@ -1491,7 +1522,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     source_byte_offset: None,
                 });
             self.timeline.complete_seek(epoch);
-            self.timeline.clear_seek_pending(epoch);
+            self.finalize_seek_pending(epoch);
             self.epoch.store(epoch, Ordering::Release);
             self.update_state(TrackState::AtEof);
             return;
@@ -1711,7 +1742,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 }));
                 if self.apply_time_anchor_seek(request, anchor) {
                     self.epoch.store(request.seek.epoch, Ordering::Release);
-                    self.timeline.clear_seek_pending(request.seek.epoch);
+                    self.finalize_seek_pending(request.seek.epoch);
                     TrackStep::StateChanged
                 } else {
                     TrackStep::StateChanged
@@ -1780,7 +1811,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     None,
                 );
                 self.epoch.store(request.seek.epoch, Ordering::Release);
-                self.timeline.clear_seek_pending(request.seek.epoch);
+                self.finalize_seek_pending(request.seek.epoch);
                 TrackStep::StateChanged
             }
             Err(err) => {
@@ -1821,7 +1852,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         };
         if applied {
             self.epoch.store(request.seek.epoch, Ordering::Release);
-            self.timeline.clear_seek_pending(request.seek.epoch);
+            self.finalize_seek_pending(request.seek.epoch);
             self.gapless.notify_seek();
         }
         TrackStep::StateChanged
