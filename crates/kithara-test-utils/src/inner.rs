@@ -1,3 +1,4 @@
+pub mod alac_fixture;
 pub mod consts;
 pub mod fixture_protocol;
 pub mod fixtures;
@@ -20,6 +21,7 @@ pub mod wav;
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod probe_capture;
+pub use alac_fixture::ensure_silence_1s_alac_m4a;
 pub use fixtures::*;
 pub use hls_fixture::{
     AbrTestServer, EncryptionConfig, HlsTestServer, HlsTestServerConfig, PackagedTestServer,
