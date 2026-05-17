@@ -11,7 +11,7 @@ use super::{
     error::AndroidBackendError,
     ffi::{
         self, KEY_CHANNEL_COUNT, KEY_CSD_0, KEY_MIME, KEY_PCM_ENCODING, KEY_SAMPLE_RATE, MIME_AAC,
-        MIME_FLAC, PCM_ENCODING_16BIT, PCM_ENCODING_FLOAT,
+        MIME_ALAC, MIME_FLAC, MIME_MP3, MIME_RAW, PCM_ENCODING_16BIT, PCM_ENCODING_FLOAT,
     },
     media_codec::{AndroidPcmEncoding, DequeueOutput, OwnedCodec, QueueInput},
 };
@@ -60,6 +60,9 @@ impl AndroidCodec {
         let mime = match track.codec {
             AudioCodec::AacLc => MIME_AAC,
             AudioCodec::Flac => MIME_FLAC,
+            AudioCodec::Pcm => MIME_RAW,
+            AudioCodec::Mp3 => MIME_MP3,
+            AudioCodec::Alac => MIME_ALAC,
             other => return Err(DecodeError::UnsupportedCodec(other)),
         };
 
@@ -128,9 +131,18 @@ impl AndroidCodec {
 
     /// Whether `MediaCodec` accepts this codec at the codec layer alone
     /// (i.e. without an extractor providing per-track metadata).
-    /// Initial scope: AAC family + FLAC.
+    ///
+    /// Scope: AAC-LC and FLAC over fMP4 (HLS), plus standalone WAV/PCM,
+    /// MP3, and ALAC paired with [`super::AndroidMediaExtractorDemuxer`].
     pub(crate) fn supports(codec: AudioCodec) -> bool {
-        matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
+        matches!(
+            codec,
+            AudioCodec::AacLc
+                | AudioCodec::Flac
+                | AudioCodec::Pcm
+                | AudioCodec::Mp3
+                | AudioCodec::Alac
+        )
     }
 }
 

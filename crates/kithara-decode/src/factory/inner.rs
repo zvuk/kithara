@@ -270,7 +270,11 @@ fn create_apple(
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
 
-    if apple_standalone_supports(codec, container) {
+    // Apple-native standalone path only for file-like sources. HLS
+    // (`segment_layout = Some(_)`) feeds AudioFileServices through random
+    // seeks on a streaming source, which is too slow for the seek-stress
+    // workload; HLS WAV/MP3/ALAC keeps going through Symphonia.
+    if config.segment_layout.is_none() && apple_standalone_supports(codec, container) {
         tracing::debug!(
             ?codec,
             ?container,
@@ -347,11 +351,12 @@ fn create_android(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
+    use crate::android::AndroidCodec;
+
     #[cfg(feature = "symphonia")]
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        use crate::android::AndroidCodec;
         if AndroidCodec::supports(codec) {
             tracing::debug!(
                 ?codec,
@@ -364,7 +369,77 @@ fn create_android(
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
-    create_symphonia(source, codec, container, config)
+
+    // Android-native standalone path only for file-like sources. HLS
+    // streams stay on Symphonia for the same reason as Apple — random
+    // seeks through `AMediaDataSource` callbacks on a streaming source
+    // are too slow for the seek-stress workload.
+    if config.segment_layout.is_none() && android_standalone_supports(codec, container) {
+        tracing::debug!(
+            ?codec,
+            ?container,
+            "android-standalone: routing via AMediaExtractor"
+        );
+        return build_android_standalone_decoder(source, codec, container, config);
+    }
+
+    #[cfg(feature = "symphonia")]
+    return create_symphonia(source, codec, container, config);
+    #[cfg(not(feature = "symphonia"))]
+    {
+        let _ = (source, container, config);
+        Err(DecodeError::UnsupportedCodec(codec))
+    }
+}
+
+#[cfg(all(feature = "android", target_os = "android"))]
+fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
+    matches!(
+        (codec, container),
+        (AudioCodec::Pcm, Some(ContainerFormat::Wav))
+            | (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))
+            | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
+    )
+}
+
+#[cfg(all(feature = "android", target_os = "android"))]
+fn build_android_standalone_decoder(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    use crate::{
+        android::{AndroidCodec, AndroidMediaExtractorDemuxer},
+        composed::ComposedDecoder,
+        demuxer::Demuxer,
+    };
+    let demuxer = match (codec, container) {
+        (AudioCodec::Pcm, Some(ContainerFormat::Wav)) => {
+            AndroidMediaExtractorDemuxer::open_wav(source)?
+        }
+        (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio)) => {
+            AndroidMediaExtractorDemuxer::open_mp3(source)?
+        }
+        (AudioCodec::Alac, Some(ContainerFormat::Mp4)) => {
+            AndroidMediaExtractorDemuxer::open_alac_m4a(source)?
+        }
+        _ => return Err(DecodeError::UnsupportedCodec(codec)),
+    };
+    let codec_impl = AndroidCodec::open_with_config(demuxer.track_info(), config.gapless)?;
+    let pool = config
+        .pcm_pool
+        .clone()
+        .unwrap_or_else(|| PcmPool::default().clone());
+    let decoder = ComposedDecoder::new(
+        demuxer,
+        codec_impl,
+        pool,
+        config.epoch,
+        config.byte_len_handle.clone(),
+        config.hooks.clone(),
+    );
+    Ok(Box::new(decoder))
 }
 
 #[cfg(feature = "symphonia")]

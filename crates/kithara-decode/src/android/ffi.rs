@@ -31,6 +31,13 @@ pub(crate) const KEY_CSD_0: &CStr = c"csd-0";
 pub(crate) const MIME_AAC: &CStr = c"audio/mp4a-latm";
 /// Android MediaCodec MIME type for FLAC.
 pub(crate) const MIME_FLAC: &CStr = c"audio/flac";
+/// Android MediaCodec MIME type for raw PCM. WAV passes through with no
+/// decoding work — the extractor's per-sample bytes are interleaved PCM.
+pub(crate) const MIME_RAW: &CStr = c"audio/raw";
+/// Android MediaCodec MIME type for MPEG-1/2 Layer 3 (MP3).
+pub(crate) const MIME_MP3: &CStr = c"audio/mpeg";
+/// Android MediaCodec MIME type for Apple Lossless (ALAC).
+pub(crate) const MIME_ALAC: &CStr = c"audio/alac";
 
 #[cfg(target_os = "android")]
 pub(crate) type MediaStatus = i32;
@@ -222,6 +229,16 @@ unsafe extern "C" {
         format: *mut AMediaFormat,
         name: *const c_char,
         value: i32,
+    ) -> bool;
+    /// `AMediaFormat_getBuffer` — fetch a byte-buffer property (e.g.
+    /// `csd-0`). Returns `false` when the key is absent; on success
+    /// `*data` / `*size` borrow from the format's internal storage and
+    /// are valid until the format is deleted.
+    pub(crate) fn AMediaFormat_getBuffer(
+        format: *mut AMediaFormat,
+        name: *const c_char,
+        data: *mut *mut c_void,
+        size: *mut usize,
     ) -> bool;
 }
 
