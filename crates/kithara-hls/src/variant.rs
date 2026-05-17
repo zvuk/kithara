@@ -255,6 +255,7 @@ pub(crate) struct HlsVariant {
     /// stays contiguous across switches and fMP4 box addresses remain
     /// aligned.
     byte_shift: AtomicI64,
+    prefetch_anchor: AtomicU64,
     /// First media segment served by this variant in the combined byte
     /// stream (inclusive). Initial activate: 0. After switch: the
     /// `from_seg` passed to `activate_at_segment`. Segments < this index
@@ -350,6 +351,7 @@ impl HlsVariant {
             offsets: RwLock::new(Vec::new()),
             init_seed: AtomicU64::new(0),
             byte_shift: AtomicI64::new(0),
+            prefetch_anchor: AtomicU64::new(0),
             served_from: AtomicU32::new(0),
             served_until: AtomicU32::new(num),
             queue: Mutex::new(VecDeque::new()),
@@ -714,6 +716,15 @@ impl HlsVariant {
         self.position.store(pos, Ordering::Release);
     }
 
+    #[kithara::probe(variant = self.variant as u64, byte)]
+    pub(crate) fn set_prefetch_anchor(&self, byte: u64) {
+        self.prefetch_anchor.store(byte, Ordering::Release);
+    }
+
+    pub(crate) fn prefetch_anchor(&self) -> u64 {
+        self.prefetch_anchor.load(Ordering::Acquire)
+    }
+
     pub(crate) fn init_size(&self) -> u64 {
         self.init.size.load(Ordering::Acquire)
     }
@@ -785,6 +796,13 @@ impl HlsVariant {
         // cancelled by a prior switch, its `cancel` token is still
         // tripped — rearm so dispatched fetches are not stillborn.
         self.rearm_cancel();
+    }
+
+    pub(crate) fn invalidate_init(&self) {
+        if self.init_size() > 0 {
+            self.init.set_state(SegmentState::Missing);
+            self.init_seed.store(0, Ordering::Release);
+        }
     }
 
     fn find_virtual(&self, byte_virtual: u64) -> Option<(u32, u64, u64)> {
@@ -974,13 +992,17 @@ impl HlsVariant {
         self.descriptor(idx)
     }
 
-    /// Reposition the cursor to the segment that covers `target` and
-    /// rebuild the queue from there. Returns the resolved segment index,
-    /// or `None` when the variant carries no segments.
-    pub(crate) fn seek_to(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {
+    #[kithara::probe(variant = self.variant as u64, byte)]
+    pub(crate) fn descriptor_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        let (idx, _, _) = self.find_at_offset(byte)?;
+        self.descriptor(idx as usize)
+    }
+
+    pub(crate) fn rebuild_at_time(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {
         let seg = self.segment_index_at_time(target)?;
-        let byte = self.segment_byte_offset(seg)?;
-        self.set_position(byte);
+        if let Some(byte) = self.segment_byte_offset(seg) {
+            self.set_prefetch_anchor(byte);
+        }
         self.rebuild(ctx, seg);
         Some(seg)
     }
@@ -1112,9 +1134,10 @@ impl HlsVariant {
     pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
         let mut out = Vec::new();
         let mut remaining = budget;
+        let prefetch_base = self.get_position().max(self.prefetch_anchor());
         let prefetch_byte_cap = ctx
             .look_ahead_bytes
-            .map(|n| self.get_position().saturating_add(n));
+            .map(|n| prefetch_base.saturating_add(n));
         while remaining > 0 {
             hang_tick!();
             // Peek-then-conditional-pop so a too-far-ahead segment

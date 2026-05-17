@@ -79,7 +79,7 @@ mod hls_timeline {
         assets::StoreOptions,
         decode::{DecoderConfig, DecoderFactory},
         hls::{AbrMode, Hls, HlsConfig},
-        stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
+        stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     };
     use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
     use kithara_test_utils::{TestTempDir, create_wav_exact_bytes, signal_pcm::signal};
@@ -128,7 +128,9 @@ mod hls_timeline {
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let decoder_config = DecoderConfig::default().with_hint("wav".to_string());
+        let decoder_config = DecoderConfig::default()
+            .with_hint("wav".to_string())
+            .with_segment_layout(stream.as_segment_layout());
 
         let result = tokio::task::spawn_blocking(move || {
             let mut decoder =

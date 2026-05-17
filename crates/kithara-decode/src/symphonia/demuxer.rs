@@ -44,6 +44,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// the demuxer is built through that path; absent for synthetic
     /// readers in unit tests.
     byte_pos_handle: Option<Arc<AtomicU64>>,
+    segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
     /// Latest packet handed to [`Demuxer::next_frame`]. Held so the
     /// returned `Frame<'_>` can borrow the packet's `Box<[u8]>` payload
     /// directly — Symphonia owns the allocation, we don't clone it.
@@ -84,9 +85,10 @@ impl SymphoniaDemuxer {
     /// Returns a [`crate::DecodeError`] when the reader exposes no
     /// audio track or the audio track's codec parameters are missing
     /// fields the demuxer needs (sample rate, channel count).
-    pub(crate) fn from_reader(
+    pub(crate) fn from_reader_with_layout(
         format_reader: Box<dyn FormatReader>,
         byte_pos_handle: Option<Arc<AtomicU64>>,
+        segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
     ) -> DecodeResult<Self> {
         let track = format_reader
             .default_track(TrackType::Audio)
@@ -106,6 +108,7 @@ impl SymphoniaDemuxer {
             native_params,
             time_base,
             byte_pos_handle,
+            segment_layout,
             current_packet: None,
         })
     }
@@ -138,6 +141,7 @@ impl SymphoniaDemuxer {
         hint: Option<String>,
         container: Option<ContainerFormat>,
         byte_len_handle: Option<Arc<AtomicU64>>,
+        segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
     ) -> DecodeResult<(Self, Arc<AtomicU64>)>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -154,7 +158,11 @@ impl SymphoniaDemuxer {
             probe_with_seek(source, &config, format_opts, false)?
         };
         let len_handle = bootstrap.byte_len_handle.clone();
-        let demuxer = Self::from_reader(bootstrap.format_reader, Some(bootstrap.byte_pos_handle))?;
+        let demuxer = Self::from_reader_with_layout(
+            bootstrap.format_reader,
+            Some(bootstrap.byte_pos_handle),
+            segment_layout,
+        )?;
         Ok((demuxer, len_handle))
     }
 
@@ -232,6 +240,24 @@ impl Demuxer for SymphoniaDemuxer {
 
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
+    }
+
+    fn current_segment_index(&self) -> Option<u32> {
+        // `byte_pos` is the next read offset, so look up by `byte - 1`
+        // to keep the cursor parked at `segment.end` in that segment.
+        let byte = self.current_byte()?;
+        self.segment_layout
+            .as_ref()?
+            .segment_at_byte(byte.saturating_sub(1))
+            .map(|d| d.segment_index)
+    }
+
+    fn current_variant_index(&self) -> Option<usize> {
+        let byte = self.current_byte()?;
+        self.segment_layout
+            .as_ref()?
+            .segment_at_byte(byte.saturating_sub(1))
+            .map(|d| d.variant_index)
     }
 }
 

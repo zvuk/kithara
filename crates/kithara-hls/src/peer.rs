@@ -346,7 +346,7 @@ impl HlsTrackState {
     fn seek_epoch_reset(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
         if let Some(target) = coord.timeline.seek_target()
             && let Some(active) = coord.active()
-            && let Some(seg) = active.seek_to(ctx, target)
+            && let Some(seg) = active.rebuild_at_time(ctx, target)
         {
             self.reader_segment.store(seg as usize, Ordering::Release);
         }
@@ -403,8 +403,21 @@ impl HlsTrackState {
             self.reader_segment.store(resolved_us, Ordering::Release);
         }
         let manual_mode = matches!(self.coord.abr.mode(), Some(AbrMode::Manual(_)));
-        if boundary_crossed || manual_mode {
-            coord.commit_variant_switch(ctx, resolved);
+        let switch_landed = if boundary_crossed || manual_mode {
+            coord.commit_variant_switch(ctx, resolved)
+        } else {
+            false
+        };
+        // Non-adjacent boundary crossing (seek, byte-shift) leaves the
+        // prefetch queue covering the wrong window — rebuild reseeds it.
+        // Adjacent advance keeps the queue: rebuild would drop in-flight.
+        let prev_u32 = u32::try_from(prev).unwrap_or(0);
+        let discontinuous_advance = boundary_crossed && resolved != prev_u32.saturating_add(1);
+        if discontinuous_advance
+            && !switch_landed
+            && let Some(active) = coord.active()
+        {
+            active.rebuild(ctx, resolved);
         }
         resolved
     }

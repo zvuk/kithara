@@ -385,6 +385,7 @@ fn create_file_symphonia_universal(
         config.hint.clone(),
         container,
         config.byte_len_handle.clone(),
+        config.segment_layout.clone(),
     )?;
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);

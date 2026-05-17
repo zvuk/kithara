@@ -77,7 +77,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             hooks,
             frame_offset: 0,
             pending_seek_target: None,
-            resync_frame_offset_to_pts: false,
+            resync_frame_offset_to_pts: true,
         }
     }
 
@@ -115,9 +115,9 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             frames,
             frame_offset,
             source_bytes,
-            segment_index: None,
+            segment_index: self.demuxer.current_segment_index(),
             source_byte_offset: None,
-            variant_index: None,
+            variant_index: self.demuxer.current_variant_index(),
             spec: self.spec,
             epoch: self.epoch,
         };
@@ -292,7 +292,8 @@ mod smoke_tests {
                 MetadataOptions::default(),
             )
             .expect("BUG: MP3 probe should succeed");
-        SymphoniaDemuxer::from_reader(format_reader, None).expect("BUG: MP3 demuxer should build")
+        SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
+            .expect("BUG: MP3 demuxer should build")
     }
 
     #[kithara::test]

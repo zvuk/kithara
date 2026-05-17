@@ -331,10 +331,19 @@ impl HlsCoord {
             v_new.activate_at_segment_with_shift(ctx, switch_at, seg_boundary, reader_pos);
             self.abr.apply_decision(&decision, Instant::now());
         } else {
+            let old_codec = v_old.and_then(|_| self.playlist_state.variant_codec(current_before));
+            let new_codec = self.playlist_state.variant_codec(new_v);
+            let is_cross_codec = match (old_codec, new_codec) {
+                (Some(a), Some(b)) => a != b,
+                _ => false,
+            };
             if let Some(v_old) = v_old {
                 v_old.cancel();
             }
             v_new.reset_to_full_range();
+            if is_cross_codec {
+                v_new.invalidate_init();
+            }
             let target_time = self.timeline.committed_position();
             let target_seg: u32 = self
                 .playlist_state
@@ -451,6 +460,10 @@ impl SegmentLayout for HlsCoord {
 
     fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         self.active()?.descriptor_after_byte(byte)
+    }
+
+    fn segment_at_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        self.variant_serving(byte).descriptor_at_byte(byte)
     }
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {

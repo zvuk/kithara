@@ -3,6 +3,7 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
+    decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -53,10 +54,20 @@ impl Consts {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case::ephemeral(true)]
+#[case::symphonia_ephemeral(true, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_ephemeral(true, DecoderBackend::Apple)
+)]
 #[cfg(not(target_arch = "wasm32"))]
-#[case::mmap(false)]
-async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
+#[case::symphonia_mmap(false, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_mmap(false, DecoderBackend::Apple)
+)]
+async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
     let wav_data = create_wav_exact_bytes(
         signal::Sawtooth,
         Consts::D.sample_rate,
@@ -100,7 +111,9 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         .with_initial_abr_mode(AbrMode::Manual(0));
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::new(hls_config)
+        .with_media_info(wav_info)
+        .with_decoder_backend(backend);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");

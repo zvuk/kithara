@@ -436,6 +436,12 @@ pub trait SegmentLayout: Send + Sync + 'static {
     /// Used for sequential play after the current segment is consumed.
     fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor>;
 
+    /// Segment whose `byte_range` covers `byte_offset`. Default `None`
+    /// keeps non-segmented sources transparent.
+    fn segment_at_byte(&self, _byte_offset: u64) -> Option<SegmentDescriptor> {
+        None
+    }
+
     /// Locate the segment whose `[decode_time, decode_time + duration)`
     /// covers `t`. Resolves against the source's *current layout
     /// variant* — same variant `init_segment_range` describes.

@@ -7,7 +7,7 @@ use kithara_abr::{
     Abr, AbrController, AbrMode, AbrSettings, AbrState, BandwidthSource, Estimator,
     ThroughputEstimator,
 };
-use kithara_events::{AbrProgressSnapshot, AbrVariant, VariantDuration};
+use kithara_events::{VariantDuration, VariantInfo};
 use kithara_platform::time::Duration;
 
 fn settings() -> AbrSettings {
@@ -17,46 +17,38 @@ fn settings() -> AbrSettings {
         .with_min_buffer_for_up_switch(Duration::ZERO)
 }
 
-fn variants_4() -> Vec<AbrVariant> {
+fn variant(idx: usize, bps: u64) -> VariantInfo {
+    VariantInfo {
+        variant_index: idx,
+        bandwidth_bps: Some(bps),
+        duration: VariantDuration::Unknown,
+        name: None,
+        codecs: None,
+        container: None,
+    }
+}
+
+fn variants_4() -> Vec<VariantInfo> {
     vec![
-        AbrVariant {
-            variant_index: 0,
-            bandwidth_bps: 256_000,
-            duration: VariantDuration::Unknown,
-        },
-        AbrVariant {
-            variant_index: 1,
-            bandwidth_bps: 512_000,
-            duration: VariantDuration::Unknown,
-        },
-        AbrVariant {
-            variant_index: 2,
-            bandwidth_bps: 1_024_000,
-            duration: VariantDuration::Unknown,
-        },
-        AbrVariant {
-            variant_index: 3,
-            bandwidth_bps: 2_048_000,
-            duration: VariantDuration::Unknown,
-        },
+        variant(0, 256_000),
+        variant(1, 512_000),
+        variant(2, 1_024_000),
+        variant(3, 2_048_000),
     ]
 }
 
 struct BenchPeer {
     state: Arc<AbrState>,
+    variants: Vec<VariantInfo>,
 }
 
 impl Abr for BenchPeer {
-    fn variants(&self) -> Vec<AbrVariant> {
-        self.state.variants_snapshot()
+    fn variants(&self) -> Vec<VariantInfo> {
+        self.variants.clone()
     }
 
     fn state(&self) -> Option<Arc<AbrState>> {
         Some(Arc::clone(&self.state))
-    }
-
-    fn progress(&self) -> Option<AbrProgressSnapshot> {
-        None
     }
 }
 
@@ -104,9 +96,10 @@ fn bench_controller_record_bandwidth(c: &mut Criterion) {
             |b, &(bytes, duration_ms)| {
                 b.iter(|| {
                     let controller = AbrController::new(settings());
-                    let state = Arc::new(AbrState::new(variants_4(), AbrMode::Auto(Some(1))));
+                    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(1))));
                     let peer: Arc<dyn Abr> = Arc::new(BenchPeer {
                         state: Arc::clone(&state),
+                        variants: variants_4(),
                     });
                     let handle = controller.register(&peer);
                     for _ in 0..8 {

@@ -38,6 +38,18 @@ pub(crate) trait Demuxer: Send {
 
     /// Track-level metadata exposed by the container.
     fn track_info(&self) -> &TrackInfo;
+
+    /// Segment index of the frame from the last `next_frame`.
+    /// `None` for non-segmented sources.
+    fn current_segment_index(&self) -> Option<u32> {
+        None
+    }
+
+    /// Variant index of the frame from the last `next_frame`.
+    /// `None` for non-segmented sources.
+    fn current_variant_index(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// Track-level metadata produced by [`Demuxer::track_info`].
