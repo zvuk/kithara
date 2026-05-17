@@ -251,11 +251,12 @@ fn create_apple(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
+    use crate::apple::AppleCodec;
+
     #[cfg(feature = "symphonia")]
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        use crate::apple::AppleCodec;
         if AppleCodec::supports(codec) {
             tracing::debug!(
                 ?codec,
@@ -268,13 +269,75 @@ fn create_apple(
         }
         return create_fmp4_segment_symphonia(source, codec, layout, config);
     }
+
+    if apple_standalone_supports(codec, container) {
+        tracing::debug!(
+            ?codec,
+            ?container,
+            "apple-standalone: routing via AudioFileServices"
+        );
+        return build_apple_standalone_decoder(source, codec, container, config);
+    }
+
     #[cfg(feature = "symphonia")]
     return create_symphonia(source, codec, container, config);
     #[cfg(not(feature = "symphonia"))]
     {
-        let _ = (source, codec, container, config);
+        let _ = (source, container, config);
         Err(DecodeError::UnsupportedCodec(codec))
     }
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn apple_standalone_supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
+    matches!(
+        (codec, container),
+        (AudioCodec::Pcm, Some(ContainerFormat::Wav))
+            | (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))
+            | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
+            | (AudioCodec::Alac, Some(ContainerFormat::Caf))
+    )
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn build_apple_standalone_decoder(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    use crate::{
+        apple::{AppleAudioFileDemuxer, AppleCodec},
+        composed::ComposedDecoder,
+        demuxer::Demuxer,
+    };
+    let demuxer = match (codec, container) {
+        (AudioCodec::Pcm, Some(ContainerFormat::Wav)) => AppleAudioFileDemuxer::open_wav(source)?,
+        (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio)) => {
+            AppleAudioFileDemuxer::open_mp3(source)?
+        }
+        (AudioCodec::Alac, Some(ContainerFormat::Mp4)) => {
+            AppleAudioFileDemuxer::open_alac_m4a(source)?
+        }
+        (AudioCodec::Alac, Some(ContainerFormat::Caf)) => {
+            AppleAudioFileDemuxer::open_alac_caf(source)?
+        }
+        _ => return Err(DecodeError::UnsupportedCodec(codec)),
+    };
+    let codec_impl = AppleCodec::open_with_config(demuxer.track_info(), config.gapless)?;
+    let pool = config
+        .pcm_pool
+        .clone()
+        .unwrap_or_else(|| PcmPool::default().clone());
+    let decoder = ComposedDecoder::new(
+        demuxer,
+        codec_impl,
+        pool,
+        config.epoch,
+        config.byte_len_handle.clone(),
+        config.hooks.clone(),
+    );
+    Ok(Box::new(decoder))
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]

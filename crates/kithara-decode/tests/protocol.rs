@@ -2,6 +2,8 @@ use std::{io::Cursor, time::Duration};
 
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use kithara_test_utils::ensure_silence_1s_alac_m4a;
 use kithara_test_utils::{create_test_wav, kithara};
 
 struct Consts;
@@ -255,6 +257,28 @@ fn wav_pcm_round_trip_matches_signal_across_backends() {
             "{backend:?}: decoded PCM peak {peak} is too quiet — signal likely dropped"
         );
     }
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+#[kithara::test]
+fn apple_decodes_standalone_alac_m4a() {
+    let path = ensure_silence_1s_alac_m4a();
+    let bytes = std::fs::read(&path).expect("read ALAC fixture");
+    let info = MediaInfo::new(Some(AudioCodec::Alac), Some(ContainerFormat::Mp4));
+    let mut decoder = Backend::Apple.make_decoder(bytes, &info);
+
+    let spec = decoder.spec();
+    assert!(spec.sample_rate >= 8000, "ALAC sample rate sanity");
+    assert!(spec.channels >= 1, "ALAC channel count sanity");
+
+    let samples = drain_all(&mut *decoder);
+    let frames = samples.len() / usize::from(spec.channels.max(1));
+    let expected = spec.sample_rate as usize; // 1-second fixture
+    let tol = expected / 10;
+    assert!(
+        frames.abs_diff(expected) <= tol,
+        "Apple ALAC produced {frames} frames, expected ~{expected} (tol {tol})"
+    );
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]

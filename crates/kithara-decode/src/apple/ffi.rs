@@ -101,3 +101,57 @@ unsafe extern "C" {
 
     pub(crate) fn AudioConverterReset(inAudioConverter: AudioConverterRef) -> OSStatus;
 }
+
+pub(crate) type AudioFileID = *mut c_void;
+pub(crate) type AudioFilePropertyID = u32;
+pub(crate) type AudioFileTypeID = u32;
+pub(crate) type SInt64 = i64;
+
+pub(crate) type AudioFile_ReadProc = extern "C" fn(
+    inClientData: *mut c_void,
+    inPosition: SInt64,
+    requestCount: UInt32,
+    buffer: *mut c_void,
+    actualCount: *mut UInt32,
+) -> OSStatus;
+
+pub(crate) type AudioFile_GetSizeProc = extern "C" fn(inClientData: *mut c_void) -> SInt64;
+
+#[link(name = "AudioToolbox", kind = "framework")]
+unsafe extern "C" {
+    pub(crate) fn AudioFileOpenWithCallbacks(
+        inClientData: *mut c_void,
+        inReadFunc: AudioFile_ReadProc,
+        inWriteFunc: *const c_void,
+        inGetSizeFunc: AudioFile_GetSizeProc,
+        inSetSizeFunc: *const c_void,
+        inFileTypeHint: AudioFileTypeID,
+        outAudioFile: *mut AudioFileID,
+    ) -> OSStatus;
+
+    pub(crate) fn AudioFileClose(inAudioFile: AudioFileID) -> OSStatus;
+
+    pub(crate) fn AudioFileGetProperty(
+        inAudioFile: AudioFileID,
+        inPropertyID: AudioFilePropertyID,
+        ioDataSize: *mut UInt32,
+        outPropertyData: *mut c_void,
+    ) -> OSStatus;
+
+    pub(crate) fn AudioFileGetPropertyInfo(
+        inAudioFile: AudioFileID,
+        inPropertyID: AudioFilePropertyID,
+        outDataSize: *mut UInt32,
+        isWritable: *mut UInt32,
+    ) -> OSStatus;
+
+    pub(crate) fn AudioFileReadPacketData(
+        inAudioFile: AudioFileID,
+        inUseCache: u8,
+        ioNumBytes: *mut UInt32,
+        outPacketDescriptions: *mut AudioStreamPacketDescription,
+        inStartingPacket: SInt64,
+        ioNumPackets: *mut UInt32,
+        outBuffer: *mut c_void,
+    ) -> OSStatus;
+}
