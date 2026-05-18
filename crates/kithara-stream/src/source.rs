@@ -434,6 +434,19 @@ pub trait SegmentLayout: Send + Sync + 'static {
     /// variant* — same variant `init_segment_range` describes.
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor>;
 
+    /// Descriptor for the segment at `segment_index` in the current
+    /// layout variant. Used by demuxers to re-resolve a cursor's
+    /// `byte_range` against the live layout — without this, a DRM
+    /// post-decrypt size shrink (PKCS7 padding stripped) between cursor
+    /// setup and the actual read leaves `state.range` pointing past
+    /// the segment's real end and `HlsSource::read_at` splices bytes
+    /// from the next segment onto the buffer's tail. Returns `None`
+    /// for non-segmented sources or for indices outside the current
+    /// layout's range.
+    fn segment_at_index(&self, _segment_index: u32) -> Option<SegmentDescriptor> {
+        None
+    }
+
     /// Total number of segments in the current layout variant.
     fn segment_count(&self) -> Option<u32>;
 }

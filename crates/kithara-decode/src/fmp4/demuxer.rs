@@ -5,7 +5,7 @@ use kithara_test_utils::kithara;
 
 use super::{
     parsing::{CodecConfig, Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
-    source_io::{FillStatus, SegmentReadState, fill_segment_buffer},
+    source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
@@ -62,7 +62,12 @@ impl Fmp4SegmentDemuxer {
         if cursor.frames.is_some() {
             return Ok(FillStatus::Ready);
         }
-        let status = fill_segment_buffer(&mut self.source, &mut cursor.read)?;
+        let segments = self.segments.as_ref();
+        let status = fill_segment_buffer(
+            &mut self.source,
+            &mut cursor.read,
+            LiveRange::Segment(segments, cursor.segment_index),
+        )?;
         if matches!(status, FillStatus::Ready) {
             let frames = parse_segment_frames(&self.init, &cursor.read.buffer)?;
             cursor.frames = Some(DecodedFrames {
@@ -100,7 +105,11 @@ impl Fmp4SegmentDemuxer {
             ));
         }
         let mut init_state = SegmentReadState::new(init_range);
-        if let FillStatus::Pending(_) = fill_segment_buffer(&mut source, &mut init_state)? {
+        if let FillStatus::Pending(_) = fill_segment_buffer(
+            &mut source,
+            &mut init_state,
+            LiveRange::Init(segments.as_ref()),
+        )? {
             return Err(DecodeError::Interrupted);
         }
         let init = parse_init(&init_state.buffer)?;

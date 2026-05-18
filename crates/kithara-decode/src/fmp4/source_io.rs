@@ -3,7 +3,7 @@ use std::{
     ops::Range,
 };
 
-use kithara_stream::{PendingReason, StreamReadError};
+use kithara_stream::{PendingReason, SegmentLayout, StreamReadError};
 
 use crate::{
     error::{DecodeError, DecodeResult},
@@ -58,21 +58,76 @@ impl SegmentReadState {
     }
 }
 
+/// Which range in the live layout to re-resolve `state.range` against
+/// on each iteration. Init reads (no `segment_index`) must re-query
+/// [`SegmentLayout::init_segment_range`] because the post-decrypt init
+/// size on DRM streams can shrink between cursor setup and the actual
+/// read (PKCS7 padding strips up to 16 bytes off the encrypted estimate).
+/// Media reads must re-query [`SegmentLayout::segment_at_index`] for the
+/// same reason on individual segment sizes.
+#[derive(Clone, Copy)]
+pub(crate) enum LiveRange<'a> {
+    Init(&'a dyn SegmentLayout),
+    Segment(&'a dyn SegmentLayout, u32),
+}
+
+impl<'a> LiveRange<'a> {
+    fn resolve(self) -> Option<Range<u64>> {
+        match self {
+            LiveRange::Init(layout) => {
+                let range = layout.init_segment_range();
+                if range.is_empty() { None } else { Some(range) }
+            }
+            LiveRange::Segment(layout, idx) => layout.segment_at_index(idx).map(|d| d.byte_range),
+        }
+    }
+}
+
 /// Drive a `BoxedSource` to fill `state.buffer` with all bytes in
 /// `state.range`. Resumable across multiple calls.
+///
+/// `live` lets the loop re-resolve `state.range` against the live layout
+/// on each iteration. When a DRM init or media segment commits with a
+/// smaller post-decrypt size than the HEAD estimate, the layout's
+/// reported byte range shrinks; without this re-resolve, `state.range`
+/// (captured at cursor-setup time) extends past the segment's actual
+/// end, and `HlsSource::read_at` happily fills the buffer's tail with
+/// bytes from the next segment (or from the seg-0 moof after the init).
+/// `re_mp4` then parses the trailing splice as a malformed box and
+/// errors with "failed to fill whole buffer".
 pub(crate) fn fill_segment_buffer(
     source: &mut BoxedSource,
     state: &mut SegmentReadState,
+    live: LiveRange<'_>,
 ) -> DecodeResult<FillStatus> {
-    let total = state.total();
-    if state.buffer.len() != total {
-        state.buffer.clear();
-        state.buffer.resize(total, 0);
-    }
+    loop {
+        refresh_range(state, live);
+        let total = state.total();
+        if state.buffer.len() != total {
+            state.buffer.resize(total, 0);
+        }
+        if state.filled >= total {
+            return Ok(FillStatus::Ready);
+        }
 
-    while state.filled < total {
         let abs_offset = state.range.start + state.filled as u64;
         source.seek(SeekFrom::Start(abs_offset))?;
+        // `Stream::seek` waits on `wait_range` — during that wait, an
+        // apply_commit can shift the live range. Re-resolve once more
+        // so the read below uses the post-wait layout.
+        if refresh_range(state, live) {
+            let total_after = state.total();
+            if state.buffer.len() != total_after {
+                state.buffer.clear();
+                state.buffer.resize(total_after, 0);
+            }
+            if state.filled >= total_after {
+                return Ok(FillStatus::Ready);
+            }
+            let corrected = state.range.start + state.filled as u64;
+            source.seek(SeekFrom::Start(corrected))?;
+        }
+
         match source
             .try_read(&mut state.buffer[state.filled..])
             .map_err(map_stream_err)?
@@ -80,15 +135,60 @@ pub(crate) fn fill_segment_buffer(
             InputReadOutcome::Bytes(n) => state.filled += n.get(),
             InputReadOutcome::Pending(reason) => return Ok(FillStatus::Pending(reason)),
             InputReadOutcome::Eof => {
-                if state.filled == total {
-                    break;
+                if state.filled == state.total() {
+                    return Ok(FillStatus::Ready);
+                }
+                // Storage reached the end of this segment's resource
+                // before `segment.size` atomic was updated by
+                // `apply_commit` (DRM settle is async — encrypted HEAD
+                // estimate is replaced with the post-decrypt actual size
+                // only after the segment finishes settling). Refresh
+                // against the live layout once more — if the segment's
+                // byte_range has since shrunk to match what we actually
+                // read, treat that as a successful fill.
+                if refresh_range(state, live) {
+                    let new_total = state.total();
+                    if state.buffer.len() != new_total {
+                        state.buffer.resize(new_total, 0);
+                    }
+                    if state.filled >= new_total {
+                        return Ok(FillStatus::Ready);
+                    }
                 }
                 return Err(DecodeError::InvalidData(format!(
                     "unexpected EOF before segment buffer filled: {} / {}",
-                    state.filled, total
+                    state.filled,
+                    state.total()
                 )));
             }
         }
     }
-    Ok(FillStatus::Ready)
+}
+
+/// Re-resolve `state.range` against the live layout. Returns `true` if
+/// the range moved. When `state.range.start` shifts, any bytes already
+/// accumulated in `state.buffer` describe the OLD position in the
+/// virtual byte map (the underlying segment data now lives at a
+/// different virtual address) — we reset `state.filled = 0` and re-read
+/// from the new start. When only `state.range.end` shrinks, the prefix
+/// stays valid; cap `state.filled` so the loop doesn't try to re-read
+/// trimmed-off bytes.
+fn refresh_range(state: &mut SegmentReadState, live: LiveRange<'_>) -> bool {
+    let Some(new_range) = live.resolve() else {
+        return false;
+    };
+    if new_range == state.range {
+        return false;
+    }
+    let start_changed = new_range.start != state.range.start;
+    state.range = new_range;
+    if start_changed {
+        state.filled = 0;
+    } else {
+        let new_total = state.total();
+        if state.filled > new_total {
+            state.filled = new_total;
+        }
+    }
+    true
 }

@@ -470,6 +470,10 @@ impl SegmentLayout for HlsCoord {
         self.active()?.descriptor_at_time(t)
     }
 
+    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
+        self.active()?.descriptor(segment_index as usize)
+    }
+
     fn segment_count(&self) -> Option<u32> {
         Some(self.active()?.num_segments())
     }

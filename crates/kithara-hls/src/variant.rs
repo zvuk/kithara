@@ -1336,7 +1336,7 @@ impl HlsVariant {
         lo
     }
 
-    fn descriptor(&self, idx: usize) -> Option<SegmentDescriptor> {
+    pub(crate) fn descriptor(&self, idx: usize) -> Option<SegmentDescriptor> {
         let entry = self.segments.get(idx)?;
         let seg_idx_u32 = u32::try_from(idx).ok()?;
         let byte_offset = self.segment_byte_offset_usize(idx)?;
