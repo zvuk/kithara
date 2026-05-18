@@ -1,6 +1,6 @@
 [package]
 name = "kithara"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -28,7 +28,7 @@ kithara-drm = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal", "wasm-bindgen"] }

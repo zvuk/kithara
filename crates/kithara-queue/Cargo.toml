@@ -1,6 +1,6 @@
 [package]
 name = "kithara-queue"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -31,7 +31,7 @@ bon = { workspace = true }
 delegate = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-platform = { workspace = true }

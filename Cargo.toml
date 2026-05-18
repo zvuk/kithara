@@ -135,7 +135,7 @@ approx_constant = "warn"
 tools = { rustfmt = "rustfmt.toml", clippy = "clippy.toml", deny = "deny.toml" }
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.1-alpha1"
 edition = "2024"
 rust-version = "1.89"
 authors = ["kithara contributors"]
@@ -151,30 +151,30 @@ homepage = "https://github.com/zvuk/kithara"
 # - In crate Cargo.toml files use `{ workspace = true }`.
 [workspace.dependencies]
 # workspace crates (path deps)
-kithara = { path = "crates/kithara", version = "0.1.0" }
-kithara-abr = { path = "crates/kithara-abr", version = "0.1.0" }
-kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
-kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
-kithara-audio = { path = "crates/kithara-audio", version = "0.1.0" }
-kithara-encode = { path = "crates/kithara-encode", version = "0.1.0" }
-kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
-kithara-drm = { path = "crates/kithara-drm", version = "0.1.0" }
-kithara-events = { path = "crates/kithara-events", version = "0.1.0" }
-kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
-kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
-kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
-kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
-kithara-play = { path = "crates/kithara-play", version = "0.1.0", default-features = false }
-kithara-queue = { path = "crates/kithara-queue", version = "0.1.0" }
-kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
-kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara = { path = "crates/kithara", version = "0.0.1-alpha1" }
+kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha1" }
+kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha1" }
+kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha1" }
+kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha1" }
+kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha1" }
+kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha1" }
+kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha1" }
+kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha1" }
+kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha1" }
+kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha1" }
+kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha1" }
+kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha1" }
+kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha1", default-features = false }
+kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha1" }
+kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha1" }
+kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha1" }
 kithara-test-macros = { path = "crates/kithara-test-macros" }
 kithara-test-utils = { path = "crates/kithara-test-utils" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
 kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
-kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.1.0" }
+kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha1" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.4.0"
 unimock = { version = "0.6", features = ["std"] }

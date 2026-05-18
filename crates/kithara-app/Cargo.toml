@@ -1,6 +1,6 @@
 [package]
 name = "kithara-app"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license = "MIT OR Apache-2.0"
 publish = false
@@ -30,7 +30,7 @@ crabtime = { workspace = true }
 bon = { workspace = true }
 crossterm = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }

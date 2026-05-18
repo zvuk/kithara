@@ -8,7 +8,7 @@ assignees: ''
 
 ## Version
 
-kithara version (e.g., 0.1.0):
+kithara version (git tag or commit SHA):
 
 ## Platform
 

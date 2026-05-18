@@ -21,7 +21,7 @@ Built on top of the Rust core via UniFFI-generated bindings and distributed as a
 
 Add Kithara as a Swift Package Manager dependency:
 
-**Xcode**: File → Add Package Dependencies → enter `https://github.com/zvuk/kithara` → select "Up to Next Major Version" from `0.1.0`.
+**Xcode**: File → Add Package Dependencies → enter `https://github.com/zvuk/kithara` → pick the latest tag from the [Releases page](https://github.com/zvuk/kithara/releases).
 
 **Package.swift**:
 
@@ -33,7 +33,8 @@ let package = Package(
     name: "MyApp",
     platforms: [.iOS(.v16), .macOS(.v13)],
     dependencies: [
-        .package(url: "https://github.com/zvuk/kithara", from: "0.1.0"),
+        // Replace X.Y.Z with the latest tag from https://github.com/zvuk/kithara/releases
+        .package(url: "https://github.com/zvuk/kithara", from: "X.Y.Z"),
     ],
     targets: [
         .executableTarget(
