@@ -34,12 +34,14 @@ const SILENCE_THRESHOLD: f32 = 1.0e-3;
 async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let expected_visible_frames = crate::gapless_common::generated_aac_elst_visible_frames();
-    let player_config = PlayerConfig::default()
-        .with_crossfade_duration(0.0)
-        .with_gapless_mode(GaplessMode::SilenceTrim(SilenceTrimParams {
-            trim_trailing: true,
-            ..SilenceTrimParams::default()
-        }));
+    let gapless_params = SilenceTrimParams {
+        trim_trailing: true,
+        ..SilenceTrimParams::default()
+    };
+    let player_config = PlayerConfig::builder()
+        .crossfade_duration(0.0)
+        .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
+        .build();
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE);
     let first = create_gapless_hls_resource(
         harness.player(),
@@ -106,12 +108,14 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
 )]
 async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let player_config = PlayerConfig::default()
-        .with_crossfade_duration(1.0)
-        .with_gapless_mode(GaplessMode::SilenceTrim(SilenceTrimParams {
-            trim_trailing: true,
-            ..SilenceTrimParams::default()
-        }));
+    let gapless_params = SilenceTrimParams {
+        trim_trailing: true,
+        ..SilenceTrimParams::default()
+    };
+    let player_config = PlayerConfig::builder()
+        .crossfade_duration(1.0)
+        .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
+        .build();
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE);
     let first = create_gapless_hls_resource(
         harness.player(),
@@ -256,7 +260,7 @@ async fn create_gapless_hls_resource(
     let store = StoreOptions::new(cache_dir);
     let mut config = ResourceConfig::new(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .with_store(store);
+        .store(store);
     player.prepare_config(&mut config);
     let mut resource = Resource::new(config)
         .await

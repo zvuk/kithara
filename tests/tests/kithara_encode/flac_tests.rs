@@ -28,9 +28,10 @@ fn encode_packaged_flac_happy_path_emits_monotonic_access_units() {
         .expect("BUG: Flac must be supported by the packaged encoder");
     let total_frames = 4 * frame_samples;
     let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);
-    let media_info = MediaInfo::default()
-        .with_codec(AudioCodec::Flac)
-        .with_container(ContainerFormat::Fmp4);
+    let media_info = MediaInfo::builder()
+        .codec(AudioCodec::Flac)
+        .container(ContainerFormat::Fmp4)
+        .build();
 
     let encoded = EncoderFactory::encode_packaged(PackagedEncodeRequest {
         media_info,

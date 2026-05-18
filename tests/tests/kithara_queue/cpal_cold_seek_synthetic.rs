@@ -95,7 +95,9 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let downloader = Downloader::new(DownloaderConfig::default());
 
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
@@ -110,7 +112,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     });
 
     let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
-    cfg = cfg.with_downloader(downloader.clone());
+    cfg = cfg.downloader(downloader.clone());
     cfg.store = store;
     cfg.decoder_backend = backend;
     let source = TrackSource::Config(Box::new(cfg));

@@ -32,9 +32,10 @@ async fn prefetch_403_returns_err_quickly(
     .await;
 
     let url = server.url("/master-encrypted.m3u8");
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new());
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(CancellationToken::new())
+        .build();
 
     let started = std::time::Instant::now();
     let result = tokio::time::timeout(Duration::from_secs(1), Stream::<Hls>::new(config))

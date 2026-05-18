@@ -39,11 +39,12 @@ fn engine_config_defaults() {
 
 #[kithara::test]
 fn engine_config_builder() {
-    let config = EngineConfig::default()
-        .with_max_slots(8)
-        .with_sample_rate(48000)
-        .with_channels(1)
-        .with_eq_layout(kithara_audio::generate_log_spaced_bands(5));
+    let config = EngineConfig::builder()
+        .max_slots(8)
+        .sample_rate(48000)
+        .channels(1)
+        .eq_layout(kithara_audio::generate_log_spaced_bands(5))
+        .build();
     assert_eq!(config.max_slots, 8);
     assert_eq!(config.sample_rate, 48000);
     assert_eq!(config.channels, 1);
@@ -139,7 +140,7 @@ fn engine_cancel_crossfade_stub_returns_no_crossfade() {
 
 #[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
-    let config = EngineConfig::default().with_sample_rate(48000);
+    let config = EngineConfig::builder().sample_rate(48000).build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
 }

@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use derive_setters::Setters;
+use bon::Builder;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerFormat {
@@ -30,8 +30,8 @@ pub enum AudioCodec {
     Adpcm,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct MediaInfo {
     pub channels: Option<u16>,
@@ -44,13 +44,10 @@ pub struct MediaInfo {
 impl MediaInfo {
     #[must_use]
     pub fn new(codec: Option<AudioCodec>, container: Option<ContainerFormat>) -> Self {
-        Self {
-            codec,
-            container,
-            channels: None,
-            sample_rate: None,
-            variant_index: None,
-        }
+        Self::builder()
+            .maybe_codec(codec)
+            .maybe_container(container)
+            .build()
     }
 
     #[must_use]

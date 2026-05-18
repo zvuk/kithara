@@ -135,11 +135,14 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         store.max_assets = Some(10);
     }
 
-    let file_config = FileConfig::new(url.into()).with_store(store);
-    let mut audio =
-        Audio::<Stream<File>>::new(AudioConfig::<File>::new(file_config).with_hint("mp3"))
-            .await
-            .expect("audio creation");
+    let file_config = FileConfig::for_src(url.into()).store(store).build();
+    let mut audio = Audio::<Stream<File>>::new(
+        AudioConfig::<File>::for_stream(file_config)
+            .hint(("mp3").to_string())
+            .build(),
+    )
+    .await
+    .expect("audio creation");
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.events();

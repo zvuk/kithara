@@ -174,7 +174,7 @@ fn build_initial_key_state(
         }
         registry.add(build_processor_rule(r));
     }
-    let key_options = KeyOptions::new().with_key_registry(registry);
+    let key_options = KeyOptions::builder().key_registry(registry).build();
     (key_options, player_headers)
 }
 
@@ -185,8 +185,9 @@ impl AudioPlayer {
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
         let cancel = CancellationToken::new(); // kithara:cancel:owner
-        let mut player_config = PlayerConfig::default()
-            .with_eq_layout(generate_log_spaced_bands(config.eq_band_count as usize));
+        let mut player_config = PlayerConfig::builder()
+            .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
+            .build();
         player_config.cancel = Some(cancel.clone());
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);
@@ -594,7 +595,7 @@ impl AudioPlayer {
         let mut opts = self.key_options.lock_sync();
         let mut registry = opts.key_registry.take().unwrap_or_default();
         registry.add(processor_rule);
-        *opts = KeyOptions::new().with_key_registry(registry);
+        *opts = KeyOptions::builder().key_registry(registry).build();
     }
 
     /// Player-wide auth header. Stores `auth_token` under
@@ -673,23 +674,23 @@ impl AudioPlayer {
 
         let bitrate = item.preferred_peak_bitrate();
         if bitrate > 0.0 {
-            config = config.with_preferred_peak_bitrate(bitrate);
+            config = config.preferred_peak_bitrate(bitrate);
         }
 
         let merged_headers = self.merged_headers_for_item(item);
         if let Some(headers) = merged_headers {
-            config = config.with_headers(headers.into());
+            config = config.headers(headers.into());
         }
 
         let scoped = self.queue.bus().scoped();
         config.bus = Some(scoped.clone());
         *item.bus.lock_sync() = Some(scoped);
 
-        config = config.with_downloader(self.downloader.clone());
+        config = config.downloader(self.downloader.clone());
 
         let key_options = self.key_options.lock_sync().clone();
         if key_options.key_registry.is_some() {
-            config = config.with_keys(key_options);
+            config = config.keys(key_options);
         }
 
         if let Some(mode) = item.abr_mode() {
@@ -697,7 +698,7 @@ impl AudioPlayer {
                 FfiAbrMode::Auto => AbrMode::Auto(None),
                 FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
             };
-            config = config.with_initial_abr_mode(abr_mode);
+            config = config.initial_abr_mode(abr_mode);
         }
 
         Ok(TrackSource::Config(Box::new(config)))

@@ -44,10 +44,11 @@ async fn test_driver_seek_after_playlist_finished(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
@@ -112,11 +113,12 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_events(bus)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .events(bus)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 

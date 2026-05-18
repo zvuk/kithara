@@ -169,15 +169,19 @@ async fn audio_file_mp3_decodes_with_duration(
     let server = TestHttpServer::new(app()).await;
     let temp_dir = TestTempDir::new();
 
-    let file_config = FileConfig::new(server.url(path).into()).with_store(
-        StoreOptions::builder()
-            .cache_dir(temp_dir.path().into())
-            .is_ephemeral(true)
-            .build(),
-    );
-    let mut config = AudioConfig::<File>::new(file_config).with_decoder_backend(backend);
+    let file_config = FileConfig::for_src(server.url(path).into())
+        .store(
+            StoreOptions::builder()
+                .cache_dir(temp_dir.path().into())
+                .is_ephemeral(true)
+                .build(),
+        )
+        .build();
+    let mut config = AudioConfig::<File>::for_stream(file_config)
+        .decoder_backend(backend)
+        .build();
     if let Some(h) = hint {
-        config = config.with_hint(h);
+        config.hint = Some(h.to_string());
     }
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
@@ -243,16 +247,17 @@ async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Op
     let server = TestHttpServer::new(app()).await;
     let temp_dir = TestTempDir::new();
 
-    let file_config = FileConfig::new(server.url(path).into()).with_store(
-        StoreOptions::builder()
-            .cache_dir(temp_dir.path().into())
-            .is_ephemeral(true)
-            .build(),
-    );
-    let mut config = AudioConfig::<File>::new(file_config);
-    if let Some(h) = hint {
-        config = config.with_hint(h);
-    }
+    let file_config = FileConfig::for_src(server.url(path).into())
+        .store(
+            StoreOptions::builder()
+                .cache_dir(temp_dir.path().into())
+                .is_ephemeral(true)
+                .build(),
+        )
+        .build();
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .maybe_hint(hint.map(String::from))
+        .build();
     let audio = Audio::<Stream<File>>::new(config)
         .await
         .unwrap_or_else(|e| panic!("creation failed for path={path} hint={hint:?}: {e}"));
@@ -275,12 +280,14 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     let server = TestHttpServer::new(app()).await;
     let temp_dir = TestTempDir::new();
 
-    let file_config = FileConfig::new(server.url("/track/stream").into()).with_store(
-        StoreOptions::builder()
-            .cache_dir(temp_dir.path().into())
-            .is_ephemeral(true)
-            .build(),
-    );
+    let file_config = FileConfig::for_src(server.url("/track/stream").into())
+        .store(
+            StoreOptions::builder()
+                .cache_dir(temp_dir.path().into())
+                .is_ephemeral(true)
+                .build(),
+        )
+        .build();
     let config = AudioConfig::<File>::new(file_config);
     let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
 

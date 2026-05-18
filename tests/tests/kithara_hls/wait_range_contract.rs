@@ -46,10 +46,11 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
         .is_ephemeral(ephemeral)
         .cache_capacity(NonZeroUsize::new(256).unwrap())
         .build();
-    let config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(CancellationToken::new())
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(CancellationToken::new())
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
     let total_bytes = server.total_bytes();
@@ -157,10 +158,11 @@ async fn ephemeral_small_cache_reads_entire_stream() {
         .is_ephemeral(true)
         .cache_capacity(NonZeroUsize::new(5).expect("5 > 0"))
         .build();
-    let config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(CancellationToken::new())
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(CancellationToken::new())
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
     let result = spawn_blocking(move || {

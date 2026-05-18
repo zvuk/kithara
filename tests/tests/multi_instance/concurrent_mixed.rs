@@ -46,8 +46,12 @@ async fn spawn_file_instance(
     url: url::Url,
     temp_path: &std::path::Path,
 ) -> JoinHandle<InstanceResult> {
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_path));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let file_config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_path))
+        .build();
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .hint(("mp3").to_string())
+        .build();
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create File audio");
@@ -80,13 +84,16 @@ async fn spawn_hls_instance(
     let url = server.url("/master.m3u8");
     let cancel = CancellationToken::new();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_path))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_path))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await

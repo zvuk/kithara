@@ -67,9 +67,10 @@ fn expected_total_decoded_frames() -> usize {
 async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default()
-            .with_crossfade_duration(0.0)
-            .with_gapless_mode(silence_trim_with_trailing()),
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
         GAPLESS_SAMPLE_RATE,
     );
 
@@ -126,9 +127,10 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     let server = TestServerHelper::new().await;
     let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default()
-            .with_crossfade_duration(0.0)
-            .with_gapless_mode(silence_trim_with_trailing()),
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
         GAPLESS_SAMPLE_RATE,
     );
 
@@ -214,9 +216,10 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
 async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default()
-            .with_crossfade_duration(0.0)
-            .with_gapless_mode(GaplessMode::Disabled),
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(GaplessMode::Disabled)
+            .build(),
         GAPLESS_SAMPLE_RATE,
     );
 
@@ -267,9 +270,10 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
 ) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default()
-            .with_crossfade_duration(0.0)
-            .with_gapless_mode(silence_trim_with_trailing()),
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
         GAPLESS_SAMPLE_RATE,
     );
 
@@ -309,9 +313,10 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
 ) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default()
-            .with_crossfade_duration(0.0)
-            .with_gapless_mode(silence_trim_with_trailing()),
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
         GAPLESS_SAMPLE_RATE,
     );
 
@@ -406,9 +411,10 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
 async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default()
-            .with_crossfade_duration(0.0)
-            .with_gapless_mode(silence_trim_with_trailing()),
+        PlayerConfig::builder()
+            .crossfade_duration(0.0)
+            .gapless_mode(silence_trim_with_trailing())
+            .build(),
         GAPLESS_SAMPLE_RATE,
     );
 
@@ -553,7 +559,7 @@ async fn create_resource_with_encoding(
     let store = StoreOptions::new(cache_dir);
     let mut config = ResourceConfig::new(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .with_store(store);
+        .store(store);
     player.prepare_config(&mut config);
     let mut resource = Resource::new(config)
         .await

@@ -68,18 +68,16 @@ async fn open_packaged_hls_audio(
     abr: AbrMode,
     bus: Option<EventBus>,
 ) -> Audio<Stream<Hls>> {
-    let mut hls_config = HlsConfig::new(url.clone())
-        .with_store(store)
-        .with_initial_abr_mode(abr)
-        .with_download_batch_size(1);
-    if let Some(bus) = bus.clone() {
-        hls_config = hls_config.with_events(bus);
-    }
+    let hls_config = HlsConfig::for_url(url.clone())
+        .store(store)
+        .initial_abr_mode(abr)
+        .download_batch_size(1)
+        .maybe_events(bus.clone())
+        .build();
 
-    let mut config = AudioConfig::<Hls>::new(hls_config);
-    if let Some(bus) = bus {
-        config = config.with_events(bus);
-    }
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .maybe_events(bus)
+        .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -127,12 +125,13 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let url = server.asset("hls/master.m3u8");
 
     let cancel = CancellationToken::new();
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -357,12 +356,15 @@ async fn stream_continues_after_seek(
     } else {
         AbrMode::Manual(0)
     };
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(abr_mode);
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(abr_mode)
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_decoder_backend(backend);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -435,12 +437,13 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let url = server.asset("hls/master.m3u8");
 
     let cancel = CancellationToken::new();
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -489,13 +492,15 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     let url = server.asset(path);
 
     let cancel = CancellationToken::new();
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config =
-        AudioConfig::<Hls>::new(hls_config).with_decoder_backend(DecoderBackend::Symphonia);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .decoder_backend(DecoderBackend::Symphonia)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -555,8 +560,12 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("track.mp3");
 
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let file_config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .hint(("mp3").to_string())
+        .build();
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create audio");
@@ -636,11 +645,12 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -770,13 +780,14 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     let bus = EventBus::new(256);
     let mut hls_rx = bus.subscribe();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");

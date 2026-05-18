@@ -61,11 +61,12 @@ async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
 
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
 
@@ -125,11 +126,12 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     // segments worth of look-ahead — comfortably below the 37-segment
     // variant length so a missing cap is unambiguously visible.
     const LOOK_AHEAD_BYTES: u64 = 256 * 1024;
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Manual(0))
-        .with_download_batch_size(1)
-        .with_look_ahead_bytes(LOOK_AHEAD_BYTES);
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .download_batch_size(1)
+        .look_ahead_bytes(LOOK_AHEAD_BYTES)
+        .build();
 
     let _audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await

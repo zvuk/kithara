@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use derivative::Derivative;
 use kithara_platform::time::Duration;
 
 /// Threshold separating Manual (below) from Auto (at or above) in the packed
@@ -8,15 +7,19 @@ use kithara_platform::time::Duration;
 const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
 
 /// ABR mode selection.
-#[derive(Clone, Copy, Debug, Derivative, PartialEq, Eq)]
-#[derivative(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbrMode {
     /// Automatic bitrate adaptation.
     /// Optional initial variant index (defaults to 0 when `None`).
-    #[derivative(Default)]
     Auto(Option<usize>),
     /// Manual variant selection — ABR disabled, fixed variant.
     Manual(usize),
+}
+
+impl Default for AbrMode {
+    fn default() -> Self {
+        Self::Auto(None)
+    }
 }
 
 impl From<AbrMode> for usize {

@@ -32,11 +32,12 @@ async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: Cancellation
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_initial_abr_mode(AbrMode::Manual(1))
-        .with_events(bus);
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .initial_abr_mode(AbrMode::Manual(1))
+        .events(bus)
+        .build();
 
     info!("Opening HLS stream...");
     let mut stream = Stream::<Hls>::new(config).await.unwrap();

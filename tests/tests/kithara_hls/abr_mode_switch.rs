@@ -234,16 +234,18 @@ async fn vod_manual_switch_affects_future_segments() {
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_events(bus)
-        .with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -352,15 +354,17 @@ async fn multi_track_shared_abr_with_cache() {
     let bus1 = EventBus::new(8192);
     let collector1 = EventCollector::new(&bus1);
 
-    let hls1 = HlsConfig::new(url1.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new())
-        .with_events(bus1.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls1 = HlsConfig::for_url(url1.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(CancellationToken::new())
+        .events(bus1.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config1 = AudioConfig::<Hls>::new(hls1)
-        .with_events(bus1)
-        .with_media_info(wav_info.clone());
+    let config1 = AudioConfig::<Hls>::for_stream(hls1)
+        .events(bus1)
+        .media_info(wav_info.clone())
+        .build();
     let mut audio1 = Audio::<Stream<Hls>>::new(config1).await.expect("track 1");
 
     let t1_samples = spawn_blocking(move || read_until_eof(&mut audio1, Duration::from_secs(15)))
@@ -386,15 +390,17 @@ async fn multi_track_shared_abr_with_cache() {
     let bus2 = EventBus::new(8192);
     let collector2 = EventCollector::new(&bus2);
 
-    let hls2 = HlsConfig::new(url2)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new())
-        .with_events(bus2.clone())
-        .with_initial_abr_mode(AbrMode::Manual(1));
+    let hls2 = HlsConfig::for_url(url2)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(CancellationToken::new())
+        .events(bus2.clone())
+        .initial_abr_mode(AbrMode::Manual(1))
+        .build();
 
-    let config2 = AudioConfig::<Hls>::new(hls2)
-        .with_events(bus2)
-        .with_media_info(wav_info.clone());
+    let config2 = AudioConfig::<Hls>::for_stream(hls2)
+        .events(bus2)
+        .media_info(wav_info.clone())
+        .build();
     let mut audio2 = Audio::<Stream<Hls>>::new(config2).await.expect("track 2");
 
     let t2_samples = spawn_blocking(move || read_until_eof(&mut audio2, Duration::from_secs(15)))
@@ -419,15 +425,17 @@ async fn multi_track_shared_abr_with_cache() {
     let bus3 = EventBus::new(8192);
     let collector3 = EventCollector::new(&bus3);
 
-    let hls3 = HlsConfig::new(url1)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new())
-        .with_events(bus3.clone())
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls3 = HlsConfig::for_url(url1)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(CancellationToken::new())
+        .events(bus3.clone())
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
-    let config3 = AudioConfig::<Hls>::new(hls3)
-        .with_events(bus3)
-        .with_media_info(wav_info);
+    let config3 = AudioConfig::<Hls>::for_stream(hls3)
+        .events(bus3)
+        .media_info(wav_info)
+        .build();
     let mut audio3 = Audio::<Stream<Hls>>::new(config3)
         .await
         .expect("track 1 replay");
@@ -508,16 +516,18 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_events(bus)
-        .with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -596,16 +606,18 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_events(bus)
-        .with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -699,13 +711,16 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         }
     });
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_events(bus);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -808,17 +823,19 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
 
     // download_batch_size larger than total segments → peer fetches the
     // full variant 0 then parks itself idle.
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)))
-        .with_download_batch_size(segment_count * 2);
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .download_batch_size(segment_count * 2)
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_events(bus)
-        .with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -935,17 +952,19 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
 
     // Manual(0) initial so Auto-decision doesn't fire an UpSwitch/
     // DownSwitch that races against the explicit Manual(1) below.
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Manual(0))
-        .with_download_batch_size(segment_count * 2);
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Manual(0))
+        .download_batch_size(segment_count * 2)
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_events(bus)
-        .with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -1090,16 +1109,18 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     let collector = EventCollector::new(&bus);
 
     // Crucially: NO `with_settings(abr_fast())` — production defaults.
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_events(bus)
-        .with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -1195,13 +1216,16 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
         }
     });
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_events(bus);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -1343,15 +1367,17 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
         }
     });
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Manual(2));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Manual(2))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_events(bus)
-        .with_decoder_backend(backend);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -1555,15 +1581,17 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
         }
     });
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_events(bus)
-        .with_decoder_backend(backend);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");

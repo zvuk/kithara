@@ -60,10 +60,11 @@ async fn seek_beyond_head_total_within_actual_total(
 
     let url = server.url("/master.m3u8");
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 

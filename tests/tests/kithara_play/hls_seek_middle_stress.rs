@@ -108,7 +108,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
     let downloader = Downloader::new(DownloaderConfig::default());
 
     let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
-    cfg = cfg.with_downloader(downloader.clone()).with_name("t0");
+    cfg = cfg.downloader(downloader.clone()).name("t0");
     cfg.store = store;
     cfg.decoder_backend = backend;
 

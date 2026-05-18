@@ -123,9 +123,10 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
 
     let file_cfg = FileConfig::new(FileSrc::Local(input));
     let worker = AudioWorkerHandle::new();
-    let audio_cfg = AudioConfig::<FileSource>::new(file_cfg)
-        .with_hint("mp3")
-        .with_worker(worker);
+    let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
+        .hint("mp3")
+        .worker(worker)
+        .build();
 
     let mut audio = match Audio::<Stream<FileSource>>::new(audio_cfg).await {
         Ok(a) => a,

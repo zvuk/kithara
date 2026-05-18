@@ -55,11 +55,12 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    let config = HlsConfig::new(url.clone())
-        .with_cancel(cancel_token.clone())
-        .with_events(bus)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let config = HlsConfig::for_url(url.clone())
+        .cancel(cancel_token.clone())
+        .events(bus)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     info!("Opening HLS stream with ABR enabled");
 
@@ -161,10 +162,11 @@ async fn test_basic_multi_segment_reading(
     let url = server.url("/master.m3u8");
     let cancel_token = CancellationToken::new();
 
-    let config = HlsConfig::new(url)
-        .with_cancel(cancel_token.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .cancel(cancel_token.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await?;
 
@@ -230,11 +232,12 @@ async fn test_abr_variant_switch_with_seek_backward(
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    let config = HlsConfig::new(url)
-        .with_cancel(cancel_token.clone())
-        .with_events(bus)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let config = HlsConfig::for_url(url)
+        .cancel(cancel_token.clone())
+        .events(bus)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     println!("\nCreating HLS stream with ABR");
     let mut stream = Stream::<Hls>::new(config).await?;

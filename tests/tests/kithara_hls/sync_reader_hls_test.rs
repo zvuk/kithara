@@ -27,10 +27,11 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     let url = server.url("/master.m3u8");
     let cancel_token = CancellationToken::new();
 
-    let config = HlsConfig::new(url.clone())
-        .with_cancel(cancel_token.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url.clone())
+        .cancel(cancel_token.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 

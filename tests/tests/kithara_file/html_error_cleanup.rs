@@ -138,10 +138,11 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
     let cancel = CancellationToken::new();
-    let config = FileConfig::new(url.into())
-        .with_events(bus.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel.clone());
+    let config = FileConfig::for_src(url.into())
+        .events(bus.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel.clone())
+        .build();
 
     let stream = Stream::<File>::new(config).await.unwrap();
 
@@ -177,10 +178,11 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
     let cancel = CancellationToken::new();
-    let config = FileConfig::new(url.into())
-        .with_events(bus.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel.clone());
+    let config = FileConfig::for_src(url.into())
+        .events(bus.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel.clone())
+        .build();
 
     let stream = Stream::<File>::new(config).await.unwrap();
     let _ = wait_for_download_terminal(&mut rx, Duration::from_secs(5)).await;

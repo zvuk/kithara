@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecoderBackend, GaplessMode, PcmSpec};
 use kithara_events::EventBus;
@@ -23,37 +23,29 @@ use crate::{
 ///
 /// Generic over `StreamType` to include stream-specific configuration.
 /// Combines stream config and audio pipeline settings into a single builder.
-#[derive(Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AudioConfig<T: StreamType> {
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
     pub stream: T::Config,
-    /// Decoder backend selection. See [`DecoderBackend`]. Defaults to
-    /// [`DecoderBackend::Symphonia`] — the software path is cross-platform
-    /// and capability-complete; hardware backends are opt-in via
-    /// [`AudioConfig::with_decoder_backend`] because there is no runtime
-    /// fallback.
+    /// Decoder backend selection. See [`DecoderBackend`].
+    #[builder(default)]
     pub decoder_backend: DecoderBackend,
     /// How leading/trailing PCM is trimmed after the decode.
+    #[builder(default)]
     pub gapless_mode: GaplessMode,
     /// Number of chunks to buffer before signaling preload readiness.
-    ///
-    /// Higher values reduce the chance of the audio thread blocking on `recv()`
-    /// after preload, but increase initial latency. Default: 3.
+    #[builder(default = NonZeroUsize::new(3).expect("3 is non-zero"))]
     pub preload_chunks: NonZeroUsize,
     /// Unified event bus (optional — if not provided, one is created internally).
-    #[setters(rename = "with_events")]
+    #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
-    /// Master cancel token for the audio pipeline. Per-track child of
-    /// the player master — see `kithara-play/README.md` "Cancel
-    /// Hierarchy". Populated by `kithara_play::ResourceConfig`'s
-    /// conversion routines from the resource-level cancel.
+    /// Master cancel token for the audio pipeline.
     pub cancel: Option<tokio_util::sync::CancellationToken>,
     /// Optional format hint (file extension like "mp3", "wav")
-    #[setters(skip)]
     pub hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
@@ -62,77 +54,41 @@ pub struct AudioConfig<T: StreamType> {
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
     /// Shared atomic for dynamic playback rate (1.0 = normal speed).
-    ///
-    /// When set, propagated to the resampler for pitch-shifting playback.
-    /// When `None`, a default `Arc<AtomicF32>` with value `1.0` is created.
     pub playback_rate: Option<Arc<AtomicF32>>,
     /// Optional shared audio worker handle.
-    ///
-    /// When provided, the track registers with this shared worker instead of
-    /// spawning a dedicated OS thread. When `None` (default), a standalone
-    /// worker is created automatically for backward compatibility.
-    #[setters(skip)]
     pub worker: Option<handle::AudioWorkerHandle>,
     /// Resampling quality preset.
+    #[builder(default)]
     pub resampler_quality: ResamplerQuality,
     /// Additional effects to append after resampler in the processing chain.
-    #[setters(skip)]
+    #[builder(default)]
     pub effects: Vec<Box<dyn AudioEffect>>,
-    /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
+    /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s).
+    /// Default: 10 on native, 32 on wasm32.
+    #[builder(default = default_pcm_buffer_chunks())]
     pub pcm_buffer_chunks: usize,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+const fn default_pcm_buffer_chunks() -> usize {
+    10
+}
+
+#[cfg(target_arch = "wasm32")]
+const fn default_pcm_buffer_chunks() -> usize {
+    32
+}
+
 impl<T: StreamType> AudioConfig<T> {
-    /// Default PCM queue depth in decoded chunks.
-    #[cfg(target_arch = "wasm32")]
-    const DEFAULT_PCM_BUFFER_CHUNKS: usize = 32;
-
-    #[cfg(not(target_arch = "wasm32"))]
-    const DEFAULT_PCM_BUFFER_CHUNKS: usize = 10;
-    /// Default number of preload chunks.
-    const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
-
     /// Create config with stream config and default audio settings.
     pub fn new(stream: T::Config) -> Self {
-        Self {
-            stream,
-            byte_pool: None,
-            hint: None,
-            host_sample_rate: None,
-            media_info: None,
-            pcm_buffer_chunks: Self::DEFAULT_PCM_BUFFER_CHUNKS,
-            pcm_pool: None,
-            playback_rate: None,
-            decoder_backend: DecoderBackend::default(),
-            preload_chunks: Self::DEFAULT_PRELOAD_CHUNKS,
-            resampler_quality: ResamplerQuality::default(),
-            bus: None,
-            effects: Vec::new(),
-            worker: None,
-            gapless_mode: GaplessMode::default(),
-            cancel: None,
-        }
+        Self::for_stream(stream).build()
     }
 
-    /// Add an audio effect to the processing chain (runs after resampler).
-    pub fn with_effect(mut self, effect: Box<dyn AudioEffect>) -> Self {
-        self.effects.push(effect);
-        self
-    }
-
-    /// Set format hint.
-    pub fn with_hint<S: Into<String>>(mut self, hint: S) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
-
-    /// Use a shared audio worker instead of spawning a dedicated thread.
-    ///
-    /// Multiple tracks sharing one worker run on a single OS thread via
-    /// cooperative round-robin scheduling.
-    pub fn with_worker(mut self, worker: handle::AudioWorkerHandle) -> Self {
-        self.worker = Some(worker);
-        self
+    /// Chainable counterpart to [`AudioConfig::new`]: returns a builder
+    /// with `stream` set so callers can attach further setters.
+    pub fn for_stream(stream: T::Config) -> AudioConfigBuilder<T, audio_config_builder::SetStream> {
+        Self::builder().stream(stream)
     }
 }
 
@@ -161,14 +117,14 @@ pub(crate) fn create_effects(
     pool: Option<PcmPool>,
     custom_effects: Vec<Box<dyn AudioEffect>>,
 ) -> Vec<Box<dyn AudioEffect>> {
-    let params = ResamplerParams::new(
-        Arc::clone(host_sample_rate),
-        initial_spec.sample_rate,
-        initial_spec.channels as usize,
-    )
-    .with_playback_rate(Arc::clone(playback_rate))
-    .with_quality(quality)
-    .with_pool(pool);
+    let params = ResamplerParams::builder()
+        .host_sample_rate(Arc::clone(host_sample_rate))
+        .source_sample_rate(initial_spec.sample_rate)
+        .channels(initial_spec.channels as usize)
+        .playback_rate(Arc::clone(playback_rate))
+        .quality(quality)
+        .maybe_pool(pool)
+        .build();
 
     let mut chain: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResamplerProcessor::new(params))];
     chain.extend(custom_effects);
@@ -201,9 +157,11 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
     fn audio_config_with_effect_adds_to_chain() {
-        let config = AudioConfig::<kithara_file::File>::new(FileConfig::default())
-            .with_effect(Box::new(PassthroughEffect))
-            .with_effect(Box::new(PassthroughEffect));
+        let effects: Vec<Box<dyn AudioEffect>> =
+            vec![Box::new(PassthroughEffect), Box::new(PassthroughEffect)];
+        let config = AudioConfig::<kithara_file::File>::for_stream(FileConfig::default())
+            .effects(effects)
+            .build();
         assert_eq!(config.effects.len(), 2);
     }
 

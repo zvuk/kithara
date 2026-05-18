@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     EncodeError, EncodeResult,
-    codec::AudioCodec,
+    codec::{AudioCodec, MediaInfo},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
@@ -63,12 +63,12 @@ impl AacFFmpegEncoder {
         send_eof_to_encoder(&mut encoder.encoder)?;
         encoder.receive_and_collect_packets();
 
-        let media_info = request
-            .media_info
-            .clone()
-            .with_codec(AudioCodec::AacLc)
-            .with_sample_rate(request.pcm.sample_rate())
-            .with_channels(request.pcm.channels());
+        let media_info = MediaInfo {
+            codec: Some(AudioCodec::AacLc),
+            sample_rate: Some(request.pcm.sample_rate()),
+            channels: Some(request.pcm.channels()),
+            ..request.media_info.clone()
+        };
 
         Ok(EncodedTrack {
             media_info,

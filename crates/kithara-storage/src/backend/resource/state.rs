@@ -5,7 +5,6 @@ use std::{
     sync::Arc,
 };
 
-use derivative::Derivative;
 use kithara_platform::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
@@ -41,10 +40,16 @@ pub(super) struct Inner<D: DriverIo> {
 /// Use via type aliases:
 /// - [`MmapResource`](crate::MmapResource) = `Resource<MmapDriver>`
 /// - [`MemResource`](crate::MemResource) = `Resource<MemDriver>`
-#[derive(Derivative)]
-#[derivative(Clone(bound = ""))]
 pub struct Resource<D: DriverIo> {
     pub(super) inner: Arc<Inner<D>>,
+}
+
+impl<D: DriverIo> Clone for Resource<D> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 impl<D: DriverIo + Debug> Debug for Resource<D> {

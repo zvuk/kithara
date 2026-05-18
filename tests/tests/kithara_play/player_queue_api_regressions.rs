@@ -24,7 +24,7 @@ const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_crossfade_duration(0.0),
+        PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
     let first_id = Arc::<str>::from("item-1");
@@ -128,7 +128,7 @@ async fn make_signal_resource(
     let url = server.sine(&spec, freq_hz).await;
     let mut config = ResourceConfig::new(url.as_str())
         .expect("valid signal fixture URL")
-        .with_store(StoreOptions::new(cache_dir));
+        .store(StoreOptions::new(cache_dir));
     player.prepare_config(&mut config);
 
     Resource::new(config)

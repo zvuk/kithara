@@ -1,0 +1,46 @@
+id: arch.prefer-config-over-new-params
+message: |
+  `pub fn new(...)` with multiple parameters (more than one named field
+  or non-context required value). Public constructors in the workspace
+  follow the pattern:
+
+      // ❌  ad-hoc positional flags
+      pub fn new(url: Url, headers: Option<Headers>, store: StoreOptions, ...) -> Self
+
+      // ✅  single Config / Options argument (bon-built)
+      pub fn new(config: FooConfig) -> Self
+      // -- or --
+      // Single required argument constructors are allowed, plus an
+      // optional chainable counterpart returning a bon builder:
+      pub fn new(src: ResourceSrc) -> Self
+      pub fn for_src(src: ResourceSrc) -> FooConfigBuilder<...>
+
+  Use a `*Config` / `*Options` struct (`#[derive(bon::Builder)]`) that
+  bundles the knobs. Callers configure through the builder; the
+  constructor takes the built value or a single required argument plus
+  one optional builder counterpart.
+
+  This guidance is for LLM-driven contributors: when extending a public
+  type, **do not** add another positional parameter to `new`. Add the
+  field to the matching `Config` struct instead.
+
+  Suppress with `// ast-grep-ignore: arch.prefer-config-over-new-params`
+  only when the type has no associated `*Config` / `*Options` struct
+  and the constructor truly takes a single named required value plus
+  one or two unavoidable context tokens (cancel, runtime handle).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: "pub fn new($A, $B, $C) -> $T"
+    - pattern: "pub fn new($A, $B, $C, $D) -> $T"
+    - pattern: "pub fn new($A, $B, $C, $D, $E) -> $T"
+    - pattern: "pub fn new($A, $B, $C, $D, $E, $F) -> $T"

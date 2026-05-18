@@ -49,10 +49,11 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         let server = TestServerHelper::new().await;
         let url = server.asset("hls/master.m3u8");
 
-        let hls_config = HlsConfig::new(url)
-            .with_store(StoreOptions::new(temp_dir.path()))
-            .with_initial_abr_mode(AbrMode::Auto(Some(0)));
-        let config = AudioConfig::<Hls>::new(hls_config);
+        let hls_config = HlsConfig::for_url(url)
+            .store(StoreOptions::new(temp_dir.path()))
+            .initial_abr_mode(AbrMode::Auto(Some(0)))
+            .build();
+        let config = AudioConfig::<Hls>::for_stream(hls_config);
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
             .expect("audio creation");
@@ -136,9 +137,10 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await

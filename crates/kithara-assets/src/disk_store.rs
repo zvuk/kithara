@@ -175,7 +175,9 @@ impl DiskAssetStore {
             };
             Resource::open_with_observer(
                 cancel.clone(),
-                MmapOptions::new(target.to_path_buf()).with_mode(mode),
+                MmapOptions::for_path(target.to_path_buf())
+                    .mode(mode)
+                    .build(),
                 Some(Arc::clone(&observer) as Arc<dyn AvailabilityObserver>),
             )
         })?;
@@ -185,9 +187,10 @@ impl DiskAssetStore {
     fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
         Ok(Resource::open(
             self.cancel.clone(),
-            MmapOptions::new(path)
-                .with_initial_len(INDEX_INITIAL_SIZE)
-                .with_mode(OpenMode::ReadWrite),
+            MmapOptions::for_path(path)
+                .initial_len(INDEX_INITIAL_SIZE)
+                .mode(OpenMode::ReadWrite)
+                .build(),
         )?)
     }
 
@@ -199,7 +202,7 @@ impl DiskAssetStore {
     ) -> AssetsResult<MmapResource> {
         let resource = Resource::open_with_observer(
             self.cancel.clone(),
-            MmapOptions::new(path).with_mode(mode),
+            MmapOptions::for_path(path).mode(mode).build(),
             Some(self.scoped_observer(key)),
         )?;
         if let ResourceStatus::Committed {

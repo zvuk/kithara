@@ -363,11 +363,12 @@ fn encode_packaged_variant(
         u32::try_from(total_frames.saturating_sub(unaligned_total_frames)).unwrap_or(u32::MAX),
     );
 
-    let media_info = MediaInfo::default()
-        .with_codec(variant.codec)
-        .with_container(packaged.container)
-        .with_sample_rate(packaged.sample_rate)
-        .with_channels(packaged.channels);
+    let media_info = MediaInfo::builder()
+        .codec(variant.codec)
+        .container(packaged.container)
+        .sample_rate(packaged.sample_rate)
+        .channels(packaged.channels)
+        .build();
     let content_length = Finite::new(content_frames);
 
     let encode = |pcm: &dyn PcmSource| {

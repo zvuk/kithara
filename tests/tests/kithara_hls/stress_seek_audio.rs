@@ -105,15 +105,17 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: Dec
         store.is_ephemeral = true;
     }
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_media_info(wav_info)
-        .with_decoder_backend(backend);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");

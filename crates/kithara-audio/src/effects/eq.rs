@@ -1,6 +1,5 @@
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_decode::PcmChunk;
 
 use crate::AudioEffect;
@@ -95,21 +94,28 @@ impl From<u8> for FilterKind {
 }
 
 /// Configuration for a single EQ band.
-#[derive(Debug, Clone, Copy, Derivative, PartialEq, Setters)]
-#[derivative(Default)]
-#[setters(prefix = "with_")]
+#[derive(Debug, Clone, Copy, PartialEq, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EqBandConfig {
     /// Filter type label for this band.
+    #[builder(default)]
     pub kind: FilterKind,
     /// Center frequency in Hz.
-    #[derivative(Default(value = "1000.0"))]
+    #[builder(default = 1000.0)]
     pub frequency: f32,
     /// Gain in dB (clamped to [`MIN_GAIN_DB`]..=[`MAX_GAIN_DB`] on set).
+    #[builder(default)]
     pub gain_db: f32,
     /// Q factor (used only by `compute_coefficients` for parametric mode).
-    #[derivative(Default(value = "std::f32::consts::FRAC_1_SQRT_2"))]
+    #[builder(default = std::f32::consts::FRAC_1_SQRT_2)]
     pub q_factor: f32,
+}
+
+impl Default for EqBandConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 /// Generate logarithmically-spaced EQ bands from 60 Hz to 18 kHz.

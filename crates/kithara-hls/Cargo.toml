@@ -21,9 +21,8 @@ kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
+bon = { workspace = true }
 delegate = { workspace = true }
-derivative = { workspace = true }
-derive_setters = { workspace = true }
 futures = { workspace = true }
 hls_m3u8 = { workspace = true }
 thiserror = { workspace = true }

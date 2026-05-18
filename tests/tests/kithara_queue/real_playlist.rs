@@ -70,7 +70,9 @@ async fn shared_test_ctx() -> &'static TestCtx {
             );
             let config = AppConfig::new(downloader, flush_hub);
             let player = Arc::new(PlayerImpl::new(
-                PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+                PlayerConfig::builder()
+                    .session(OfflineSession::arc_auto())
+                    .build(),
             ));
             let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 

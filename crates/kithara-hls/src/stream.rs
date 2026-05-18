@@ -135,7 +135,11 @@ impl StreamType for Hls {
             asset_store: Arc::clone(&asset_store),
             prefetch_budget: config.download_batch_size.max(1),
             seek_epoch: timeline.seek_epoch(),
-            look_ahead_bytes: config.look_ahead_bytes,
+            look_ahead_bytes: Some(
+                config
+                    .look_ahead_bytes
+                    .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
+            ),
         };
 
         let variants: Vec<Arc<HlsVariant>> = media_playlists
@@ -173,7 +177,11 @@ impl StreamType for Hls {
             coord,
             evict_rx,
             config.download_batch_size.max(1),
-            config.look_ahead_bytes,
+            Some(
+                config
+                    .look_ahead_bytes
+                    .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
+            ),
         );
 
         source.set_peer_handle(peer_handle);

@@ -6,9 +6,11 @@ use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 fn settings_fast() -> AbrSettings {
-    AbrSettings::default()
-        .with_min_switch_interval(Duration::ZERO)
-        .with_min_buffer_for_up_switch(Duration::ZERO)
+    AbrSettings::builder()
+        .initial_throughput_bps(2_000_000)
+        .min_switch_interval(Duration::ZERO)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build()
 }
 
 struct TestPeer {

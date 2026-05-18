@@ -12,7 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
-derive_setters = { workspace = true }
+bon = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

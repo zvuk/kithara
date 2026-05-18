@@ -162,9 +162,10 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
     let url = Url::parse(&format!("http://{addr}/master.m3u8")).unwrap();
 
     let cancel = CancellationToken::new();
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel.clone());
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel.clone())
+        .build();
 
     let result = Stream::<Hls>::new(config).await;
     assert!(result.is_err(), "{fail_msg}");
@@ -202,9 +203,10 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     let url = Url::parse(&format!("http://{addr}/master.m3u8")).unwrap();
 
     let cancel = CancellationToken::new();
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel.clone());
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel.clone())
+        .build();
 
     let _ = Stream::<Hls>::new(config).await;
 

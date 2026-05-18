@@ -28,9 +28,12 @@ fn test_wav_config(
         .write_all(&wav_data)
         .unwrap();
     let cache = TestTempDir::new();
-    let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()))
-        .with_store(StoreOptions::new(cache.path()));
-    let config = AudioConfig::<kithara_file::File>::new(file_config).with_hint("wav");
+    let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
+        .store(StoreOptions::new(cache.path()))
+        .build();
+    let config = AudioConfig::<kithara_file::File>::for_stream(file_config)
+        .hint("wav".to_string())
+        .build();
     (cache, tmp, config)
 }
 
@@ -78,8 +81,9 @@ fn test_audio_config_with_media_info() {
         .sample_rate(44100)
         .build();
 
-    let config =
-        AudioConfig::<kithara_file::File>::new(FileConfig::default()).with_media_info(info.clone());
+    let config = AudioConfig::<kithara_file::File>::for_stream(FileConfig::default())
+        .media_info(info.clone())
+        .build();
 
     assert!(config.media_info.is_some());
     assert_eq!(
@@ -97,8 +101,9 @@ fn test_audio_config_with_media_info() {
     trim_trailing: true,
 }))]
 fn test_audio_config_with_gapless_mode(#[case] mode: GaplessMode) {
-    let config =
-        AudioConfig::<kithara_file::File>::new(FileConfig::default()).with_gapless_mode(mode);
+    let config = AudioConfig::<kithara_file::File>::for_stream(FileConfig::default())
+        .gapless_mode(mode)
+        .build();
 
     assert_eq!(config.gapless_mode, mode);
 }

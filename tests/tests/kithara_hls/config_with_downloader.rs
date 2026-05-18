@@ -43,16 +43,18 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     let temp_a = temp_dir.path().join("stream_a");
     let temp_b = temp_dir.path().join("stream_b");
 
-    let config_a = HlsConfig::new(server_a.url("/master.m3u8"))
-        .with_cancel(cancel.clone())
-        .with_store(StoreOptions::new(&temp_a))
-        .with_initial_abr_mode(AbrMode::Manual(0))
-        .with_downloader(downloader.clone());
-    let config_b = HlsConfig::new(server_b.url("/master.m3u8"))
-        .with_cancel(cancel.clone())
-        .with_store(StoreOptions::new(&temp_b))
-        .with_initial_abr_mode(AbrMode::Manual(0))
-        .with_downloader(downloader.clone());
+    let config_a = HlsConfig::for_url(server_a.url("/master.m3u8"))
+        .cancel(cancel.clone())
+        .store(StoreOptions::new(&temp_a))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .downloader(downloader.clone())
+        .build();
+    let config_b = HlsConfig::for_url(server_b.url("/master.m3u8"))
+        .cancel(cancel.clone())
+        .store(StoreOptions::new(&temp_b))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .downloader(downloader.clone())
+        .build();
 
     let mut stream_a = Stream::<Hls>::new(config_a).await.unwrap();
     let mut stream_b = Stream::<Hls>::new(config_b).await.unwrap();

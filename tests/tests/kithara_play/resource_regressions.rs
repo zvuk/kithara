@@ -181,12 +181,12 @@ fn resource_config(
     hint: Option<&str>,
     worker: Option<AudioWorkerHandle>,
 ) -> ResourceConfig {
-    let mut cfg = ResourceConfig::new(url.as_str()).unwrap().with_store(store);
+    let mut cfg = ResourceConfig::new(url.as_str()).unwrap().store(store);
     if let Some(h) = hint {
-        cfg = cfg.with_hint(h);
+        cfg = cfg.hint(h);
     }
     if let Some(w) = worker {
-        cfg = cfg.with_worker(w);
+        cfg = cfg.worker(w);
     }
     cfg.decoder_backend = backend;
     cfg
@@ -242,11 +242,12 @@ async fn warm_hls_worker(
     backend: DecoderBackend,
 ) -> f64 {
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let hls_config = HlsConfig::new(url.clone()).with_store(store);
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_media_info(wav_info)
-        .with_worker(worker)
-        .with_decoder_backend(backend);
+    let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .worker(worker)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
@@ -301,11 +302,12 @@ async fn warm_hls_worker_without_seek(
     backend: DecoderBackend,
 ) -> f64 {
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let hls_config = HlsConfig::new(url.clone()).with_store(store);
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_media_info(wav_info)
-        .with_worker(worker)
-        .with_decoder_backend(backend);
+    let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .worker(worker)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
@@ -333,7 +335,7 @@ async fn warm_hls_worker_without_seek(
 }
 
 async fn read_hls_stream_some(url: &url::Url, store: StoreOptions) -> usize {
-    let config = HlsConfig::new(url.clone()).with_store(store);
+    let config = HlsConfig::for_url(url.clone()).store(store).build();
     let mut stream = Stream::<Hls>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS stream should open for {}: {err}", url));
@@ -376,8 +378,10 @@ async fn open_packaged_hls_audio(
     _codec: AudioCodec,
     backend: DecoderBackend,
 ) -> Audio<Stream<Hls>> {
-    let config = AudioConfig::<Hls>::new(HlsConfig::new(url.clone()).with_store(store))
-        .with_decoder_backend(backend);
+    let config =
+        AudioConfig::<Hls>::for_stream(HlsConfig::for_url(url.clone()).store(store).build())
+            .decoder_backend(backend)
+            .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
@@ -1093,9 +1097,10 @@ async fn stress_offline_crossfade_no_gaps() {
         let p = local_mp3.clone();
         async move {
             let file_cfg = FileConfig::new(FileSrc::Local(p));
-            let audio_cfg = AudioConfig::<FileSource>::new(file_cfg)
-                .with_hint("mp3")
-                .with_worker(w);
+            let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
+                .hint("mp3".to_string())
+                .worker(w)
+                .build();
             let audio = Audio::<Stream<FileSource>>::new(audio_cfg)
                 .await
                 .expect("create local MP3 audio");
@@ -1107,10 +1112,11 @@ async fn stress_offline_crossfade_no_gaps() {
         let u = hls_url.clone();
         async move {
             let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-            let cfg = HlsConfig::new(u).with_store(s);
-            let audio_config = AudioConfig::<Hls>::new(cfg)
-                .with_media_info(wav_info)
-                .with_worker(w);
+            let cfg = HlsConfig::for_url(u).store(s).build();
+            let audio_config = AudioConfig::<Hls>::for_stream(cfg)
+                .media_info(wav_info)
+                .worker(w)
+                .build();
             let audio = Audio::<Stream<Hls>>::new(audio_config)
                 .await
                 .expect("HLS audio");
@@ -1428,8 +1434,8 @@ async fn live_remote_resource_decodes_with_duration(
     );
     let mut config = ResourceConfig::new(url)
         .expect("valid URL")
-        .with_store(store)
-        .with_downloader(downloader);
+        .store(store)
+        .downloader(downloader);
     config.decoder_backend = backend;
 
     let mut resource = Resource::new(config)
@@ -1541,7 +1547,7 @@ async fn player_mp3_duration_matches_app_flow(
     let player = PlayerImpl::new(PlayerConfig::default());
     player.reserve_slots(1);
 
-    let mut config = ResourceConfig::new(url).unwrap().with_store(store);
+    let mut config = ResourceConfig::new(url).unwrap().store(store);
     config.decoder_backend = backend;
     player.prepare_config(&mut config);
 
@@ -1623,7 +1629,7 @@ async fn local_resource_decodes_with_duration(
     let store = store_options(&temp_dir, true);
     let mut config = ResourceConfig::new(url.as_str())
         .expect("valid URL")
-        .with_store(store);
+        .store(store);
     config.decoder_backend = backend;
 
     let mut resource = Resource::new(config)

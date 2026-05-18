@@ -103,7 +103,9 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
-    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     let expected_len = expected.len();
@@ -145,7 +147,9 @@ async fn stream_file_seek_reads_expected_bytes(
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
-    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {
@@ -180,7 +184,9 @@ async fn stream_file_seek_past_eof_fails(
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
-    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {
@@ -204,7 +210,9 @@ async fn stream_file_multiple_seeks_work(
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
-    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {

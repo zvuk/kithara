@@ -82,7 +82,7 @@ enum RecvOutcome {
 /// use kithara_stream::Stream;
 ///
 /// let config = AudioConfig::<Hls>::new(hls_config)
-///     .with_hint("mp3");
+///     .hint("mp3");
 /// let audio = Audio::<Stream<Hls>>::new(config).await?;
 ///
 /// // Get audio format
@@ -875,14 +875,15 @@ where
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
             factory_byte_len.store(byte_len, Ordering::Release);
-            let config = kithara_decode::DecoderConfig::default()
-                .with_backend(decoder_backend)
-                .with_byte_len_handle(Arc::clone(&factory_byte_len))
-                .with_pcm_pool(factory_pool.clone())
-                .with_byte_pool(factory_byte_pool.clone())
-                .with_epoch(factory_epoch.load(Ordering::Acquire))
-                .with_segment_layout(stream.as_segment_layout())
-                .with_hooks(stream.take_reader_hooks());
+            let config = kithara_decode::DecoderConfig::builder()
+                .backend(decoder_backend)
+                .byte_len_handle(Arc::clone(&factory_byte_len))
+                .pcm_pool(factory_pool.clone())
+                .byte_pool(factory_byte_pool.clone())
+                .epoch(factory_epoch.load(Ordering::Acquire))
+                .maybe_segment_layout(stream.as_segment_layout())
+                .maybe_hooks(stream.take_reader_hooks())
+                .build();
             let source = OffsetReader::new(stream.clone(), base_offset);
             match DecoderFactory::create_from_media_info(source, info, &config) {
                 Ok(d) => {
@@ -914,16 +915,15 @@ where
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
-        let mut decoder_config = kithara_decode::DecoderConfig::default()
-            .with_backend(decoder_backend)
-            .with_byte_len_handle(byte_len_handle)
-            .with_pcm_pool(pcm_pool)
-            .with_byte_pool(byte_pool)
-            .with_segment_layout(shared_stream.as_segment_layout())
-            .with_hooks(shared_stream.take_reader_hooks());
-        if let Some(h) = hint.clone() {
-            decoder_config = decoder_config.with_hint(h);
-        }
+        let decoder_config = kithara_decode::DecoderConfig::builder()
+            .backend(decoder_backend)
+            .byte_len_handle(byte_len_handle)
+            .pcm_pool(pcm_pool)
+            .byte_pool(byte_pool)
+            .maybe_segment_layout(shared_stream.as_segment_layout())
+            .maybe_hooks(shared_stream.take_reader_hooks())
+            .maybe_hint(hint.clone())
+            .build();
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;
         let decoder = spawn_blocking(move || {

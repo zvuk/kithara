@@ -1,10 +1,12 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_abr::{AbrController, AbrMode, AbrSettings};
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
@@ -55,75 +57,61 @@ struct PendingNext {
 }
 
 /// Configuration for the player.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Default, Debug)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 pub struct PlayerConfig {
     /// How resources created for this player trim leading/trailing PCM.
+    #[builder(default)]
     pub gapless_mode: GaplessMode,
     /// Shared ABR controller. When `None`, a default one is created.
-    #[derivative(Debug = "ignore")]
     pub abr: Option<Arc<AbrController>>,
     /// Root event bus for this player.
-    ///
-    /// When set, all player/engine/resource events are published here.
-    /// Resources receive a `bus.scoped()` child via `prepare_config()`.
-    /// When `None`, a default root bus is created.
-    #[setters(skip)]
     pub bus: Option<EventBus>,
-    /// Master cancel token for this player. Consumer crates (`Queue` /
-    /// `App` / FFI) construct one and propagate it here so subsystem
-    /// shutdown is driven by a single pulse. When `None`,
-    /// [`PlayerImpl::new`] creates an internal master as the canonical
-    /// fallback. Per-track children are derived in
-    /// [`PlayerImpl::prepare_config`].
-    #[derivative(Debug = "ignore")]
+    /// Master cancel token for this player.
     pub cancel: Option<CancellationToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
-    ///
-    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
-    /// PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
     /// Pre-built audio session dispatcher.
-    ///
-    /// Forwarded to [`EngineConfig::session`]. `None` → engine binds to
-    /// the process-wide cpal session. Integration tests pass an offline
-    /// dispatcher here to drive playback without real hardware.
-    #[derivative(Debug = "ignore")]
     pub session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout. Default: 10-band log-spaced.
-    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
+    #[builder(default = generate_log_spaced_bands(10))]
     pub eq_layout: Vec<EqBandConfig>,
-    /// Built-in linear (`next = current + 1`) auto-advance handler that
-    /// reacts to the audio-thread prefetch / handover triggers via
-    /// [`PlayerImpl::arm_next`] and [`PlayerImpl::commit_next`].
-    ///
-    /// Default: `true`. Standalone callers (tests, demos) get gapless
-    /// auto-advance for free. Higher-level orchestrators
-    /// (`kithara_queue::Queue`) disable this and drive auto-advance
-    /// themselves through the public arm / commit API.
-    #[derivative(Default(value = "true"))]
+    /// Built-in auto-advance handler. Default: `true`.
+    #[builder(default = true)]
     pub auto_advance_enabled: bool,
     /// Crossfade duration in seconds. Default: 1.0.
-    #[derivative(Default(value = "1.0"))]
+    #[builder(default = 1.0)]
     pub crossfade_duration: f32,
     /// Default playback rate (1.0 = normal). Default: 1.0.
-    #[derivative(Default(value = "1.0"))]
+    #[builder(default = 1.0)]
     pub default_rate: f32,
-    /// Secondary lead time before EOF at which the next queued item is
-    /// loaded into the processor; independent of crossfade.
-    ///
-    /// Effective preload trigger threshold =
-    /// `max(prefetch_duration, crossfade_duration) + block_seconds`.
-    /// The crossfade activation moment is unaffected. Set greater than
-    /// `crossfade_duration` (especially when `crossfade_duration = 0`) so
-    /// network probe + initial decode of the next track can finish before
-    /// the audio thread runs out of PCM on the current track. Default: 3.5.
-    #[derivative(Default(value = "3.5"))]
+    /// Secondary lead time before EOF at which the next queued item is loaded.
+    #[builder(default = 3.5)]
     pub prefetch_duration: f32,
     /// Maximum concurrent slots in the engine. Default: 4.
-    #[derivative(Default(value = "4"))]
+    #[builder(default = 4)]
     pub max_slots: usize,
+}
+
+impl fmt::Debug for PlayerConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlayerConfig")
+            .field("gapless_mode", &self.gapless_mode)
+            .field("eq_layout", &self.eq_layout)
+            .field("auto_advance_enabled", &self.auto_advance_enabled)
+            .field("crossfade_duration", &self.crossfade_duration)
+            .field("default_rate", &self.default_rate)
+            .field("prefetch_duration", &self.prefetch_duration)
+            .field("max_slots", &self.max_slots)
+            .field("pcm_pool", &self.pcm_pool)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for PlayerConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 /// Concrete Player implementation managing items queue.
@@ -1394,12 +1382,13 @@ mod tests {
 
     #[kithara::test]
     fn player_config_builder() {
-        let config = PlayerConfig::default()
-            .with_max_slots(8)
-            .with_default_rate(0.5)
-            .with_crossfade_duration(2.5)
-            .with_prefetch_duration(7.0)
-            .with_eq_layout(generate_log_spaced_bands(5));
+        let config = PlayerConfig::builder()
+            .max_slots(8)
+            .default_rate(0.5)
+            .crossfade_duration(2.5)
+            .prefetch_duration(7.0)
+            .eq_layout(generate_log_spaced_bands(5))
+            .build();
         assert_eq!(config.max_slots, 8);
         assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
         assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);

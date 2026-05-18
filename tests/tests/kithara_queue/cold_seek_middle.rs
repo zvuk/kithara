@@ -88,7 +88,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
@@ -158,7 +160,9 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let downloader = Downloader::new(DownloaderConfig::default());
 
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
@@ -177,7 +181,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .iter()
         .map(|u| {
             let mut cfg = ResourceConfig::new(u).expect("valid URL");
-            cfg = cfg.with_downloader(downloader.clone());
+            cfg = cfg.downloader(downloader.clone());
             cfg.store = store.clone();
             queue.append(TrackSource::Config(Box::new(cfg)))
         })
@@ -307,7 +311,7 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     let track_source = |url: &str| -> TrackSource {
         let mut cfg = ResourceConfig::new(url)
             .expect("valid URL")
-            .with_downloader(downloader.clone());
+            .downloader(downloader.clone());
         cfg.store = store.clone();
         TrackSource::Config(Box::new(cfg))
     };
@@ -394,7 +398,7 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     let track_source = |url: &str| -> TrackSource {
         let mut cfg = ResourceConfig::new(url)
             .expect("valid URL")
-            .with_downloader(downloader.clone());
+            .downloader(downloader.clone());
         cfg.store = store.clone();
         TrackSource::Config(Box::new(cfg))
     };

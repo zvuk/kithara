@@ -53,10 +53,9 @@ fn open_mmap_at(
     initial_len: Option<u64>,
     cancel: CancellationToken,
 ) -> MmapResource {
-    let mut opts = MmapOptions::new(path);
-    if let Some(len) = initial_len {
-        opts = opts.with_initial_len(len);
-    }
+    let opts = MmapOptions::for_path(path)
+        .maybe_initial_len(initial_len)
+        .build();
     Resource::open(cancel, opts).expect("open should succeed")
 }
 

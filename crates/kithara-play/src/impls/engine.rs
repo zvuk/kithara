@@ -1,12 +1,14 @@
 #[cfg(test)]
 use std::sync::OnceLock;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
@@ -34,44 +36,46 @@ use crate::{
 };
 
 /// Configuration for the audio engine.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Debug, Default)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EngineConfig {
-    /// Master cancel token for the engine. The shared audio worker
-    /// thread runs as a child of this token so its shutdown
-    /// participates in the unified cancel hierarchy. `PlayerImpl::new`
-    /// populates this with the resolved player master before
-    /// constructing the engine. When `None`, the engine creates a fresh
-    /// orphan (test/standalone fallback only — see `kithara-play/README.md`).
-    #[derivative(Debug = "ignore")]
+    /// Master cancel token for the engine.
     pub cancel: Option<CancellationToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
-    ///
-    /// When `None`, the global PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
     /// Pre-built audio session dispatcher.
-    ///
-    /// `None` → the engine binds to the process-wide cpal-backed session
-    /// (default for production builds).
-    /// `Some(_)` → the engine takes ownership of the supplied dispatcher.
-    /// Integration tests pass an offline session here to drive the audio
-    /// graph synchronously without touching real hardware.
-    #[derivative(Debug = "ignore")]
     pub session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout per player. Default: 10-band log-spaced.
-    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
+    #[builder(default = generate_log_spaced_bands(10))]
     pub eq_layout: Vec<EqBandConfig>,
     /// Number of output channels. Default: 2 (stereo).
-    #[derivative(Default(value = "2"))]
+    #[builder(default = 2)]
     pub channels: u16,
     /// Sample rate passed to the runtime backend as a hint. Default: 44100.
-    #[derivative(Default(value = "44100"))]
+    #[builder(default = 44100)]
     pub sample_rate: u32,
     /// Maximum number of concurrent player slots. Default: 4.
-    #[derivative(Default(value = "4"))]
+    #[builder(default = 4)]
     pub max_slots: usize,
+}
+
+impl fmt::Debug for EngineConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EngineConfig")
+            .field("eq_layout", &self.eq_layout)
+            .field("channels", &self.channels)
+            .field("sample_rate", &self.sample_rate)
+            .field("max_slots", &self.max_slots)
+            .field("pcm_pool", &self.pcm_pool)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 /// Handle for a slot, providing command channel and shared state.

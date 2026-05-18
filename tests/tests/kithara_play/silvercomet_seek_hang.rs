@@ -125,8 +125,8 @@ async fn build_resource(
     let mut cfg =
         ResourceConfig::new(url).unwrap_or_else(|e| panic!("ResourceConfig::new({url}): {e}"));
     cfg = cfg
-        .with_downloader(downloader.clone())
-        .with_name(format!("{iter_label}|{url}"));
+        .downloader(downloader.clone())
+        .name(format!("{iter_label}|{url}"));
     cfg.store = store;
     cfg.decoder_backend = backend;
     cfg.initial_abr_mode = abr;

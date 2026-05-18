@@ -1,6 +1,5 @@
 use std::{fmt, sync::Arc, time::Duration};
 
-use derivative::Derivative;
 use kithara_bufpool::{PcmBuf, PcmPool};
 
 use crate::gapless::GaplessInfo;
@@ -134,12 +133,19 @@ pub struct PcmMeta {
 /// - `pcm.len() % channels == 0` (frame-aligned)
 /// - `spec.channels > 0` and `spec.sample_rate > 0`
 /// - All samples are f32 and interleaved (LRLRLR...)
-#[derive(Debug, Derivative)]
-#[derivative(Default)]
+#[derive(Debug)]
 pub struct PcmChunk {
-    #[derivative(Default(value = "PcmPool::default().get()"))]
     pub pcm: PcmBuf,
     pub meta: PcmMeta,
+}
+
+impl Default for PcmChunk {
+    fn default() -> Self {
+        Self {
+            pcm: PcmPool::default().get(),
+            meta: PcmMeta::default(),
+        }
+    }
 }
 
 impl Clone for PcmChunk {

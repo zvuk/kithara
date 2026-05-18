@@ -499,11 +499,12 @@ mod tests {
 
     fn test_track() -> EncodedTrack {
         EncodedTrack {
-            media_info: MediaInfo::default()
-                .with_codec(AudioCodec::AacLc)
-                .with_container(ContainerFormat::Fmp4)
-                .with_sample_rate(44_100)
-                .with_channels(2),
+            media_info: MediaInfo::builder()
+                .codec(AudioCodec::AacLc)
+                .container(ContainerFormat::Fmp4)
+                .sample_rate(44_100)
+                .channels(2)
+                .build(),
             timescale: 44_100,
             bit_rate: 128_000,
             codec_config: Vec::new(),
@@ -545,11 +546,12 @@ mod tests {
 
     fn flac_track() -> EncodedTrack {
         EncodedTrack {
-            media_info: MediaInfo::default()
-                .with_codec(AudioCodec::Flac)
-                .with_container(ContainerFormat::Fmp4)
-                .with_sample_rate(48_000)
-                .with_channels(2),
+            media_info: MediaInfo::builder()
+                .codec(AudioCodec::Flac)
+                .container(ContainerFormat::Fmp4)
+                .sample_rate(48_000)
+                .channels(2)
+                .build(),
             timescale: 48_000,
             bit_rate: 512_000,
             codec_config: vec![

@@ -73,9 +73,10 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         let p = local_mp3.clone();
         async move {
             let file_cfg = FileConfig::new(FileSrc::Local(p));
-            let audio_cfg = AudioConfig::<FileSource>::new(file_cfg)
-                .with_hint("mp3")
-                .with_worker(w);
+            let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
+                .hint("mp3".to_string())
+                .worker(w)
+                .build();
             let audio = Audio::<Stream<FileSource>>::new(audio_cfg)
                 .await
                 .expect("create local MP3 audio");
@@ -87,10 +88,11 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         let u = hls_url.clone();
         async move {
             let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-            let cfg = HlsConfig::new(u).with_store(s);
-            let audio_cfg = AudioConfig::<Hls>::new(cfg)
-                .with_media_info(wav_info)
-                .with_worker(w);
+            let cfg = HlsConfig::for_url(u).store(s).build();
+            let audio_cfg = AudioConfig::<Hls>::for_stream(cfg)
+                .media_info(wav_info)
+                .worker(w)
+                .build();
             let audio = Audio::<Stream<Hls>>::new(audio_cfg)
                 .await
                 .expect("create HLS audio");

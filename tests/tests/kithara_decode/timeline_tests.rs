@@ -120,17 +120,19 @@ mod hls_timeline {
         let temp_dir = TestTempDir::new();
         let cancel = CancellationToken::new();
 
-        let hls_config = HlsConfig::new(url)
-            .with_store(StoreOptions::new(temp_dir.path()))
-            .with_cancel(cancel)
-            .with_initial_abr_mode(AbrMode::Manual(0));
+        let hls_config = HlsConfig::for_url(url)
+            .store(StoreOptions::new(temp_dir.path()))
+            .cancel(cancel)
+            .initial_abr_mode(AbrMode::Manual(0))
+            .build();
 
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let decoder_config = DecoderConfig::default()
-            .with_hint("wav".to_string())
-            .with_segment_layout(stream.as_segment_layout());
+        let decoder_config = DecoderConfig::builder()
+            .hint("wav".to_string())
+            .maybe_segment_layout(stream.as_segment_layout())
+            .build();
 
         let result = tokio::task::spawn_blocking(move || {
             let mut decoder =

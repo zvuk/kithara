@@ -42,9 +42,12 @@ async fn stress_random_seek_read_synthetic_wav() {
     .expect("write WAV data");
 
     let cache = TestTempDir::new();
-    let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()))
-        .with_store(StoreOptions::new(cache.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("wav");
+    let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
+        .store(StoreOptions::new(cache.path()))
+        .build();
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .hint("wav".to_string())
+        .build();
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create audio pipeline");

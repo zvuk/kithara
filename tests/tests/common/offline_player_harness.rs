@@ -19,14 +19,13 @@ impl OfflinePlayerHarness {
         player_config.bus = Some(bus.clone());
 
         let session = Arc::new(OfflineSession::new_manual());
-        let mut engine_config = EngineConfig::default()
-            .with_eq_layout(player_config.eq_layout.clone())
-            .with_max_slots(player_config.max_slots)
-            .with_sample_rate(sample_rate)
-            .with_session(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
-        if let Some(pool) = player_config.pcm_pool.clone() {
-            engine_config = engine_config.with_pcm_pool(pool);
-        }
+        let engine_config = EngineConfig::builder()
+            .eq_layout(player_config.eq_layout.clone())
+            .max_slots(player_config.max_slots)
+            .sample_rate(sample_rate)
+            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+            .maybe_pcm_pool(player_config.pcm_pool.clone())
+            .build();
         let engine = EngineImpl::new(engine_config, bus);
         let player = Arc::new(PlayerImpl::with_engine(player_config, engine));
         let events = player.subscribe();

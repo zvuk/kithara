@@ -20,7 +20,9 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
         const CROSSFADE_SECONDS: f32 = 5.0;
 
         clog!("[WORKER] spawn: creating PlayerConfig");
-        let config = PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECONDS);
+        let config = PlayerConfig::builder()
+            .crossfade_duration(CROSSFADE_SECONDS)
+            .build();
         clog!("[WORKER] spawn: creating PlayerImpl");
         let player = Arc::new(PlayerImpl::new(config));
         clog!("[WORKER] spawn: PlayerImpl created, entering command loop");
@@ -101,7 +103,7 @@ async fn handle_select_track(player: &Arc<PlayerImpl>, url: &str) -> Result<(), 
     if config.store.cache_capacity.is_none() {
         config.store.cache_capacity = NonZeroUsize::new(WASM_CACHE_CAPACITY);
     }
-    config = config.with_worker(player.worker().clone());
+    config = config.worker(player.worker().clone());
 
     let mut resource = Resource::new(config)
         .await

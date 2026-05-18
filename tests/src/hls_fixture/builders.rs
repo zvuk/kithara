@@ -101,10 +101,11 @@ impl HlsStreamBuilder {
             .maybe_max_bytes(self.max_bytes)
             .build();
 
-        let config = HlsConfig::new(url)
-            .with_store(store_opts)
-            .with_cancel(cancel_token)
-            .with_initial_abr_mode(self.initial_abr_mode);
+        let config = HlsConfig::for_url(url)
+            .store(store_opts)
+            .cancel(cancel_token)
+            .initial_abr_mode(self.initial_abr_mode)
+            .build();
 
         Stream::<Hls>::new(config)
             .await

@@ -87,7 +87,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
@@ -190,7 +192,7 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
 
         let mk_cfg = |url: &Url| {
             let mut cfg = ResourceConfig::new(url.as_str()).expect("valid fixture URL");
-            cfg = cfg.with_downloader(downloader.clone());
+            cfg = cfg.downloader(downloader.clone());
             cfg.store = store.clone();
             cfg.initial_abr_mode = AbrMode::Auto(None);
             cfg

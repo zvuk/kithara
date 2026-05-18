@@ -51,13 +51,16 @@ async fn run_drm_seek_resume_cycle(
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_downloader(downloader.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .downloader(downloader.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::new(hls_config).with_worker(shared_worker.clone()),
+        AudioConfig::<Hls>::for_stream(hls_config)
+            .worker(shared_worker.clone())
+            .build(),
     )
     .await
     .expect("audio creation");

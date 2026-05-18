@@ -118,16 +118,19 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
 
-    let hls_config = HlsConfig::new(url)
-        .with_events(bus)
-        .with_store(StoreOptions::default_builder().is_ephemeral(true).build())
+    let hls_config = HlsConfig::for_url(url)
+        .events(bus)
+        .store(StoreOptions::default_builder().is_ephemeral(true).build())
         .with_abr_options(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()
-        });
+        })
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config).await.unwrap();
     audio.preload();
     audio

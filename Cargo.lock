@@ -1823,16 +1823,6 @@ dependencies = [
 
 [[package]]
 name = "darling"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cdf337090841a411e2a7f3deb9187445851f91b309c0c0a29e05f74a00a48c0"
-dependencies = [
- "darling_core 0.21.3",
- "darling_macro 0.21.3",
-]
-
-[[package]]
-name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
@@ -1846,20 +1836,6 @@ name = "darling_core"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
-dependencies = [
- "fnv",
- "ident_case",
- "proc-macro2",
- "quote",
- "strsim",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "darling_core"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1247195ecd7e3c85f83c8d2a366e4210d588e802133e1e355180a9870b517ea4"
 dependencies = [
  "fnv",
  "ident_case",
@@ -1889,17 +1865,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
 dependencies = [
  "darling_core 0.20.11",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "darling_macro"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38308df82d1080de0afee5d069fa14b0326a88c14f15c5ccda35b4a6c414c81"
-dependencies = [
- "darling_core 0.21.3",
  "quote",
  "syn 2.0.117",
 ]
@@ -1965,17 +1930,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "powerfmt",
-]
-
-[[package]]
-name = "derivative"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
 ]
 
 [[package]]
@@ -2062,18 +2016,6 @@ dependencies = [
  "rustc_version",
  "syn 2.0.117",
  "unicode-xid",
-]
-
-[[package]]
-name = "derive_setters"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7e6f6fa1f03c14ae082120b84b3c7fbd7b8588d924cf2d7c3daf9afd49df8b9"
-dependencies = [
- "darling 0.21.3",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -4055,9 +3997,8 @@ dependencies = [
 name = "kithara-abr"
 version = "0.1.0"
 dependencies = [
+ "bon",
  "criterion",
- "derivative",
- "derive_setters",
  "kithara-events",
  "kithara-platform",
  "kithara-test-utils",
@@ -4075,12 +4016,11 @@ dependencies = [
 name = "kithara-app"
 version = "0.1.0"
 dependencies = [
+ "bon",
  "bytes",
  "clap",
  "crabtime",
  "crossterm",
- "derivative",
- "derive_setters",
  "iced",
  "kithara",
  "kithara-drm",
@@ -4144,11 +4084,10 @@ dependencies = [
  "audioadapter-buffers",
  "axum",
  "biquad",
+ "bon",
  "bytes",
  "cbc",
  "delegate",
- "derivative",
- "derive_setters",
  "fast-interleave",
  "hotpath",
  "js-sys",
@@ -4200,10 +4139,9 @@ dependencies = [
 name = "kithara-decode"
 version = "0.1.0"
 dependencies = [
+ "bon",
  "core-foundation 0.10.1",
  "core-foundation-sys",
- "derivative",
- "derive_setters",
  "hotpath",
  "jni 0.22.4",
  "kithara-bufpool",
@@ -4249,7 +4187,7 @@ dependencies = [
 name = "kithara-encode"
 version = "0.1.0"
 dependencies = [
- "derive_setters",
+ "bon",
  "ffmpeg-next",
  "kithara-workspace-hack",
  "tempfile",
@@ -4263,7 +4201,6 @@ version = "0.1.0"
 dependencies = [
  "dashmap",
  "delegate",
- "derivative",
  "kithara-events",
  "kithara-net",
  "kithara-platform",
@@ -4322,8 +4259,7 @@ name = "kithara-file"
 version = "0.1.0"
 dependencies = [
  "axum",
- "derivative",
- "derive_setters",
+ "bon",
  "futures",
  "hotpath",
  "kithara-abr",
@@ -4399,12 +4335,11 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "axum",
+ "bon",
  "bytes",
  "cbc",
  "dashmap",
  "delegate",
- "derivative",
- "derive_setters",
  "futures",
  "hls_m3u8",
  "hotpath",
@@ -4508,7 +4443,6 @@ dependencies = [
  "axum",
  "bon",
  "bytes",
- "derivative",
  "futures",
  "gloo-timers",
  "hotpath",
@@ -4556,8 +4490,7 @@ name = "kithara-play"
 version = "0.1.0"
 dependencies = [
  "bevy_platform",
- "derivative",
- "derive_setters",
+ "bon",
  "firewheel",
  "firewheel-web-audio",
  "kithara-abr",
@@ -4593,9 +4526,8 @@ dependencies = [
 name = "kithara-queue"
 version = "0.1.0"
 dependencies = [
+ "bon",
  "delegate",
- "derivative",
- "derive_setters",
  "kithara-abr",
  "kithara-events",
  "kithara-platform",
@@ -4612,10 +4544,9 @@ dependencies = [
 name = "kithara-storage"
 version = "0.1.0"
 dependencies = [
+ "bon",
  "crossbeam-queue",
  "delegate",
- "derivative",
- "derive_setters",
  "hotpath",
  "kithara-bufpool",
  "kithara-hang-detector",
@@ -4643,7 +4574,6 @@ dependencies = [
  "bon",
  "bytes",
  "delegate",
- "derive_setters",
  "futures",
  "hotpath",
  "kithara-abr",

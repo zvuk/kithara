@@ -14,8 +14,12 @@ use crate::common::reader_helpers::{ReadLimit, read_for_concurrency_check};
 
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
 async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File>> {
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(cache_dir));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let file_config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(cache_dir))
+        .build();
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .hint(("mp3").to_string())
+        .build();
     Audio::<Stream<File>>::new(config)
         .await
         .expect("create Audio<Stream<File>>")

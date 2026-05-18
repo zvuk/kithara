@@ -8,7 +8,7 @@ use std::{
 };
 
 use audioadapter_buffers::direct::SequentialSliceOfVecs;
-use derive_setters::Setters;
+use bon::Builder;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
@@ -150,8 +150,8 @@ impl ResamplerKind {
 /// Configuration parameters for the resampler effect.
 ///
 /// Contains all values needed to construct a [`ResamplerProcessor`].
-#[derive(Setters)]
-#[setters(prefix = "with_")]
+#[derive(Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct ResamplerParams {
     /// Shared atomic for dynamic host sample rate tracking.
@@ -160,31 +160,30 @@ pub struct ResamplerParams {
     ///
     /// Affects the resampling ratio: `ratio = host_rate / (source_rate × playback_rate)`.
     /// At rate=2.0, audio plays at double speed with pitch shift (vinyl effect).
+    #[builder(default = Arc::new(AtomicF32::new(1.0)))]
     pub playback_rate: Arc<AtomicF32>,
     /// Shared PCM pool for output buffers.
     pub pool: Option<PcmPool>,
     /// Quality preset controlling resampling algorithm.
+    #[builder(default)]
     pub quality: ResamplerQuality,
     /// Initial source sample rate.
     pub source_sample_rate: u32,
     /// Number of audio channels.
     pub channels: usize,
     /// Number of input frames per resampler processing block.
+    #[builder(default = ResamplerProcessor::DEFAULT_CHUNK_SIZE)]
     pub chunk_size: usize,
 }
 
 impl ResamplerParams {
     /// Create resampler params with required runtime values and default settings.
     pub fn new(host_sample_rate: Arc<AtomicU32>, source_sample_rate: u32, channels: usize) -> Self {
-        Self {
-            channels,
-            host_sample_rate,
-            source_sample_rate,
-            chunk_size: ResamplerProcessor::DEFAULT_CHUNK_SIZE,
-            playback_rate: Arc::new(AtomicF32::new(1.0)),
-            pool: None,
-            quality: ResamplerQuality::default(),
-        }
+        Self::builder()
+            .host_sample_rate(host_sample_rate)
+            .source_sample_rate(source_sample_rate)
+            .channels(channels)
+            .build()
     }
 }
 
@@ -818,7 +817,12 @@ mod tests {
         channels: usize,
         rate: Arc<AtomicF32>,
     ) -> ResamplerParams {
-        ResamplerParams::new(host_sr, source_rate, channels).with_playback_rate(rate)
+        ResamplerParams::builder()
+            .host_sample_rate(host_sr)
+            .source_sample_rate(source_rate)
+            .channels(channels)
+            .playback_rate(rate)
+            .build()
     }
 
     fn params_with_quality(
@@ -827,7 +831,12 @@ mod tests {
         channels: usize,
         quality: ResamplerQuality,
     ) -> ResamplerParams {
-        ResamplerParams::new(host_sr, source_rate, channels).with_quality(quality)
+        ResamplerParams::builder()
+            .host_sample_rate(host_sr)
+            .source_sample_rate(source_rate)
+            .channels(channels)
+            .quality(quality)
+            .build()
     }
 
     #[kithara::test]

@@ -44,7 +44,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 ) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_gapless_mode(gapless_mode),
+        PlayerConfig::builder().gapless_mode(gapless_mode).build(),
         GAPLESS_SAMPLE_RATE,
     );
     let resource =
@@ -126,7 +126,7 @@ async fn create_delayed_gapless_hls_resource(
     let store = StoreOptions::new(cache_dir);
     let mut config = ResourceConfig::new(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .with_store(store);
+        .store(store);
     player.prepare_config(&mut config);
 
     Resource::new(config)

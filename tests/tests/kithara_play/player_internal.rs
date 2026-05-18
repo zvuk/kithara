@@ -194,7 +194,11 @@ async fn player_advance_emits_event() {
 
 #[kithara::test(tokio)]
 async fn player_play_without_audio_hardware_logs_warning() {
-    let player = PlayerImpl::new(PlayerConfig::default().with_session(OfflineSession::arc_auto()));
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
+    );
     player.insert(make_resource(1.0), None, None);
     player.play();
 }

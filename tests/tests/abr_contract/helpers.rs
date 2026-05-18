@@ -269,20 +269,22 @@ pub(crate) mod params {
         prefetch_count: usize,
     ) -> Audio<Stream<Hls>> {
         let cancel = CancellationToken::new();
-        let hls_config = HlsConfig::new(url.clone())
-            .with_store(store)
-            .with_cancel(cancel)
-            .with_initial_abr_mode(abr)
-            .with_download_batch_size(prefetch_count);
+        let hls_config = HlsConfig::for_url(url.clone())
+            .store(store)
+            .cancel(cancel)
+            .initial_abr_mode(abr)
+            .download_batch_size(prefetch_count)
+            .build();
         // pcm_buffer_chunks по умолчанию 10 (~1s аудио). RED-тестам
         // нужно ждать определённые пробы (например, decoder build_chunk
         // на timestamp >= 4s) без активного потребителя — поэтому буфер
         // расширен до ~30s, чтобы декодер фоновым worker'ом работал
         // автономно и наполнял канал, пока тестовый поток ждёт через
         // `wait_for_probe`.
-        let config = AudioConfig::<Hls>::new(hls_config)
-            .with_decoder_backend(backend)
-            .with_pcm_buffer_chunks(300);
+        let config = AudioConfig::<Hls>::for_stream(hls_config)
+            .decoder_backend(backend)
+            .pcm_buffer_chunks(300)
+            .build();
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
             .unwrap_or_else(|err| panic!("audio open failed for {url}: {err}"));

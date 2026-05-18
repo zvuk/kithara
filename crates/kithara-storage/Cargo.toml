@@ -20,9 +20,8 @@ disable-hang-detector = [
 ]
 
 [dependencies]
+bon = { workspace = true }
 delegate = { workspace = true }
-derivative = { workspace = true }
-derive_setters = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }

@@ -93,7 +93,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
@@ -181,7 +183,7 @@ async fn run_one_attempt(
             };
         }
     };
-    cfg = cfg.with_downloader(downloader.clone());
+    cfg = cfg.downloader(downloader.clone());
     cfg.store = store;
     cfg.initial_abr_mode = AbrMode::Auto(None);
     cfg.decoder_backend = backend;

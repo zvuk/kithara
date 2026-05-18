@@ -111,9 +111,10 @@ fn main() -> AppResult {
 
     init_tracing_for_mode(mode)?;
 
-    let player_config = PlayerConfig::default()
-        .with_crossfade_duration(config.crossfade_seconds)
-        .with_eq_layout(generate_log_spaced_bands(config.eq_band_count));
+    let player_config = PlayerConfig::builder()
+        .crossfade_duration(config.crossfade_seconds)
+        .eq_layout(generate_log_spaced_bands(config.eq_band_count))
+        .build();
     let player = Arc::new(PlayerImpl::new(player_config));
     let queue_config = QueueConfig::default().with_player(player);
 

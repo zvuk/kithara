@@ -185,11 +185,12 @@ async fn file_stream_closes_early_seek_still_works() {
             .build(),
     );
 
-    let config = FileConfig::new(FileSrc::Remote(url))
-        .with_store(StoreOptions::new(clean_temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_look_ahead_bytes(256_000)
-        .with_downloader(dl);
+    let config = FileConfig::for_src(FileSrc::Remote(url))
+        .store(StoreOptions::new(clean_temp_dir.path()))
+        .cancel(cancel_token)
+        .look_ahead_bytes(256_000)
+        .downloader(dl)
+        .build();
 
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
@@ -258,10 +259,11 @@ async fn partial_cache_resume_works() {
     let (url, _call_count, _server) = setup_server(file_data).await;
 
     let cancel1 = CancellationToken::new();
-    let config1 = FileConfig::new(FileSrc::Remote(url.clone()))
-        .with_store(StoreOptions::new(cache_dir.path()))
-        .with_cancel(cancel1.clone())
-        .with_look_ahead_bytes(256_000);
+    let config1 = FileConfig::for_src(FileSrc::Remote(url.clone()))
+        .store(StoreOptions::new(cache_dir.path()))
+        .cancel(cancel1.clone())
+        .look_ahead_bytes(256_000)
+        .build();
 
     let stream1 = Stream::<File>::new(config1).await.unwrap();
 
@@ -285,10 +287,11 @@ async fn partial_cache_resume_works() {
     tracing::info!("Phase 1 complete, stream dropped");
 
     let cancel2 = CancellationToken::new();
-    let config2 = FileConfig::new(FileSrc::Remote(url))
-        .with_store(StoreOptions::new(cache_dir.path()))
-        .with_cancel(cancel2.clone())
-        .with_look_ahead_bytes(256_000);
+    let config2 = FileConfig::for_src(FileSrc::Remote(url))
+        .store(StoreOptions::new(cache_dir.path()))
+        .cancel(cancel2.clone())
+        .look_ahead_bytes(256_000)
+        .build();
 
     let stream2 = Stream::<File>::new(config2).await.unwrap();
 

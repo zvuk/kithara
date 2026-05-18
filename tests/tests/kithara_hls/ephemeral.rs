@@ -121,18 +121,21 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(
+    let hls_config = HlsConfig::for_url(url)
+        .store(
             StoreOptions::builder()
                 .cache_dir(temp_dir.path().into())
                 .is_ephemeral(true)
                 .build(),
         )
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");

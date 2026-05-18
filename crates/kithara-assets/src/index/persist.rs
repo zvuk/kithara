@@ -20,7 +20,9 @@ pub(super) const INITIAL_LEN: u64 = 4096;
 pub(super) fn open_existing(path: &Path, cancel: &CancellationToken) -> AssetsResult<MmapResource> {
     let res: MmapResource = Resource::open(
         cancel.clone(),
-        MmapOptions::new(path.to_path_buf()).with_mode(OpenMode::ReadWrite),
+        MmapOptions::for_path(path.to_path_buf())
+            .mode(OpenMode::ReadWrite)
+            .build(),
     )?;
     Ok(res)
 }
@@ -34,9 +36,10 @@ pub(super) fn open_for_write(
 ) -> AssetsResult<MmapResource> {
     let res: MmapResource = Resource::open(
         cancel.clone(),
-        MmapOptions::new(path.to_path_buf())
-            .with_initial_len(INITIAL_LEN)
-            .with_mode(OpenMode::ReadWrite),
+        MmapOptions::for_path(path.to_path_buf())
+            .initial_len(INITIAL_LEN)
+            .mode(OpenMode::ReadWrite)
+            .build(),
     )?;
     Ok(res)
 }

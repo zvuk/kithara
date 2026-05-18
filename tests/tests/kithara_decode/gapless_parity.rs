@@ -48,7 +48,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
     let probe = create_decoder_with_probe(
         fixture.bytes.clone(),
         "m4a",
-        DecoderConfig::default().with_hint("m4a".to_string()),
+        DecoderConfig::builder().hint("m4a".to_string()).build(),
     )
     .expect("create probe AAC fMP4 decoder");
     let probe_gapless = probe.track_info().gapless.expect("probe gapless metadata");
@@ -57,7 +57,9 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
 
     let preferred = create_decoder_from_media_info(
         &fixture,
-        DecoderConfig::default().with_backend(DecoderBackend::default()),
+        DecoderConfig::builder()
+            .backend(DecoderBackend::default())
+            .build(),
     )
     .expect("create preferred-backend AAC fMP4 decoder");
     let preferred_pcm = decode_visible_frames(preferred).expect("decode preferred AAC fMP4");
@@ -272,7 +274,9 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
         create_decoder_with_probe(
             bytes,
             hint,
-            DecoderConfig::default().with_backend(DecoderBackend::default()),
+            DecoderConfig::builder()
+                .backend(DecoderBackend::default())
+                .build(),
         )
         .expect("create preferred decoder"),
     )

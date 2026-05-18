@@ -48,13 +48,16 @@ async fn create_hls_audio(
     let url = server.url("/master.m3u8");
     let cancel = CancellationToken::new();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(cache_dir))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(abr);
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(cache_dir))
+        .cancel(cancel)
+        .initial_abr_mode(abr)
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
 
     Audio::<Stream<Hls>>::new(config)
         .await

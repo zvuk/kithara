@@ -114,10 +114,11 @@ async fn red_hls_source_drop_leaks_peer(
 
     {
         let stream = Stream::<Hls>::new(
-            HlsConfig::new(url.clone())
-                .with_store(StoreOptions::new(temp_dir.path()))
-                .with_cancel(CancellationToken::new())
-                .with_downloader(downloader.clone()),
+            HlsConfig::for_url(url.clone())
+                .store(StoreOptions::new(temp_dir.path()))
+                .cancel(CancellationToken::new())
+                .downloader(downloader.clone())
+                .build(),
         )
         .await?;
         drop(stream);
@@ -128,10 +129,11 @@ async fn red_hls_source_drop_leaks_peer(
 
     for i in 0..ITERATIONS {
         let stream = Stream::<Hls>::new(
-            HlsConfig::new(url.clone())
-                .with_store(StoreOptions::new(temp_dir.path()))
-                .with_cancel(CancellationToken::new())
-                .with_downloader(downloader.clone()),
+            HlsConfig::for_url(url.clone())
+                .store(StoreOptions::new(temp_dir.path()))
+                .cancel(CancellationToken::new())
+                .downloader(downloader.clone())
+                .build(),
         )
         .await?;
         drop(stream);

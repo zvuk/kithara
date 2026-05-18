@@ -168,9 +168,10 @@ async fn html_segment_does_not_cancel_sibling_fetches(temp_dir: TestTempDir) {
 
     let cancel = CancellationToken::new();
     let store = StoreOptions::new(temp_dir.path());
-    let config = HlsConfig::new(master)
-        .with_store(store)
-        .with_cancel(cancel.clone());
+    let config = HlsConfig::for_url(master)
+        .store(store)
+        .cancel(cancel.clone())
+        .build();
 
     let stream = Stream::<Hls>::new(config)
         .await

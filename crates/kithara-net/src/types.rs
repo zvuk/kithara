@@ -1,7 +1,6 @@
 use std::{cmp::min, collections::HashMap, time::Duration};
 
 use bon::Builder;
-use derivative::Derivative;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Headers {
@@ -72,16 +71,22 @@ impl RangeSpec {
     }
 }
 
-#[derive(Clone, Debug, Derivative)]
-#[derivative(Default)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct RetryPolicy {
-    #[derivative(Default(value = "Duration::from_millis(100)"))]
     pub base_delay: Duration,
-    #[derivative(Default(value = "Duration::from_secs(5)"))]
     pub max_delay: Duration,
-    #[derivative(Default(value = "3"))]
     pub max_retries: u32,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            base_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(5),
+            max_retries: 3,
+        }
+    }
 }
 
 impl RetryPolicy {

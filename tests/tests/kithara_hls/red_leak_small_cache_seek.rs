@@ -39,10 +39,11 @@ async fn build_small_cache_stream(
         .is_ephemeral(true)
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
-    let config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
     Stream::<Hls>::new(config)
         .await
         .expect("HLS stream creation")

@@ -3,8 +3,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SegmentLayout, SharedHooks};
 
@@ -87,12 +86,12 @@ impl std::fmt::Display for DecoderBackend {
 /// `BytePool::default()`. Don't construct fresh `PcmPool::new` / `BytePool::new`
 /// inside library components — that fragments the heap into many small
 /// per-component pools and defeats recycling.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Default)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct DecoderConfig {
     /// Which decoder backend to use. See [`DecoderBackend`].
+    #[builder(default)]
     pub backend: DecoderBackend,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
@@ -100,62 +99,26 @@ pub struct DecoderConfig {
     /// back to `BytePool::default()`.
     pub byte_pool: Option<BytePool>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
-    ///
-    /// Used when the container format is not specified, as a hint for auto-detection.
     pub hint: Option<String>,
     /// Reader-side observer hooks. Forwarded into [`ComposedDecoder`]
-    /// directly; emitting them is opt-in and zero-overhead when `None`.
-    /// `Some(_)` wires the chunk/seek signals into the supplied
-    /// [`SharedHooks`] sink (mock sources, tests, telemetry).
-    ///
-    /// [`ComposedDecoder`]: crate::composed::ComposedDecoder
-    #[setters(skip)]
+    /// directly.
     pub hooks: Option<SharedHooks>,
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,
-    /// Optional segment-layout handle over the underlying source. When
-    /// present, fMP4 AAC / FLAC streams dispatch through the
-    /// segment-by-segment demuxer (`Fmp4SegmentDemuxer`) instead of the
-    /// whole-stream container parser, side-stepping prefix walks during
-    /// forward seek.
-    #[setters(skip)]
+    /// Optional segment-layout handle over the underlying source.
     pub segment_layout: Option<Arc<dyn SegmentLayout>>,
     /// Enable gapless trim wiring through the per-backend codec.
-    ///
-    /// `true` (default) flips the matching `*Config::gapless` for the
-    /// selected backend (Apple / Symphonia / Android) so the codec
-    /// emits priming and padding-trimmed PCM for codecs whose encoder
-    /// reports those numbers (FLAC, Opus, Vorbis via Symphonia; AAC
-    /// via Apple `kAudioConverterPrimeInfo`). Container-level priming
-    /// (MP4 `iTunSMPB` for AAC) is captured separately via the
-    /// `*Codec::probe_track_info` helpers — wired in a follow-up
-    /// alongside the [`crate::DecoderTrackInfo`] propagation through
-    /// the `Decoder` trait.
-    #[derivative(Default(value = "true"))]
+    #[builder(default = true)]
     pub gapless: bool,
     /// Epoch counter for decoder recreation tracking.
+    #[builder(default)]
     pub epoch: u64,
 }
 
-impl DecoderConfig {
-    /// Set [`Self::hooks`] from an `Option`. Same `Option` rationale as
-    /// [`Self::with_segment_layout`].
-    #[must_use]
-    pub fn with_hooks(mut self, hooks: Option<SharedHooks>) -> Self {
-        self.hooks = hooks;
-        self
-    }
-
-    /// Set [`Self::segment_layout`] from an `Option`. Distinct from
-    /// the derived `with_*` setters because `derive_setters` with
-    /// `strip_option` would force callers to unwrap the `Option`
-    /// themselves. Stream sources surface segment layout as
-    /// `Option<...>` already, so this signature avoids the dance.
-    #[must_use]
-    pub fn with_segment_layout(mut self, layout: Option<Arc<dyn SegmentLayout>>) -> Self {
-        self.segment_layout = layout;
-        self
+impl Default for DecoderConfig {
+    fn default() -> Self {
+        Self::builder().build()
     }
 }
 

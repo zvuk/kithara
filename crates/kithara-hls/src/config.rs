@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use std::fmt;
+
+use bon::Builder;
 pub use kithara_abr::AbrMode;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_drm::KeyProcessorRegistry;
@@ -17,9 +18,8 @@ use url::Url;
 /// different providers (zvuk, custom in-house DRM, etc.) can coexist
 /// with different processors, headers, and query params — all scoped
 /// by URL domain.
-#[derive(Clone, Default, Derivative, Setters)]
-#[derivative(Debug)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Debug, Default, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct KeyOptions {
     /// Domain-scoped processor registry. Key URLs whose host matches
@@ -38,108 +38,90 @@ impl KeyOptions {
 /// Configuration for HLS streaming.
 ///
 /// Used with `Stream::<Hls>::new(config)`.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Default, Debug)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct HlsConfig {
-    /// Initial ABR mode. The shared `AbrController` owned by the
-    /// `Downloader` drives per-sample decisions; this field only seeds
-    /// the initial variant.
+    /// Initial ABR mode.
+    #[builder(default)]
     pub initial_abr_mode: AbrMode,
     /// Encryption key handling configuration.
+    #[builder(default)]
     pub keys: KeyOptions,
     /// Base URL for resolving relative playlist/segment URLs.
     pub base_url: Option<Url>,
     /// Event bus (optional - if not provided, one is created internally).
-    #[setters(rename = "with_events")]
+    #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Shared downloader (created lazily if not provided).
-    ///
-    /// Currently unread — added ahead of the phase02 HLS migration that
-    /// routes fetches through the unified downloader. Mirrors the
-    /// `FileConfig::downloader` field so that once the HLS path consumes
-    /// this field it can share a `Downloader` across multiple tracks.
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — pause when a segment's start offset is more than
-    ///   `n` bytes past the reader's current position. `HlsVariant::
-    ///   dispatch` keeps further segments in the queue until the reader
-    ///   advances — caps idle prefetch so an unread `Audio` handle does
-    ///   not drain the entire playlist into the asset cache.
-    /// - `None` — no cap, download as fast as possible (the legacy
-    ///   behavior that caused bug #2: an idle queue accumulating every
-    ///   segment of every active variant).
-    ///
-    /// Default: ~2 `MiB`. Generous enough to keep ~3-4 hi-bitrate FLAC
-    /// segments queued ahead during steady playback, but small enough
-    /// that a paused player tops out at a couple of segments instead
-    /// of the whole track.
-    #[derivative(Default(value = "Some(2 * 1024 * 1024)"))]
+    /// `None` falls back to [`HlsConfig::DEFAULT_LOOK_AHEAD_BYTES`] (~2 `MiB`)
+    /// at the consumer site — production HLS streams need a downloader
+    /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (e.g. differ only in
-    /// query parameters), setting a unique `name` ensures each gets its own
-    /// cache directory.
-    #[setters(skip)]
     pub name: Option<String>,
     /// Buffer pool (shared across all components, created if not provided).
     pub pool: Option<BytePool>,
     /// Storage configuration.
+    #[builder(default)]
     pub store: StoreOptions,
     /// Master playlist URL.
-    #[derivative(Default(
-        value = "Url::parse(\"http://localhost/stream.m3u8\").expect(\"valid default URL\")"
-    ))]
     pub url: Url,
     /// Max segments to download per step.
-    ///
-    /// Higher values reduce per-step overhead (ABR decisions happen per-batch)
-    /// but reduce ABR reactivity. Default: 3.
-    #[derivative(Default(value = "3"))]
+    #[builder(default = 3)]
     pub download_batch_size: usize,
     /// Capacity of the event bus channel (used when `bus` is not provided).
-    #[derivative(Default(value = "kithara_events::DEFAULT_EVENT_BUS_CAPACITY"))]
+    #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
 }
 
+impl fmt::Debug for HlsConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HlsConfig")
+            .field("initial_abr_mode", &self.initial_abr_mode)
+            .field("keys", &self.keys)
+            .field("base_url", &self.base_url)
+            .field("bus", &self.bus)
+            .field("cancel", &self.cancel)
+            .field("headers", &self.headers)
+            .field("look_ahead_bytes", &self.look_ahead_bytes)
+            .field("name", &self.name)
+            .field("pool", &self.pool)
+            .field("store", &self.store)
+            .field("url", &self.url)
+            .field("download_batch_size", &self.download_batch_size)
+            .field("event_channel_capacity", &self.event_channel_capacity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for HlsConfig {
+    fn default() -> Self {
+        let url = Url::parse("http://localhost/stream.m3u8").expect("valid default URL");
+        Self::new(url)
+    }
+}
+
 impl HlsConfig {
+    /// Default `look_ahead_bytes` cap (~2 `MiB`). Production HLS streams
+    /// need a downloader backpressure cap so an idle reader does not
+    /// drain the whole playlist into cache.
+    pub const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
+
     /// Create new HLS config with URL.
     #[must_use]
     pub fn new(url: Url) -> Self {
-        Self {
-            url,
-            ..Self::default()
-        }
+        Self::for_url(url).build()
     }
 
-    /// Set shared downloader.
-    ///
-    /// When not provided, the HLS path will create a private downloader
-    /// during `Hls::create`. Supply a shared instance here to run
-    /// multiple HLS tracks on one download pool (and to share it with
-    /// `File` tracks if desired).
-    ///
-    /// Currently the field is not yet consumed by the HLS path — it is
-    /// added ahead of the phase02 migration commits that wire the HLS
-    /// fetchers through the unified downloader.
-    #[must_use]
-    pub fn with_downloader(mut self, dl: Downloader) -> Self {
-        self.downloader = Some(dl);
-        self
-    }
-
-    /// Set name for cache disambiguation.
-    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.name = Some(name.into());
-        self
+    /// Chainable counterpart to [`HlsConfig::new`].
+    pub fn for_url(url: Url) -> HlsConfigBuilder<hls_config_builder::SetUrl> {
+        Self::builder().url(url)
     }
 }

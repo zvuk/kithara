@@ -69,11 +69,12 @@ impl BytesEncodeTarget {
 
     #[must_use]
     pub fn media_info(self, sample_rate: u32, channels: u16) -> MediaInfo {
-        MediaInfo::default()
-            .with_codec(self.codec())
-            .with_container(self.container())
-            .with_sample_rate(sample_rate)
-            .with_channels(channels)
+        MediaInfo::builder()
+            .codec(self.codec())
+            .container(self.container())
+            .sample_rate(sample_rate)
+            .channels(channels)
+            .build()
     }
 }
 

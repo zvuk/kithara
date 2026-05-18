@@ -204,10 +204,11 @@ async fn build_live_audio(
         .is_ephemeral(true)
         .cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"))
         .build();
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -326,14 +327,15 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = timeout(
         Consts::browser_timeout(10, 15),
-        Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config)),
+        Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build()),
     )
     .await
     .expect("audio creation timed out")
@@ -405,11 +407,14 @@ async fn live_ephemeral_revisit_sequence_regression(
         .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
         .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_decoder_backend(backend);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");
@@ -654,11 +659,12 @@ async fn live_real_stream_seek_resume_native(
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -744,11 +750,12 @@ async fn live_stress_real_stream_seek_read_cache(
         store.cache_capacity = Some(NonZeroUsize::new(24).expect("nonzero"));
     }
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -1043,11 +1050,12 @@ async fn live_ephemeral_small_cache_playback(
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -1122,11 +1130,14 @@ async fn live_ephemeral_small_cache_seek_stress(
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_decoder_backend(backend);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");

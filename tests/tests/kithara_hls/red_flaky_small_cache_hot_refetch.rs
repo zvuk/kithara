@@ -38,9 +38,10 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
         .cache_capacity(NonZeroUsize::new(1).expect("nonzero"))
         .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await

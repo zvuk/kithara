@@ -23,12 +23,15 @@ async fn open_test_mp3(
     events: Option<EventBus>,
 ) -> Audio<Stream<File>> {
     let url = server.asset("test.mp3");
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let mut config = AudioConfig::<File>::new(file_config)
-        .with_hint("mp3")
-        .with_decoder_backend(backend);
+    let file_config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
+    let mut config = AudioConfig::<File>::for_stream(file_config)
+        .hint(String::from("mp3"))
+        .decoder_backend(backend)
+        .build();
     if let Some(bus) = events {
-        config = config.with_events(bus);
+        config.bus = Some(bus);
     }
     Audio::<Stream<File>>::new(config).await.unwrap()
 }

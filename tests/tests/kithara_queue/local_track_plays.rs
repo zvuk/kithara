@@ -181,7 +181,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
@@ -263,7 +265,7 @@ async fn local_track_plays_end_to_end(
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
     let mut cfg = ResourceConfig::new(url.as_str()).expect("valid fixture URL");
-    cfg = cfg.with_downloader(downloader.clone());
+    cfg = cfg.downloader(downloader.clone());
     cfg.store = store;
     cfg.decoder_backend = backend;
     cfg.initial_abr_mode = abr;
@@ -392,7 +394,7 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .iter()
         .map(|u| {
             let mut cfg = ResourceConfig::new(u.as_str()).expect("valid fixture URL");
-            cfg = cfg.with_downloader(downloader.clone());
+            cfg = cfg.downloader(downloader.clone());
             cfg.store = store.clone();
             cfg.decoder_backend = backend;
             cfg.initial_abr_mode = AbrMode::Auto(None);

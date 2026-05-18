@@ -7,8 +7,7 @@ use std::{
     },
 };
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
     Mutex, RwLock,
@@ -42,57 +41,53 @@ impl kithara_test_utils::probes::IntoProbeArg for AbrPeerId {
 }
 
 /// ABR controller settings.
-#[derive(Clone, Debug, Derivative, PartialEq, Setters)]
-#[derivative(Default)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Debug, PartialEq, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
-    #[derivative(Default(value = "Duration::from_secs(1)"))]
+    #[builder(default = Duration::from_secs(1))]
     pub bandwidth_emit_min_interval: Duration,
     /// Minimum absolute delta between `BufferAhead` emits.
-    #[derivative(Default(value = "Duration::from_millis(500)"))]
+    #[builder(default = Duration::from_millis(500))]
     pub buffer_emit_min_delta: Duration,
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
-    #[derivative(Default(value = "Duration::from_millis(500)"))]
+    #[builder(default = Duration::from_millis(500))]
     pub buffer_emit_min_interval: Duration,
     /// Deadline for the incoherence watcher spawned after a variant switch.
-    #[derivative(Default(value = "Duration::from_secs(5)"))]
+    #[builder(default = Duration::from_secs(5))]
     pub incoherence_deadline: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
-    #[derivative(Default(value = "Duration::from_secs(10)"))]
+    #[builder(default = Duration::from_secs(10))]
     pub min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
-    #[derivative(Default(value = "Duration::from_secs(30)"))]
+    #[builder(default = Duration::from_secs(30))]
     pub min_switch_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
-    #[derivative(Default(value = "Duration::from_secs(5)"))]
+    #[builder(default = Duration::from_secs(5))]
     pub urgent_downswitch_buffer: Duration,
-    /// Global data-saver cap. Per-peer overrides live in `AbrState`.
+    /// Global data-saver cap.
     pub max_bandwidth_bps: Option<u64>,
     /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
-    #[derivative(Default(value = "0.10"))]
+    #[builder(default = 0.10)]
     pub bandwidth_emit_min_delta_ratio: f64,
     /// Hysteresis ratio for down-switch.
-    #[derivative(Default(value = "0.8"))]
+    #[builder(default = 0.8)]
     pub down_hysteresis_ratio: f64,
-    /// Safety factor applied to the throughput estimate before comparing to
-    /// candidate variants (e.g. `1.5` uses ~66% of the raw estimate).
-    #[derivative(Default(value = "1.5"))]
+    /// Safety factor applied to the throughput estimate before comparing.
+    #[builder(default = 1.5)]
     pub throughput_safety_factor: f64,
-    /// Hysteresis ratio for up-switch (adjusted throughput must exceed
-    /// candidate bandwidth by this factor).
-    #[derivative(Default(value = "1.3"))]
+    /// Hysteresis ratio for up-switch.
+    #[builder(default = 1.3)]
     pub up_hysteresis_ratio: f64,
     /// Seed throughput estimate (bps) applied at controller construction.
-    /// Lets `decide()` pick the right variant on the first tick, before
-    /// any real samples land — eliminates the cold-start LQ spike and
-    /// wasted disk segments. `None` preserves the historical cold-start
-    /// path (`AbrReason::NoEstimate` → stays on `current_variant`).
-    /// 2 Mbps covers Wi-Fi and most 4G; 3G/EDGE down-switches after the
-    /// first real sample.
-    #[derivative(Default(value = "Some(2_000_000)"))]
     pub initial_throughput_bps: Option<u64>,
+}
+
+impl Default for AbrSettings {
+    fn default() -> Self {
+        Self::builder().initial_throughput_bps(2_000_000).build()
+    }
 }
 
 /// Shared per-player ABR controller.

@@ -15,12 +15,15 @@ pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
     match ResourceConfig::new(url) {
         Ok(mut cfg) => {
             if !config.key_registry.is_empty() {
-                cfg =
-                    cfg.with_keys(KeyOptions::new().with_key_registry(config.key_registry.clone()));
+                cfg = cfg.keys(
+                    KeyOptions::builder()
+                        .key_registry(config.key_registry.clone())
+                        .build(),
+                );
             }
             cfg = cfg
-                .with_downloader(config.downloader.clone())
-                .with_flush_hub(config.flush_hub.clone());
+                .downloader(config.downloader.clone())
+                .flush_hub(config.flush_hub.clone());
             TrackSource::Config(Box::new(cfg))
         }
         Err(e) => {

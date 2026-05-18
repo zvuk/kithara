@@ -92,7 +92,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(
         QueueConfig::default().with_player(Arc::clone(&player)),
@@ -181,7 +183,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let mut rx = player.bus().subscribe();
 
     let mut cfg = ResourceConfig::new(url.as_str()).expect("ResourceConfig::new");
-    cfg = cfg.with_downloader(downloader.clone());
+    cfg = cfg.downloader(downloader.clone());
     cfg.store = store;
     cfg.initial_abr_mode = AbrMode::Auto(None);
     cfg.decoder_backend = backend;

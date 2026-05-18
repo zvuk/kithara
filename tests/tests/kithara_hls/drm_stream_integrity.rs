@@ -164,10 +164,11 @@ async fn drm_stream_byte_integrity(
         AbrMode::Manual(abr_variant)
     };
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(cancel.clone())
-        .with_initial_abr_mode(abr_mode);
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(cancel.clone())
+        .initial_abr_mode(abr_mode)
+        .build();
 
     let mut stream = Stream::<Hls>::new(hls_config)
         .await
