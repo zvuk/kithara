@@ -145,10 +145,7 @@ impl Queue {
         } = config;
         let cancel = CancellationToken::new(); // kithara:cancel:owner
         let player = player.unwrap_or_else(|| {
-            let config = PlayerConfig {
-                cancel: Some(cancel.clone()),
-                ..PlayerConfig::default()
-            };
+            let config = PlayerConfig::builder().cancel(cancel.clone()).build();
             Arc::new(PlayerImpl::new(config))
         });
         player.set_auto_advance_enabled(false);

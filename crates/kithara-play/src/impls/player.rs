@@ -59,6 +59,7 @@ struct PendingNext {
 /// Configuration for the player.
 #[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
 pub struct PlayerConfig {
     /// How resources created for this player trim leading/trailing PCM.
     #[builder(default)]
