@@ -20,6 +20,7 @@ use kithara_platform::{
     tokio::{sync::Notify, task::spawn_blocking},
 };
 use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
+use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
@@ -375,7 +376,7 @@ impl<S> Audio<S> {
     /// reported a failure (`ConsumerPhase::Failed`) before any frames
     /// could be flushed.
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         if buf.is_empty() {
             return Ok(ReadOutcome::Pending {
@@ -511,7 +512,7 @@ impl<S> Audio<S> {
         self.recv_outcome_blocking()
     }
 
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     fn recv_outcome_blocking(&mut self) -> RecvOutcome {
         loop {
             if let Some(fetch) = self.pcm_rx.try_pop() {
@@ -547,7 +548,7 @@ impl<S> Audio<S> {
         }
     }
 
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
         if self.consumer_phase.is_terminal() {
             return None;
@@ -590,7 +591,7 @@ impl<S> Audio<S> {
     /// this layer — the worker thread surfaces errors lazily via
     /// `FetchKind::Failure`, which becomes `Err` from a subsequent
     /// `read()` / `next_chunk()`).
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let epoch = self.timeline.initiate_seek(position);
         self.timeline.mark_pending_seek_epoch(epoch);

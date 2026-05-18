@@ -153,7 +153,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         }
     }
 
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             hang_tick!();

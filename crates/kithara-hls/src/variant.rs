@@ -503,7 +503,7 @@ impl HlsVariant {
         SourcePhase::Waiting
     }
 
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let total = self.total_bytes();
         if total > 0 && offset >= total {
@@ -566,7 +566,7 @@ impl HlsVariant {
         Ok(Self::wrap(written))
     }
 
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub(crate) fn wait_range(
         &self,
         range: Range<u64>,
@@ -1137,7 +1137,7 @@ impl HlsVariant {
         budget = budget as u64,
         queue_len = self.queue.lock_sync().len() as u64
     )]
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub(crate) fn dispatch(self: &Arc<Self>, ctx: &PlanCtx, budget: usize) -> Vec<FetchCmd> {
         let mut out = Vec::new();
         let mut remaining = budget;

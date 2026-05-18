@@ -9,6 +9,7 @@
 //! - [`mock_macro`] — `#[kithara::mock]` (unimock forwarder, auto-gated).
 
 mod fixture_macro;
+mod hang_watchdog;
 mod mock_macro;
 mod probe_macro;
 mod test_macro;
@@ -20,6 +21,13 @@ use proc_macro::TokenStream;
 #[proc_macro_attribute]
 pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     test_macro::expand(attr, item)
+}
+
+/// `#[kithara::hang_watchdog]` — wraps a function with a `HangDetector`.
+/// Generated code refers to `::kithara_test_utils::hang::*`.
+#[proc_macro_attribute]
+pub fn hang_watchdog(attr: TokenStream, item: TokenStream) -> TokenStream {
+    hang_watchdog::expand(attr, item)
 }
 
 /// `#[kithara::fixture]` — rstest-fixture replacement.

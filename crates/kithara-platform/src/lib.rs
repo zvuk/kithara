@@ -34,7 +34,6 @@ pub mod tokio;
 pub use cancel_group::CancelGroup;
 #[cfg(not(target_arch = "wasm32"))]
 pub use env::env_mutation_lock;
-pub use kithara_hang_detector::{HangDetector, default_timeout, hang_watchdog};
 pub use maybe_send::{BoxFuture, MaybeSend, MaybeSendFuture, MaybeSync, WasmSend};
 pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,

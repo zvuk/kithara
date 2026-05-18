@@ -25,13 +25,15 @@
 #[cfg(test)]
 extern crate self as kithara_test_utils;
 
+pub mod hang;
 pub mod probes;
 
 /// Re-export of `kithara_test_macros` под `kithara::*`-namespace.
 /// Позволяет писать `use kithara_test_utils::kithara` и затем
-/// `#[kithara::test]`, `#[kithara::probe]`, `#[kithara::mock]`.
+/// `#[kithara::test]`, `#[kithara::probe]`, `#[kithara::mock]`,
+/// `#[kithara::hang_watchdog]`.
 pub mod kithara {
-    pub use kithara_test_macros::{Probe, fixture, mock, probe, test};
+    pub use kithara_test_macros::{Probe, fixture, hang_watchdog, mock, probe, test};
 }
 
 #[cfg(feature = "test-utils")]

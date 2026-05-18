@@ -1370,7 +1370,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     ///
     /// Replaces the old `FallibleIterator::next` implementation.
     /// Called from `decode_one_fetch` to drive the decoder.
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     fn decode_next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             if self.timeline.is_flushing() || self.timeline.is_seek_pending() {

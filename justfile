@@ -514,8 +514,6 @@ mutants TARGET="" *ARGS:
         --exclude 'crates/kithara-app/**' \
         --exclude 'crates/kithara-wasm/**' \
         --exclude 'crates/kithara-wasm-macros/**' \
-        --exclude 'crates/kithara-hang-detector/**' \
-        --exclude 'crates/kithara-hang-detector-macros/**' \
         --exclude 'xtask/**' \
         --exclude-re 'src/.*test.*\.rs' \
         -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \

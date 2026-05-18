@@ -11,7 +11,11 @@ publish = false
 workspace = true
 
 [features]
-default = []
+default = ["hang"]
+# Real hang-watchdog runtime. Default-on: prod consumers see the real
+# `HangDetector` through transitive `kithara-test-utils = { workspace = true }`.
+# Disable via `default-features = false` on the dep-line.
+hang = ["dep:web-time", "dep:serde", "dep:serde_json"]
 # Включает полный тестовый набор: фикстуры, тестовый HTTP-сервер,
 # signal/wav/fmp4-генераторы, USDT-эмиссию probes. Прод-крейты держат
 # `kithara-test-utils = { workspace = true }` (без features) и получают
@@ -50,6 +54,9 @@ kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+
+# OPTIONAL — пулится под `feature = "hang"` (default-on) и/или `feature = "test-utils"`.
+web-time = { workspace = true, optional = true }
 
 # OPTIONAL — пулится только под `feature = "test-utils"`.
 base64 = { workspace = true, optional = true }

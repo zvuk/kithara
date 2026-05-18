@@ -1,19 +1,18 @@
 use std::time::Duration;
 
-use kithara_hang_detector::HangDump;
-use kithara_test_utils::kithara;
+use super::HangDump;
+use crate::kithara;
 
 #[kithara::test]
 fn no_context_serializes_to_null() {
-    assert_eq!(kithara_hang_detector::NoContext.to_json(), "null");
+    assert_eq!(super::NoContext.to_json(), "null");
 }
 
-#[cfg(not(feature = "disable-hang-detector"))]
 mod detector_tests {
     use std::{thread::sleep, time::Duration};
 
-    use kithara_hang_detector::HangDetector;
-    use kithara_test_utils::kithara;
+    use super::super::HangDetector;
+    use crate::kithara;
 
     #[kithara::test]
     fn tick_within_timeout_does_not_panic() {
@@ -48,7 +47,7 @@ mod detector_tests {
     }
 }
 
-#[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod native_detector_tests {
     use std::{
         env,
@@ -58,10 +57,8 @@ mod native_detector_tests {
         time::Duration,
     };
 
-    use kithara_hang_detector::HangDetector;
-    use kithara_test_utils::kithara;
-
-    use crate::detector::{fallback_timeout, parse_timeout_secs};
+    use super::super::{HangDetector, fallback_timeout, parse_timeout_secs};
+    use crate::kithara;
 
     #[kithara::test]
     fn parse_timeout_secs_rejects_invalid() {
@@ -135,13 +132,12 @@ fn blanket_impl_serializes_serde_type() {
     assert_eq!(parsed["name"], "x");
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "disable-hang-detector")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod dump_tests {
     use std::path::PathBuf;
 
-    use kithara_test_utils::kithara;
-
-    use crate::dump::{resolve_dump_dir, sanitize_label, write_dump};
+    use super::super::{resolve_dump_dir, sanitize_label, write_dump};
+    use crate::kithara;
 
     #[kithara::test]
     fn sanitize_label_preserves_safe_chars() {
@@ -214,7 +210,7 @@ impl Consts {
 fn attr_macro_loop_compiles_and_runs() {
     let mut count = 0;
 
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     fn run_loop(count: &mut i32) {
         loop {
             *count += 1;
@@ -234,7 +230,7 @@ fn attr_macro_loop_compiles_and_runs() {
 fn attr_macro_while_compiles_and_runs() {
     let mut count = 0;
 
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     fn run_while(count: &mut i32) {
         while *count < Consts::LOOP_BREAK_COUNT_3 {
             *count += 1;
@@ -251,7 +247,7 @@ fn attr_macro_while_compiles_and_runs() {
 fn attr_macro_with_thread_compiles_and_runs() {
     let mut count = 0;
 
-    #[kithara_hang_detector::hang_watchdog(name = "test.thread")]
+    #[kithara::hang_watchdog(name = "test.thread")]
     fn run_loop(count: &mut i32) {
         loop {
             *count += 1;
@@ -271,7 +267,7 @@ fn attr_macro_with_thread_compiles_and_runs() {
 fn attr_macro_with_timeout_compiles_and_runs() {
     let mut count = 0;
 
-    #[kithara_hang_detector::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn run_loop(count: &mut i32) {
         loop {
             *count += 1;
@@ -291,7 +287,7 @@ fn attr_macro_with_timeout_compiles_and_runs() {
 fn attr_macro_with_thread_and_timeout_compiles_and_runs() {
     let mut count = 0;
 
-    #[kithara_hang_detector::hang_watchdog(
+    #[kithara::hang_watchdog(
         name = "test.thread",
         timeout = Duration::from_secs(1)
     )]

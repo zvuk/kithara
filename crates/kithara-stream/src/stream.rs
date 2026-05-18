@@ -12,6 +12,7 @@ use std::{
 
 use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration, tokio::task};
 use kithara_storage::WaitOutcome;
+use kithara_test_utils::kithara;
 
 /// Real error from [`Stream::try_read`] — the underlying source
 /// surfaced an I/O failure.
@@ -285,7 +286,7 @@ impl<T: StreamType> Stream<T> {
     /// [`StreamReadError::Source`]. `impl Read for Stream` wraps this
     /// outcome for `std::io::Read` consumers.
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
         if buf.is_empty() {
             return Ok(StreamReadOutcome::Eof {

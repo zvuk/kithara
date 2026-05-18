@@ -4098,7 +4098,6 @@ dependencies = [
  "kithara-decode",
  "kithara-events",
  "kithara-file",
- "kithara-hang-detector",
  "kithara-hls",
  "kithara-net",
  "kithara-platform",
@@ -4146,7 +4145,6 @@ dependencies = [
  "jni 0.22.4",
  "kithara-bufpool",
  "kithara-decode",
- "kithara-hang-detector",
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",
@@ -4305,31 +4303,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kithara-hang-detector"
-version = "0.1.0"
-dependencies = [
- "kithara-hang-detector",
- "kithara-hang-detector-macros",
- "kithara-test-macros",
- "kithara-test-utils",
- "kithara-workspace-hack",
- "serde",
- "serde_json",
- "tracing",
- "wasm-bindgen-test",
- "web-time",
-]
-
-[[package]]
-name = "kithara-hang-detector-macros"
-version = "0.1.0"
-dependencies = [
- "kithara-workspace-hack",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "kithara-hls"
 version = "0.1.0"
 dependencies = [
@@ -4348,7 +4321,6 @@ dependencies = [
  "kithara-bufpool",
  "kithara-drm",
  "kithara-events",
- "kithara-hang-detector",
  "kithara-hls",
  "kithara-net",
  "kithara-platform",
@@ -4468,7 +4440,6 @@ dependencies = [
  "console_error_panic_hook",
  "futures",
  "js-sys",
- "kithara-hang-detector",
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
@@ -4500,7 +4471,6 @@ dependencies = [
  "kithara-decode",
  "kithara-events",
  "kithara-file",
- "kithara-hang-detector",
  "kithara-hls",
  "kithara-net",
  "kithara-platform",
@@ -4549,7 +4519,6 @@ dependencies = [
  "delegate",
  "hotpath",
  "kithara-bufpool",
- "kithara-hang-detector",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-macros",
@@ -4578,7 +4547,6 @@ dependencies = [
  "hotpath",
  "kithara-abr",
  "kithara-events",
- "kithara-hang-detector",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",
@@ -4640,6 +4608,7 @@ dependencies = [
  "url",
  "usdt",
  "uuid",
+ "web-time",
 ]
 
 [[package]]

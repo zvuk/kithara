@@ -13,7 +13,6 @@ workspace = true
 [dependencies]
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
-kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }

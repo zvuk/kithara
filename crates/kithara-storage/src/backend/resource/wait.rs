@@ -6,6 +6,7 @@ use kithara_platform::{
     thread::yield_now,
     time::{Duration as PlatformDuration, Instant},
 };
+use kithara_test_utils::kithara;
 use tracing::debug;
 
 use crate::{
@@ -16,7 +17,7 @@ use crate::{
 
 impl<D: DriverIo> Resource<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub(super) fn wait_range_inner(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         const WAIT_SPIN_TIMEOUT_MS: u64 = 50;
 

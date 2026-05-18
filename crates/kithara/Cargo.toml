@@ -59,10 +59,6 @@ perf = [
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
-disable-hang-detector = [
-    "kithara-audio/disable-hang-detector",
-    "kithara-hls?/disable-hang-detector",
-]
 apple = ["kithara-audio/apple", "kithara-play/apple"]
 android = ["kithara-audio/android", "kithara-decode/android"]
 full = ["file", "hls", "assets", "net", "bufpool"]

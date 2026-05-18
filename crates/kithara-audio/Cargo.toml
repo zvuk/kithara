@@ -27,7 +27,6 @@ smallvec = { workspace = true }
 tokio-util = { workspace = true }
 ringbuf = { workspace = true }
 tracing = { workspace = true }
-kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 portable-atomic = { workspace = true }
 fast-interleave = { workspace = true }
@@ -49,13 +48,6 @@ android = ["kithara-decode/android"]
 # Enable the Symphonia software decoder path. Disable to build with
 # only the hardware backend (apple or android) and no software fallback.
 symphonia = ["kithara-decode/symphonia"]
-# Disable hang-loop detection in wait loops (fallback to no-op detector)
-disable-hang-detector = [
-    "kithara-hang-detector/disable-hang-detector",
-    "kithara-platform/disable-hang-detector",
-    "kithara-stream/disable-hang-detector",
-]
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }

@@ -27,7 +27,6 @@ impl Consts {
         "kithara-test-utils",
         "kithara-test-macros",
         "kithara-wasm-macros",
-        "kithara-hang-detector-macros",
         "kithara-ffi",
         "kithara-fuzz",
         "kithara-decode",
