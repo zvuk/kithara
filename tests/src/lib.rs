@@ -17,6 +17,10 @@ pub mod apple_warmup;
 pub mod asset_fixture;
 pub mod audio_fixture;
 pub mod audio_mock;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod decode_mock;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod encode_test_pcm;
 pub mod hls_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hls_test_helpers;

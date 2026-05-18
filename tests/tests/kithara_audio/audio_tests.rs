@@ -3,14 +3,50 @@
 use std::{fs::File, io::Write};
 
 use kithara_assets::StoreOptions;
-use kithara_audio::{ReadOutcome, test_helpers::audio::*};
+use kithara_audio::{Audio, AudioConfig, ReadOutcome};
 use kithara_decode::{GaplessMode, SilenceTrimParams};
-use kithara_events::{AudioEvent, Event, SeekLifecycleStage};
+use kithara_events::{AudioEvent, Event, EventReceiver, SeekEpoch, SeekLifecycleStage};
 use kithara_file::{FileConfig, FileSrc};
 use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
 use kithara_test_utils::{TestTempDir, create_test_wav, kithara};
 use tempfile::NamedTempFile;
+
+/// Polls `audio.read()` until it returns `Frames`, an unrelated `Eof`,
+/// or the deadline expires. Returns the number of frames read on
+/// success.
+async fn wait_for_frames<S>(audio: &mut Audio<S>, budget: Duration) -> usize {
+    let mut buf = [0.0f32; 256];
+    let deadline = Instant::now() + budget;
+    while Instant::now() < deadline {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
+            Ok(ReadOutcome::Eof { .. }) => return 0,
+            Ok(ReadOutcome::Pending { .. }) => {
+                sleep(Duration::from_millis(20)).await;
+            }
+            Err(error) => panic!("decode error while waiting for frames: {error}"),
+        }
+    }
+    panic!("timed out waiting for ReadOutcome::Frames");
+}
+
+/// Drains events until a `SeekLifecycle::SeekRequest` arrives, returning its epoch.
+async fn await_seek_request_epoch(events: &mut EventReceiver, budget: Duration) -> SeekEpoch {
+    let deadline = Instant::now() + budget;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if let Ok(Ok(Event::Audio(AudioEvent::SeekLifecycle {
+            stage: SeekLifecycleStage::SeekRequest,
+            seek_epoch,
+            ..
+        }))) = timeout(remaining, events.recv()).await
+        {
+            return seek_epoch;
+        }
+    }
+    panic!("SeekLifecycle::SeekRequest was not observed");
+}
 
 /// Write test WAV to a temp file and return config for it.
 ///
@@ -45,33 +81,6 @@ async fn test_audio_new(#[case] sample_count: usize) {
     let _audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
-}
-
-#[kithara::test(tokio)]
-async fn test_audio_receive_chunks() {
-    let (_cache, _tmp, config) = test_wav_config(1000);
-    let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
-        .await
-        .unwrap();
-
-    let mut chunk_count = 0;
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while Instant::now() < deadline {
-        if let Some(fetch) = test_try_pop_pcm(&mut audio) {
-            if fetch.is_eof() {
-                break;
-            }
-            chunk_count += 1;
-            assert!(!fetch.data.pcm.is_empty());
-            if chunk_count >= 5 {
-                break;
-            }
-        } else {
-            sleep(Duration::from_millis(1)).await;
-        }
-    }
-
-    assert!(chunk_count > 0);
 }
 
 #[kithara::test]
@@ -241,17 +250,19 @@ async fn test_seek_emits_matching_playback_progress() {
     let mut buf = [0.0f32; 256];
 
     audio.seek(Duration::from_secs_f64(2.5)).unwrap();
-    let expected_epoch = seek_epoch(&audio);
+    let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
     let _ = audio.read(&mut buf);
 
-    let deadline = Instant::now() + Duration::from_millis(300);
+    let deadline = Instant::now() + Duration::from_millis(500);
     let mut matched_epoch = None;
     while Instant::now() < deadline {
         if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
             timeout(Duration::from_millis(40), events.recv()).await
         {
-            matched_epoch = Some(seek_epoch);
-            break;
+            if seek_epoch == expected_epoch {
+                matched_epoch = Some(seek_epoch);
+                break;
+            }
         }
     }
 
@@ -267,7 +278,7 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
 
     let mut events = audio.event_bus().subscribe();
     audio.seek(Duration::from_secs_f64(1.5)).unwrap();
-    let expected_epoch = seek_epoch(&audio);
+    let expected_epoch = await_seek_request_epoch(&mut events, Duration::from_secs(1)).await;
 
     let mut saw_seek_complete_before_read = false;
     while let Ok(event) = events.try_recv() {
@@ -329,49 +340,41 @@ async fn test_audio_preload(#[case] second_preload: bool) {
         .await
         .unwrap();
 
-    assert!(!has_current_chunk(&audio));
+    assert!(
+        !audio.is_preloaded(),
+        "fresh Audio must not advertise preloaded state"
+    );
 
-    let notify = preload_notify(&audio);
-    notify.notified().await;
     audio.preload().expect("preload must succeed");
     if second_preload {
         audio.preload().expect("second preload must succeed");
     }
 
-    assert!(has_current_chunk(&audio));
+    assert!(audio.is_preloaded(), "preload must flip the latch");
 
-    let mut buf = [0.0f32; 64];
-    assert!(matches!(
-        audio.read(&mut buf),
-        Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0
-    ));
+    let frames = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
+    assert!(frames > 0, "preload must produce at least one frame");
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn test_audio_preload_rearms_after_seek() {
-    let (_cache, _tmp, config) = test_wav_config(1000);
+    let (_cache, _tmp, config) = test_wav_config(44_100);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
 
-    let first_notify = preload_notify(&audio);
-    timeout(Duration::from_secs(1), first_notify.notified())
-        .await
-        .expect("initial preload notify must fire");
     audio.preload().expect("preload must succeed");
-
-    let mut buf = [0.0f32; 64];
-    assert!(
-        matches!(audio.read(&mut buf), Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0),
-        "initial read must produce samples",
-    );
+    let initial = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
+    assert!(initial > 0, "initial read must produce samples");
 
     audio.seek(Duration::from_millis(100)).unwrap();
+    audio.preload().expect("preload after seek must succeed");
 
-    let second_notify = preload_notify(&audio);
-    timeout(Duration::from_secs(1), second_notify.notified())
-        .await
-        .expect("seek must re-arm preload notify");
+    let after_seek = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
+    assert!(
+        after_seek > 0,
+        "seek must re-arm preload so the next read produces samples"
+    );
 }
 
 /// `preloaded` is a one-way latch: once set by `preload()`, it must
@@ -379,30 +382,19 @@ async fn test_audio_preload_rearms_after_seek() {
 /// blocking recv — parking the thread on every empty ringbuf poll.
 #[kithara::test(tokio)]
 async fn preloaded_survives_seek() {
-    use kithara_audio::test_helpers::audio::is_preloaded;
-
     let (_cache, _tmp, config) = test_wav_config(44100 * 2);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .expect("create audio");
 
-    let notify = preload_notify(&audio);
-    timeout(Duration::from_secs(1), notify.notified())
-        .await
-        .expect("initial preload");
     audio.preload().expect("preload must succeed");
-    assert!(is_preloaded(&audio));
+    let initial = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
+    assert!(initial > 0, "preload must deliver before seek");
+    assert!(audio.is_preloaded());
 
     audio.seek(Duration::from_millis(100)).unwrap();
-    assert!(is_preloaded(&audio), "seek must not reset preloaded");
+    assert!(audio.is_preloaded(), "seek must not reset preloaded");
 
-    let post_notify = preload_notify(&audio);
-    timeout(Duration::from_secs(2), post_notify.notified())
-        .await
-        .expect("worker must deliver after seek");
-    let mut buf = [0.0f32; 4096];
-    assert!(
-        matches!(audio.read(&mut buf), Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0),
-        "must read samples after seek",
-    );
+    let after_seek = wait_for_frames(&mut audio, Duration::from_secs(2)).await;
+    assert!(after_seek > 0, "must read samples after seek");
 }

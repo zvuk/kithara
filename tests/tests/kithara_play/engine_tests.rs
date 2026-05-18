@@ -1,8 +1,15 @@
 use std::sync::{Mutex as StdMutex, OnceLock};
 
 use kithara_events::EventBus;
-use kithara_play::test_helpers::engine::*;
+use kithara_play::{
+    Engine, EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId,
+    traits::dj::crossfade::CrossfadeConfig,
+};
 use kithara_test_utils::kithara;
+
+fn slot_id(value: u64) -> SlotId {
+    SlotId::new(value)
+}
 
 fn make_engine() -> EngineImpl {
     EngineImpl::new(EngineConfig::default(), EventBus::default())

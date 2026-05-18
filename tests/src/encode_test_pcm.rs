@@ -1,6 +1,6 @@
 use std::mem::size_of;
 
-use crate::PcmSource;
+use kithara_encode::PcmSource;
 
 /// Interleaved PCM buffer: each frame repeats one 16-bit little-endian sawtooth sample per channel.
 pub struct SawtoothPcmFixture {

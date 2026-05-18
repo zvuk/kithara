@@ -1,8 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_decode::{
-    DecoderTrackInfo, GaplessInfo, PcmSpec, mock::scripted_inner_decoder_with_track_info_loose,
-};
+use kithara_decode::{DecoderTrackInfo, GaplessInfo, PcmSpec};
+use kithara_integration_tests::decode_mock::scripted_inner_decoder_with_track_info_loose;
 use kithara_test_utils::kithara;
 
 #[kithara::test]

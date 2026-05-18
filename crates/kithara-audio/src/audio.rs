@@ -295,13 +295,6 @@ impl<S> Audio<S> {
         &self.metadata
     }
 
-    /// Get reference to PCM receiver for direct channel access.
-    #[must_use]
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
-        &mut self.pcm_rx
-    }
-
     /// Get current playback position.
     ///
     /// Calculated from samples read since last seek plus the seek base.
@@ -1260,7 +1253,7 @@ mod tests {
         }
     }
 
-    #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
     #[should_panic(expected = "recv_outcome_blocking")]
     fn blocking_recv_without_preload_panics_when_no_chunk_arrives() {

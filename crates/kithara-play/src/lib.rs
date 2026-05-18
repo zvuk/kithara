@@ -16,9 +16,6 @@ mod metadata;
 mod time;
 mod types;
 
-#[cfg(any(test, feature = "probe"))]
-pub mod test_helpers;
-
 pub mod impls;
 pub mod traits;
 

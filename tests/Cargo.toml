@@ -66,7 +66,7 @@ async-trait = { workspace = true }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true }
-kithara-decode = { workspace = true, features = ["probe", "symphonia"] }
+kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
 kithara-encode = { workspace = true }
 kithara-file = { workspace = true }
 kithara-play = { workspace = true, features = ["backend-cpal"] }

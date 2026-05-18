@@ -1,8 +1,8 @@
 use kithara_encode::{
     EncoderFactory, PackagedEncodeRequest,
     codec::{AudioCodec, ContainerFormat, MediaInfo},
-    test_pcm::SawtoothPcmFixture,
 };
+use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
 use kithara_test_utils::kithara;
 
 #[kithara::test]

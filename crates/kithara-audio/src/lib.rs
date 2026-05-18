@@ -46,9 +46,6 @@ mod runtime;
 mod traits;
 pub(crate) mod worker;
 
-#[cfg(any(test, feature = "probe"))]
-pub mod test_helpers;
-
 pub use audio::Audio;
 pub use effects::eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands};
 pub use pipeline::{

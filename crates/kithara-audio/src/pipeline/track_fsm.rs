@@ -265,9 +265,6 @@ pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, atomic::AtomicBool};
-
-    use kithara_decode::{PcmSpec, mock::infinite_decoder_loose};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -446,19 +443,5 @@ mod tests {
         let state = TrackState::AtEof;
         assert!(!state.is_terminal());
         assert_eq!(state.phase_tag(), TrackPhaseTag::AtEof);
-    }
-
-    #[kithara::test]
-    fn decoder_session_construction() {
-        let media_info = MediaInfo::builder().channels(2).sample_rate(44100).build();
-        let stop = Arc::new(AtomicBool::new(false));
-        let (decoder, _logs) = infinite_decoder_loose(PcmSpec::default(), stop);
-        let session = DecoderSession {
-            decoder,
-            base_offset: 1024,
-            media_info: Some(media_info),
-        };
-        assert_eq!(session.base_offset, 1024);
-        assert!(session.media_info.is_some());
     }
 }

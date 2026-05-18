@@ -9,6 +9,7 @@ use std::{
 };
 
 use futures::executor::block_on;
+use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -124,7 +125,7 @@ pub struct MemStream;
 
 impl StreamType for MemStream {
     type Config = MemStreamConfig;
-    type Events = ();
+    type Events = EventBus;
     type Source = MemorySource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
@@ -132,11 +133,16 @@ impl StreamType for MemStream {
             .source
             .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
+
+    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
+        config.event_bus.clone()
+    }
 }
 
 #[derive(Default)]
 pub struct MemStreamConfig {
     pub source: Option<MemorySource>,
+    pub event_bus: Option<EventBus>,
 }
 
 /// `StreamType` using `MemorySource` with unknown length.
@@ -144,7 +150,7 @@ pub struct UnknownLenStream;
 
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
-    type Events = ();
+    type Events = EventBus;
     type Source = MemorySource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
@@ -152,11 +158,16 @@ impl StreamType for UnknownLenStream {
             .source
             .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
+
+    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
+        config.event_bus.clone()
+    }
 }
 
 #[derive(Default)]
 pub struct UnknownLenStreamConfig {
     pub source: Option<MemorySource>,
+    pub event_bus: Option<EventBus>,
 }
 
 /// Create a `Stream` from a `MemorySource`.
@@ -164,6 +175,7 @@ pub struct UnknownLenStreamConfig {
 pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
     let config = MemStreamConfig {
         source: Some(source),
+        event_bus: None,
     };
     block_on(Stream::new(config)).unwrap()
 }
@@ -173,6 +185,7 @@ pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
 pub fn unknown_len_stream(source: MemorySource) -> Stream<UnknownLenStream> {
     let config = UnknownLenStreamConfig {
         source: Some(source),
+        event_bus: None,
     };
     block_on(Stream::new(config)).unwrap()
 }
