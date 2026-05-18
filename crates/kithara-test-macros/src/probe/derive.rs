@@ -97,7 +97,7 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .zip(slot_idents.iter())
         .map(|(field, slot)| {
             quote! {
-                let #slot: u64 = ::kithara_test_utils::probes::IntoProbeArg::into_probe_arg(self.#field);
+                let #slot: u64 = ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(self.#field);
             }
         })
         .collect();
@@ -119,16 +119,16 @@ pub(crate) fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
-        impl #impl_generics ::kithara_test_utils::probes::Probe for #struct_name #ty_generics #where_clause {
+        impl #impl_generics ::kithara_test_utils::probe::Probe for #struct_name #ty_generics #where_clause {
             #[inline]
             fn record_probe(&self, name: &'static str) {
                 let _ = name;
                 #(#field_consume)*
-                #[cfg(any(test, feature = "test-utils"))]
+                #[cfg(any(test, feature = "probe"))]
                 {
-                    ::kithara_test_utils::probes::register_probes();
+                    ::kithara_test_utils::probe::register_probes();
                     #(#bindings)*
-                    ::kithara_test_utils::probes::#fire_fn(name, #(#slot_idents),*);
+                    ::kithara_test_utils::probe::#fire_fn(name, #(#slot_idents),*);
                     ::tracing::event!(
                         target: #target,
                         ::tracing::Level::TRACE,
@@ -178,7 +178,7 @@ pub(crate) fn expand_derive_into_probe_arg(input: &DeriveInput) -> syn::Result<T
             (
                 quote!(self.0),
                 quote!(#ty),
-                quote!(Self(<#ty as ::kithara_test_utils::probes::IntoProbeArg>::from_probe_arg(packed))),
+                quote!(Self(<#ty as ::kithara_test_utils::probe::IntoProbeArg>::from_probe_arg(packed))),
             )
         }
         Fields::Named(named) => {
@@ -200,7 +200,7 @@ pub(crate) fn expand_derive_into_probe_arg(input: &DeriveInput) -> syn::Result<T
                 quote!(self.#name),
                 quote!(#ty),
                 quote!(Self {
-                    #name: <#ty as ::kithara_test_utils::probes::IntoProbeArg>::from_probe_arg(packed),
+                    #name: <#ty as ::kithara_test_utils::probe::IntoProbeArg>::from_probe_arg(packed),
                 }),
             )
         }
@@ -209,10 +209,10 @@ pub(crate) fn expand_derive_into_probe_arg(input: &DeriveInput) -> syn::Result<T
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
-        impl #impl_generics ::kithara_test_utils::probes::IntoProbeArg
+        impl #impl_generics ::kithara_test_utils::probe::IntoProbeArg
         for #struct_name #ty_generics #where_clause {
             fn into_probe_arg(self) -> u64 {
-                <#field_ty as ::kithara_test_utils::probes::IntoProbeArg>::into_probe_arg(#field_access)
+                <#field_ty as ::kithara_test_utils::probe::IntoProbeArg>::into_probe_arg(#field_access)
             }
             fn from_probe_arg(packed: u64) -> Self {
                 #ctor

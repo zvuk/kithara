@@ -14,6 +14,6 @@ pub use memory::{MemDriver, MemOptions, MemResource};
 #[cfg(not(target_arch = "wasm32"))]
 pub use mmap::{MmapDriver, MmapOptions, MmapResource};
 pub use resource::Resource;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "probe"))]
 pub use traits::DriverIoMock;
 pub use traits::{AvailabilityObserver, Driver, DriverIo};

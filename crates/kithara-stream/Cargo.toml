@@ -32,7 +32,8 @@ unimock = { workspace = true }
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-test-utils = []
+probe = []
+mock = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
@@ -44,7 +45,7 @@ wasm_safe_thread = { workspace = true }
 
 [dev-dependencies]
 kithara-stream = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 tokio-stream = { workspace = true }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }

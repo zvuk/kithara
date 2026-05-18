@@ -11,7 +11,8 @@ description = "Persistent disk cache with lease/pin semantics and LRU eviction"
 workspace = true
 
 [features]
-test-utils = []
+probe = []
+mock = []
 
 [dependencies]
 rkyv = { workspace = true }
@@ -47,5 +48,5 @@ cbc = { workspace = true }
 kithara-assets = { path = "." }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 wasm-bindgen-test = { workspace = true }

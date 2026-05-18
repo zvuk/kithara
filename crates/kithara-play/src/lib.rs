@@ -16,7 +16,7 @@ mod metadata;
 mod time;
 mod types;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "probe"))]
 pub mod test_helpers;
 
 pub mod impls;
@@ -25,7 +25,7 @@ pub mod traits;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_support;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
 pub use error::PlayError;

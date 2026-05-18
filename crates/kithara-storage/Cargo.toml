@@ -12,7 +12,8 @@ workspace = true
 
 [features]
 default = []
-test-utils = []
+probe = []
+mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
@@ -44,6 +45,6 @@ tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 kithara-storage = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }

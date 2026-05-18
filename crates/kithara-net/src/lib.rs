@@ -7,7 +7,7 @@ mod timeout;
 mod traits;
 mod types;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
 pub use crate::{

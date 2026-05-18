@@ -17,7 +17,7 @@ arbitrary = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
-kithara-hls = { workspace = true, features = ["test-utils"] }
+kithara-hls = { workspace = true, features = ["probe"] }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, features = ["backend-cpal"] }
 kithara-storage = { workspace = true }

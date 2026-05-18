@@ -263,7 +263,7 @@ impl Queue {
     /// synchronously, bypassing the real loader. Returns `Some(result)`
     /// when the test path took the request, `None` to fall through to
     /// the production loader respawn.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "probe"))]
     fn try_replant_test_resource(
         &self,
         id: TrackId,
@@ -296,7 +296,7 @@ impl Queue {
         Some(Ok(()))
     }
 
-    #[cfg(not(any(test, feature = "test-utils")))]
+    #[cfg(not(any(test, feature = "probe")))]
     fn try_replant_test_resource(
         &self,
         _id: TrackId,

@@ -114,8 +114,8 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         .zip(arg_slot_idents.iter())
         .map(|(arg, slot)| {
             quote! {
-                #[cfg(any(test, feature = "test-utils"))]
-                let #slot: u64 = ::kithara_test_utils::probes::IntoProbeArg::into_probe_arg(#arg);
+                #[cfg(any(test, feature = "probe"))]
+                let #slot: u64 = ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#arg);
             }
         })
         .collect();
@@ -125,8 +125,8 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         .zip(computed_slot_idents.iter())
         .map(|((_, expr), slot)| {
             quote! {
-                #[cfg(any(test, feature = "test-utils"))]
-                let #slot: u64 = ::kithara_test_utils::probes::IntoProbeArg::into_probe_arg(#expr);
+                #[cfg(any(test, feature = "probe"))]
+                let #slot: u64 = ::kithara_test_utils::probe::IntoProbeArg::into_probe_arg(#expr);
             }
         })
         .collect();
@@ -172,10 +172,10 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let body = if probe_return {
         quote! {
             let __probe_ret = (|| #block)();
-            #[cfg(any(test, feature = "test-utils"))]
+            #[cfg(any(test, feature = "probe"))]
             {
-                ::kithara_test_utils::probes::register_probes();
-                ::kithara_test_utils::probes::Probe::record_probe(&__probe_ret, #fn_name_str);
+                ::kithara_test_utils::probe::register_probes();
+                ::kithara_test_utils::probe::Probe::record_probe(&__probe_ret, #fn_name_str);
             }
             __probe_ret
         }
@@ -185,7 +185,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
 
     let capture_caller_fn = if filter.caller {
         quote! {
-            let __probe_caller_fn = ::kithara_test_utils::probes::caller_fn_above(#fn_name_str)
+            let __probe_caller_fn = ::kithara_test_utils::probe::caller_fn_above(#fn_name_str)
                 .unwrap_or_default();
         }
     } else {
@@ -216,7 +216,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         // function that won't read Location::caller().
         quote! {}
     } else {
-        quote! { #[cfg_attr(any(test, feature = "test-utils"), track_caller)] }
+        quote! { #[cfg_attr(any(test, feature = "probe"), track_caller)] }
     };
 
     Ok(quote! {
@@ -246,19 +246,19 @@ fn build_emit_entry_event(
         return quote! {};
     }
     quote! {
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "probe"))]
         {
-            ::kithara_test_utils::probes::register_probes();
+            ::kithara_test_utils::probe::register_probes();
             let __probe_caller = ::core::panic::Location::caller();
-            let __probe_seq: u64 = ::kithara_test_utils::probes::next_probe_seq();
+            let __probe_seq: u64 = ::kithara_test_utils::probe::next_probe_seq();
             let __probe_thread_seq: u64 =
-                ::kithara_test_utils::probes::next_thread_probe_seq();
+                ::kithara_test_utils::probe::next_thread_probe_seq();
             let __probe_thread_id: u64 =
-                ::kithara_test_utils::probes::current_thread_u64();
+                ::kithara_test_utils::probe::current_thread_u64();
             let __probe_install_id: u64 =
-                ::kithara_test_utils::probes::current_install_id();
+                ::kithara_test_utils::probe::current_install_id();
             #capture_caller_fn
-            ::kithara_test_utils::probes::#fire_fn(#fn_name_str, #(#probe_idents),*);
+            ::kithara_test_utils::probe::#fire_fn(#fn_name_str, #(#probe_idents),*);
             ::tracing::event!(
                 target: #target,
                 ::tracing::Level::TRACE,

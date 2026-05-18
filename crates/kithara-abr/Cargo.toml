@@ -23,14 +23,15 @@ kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
 
 [features]
 # No-op shim retained so `#[kithara::probe]` macro expansions
-# (which emit `cfg(any(test, feature = "test-utils"))`) don't trigger
+# (which emit `cfg(any(test, feature = "probe"))`) don't trigger
 # `unexpected_cfgs` warnings on this crate. No production code is
 # gated by this feature; the canonical test escape hatch was removed
 # in plan async-juggling-plum.md.
-test-utils = []
+probe = []
+mock = []
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 wasm-bindgen-test = { workspace = true }
 proptest = { workspace = true }
 

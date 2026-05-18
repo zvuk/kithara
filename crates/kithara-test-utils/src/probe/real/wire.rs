@@ -160,7 +160,7 @@ impl<T: IntoProbeArg> IntoProbeArg for Option<T> {
 /// Register all USDT probes embedded in the binary with the host
 /// kernel tracer (dtrace on macOS, bpftrace on Linux). Safe to call
 /// from multiple init paths — guarded by an internal `OnceLock`. На
-/// wasm32 и в прод-сборке (`feature = "test-utils"` выключена) это
+/// wasm32 и в прод-сборке (`feature = "probe"` выключена) это
 /// no-op stub — `usdt`-крейт оптуально и не пуллится.
 pub fn register_probes() {
     imp::register();
@@ -209,7 +209,7 @@ pub fn caller_fn_above(probe_fn_name: &str) -> Option<String> {
             let trimmed = demangled
                 .rsplit_once("::h")
                 .map_or(demangled.as_str(), |(head, _)| head);
-            if trimmed.starts_with("kithara_test_utils::probes::")
+            if trimmed.starts_with("kithara_test_utils::probe::")
                 || trimmed.starts_with("backtrace::")
                 || trimmed.starts_with("std::backtrace::")
             {
@@ -350,7 +350,7 @@ pub fn current_thread_u64() -> u64 {
     hasher.finish()
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
 mod imp {
     use std::sync::OnceLock;
 
@@ -363,7 +363,7 @@ mod imp {
     }
 }
 
-#[cfg(any(target_arch = "wasm32", not(feature = "test-utils")))]
+#[cfg(any(target_arch = "wasm32", not(feature = "probe")))]
 mod imp {
     pub(super) fn register() {}
 }

@@ -34,7 +34,7 @@ impl AbrPeerId {
     }
 }
 
-impl kithara_test_utils::probes::IntoProbeArg for AbrPeerId {
+impl kithara_test_utils::probe::IntoProbeArg for AbrPeerId {
     fn into_probe_arg(self) -> u64 {
         self.0.get()
     }

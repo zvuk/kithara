@@ -15,22 +15,22 @@ ignored = ["serial_test"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara = { workspace = true, features = ["full", "test-utils"] }
-kithara-audio = { workspace = true, features = ["test-utils", "symphonia"] }
-kithara-abr = { workspace = true, features = ["test-utils"] }
+kithara = { workspace = true, features = ["full", "probe"] }
+kithara-audio = { workspace = true, features = ["probe", "symphonia"] }
+kithara-abr = { workspace = true, features = ["probe"] }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
-kithara-hls = { workspace = true, features = ["test-utils"] }
-kithara-queue = { workspace = true, features = ["test-utils"] }
+kithara-hls = { workspace = true, features = ["probe"] }
+kithara-queue = { workspace = true, features = ["probe"] }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 rkyv = { workspace = true }
-kithara-net = { workspace = true, features = ["test-utils"] }
+kithara-net = { workspace = true, features = ["mock", "probe"] }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
-kithara-stream = { workspace = true, features = ["test-utils"] }
+kithara-stream = { workspace = true, features = ["probe"] }
 # Async runtime
 tokio-util = { workspace = true }
 
@@ -66,7 +66,7 @@ async-trait = { workspace = true }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true }
-kithara-decode = { workspace = true, features = ["test-utils", "symphonia"] }
+kithara-decode = { workspace = true, features = ["probe", "symphonia"] }
 kithara-encode = { workspace = true }
 kithara-file = { workspace = true }
 kithara-play = { workspace = true, features = ["backend-cpal"] }

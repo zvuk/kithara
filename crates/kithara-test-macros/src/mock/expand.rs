@@ -8,7 +8,7 @@ pub(crate) fn expand(args: TokenStream, item: TokenStream) -> TokenStream {
 
     quote! {
         #[cfg_attr(
-            any(test, feature = "test-utils"),
+            any(test, feature = "mock"),
             allow(
                 clippy::ignored_unit_patterns,
                 clippy::allow_attributes,
@@ -22,7 +22,7 @@ pub(crate) fn expand(args: TokenStream, item: TokenStream) -> TokenStream {
             )
         )]
         #[cfg_attr(
-            any(test, feature = "test-utils"),
+            any(test, feature = "mock"),
             ::unimock::unimock(#args2)
         )]
         #item2

@@ -41,7 +41,7 @@ pub fn install() -> Recorder {
     Recorder {
         log: shared_log(),
         start_at: Instant::now(),
-        install_id: crate::probes::current_install_id(),
+        install_id: crate::probe::current_install_id(),
     }
 }
 

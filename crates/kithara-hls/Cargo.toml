@@ -39,7 +39,7 @@ hotpath = { workspace = true, optional = true }
 [features]
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
-test-utils = []
+probe = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
@@ -48,9 +48,9 @@ tokio-util = { workspace = true, features = ["full"] }
 [dev-dependencies]
 aes = { workspace = true }
 cbc = { workspace = true }
-kithara-hls = { path = ".", default-features = false, features = ["test-utils"] }
-kithara-net = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-hls = { path = ".", default-features = false, features = ["probe"] }
+kithara-net = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 wasm-bindgen-test = { workspace = true }

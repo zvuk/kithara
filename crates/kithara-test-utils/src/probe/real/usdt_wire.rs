@@ -1,4 +1,4 @@
-#[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
 #[allow(
     clippy::undocumented_unsafe_blocks,
     reason = "Inline-asm `unsafe` blocks expanded by `usdt::provider!` are out of our control."
@@ -15,7 +15,7 @@ mod prov {
 }
 
 #[cfg_attr(
-    feature = "test-utils",
+    feature = "probe",
     expect(
         clippy::items_after_statements,
         reason = "USDT probe macro mixes per-call `static` items with `let _: u64 = ...` arg-bindings; the shape is fixed by the external `usdt` crate."
@@ -23,12 +23,12 @@ mod prov {
 )]
 pub fn fire_0(name: &'static str) {
     let _ = name;
-    #[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
     prov::probe_0!(|| ());
 }
 
 #[cfg_attr(
-    feature = "test-utils",
+    feature = "probe",
     expect(
         clippy::items_after_statements,
         reason = "USDT probe macro mixes per-call `static` items with `let _: u64 = ...` arg-bindings; the shape is fixed by the external `usdt` crate."
@@ -36,12 +36,12 @@ pub fn fire_0(name: &'static str) {
 )]
 pub fn fire_1(name: &'static str, a0: u64) {
     let _ = (name, a0);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
     prov::probe_1!(|| a0);
 }
 
 #[cfg_attr(
-    feature = "test-utils",
+    feature = "probe",
     expect(
         clippy::items_after_statements,
         reason = "USDT probe macro mixes per-call `static` items with `let _: u64 = ...` arg-bindings; the shape is fixed by the external `usdt` crate."
@@ -49,12 +49,12 @@ pub fn fire_1(name: &'static str, a0: u64) {
 )]
 pub fn fire_2(name: &'static str, a0: u64, a1: u64) {
     let _ = (name, a0, a1);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
     prov::probe_2!(|| (a0, a1));
 }
 
 #[cfg_attr(
-    feature = "test-utils",
+    feature = "probe",
     expect(
         clippy::items_after_statements,
         reason = "USDT probe macro mixes per-call `static` items with `let _: u64 = ...` arg-bindings; the shape is fixed by the external `usdt` crate."
@@ -62,12 +62,12 @@ pub fn fire_2(name: &'static str, a0: u64, a1: u64) {
 )]
 pub fn fire_3(name: &'static str, a0: u64, a1: u64, a2: u64) {
     let _ = (name, a0, a1, a2);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
     prov::probe_3!(|| (a0, a1, a2));
 }
 
 #[cfg_attr(
-    feature = "test-utils",
+    feature = "probe",
     expect(
         clippy::items_after_statements,
         reason = "USDT probe macro mixes per-call `static` items with `let _: u64 = ...` arg-bindings; the shape is fixed by the external `usdt` crate."
@@ -75,12 +75,12 @@ pub fn fire_3(name: &'static str, a0: u64, a1: u64, a2: u64) {
 )]
 pub fn fire_4(name: &'static str, a0: u64, a1: u64, a2: u64, a3: u64) {
     let _ = (name, a0, a1, a2, a3);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
     prov::probe_4!(|| (a0, a1, a2, a3));
 }
 
 #[cfg_attr(
-    feature = "test-utils",
+    feature = "probe",
     expect(
         clippy::items_after_statements,
         reason = "USDT probe macro mixes per-call `static` items with `let _: u64 = ...` arg-bindings; the shape is fixed by the external `usdt` crate."
@@ -88,12 +88,12 @@ pub fn fire_4(name: &'static str, a0: u64, a1: u64, a2: u64, a3: u64) {
 )]
 pub fn fire_5(name: &'static str, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) {
     let _ = (name, a0, a1, a2, a3, a4);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
     prov::probe_5!(|| (a0, a1, a2, a3, a4));
 }
 
 #[cfg_attr(
-    feature = "test-utils",
+    feature = "probe",
     expect(
         clippy::items_after_statements,
         reason = "USDT probe macro mixes per-call `static` items with `let _: u64 = ...` arg-bindings; the shape is fixed by the external `usdt` crate."
@@ -101,6 +101,6 @@ pub fn fire_5(name: &'static str, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) {
 )]
 pub fn fire_6(name: &'static str, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) {
     let _ = (name, a0, a1, a2, a3, a4, a5);
-    #[cfg(all(not(target_arch = "wasm32"), feature = "test-utils"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "probe"))]
     prov::probe_6!(|| (a0, a1, a2, a3, a4, a5));
 }

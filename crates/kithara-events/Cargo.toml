@@ -36,6 +36,6 @@ downloader = ["dep:kithara-net", "dep:url"]
 
 [dev-dependencies]
 kithara-events = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 wasm-bindgen-test = { workspace = true }
 

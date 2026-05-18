@@ -11,7 +11,8 @@ description = "HTTP networking with retry, timeout, and streaming support"
 workspace = true
 
 [features]
-test-utils = []
+probe = []
+mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
@@ -39,7 +40,7 @@ gloo-timers = { workspace = true }
 
 [dev-dependencies]
 kithara-net = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

@@ -297,7 +297,7 @@ impl<S> Audio<S> {
 
     /// Get reference to PCM receiver for direct channel access.
     #[must_use]
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "probe"))]
     pub(crate) fn pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
         &mut self.pcm_rx
     }

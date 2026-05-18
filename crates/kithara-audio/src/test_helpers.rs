@@ -3,11 +3,11 @@
 pub mod audio {
     use std::sync::Arc;
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "probe"))]
     use kithara_decode::PcmChunk;
     use kithara_platform::tokio::sync::Notify;
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "probe"))]
     use crate::pipeline::fetch::Fetch;
     pub use crate::{AudioConfig, audio::Audio};
 
@@ -17,7 +17,7 @@ pub mod audio {
             self.current_chunk.is_some()
         }
 
-        #[cfg(any(test, feature = "test-utils"))]
+        #[cfg(any(test, feature = "probe"))]
         #[must_use]
         pub(crate) fn test_pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
             self.pcm_rx()
@@ -34,7 +34,7 @@ pub mod audio {
         }
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "probe"))]
     #[must_use]
     pub fn test_try_pop_pcm<S>(audio: &mut Audio<S>) -> Option<Fetch<PcmChunk>> {
         audio.test_pcm_rx().try_pop()

@@ -4605,6 +4605,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-wasm",
+ "unimock",
  "url",
  "usdt",
  "uuid",

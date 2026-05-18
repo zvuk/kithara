@@ -23,7 +23,7 @@ schema_version = 1
 "crates/kithara-stream/src/dl/tests.rs::poll_next_respects_max_concurrent" = 1
 "crates/kithara-stream/src/dl/tests.rs::shared_client_keepalive_bounds_socket_count" = 1
 "crates/kithara-stream/src/timeline.rs::tests::concurrent_flag_toggles_preserve_independent_semantics" = 1
-"crates/kithara-test-utils/src/inner/native/hls_stream.rs::load_hls" = 1
+"crates/kithara-test-utils/src/test/real/native/hls_stream.rs::load_hls" = 1
 
 [canonical_types]
 "enum AudioCodec" = 1
@@ -57,10 +57,10 @@ schema_version = 1
 "crates/kithara-storage/src/decorator/atomic/tests.rs" = 1
 "crates/kithara-storage/src/unified.rs" = 1
 "crates/kithara-test-utils/src/hang/real/mod.rs" = 1
-"crates/kithara-test-utils/src/inner/fixtures.rs" = 1
-"crates/kithara-test-utils/src/inner/test_server.rs" = 1
-"crates/kithara-test-utils/src/probes/usdt_wire.rs" = 1
-"crates/kithara-test-utils/src/probes/wire.rs" = 1
+"crates/kithara-test-utils/src/probe/real/usdt_wire.rs" = 1
+"crates/kithara-test-utils/src/probe/real/wire.rs" = 1
+"crates/kithara-test-utils/src/test/real/fixtures.rs" = 1
+"crates/kithara-test-utils/src/test/real/test_server.rs" = 1
 "crates/kithara/src/lib.rs" = 1
 
 [direction]
@@ -162,15 +162,15 @@ schema_version = 1
 "crates/kithara-stream/src/source.rs" = 1
 "crates/kithara-stream/src/stream.rs" = 1
 "crates/kithara-stream/src/timeline.rs" = 1
-"crates/kithara-test-utils/src/inner/fixture_protocol.rs" = 1
-"crates/kithara-test-utils/src/inner/hls_fixture.rs" = 1
-"crates/kithara-test-utils/src/inner/hls_spec.rs" = 1
-"crates/kithara-test-utils/src/inner/native/fmp4/mux.rs" = 1
-"crates/kithara-test-utils/src/inner/native/hls_stream.rs" = 1
-"crates/kithara-test-utils/src/inner/native/routes/signal.rs" = 1
-"crates/kithara-test-utils/src/inner/signal_pcm.rs" = 1
-"crates/kithara-test-utils/src/inner/signal_spec.rs" = 1
-"crates/kithara-test-utils/src/inner/test_server.rs" = 1
+"crates/kithara-test-utils/src/test/real/fixture_protocol.rs" = 1
+"crates/kithara-test-utils/src/test/real/hls_fixture.rs" = 1
+"crates/kithara-test-utils/src/test/real/hls_spec.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/fmp4/mux.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/hls_stream.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/routes/signal.rs" = 1
+"crates/kithara-test-utils/src/test/real/signal_pcm.rs" = 1
+"crates/kithara-test-utils/src/test/real/signal_spec.rs" = 1
+"crates/kithara-test-utils/src/test/real/test_server.rs" = 1
 
 [flat_directory]
 "crates/kithara-app/src" = 1
@@ -192,7 +192,7 @@ schema_version = 1
 "crates/kithara-stream/src" = 1
 "crates/kithara-stream/src/dl" = 1
 "crates/kithara-test-macros/src/test" = 1
-"crates/kithara-test-utils/src/inner" = 1
+"crates/kithara-test-utils/src/test/real" = 1
 
 [fn_arg_count]
 "crates/kithara-abr/src/controller/throttle.rs::AbrController::emit_throttled" = 1
@@ -261,14 +261,17 @@ schema_version = 1
 "crates/kithara-test-macros/src/test/expand_async.rs::emit_browser_test" = 1
 "crates/kithara-test-macros/src/test/expand_sync.rs::emit_native_only_one" = 1
 "crates/kithara-test-macros/src/test/expand_sync.rs::emit_one_test" = 1
-"crates/kithara-test-utils/src/inner/native/routes/stream.rs::build_range_response" = 1
-"crates/kithara-test-utils/src/inner/native/routes/stream.rs::build_range_response_with_len" = 1
-"crates/kithara-test-utils/src/inner/native/routes/stream.rs::serve_media_segment" = 1
-"crates/kithara-test-utils/src/probes/usdt_wire.rs::fire_4" = 1
-"crates/kithara-test-utils/src/probes/usdt_wire.rs::fire_5" = 1
-"crates/kithara-test-utils/src/probes/usdt_wire.rs::fire_6" = 1
-"crates/kithara-test-utils/src/probes/usdt_wire.rs::prov::probe_5" = 1
-"crates/kithara-test-utils/src/probes/usdt_wire.rs::prov::probe_6" = 1
+"crates/kithara-test-utils/src/probe/noop.rs::fire_4" = 1
+"crates/kithara-test-utils/src/probe/noop.rs::fire_5" = 1
+"crates/kithara-test-utils/src/probe/noop.rs::fire_6" = 1
+"crates/kithara-test-utils/src/probe/real/usdt_wire.rs::fire_4" = 1
+"crates/kithara-test-utils/src/probe/real/usdt_wire.rs::fire_5" = 1
+"crates/kithara-test-utils/src/probe/real/usdt_wire.rs::fire_6" = 1
+"crates/kithara-test-utils/src/probe/real/usdt_wire.rs::prov::probe_5" = 1
+"crates/kithara-test-utils/src/probe/real/usdt_wire.rs::prov::probe_6" = 1
+"crates/kithara-test-utils/src/test/real/native/routes/stream.rs::build_range_response" = 1
+"crates/kithara-test-utils/src/test/real/native/routes/stream.rs::build_range_response_with_len" = 1
+"crates/kithara-test-utils/src/test/real/native/routes/stream.rs::serve_media_segment" = 1
 
 [generic_param_count]
 "crates/kithara-assets/src/cache.rs::Cache" = 1
@@ -345,12 +348,12 @@ schema_version = 1
 "crates/kithara-stream/src/stream.rs::ScriptSource" = 1
 "crates/kithara-stream/src/timeline.rs::Timeline" = 1
 "crates/kithara-test-utils/src/hang/real/detector.rs::HangDetector" = 1
-"crates/kithara-test-utils/src/inner/hls_spec.rs::ResolvedHlsSpec" = 1
-"crates/kithara-test-utils/src/inner/hls_url.rs::HlsSpec" = 1
-"crates/kithara-test-utils/src/inner/native/hls_stream.rs::GeneratedHls" = 1
-"crates/kithara-test-utils/src/inner/native/test_server_state.rs::TestServerState" = 1
-"crates/kithara-test-utils/src/inner/signal_pcm.rs::SignalPcm" = 1
-"crates/kithara-test-utils/src/inner/test_server.rs::HlsFixtureBuilder" = 1
+"crates/kithara-test-utils/src/test/real/hls_spec.rs::ResolvedHlsSpec" = 1
+"crates/kithara-test-utils/src/test/real/hls_url.rs::HlsSpec" = 1
+"crates/kithara-test-utils/src/test/real/native/hls_stream.rs::GeneratedHls" = 1
+"crates/kithara-test-utils/src/test/real/native/test_server_state.rs::TestServerState" = 1
+"crates/kithara-test-utils/src/test/real/signal_pcm.rs::SignalPcm" = 1
+"crates/kithara-test-utils/src/test/real/test_server.rs::HlsFixtureBuilder" = 1
 "crates/kithara-wasm/src/wasm/player.rs::Player" = 1
 
 [god_trait]
@@ -377,15 +380,24 @@ schema_version = 1
 "crates/kithara-stream/src/source.rs::Source" = 1
 
 [max_nesting]
-"crates/kithara-test-utils/src/inner/native/fmp4/bytes.rs" = 1
-"crates/kithara-test-utils/src/inner/native/fmp4/codec.rs" = 1
-"crates/kithara-test-utils/src/inner/native/fmp4/mod.rs" = 1
-"crates/kithara-test-utils/src/inner/native/fmp4/mux.rs" = 1
-"crates/kithara-test-utils/src/inner/native/routes/assets.rs" = 1
-"crates/kithara-test-utils/src/inner/native/routes/mod.rs" = 1
-"crates/kithara-test-utils/src/inner/native/routes/signal.rs" = 1
-"crates/kithara-test-utils/src/inner/native/routes/stream.rs" = 1
-"crates/kithara-test-utils/src/inner/native/routes/token.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/fmp4/bytes.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/fmp4/codec.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/fmp4/mod.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/fmp4/mux.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/hls_stream.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/http_server.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/routes/assets.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/routes/mod.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/routes/signal.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/routes/stream.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/routes/token.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/test_server_state.rs" = 1
+"crates/kithara-test-utils/src/test/real/probe_capture/event.rs" = 1
+"crates/kithara-test-utils/src/test/real/probe_capture/layer.rs" = 1
+"crates/kithara-test-utils/src/test/real/probe_capture/mod.rs" = 1
+"crates/kithara-test-utils/src/test/real/probe_capture/recorder.rs" = 1
+"crates/kithara-test-utils/src/test/real/test_server/native.rs" = 1
+"crates/kithara-test-utils/src/test/real/test_server/wasm.rs" = 1
 
 [mixed_entities]
 "crates/kithara-assets/src/cache.rs" = 1
@@ -411,9 +423,9 @@ schema_version = 1
 "crates/kithara-play/src/impls/player_processor.rs" = 1
 "crates/kithara-play/src/impls/player_track.rs" = 1
 "crates/kithara-stream/src/stream.rs" = 1
-"crates/kithara-test-utils/src/inner/native/hls_stream.rs" = 1
-"crates/kithara-test-utils/src/inner/signal_pcm.rs" = 1
-"crates/kithara-test-utils/src/inner/test_server.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/hls_stream.rs" = 1
+"crates/kithara-test-utils/src/test/real/signal_pcm.rs" = 1
+"crates/kithara-test-utils/src/test/real/test_server.rs" = 1
 
 [module_fan_out]
 "crates/kithara-abr/src/controller/core.rs" = 1
@@ -478,11 +490,11 @@ schema_version = 1
 "crates/kithara-play/src/impls/player_node.rs:46:PlayerNode" = 1
 "crates/kithara-storage/src/backend/memory/driver.rs:106:MemResource" = 1
 "crates/kithara-stream/src/dl/response.rs:47:BodyStream" = 1
-"crates/kithara-test-utils/src/inner/hls_fixture.rs:355:PackagedTestServer" = 1
-"crates/kithara-test-utils/src/inner/native/http_server.rs:18:TestHttpServer" = 1
-"crates/kithara-test-utils/src/inner/signal_pcm.rs:143:SignalLength" = 1
-"crates/kithara-test-utils/src/inner/signal_pcm.rs:193:Finite" = 1
-"crates/kithara-test-utils/src/inner/test_server.rs:123:HlsFixtureBuilder" = 1
+"crates/kithara-test-utils/src/test/real/hls_fixture.rs:355:PackagedTestServer" = 1
+"crates/kithara-test-utils/src/test/real/native/http_server.rs:18:TestHttpServer" = 1
+"crates/kithara-test-utils/src/test/real/signal_pcm.rs:143:SignalLength" = 1
+"crates/kithara-test-utils/src/test/real/signal_pcm.rs:193:Finite" = 1
+"crates/kithara-test-utils/src/test/real/test_server.rs:123:HlsFixtureBuilder" = 1
 
 [no_lib_statics]
 "crates/kithara-audio/src/worker/handle.rs::static AUDIO_WORKER_ID" = 1
@@ -561,15 +573,15 @@ schema_version = 1
 "crates/kithara-stream/src/source.rs::SourceSeekAnchor" = 1
 "crates/kithara-stream/src/stream.rs::StreamSeekPastEof" = 1
 "crates/kithara-stream/src/timeline.rs::ChunkPosition" = 1
-"crates/kithara-test-utils/src/inner/fixture_protocol.rs::DelayRule" = 1
-"crates/kithara-test-utils/src/inner/fixture_protocol.rs::HttpErrorRule" = 1
-"crates/kithara-test-utils/src/inner/fixture_protocol.rs::PackagedAudioRequest" = 1
-"crates/kithara-test-utils/src/inner/fixture_protocol.rs::PackagedAudioVariantOverride" = 1
-"crates/kithara-test-utils/src/inner/hls_fixture.rs::HlsTestServerConfig" = 1
-"crates/kithara-test-utils/src/inner/hls_url.rs::HlsSpec" = 1
-"crates/kithara-test-utils/src/inner/probe_capture/event.rs::ProbeEvent" = 1
-"crates/kithara-test-utils/src/inner/signal_pcm.rs::Sweep" = 1
-"crates/kithara-test-utils/src/inner/signal_url.rs::SignalSpec" = 1
+"crates/kithara-test-utils/src/test/real/fixture_protocol.rs::DelayRule" = 1
+"crates/kithara-test-utils/src/test/real/fixture_protocol.rs::HttpErrorRule" = 1
+"crates/kithara-test-utils/src/test/real/fixture_protocol.rs::PackagedAudioRequest" = 1
+"crates/kithara-test-utils/src/test/real/fixture_protocol.rs::PackagedAudioVariantOverride" = 1
+"crates/kithara-test-utils/src/test/real/hls_fixture.rs::HlsTestServerConfig" = 1
+"crates/kithara-test-utils/src/test/real/hls_url.rs::HlsSpec" = 1
+"crates/kithara-test-utils/src/test/real/probe_capture/event.rs::ProbeEvent" = 1
+"crates/kithara-test-utils/src/test/real/signal_pcm.rs::Sweep" = 1
+"crates/kithara-test-utils/src/test/real/signal_url.rs::SignalSpec" = 1
 
 [readme_presence]
 kithara-examples = 1
@@ -587,7 +599,7 @@ xtask = 1
 "crates/kithara-play/src/impls/player.rs::PlayerImpl::abr" = 1
 "crates/kithara-stream/src/stream.rs::Stream::source" = 1
 "crates/kithara-stream/src/timeline.rs::Timeline::seek_epoch_handle" = 1
-"crates/kithara-test-utils/src/inner/fixture_protocol.rs::DelayRule::matches" = 1
+"crates/kithara-test-utils/src/test/real/fixture_protocol.rs::DelayRule::matches" = 1
 
 [redundant_reexport]
 "crates/kithara-hls/config.rs:6:0::kithara_abr::AbrMode" = 1
@@ -631,7 +643,7 @@ xtask = 1
 "crates/kithara-queue/src/queue/selection.rs::impl Queue" = 1
 "crates/kithara-stream/src/dl/registry.rs::impl Registry" = 1
 "crates/kithara-stream/src/timeline.rs::impl Timeline" = 1
-"crates/kithara-test-utils/src/inner/test_server.rs::impl HlsFixtureBuilder" = 1
+"crates/kithara-test-utils/src/test/real/test_server.rs::impl HlsFixtureBuilder" = 1
 
 [single_word_filenames]
 "crates/kithara-app/src/tracing_init.rs" = 1
@@ -683,24 +695,24 @@ xtask = 1
 "crates/kithara-test-macros/src/test/expand_async.rs" = 1
 "crates/kithara-test-macros/src/test/expand_sync.rs" = 1
 "crates/kithara-test-macros/src/test/fixture_args.rs" = 1
-"crates/kithara-test-utils/src/inner/alac_fixture.rs" = 1
-"crates/kithara-test-utils/src/inner/fixture_protocol.rs" = 1
-"crates/kithara-test-utils/src/inner/hls_blob_store.rs" = 1
-"crates/kithara-test-utils/src/inner/hls_fixture.rs" = 1
-"crates/kithara-test-utils/src/inner/hls_spec.rs" = 1
-"crates/kithara-test-utils/src/inner/hls_url.rs" = 1
-"crates/kithara-test-utils/src/inner/log_filter.rs" = 1
-"crates/kithara-test-utils/src/inner/native/hls_stream.rs" = 1
-"crates/kithara-test-utils/src/inner/native/http_server.rs" = 1
-"crates/kithara-test-utils/src/inner/native/test_server_state.rs" = 1
-"crates/kithara-test-utils/src/inner/server_url.rs" = 1
-"crates/kithara-test-utils/src/inner/signal_pcm.rs" = 1
-"crates/kithara-test-utils/src/inner/signal_source_utils.rs" = 1
-"crates/kithara-test-utils/src/inner/signal_spec.rs" = 1
-"crates/kithara-test-utils/src/inner/signal_url.rs" = 1
-"crates/kithara-test-utils/src/inner/test_server.rs" = 1
-"crates/kithara-test-utils/src/inner/token_store.rs" = 1
-"crates/kithara-test-utils/src/probes/usdt_wire.rs" = 1
+"crates/kithara-test-utils/src/probe/real/usdt_wire.rs" = 1
+"crates/kithara-test-utils/src/test/real/alac_fixture.rs" = 1
+"crates/kithara-test-utils/src/test/real/fixture_protocol.rs" = 1
+"crates/kithara-test-utils/src/test/real/hls_blob_store.rs" = 1
+"crates/kithara-test-utils/src/test/real/hls_fixture.rs" = 1
+"crates/kithara-test-utils/src/test/real/hls_spec.rs" = 1
+"crates/kithara-test-utils/src/test/real/hls_url.rs" = 1
+"crates/kithara-test-utils/src/test/real/log_filter.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/hls_stream.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/http_server.rs" = 1
+"crates/kithara-test-utils/src/test/real/native/test_server_state.rs" = 1
+"crates/kithara-test-utils/src/test/real/server_url.rs" = 1
+"crates/kithara-test-utils/src/test/real/signal_pcm.rs" = 1
+"crates/kithara-test-utils/src/test/real/signal_source_utils.rs" = 1
+"crates/kithara-test-utils/src/test/real/signal_spec.rs" = 1
+"crates/kithara-test-utils/src/test/real/signal_url.rs" = 1
+"crates/kithara-test-utils/src/test/real/test_server.rs" = 1
+"crates/kithara-test-utils/src/test/real/token_store.rs" = 1
 
 [trait_impl_count]
 "crates/kithara-events/src/event.rs::Event" = 1

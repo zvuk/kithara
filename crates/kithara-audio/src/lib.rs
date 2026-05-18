@@ -38,7 +38,7 @@
 
 mod audio;
 pub mod effects;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock;
 mod pipeline;
 mod resampler;
@@ -46,7 +46,7 @@ mod runtime;
 mod traits;
 pub(crate) mod worker;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "probe"))]
 pub mod test_helpers;
 
 pub use audio::Audio;

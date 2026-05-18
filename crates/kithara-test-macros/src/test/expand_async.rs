@@ -51,9 +51,9 @@ pub(crate) fn emit_async_runtime_test(
             #env_setup
             let __rt = #runtime_builder;
             let __probe_install_id =
-                ::kithara_test_utils::probes::bump_install_id();
+                ::kithara_test_utils::probe::bump_install_id();
             __rt.block_on(
-                ::kithara_test_utils::probes::OWNED_INSTALL_ID
+                ::kithara_test_utils::probe::OWNED_INSTALL_ID
                     .scope(__probe_install_id, async #inner_body),
             )
         }
@@ -175,12 +175,12 @@ pub(crate) fn emit_async_timeout_test(
 
             let __rt = #runtime_builder;
             let __probe_install_id =
-                ::kithara_test_utils::probes::bump_install_id();
+                ::kithara_test_utils::probe::bump_install_id();
 
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
                     __rt.block_on(
-                        ::kithara_test_utils::probes::OWNED_INSTALL_ID.scope(
+                        ::kithara_test_utils::probe::OWNED_INSTALL_ID.scope(
                             __probe_install_id,
                             async {
                                 kithara_platform::time::timeout(__timeout_dur, async {

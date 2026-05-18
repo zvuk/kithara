@@ -60,12 +60,13 @@ wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
-test-utils = []
+probe = []
+mock = []
 
 [dev-dependencies]
-kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "test-utils"] }
-kithara-audio = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
+kithara-audio = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

@@ -5,8 +5,8 @@
 //! - [`test`] — `#[kithara::test]` (sync/async/native/wasm с case+fixture).
 //! - [`fixture`] — `#[kithara::fixture]` (rstest-fixture replacement).
 //! - [`probe`] — `#[kithara::probe]` + `#[derive(kithara::Probe)]`
-//!   (USDT + tracing instrumentation; auto-gated `cfg(any(test, feature = "test-utils"))`).
-//! - [`mock`] — `#[kithara::mock]` (unimock forwarder, auto-gated).
+//!   (USDT + tracing instrumentation; auto-gated `cfg(any(test, feature = "probe"))`).
+//! - [`mock`] — `#[kithara::mock]` (unimock forwarder, gated `cfg(any(test, feature = "mock"))`).
 
 mod fixture;
 mod hang_watchdog;
@@ -37,14 +37,14 @@ pub fn fixture(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// `#[kithara::probe]` — USDT + tracing-event instrumentation.
-/// Тело гейтится `cfg(any(test, feature = "test-utils"))` → no-op в проде.
+/// Тело гейтится `cfg(any(test, feature = "probe"))` → no-op в проде.
 #[proc_macro_attribute]
 pub fn probe(attr: TokenStream, item: TokenStream) -> TokenStream {
     probe::expand_attr(attr, item)
 }
 
 /// `#[kithara::mock]` — workspace replacement for `#[unimock(...)]`.
-/// Гейтится `cfg(any(test, feature = "test-utils"))` → trait-декларация
+/// Гейтится `cfg(any(test, feature = "mock"))` → trait-декларация
 /// в проде остаётся без mock-impl.
 #[proc_macro_attribute]
 pub fn mock(args: TokenStream, item: TokenStream) -> TokenStream {
@@ -52,7 +52,7 @@ pub fn mock(args: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// `#[derive(kithara::Probe)]` — generates `record_probe()` для value-type probes.
-/// Тело гейтится `cfg(any(test, feature = "test-utils"))`.
+/// Тело гейтится `cfg(any(test, feature = "probe"))`.
 #[proc_macro_derive(Probe, attributes(probe))]
 pub fn derive_probe(input: TokenStream) -> TokenStream {
     probe::expand_derive_entry(input)

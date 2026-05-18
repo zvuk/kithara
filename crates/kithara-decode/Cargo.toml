@@ -55,12 +55,13 @@ android = []
 # Enables the software (Symphonia) decoder path. When disabled, the
 # factory only uses the compiled hardware backend — no fallback.
 symphonia = ["dep:symphonia"]
-test-utils = []
+probe = []
+mock = []
 
 [dev-dependencies]
 kithara-decode = { path = ".", default-features = false, features = ["symphonia"] }
 kithara-storage = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
 wasm-bindgen-test = { workspace = true }
 
 [package.metadata.cargo-machete]

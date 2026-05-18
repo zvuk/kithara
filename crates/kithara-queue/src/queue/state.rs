@@ -25,7 +25,7 @@ pub(super) type TrackSources = HashMap<TrackId, TrackSource>;
 
 /// Test-only respawn resource cache, same aliasing rationale as
 /// [`TrackSources`].
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "probe"))]
 pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
 
 /// AVQueuePlayer-analogue orchestration facade.
@@ -64,13 +64,13 @@ pub struct Queue {
     /// production register/insert paths do not arm autoplay yet (see
     /// `register_for_test` / `complete_load_for_test`). Gated with the
     /// same `cfg` so the field carries no cost outside tests.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "probe"))]
     pub(super) should_autoplay: bool,
     /// First registered track id awaiting autoplay-on-load. Set when
     /// `autoplay = true` and the queue has no active selection;
     /// consumed when the matching id finishes loading.
     /// `Self::NO_ARMED_TRACK` sentinel = no pending target.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "probe"))]
     pub(super) autoplay_target: Arc<AtomicU64>,
     pub(super) loader: Arc<Loader>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
@@ -87,7 +87,7 @@ pub struct Queue {
     /// `select` when a `Consumed` / `Cancelled` / `Failed` track is
     /// re-selected. Lets harness tests exercise the respawn path
     /// without a real loader.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(any(test, feature = "probe"))]
     pub(super) test_resources: Arc<Mutex<TestResources>>,
     /// Sole owner of the `Vec<TrackEntry>`. Shared with [`Loader`]
     /// through `Arc<Tracks>`; every status transition goes through
@@ -138,9 +138,9 @@ impl Queue {
             player,
             max_concurrent_loads,
             prefetch_duration: _,
-            #[cfg(any(test, feature = "test-utils"))]
+            #[cfg(any(test, feature = "probe"))]
             should_autoplay,
-            #[cfg(not(any(test, feature = "test-utils")))]
+            #[cfg(not(any(test, feature = "probe")))]
                 should_autoplay: _,
         } = config;
         let cancel = CancellationToken::new(); // kithara:cancel:owner
@@ -162,18 +162,18 @@ impl Queue {
             loader,
             tracks,
             bus,
-            #[cfg(any(test, feature = "test-utils"))]
+            #[cfg(any(test, feature = "probe"))]
             should_autoplay,
             cancel,
             next_id: AtomicU64::new(0),
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(None)),
             sources: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(any(test, feature = "test-utils"))]
+            #[cfg(any(test, feature = "probe"))]
             test_resources: Arc::new(Mutex::new(HashMap::new())),
             player_rx: Mutex::new(player_rx),
             crossfade_armed_for: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
-            #[cfg(any(test, feature = "test-utils"))]
+            #[cfg(any(test, feature = "probe"))]
             autoplay_target: Arc::new(AtomicU64::new(Self::NO_ARMED_TRACK)),
             cached_position: Arc::new(AtomicU64::new(Self::NO_CACHED_POSITION.to_bits())),
         }
