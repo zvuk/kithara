@@ -111,10 +111,12 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
         }
     });
 
-    let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
-    cfg = cfg.downloader(downloader.clone());
-    cfg.store = store;
-    cfg.decoder_backend = backend;
+    let cfg = ResourceConfig::for_src(master.as_str())
+        .expect("valid master URL")
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder_backend(backend)
+        .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let id = queue.append(source);

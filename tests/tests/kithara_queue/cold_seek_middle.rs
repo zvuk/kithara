@@ -180,9 +180,11 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let ids: Vec<TrackId> = resolved
         .iter()
         .map(|u| {
-            let mut cfg = ResourceConfig::new(u).expect("valid URL");
-            cfg = cfg.downloader(downloader.clone());
-            cfg.store = store.clone();
+            let cfg = ResourceConfig::for_src(u)
+                .expect("valid URL")
+                .downloader(downloader.clone())
+                .store(store.clone())
+                .build();
             queue.append(TrackSource::Config(Box::new(cfg)))
         })
         .collect();
@@ -309,10 +311,11 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
 
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
     let track_source = |url: &str| -> TrackSource {
-        let mut cfg = ResourceConfig::new(url)
+        let cfg = ResourceConfig::for_src(url)
             .expect("valid URL")
-            .downloader(downloader.clone());
-        cfg.store = store.clone();
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .build();
         TrackSource::Config(Box::new(cfg))
     };
 
@@ -396,10 +399,11 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
 
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
     let track_source = |url: &str| -> TrackSource {
-        let mut cfg = ResourceConfig::new(url)
+        let cfg = ResourceConfig::for_src(url)
             .expect("valid URL")
-            .downloader(downloader.clone());
-        cfg.store = store.clone();
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .build();
         TrackSource::Config(Box::new(cfg))
     };
 

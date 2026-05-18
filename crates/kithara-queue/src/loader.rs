@@ -191,10 +191,10 @@ mod tests {
     #[kithara::test(tokio)]
     async fn build_config_preserves_caller_supplied_config() {
         let loader = LoaderFixtureSpec::default().build().loader;
-        let Ok(given) = ResourceConfig::new("https://example.com/a.mp3") else {
+        let Ok(builder) = ResourceConfig::for_src("https://example.com/a.mp3") else {
             panic!("valid url");
         };
-        let given = given.preferred_peak_bitrate(321.0);
+        let given = builder.preferred_peak_bitrate(321.0).build();
         let Ok(returned) = loader.build_config(TrackSource::Config(Box::new(given))) else {
             panic!("build_config should succeed");
         };

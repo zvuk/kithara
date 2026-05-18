@@ -153,249 +153,31 @@ pub struct ResourceConfig {
 }
 
 impl ResourceConfig {
-    /// Create a new config from a URL string or local file path.
+    /// Parse a URL string or local file path into a [`ResourceSrc`].
     ///
-    /// Parses the input as a URL first. If parsing fails, treats it as a local
-    /// file path (must be absolute). A `file://` URL is normalized to a `Path`.
+    /// Tries URL parsing first. On failure, falls back to absolute file path.
+    /// A `file://` URL is normalized to a `Path`.
     ///
     /// # Errors
     ///
-    /// Returns `DecodeError::InvalidData` if the input is an invalid `file://` URL
-    /// or a non-absolute file path.
-    /// Backwards-compat fluent setters. Mirror the old `with_*` API so
-    /// existing call-sites compile while the workspace migrates to the
-    /// canonical `ResourceConfig::builder()` chain. To be removed in
-    /// follow-up cleanup PR.
-    #[must_use]
-    pub fn with_events(mut self, bus: EventBus) -> Self {
-        self.bus = Some(bus);
-        self
-    }
-    #[must_use]
-    pub fn with_headers(mut self, headers: Headers) -> Self {
-        self.headers = Some(headers);
-        self
-    }
-    #[must_use]
-    pub fn with_hint<S: Into<String>>(mut self, hint: S) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
-    #[must_use]
-    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-    #[must_use]
-    pub fn with_store(mut self, store: StoreOptions) -> Self {
-        self.store = store;
-        self
-    }
-    #[must_use]
-    pub fn with_downloader(mut self, dl: Downloader) -> Self {
-        self.downloader = Some(dl);
-        self
-    }
-    #[must_use]
-    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
-        self.flush_hub = Some(hub);
-        self
-    }
-    #[must_use]
-    pub fn with_worker(mut self, worker: AudioWorkerHandle) -> Self {
-        self.worker = Some(worker);
-        self
-    }
-    #[must_use]
-    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-    #[must_use]
-    pub fn with_initial_abr_mode(mut self, mode: AbrMode) -> Self {
-        self.initial_abr_mode = mode;
-        self
-    }
-    #[must_use]
-    pub fn with_keys(mut self, keys: KeyOptions) -> Self {
-        self.keys = keys;
-        self
-    }
-    #[must_use]
-    pub fn with_preferred_peak_bitrate(mut self, bps: f64) -> Self {
-        self.preferred_peak_bitrate = bps;
-        self
-    }
-    #[must_use]
-    pub fn with_preferred_peak_bitrate_for_expensive_networks(mut self, bps: f64) -> Self {
-        self.preferred_peak_bitrate_for_expensive_networks = bps;
-        self
-    }
-    #[must_use]
-    pub fn with_preload_chunks(mut self, n: NonZeroUsize) -> Self {
-        self.preload_chunks = n;
-        self
-    }
-    #[must_use]
-    pub fn with_decoder_backend(mut self, backend: DecoderBackend) -> Self {
-        self.decoder_backend = backend;
-        self
-    }
-    #[must_use]
-    pub fn with_resampler_quality(mut self, q: ResamplerQuality) -> Self {
-        self.resampler_quality = q;
-        self
-    }
-    #[must_use]
-    pub fn with_byte_pool(mut self, pool: BytePool) -> Self {
-        self.byte_pool = Some(pool);
-        self
-    }
-    #[must_use]
-    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
-        self.pcm_pool = Some(pool);
-        self
-    }
-    #[must_use]
-    pub fn with_host_sample_rate(mut self, sr: NonZeroU32) -> Self {
-        self.host_sample_rate = Some(sr);
-        self
-    }
-    #[must_use]
-    pub fn with_playback_rate(mut self, rate: Arc<AtomicF32>) -> Self {
-        self.playback_rate = Some(rate);
-        self
-    }
-    #[must_use]
-    pub fn with_look_ahead_bytes(mut self, bytes: u64) -> Self {
-        self.look_ahead_bytes = Some(bytes);
-        self
-    }
-    #[must_use]
-    pub fn with_hls_base_url(mut self, url: Url) -> Self {
-        self.hls_base_url = Some(url);
-        self
-    }
-    #[must_use]
-    pub fn with_gapless_mode(mut self, mode: kithara_decode::GaplessMode) -> Self {
-        self.gapless_mode = mode;
-        self
-    }
-
-    /// Backwards-compat fluent setters mirroring [`Self::with_*`] without
-    /// the `with_` prefix. Removed alongside the with_* aliases once
-    /// all call-sites migrate to `ResourceConfig::builder()`.
-    #[must_use]
-    pub fn events(self, bus: EventBus) -> Self {
-        self.with_events(bus)
-    }
-    #[must_use]
-    pub fn headers(self, headers: Headers) -> Self {
-        self.with_headers(headers)
-    }
-    #[must_use]
-    pub fn hint<S: Into<String>>(self, hint: S) -> Self {
-        self.with_hint(hint)
-    }
-    #[must_use]
-    pub fn name<S: Into<String>>(self, name: S) -> Self {
-        self.with_name(name)
-    }
-    #[must_use]
-    pub fn store(self, store: StoreOptions) -> Self {
-        self.with_store(store)
-    }
-    #[must_use]
-    pub fn downloader(self, dl: Downloader) -> Self {
-        self.with_downloader(dl)
-    }
-    #[must_use]
-    pub fn flush_hub(self, hub: Arc<FlushHub>) -> Self {
-        self.with_flush_hub(hub)
-    }
-    #[must_use]
-    pub fn worker(self, worker: AudioWorkerHandle) -> Self {
-        self.with_worker(worker)
-    }
-    #[must_use]
-    pub fn cancel(self, cancel: CancellationToken) -> Self {
-        self.with_cancel(cancel)
-    }
-    #[must_use]
-    pub fn initial_abr_mode(self, mode: AbrMode) -> Self {
-        self.with_initial_abr_mode(mode)
-    }
-    #[must_use]
-    pub fn keys(self, keys: KeyOptions) -> Self {
-        self.with_keys(keys)
-    }
-    #[must_use]
-    pub fn preferred_peak_bitrate(self, bps: f64) -> Self {
-        self.with_preferred_peak_bitrate(bps)
-    }
-    #[must_use]
-    pub fn preferred_peak_bitrate_for_expensive_networks(self, bps: f64) -> Self {
-        self.with_preferred_peak_bitrate_for_expensive_networks(bps)
-    }
-    #[must_use]
-    pub fn preload_chunks(self, n: NonZeroUsize) -> Self {
-        self.with_preload_chunks(n)
-    }
-    #[must_use]
-    pub fn decoder_backend(self, backend: DecoderBackend) -> Self {
-        self.with_decoder_backend(backend)
-    }
-    #[must_use]
-    pub fn resampler_quality(self, q: ResamplerQuality) -> Self {
-        self.with_resampler_quality(q)
-    }
-    #[must_use]
-    pub fn byte_pool(self, pool: BytePool) -> Self {
-        self.with_byte_pool(pool)
-    }
-    #[must_use]
-    pub fn pcm_pool(self, pool: PcmPool) -> Self {
-        self.with_pcm_pool(pool)
-    }
-    #[must_use]
-    pub fn host_sample_rate(self, sr: NonZeroU32) -> Self {
-        self.with_host_sample_rate(sr)
-    }
-    #[must_use]
-    pub fn playback_rate(self, rate: Arc<AtomicF32>) -> Self {
-        self.with_playback_rate(rate)
-    }
-    #[must_use]
-    pub fn look_ahead_bytes(self, bytes: u64) -> Self {
-        self.with_look_ahead_bytes(bytes)
-    }
-    #[must_use]
-    pub fn hls_base_url(self, url: Url) -> Self {
-        self.with_hls_base_url(url)
-    }
-    #[must_use]
-    pub fn gapless_mode(self, mode: kithara_decode::GaplessMode) -> Self {
-        self.with_gapless_mode(mode)
-    }
-
-    pub fn new<S: AsRef<str>>(input: S) -> Result<Self, DecodeError> {
+    /// Returns `DecodeError::InvalidData` if the input is an invalid `file://`
+    /// URL or a non-absolute file path.
+    pub fn parse_src<S: AsRef<str>>(input: S) -> Result<ResourceSrc, DecodeError> {
         let trimmed = input.as_ref().trim();
 
-        let src = match Url::parse(trimmed) {
+        match Url::parse(trimmed) {
             #[cfg(not(target_arch = "wasm32"))]
             Ok(url) if url.scheme() == "file" => {
                 let path = url.to_file_path().map_err(|()| {
                     DecodeError::InvalidData(format!("invalid file URL: {trimmed}"))
                 })?;
-                ResourceSrc::Path(path)
+                Ok(ResourceSrc::Path(path))
             }
             #[cfg(target_arch = "wasm32")]
-            Ok(url) if url.scheme() == "file" => {
-                return Err(DecodeError::InvalidData(format!(
-                    "file:// URL is not supported on wasm: {trimmed}"
-                )));
-            }
-            Ok(url) => ResourceSrc::Url(url),
+            Ok(url) if url.scheme() == "file" => Err(DecodeError::InvalidData(format!(
+                "file:// URL is not supported on wasm: {trimmed}"
+            ))),
+            Ok(url) => Ok(ResourceSrc::Url(url)),
             Err(_) => {
                 let path = PathBuf::from(trimmed);
                 if !path.is_absolute() {
@@ -403,11 +185,33 @@ impl ResourceConfig {
                         "invalid URL or file path (must be absolute): {trimmed}"
                     )));
                 }
-                ResourceSrc::Path(path)
+                Ok(ResourceSrc::Path(path))
             }
-        };
+        }
+    }
 
-        Ok(Self::builder().src(src).build())
+    /// Terminal constructor — parses input and returns a fully-built config.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
+    /// absolute path. See [`Self::parse_src`].
+    pub fn new<S: AsRef<str>>(input: S) -> Result<Self, DecodeError> {
+        Self::for_src(input).map(ResourceConfigBuilder::build)
+    }
+
+    /// Chainable counterpart to [`Self::new`]: parses input and returns a
+    /// builder with `src` already populated so call-sites can add options
+    /// before `.build()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
+    /// absolute path. See [`Self::parse_src`].
+    pub fn for_src<S: AsRef<str>>(
+        input: S,
+    ) -> Result<ResourceConfigBuilder<resource_config_builder::SetSrc>, DecodeError> {
+        Self::parse_src(input).map(|src| Self::builder().src(src))
     }
 
     /// Convert into an `AudioConfig<File>`.
@@ -559,29 +363,29 @@ mod tests {
     #[case(false)]
     #[case(true)]
     fn config_bus_presence(#[case] with_events: bool) {
-        let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
-        if with_events {
-            config = config.with_events(EventBus::new(32));
-        }
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
+            .unwrap()
+            .maybe_events(with_events.then(|| EventBus::new(32)))
+            .build();
         assert_eq!(config.bus.is_some(), with_events);
     }
 
     #[kithara::test]
     fn config_bus_propagates_to_file_config() {
-        let bus = EventBus::new(32);
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .events(bus);
+            .events(EventBus::new(32))
+            .build();
         let audio_config = config.into_file_config();
         assert!(audio_config.stream.bus.is_some());
     }
 
     #[kithara::test]
     fn config_bus_propagates_to_hls_config() {
-        let bus = EventBus::new(32);
-        let config = ResourceConfig::new("https://example.com/live.m3u8")
+        let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
-            .events(bus);
+            .events(EventBus::new(32))
+            .build();
         let audio_config = config.into_hls_config().unwrap();
         assert!(audio_config.stream.bus.is_some());
     }
@@ -590,9 +394,10 @@ mod tests {
     fn config_with_headers() {
         let mut headers = Headers::new();
         headers.insert("Authorization", "Bearer test");
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .headers(headers);
+            .headers(headers)
+            .build();
 
         assert!(config.headers.is_some());
         assert_eq!(
@@ -603,13 +408,13 @@ mod tests {
 
     #[kithara::test]
     fn config_builder_chain() {
-        let bus = EventBus::new(32);
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .events(bus)
-            .hint("mp3")
-            .name("test")
-            .preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"));
+            .events(EventBus::new(32))
+            .hint("mp3".to_string())
+            .name("test".to_string())
+            .preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"))
+            .build();
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
         assert_eq!(config.name.as_deref(), Some("test"));
@@ -625,9 +430,10 @@ mod tests {
 
     #[kithara::test]
     fn config_bitrate_propagates_to_hls_abr() {
-        let config = ResourceConfig::new("https://example.com/live.m3u8")
+        let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
-            .preferred_peak_bitrate(512_000.0);
+            .preferred_peak_bitrate(512_000.0)
+            .build();
         let _audio_config = config.into_hls_config().unwrap();
     }
 
@@ -640,9 +446,10 @@ mod tests {
     #[kithara::test]
     fn config_with_worker_sets_field() {
         let worker = AudioWorkerHandle::new();
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .worker(worker.clone());
+            .worker(worker.clone())
+            .build();
         assert!(config.worker.is_some());
         worker.shutdown();
     }
@@ -650,9 +457,10 @@ mod tests {
     #[kithara::test]
     fn config_worker_propagates_to_file_config() {
         let worker = AudioWorkerHandle::new();
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .worker(worker.clone());
+            .worker(worker.clone())
+            .build();
         let audio_config = config.into_file_config();
         assert!(audio_config.worker.is_some());
         worker.shutdown();
@@ -661,9 +469,10 @@ mod tests {
     #[kithara::test]
     fn config_worker_propagates_to_hls_config() {
         let worker = AudioWorkerHandle::new();
-        let config = ResourceConfig::new("https://example.com/live.m3u8")
+        let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
-            .worker(worker.clone());
+            .worker(worker.clone())
+            .build();
         let audio_config = config.into_hls_config().unwrap();
         assert!(audio_config.worker.is_some());
         worker.shutdown();

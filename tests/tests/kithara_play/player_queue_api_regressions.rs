@@ -126,9 +126,10 @@ async fn make_signal_resource(
         format: SignalFormat::Wav,
     };
     let url = server.sine(&spec, freq_hz).await;
-    let mut config = ResourceConfig::new(url.as_str())
+    let mut config = ResourceConfig::for_src(url.as_str())
         .expect("valid signal fixture URL")
-        .store(StoreOptions::new(cache_dir));
+        .store(StoreOptions::new(cache_dir))
+        .build();
     player.prepare_config(&mut config);
 
     Resource::new(config)

@@ -58,9 +58,12 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(DownloaderConfig::default());
 
-    let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
-    cfg = cfg.downloader(downloader.clone()).name("t0");
-    cfg.store = store;
+    let cfg = ResourceConfig::for_src(master.as_str())
+        .expect("valid master URL")
+        .downloader(downloader.clone())
+        .name("t0".to_string())
+        .store(store)
+        .build();
 
     let resource = Resource::new(cfg)
         .await

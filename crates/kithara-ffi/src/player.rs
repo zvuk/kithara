@@ -665,41 +665,25 @@ impl AudioPlayer {
     /// (`VariantsDiscovered` fires synchronously during stream open — a
     /// late subscriber would miss it).
     fn build_source_for_item(&self, item: &Arc<AudioPlayerItem>) -> Result<TrackSource, FfiError> {
-        let mut config =
-            ResourceConfig::new(item.url()).map_err(|e| FfiError::InvalidArgument {
+        let scoped = self.queue.bus().scoped();
+        let abr_mode = item.abr_mode().map(|mode| match mode {
+            FfiAbrMode::Auto => AbrMode::Auto(None),
+            FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
+        });
+        let mut config = ResourceConfig::for_src(item.url())
+            .map_err(|e| FfiError::InvalidArgument {
                 reason: e.to_string(),
-            })?;
+            })?
+            .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
+            .maybe_headers(self.merged_headers_for_item(item).map(Into::into))
+            .events(scoped.clone())
+            .downloader(self.downloader.clone())
+            .keys(self.key_options.lock_sync().clone())
+            .initial_abr_mode(abr_mode.unwrap_or_default())
+            .build();
 
         config::configure_resource(&mut config, &self.store);
-
-        let bitrate = item.preferred_peak_bitrate();
-        if bitrate > 0.0 {
-            config = config.preferred_peak_bitrate(bitrate);
-        }
-
-        let merged_headers = self.merged_headers_for_item(item);
-        if let Some(headers) = merged_headers {
-            config = config.headers(headers.into());
-        }
-
-        let scoped = self.queue.bus().scoped();
-        config.bus = Some(scoped.clone());
         *item.bus.lock_sync() = Some(scoped);
-
-        config = config.downloader(self.downloader.clone());
-
-        let key_options = self.key_options.lock_sync().clone();
-        if key_options.key_registry.is_some() {
-            config = config.keys(key_options);
-        }
-
-        if let Some(mode) = item.abr_mode() {
-            let abr_mode = match mode {
-                FfiAbrMode::Auto => AbrMode::Auto(None),
-                FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
-            };
-            config = config.initial_abr_mode(abr_mode);
-        }
 
         Ok(TrackSource::Config(Box::new(config)))
     }

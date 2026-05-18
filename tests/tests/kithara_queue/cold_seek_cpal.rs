@@ -129,10 +129,12 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         }
     });
 
-    let mut cfg = ResourceConfig::new(URL).expect("valid silvercomet URL");
-    cfg = cfg.downloader(downloader.clone());
-    cfg.store = store;
-    cfg.decoder_backend = backend;
+    let cfg = ResourceConfig::for_src(URL)
+        .expect("valid silvercomet URL")
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder_backend(backend)
+        .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();

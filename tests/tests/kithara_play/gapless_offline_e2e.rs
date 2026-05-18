@@ -557,9 +557,10 @@ async fn create_resource_with_encoding(
 
     let item_id = Arc::<str>::from(item_id);
     let store = StoreOptions::new(cache_dir);
-    let mut config = ResourceConfig::new(created.master_url().as_str())
+    let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .store(store);
+        .store(store)
+        .build();
     player.prepare_config(&mut config);
     let mut resource = Resource::new(config)
         .await

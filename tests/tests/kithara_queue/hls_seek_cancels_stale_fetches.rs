@@ -182,11 +182,13 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
     let mut rx = player.bus().subscribe();
 
-    let mut cfg = ResourceConfig::new(url.as_str()).expect("ResourceConfig::new");
-    cfg = cfg.downloader(downloader.clone());
-    cfg.store = store;
-    cfg.initial_abr_mode = AbrMode::Auto(None);
-    cfg.decoder_backend = backend;
+    let cfg = ResourceConfig::for_src(url.as_str())
+        .expect("ResourceConfig::for_src")
+        .downloader(downloader.clone())
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(None))
+        .decoder_backend(backend)
+        .build();
 
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
     queue.select(track_id, Transition::None).expect("select");

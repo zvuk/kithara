@@ -122,14 +122,14 @@ async fn build_resource(
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
-    let mut cfg =
-        ResourceConfig::new(url).unwrap_or_else(|e| panic!("ResourceConfig::new({url}): {e}"));
-    cfg = cfg
+    let cfg = ResourceConfig::for_src(url)
+        .unwrap_or_else(|e| panic!("ResourceConfig::for_src({url}): {e}"))
         .downloader(downloader.clone())
-        .name(format!("{iter_label}|{url}"));
-    cfg.store = store;
-    cfg.decoder_backend = backend;
-    cfg.initial_abr_mode = abr;
+        .name(format!("{iter_label}|{url}"))
+        .store(store)
+        .decoder_backend(backend)
+        .initial_abr_mode(abr)
+        .build();
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));

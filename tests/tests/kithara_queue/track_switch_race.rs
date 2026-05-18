@@ -191,11 +191,12 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
         let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
         let mk_cfg = |url: &Url| {
-            let mut cfg = ResourceConfig::new(url.as_str()).expect("valid fixture URL");
-            cfg = cfg.downloader(downloader.clone());
-            cfg.store = store.clone();
-            cfg.initial_abr_mode = AbrMode::Auto(None);
-            cfg
+            ResourceConfig::for_src(url.as_str())
+                .expect("valid fixture URL")
+                .downloader(downloader.clone())
+                .store(store.clone())
+                .initial_abr_mode(AbrMode::Auto(None))
+                .build()
         };
 
         let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(&fast_url))));

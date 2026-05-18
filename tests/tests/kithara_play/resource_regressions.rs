@@ -181,15 +181,13 @@ fn resource_config(
     hint: Option<&str>,
     worker: Option<AudioWorkerHandle>,
 ) -> ResourceConfig {
-    let mut cfg = ResourceConfig::new(url.as_str()).unwrap().store(store);
-    if let Some(h) = hint {
-        cfg = cfg.hint(h);
-    }
-    if let Some(w) = worker {
-        cfg = cfg.worker(w);
-    }
-    cfg.decoder_backend = backend;
-    cfg
+    ResourceConfig::for_src(url.as_str())
+        .unwrap()
+        .store(store)
+        .maybe_hint(hint.map(str::to_owned))
+        .maybe_worker(worker)
+        .decoder_backend(backend)
+        .build()
 }
 
 /// Open a resource with [`resource_config`] options; panics on error.
@@ -1432,11 +1430,12 @@ async fn live_remote_resource_decodes_with_duration(
             .client(HttpClient::new(net))
             .build(),
     );
-    let mut config = ResourceConfig::new(url)
+    let config = ResourceConfig::for_src(url)
         .expect("valid URL")
         .store(store)
-        .downloader(downloader);
-    config.decoder_backend = backend;
+        .downloader(downloader)
+        .decoder_backend(backend)
+        .build();
 
     let mut resource = Resource::new(config)
         .await
@@ -1547,8 +1546,11 @@ async fn player_mp3_duration_matches_app_flow(
     let player = PlayerImpl::new(PlayerConfig::default());
     player.reserve_slots(1);
 
-    let mut config = ResourceConfig::new(url).unwrap().store(store);
-    config.decoder_backend = backend;
+    let mut config = ResourceConfig::for_src(url)
+        .unwrap()
+        .store(store)
+        .decoder_backend(backend)
+        .build();
     player.prepare_config(&mut config);
 
     let resource = Resource::new(config)
@@ -1627,10 +1629,11 @@ async fn local_resource_decodes_with_duration(
         }
     };
     let store = store_options(&temp_dir, true);
-    let mut config = ResourceConfig::new(url.as_str())
+    let config = ResourceConfig::for_src(url.as_str())
         .expect("valid URL")
-        .store(store);
-    config.decoder_backend = backend;
+        .store(store)
+        .decoder_backend(backend)
+        .build();
 
     let mut resource = Resource::new(config)
         .await

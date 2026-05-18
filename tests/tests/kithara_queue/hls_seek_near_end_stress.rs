@@ -172,21 +172,23 @@ async fn run_one_attempt(
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let mut cfg = match ResourceConfig::new(url.as_str()) {
-        Ok(cfg) => cfg,
+    let builder = match ResourceConfig::for_src(url.as_str()) {
+        Ok(b) => b,
         Err(e) => {
             tick_handle.abort();
             return IterOutcome::Errored {
                 iter,
                 target: f64::NAN,
-                error: format!("ResourceConfig::new failed: {e}"),
+                error: format!("ResourceConfig::for_src failed: {e}"),
             };
         }
     };
-    cfg = cfg.downloader(downloader.clone());
-    cfg.store = store;
-    cfg.initial_abr_mode = AbrMode::Auto(None);
-    cfg.decoder_backend = backend;
+    let cfg = builder
+        .downloader(downloader.clone())
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(None))
+        .decoder_backend(backend)
+        .build();
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
 
     if let Err(e) = queue.select(track_id, Transition::None) {

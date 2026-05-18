@@ -264,11 +264,13 @@ async fn local_track_plays_end_to_end(
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let mut cfg = ResourceConfig::new(url.as_str()).expect("valid fixture URL");
-    cfg = cfg.downloader(downloader.clone());
-    cfg.store = store;
-    cfg.decoder_backend = backend;
-    cfg.initial_abr_mode = abr;
+    let cfg = ResourceConfig::for_src(url.as_str())
+        .expect("valid fixture URL")
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder_backend(backend)
+        .initial_abr_mode(abr)
+        .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let track_id = queue.append(source);
@@ -393,11 +395,13 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     let ids: Vec<TrackId> = urls
         .iter()
         .map(|u| {
-            let mut cfg = ResourceConfig::new(u.as_str()).expect("valid fixture URL");
-            cfg = cfg.downloader(downloader.clone());
-            cfg.store = store.clone();
-            cfg.decoder_backend = backend;
-            cfg.initial_abr_mode = AbrMode::Auto(None);
+            let cfg = ResourceConfig::for_src(u.as_str())
+                .expect("valid fixture URL")
+                .downloader(downloader.clone())
+                .store(store.clone())
+                .decoder_backend(backend)
+                .initial_abr_mode(AbrMode::Auto(None))
+                .build();
             queue.append(TrackSource::Config(Box::new(cfg)))
         })
         .collect();
