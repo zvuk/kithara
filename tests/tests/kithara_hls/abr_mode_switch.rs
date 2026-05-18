@@ -295,19 +295,20 @@ async fn vod_manual_switch_affects_future_segments() {
 
 /// Multi-track shared ABR: quality persists across tracks, cache serves on replay.
 ///
-/// 1. Track 1, Manual(0) → plays V0 (1 Mbps) deterministically; V0
-///    segments populate the cache. (Note: `Auto(Some(0))` is NOT a hard
-///    pin — once `buffer_ahead > min_buffer_for_up_switch` (10s default)
-///    and the throughput estimator surfaces post-sample bandwidth that
-///    exceeds the V1 cap × `up_hysteresis_ratio`, ABR auto-up-switches
-///    to V1. On an in-process server that gate clears within ~60 ms,
-///    which races Step 1 into a cross-variant recreate. Step 1's goal
-///    is cache population, not ABR contract — `Manual(0)` is the
-///    correct primitive here.)
-/// 2. Track 2 with Manual(1) → downloads V1 (3 Mbps) segments.
-/// 3. Track 1 replay with Manual(0) → V0 segments served from cache.
+/// 1. Track 1, Auto(Some(0)) → plays V0 (1 Mbps); the default
+///    `initial_throughput_bps = Some(2 Mbps)` seed picks V0 as the
+///    highest variant fitting under `2 Mbps / 1.5 ≈ 1.33 Mbps`, so
+///    `decide` issues no boundary switch and V0 segments populate the
+///    cache.
+/// 2. Switch to Manual(1) — V1 (3 Mbps).
+/// 3. Track 2 with Manual(1) → downloads V1 segments.
+/// 4. Switch to Manual(0) for Track 1 replay → future segments switch to V0.
+/// 5. Replay Track 1 → V0 segments served from cache (cached=true).
 ///
-/// Variants are ordered `[V0=1 Mbps, V1=3 Mbps]`.
+/// Variants are ordered `[V0=1 Mbps, V1=3 Mbps]` so the seed lands on V0
+/// — historically the test used `[3 Mbps, 1 Mbps]` and relied on the
+/// pre-seed cold-start behaviour where `Auto(Some(0))` stayed on V0
+/// only because `decide` returned `NoEstimate` until samples arrived.
 #[kithara::test(
     native,
     tokio,
@@ -349,7 +350,7 @@ async fn multi_track_shared_abr_with_cache() {
     let temp_dir = TestTempDir::new();
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
 
-    info!("=== Step 1: Track 1 Manual(0) (deterministic V0 cache fill) ===");
+    info!("=== Step 1: Track 1 Auto ===");
     let bus1 = EventBus::new(8192);
     let collector1 = EventCollector::new(&bus1);
 
@@ -357,7 +358,7 @@ async fn multi_track_shared_abr_with_cache() {
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(CancellationToken::new())
         .events(bus1.clone())
-        .initial_abr_mode(AbrMode::Manual(0))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
         .build();
 
     let config1 = AudioConfig::<Hls>::for_stream(hls1)
@@ -381,10 +382,10 @@ async fn multi_track_shared_abr_with_cache() {
     let t1_v0_count = t1_segs.iter().filter(|s| s.variant == 0).count();
     assert!(
         t1_v0_count > 0,
-        "Track 1 Manual(0) should download V0 segments, got none"
+        "Track 1 Auto should download V0 segments, got none"
     );
 
-    info!("=== Step 2: Track 2 Manual(1) ===");
+    info!("=== Step 2: Manual(1) → Track 2 ===");
 
     let bus2 = EventBus::new(8192);
     let collector2 = EventCollector::new(&bus2);
