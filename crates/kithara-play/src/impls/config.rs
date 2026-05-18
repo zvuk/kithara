@@ -216,70 +216,72 @@ impl ResourceConfig {
 
     /// Convert into an `AudioConfig<File>`.
     pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
-        let (file_src, hint) = match self.src {
-            ResourceSrc::Url(url) => {
-                let h = derive_remote_file_hint(&url);
-                (FileSrc::Remote(url), h)
+        let (file_src, derived_hint) = match self.src {
+            ResourceSrc::Url(ref url) => {
+                (FileSrc::Remote(url.clone()), derive_remote_file_hint(url))
             }
-            ResourceSrc::Path(path) => {
-                let h = path
-                    .extension()
+            ResourceSrc::Path(ref path) => (
+                FileSrc::Local(path.clone()),
+                path.extension()
                     .and_then(|e| e.to_str())
-                    .map(str::to_lowercase);
-                (FileSrc::Local(path), h)
-            }
+                    .map(str::to_lowercase),
+            ),
         };
-
-        let dl = self
+        let store = StoreOptions::builder()
+            .cache_dir(self.store.cache_dir.clone())
+            .maybe_flush_hub(
+                self.flush_hub
+                    .clone()
+                    .or_else(|| self.store.flush_hub.clone()),
+            )
+            .build();
+        let downloader = self
             .downloader
+            .clone()
             .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
-        let mut store = self.store;
-        if let Some(hub) = self.flush_hub {
-            store.flush_hub = Some(hub);
-        }
-        let cancel_for_audio = self.cancel.clone();
         let file_config = FileConfig::for_src(file_src)
             .store(store)
-            .downloader(dl)
+            .downloader(downloader)
             .maybe_look_ahead_bytes(self.look_ahead_bytes)
-            .maybe_headers(self.headers)
-            .maybe_name(self.name)
+            .maybe_headers(self.headers.clone())
+            .maybe_name(self.name.clone())
             .maybe_events(self.bus.clone())
-            .maybe_cancel(self.cancel)
+            .maybe_cancel(self.cancel.clone())
             .build();
-        let mut config = AudioConfig::<kithara_file::File>::new(file_config);
-        config.cancel = cancel_for_audio;
-        config.hint = self.hint.or(hint);
-        config.byte_pool = self.byte_pool;
-        config.pcm_pool = self.pcm_pool;
-        config.host_sample_rate = self.host_sample_rate;
-        config.resampler_quality = self.resampler_quality;
-        config.preload_chunks = self.preload_chunks;
-        config.decoder_backend = self.decoder_backend;
-        config.playback_rate = self.playback_rate;
-        config.worker = self.worker;
-        config.gapless_mode = self.gapless_mode;
-
-        config
+        AudioConfig::<kithara_file::File>::for_stream(file_config)
+            .maybe_cancel(self.cancel)
+            .maybe_hint(self.hint.or(derived_hint))
+            .maybe_byte_pool(self.byte_pool)
+            .maybe_pcm_pool(self.pcm_pool)
+            .maybe_host_sample_rate(self.host_sample_rate)
+            .resampler_quality(self.resampler_quality)
+            .preload_chunks(self.preload_chunks)
+            .decoder_backend(self.decoder_backend)
+            .maybe_playback_rate(self.playback_rate)
+            .maybe_worker(self.worker)
+            .gapless_mode(self.gapless_mode)
+            .build()
     }
 
     /// Convert into an `AudioConfig<Hls>`.
     pub(crate) fn into_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
         let url = match self.src {
-            ResourceSrc::Url(url) => url,
-            ResourceSrc::Path(p) => {
+            ResourceSrc::Url(ref url) => url.clone(),
+            ResourceSrc::Path(ref p) => {
                 return Err(DecodeError::InvalidData(format!(
                     "HLS requires a URL, got local path: {}",
                     p.display()
                 )));
             }
         };
-
-        let mut store = self.store;
-        if let Some(hub) = self.flush_hub {
-            store.flush_hub = Some(hub);
-        }
-        let cancel_for_audio = self.cancel.clone();
+        let store = StoreOptions::builder()
+            .cache_dir(self.store.cache_dir.clone())
+            .maybe_flush_hub(
+                self.flush_hub
+                    .clone()
+                    .or_else(|| self.store.flush_hub.clone()),
+            )
+            .build();
         let hls_config = HlsConfig::for_url(url)
             .store(store)
             .keys(self.keys)
@@ -290,23 +292,21 @@ impl ResourceConfig {
             .maybe_name(self.name)
             .maybe_base_url(self.hls_base_url)
             .maybe_events(self.bus.clone())
-            .maybe_cancel(self.cancel)
+            .maybe_cancel(self.cancel.clone())
             .build();
-
-        let mut config = AudioConfig::<kithara_hls::Hls>::new(hls_config);
-        config.cancel = cancel_for_audio;
-        config.hint = self.hint;
-        config.byte_pool = self.byte_pool;
-        config.pcm_pool = self.pcm_pool;
-        config.host_sample_rate = self.host_sample_rate;
-        config.resampler_quality = self.resampler_quality;
-        config.preload_chunks = self.preload_chunks;
-        config.decoder_backend = self.decoder_backend;
-        config.playback_rate = self.playback_rate;
-        config.worker = self.worker;
-        config.gapless_mode = self.gapless_mode;
-
-        Ok(config)
+        Ok(AudioConfig::<kithara_hls::Hls>::for_stream(hls_config)
+            .maybe_cancel(self.cancel)
+            .maybe_hint(self.hint)
+            .maybe_byte_pool(self.byte_pool)
+            .maybe_pcm_pool(self.pcm_pool)
+            .maybe_host_sample_rate(self.host_sample_rate)
+            .resampler_quality(self.resampler_quality)
+            .preload_chunks(self.preload_chunks)
+            .decoder_backend(self.decoder_backend)
+            .maybe_playback_rate(self.playback_rate)
+            .maybe_worker(self.worker)
+            .gapless_mode(self.gapless_mode)
+            .build())
     }
 }
 
