@@ -208,7 +208,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 /// random → position consistency. Isolates track-specific regressions
 /// (DRM 403, MP3 seek-near-end hang, position drift).
 #[kithara::test(tokio)]
-#[ignore]
+#[ignore = "requires silvercomet.top real network — run with --include-ignored"]
 #[case::silvercomet_mp3_symphonia(
     "https://stream.silvercomet.top/track.mp3",
     42,
@@ -606,7 +606,7 @@ where
 /// so DRM regressions surface as a list instead of killing the whole
 /// test at the first bad entry.
 #[kithara::test(tokio)]
-#[ignore]
+#[ignore = "requires AppConfig::DEFAULT_TRACKS real-network URLs (incl. silvercomet + DRM) — run with --include-ignored"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
