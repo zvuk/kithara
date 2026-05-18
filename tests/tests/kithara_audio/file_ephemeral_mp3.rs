@@ -177,12 +177,10 @@ async fn audio_file_mp3_decodes_with_duration(
                 .build(),
         )
         .build();
-    let mut config = AudioConfig::<File>::for_stream(file_config)
+    let config = AudioConfig::<File>::for_stream(file_config)
         .decoder_backend(backend)
+        .maybe_hint(hint.map(str::to_owned))
         .build();
-    if let Some(h) = hint {
-        config.hint = Some(h.to_string());
-    }
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .unwrap_or_else(|e| panic!("probe failed for path={path} hint={hint:?}: {e}"));

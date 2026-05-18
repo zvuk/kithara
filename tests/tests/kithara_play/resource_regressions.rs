@@ -1551,7 +1551,7 @@ async fn player_mp3_duration_matches_app_flow(
         .store(store)
         .decoder_backend(backend)
         .build();
-    player.prepare_config(&mut config);
+    config = player.prepare_config(config);
 
     let resource = Resource::new(config)
         .await

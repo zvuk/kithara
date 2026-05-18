@@ -185,10 +185,10 @@ impl AudioPlayer {
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
         let cancel = CancellationToken::new(); // kithara:cancel:owner
-        let mut player_config = PlayerConfig::builder()
+        let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
+            .cancel(cancel.clone())
             .build();
-        player_config.cancel = Some(cancel.clone());
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);
         let net = default_net_options();

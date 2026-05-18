@@ -51,13 +51,12 @@ impl Loader {
     /// Both paths finish with `PlayerImpl::prepare_config` so worker /
     /// sample-rate / runtime / default bus are injected.
     pub(crate) fn build_config(&self, source: TrackSource) -> Result<ResourceConfig, QueueError> {
-        let mut config = match source {
+        let config = match source {
             TrackSource::Uri(url) => ResourceConfig::new(&url)
                 .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
             TrackSource::Config(boxed) => *boxed,
         };
-        self.player.prepare_config(&mut config);
-        Ok(config)
+        Ok(self.player.prepare_config(config))
     }
 
     /// Load a [`Resource`] for the given track. Caller is responsible for

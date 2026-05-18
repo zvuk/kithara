@@ -561,7 +561,7 @@ async fn create_resource_with_encoding(
         .expect("valid HLS master URL")
         .store(store)
         .build();
-    player.prepare_config(&mut config);
+    config = player.prepare_config(config);
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for gapless e2e fixture");

@@ -130,7 +130,7 @@ async fn make_signal_resource(
         .expect("valid signal fixture URL")
         .store(StoreOptions::new(cache_dir))
         .build();
-    player.prepare_config(&mut config);
+    config = player.prepare_config(config);
 
     Resource::new(config)
         .await

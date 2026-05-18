@@ -720,17 +720,22 @@ impl PlayerImpl {
     /// the player's decode thread and resampler is pre-initialised with
     /// the correct ratio. Callers that want a shared HTTP pool /
     /// tokio runtime must build their own [`Downloader`] (with an
-    /// explicit runtime handle if needed) and pass it via
-    /// [`ResourceConfig::with_downloader`].
-    pub fn prepare_config(&self, config: &mut super::config::ResourceConfig) {
-        config.worker = Some(self.engine.worker().clone());
-        config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
-        config.gapless_mode = self.config.gapless_mode;
-        if config.bus.is_none() {
-            config.bus = Some(self.bus.scoped());
-        }
-        if config.cancel.is_none() {
-            config.cancel = Some(self.cancel.child_token());
+    /// explicit runtime handle if needed) and attach it via
+    /// [`ResourceConfig::for_src`] before passing the config in.
+    #[must_use]
+    pub fn prepare_config(
+        &self,
+        config: super::config::ResourceConfig,
+    ) -> super::config::ResourceConfig {
+        let bus = config.bus.or_else(|| Some(self.bus.scoped()));
+        let cancel = config.cancel.or_else(|| Some(self.cancel.child_token()));
+        super::config::ResourceConfig {
+            worker: Some(self.engine.worker().clone()),
+            host_sample_rate: std::num::NonZeroU32::new(self.engine.master_sample_rate()),
+            gapless_mode: self.config.gapless_mode,
+            bus,
+            cancel,
+            ..config
         }
     }
 
@@ -1220,7 +1225,7 @@ mod tests {
         let mut config = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
             .expect("BUG: valid resource config");
 
-        player.prepare_config(&mut config);
+        config = player.prepare_config(config);
 
         assert_eq!(config.gapless_mode, GaplessMode::Disabled);
         assert!(
@@ -1235,7 +1240,7 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
             .expect("BUG: valid resource config");
-        player.prepare_config(&mut rc);
+        rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child_token();
@@ -1257,7 +1262,7 @@ mod tests {
         });
         let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
             .expect("BUG: valid resource config");
-        player.prepare_config(&mut rc);
+        rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child_token();
