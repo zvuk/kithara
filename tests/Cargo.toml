@@ -25,7 +25,7 @@ kithara-events = { workspace = true }
 kithara-hls = { workspace = true, features = ["probe"] }
 kithara-queue = { workspace = true, features = ["probe"] }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 rkyv = { workspace = true }
 kithara-net = { workspace = true, features = ["mock", "probe"] }
 kithara-platform = { workspace = true }
@@ -56,6 +56,10 @@ serde_json = { workspace = true }
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }
 cbc = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
 
 # Misc
 futures = { workspace = true }

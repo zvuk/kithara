@@ -1,10 +1,11 @@
 use std::{io::Cursor, time::Duration};
 
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_integration_tests::create_test_wav;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-use kithara_test_utils::ensure_silence_1s_alac_m4a;
-use kithara_test_utils::{create_test_wav, kithara};
+use kithara_integration_tests::ensure_silence_1s_alac_m4a;
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_test_utils::kithara;
 
 struct Consts;
 
@@ -31,10 +32,8 @@ impl Backend {
     }
 
     fn make_mp3(self) -> Box<dyn Decoder> {
-        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/test.mp3"
-        ));
+        const TEST_MP3_BYTES: &[u8] =
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/test.mp3"));
         let info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
         self.make_decoder(TEST_MP3_BYTES.to_vec(), &info)
     }

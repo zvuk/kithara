@@ -9,11 +9,11 @@ use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource};
 use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
+use kithara_integration_tests::{TestTempDir, cancel_token, temp_dir};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]

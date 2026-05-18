@@ -66,7 +66,7 @@ mock = []
 [dev-dependencies]
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
 kithara-audio = { workspace = true, features = ["probe"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

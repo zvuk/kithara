@@ -2,7 +2,7 @@ use std::{io::Cursor, num::NonZeroU32};
 
 use kithara::{decode::probe_mp4_gapless, platform::time::Duration};
 use kithara_encode::codec::AudioCodec;
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,

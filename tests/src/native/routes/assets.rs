@@ -12,8 +12,6 @@ pub(crate) fn router() -> Router<Arc<TestServerState>> {
 pub(crate) fn assets_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("parent of kithara-test-utils")
-        .parent()
-        .expect("repo root")
+        .expect("repo root from tests/")
         .join("assets")
 }

@@ -46,22 +46,19 @@ pub trait IntoProbeArg: Copy {
     }
 }
 
-/// Generate a round-trippable [`IntoProbeArg`] impl for an integer type
-/// whose `as u64` / `as Self` cast is the canonical wire shape.
-/// `as` casts are well-defined for all integer-to-integer in Rust:
-/// signed values round-trip via two's complement, unsigned via zero
-/// extension. Each scalar `IntoProbeArg` impl below is exactly one
-/// `impl_int_probe_arg!(...)` line — saves the eight-line per-type
-/// repetition the trait would otherwise demand.
+/// Generate a round-trippable [`IntoProbeArg`] impl for an integer type.
+/// Wire shape is `u64`; `AsPrimitive` reproduces the `as`-cast semantics
+/// (zero-extension for unsigned, two's-complement round-trip for signed)
+/// without tripping clippy's truncation/sign-loss lints.
 macro_rules! impl_int_probe_arg {
     ($($ty:ty),* $(,)?) => {
         $(
             impl IntoProbeArg for $ty {
                 fn into_probe_arg(self) -> u64 {
-                    self as u64
+                    num_traits::AsPrimitive::<u64>::as_(self)
                 }
                 fn from_probe_arg(packed: u64) -> Self {
-                    packed as $ty
+                    num_traits::AsPrimitive::<Self>::as_(packed)
                 }
             }
         )*

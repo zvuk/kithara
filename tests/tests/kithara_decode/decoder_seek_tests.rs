@@ -6,8 +6,8 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
 use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 
 #[kithara::fixture]
 async fn server() -> TestServerHelper {

@@ -5,14 +5,13 @@ use std::{sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;
 use kithara_events::{AbrMode, EventReceiver, TrackId, TrackStatus};
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
+    offline::OfflineSession, temp_dir,
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
-    temp_dir,
-};
 use tokio::time::sleep;
 use url::Url;
 

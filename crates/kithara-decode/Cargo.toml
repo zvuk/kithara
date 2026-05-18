@@ -61,7 +61,7 @@ mock = []
 [dev-dependencies]
 kithara-decode = { path = ".", default-features = false, features = ["symphonia"] }
 kithara-storage = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }
 
 [package.metadata.cargo-machete]

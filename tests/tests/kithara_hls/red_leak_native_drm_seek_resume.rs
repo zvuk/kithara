@@ -8,9 +8,9 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
 use kithara_platform::{thread::active_named_thread_count, time::sleep};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 

@@ -7,13 +7,13 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, Stream},
 };
-use kithara_integration_tests::offline::{OfflinePlayer, resource_from_reader};
-use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, PcmPattern},
+    offline::{OfflinePlayer, resource_from_reader},
     temp_dir,
 };
+use kithara_platform::time::{Duration, Instant, sleep};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::info;

@@ -74,7 +74,7 @@ impl TestServer {
     }
 }
 
-#[crate::kithara::fixture]
+#[::kithara_test_utils::kithara::fixture]
 pub async fn test_server() -> TestServer {
     TestServer::new().await
 }
@@ -428,7 +428,7 @@ impl PackagedTestServer {
     }
 }
 
-#[crate::kithara::fixture]
+#[::kithara_test_utils::kithara::fixture]
 pub async fn packaged_test_server() -> PackagedTestServer {
     PackagedTestServer::new().await
 }

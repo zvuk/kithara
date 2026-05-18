@@ -6,14 +6,13 @@ use std::{sync::Arc, time::Duration};
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    fixture_protocol::EncryptionRequest, kithara, offline::OfflineSession, temp_dir,
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
-    fixture_protocol::EncryptionRequest, kithara, temp_dir,
-};
 use tokio::time::{sleep, timeout};
 use url::Url;
 

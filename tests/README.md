@@ -67,7 +67,7 @@ The helper contract is token-backed but transparent to tests:
 - the server returns a UUID
 - helper APIs return ordinary `Url`s that already point at `/signal/{token}...` or `/stream/{token}...`
 
-Canonical fixture types (`kithara_test_utils::hls_fixture`):
+Canonical fixture types (`kithara_integration_tests::hls_server`):
 
 | Fixture | Purpose |
 |---------|---------|

@@ -6,8 +6,8 @@ use kithara::{
     stream::Stream,
 };
 use kithara_assets::StoreOptions;
+use kithara_integration_tests::{TestTempDir, Xorshift64, wav::create_test_wav};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, Xorshift64, wav::create_test_wav};
 use tempfile::NamedTempFile;
 use tracing::info;
 

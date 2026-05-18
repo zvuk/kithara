@@ -8,13 +8,13 @@ use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
 use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_platform::time::{Duration, Instant};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, SAW_PERIOD, TestServerHelper,
     fixture_protocol::{DataMode, InitMode},
     phase_distance, phase_from_f32,
 };
+use kithara_platform::time::{Duration, Instant};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use tracing::{info, warn};
 use url::Url;
 mod kithara {

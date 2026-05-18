@@ -7,15 +7,15 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
     fixture_protocol::DelayRule,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
+use kithara_platform::time::{Duration, Instant, sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 

@@ -46,7 +46,7 @@ kithara = { workspace = true, features = ["apple"] }
 
 [dev-dependencies]
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe", "test"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 
 [[bin]]
 name = "kithara"

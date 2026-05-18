@@ -62,7 +62,6 @@ fn locate_silence_wav() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest
         .parent()
-        .and_then(Path::parent)
         .map_or_else(|| manifest.clone(), Path::to_path_buf);
     let candidate = workspace_root.join("assets/silence_1s.wav");
     assert!(
@@ -113,8 +112,9 @@ fn try_ffmpeg(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
-    use crate::kithara;
 
     #[kithara::test]
     #[cfg_attr(

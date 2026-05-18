@@ -10,14 +10,14 @@ use std::{
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, DownloaderEvent, Event, HlsEvent, RequestId, TrackId, TrackStatus};
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
+    offline::OfflineSession, temp_dir,
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
-    probe_capture, temp_dir,
-};
+use kithara_test_utils::probe::capture as probe_capture;
 use tokio::time::sleep;
 use url::Url;
 

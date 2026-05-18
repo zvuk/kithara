@@ -20,10 +20,12 @@
 
 use kithara_audio::{Audio, AudioConfig, ReadOutcome};
 use kithara_events::{AudioEvent, Event, SeekEpoch, SeekLifecycleStage};
-use kithara_integration_tests::memory_source::{MemStream, MemStreamConfig, MemorySource};
+use kithara_integration_tests::{
+    create_test_wav, kithara,
+    memory_source::{MemStream, MemStreamConfig, MemorySource},
+};
 use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_stream::Stream;
-use kithara_test_utils::{create_test_wav, kithara};
 
 fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
     let wav = create_test_wav(samples, 44_100, 2);

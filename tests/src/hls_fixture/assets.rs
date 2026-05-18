@@ -7,8 +7,9 @@ use kithara::{
     net::{HttpClient, NetOptions},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle};
-use kithara_test_utils::TestTempDir;
 use tokio_util::sync::CancellationToken;
+
+use crate::TestTempDir;
 
 /// Wrapper for test assets with temp directory lifetime management
 pub struct TestAssets {

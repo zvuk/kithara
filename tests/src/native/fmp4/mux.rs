@@ -493,9 +493,9 @@ mod tests {
         EncodedAccessUnit, EncodedTrack,
         codec::{ContainerFormat, MediaInfo},
     };
+    use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::kithara;
 
     fn test_track() -> EncodedTrack {
         EncodedTrack {

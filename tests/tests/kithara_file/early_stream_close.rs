@@ -28,12 +28,12 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
+use kithara_integration_tests::{TestHttpServer, TestTempDir};
 use kithara_platform::{
     thread,
     time::{sleep, timeout},
     tokio::task::spawn_blocking,
 };
-use kithara_test_utils::{TestHttpServer, TestTempDir};
 use tokio_util::sync::CancellationToken;
 
 struct Consts;

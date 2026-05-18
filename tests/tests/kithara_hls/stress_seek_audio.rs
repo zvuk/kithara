@@ -7,12 +7,13 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_platform::tokio::task::spawn_blocking;
-use kithara_test_utils::{
-    TestTempDir, Xorshift64, create_wav_exact_bytes, phase_distance, phase_from_f32,
+use kithara_integration_tests::{
+    TestTempDir, Xorshift64, create_wav_exact_bytes,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+    phase_distance, phase_from_f32,
     signal_pcm::signal,
 };
+use kithara_platform::tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 

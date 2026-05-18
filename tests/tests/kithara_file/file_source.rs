@@ -13,8 +13,8 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestHttpServer, TestTempDir, temp_dir};
 use kithara_platform::tokio::task::spawn_blocking;
-use kithara_test_utils::{TestHttpServer, TestTempDir, temp_dir};
 
 struct Consts;
 impl Consts {

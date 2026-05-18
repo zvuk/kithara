@@ -8,9 +8,12 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist};
+use kithara_integration_tests::{
+    TestTempDir,
+    hls_server::abr::{AbrTestServer, master_playlist},
+    temp_dir,
+};
 use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 #[kithara::test(

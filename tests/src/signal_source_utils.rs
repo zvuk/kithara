@@ -61,8 +61,9 @@ pub fn detect_direction(samples: &[f32], channels: usize) -> SignalDirection {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
-    use crate::kithara;
 
     #[kithara::test]
     fn phase_helpers_work() {

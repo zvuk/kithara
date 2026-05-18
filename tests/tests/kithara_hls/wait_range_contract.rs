@@ -8,9 +8,11 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    TestTempDir, Xorshift64,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, Xorshift64};
 use tokio_util::sync::CancellationToken;
 
 struct Consts;

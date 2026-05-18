@@ -189,7 +189,7 @@ pub(crate) mod params {
     };
     use kithara_audio::AudioConfig;
     use kithara_encode::codec::AudioCodec;
-    use kithara_test_utils::{
+    use kithara_integration_tests::{
         HlsFixtureBuilder,
         fixture_protocol::{DelayRule, PackagedSignal},
     };
@@ -300,7 +300,7 @@ pub(crate) mod counters {
     };
 
     use kithara_platform::time::Instant;
-    use kithara_test_utils::probe_capture::{ProbeEvent, Recorder};
+    use kithara_test_utils::probe::capture::{ProbeEvent, Recorder};
 
     /// One `dispatch` USDT event lifted into typed form.
     #[derive(Clone, Debug)]
@@ -413,7 +413,7 @@ pub(crate) mod counters {
 pub(crate) mod diagnostics {
     use std::collections::BTreeMap;
 
-    use kithara_test_utils::probe_capture::Recorder;
+    use kithara_test_utils::probe::capture::Recorder;
 
     /// Probes printed in full — they describe the scheduler's decision
     /// stream end-to-end. Listed once, every firing is shown.
@@ -488,7 +488,7 @@ pub(crate) mod diagnostics {
 pub(crate) mod probe_contracts {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use kithara_test_utils::probe_capture::{ProbeEvent, Recorder};
+    use kithara_test_utils::probe::capture::{ProbeEvent, Recorder};
 
     /// Bucket events by `thread_id`, sorted by `thread_seq` within each
     /// bucket. Events without a `thread_id` (older probe expansions, or

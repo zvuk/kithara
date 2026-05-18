@@ -4,12 +4,12 @@ use kithara::{
     decode::{DecoderConfig, DecoderFactory},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_integration_tests::audio_fixture::EmbeddedAudio;
-use kithara_platform::time::Duration;
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, SignalDirection, SignalFormat, SignalSpec,
-    SignalSpecLength, TestServerHelper, detect_direction, fixture_protocol::PackagedSignal,
+    SignalSpecLength, TestServerHelper, audio_fixture::EmbeddedAudio, detect_direction,
+    fixture_protocol::PackagedSignal,
 };
+use kithara_platform::time::Duration;
 use reqwest::Client;
 
 #[kithara::test(

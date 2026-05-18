@@ -7,12 +7,14 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+};
 use kithara_platform::{
     time::Duration,
     tokio::task::{JoinHandle, spawn_blocking},
 };
-use kithara_test_utils::{TestServerHelper, TestTempDir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 

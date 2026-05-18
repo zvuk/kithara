@@ -53,11 +53,11 @@ pub(crate) fn make_runtime_builder(args: &TestArgs) -> TokenStream2 {
 pub(crate) fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
     if let Some(filter) = &args.tracing_filter {
         quote! {
-            ::kithara_test_utils::setup_tracing_with_filter(#filter);
+            ::kithara_test_utils::test::setup_tracing_with_filter(#filter);
         }
     } else {
         quote! {
-            ::kithara_test_utils::setup_tracing();
+            ::kithara_test_utils::test::setup_tracing();
         }
     }
 }

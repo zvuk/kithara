@@ -1,11 +1,4 @@
-#![cfg_attr(not(feature = "test"), allow(unreachable_pub))]
+mod tracing_init;
 
-#[cfg(not(feature = "test"))]
-mod noop;
-#[cfg(feature = "test")]
-mod real;
-
-#[cfg(not(feature = "test"))]
-pub use noop::*;
-#[cfg(feature = "test")]
-pub use real::*;
+pub use kithara_test_macros::test;
+pub use tracing_init::{init_tracing, setup_tracing, setup_tracing_with_filter};

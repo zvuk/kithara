@@ -41,5 +41,5 @@ mod layer;
 mod recorder;
 
 pub use event::ProbeEvent;
-pub(crate) use layer::probe_layer;
+pub use layer::probe_layer;
 pub use recorder::{Recorder, install};

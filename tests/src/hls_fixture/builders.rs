@@ -5,8 +5,9 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::hls_fixture::TestServer;
 use tokio_util::sync::CancellationToken;
+
+use crate::hls_server::TestServer;
 
 /// Builder for creating `Stream<Hls>` in integration tests.
 ///

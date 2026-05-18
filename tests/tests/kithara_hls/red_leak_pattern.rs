@@ -12,10 +12,9 @@ use kithara::{
     stream::Stream,
 };
 use kithara_abr::Abr;
-use kithara_integration_tests::hls_fixture::TestServer;
+use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_platform::time::{Duration, sleep};
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 /// A peer that behaves like `HlsPeer`: `poll_next` never returns

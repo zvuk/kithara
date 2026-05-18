@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -72,10 +72,8 @@ impl Recorder {
     /// completed).
     #[must_use]
     pub fn snapshot(&self) -> Vec<ProbeEvent> {
-        self.log
-            .lock()
-            .expect("probe log poisoned")
-            .iter()
+        let log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+        log.iter()
             .filter(|e| e.u64("install_id") == Some(self.install_id) && e.at >= self.start_at)
             .cloned()
             .collect()

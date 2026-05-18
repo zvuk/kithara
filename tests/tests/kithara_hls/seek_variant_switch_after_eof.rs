@@ -8,11 +8,12 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+    TestTempDir, cancel_token,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
     hls_test_helpers::pin_abr_variant,
+    temp_dir,
 };
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 

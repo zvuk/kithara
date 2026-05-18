@@ -9,13 +9,12 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::abr_fast;
+use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, temp_dir};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
-use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use tracing::info;
 
 /// Stress test: 20 seconds of rapid seeking after ABR switch.

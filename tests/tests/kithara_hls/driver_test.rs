@@ -10,15 +10,18 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::{
-    TestServer,
-    abr::{AbrTestServer, master_playlist},
+use kithara_integration_tests::{
+    TestTempDir, cancel_token,
+    hls_server::{
+        TestServer,
+        abr::{AbrTestServer, master_playlist},
+    },
+    temp_dir,
 };
 use kithara_platform::{
     time::sleep,
     tokio::task::{spawn, spawn_blocking},
 };
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 

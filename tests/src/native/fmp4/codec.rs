@@ -129,9 +129,9 @@ fn flac_dfla(codec_config: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use kithara_encode::codec::AudioCodec;
+    use kithara_test_utils::kithara;
 
     use super::CodecDescriptor;
-    use crate::kithara;
 
     #[kithara::test]
     fn flac_descriptor_emits_flac_sample_entry_and_dfla() {

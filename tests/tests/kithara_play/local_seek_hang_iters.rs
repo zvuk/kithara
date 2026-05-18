@@ -8,12 +8,13 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_decode::DecoderBackend;
-use kithara_integration_tests::offline::OfflinePlayer;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayer, temp_dir,
+};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
-use kithara_test_utils::{HlsFixtureBuilder, TestServerHelper, temp_dir};
 use url::Url;
 
 use crate::common::test_defaults::Consts as Shared;

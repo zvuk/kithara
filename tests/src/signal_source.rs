@@ -15,7 +15,8 @@ use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, ReadOutcome, Source, SourceError, SourcePhase, Stream,
     StreamResult, StreamType, Timeline,
 };
-use kithara_test_utils::{
+
+use crate::{
     signal_pcm::{SignalPcm, signal},
     wav::WavHeader,
 };
@@ -190,12 +191,10 @@ pub fn signal_stream<S: signal::SignalFn + Sync>(
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::{
-        kithara,
-        signal_pcm::{Finite, Infinite},
-    };
+    use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::signal_pcm::{Finite, Infinite};
 
     #[kithara::test]
     fn finite_eof() {

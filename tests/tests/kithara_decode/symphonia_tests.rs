@@ -1,12 +1,9 @@
 use std::{io::Cursor, time::Duration};
 
+use kithara_decode::{DecodeError, DecoderConfig, DecoderFactory};
+use kithara_integration_tests::create_test_wav;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-use kithara_test_utils::{create_test_wav, kithara};
-
-use crate::{
-    error::DecodeError,
-    factory::{DecoderConfig, DecoderFactory},
-};
+use kithara_test_utils::kithara;
 
 #[kithara::test]
 #[case(Some(ContainerFormat::Wav))]
@@ -18,10 +15,7 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
     let decoder = DecoderFactory::create_from_media_info(
         cursor,
         &media_info,
-        &DecoderConfig {
-            hint: Some("wav".into()),
-            ..Default::default()
-        },
+        &DecoderConfig::builder().hint("wav".into()).build(),
     );
     assert!(decoder.is_ok(), "decoder creation should succeed");
 

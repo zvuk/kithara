@@ -7,7 +7,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{
+use kithara_integration_tests::{
     PackagedTestServer, TestTempDir,
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
     temp_dir,

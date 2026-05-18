@@ -20,11 +20,11 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestTempDir, temp_dir};
 use kithara_platform::{
     time::{Duration, Instant},
     tokio::time::sleep,
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio::{net::TcpListener, task};
 use tokio_util::sync::CancellationToken;
 use url::Url;

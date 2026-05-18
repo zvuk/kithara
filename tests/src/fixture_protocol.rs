@@ -428,8 +428,9 @@ pub fn create_wav_init_header(sample_rate: u32, channels: u16) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
-    use crate::kithara;
 
     #[kithara::test]
     fn packaged_audio_codec_json_uses_snake_case_strings() {

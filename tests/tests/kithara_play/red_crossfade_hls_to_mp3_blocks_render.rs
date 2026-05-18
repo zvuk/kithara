@@ -32,10 +32,12 @@ impl Consts {
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     use kithara::assets::StoreOptions;
     use kithara_integration_tests::{
-        hls_fixture::{HlsTestServer, HlsTestServerConfig},
+        create_wav_exact_bytes,
+        hls_server::{HlsTestServer, HlsTestServerConfig},
         offline::OfflinePlayer,
+        signal_pcm::signal,
+        temp_dir,
     };
-    use kithara_test_utils::{create_wav_exact_bytes, signal_pcm::signal, temp_dir};
 
     const HLS_SEGMENT_COUNT: usize = 3;
     const HLS_SEGMENT_SIZE: usize = 200_000;

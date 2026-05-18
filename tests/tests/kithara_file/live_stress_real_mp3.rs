@@ -14,11 +14,11 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
 use kithara_platform::{
     time::{Instant, sleep},
     tokio::task::spawn,
 };
-use kithara_test_utils::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
 use tracing::info;
 
 struct Consts;

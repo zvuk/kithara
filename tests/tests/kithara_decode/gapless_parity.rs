@@ -8,7 +8,7 @@ use kithara::{
     stream::{AudioCodec as StreamAudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::codec::AudioCodec;
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };

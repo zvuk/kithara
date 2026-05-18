@@ -6,8 +6,8 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestServerHelper, TestTempDir};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestServerHelper, TestTempDir};
 use tracing::info;
 
 use crate::common::reader_helpers::{ReadLimit, read_for_concurrency_check};

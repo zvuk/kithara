@@ -79,7 +79,7 @@ impl WavHeader {
     #[must_use]
     pub fn new(sample_rate: u32, channels: u16, data_size: Option<usize>) -> Self {
         let bytes_per_sample: u16 = 2;
-        let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
+        let byte_rate = sample_rate * u32::from(channels) * u32::from(bytes_per_sample);
         let block_align = channels * bytes_per_sample;
 
         let (file_size_val, data_size_val) = data_size

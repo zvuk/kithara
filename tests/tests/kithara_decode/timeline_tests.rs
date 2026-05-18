@@ -81,8 +81,11 @@ mod hls_timeline {
         hls::{AbrMode, Hls, HlsConfig},
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     };
-    use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-    use kithara_test_utils::{TestTempDir, create_wav_exact_bytes, signal_pcm::signal};
+    use kithara_integration_tests::{
+        TestTempDir, create_wav_exact_bytes,
+        hls_server::{HlsTestServer, HlsTestServerConfig},
+        signal_pcm::signal,
+    };
     use tokio_util::sync::CancellationToken;
 
     use crate::common::test_defaults::SawWav;

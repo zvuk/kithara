@@ -7,7 +7,7 @@ use kithara::{
     drm::{DecryptContext, aes128_cbc_process_chunk},
     hls::{HlsError, HlsResult, KeyProcessorRegistry, KeyProcessorRule},
 };
-use kithara_integration_tests::hls_fixture::*;
+use kithara_integration_tests::{hls_fixture::*, hls_server::*};
 use kithara_platform::time::Duration;
 use url::Url;
 

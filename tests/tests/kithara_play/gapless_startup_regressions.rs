@@ -5,15 +5,15 @@ use std::{num::NonZeroU32, path::Path};
 use kithara_assets::StoreOptions;
 use kithara_decode::{GaplessMode, SilenceTrimParams};
 use kithara_encode::codec::AudioCodec;
-use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_play::{PlayerConfig, Resource, ResourceConfig};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{
         DelayRule, GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
     temp_dir,
 };
+use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_play::{PlayerConfig, Resource, ResourceConfig};
 
 use super::offline_player_harness::OfflinePlayerHarness;
 use crate::gapless_common::{

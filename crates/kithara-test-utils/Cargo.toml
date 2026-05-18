@@ -15,62 +15,28 @@ default = ["hang"]
 hang = ["dep:web-time", "dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
 probe = ["dep:usdt"]
-test = [
-    "dep:kithara-encode",
-    "dep:axum",
-    "dep:tower-http",
-    "dep:aes",
-    "dep:cbc",
-    "dep:reqwest",
-    "dep:tempfile",
-    "dep:serde",
-    "dep:serde_json",
-    "dep:tracing-subscriber",
-    "dep:tracing-wasm",
-    "dep:base64",
-    "dep:futures",
-    "dep:hex",
-    "dep:sha2",
-    "dep:thiserror",
-    "dep:tokio",
-    "dep:tokio-util",
-    "dep:uuid",
-    "tokio/net",
-]
 
 [dependencies]
 kithara-events = { workspace = true, features = ["downloader"] }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
+num-traits = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 url = { workspace = true }
 
 web-time = { workspace = true, optional = true }
 
-base64 = { workspace = true, optional = true }
-futures = { workspace = true, optional = true }
-hex = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
-tempfile = { workspace = true, optional = true }
-thiserror = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
-tokio-util = { workspace = true, optional = true }
-tracing-subscriber = { workspace = true, optional = true }
 unimock = { workspace = true, optional = true }
-uuid = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-tracing-wasm = { workspace = true, optional = true }
+tracing-wasm = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
-kithara-encode = { workspace = true, optional = true }
-axum = { workspace = true, optional = true }
-tower-http = { workspace = true, optional = true }
-aes = { workspace = true, optional = true }
-cbc = { workspace = true, optional = true }
 usdt = { workspace = true, optional = true }
 backtrace = { workspace = true }
+tokio = { workspace = true, features = ["time", "rt"] }
+tokio-util = { workspace = true }

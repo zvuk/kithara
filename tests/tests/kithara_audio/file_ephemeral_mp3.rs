@@ -17,8 +17,8 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestHttpServer, TestTempDir};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestHttpServer, TestTempDir};
 
 use crate::common::test_defaults::Consts;
 

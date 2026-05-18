@@ -11,19 +11,16 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    abr_fast,
-    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+    TestTempDir, abr_fast,
+    fixture_protocol::DelayRule,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+    signal_pcm::{Finite, SignalPcm, signal},
+    temp_dir,
+    wav::create_wav_header,
 };
 use kithara_platform::{
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
-};
-use kithara_test_utils::{
-    TestTempDir,
-    fixture_protocol::DelayRule,
-    signal_pcm::{Finite, SignalPcm, signal},
-    temp_dir,
-    wav::create_wav_header,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::info;

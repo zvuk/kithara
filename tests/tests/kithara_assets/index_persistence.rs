@@ -11,8 +11,8 @@ use kithara_assets::{
     AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey,
     index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
 };
+use kithara_integration_tests::{kithara, temp_dir};
 use kithara_storage::ResourceExt;
-use kithara_test_utils::{kithara, temp_dir};
 use rkyv::option::ArchivedOption;
 
 fn index_dir(root: &Path) -> PathBuf {
@@ -99,7 +99,7 @@ fn read_archived_availability(path: &Path, asset_root: &str, key: &str) -> Archi
     }
 }
 
-fn build_store(temp_dir: &kithara_test_utils::TestTempDir, asset_root: &str) -> AssetStore {
+fn build_store(temp_dir: &kithara_integration_tests::TestTempDir, asset_root: &str) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
         .asset_root(Some(asset_root))
@@ -114,7 +114,7 @@ fn build_store(temp_dir: &kithara_test_utils::TestTempDir, asset_root: &str) -> 
 /// commit → read lifecycle, checking every index file at every
 /// observable step.
 #[kithara::test(timeout(Duration::from_secs(5)))]
-fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::TestTempDir) {
+fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_tests::TestTempDir) {
     let root = temp_dir.path().to_path_buf();
     let asset_root = "persisted-asset";
     let pins = pins_path(&root);
@@ -232,7 +232,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_test_utils::Test
 /// fine-print — just asserts the three files appear in the spots the
 /// documented API promises they will.
 #[kithara::test(timeout(Duration::from_secs(3)))]
-fn index_files_land_under_root_dir_index(temp_dir: kithara_test_utils::TestTempDir) {
+fn index_files_land_under_root_dir_index(temp_dir: kithara_integration_tests::TestTempDir) {
     let root = temp_dir.path().to_path_buf();
     let store = build_store(&temp_dir, "basic-asset");
     let key = ResourceKey::new("one.bin");

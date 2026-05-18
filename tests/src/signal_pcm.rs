@@ -62,7 +62,7 @@ pub mod signal {
 
     impl SignalFn for SineWave {
         fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
-            let t = frame as f64 / sample_rate as f64;
+            let t = frame as f64 / f64::from(sample_rate);
             (f64::sin(2.0 * PI * self.0 * t) * 32767.0) as i16
         }
     }
@@ -95,8 +95,8 @@ pub mod signal {
         }
 
         fn phase(&self, frame: usize, sample_rate: u32) -> f64 {
-            let t = frame as f64 / sample_rate as f64;
-            let duration_secs = self.total_frames as f64 / sample_rate as f64;
+            let t = frame as f64 / f64::from(sample_rate);
+            let duration_secs = self.total_frames as f64 / f64::from(sample_rate);
             match self.mode {
                 SweepMode::Linear => {
                     let slope = (self.end_hz - self.start_hz) / (2.0 * duration_secs);
@@ -144,7 +144,7 @@ impl SignalLength {
     /// Create from a time duration and sample rate.
     #[must_use]
     pub fn from_duration(duration: Duration, sample_rate: u32) -> Self {
-        Self::from_frames((duration.as_secs_f64() * sample_rate as f64) as usize)
+        Self::from_frames((duration.as_secs_f64() * f64::from(sample_rate)) as usize)
     }
 
     /// Create from an exact frame count.
@@ -200,7 +200,7 @@ impl Finite {
     /// Create from a time duration and sample rate.
     #[must_use]
     pub fn from_duration(duration: Duration, sample_rate: u32) -> Self {
-        Self::new((duration.as_secs_f64() * sample_rate as f64) as usize)
+        Self::new((duration.as_secs_f64() * f64::from(sample_rate)) as usize)
     }
 
     /// Create from HLS-style segment layout (count, byte size per segment, channels).
@@ -430,7 +430,7 @@ mod tests {
     }
 
     fn estimate_frequency(samples: &[i16], sample_rate: u32) -> f64 {
-        let duration_secs = samples.len() as f64 / sample_rate as f64;
+        let duration_secs = samples.len() as f64 / f64::from(sample_rate);
         zero_crossings(samples) as f64 / (2.0 * duration_secs)
     }
 

@@ -11,8 +11,8 @@ use kithara::{
     assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey},
     storage::ResourceExt,
 };
+use kithara_integration_tests::temp_dir;
 use kithara_platform::time::Duration;
-use kithara_test_utils::temp_dir;
 
 /// Context for test processing callback.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]
@@ -35,7 +35,7 @@ fn create_xor_chunk_callback(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<Tes
 }
 
 fn build_test_processing_store(
-    temp_dir: &kithara_test_utils::TestTempDir,
+    temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
     process_fn: ProcessChunkFn<TestContext>,
 ) -> kithara::assets::AssetStore<TestContext> {
@@ -60,7 +60,7 @@ fn build_test_processing_store(
 }
 
 fn build_test_store_no_processing(
-    temp_dir: &kithara_test_utils::TestTempDir,
+    temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
 ) -> kithara::assets::AssetStore {
     #[cfg(not(target_arch = "wasm32"))]
@@ -85,7 +85,7 @@ fn build_test_store_no_processing(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDir) {
+fn processing_transforms_data_on_commit(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
     let store = build_test_processing_store(
@@ -120,7 +120,7 @@ fn processing_transforms_data_on_commit(temp_dir: kithara_test_utils::TestTempDi
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::TestTempDir) {
+fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
     let store = build_test_processing_store(
@@ -161,7 +161,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: kithara_test_utils::Te
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTempDir) {
+fn processing_partial_reads_work_correctly(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
     let store = build_test_processing_store(
@@ -200,7 +200,7 @@ fn processing_partial_reads_work_correctly(temp_dir: kithara_test_utils::TestTem
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempDir) {
+fn processing_read_past_end_returns_zero(temp_dir: kithara_integration_tests::TestTempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
     let store = build_test_processing_store(
@@ -229,7 +229,7 @@ fn processing_read_past_end_returns_zero(temp_dir: kithara_test_utils::TestTempD
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
-fn store_without_processing_works_normally(temp_dir: kithara_test_utils::TestTempDir) {
+fn store_without_processing_works_normally(temp_dir: kithara_integration_tests::TestTempDir) {
     let store = build_test_store_no_processing(&temp_dir, "no-processing");
 
     let key = ResourceKey::new("test.bin");

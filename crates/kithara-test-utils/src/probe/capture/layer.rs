@@ -7,8 +7,9 @@ use super::{event::ProbeEvent, recorder::SharedLog};
 
 /// Build a `tracing_subscriber` `Layer` that captures probe events
 /// into the shared log. Composed into the global subscriber by
-/// [`fixtures::init_tracing`](crate::fixtures::init_tracing).
-pub(crate) fn probe_layer<S>() -> impl Layer<S>
+/// [`crate::test::init_tracing`].
+#[must_use]
+pub fn probe_layer<S>() -> impl Layer<S>
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {

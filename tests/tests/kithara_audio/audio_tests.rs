@@ -7,9 +7,9 @@ use kithara_audio::{Audio, AudioConfig, ReadOutcome};
 use kithara_decode::{GaplessMode, SilenceTrimParams};
 use kithara_events::{AudioEvent, Event, EventReceiver, SeekEpoch, SeekLifecycleStage};
 use kithara_file::{FileConfig, FileSrc};
+use kithara_integration_tests::{TestTempDir, create_test_wav, kithara};
 use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
-use kithara_test_utils::{TestTempDir, create_test_wav, kithara};
 use tempfile::NamedTempFile;
 
 /// Polls `audio.read()` until it returns `Frames`, an unrelated `Eof`,

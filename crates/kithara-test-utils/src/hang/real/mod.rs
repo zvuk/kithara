@@ -14,5 +14,5 @@ pub(crate) use detector::{fallback_timeout, sanitize_label};
 #[cfg(test)]
 pub(crate) use platform::{parse_timeout_secs, resolve_dump_dir, write_dump};
 
-#[cfg(all(test, feature = "test"))]
+#[cfg(test)]
 mod tests;

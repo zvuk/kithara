@@ -6,14 +6,16 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    TestTempDir,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread;
 use kithara_platform::{
     time::{Duration, sleep},
     tokio::task::{JoinHandle, spawn, spawn_blocking},
 };
-use kithara_test_utils::TestTempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 

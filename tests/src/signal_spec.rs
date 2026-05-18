@@ -493,8 +493,9 @@ fn validate_pcm_budget(total_frames: usize, channels: u16) -> Result<(), SignalR
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
-    use crate::kithara;
 
     fn encode(json: &str) -> String {
         URL_SAFE_NO_PAD.encode(json)

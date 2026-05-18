@@ -141,7 +141,6 @@ mod tests {
     use super::*;
     use crate::traits::AudioEffect;
 
-    /// Minimal pass-through effect for testing.
     struct PassthroughEffect;
 
     impl AudioEffect for PassthroughEffect {

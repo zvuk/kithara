@@ -22,8 +22,8 @@ use futures::{StreamExt, stream};
 use kithara::net::{
     Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy, TimeoutNet,
 };
+use kithara_integration_tests::TestHttpServer;
 use kithara_platform::time::sleep;
-use kithara_test_utils::TestHttpServer;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 

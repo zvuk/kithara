@@ -8,8 +8,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_decode::DecoderBackend;
-use kithara_integration_tests::offline::OfflinePlayer;
-use kithara_test_utils::{PackagedTestServer, fixture_protocol::DelayRule, temp_dir};
+use kithara_integration_tests::{
+    PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
+};
 use tokio::time::sleep;
 
 use crate::common::test_defaults::Consts as Shared;
