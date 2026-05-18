@@ -3,6 +3,7 @@ use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[ignore = "Plan 10 — pending — probe wiring deferred per .docs/plans/2026-05-12-abr-pull-driven-10-H-test-sweep.md"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),

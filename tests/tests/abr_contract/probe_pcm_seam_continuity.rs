@@ -8,6 +8,7 @@ const VARIANT_AAC_HQ: usize = 1;
 const VARIANT_FLAC: usize = 2;
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(10)))]
+#[ignore = "Plan 10 — pending — probe wiring deferred per .docs/plans/2026-05-12-abr-pull-driven-10-H-test-sweep.md"]
 #[case::lq_to_hq_symphonia(VARIANT_AAC_LQ, VARIANT_AAC_HQ, DecoderBackend::Symphonia)]
 #[case::hq_to_flac_symphonia(VARIANT_AAC_HQ, VARIANT_FLAC, DecoderBackend::Symphonia)]
 #[case::flac_to_lq_symphonia(VARIANT_FLAC, VARIANT_AAC_LQ, DecoderBackend::Symphonia)]

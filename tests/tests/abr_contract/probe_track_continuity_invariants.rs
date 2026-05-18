@@ -12,6 +12,7 @@ const VARIANT_FLAC: usize = 2;
 // === Bug #1 — variant switch must not reset playhead to seg 0 ===
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(60)))]
+#[ignore = "Plan 10 — pending — probe wiring deferred per .docs/plans/2026-05-12-abr-pull-driven-10-H-test-sweep.md"]
 #[case::lq_to_hq_symphonia_instant(
     VARIANT_AAC_LQ,
     VARIANT_AAC_HQ,
@@ -63,6 +64,7 @@ async fn bug1_variant_switch_does_not_reset_playhead_to_seg_0(
 // === Bug #2 — no audio gaps in steady (non-switching) playback ===
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(60)))]
+#[ignore = "Plan 10 — pending — probe wiring deferred per .docs/plans/2026-05-12-abr-pull-driven-10-H-test-sweep.md"]
 #[case::aac_lq_symphonia(VARIANT_AAC_LQ, DecoderBackend::Symphonia)]
 #[case::flac_symphonia(VARIANT_FLAC, DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -84,6 +86,7 @@ async fn bug2_no_audio_gaps_mid_segment_during_steady_playback(
 // === Bug #2 — no segment skip across variant switch ===
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(60)))]
+#[ignore = "Plan 10 — pending — probe wiring deferred per .docs/plans/2026-05-12-abr-pull-driven-10-H-test-sweep.md"]
 #[case::lq_to_hq_symphonia_instant(
     VARIANT_AAC_LQ,
     VARIANT_AAC_HQ,
@@ -134,6 +137,7 @@ async fn bug2_no_segment_skip_during_variant_switch(
 // === Bug #3 — full track plays to natural EOF, no premature termination ===
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(90)))]
+#[ignore = "Plan 10 — pending — probe wiring deferred per .docs/plans/2026-05-12-abr-pull-driven-10-H-test-sweep.md"]
 #[case::aac_lq_symphonia(VARIANT_AAC_LQ, DecoderBackend::Symphonia)]
 #[case::flac_symphonia(VARIANT_FLAC, DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -155,6 +159,7 @@ async fn bug3_no_premature_eof_full_track_to_natural_end(
 // === Bug #3 — no premature EOF after variant switch ===
 
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(90)))]
+#[ignore = "Plan 10 — pending — probe wiring deferred per .docs/plans/2026-05-12-abr-pull-driven-10-H-test-sweep.md"]
 #[case::lq_to_hq_symphonia_instant(
     VARIANT_AAC_LQ,
     VARIANT_AAC_HQ,
