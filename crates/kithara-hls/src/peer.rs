@@ -30,18 +30,18 @@ use crate::{coord::HlsCoord, variant::PlanCtx};
 
 struct HlsTrackState {
     coord: Arc<HlsCoord>,
-    eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
-    last_seek_epoch: u64,
     /// Reused from the parent [`HlsPeer`]: stores the reader's last-known
     /// segment index — read by [`Abr::progress`] and compared against the
     /// freshly resolved segment in `poll_next` to detect a boundary
     /// crossing. The initial value is set in [`HlsPeer::activate`].
     reader_segment: Arc<AtomicUsize>,
-    waker: Option<Waker>,
-    prefetch_budget: usize,
     /// Mirrors `HlsConfig::look_ahead_bytes` — capped idle prefetch
     /// budget threaded into every `PlanCtx` constructed for `dispatch`.
     look_ahead_bytes: Option<u64>,
+    waker: Option<Waker>,
+    eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
+    last_seek_epoch: u64,
+    prefetch_budget: usize,
 }
 
 /// HLS peer — one per track. Pre-init: `poll_next` returns Pending.
@@ -50,25 +50,25 @@ struct HlsTrackState {
 /// next batch of `FetchCmd`s (thin event router per spec).
 pub(crate) struct HlsPeer {
     abr: Arc<AbrState>,
-    /// Single source of truth for variant metadata visible to ABR
-    /// controller via [`Abr::variants()`] and to UI/FFI via the
-    /// `Source::current_variant()` chain. Populated once by
-    /// [`Self::set_abr_variants`] after the master + media playlists
-    /// have been parsed; never mutated again for the peer's lifetime.
-    variants: Mutex<Vec<VariantInfo>>,
-    reader_segment: Arc<AtomicUsize>,
-    state: Arc<Mutex<Option<HlsTrackState>>>,
     /// Reader→peer wake channel. The HLS `Source` fires this whenever it
     /// advances the byte cursor or completes a seek, so `poll_next` runs
     /// again without waiting for the next downloader-driven wakeup. Owned
     /// here (not on `HlsCoord`) because the wake mechanism is a property
     /// of the peer, not of shared state.
     reader_advanced: Arc<Notify>,
+    reader_segment: Arc<AtomicUsize>,
+    state: Arc<Mutex<Option<HlsTrackState>>>,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
     /// cancellation of work — fires from `teardown()` / `Drop`.
     /// // kithara:cancel:owner
     wake_signal: CancellationToken,
     pending_waker: Mutex<Option<Waker>>,
+    /// Single source of truth for variant metadata visible to ABR
+    /// controller via [`Abr::variants()`] and to UI/FFI via the
+    /// `Source::current_variant()` chain. Populated once by
+    /// [`Self::set_abr_variants`] after the master + media playlists
+    /// have been parsed; never mutated again for the peer's lifetime.
+    variants: Mutex<Vec<VariantInfo>>,
     timeline: Timeline,
 }
 
@@ -86,12 +86,6 @@ impl HlsPeer {
         }
     }
 
-    /// Shared `Notify` handle that the `Source` clones to wake `poll_next`
-    /// after every reader progress event.
-    pub(crate) fn reader_wake(&self) -> Arc<Notify> {
-        Arc::clone(&self.reader_advanced)
-    }
-
     pub(crate) fn activate(
         self: &Arc<Self>,
         coord: Arc<HlsCoord>,
@@ -102,18 +96,16 @@ impl HlsPeer {
         let reader_advanced = Arc::clone(&self.reader_advanced);
         let cancel = coord.cancel.clone();
 
-        // Initial queue arming for segment 0 (or the segment the reader
-        // is already positioned in). `rebuild` is the sole queue-filler.
         let initial_seg = coord
             .find_at_offset(coord.position())
             .map_or(0, |(idx, _, _)| idx);
         if let Some(active) = coord.active() {
             let plan_ctx = PlanCtx {
+                prefetch_budget,
+                look_ahead_bytes,
                 master_cancel: coord.cancel.clone(),
                 asset_store: Arc::clone(&coord.asset_store),
-                prefetch_budget,
                 seek_epoch: coord.timeline.seek_epoch(),
-                look_ahead_bytes,
             };
             active.rebuild(&plan_ctx, initial_seg);
         }
@@ -125,11 +117,11 @@ impl HlsPeer {
             *guard = Some(HlsTrackState {
                 coord,
                 eviction_rx,
+                prefetch_budget,
+                look_ahead_bytes,
                 last_seek_epoch: 0,
                 reader_segment: Arc::clone(&self.reader_segment),
                 waker: None,
-                prefetch_budget,
-                look_ahead_bytes,
             });
         }
 
@@ -157,6 +149,12 @@ impl HlsPeer {
                 }
             }
         });
+    }
+
+    /// Shared `Notify` handle that the `Source` clones to wake `poll_next`
+    /// after every reader progress event.
+    pub(crate) fn reader_wake(&self) -> Arc<Notify> {
+        Arc::clone(&self.reader_advanced)
     }
 
     pub(crate) fn set_abr_variants(&self, variants: Vec<VariantInfo>) {
@@ -215,10 +213,6 @@ impl Abr for HlsPeer {
     }
 
     fn wake(&self) {
-        // Wake `poll_next` so it runs `apply_boundary_crossing` and
-        // observes any pending decision written by the controller —
-        // critical when all segments are cached and the peer would
-        // otherwise stay parked indefinitely.
         self.reader_advanced.notify_one();
     }
 }
@@ -226,12 +220,6 @@ impl Abr for HlsPeer {
 impl Peer for HlsPeer {
     #[kithara::probe]
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
-        // State-mutating phase: holds the `state` lock just long enough
-        // to apply seek/ABR/reader-advance bookkeeping and drain the
-        // eviction channel. Everything that only needs the (already
-        // Arc-shared) `HlsCoord` runs after the guard drops, so
-        // dispatching and eviction broadcasts do not contend on the
-        // peer-state mutex.
         let outcome = match self.poll_state_phase(cx) {
             PollPhase::NotActivated => return Poll::Pending,
             PollPhase::Terminated => return Poll::Ready(None),
@@ -278,8 +266,8 @@ enum PollPhase {
 struct PollOutcome {
     coord: Arc<HlsCoord>,
     ctx: PlanCtx,
-    seg_at_reader: u32,
     evictions: Vec<ResourceKey>,
+    seg_at_reader: u32,
 }
 
 impl HlsPeer {
@@ -305,72 +293,19 @@ impl HlsPeer {
         state.apply_seek_change(&coord, &ctx);
         let seg_at_reader = state.apply_boundary_crossing(&coord, &ctx);
         let evictions = state.drain_evictions();
-        // Release the state lock before `sync_abr_lock`: the AbrController's
-        // `unlock`/`lock` synchronously ticks the controller, which calls
-        // `HlsPeer::progress()` — and `progress` re-locks `self.state`,
-        // producing a reentrant parking_lot deadlock if we still hold it.
         drop(guard);
         coord.sync_abr_lock();
 
         PollPhase::Continue(PollOutcome {
             coord,
             ctx,
-            seg_at_reader,
             evictions,
+            seg_at_reader,
         })
     }
 }
 
 impl HlsTrackState {
-    fn plan_ctx(&self) -> PlanCtx {
-        PlanCtx {
-            master_cancel: self.coord.cancel.clone(),
-            asset_store: Arc::clone(&self.coord.asset_store),
-            prefetch_budget: self.prefetch_budget,
-            seek_epoch: self.coord.timeline.seek_epoch(),
-            look_ahead_bytes: self.look_ahead_bytes,
-        }
-    }
-
-    /// React to a confirmed seek-epoch bump: reposition the active
-    /// variant at the new target time and sync `reader_segment`.
-    /// Extracted from [`Self::apply_seek_change`] so the actual reset
-    /// work owns a USDT probe (`kithara_hls_probe::seek_epoch_reset`)
-    /// — integration tests key off this probe to detect scheduler
-    /// epoch resets without polling cycles flooding the wire.
-    #[kithara::probe(
-        seek_epoch = coord.timeline.seek_epoch(),
-        segment_index = self.reader_segment.load(Ordering::Acquire),
-        variant = coord.variant_index()
-    )]
-    fn seek_epoch_reset(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
-        if let Some(target) = coord.timeline.seek_target()
-            && let Some(active) = coord.active()
-            && let Some(seg) = active.rebuild_at_time(ctx, target)
-        {
-            self.reader_segment.store(seg as usize, Ordering::Release);
-        }
-    }
-
-    /// Detect a seek-epoch bump on the [`Timeline`] and delegate the
-    /// reset work to [`Self::seek_epoch_reset`] (which carries the
-    /// probe). Called every poll cycle; the equality short-circuit
-    /// keeps it free in the steady state.
-    ///
-    /// Collapses cross-variant byte-continuity layering on the new
-    /// seek epoch — a random seek into pre-switch territory would
-    /// otherwise pull bytes from a `history` variant whose data does
-    /// not match the variant ABR currently considers active.
-    fn apply_seek_change(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
-        let cur_seek = coord.timeline.seek_epoch();
-        if cur_seek == self.last_seek_epoch {
-            return;
-        }
-        self.last_seek_epoch = cur_seek;
-        coord.reset_for_seek();
-        self.seek_epoch_reset(coord, ctx);
-    }
-
     /// Resolve the reader's current segment from `coord.position()` and
     /// drive any pending ABR commit. The persistent variant queue (filled
     /// once by `rebuild`) advances the prefetch tail automatically as
@@ -408,9 +343,6 @@ impl HlsTrackState {
         } else {
             false
         };
-        // Non-adjacent boundary crossing (seek, byte-shift) leaves the
-        // prefetch queue covering the wrong window — rebuild reseeds it.
-        // Adjacent advance keeps the queue: rebuild would drop in-flight.
         let prev_u32 = u32::try_from(prev).unwrap_or(0);
         let discontinuous_advance = boundary_crossed && resolved != prev_u32.saturating_add(1);
         if discontinuous_advance
@@ -422,6 +354,25 @@ impl HlsTrackState {
         resolved
     }
 
+    /// Detect a seek-epoch bump on the [`Timeline`] and delegate the
+    /// reset work to [`Self::seek_epoch_reset`] (which carries the
+    /// probe). Called every poll cycle; the equality short-circuit
+    /// keeps it free in the steady state.
+    ///
+    /// Collapses cross-variant byte-continuity layering on the new
+    /// seek epoch — a random seek into pre-switch territory would
+    /// otherwise pull bytes from a `history` variant whose data does
+    /// not match the variant ABR currently considers active.
+    fn apply_seek_change(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
+        let cur_seek = coord.timeline.seek_epoch();
+        if cur_seek == self.last_seek_epoch {
+            return;
+        }
+        self.last_seek_epoch = cur_seek;
+        coord.reset_for_seek();
+        self.seek_epoch_reset(coord, ctx);
+    }
+
     /// Drain the eviction channel into a local buffer so the broadcast
     /// can run after the state lock drops.
     fn drain_evictions(&mut self) -> Vec<ResourceKey> {
@@ -430,5 +381,35 @@ impl HlsTrackState {
             out.push(key);
         }
         out
+    }
+
+    fn plan_ctx(&self) -> PlanCtx {
+        PlanCtx {
+            master_cancel: self.coord.cancel.clone(),
+            asset_store: Arc::clone(&self.coord.asset_store),
+            prefetch_budget: self.prefetch_budget,
+            seek_epoch: self.coord.timeline.seek_epoch(),
+            look_ahead_bytes: self.look_ahead_bytes,
+        }
+    }
+
+    /// React to a confirmed seek-epoch bump: reposition the active
+    /// variant at the new target time and sync `reader_segment`.
+    /// Extracted from [`Self::apply_seek_change`] so the actual reset
+    /// work owns a USDT probe (`kithara_hls_probe::seek_epoch_reset`)
+    /// — integration tests key off this probe to detect scheduler
+    /// epoch resets without polling cycles flooding the wire.
+    #[kithara::probe(
+        seek_epoch = coord.timeline.seek_epoch(),
+        segment_index = self.reader_segment.load(Ordering::Acquire),
+        variant = coord.variant_index()
+    )]
+    fn seek_epoch_reset(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
+        if let Some(target) = coord.timeline.seek_target()
+            && let Some(active) = coord.active()
+            && let Some(seg) = active.rebuild_at_time(ctx, target)
+        {
+            self.reader_segment.store(seg as usize, Ordering::Release);
+        }
     }
 }

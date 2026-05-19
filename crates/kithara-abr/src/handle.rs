@@ -47,23 +47,14 @@ impl AbrHandle {
         }
     }
 
-    /// Current variant index — `None` for peers without state.
-    #[must_use]
-    pub fn current_variant_index(&self) -> Option<usize> {
-        self.inner.state.as_ref().map(|s| s.current_variant_index())
-    }
-
-    /// Pull the live variant list from the peer. Returns an empty vec
-    /// when the peer has been dropped or has no variants — callers
-    /// should treat empty the same as "not yet registered".
-    #[must_use]
-    pub fn variants(&self) -> Vec<VariantInfo> {
-        self.inner
-            .controller
-            .peer_entry(self.inner.peer_id)
-            .and_then(|e| e.peer_weak.upgrade())
-            .map(|peer| peer.variants())
-            .unwrap_or_default()
+    /// Apply a decision previously obtained from
+    /// [`peek_pending_decision`](Self::peek_pending_decision). Mirrors
+    /// [`AbrState::apply_decision`]. No-op for stateless handles.
+    #[kithara::probe(decision)]
+    pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
+        if let Some(state) = self.inner.state.as_ref() {
+            state.apply_decision(decision, now);
+        }
     }
 
     /// Current variant's full metadata (bandwidth, name, codecs,
@@ -74,10 +65,10 @@ impl AbrHandle {
         self.variants().into_iter().find(|v| v.variant_index == idx)
     }
 
-    /// Current ABR mode (Auto / Manual). `None` for peers without state.
+    /// Current variant index — `None` for peers without state.
     #[must_use]
-    pub fn mode(&self) -> Option<AbrMode> {
-        self.inner.state.as_ref().map(|s| s.mode())
+    pub fn current_variant_index(&self) -> Option<usize> {
+        self.inner.state.as_ref().map(|s| s.current_variant_index())
     }
 
     #[must_use]
@@ -94,6 +85,44 @@ impl AbrHandle {
                 self.inner.controller.on_locked(self.inner.peer_id);
             }
         }
+    }
+
+    /// Current ABR mode (Auto / Manual). `None` for peers without state.
+    #[must_use]
+    pub fn mode(&self) -> Option<AbrMode> {
+        self.inner.state.as_ref().map(|s| s.mode())
+    }
+
+    /// Side-effects after HLS scheduler committed a variant switch:
+    /// emits `VariantApplied` via bus + schedules incoherence watchdog.
+    #[kithara::probe(current_before)]
+    pub fn notify_commit(
+        &self,
+        decision: AbrDecision,
+        current_before: usize,
+        reader_pt: Duration,
+        now: Instant,
+    ) {
+        let bus = self.inner.bus.lock_sync_read().clone();
+        if let Some(bus) = bus {
+            bus.publish(AbrEvent::VariantApplied {
+                from: current_before,
+                to: decision.target_variant_index,
+                reason: decision.reason,
+            });
+        }
+        self.inner
+            .controller
+            .schedule_incoherence_watch(self.inner.peer_id, reader_pt, now);
+    }
+
+    /// Read-only: peek at the pending boundary commit. Mirrors
+    /// [`AbrState::peek_pending_decision`].
+    #[must_use]
+    #[kithara::probe]
+    pub fn peek_pending_decision(&self) -> Option<AbrDecision> {
+        let state = self.inner.state.as_ref()?;
+        state.peek_pending_decision(state.current_variant_index())
     }
 
     #[must_use]
@@ -149,54 +178,25 @@ impl AbrHandle {
         }
     }
 
+    /// Pull the live variant list from the peer. Returns an empty vec
+    /// when the peer has been dropped or has no variants — callers
+    /// should treat empty the same as "not yet registered".
+    #[must_use]
+    pub fn variants(&self) -> Vec<VariantInfo> {
+        self.inner
+            .controller
+            .peer_entry(self.inner.peer_id)
+            .and_then(|e| e.peer_weak.upgrade())
+            .map(|peer| peer.variants())
+            .unwrap_or_default()
+    }
+
     /// Attach the track-scoped event bus. Stored directly on the handle;
     /// the controller reads it through the shared `Arc` when publishing.
     #[must_use]
     pub fn with_bus(self, bus: EventBus) -> Self {
         *self.inner.bus.lock_sync_write() = Some(bus);
         self
-    }
-
-    /// Read-only: peek at the pending boundary commit. Mirrors
-    /// [`AbrState::peek_pending_decision`].
-    #[must_use]
-    #[kithara::probe]
-    pub fn peek_pending_decision(&self) -> Option<AbrDecision> {
-        let state = self.inner.state.as_ref()?;
-        state.peek_pending_decision(state.current_variant_index())
-    }
-
-    /// Apply a decision previously obtained from
-    /// [`peek_pending_decision`](Self::peek_pending_decision). Mirrors
-    /// [`AbrState::apply_decision`]. No-op for stateless handles.
-    #[kithara::probe(decision)]
-    pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
-        if let Some(state) = self.inner.state.as_ref() {
-            state.apply_decision(decision, now);
-        }
-    }
-
-    /// Side-effects after HLS scheduler committed a variant switch:
-    /// emits `VariantApplied` via bus + schedules incoherence watchdog.
-    #[kithara::probe(current_before)]
-    pub fn notify_commit(
-        &self,
-        decision: AbrDecision,
-        current_before: usize,
-        reader_pt: Duration,
-        now: Instant,
-    ) {
-        let bus = self.inner.bus.lock_sync_read().clone();
-        if let Some(bus) = bus {
-            bus.publish(AbrEvent::VariantApplied {
-                from: current_before,
-                to: decision.target_variant_index,
-                reason: decision.reason,
-            });
-        }
-        self.inner
-            .controller
-            .schedule_incoherence_watch(self.inner.peer_id, reader_pt, now);
     }
 }
 
@@ -342,8 +342,6 @@ mod tests {
         assert_eq!(current.variant_index, 1);
         assert_eq!(current.bandwidth_bps, Some(512_000));
 
-        // Switching the state must surface live through the handle —
-        // no caching on the AbrHandle side.
         state.apply(
             &AbrDecision {
                 target_variant_index: 2,
@@ -372,10 +370,8 @@ mod tests {
                 variants: test_variants_3(),
             });
             let h = controller.register(&peer);
-            // Confirm baseline: pull returns 3 variants while peer alive.
             assert_eq!(h.variants().len(), 3);
             h
-            // `peer` Arc drops here.
         };
         assert!(
             handle.variants().is_empty(),

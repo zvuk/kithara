@@ -139,13 +139,13 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     /// terminal (or no slots at all), no work expected soon, so we
     /// park longer to keep CPU idle.
     const IDLE_TIMEOUT: Duration = Duration::from_millis(100);
+    /// Threshold for warning about slow `tick` calls.
+    const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
     /// Park budget used after `PassOutcome::Waiting` /
     /// `PassOutcome::Backpressured` — at least one slot is alive and
     /// likely to make progress shortly (source becomes ready,
     /// consumer drains the PCM ring), so re-check more aggressively.
     const WAITING_TIMEOUT: Duration = Duration::from_millis(10);
-    /// Threshold for warning about slow `tick` calls.
-    const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
 
     /// Spawn a new scheduler thread and return a handle.
     ///

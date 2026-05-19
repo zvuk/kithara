@@ -140,10 +140,6 @@ pub struct PlayerImpl {
     /// Engine drops last — worker shutdown happens after all tracks unregister.
     engine: EngineImpl,
     bus: EventBus,
-    current_slot: Mutex<Option<SlotId>>,
-    /// Items drop before engine — Audio tracks unregister from worker
-    /// while it is still alive.
-    items: Mutex<Vec<Option<QueuedResource>>>,
     /// Live `AbrHandle` of the resource currently in the processor.
     /// Populated by [`Self::enqueue_to_processor`] just before moving
     /// the resource out of `items`, and replaced on every subsequent
@@ -151,6 +147,10 @@ pub struct PlayerImpl {
     /// started — `items[idx]` is `None` then, so the queue-state lookup
     /// can't answer.
     current_abr_handle: Mutex<Option<kithara_abr::AbrHandle>>,
+    current_slot: Mutex<Option<SlotId>>,
+    /// Items drop before engine — Audio tracks unregister from worker
+    /// while it is still alive.
+    items: Mutex<Vec<Option<QueuedResource>>>,
     pending_next: Mutex<Option<PendingNext>>,
     status: Mutex<PlayerStatus>,
     pcm_pool: PcmPool,
@@ -442,10 +442,6 @@ impl PlayerImpl {
         let queued = items[index].take()?;
         let QueuedResource { item_id, resource } = queued;
 
-        // Stash the ABR handle before moving the resource into the
-        // processor — once it crosses into the worker thread, the
-        // queue-state lookup (`items[idx]`) returns `None` and the only
-        // surviving reference to the handle lives here.
         *self.current_abr_handle.lock_sync() = resource.abr_handle();
 
         let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);

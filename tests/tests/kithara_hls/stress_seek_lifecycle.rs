@@ -344,7 +344,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
         let mut read_attempts = 0u64;
         let max_read_attempts = 100_000u64;
 
-        #[allow(unused_assignments)]
+        #[expect(unused_assignments)]
         let mut final_saw_eof = false;
         loop {
             let (n, retries, saw_eof) = read_with_retry(&mut audio, &mut buf);

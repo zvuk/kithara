@@ -1,15 +1,3 @@
-//! One-shot warm-up for `CoreAudio`'s `_dispatch_once` lazy init.
-//!
-//! The first `AudioConverterNew(AAC, ...)` per process pulls
-//! `PlatformUtilities::IsInternalBuild()`, which transitively does a
-//! `CFBundleGetMainBundle()` directory scan of the test executable's
-//! folder. On a large or slow filesystem (huge `target/debug/deps`,
-//! external disk) that scan stalls for tens of seconds — long enough
-//! to blow a 20 s `LOAD_DEADLINE` on the first apple-decoder test.
-//!
-//! [`ensure_apple_decoder_warm`] forces that init in a controlled
-//! place (test setup), so per-test deadlines see only the second-and-
-//! later `AudioConverterNew` cost (microseconds).
 #![allow(unsafe_code)]
 
 use std::{ptr, sync::Once};

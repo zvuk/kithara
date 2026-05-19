@@ -68,6 +68,23 @@ impl KeyManager {
         }
     }
 
+    fn aes128_key_urls(media_playlists: &[crate::parsing::MediaPlaylist]) -> HashSet<Url> {
+        let mut urls: HashSet<Url> = HashSet::new();
+        for playlist in media_playlists {
+            for segment in &playlist.segments {
+                if let Some(ref seg_key) = segment.key
+                    && matches!(seg_key.method, crate::parsing::EncryptionMethod::Aes128)
+                    && let Some(ref key_info) = seg_key.key_info
+                    && let Ok(seg_url) = playlist.url.join(&segment.uri)
+                    && let Ok(key_url) = Self::resolve_key_url(key_info, &seg_url)
+                {
+                    urls.insert(key_url);
+                }
+            }
+        }
+        urls
+    }
+
     pub(crate) fn derive_iv(
         key_info: &crate::parsing::KeyInfo,
         sequence: u64,
@@ -78,38 +95,6 @@ impl KeyManager {
         let mut iv = [0u8; Self::AES_KEY_LEN];
         iv[Self::IV_SEQUENCE_OFFSET..].copy_from_slice(&sequence.to_be_bytes());
         iv
-    }
-
-    /// Build a [`DecryptContext`] from a pre-fetched key. Glues
-    /// `resolve_key_url` + `get_cached_key` + `derive_iv` into a single
-    /// sync step that runs after [`Self::get_raw_key`] has populated the
-    /// cache. Caller invokes this only for AES-128 segments — the
-    /// presence of [`KeyInfo`](crate::parsing::KeyInfo) means a key is
-    /// required, so every failure path here is a real error.
-    ///
-    /// # Errors
-    /// - [`HlsError::InvalidUrl`] when the key URI cannot be resolved.
-    /// - [`HlsError::KeyProcessing`] when the cached key is missing,
-    ///   empty, or not 16 bytes (AES-128 size).
-    pub(crate) fn resolve_decrypt_ctx(
-        &self,
-        key_info: &crate::parsing::KeyInfo,
-        segment_url: &Url,
-        sequence: u64,
-    ) -> HlsResult<DecryptContext> {
-        let key_url = Self::resolve_key_url(key_info, segment_url)?;
-        let key_bytes = self.get_cached_key(&key_url)?;
-        let key: [u8; Self::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
-            HlsError::KeyProcessing(format!(
-                "AES-128 key must be {} bytes, got {} for {key_url}",
-                Self::AES_KEY_LEN,
-                key_bytes.len()
-            ))
-        })?;
-        Ok(DecryptContext::new(
-            key,
-            Self::derive_iv(key_info, sequence),
-        ))
     }
 
     /// Convenience constructor from [`crate::config::KeyOptions`].
@@ -259,24 +244,6 @@ impl KeyManager {
         }
     }
 
-    pub(crate) fn resolve_key_url(
-        key_info: &crate::parsing::KeyInfo,
-        segment_url: &Url,
-    ) -> HlsResult<Url> {
-        let key_uri = key_info
-            .uri
-            .as_ref()
-            .ok_or_else(|| HlsError::InvalidUrl("missing key URI".to_string()))?;
-
-        if key_uri.starts_with("http://") || key_uri.starts_with("https://") {
-            Url::parse(key_uri).map_err(|e| HlsError::InvalidUrl(format!("Invalid key URL: {e}")))
-        } else {
-            segment_url
-                .join(key_uri)
-                .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve key URL: {e}")))
-        }
-    }
-
     /// Eagerly fetch every AES-128 key referenced by `media_playlists`,
     /// so [`Self::resolve_decrypt_ctx`] can serve them synchronously
     /// during variant construction. Cleartext playlists yield no
@@ -296,39 +263,36 @@ impl KeyManager {
         Ok(())
     }
 
-    fn aes128_key_urls(media_playlists: &[crate::parsing::MediaPlaylist]) -> HashSet<Url> {
-        let mut urls: HashSet<Url> = HashSet::new();
-        for playlist in media_playlists {
-            for segment in &playlist.segments {
-                if let Some(ref seg_key) = segment.key
-                    && matches!(seg_key.method, crate::parsing::EncryptionMethod::Aes128)
-                    && let Some(ref key_info) = seg_key.key_info
-                    && let Ok(seg_url) = playlist.url.join(&segment.uri)
-                    && let Ok(key_url) = Self::resolve_key_url(key_info, &seg_url)
-                {
-                    urls.insert(key_url);
-                }
-            }
-        }
-        urls
-    }
-
-    /// Resolve one [`DecryptContext`] per segment of `playlist`, using
-    /// keys already pre-fetched by [`Self::prefetch_aes128_keys`].
-    /// Cleartext segments map to `None`; AES-128 segments map to
-    /// `Some(ctx)`. A resolution failure on an encrypted segment is
-    /// logged and the segment falls back to `None` — the dispatch path
-    /// will surface a decoder error, which is preferable to silently
-    /// shipping garbage bytes.
-    pub(crate) fn resolve_variant_decrypt_contexts(
+    /// Build a [`DecryptContext`] from a pre-fetched key. Glues
+    /// `resolve_key_url` + `get_cached_key` + `derive_iv` into a single
+    /// sync step that runs after [`Self::get_raw_key`] has populated the
+    /// cache. Caller invokes this only for AES-128 segments — the
+    /// presence of [`KeyInfo`](crate::parsing::KeyInfo) means a key is
+    /// required, so every failure path here is a real error.
+    ///
+    /// # Errors
+    /// - [`HlsError::InvalidUrl`] when the key URI cannot be resolved.
+    /// - [`HlsError::KeyProcessing`] when the cached key is missing,
+    ///   empty, or not 16 bytes (AES-128 size).
+    pub(crate) fn resolve_decrypt_ctx(
         &self,
-        playlist: &crate::parsing::MediaPlaylist,
-    ) -> Vec<Option<DecryptContext>> {
-        playlist
-            .segments
-            .iter()
-            .map(|segment| self.resolve_segment_decrypt_ctx(&playlist.url, segment))
-            .collect()
+        key_info: &crate::parsing::KeyInfo,
+        segment_url: &Url,
+        sequence: u64,
+    ) -> HlsResult<DecryptContext> {
+        let key_url = Self::resolve_key_url(key_info, segment_url)?;
+        let key_bytes = self.get_cached_key(&key_url)?;
+        let key: [u8; Self::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
+            HlsError::KeyProcessing(format!(
+                "AES-128 key must be {} bytes, got {} for {key_url}",
+                Self::AES_KEY_LEN,
+                key_bytes.len()
+            ))
+        })?;
+        Ok(DecryptContext::new(
+            key,
+            Self::derive_iv(key_info, sequence),
+        ))
     }
 
     /// Resolve the [`DecryptContext`] for a variant's init segment.
@@ -359,6 +323,24 @@ impl KeyManager {
         }
     }
 
+    pub(crate) fn resolve_key_url(
+        key_info: &crate::parsing::KeyInfo,
+        segment_url: &Url,
+    ) -> HlsResult<Url> {
+        let key_uri = key_info
+            .uri
+            .as_ref()
+            .ok_or_else(|| HlsError::InvalidUrl("missing key URI".to_string()))?;
+
+        if key_uri.starts_with("http://") || key_uri.starts_with("https://") {
+            Url::parse(key_uri).map_err(|e| HlsError::InvalidUrl(format!("Invalid key URL: {e}")))
+        } else {
+            segment_url
+                .join(key_uri)
+                .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve key URL: {e}")))
+        }
+    }
+
     fn resolve_segment_decrypt_ctx(
         &self,
         media_url: &Url,
@@ -382,6 +364,24 @@ impl KeyManager {
                 None
             }
         }
+    }
+
+    /// Resolve one [`DecryptContext`] per segment of `playlist`, using
+    /// keys already pre-fetched by [`Self::prefetch_aes128_keys`].
+    /// Cleartext segments map to `None`; AES-128 segments map to
+    /// `Some(ctx)`. A resolution failure on an encrypted segment is
+    /// logged and the segment falls back to `None` — the dispatch path
+    /// will surface a decoder error, which is preferable to silently
+    /// shipping garbage bytes.
+    pub(crate) fn resolve_variant_decrypt_contexts(
+        &self,
+        playlist: &crate::parsing::MediaPlaylist,
+    ) -> Vec<Option<DecryptContext>> {
+        playlist
+            .segments
+            .iter()
+            .map(|segment| self.resolve_segment_decrypt_ctx(&playlist.url, segment))
+            .collect()
     }
 }
 

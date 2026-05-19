@@ -97,19 +97,19 @@ impl AppConfig {
             .build()
     }
 
+    /// Fluent alias to set `should_accept_invalid_certs`.
+    #[must_use]
+    pub fn with_should_accept_invalid_certs(mut self, value: bool) -> Self {
+        self.should_accept_invalid_certs = value;
+        self
+    }
+
     /// Override the default track list. Empty input is ignored.
     #[must_use]
     pub fn with_tracks(mut self, tracks: Vec<String>) -> Self {
         if !tracks.is_empty() {
             self.tracks = tracks;
         }
-        self
-    }
-
-    /// Fluent alias to set `should_accept_invalid_certs`.
-    #[must_use]
-    pub fn with_should_accept_invalid_certs(mut self, value: bool) -> Self {
-        self.should_accept_invalid_certs = value;
         self
     }
 }

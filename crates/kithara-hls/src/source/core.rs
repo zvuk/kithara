@@ -13,11 +13,6 @@ use kithara_stream::{
 
 use crate::{coord::HlsCoord, peer::HlsPeer, reader::HlsReaderHooks};
 
-// `Source::read_at` / `wait_range` advertise `&mut self`, but coord-side
-// state lives behind atomics + RwLock, so the implementations are `&self`
-// on `HlsCoord`. `delegate!` adapts the receiver mutability when the
-// target is reached through `Arc<HlsCoord>` (auto-deref to `&HlsCoord`).
-
 /// HLS source: thin façade over [`HlsCoord`].
 ///
 /// Owns the per-track event bus and the bound peer handle / wake. Every
@@ -30,6 +25,11 @@ use crate::{coord::HlsCoord, peer::HlsPeer, reader::HlsReaderHooks};
 /// and for the ABR handle the audio FSM consumes).
 pub struct HlsSource {
     coord: Arc<HlsCoord>,
+    /// Event bus the track was created against. Forwarded to
+    /// [`HlsReaderHooks`] in [`Source::take_reader_hooks`] so the
+    /// decoder's per-seek / per-chunk signals reach test subscribers
+    /// as `HlsEvent::ReaderSeek` / `HlsEvent::ReadProgress`.
+    bus: EventBus,
     hls_peer: Option<Arc<HlsPeer>>,
     peer_handle: Option<kithara_stream::dl::PeerHandle>,
     /// Reader→peer wake handle. Cloned from the owning [`HlsPeer`] once
@@ -37,21 +37,16 @@ pub struct HlsSource {
     /// [`HlsCoord::set_peer_wake`] so coord-side methods can wake the
     /// peer directly.
     peer_wake: Option<Arc<Notify>>,
-    /// Event bus the track was created against. Forwarded to
-    /// [`HlsReaderHooks`] in [`Source::take_reader_hooks`] so the
-    /// decoder's per-seek / per-chunk signals reach test subscribers
-    /// as `HlsEvent::ReaderSeek` / `HlsEvent::ReadProgress`.
-    bus: EventBus,
 }
 
 impl HlsSource {
     pub(crate) fn new(coord: Arc<HlsCoord>, bus: EventBus) -> Self {
         Self {
             coord,
+            bus,
             hls_peer: None,
             peer_handle: None,
             peer_wake: None,
-            bus,
         }
     }
 
@@ -76,6 +71,36 @@ impl Drop for HlsSource {
 }
 
 impl Source for HlsSource {
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.peer_handle.as_ref().map(|h| h.abr().clone())
+    }
+
+    fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn SegmentLayout>)
+    }
+
+    fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
+        self.abr_handle()?.current_variant()
+    }
+
+    fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
+        let notify = self.peer_wake.clone()?;
+        Some(Box::new(move || notify.notify_one()))
+    }
+
+    fn media_info(&self) -> Option<MediaInfo> {
+        Some(self.coord.media_info())
+    }
+
+    fn take_reader_hooks(&mut self) -> Option<SharedHooks> {
+        let hooks = HlsReaderHooks::new(
+            self.bus.clone(),
+            Arc::clone(&self.coord),
+            self.coord.timeline.seek_epoch_handle(),
+        );
+        Some(Arc::new(std::sync::Mutex::new(hooks)))
+    }
+
     delegate! {
         to self.coord {
             fn len(&self) -> Option<u64>;
@@ -100,35 +125,5 @@ impl Source for HlsSource {
             fn clear_variant_fence(&mut self);
             fn has_variant_change_pending(&self) -> bool;
         }
-    }
-
-    fn media_info(&self) -> Option<MediaInfo> {
-        Some(self.coord.media_info())
-    }
-
-    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.peer_handle.as_ref().map(|h| h.abr().clone())
-    }
-
-    fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
-        self.abr_handle()?.current_variant()
-    }
-
-    fn as_segment_layout(&self) -> Option<Arc<dyn SegmentLayout>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn SegmentLayout>)
-    }
-
-    fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
-        let notify = self.peer_wake.clone()?;
-        Some(Box::new(move || notify.notify_one()))
-    }
-
-    fn take_reader_hooks(&mut self) -> Option<SharedHooks> {
-        let hooks = HlsReaderHooks::new(
-            self.bus.clone(),
-            Arc::clone(&self.coord),
-            self.coord.timeline.seek_epoch_handle(),
-        );
-        Some(Arc::new(std::sync::Mutex::new(hooks)))
     }
 }

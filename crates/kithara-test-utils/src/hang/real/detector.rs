@@ -85,6 +85,19 @@ impl<C: HangDump> HangDetector<C> {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn handle_deadline_exceeded(&mut self) {
+        panic!(
+            "[HangDetector] `{}` no progress for {:?} — likely deadlock or hang",
+            self.label, self.timeout,
+        );
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn handle_deadline_exceeded(&mut self) {
+        self.deadline = Instant::now() + self.timeout;
+    }
+
     pub fn reset(&mut self) {
         self.deadline = Instant::now() + self.timeout;
         self.fired = false;
@@ -115,19 +128,6 @@ impl<C: HangDump> HangDetector<C> {
     pub fn with_dump_dir(mut self, dir: PathBuf) -> Self {
         self.dump_dir = Some(dir);
         self
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn handle_deadline_exceeded(&mut self) {
-        panic!(
-            "[HangDetector] `{}` no progress for {:?} — likely deadlock or hang",
-            self.label, self.timeout,
-        );
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn handle_deadline_exceeded(&mut self) {
-        self.deadline = Instant::now() + self.timeout;
     }
 }
 

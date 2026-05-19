@@ -193,7 +193,7 @@ fn pull_one_chunk(
 }
 
 /// RED scaffold for ABR variant-switch sub-problem #3
-/// (see project_hls_abr_variant_switch_init_range_bug).
+/// (see `project_hls_abr_variant_switch_init_range_bug`).
 ///
 /// `Fmp4SegmentDemuxer::open` hardcodes `next_byte = 0`. Production
 /// calls `apply_format_change` with `target_offset` equal to the
@@ -259,8 +259,6 @@ fn red_open_always_starts_at_layout_seg_0() {
             the parse_segment_frames panic. Add when implementing \
             the cursor-freshness contract."]
 fn red_cursor_byte_range_freezes_when_layout_size_grows() {
-    // Intentional placeholder. See the doc comment above for the
-    // contract and the TODO list for the fix author.
     panic!("RED scaffold — see doc comment");
 }
 

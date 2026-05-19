@@ -22,6 +22,12 @@ pub(crate) struct HlsReaderHooks {
     coord: Arc<HlsCoord>,
     seek_epoch_handle: Arc<AtomicU64>,
     bus: EventBus,
+    /// `(variant_index, segment_index)` of the last segment the
+    /// reader was observed in. A change between `on_chunk` calls
+    /// drives [`HlsEvent::SegmentReadStart`]; the same pair held
+    /// across a seek is intentionally treated as a no-op for the
+    /// boundary event (the seek itself was already announced).
+    last_segment: Option<(usize, usize)>,
     initial_seek_published: bool,
     /// Cursor at hooks-creation time. After a `Seek` failure the
     /// decoder may discard the seek outcome and resume at the
@@ -30,12 +36,6 @@ pub(crate) struct HlsReaderHooks {
     /// non-default `seek_epoch` even if `on_seek` never landed.
     initial_cursor: u64,
     last_cursor: u64,
-    /// `(variant_index, segment_index)` of the last segment the
-    /// reader was observed in. A change between `on_chunk` calls
-    /// drives [`HlsEvent::SegmentReadStart`]; the same pair held
-    /// across a seek is intentionally treated as a no-op for the
-    /// boundary event (the seek itself was already announced).
-    last_segment: Option<(usize, usize)>,
 }
 
 impl HlsReaderHooks {
@@ -77,6 +77,18 @@ impl HlsReaderHooks {
         });
     }
 
+    fn publish_initial_seek(&mut self, cursor: u64) {
+        if self.initial_seek_published {
+            return;
+        }
+        self.initial_seek_published = true;
+        let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
+        if seek_epoch == 0 {
+            return;
+        }
+        self.publish_seek(self.initial_cursor, cursor);
+    }
+
     fn publish_seek(&self, from: u64, to: u64) {
         let (variant, segment_index, byte_in_segment) = match self.coord.find_at_offset(to) {
             Some((seg, seg_start, _size)) => (
@@ -88,25 +100,13 @@ impl HlsReaderHooks {
         };
         let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
         self.bus.publish(HlsEvent::ReaderSeek {
-            from_offset: from,
-            to_offset: to,
             seek_epoch,
             variant,
             segment_index,
             byte_in_segment,
+            from_offset: from,
+            to_offset: to,
         });
-    }
-
-    fn publish_initial_seek(&mut self, cursor: u64) {
-        if self.initial_seek_published {
-            return;
-        }
-        self.initial_seek_published = true;
-        let seek_epoch = self.seek_epoch_handle.load(Ordering::Acquire);
-        if seek_epoch == 0 {
-            return;
-        }
-        self.publish_seek(self.initial_cursor, cursor);
     }
 }
 
@@ -131,10 +131,6 @@ impl DecoderHooks for HlsReaderHooks {
         };
         let from = self.last_cursor;
         self.last_cursor = to;
-        // Force a fresh `SegmentReadStart` on the first post-seek
-        // chunk even if the reader lands inside the same segment it
-        // was already in — subscribers key off this event to confirm
-        // the reader actually started consuming the seek target.
         self.last_segment = None;
         self.publish_seek(from, to);
     }

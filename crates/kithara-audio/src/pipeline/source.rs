@@ -203,7 +203,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     gapless: GaplessStage,
     emit: Option<Box<dyn Fn(AudioEvent) + Send>>,
     last_spec: Option<PcmSpec>,
-    shared_stream: SharedStream<T>,
     /// Lock-free wake callback resolved from
     /// [`Source::make_notify_fn`] at construction. Captures the source's
     /// peer-wake `Arc<Notify>` directly, so calling it never re-enters
@@ -212,6 +211,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `shared_stream.notify_waiting()` unsafe to call from inside the
     /// FSM (recursive mutex acquisition = stack overflow).
     peer_wake: Option<Box<dyn Fn() + Send + Sync>>,
+    shared_stream: SharedStream<T>,
     effects: Vec<Box<dyn AudioEffect>>,
     chunks_decoded: u64,
     total_samples: u64,
@@ -252,12 +252,12 @@ impl<T: StreamType> StreamAudioSource<T> {
             timeline,
             gapless_mode,
             gapless,
+            peer_wake,
             state: TrackState::Decoding,
             chunks_decoded: 0,
             total_samples: 0,
             last_spec: None,
             emit: None,
-            peer_wake,
         }
     }
 
@@ -329,13 +329,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                     .as_ref()
                     .and_then(|info| info.container)
             });
-        // `seek_anchor_alignment` runs on user seek, not as a format-
-        // change recovery — convert a typed `Err` (NotApplicable for
-        // file source, InitOrphaned for byte-shifted HLS variant) to
-        // "no init range usable here" so downstream `container_needs_init_resync`
-        // gate falls back to non-recreate path. The InitOrphaned case
-        // surfaces explicitly through `detect_format_change`'s own
-        // call site.
         let init_range = self.shared_stream.format_change_segment_range().ok();
         let init_offset = init_range.as_ref().map(|range| range.start);
         let is_init_bearing = target_container.is_some_and(container_needs_init_range);
@@ -687,9 +680,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                     Self::decode_panic_message(payload)
                 ))),
             };
-        // Phase R diagnostic: surface decoder Eof / Err once at the edge.
-        // Pending is hot-path and would flood — handled via the polled
-        // `has_variant_change_pending` check in `decode_next_chunk`.
         match &outcome {
             Ok(DecoderChunkOutcome::Eof) => {
                 debug!(
@@ -755,12 +745,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         else {
             return FormatChangeDetection::NoChange;
         };
-        // Pick the recovery anchor by source state: cross-codec recovery
-        // uses the init segment; byte-shifted same-codec / non-init-bearing
-        // sources fall through to the current segment boundary so the
-        // new decoder re-parses format markers from there. Two distinct
-        // strategies, not a fallback chain — neither is an error recovery
-        // for the other.
         let range = if let Ok(init) = self.shared_stream.format_change_segment_range() {
             init
         } else if let Some(current) = self.shared_stream.current_segment_range() {
@@ -1160,8 +1144,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         offset: u64,
         attempt: u8,
     ) {
-        // Phase R.1 diagnostic: see whether the FSM actually enters the
-        // RecreatingDecoder state when cross-codec ABR fires.
         debug!(
             ?cause,
             codec = ?media_info.codec,
@@ -1391,16 +1373,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                     }
                 }
                 Ok(DecoderChunkOutcome::Pending(_reason)) => {
-                    // Demuxers (Symphonia, …) absorb `IoError(VariantChangeError)`
-                    // from `Stream::read` as opaque retryable I/O and surface
-                    // only an opaque `Pending` to the decoder, so the
-                    // `Pending(VariantChange)` arm above never fires for
-                    // cross-codec switches. Without a polled check we'd
-                    // yield forever while the variant fence stays closed
-                    // waiting for a recreate that no Err/Pending(VC) ever
-                    // triggers. Source's `has_variant_change_pending` is
-                    // the explicit signal — kick recovery as if we'd seen
-                    // `Pending(VariantChange)` directly.
                     if self.shared_stream.has_variant_change_pending() {
                         match self.handle_variant_change(DecodeError::InvalidData(
                             "variant change signal without observable format transition".into(),
@@ -1458,27 +1430,6 @@ impl<T: StreamType> StreamAudioSource<T> {
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
-    /// Clear the seek-pending flag and wake the source's peer in one step.
-    ///
-    /// `Timeline::clear_seek_pending` only flips the atomic flag — it does
-    /// not wake anything. The HLS peer's `sync_abr_lock()` is invoked only
-    /// inside `poll_next`, so when every requested segment is cached and
-    /// the peer parks itself in `Poll::Pending`, the ABR lock acquired on
-    /// seek-initiate stays held indefinitely. Subsequent `set_mode(Manual)`
-    /// calls then hit `AbrReason::Locked` in `decide()` and silently fail
-    /// to commit — observed in app.log 2026-05-17 15:26:54..15:27:46.
-    ///
-    /// Notifying the source's waiter (`make_notify_fn` → `HlsCoord::wake_peer`)
-    /// after every seek-completion ensures the peer runs one more
-    /// `poll_next` cycle, which sees `is_seek_pending() == false` and
-    /// releases the ABR lock through `sync_abr_lock`.
-    fn finalize_seek_pending(&self, epoch: u64) {
-        self.timeline.clear_seek_pending(epoch);
-        if let Some(ref wake) = self.peer_wake {
-            wake();
-        }
-    }
-
     /// Apply a pending seek from the Timeline.
     ///
     /// Reads epoch/target from Timeline and resolves the seek mode.
@@ -1533,14 +1484,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
 
         self.shared_stream.set_seek_epoch(epoch);
-        // Resolve the anchor BEFORE clearing the variant fence: a
-        // concurrent ABR commit may have just bumped
-        // `variant_generation`, in which case `seek_time_anchor` must
-        // observe the new active variant — but readers must stay
-        // gated until we have committed to the resolved position.
-        // Clearing the fence first opens the gate for `v_new` while
-        // the anchor is still being computed against the snapshot we
-        // are about to apply.
         let anchor_result = self.shared_stream.seek_time_anchor(position);
         self.shared_stream.clear_variant_fence();
         self.timeline.complete_seek(epoch);
@@ -1620,17 +1563,32 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Clear the seek-pending flag and wake the source's peer in one step.
+    ///
+    /// `Timeline::clear_seek_pending` only flips the atomic flag — it does
+    /// not wake anything. The HLS peer's `sync_abr_lock()` is invoked only
+    /// inside `poll_next`, so when every requested segment is cached and
+    /// the peer parks itself in `Poll::Pending`, the ABR lock acquired on
+    /// seek-initiate stays held indefinitely. Subsequent `set_mode(Manual)`
+    /// calls then hit `AbrReason::Locked` in `decide()` and silently fail
+    /// to commit — observed in app.log 2026-05-17 15:26:54..15:27:46.
+    ///
+    /// Notifying the source's waiter (`make_notify_fn` → `HlsCoord::wake_peer`)
+    /// after every seek-completion ensures the peer runs one more
+    /// `poll_next` cycle, which sees `is_seek_pending() == false` and
+    /// releases the ABR lock through `sync_abr_lock`.
+    fn finalize_seek_pending(&self, epoch: u64) {
+        self.timeline.clear_seek_pending(epoch);
+        if let Some(ref wake) = self.peer_wake {
+            wake();
+        }
+    }
+
     /// Check whether the underlying source has data ready for a non-blocking
     /// decode. Returns `true` for `Ready`, `Eof`, or `Seeking` phases.
     fn source_is_ready(&self) -> bool {
         let pos = self.shared_stream.position();
         let lookahead_end = pos.saturating_add(Self::DEFAULT_READ_AHEAD_BYTES);
-        // Clamp the read-ahead window to the next segment boundary on
-        // segmented sources. Short HLS segments (a few `KiB`) otherwise
-        // let the 32 `KiB` window span into the *next* segment — a
-        // delayed neighbour then blocks gapless startup. For long
-        // segments the boundary is past `lookahead_end`, so the clamp
-        // is a no-op and behaviour matches the non-segmented default.
         let check_end = self
             .shared_stream
             .as_segment_layout()
@@ -1658,35 +1616,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn source_is_ready_for_boundary(&self, start: u64) -> bool {
         let end = self.boundary_end(start);
         self.source_ready_for_range(start..end)
-    }
-
-    /// Readiness for decoder recreation. When the source advertises a
-    /// **separate** init segment (CMAF `EXT-X-MAP` init box — typically
-    /// well under `DEFAULT_READ_AHEAD_BYTES`), the decoder factory's
-    /// probe only needs that init range to construct the codec; the
-    /// post-recreate `Seek` / `ApplySeek` / `Decode` action then
-    /// repositions via `decoder_seek_safe`. Gating on the init range
-    /// alone is required because after a backwards seek the HLS
-    /// scheduler emits segments around the reader byte cursor (past
-    /// `seg 0`) and never schedules `[0..DEFAULT_READ_AHEAD)`, which
-    /// produces the hang in `app.log` (2026-05-16 22:23 same-codec
-    /// V0→V2, 2026-05-17 09:08 cross-codec V3→V1).
-    ///
-    /// When the source has no separate init (raw containers like WAV,
-    /// where `format_change_segment_range` falls back to the full
-    /// `seg 0` byte range and is therefore much larger than the
-    /// read-ahead window), gating on `seg 0` is unsafe by the same
-    /// argument and we fall through to the `[offset..offset +
-    /// DEFAULT_READ_AHEAD)` slow path, whose window the scheduler
-    /// actively keeps in flight around the reader.
-    fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
-        if let Ok(init_range) = self.shared_stream.format_change_segment_range() {
-            let init_len = init_range.end.saturating_sub(init_range.start);
-            if init_len <= Self::DEFAULT_READ_AHEAD_BYTES {
-                return self.source_ready_for_range(init_range);
-            }
-        }
-        self.source_is_ready_for_boundary(recreate.offset)
     }
 
     fn source_phase_for_boundary(&self, start: u64) -> SourcePhase {
@@ -1717,6 +1646,35 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.shared_stream.phase_at(range),
             SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
         )
+    }
+
+    /// Readiness for decoder recreation. When the source advertises a
+    /// **separate** init segment (CMAF `EXT-X-MAP` init box — typically
+    /// well under `DEFAULT_READ_AHEAD_BYTES`), the decoder factory's
+    /// probe only needs that init range to construct the codec; the
+    /// post-recreate `Seek` / `ApplySeek` / `Decode` action then
+    /// repositions via `decoder_seek_safe`. Gating on the init range
+    /// alone is required because after a backwards seek the HLS
+    /// scheduler emits segments around the reader byte cursor (past
+    /// `seg 0`) and never schedules `[0..DEFAULT_READ_AHEAD)`, which
+    /// produces the hang in `app.log` (2026-05-16 22:23 same-codec
+    /// V0→V2, 2026-05-17 09:08 cross-codec V3→V1).
+    ///
+    /// When the source has no separate init (raw containers like WAV,
+    /// where `format_change_segment_range` falls back to the full
+    /// `seg 0` byte range and is therefore much larger than the
+    /// read-ahead window), gating on `seg 0` is unsafe by the same
+    /// argument and we fall through to the `[offset..offset +
+    /// DEFAULT_READ_AHEAD)` slow path, whose window the scheduler
+    /// actively keeps in flight around the reader.
+    fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
+        if let Ok(init_range) = self.shared_stream.format_change_segment_range() {
+            let init_len = init_range.end.saturating_sub(init_range.start);
+            if init_len <= Self::DEFAULT_READ_AHEAD_BYTES {
+                return self.source_ready_for_range(init_range);
+            }
+        }
+        self.source_is_ready_for_boundary(recreate.offset)
     }
 }
 
@@ -1763,15 +1721,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             if !self.apply_format_change(&recreate.media_info, recreate.offset) {
                 return Some(false);
             }
-            // Cross-codec recreate leaves the new decoder positioned at
-            // byte 0 (init prefix). Without an explicit time seek it
-            // would replay from segment 0 — but the user expects
-            // playback to continue at the current timeline position.
-            // Ask Symphonia to seek to `timeline.committed_position()`
-            // so its `MediaSourceStream` advances to the matching media
-            // offset on `v_new` (which `HlsCoord::commit_variant_switch`
-            // already pinned via `set_position(target_byte)` +
-            // `rebuild(target_seg)`).
             let target_time = self.timeline.committed_position();
             if !target_time.is_zero()
                 && let Err(e) = self.decoder_seek_safe(target_time)
@@ -2222,11 +2171,6 @@ fn resolve_recreate_offset<T: StreamType>(
     anchor_byte_offset: u64,
 ) -> Option<u64> {
     let needs_init = target_container.is_some_and(container_needs_init_range);
-    // `seek_anchor_alignment` runs on a user seek (not a typed
-    // recovery context) — InitOrphaned / NotApplicable here both
-    // collapse to "no init offset available at this site"; the
-    // invariant is surfaced from the audio FSM's
-    // `detect_format_change` call sites, not from this helper.
     let init_offset = shared
         .format_change_segment_range()
         .ok()

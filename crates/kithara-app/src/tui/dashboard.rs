@@ -34,11 +34,11 @@ fn count_to_u16(count: usize) -> u16 {
 /// using ratatui inline viewport. Stateless w.r.t. player data — every
 /// render reads from the [`UiState`] snapshot supplied by the caller.
 pub struct Dashboard {
-    colors: TuiPalette,
-    frame_count: u64,
     pub active_tab: Tab,
     pub selected_eq_band: usize,
     pub selected_setting_row: usize,
+    colors: TuiPalette,
+    frame_count: u64,
 }
 
 impl Dashboard {
@@ -90,7 +90,7 @@ impl Dashboard {
             Tab::Equalizer => 10,
             Tab::Settings => 6,
         };
-        content_lines.saturating_add(2) // 1 for tabs, 1 for bottom bar
+        content_lines.saturating_add(2)
     }
 
     fn progress_bar(width: usize, state: &UiState) -> String {
@@ -135,115 +135,6 @@ impl Dashboard {
         }
 
         self.render_bar(frame, chunks[2], state);
-    }
-
-    fn render_tabs(&self, frame: &mut Frame, area: Rect) {
-        let tabs = [Tab::Playlist, Tab::Equalizer, Tab::Settings];
-        let mut spans = Vec::new();
-
-        for tab in tabs {
-            let label = match tab {
-                Tab::Playlist => "Playlist",
-                Tab::Equalizer => "EQ",
-                Tab::Settings => "Settings",
-            };
-
-            let is_active = self.active_tab == tab;
-            let style = if is_active {
-                Style::default()
-                    .fg(self.colors.bg)
-                    .bg(self.colors.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(self.colors.text).bg(self.colors.bg)
-            };
-
-            spans.push(Span::styled(format!(" [ {label} ] "), style));
-        }
-
-        let paragraph = Paragraph::new(Line::from(spans));
-        frame.render_widget(paragraph, area);
-    }
-
-    fn render_eq(&self, frame: &mut Frame, area: Rect, state: &UiState) {
-        let mut bars = Vec::new();
-        for (i, &gain) in state.eq_bands.iter().enumerate() {
-            // BarChart needs non-negative values — shift the gain into a
-            // 0..(MAX-MIN) range for rendering, label keeps the signed dB.
-            let clamped = gain.clamp(Self::EQ_GAIN_MIN, Self::EQ_GAIN_MAX);
-            let val = clamp_f32_to_u64((clamped - Self::EQ_GAIN_MIN).max(0.0));
-            let style = if i == self.selected_eq_band {
-                Style::default().fg(self.colors.accent)
-            } else {
-                Style::default().fg(self.colors.text)
-            };
-            let bar = ratatui::widgets::Bar::default()
-                .value(val)
-                .text_value(format!("{gain:+.1}"))
-                .style(style);
-            bars.push(bar);
-        }
-
-        let chart = BarChart::default()
-            .data(ratatui::widgets::BarGroup::default().bars(&bars))
-            .bar_width(5)
-            .bar_gap(1)
-            .block(Block::default().borders(Borders::ALL).title("Equalizer"));
-
-        frame.render_widget(chart, area);
-    }
-
-    fn render_settings(&self, frame: &mut Frame, area: Rect, state: &UiState) {
-        let block = Block::default().borders(Borders::ALL).title("Settings");
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let layout = Layout::vertical([
-            Constraint::Length(2),
-            Constraint::Length(2),
-            Constraint::Min(0),
-        ])
-        .split(inner);
-
-        let row_style = |idx: usize| -> Style {
-            if idx == self.selected_setting_row {
-                Style::default()
-                    .fg(self.colors.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(self.colors.text)
-            }
-        };
-
-        let quality_label = if state.abr_mode_is_auto {
-            "Auto".to_string()
-        } else if let Some(idx) = state.selected_variant {
-            state
-                .abr_variants
-                .iter()
-                .find_map(|(i, l)| (*i == idx).then(|| l.clone()))
-                .unwrap_or_else(|| format!("variant {idx}"))
-        } else {
-            "Auto".to_string()
-        };
-        let quality_line = Paragraph::new(Line::from(vec![
-            Span::raw("Quality  "),
-            Span::styled(quality_label, Style::default().fg(self.colors.accent)),
-            Span::raw("   (←/→ to switch)"),
-        ]))
-        .style(row_style(0));
-        frame.render_widget(quality_line, layout[0]);
-
-        let crossfade_line = Paragraph::new(Line::from(vec![
-            Span::raw("Crossfade  "),
-            Span::styled(
-                format!("{:.1}s", state.crossfade),
-                Style::default().fg(self.colors.accent),
-            ),
-            Span::raw("   (←/→ to adjust)"),
-        ]))
-        .style(row_style(1));
-        frame.render_widget(crossfade_line, layout[1]);
     }
 
     fn render_bar(&self, frame: &mut Frame, area: Rect, state: &UiState) {
@@ -313,6 +204,32 @@ impl Dashboard {
         }
     }
 
+    fn render_eq(&self, frame: &mut Frame, area: Rect, state: &UiState) {
+        let mut bars = Vec::new();
+        for (i, &gain) in state.eq_bands.iter().enumerate() {
+            let clamped = gain.clamp(Self::EQ_GAIN_MIN, Self::EQ_GAIN_MAX);
+            let val = clamp_f32_to_u64((clamped - Self::EQ_GAIN_MIN).max(0.0));
+            let style = if i == self.selected_eq_band {
+                Style::default().fg(self.colors.accent)
+            } else {
+                Style::default().fg(self.colors.text)
+            };
+            let bar = ratatui::widgets::Bar::default()
+                .value(val)
+                .text_value(format!("{gain:+.1}"))
+                .style(style);
+            bars.push(bar);
+        }
+
+        let chart = BarChart::default()
+            .data(ratatui::widgets::BarGroup::default().bars(&bars))
+            .bar_width(5)
+            .bar_gap(1)
+            .block(Block::default().borders(Borders::ALL).title("Equalizer"));
+
+        frame.render_widget(chart, area);
+    }
+
     fn render_playlist(&self, frame: &mut Frame, area: Rect, state: &UiState) {
         let c = &self.colors;
         for (i, entry) in state.tracks.iter().enumerate() {
@@ -346,6 +263,87 @@ impl Dashboard {
             let padded = fit_cell(&text, usize::from(row.width));
             frame.render_widget(Paragraph::new(Line::raw(padded)).style(style), row);
         }
+    }
+
+    fn render_settings(&self, frame: &mut Frame, area: Rect, state: &UiState) {
+        let block = Block::default().borders(Borders::ALL).title("Settings");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let layout = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Min(0),
+        ])
+        .split(inner);
+
+        let row_style = |idx: usize| -> Style {
+            if idx == self.selected_setting_row {
+                Style::default()
+                    .fg(self.colors.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(self.colors.text)
+            }
+        };
+
+        let quality_label = if state.abr_mode_is_auto {
+            "Auto".to_string()
+        } else if let Some(idx) = state.selected_variant {
+            state
+                .abr_variants
+                .iter()
+                .find_map(|(i, l)| (*i == idx).then(|| l.clone()))
+                .unwrap_or_else(|| format!("variant {idx}"))
+        } else {
+            "Auto".to_string()
+        };
+        let quality_line = Paragraph::new(Line::from(vec![
+            Span::raw("Quality  "),
+            Span::styled(quality_label, Style::default().fg(self.colors.accent)),
+            Span::raw("   (←/→ to switch)"),
+        ]))
+        .style(row_style(0));
+        frame.render_widget(quality_line, layout[0]);
+
+        let crossfade_line = Paragraph::new(Line::from(vec![
+            Span::raw("Crossfade  "),
+            Span::styled(
+                format!("{:.1}s", state.crossfade),
+                Style::default().fg(self.colors.accent),
+            ),
+            Span::raw("   (←/→ to adjust)"),
+        ]))
+        .style(row_style(1));
+        frame.render_widget(crossfade_line, layout[1]);
+    }
+
+    fn render_tabs(&self, frame: &mut Frame, area: Rect) {
+        let tabs = [Tab::Playlist, Tab::Equalizer, Tab::Settings];
+        let mut spans = Vec::new();
+
+        for tab in tabs {
+            let label = match tab {
+                Tab::Playlist => "Playlist",
+                Tab::Equalizer => "EQ",
+                Tab::Settings => "Settings",
+            };
+
+            let is_active = self.active_tab == tab;
+            let style = if is_active {
+                Style::default()
+                    .fg(self.colors.bg)
+                    .bg(self.colors.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(self.colors.text).bg(self.colors.bg)
+            };
+
+            spans.push(Span::styled(format!(" [ {label} ] "), style));
+        }
+
+        let paragraph = Paragraph::new(Line::from(spans));
+        frame.render_widget(paragraph, area);
     }
 }
 

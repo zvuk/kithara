@@ -26,10 +26,10 @@ use crate::{
 /// estimator runs, so the bitrate strategy was always a no-op and has
 /// been removed.
 pub(crate) struct SizeEstimator {
-    peer: PeerHandle,
     playlist: Arc<PlaylistState>,
-    media_playlists: Vec<MediaPlaylist>,
     headers: Option<kithara_net::Headers>,
+    peer: PeerHandle,
+    media_playlists: Vec<MediaPlaylist>,
 }
 
 /// Result of [`SizeEstimator::estimate`]: a `size_maps` vector indexed by
@@ -51,11 +51,19 @@ impl SizeEstimator {
         headers: Option<kithara_net::Headers>,
     ) -> Self {
         Self {
-            peer,
             playlist,
-            media_playlists,
             headers,
+            peer,
+            media_playlists,
         }
+    }
+
+    fn content_length(resp: &FetchResponse) -> u64 {
+        resp.headers
+            .get("content-length")
+            .or_else(|| resp.headers.get("Content-Length"))
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0)
     }
 
     /// Estimate every variant. The returned `size_maps` is indexed by
@@ -66,8 +74,8 @@ impl SizeEstimator {
             size_maps.push(self.estimate_variant(variant).await);
         }
         Estimation {
-            media_playlists: self.media_playlists,
             size_maps,
+            media_playlists: self.media_playlists,
         }
     }
 
@@ -92,6 +100,12 @@ impl SizeEstimator {
         VariantSizeMap::default()
     }
 
+    fn head_cmd(&self, url: Url) -> FetchCmd {
+        FetchCmd::head(url)
+            .maybe_headers(self.headers.clone())
+            .build()
+    }
+
     /// Strategy 1: exact sizes from `#EXT-X-BYTERANGE` on every segment.
     fn try_byte_range(&self, variant: usize, num_segments: usize) -> Option<VariantSizeMap> {
         let playlist = self.media_playlists.get(variant)?;
@@ -112,8 +126,6 @@ impl SizeEstimator {
             segment_sizes.push(media_len);
             cumulative += media_len;
         }
-        // EXT-X-BYTERANGE describes media ranges only — the init prefix
-        // size is unknown here and HEAD fallback covers fMP4 variants.
         Some(VariantSizeMap {
             segment_sizes,
             offsets,
@@ -173,22 +185,8 @@ impl SizeEstimator {
         Some(VariantSizeMap {
             segment_sizes,
             offsets,
-            total: cumulative,
             init_size,
+            total: cumulative,
         })
-    }
-
-    fn head_cmd(&self, url: Url) -> FetchCmd {
-        FetchCmd::head(url)
-            .maybe_headers(self.headers.clone())
-            .build()
-    }
-
-    fn content_length(resp: &FetchResponse) -> u64 {
-        resp.headers
-            .get("content-length")
-            .or_else(|| resp.headers.get("Content-Length"))
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(0)
     }
 }

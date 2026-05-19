@@ -99,12 +99,12 @@ pub struct AbrProgressSnapshot {
 /// `VariantInfo` for UI metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VariantInfo {
-    pub variant_index: usize,
     pub bandwidth_bps: Option<u64>,
-    pub duration: VariantDuration,
-    pub name: Option<String>,
     pub codecs: Option<String>,
     pub container: Option<String>,
+    pub name: Option<String>,
+    pub duration: VariantDuration,
+    pub variant_index: usize,
 }
 
 /// Events emitted by the ABR controller for a single registered peer.

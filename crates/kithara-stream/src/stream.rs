@@ -258,12 +258,6 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Stream<T> {
-    /// Short timeout keeps the audio worker responsive for round-robin
-    /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
-    /// lasts ~46ms. A 10ms budget gives the worker time to serve other
-    /// tracks and still refill the ringbuf before the audio callback drains it.
-    const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
-
     /// Maximum `wait_range` retries before returning
     /// `Pending(NotReady)` to the caller. Each retry takes
     /// `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
@@ -278,6 +272,12 @@ impl<T: StreamType> Stream<T> {
     /// well under this budget. Matches the read path's total budget
     /// (`WAIT_RANGE_TIMEOUT * MAX_WAIT_SPINS`).
     const SEEK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// Short timeout keeps the audio worker responsive for round-robin
+    /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
+    /// lasts ~46ms. A 10ms budget gives the worker time to serve other
+    /// tracks and still refill the ringbuf before the audio callback drains it.
+    const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
 
     /// Typed read — returns a [`StreamReadOutcome`] discriminating
     /// progress (`Bytes` with [`NonZeroUsize`]) from non-progress
@@ -432,12 +432,6 @@ impl<T: StreamType> Seek for Stream<T> {
 
         let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX);
 
-        // Seeking to the start of the format-change segment range is
-        // `apply_format_change`'s recreate-decoder entry: the decoder
-        // factory will read the *entire* init payload synchronously,
-        // so a 1-byte readiness hint here would underfill the
-        // source's pre-fetch window. Other seek targets are point
-        // queries — keep the historical 1-byte hint.
         let wait_range = match self.source.format_change_segment_range() {
             Ok(range) if range.start == new_pos => range,
             _ => new_pos..new_pos.saturating_add(1),
@@ -497,9 +491,9 @@ mod tests {
     }
 
     struct ScriptSource {
+        position: Arc<AtomicU64>,
         anchor: Option<SourceSeekAnchor>,
         timeline: Timeline,
-        position: Arc<AtomicU64>,
         data: Vec<u8>,
         reads: VecDeque<ScriptRead>,
         waits: VecDeque<WaitOutcome>,
@@ -524,6 +518,10 @@ mod tests {
     }
 
     impl Source for ScriptSource {
+        fn advance(&self, n: u64) {
+            self.position.fetch_add(n, Ordering::AcqRel);
+        }
+
         fn len(&self) -> Option<u64> {
             Some(self.data.len() as u64)
         }
@@ -534,14 +532,6 @@ mod tests {
 
         fn position(&self) -> u64 {
             self.position.load(Ordering::Acquire)
-        }
-
-        fn advance(&self, n: u64) {
-            self.position.fetch_add(n, Ordering::AcqRel);
-        }
-
-        fn set_position(&self, pos: u64) {
-            self.position.store(pos, Ordering::Release);
         }
 
         fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
@@ -568,6 +558,10 @@ mod tests {
             _position: Duration,
         ) -> crate::StreamResult<Option<SourceSeekAnchor>> {
             Ok(self.anchor)
+        }
+
+        fn set_position(&self, pos: u64) {
+            self.position.store(pos, Ordering::Release);
         }
 
         fn timeline(&self) -> Timeline {
@@ -608,12 +602,16 @@ mod tests {
     }
 
     struct SeekDuringWaitSource {
-        timeline: Timeline,
         position: Arc<AtomicU64>,
+        timeline: Timeline,
         read_calls: usize,
     }
 
     impl Source for SeekDuringWaitSource {
+        fn advance(&self, n: u64) {
+            self.position.fetch_add(n, Ordering::AcqRel);
+        }
+
         fn len(&self) -> Option<u64> {
             Some(4)
         }
@@ -626,17 +624,13 @@ mod tests {
             self.position.load(Ordering::Acquire)
         }
 
-        fn advance(&self, n: u64) {
-            self.position.fetch_add(n, Ordering::AcqRel);
+        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
+            self.read_calls += 1;
+            Ok(bytes(4))
         }
 
         fn set_position(&self, pos: u64) {
             self.position.store(pos, Ordering::Release);
-        }
-
-        fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
-            self.read_calls += 1;
-            Ok(bytes(4))
         }
 
         fn timeline(&self) -> Timeline {

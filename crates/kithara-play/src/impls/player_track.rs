@@ -647,7 +647,7 @@ mod tests {
         )
     }
 
-    /// PcmReader fixture that reports a 10s duration but actually serves
+    /// `PcmReader` fixture that reports a 10s duration but actually serves
     /// a much shorter buffer. Used to verify that the gapless trigger
     /// logic relies on observed-EOF, not on a possibly-stale duration.
     struct MisreportedDurationReader {

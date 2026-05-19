@@ -27,12 +27,12 @@ pub struct VariantSizeMap {
     /// Per-segment total sizes in bytes. `segment_sizes[0]` includes the
     /// init segment size for fMP4 variants.
     pub segment_sizes: Vec<u64>,
-    /// Total size of the variant (init + all segments).
-    pub total: u64,
     /// Standalone init segment size in bytes — the first `init_size` bytes
     /// of segment 0 in variant-byte space resolve to the init resource.
     /// Zero for raw TS/AAC variants without `#EXT-X-MAP`.
     pub init_size: u64,
+    /// Total size of the variant (init + all segments).
+    pub total: u64,
 }
 
 impl VariantSizeMap {
@@ -220,8 +220,8 @@ pub(crate) trait PlaylistAccess: Send + Sync {
     ) -> Option<(SegmentIndex, Duration, Duration)>;
 
     fn has_size_map(&self, variant: VariantIndex) -> bool;
-    fn init_url(&self, variant: VariantIndex) -> Option<Url>;
     fn init_size(&self, variant: VariantIndex) -> u64;
+    fn init_url(&self, variant: VariantIndex) -> Option<Url>;
     fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64>;
     fn segment_decode_range(
         &self,
@@ -275,18 +275,18 @@ impl PlaylistAccess for PlaylistState {
         state.size_map.is_some()
     }
 
-    fn init_url(&self, variant: VariantIndex) -> Option<Url> {
-        let lock = self.variants.get(variant)?;
-        let state = lock.lock_sync_read();
-        state.init_url.clone()
-    }
-
     fn init_size(&self, variant: VariantIndex) -> u64 {
         let Some(lock) = self.variants.get(variant) else {
             return 0;
         };
         let state = lock.lock_sync_read();
         state.size_map.as_ref().map_or(0, |sm| sm.init_size)
+    }
+
+    fn init_url(&self, variant: VariantIndex) -> Option<Url> {
+        let lock = self.variants.get(variant)?;
+        let state = lock.lock_sync_read();
+        state.init_url.clone()
     }
 
     fn segment_byte_offset(&self, variant: VariantIndex, index: SegmentIndex) -> Option<u64> {
@@ -427,8 +427,8 @@ mod tests {
         VariantSizeMap {
             segment_sizes,
             offsets,
-            total: cumulative,
             init_size,
+            total: cumulative,
         }
     }
 

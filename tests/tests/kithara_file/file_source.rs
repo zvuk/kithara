@@ -28,29 +28,29 @@ impl Consts {
     reason = "axum handler signature requires owned Request"
 )]
 fn serve_with_range(data: &'static [u8], req: Request) -> Response {
-    if let Some(range_header) = req.headers().get("range").and_then(|v| v.to_str().ok()) {
-        if let Some(range_str) = range_header.strip_prefix("bytes=") {
-            let parts: Vec<&str> = range_str.split('-').collect();
-            if parts.len() == 2 {
-                let start: usize = parts[0].parse().unwrap_or(0);
-                let end: usize = if parts[1].is_empty() {
-                    data.len() - 1
-                } else {
-                    parts[1].parse().unwrap_or(data.len() - 1)
-                };
-                let end = end.min(data.len() - 1);
-                if start <= end && start < data.len() {
-                    let slice = &data[start..=end];
-                    return Response::builder()
-                        .status(206)
-                        .header(
-                            "Content-Range",
-                            format!("bytes {}-{}/{}", start, end, data.len()),
-                        )
-                        .header("Content-Length", slice.len().to_string())
-                        .body(Body::from(Bytes::from_static(slice)))
-                        .unwrap();
-                }
+    if let Some(range_header) = req.headers().get("range").and_then(|v| v.to_str().ok())
+        && let Some(range_str) = range_header.strip_prefix("bytes=")
+    {
+        let parts: Vec<&str> = range_str.split('-').collect();
+        if parts.len() == 2 {
+            let start: usize = parts[0].parse().unwrap_or(0);
+            let end: usize = if parts[1].is_empty() {
+                data.len() - 1
+            } else {
+                parts[1].parse().unwrap_or(data.len() - 1)
+            };
+            let end = end.min(data.len() - 1);
+            if start <= end && start < data.len() {
+                let slice = &data[start..=end];
+                return Response::builder()
+                    .status(206)
+                    .header(
+                        "Content-Range",
+                        format!("bytes {}-{}/{}", start, end, data.len()),
+                    )
+                    .header("Content-Length", slice.len().to_string())
+                    .body(Body::from(Bytes::from_static(slice)))
+                    .unwrap();
             }
         }
     }

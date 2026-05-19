@@ -1,23 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! Observable Audio behaviour driven through the public API + event bus.
-//!
-//! The earlier suite poked `StreamAudioSource` / `Timeline::is_flushing` /
-//! `DecoderFactory` internals directly. Those white-box paths have been
-//! superseded by:
-//!
-//! * `Audio<Stream<MemStream>>` driving real WAV bytes through the real
-//!   decoder pipeline for non-HLS scenarios (this file).
-//! * `tests/tests/kithara_hls/{stress_seek_abr,abr_integration,
-//!   abr_mode_switch,stress_seek_abr_audio}.rs` for ABR-switch and
-//!   format-change scenarios that previously lived here as `TestSource`
-//!   fakes.
-//!
-//! `decoder_panic_in_next_chunk_is_converted_to_decode_error` was removed:
-//! injecting a panicking mock decoder is not reachable through the public
-//! `DecoderBackend`; the conversion contract is still covered by
-//! `kithara_decode` unit tests.
-
 use kithara_audio::{Audio, AudioConfig, ReadOutcome};
 use kithara_events::{AudioEvent, Event, SeekEpoch, SeekLifecycleStage};
 use kithara_integration_tests::{

@@ -7,13 +7,13 @@ pub trait Probe {
 }
 
 pub trait IntoProbeArg: Copy {
-    fn into_probe_arg(self) -> u64;
-
     #[must_use]
     fn from_probe_arg(packed: u64) -> Self {
         let _ = packed;
         unimplemented!("noop probe: from_probe_arg not supported without `probe` feature")
     }
+
+    fn into_probe_arg(self) -> u64;
 }
 
 macro_rules! impl_int_probe_arg_noop {
@@ -30,20 +30,20 @@ macro_rules! impl_int_probe_arg_noop {
 impl_int_probe_arg_noop!(u64, i64, u32, i32, usize);
 
 impl IntoProbeArg for bool {
-    fn into_probe_arg(self) -> u64 {
-        u64::from(self)
-    }
     fn from_probe_arg(packed: u64) -> Self {
         packed != 0
+    }
+    fn into_probe_arg(self) -> u64 {
+        u64::from(self)
     }
 }
 
 impl IntoProbeArg for Duration {
-    fn into_probe_arg(self) -> u64 {
-        u64::try_from(self.as_micros()).unwrap_or(u64::MAX)
-    }
     fn from_probe_arg(packed: u64) -> Self {
         Self::from_micros(packed)
+    }
+    fn into_probe_arg(self) -> u64 {
+        u64::try_from(self.as_micros()).unwrap_or(u64::MAX)
     }
 }
 

@@ -42,10 +42,6 @@ pub(super) type ResponseValidator = fn(&Headers) -> NetResult<()>;
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct FetchCmd {
-    /// HTTP method.
-    pub method: RequestMethod,
-    /// URL to fetch.
-    pub url: Url,
     /// Epoch cancel token from the Peer. When set, the Downloader
     /// combines it with the track-level cancel via [`CancelGroup`].
     pub cancel: Option<CancellationToken>,
@@ -65,6 +61,10 @@ pub struct FetchCmd {
     pub validator: Option<ResponseValidator>,
     /// Streaming path body writer. `None` for channel path (`execute`/`batch`).
     pub writer: Option<WriterFn>,
+    /// HTTP method.
+    pub method: RequestMethod,
+    /// URL to fetch.
+    pub url: Url,
 }
 
 impl FetchCmd {

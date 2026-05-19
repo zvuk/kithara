@@ -44,13 +44,13 @@ pub(crate) struct SymphoniaDemuxer {
     /// the demuxer is built through that path; absent for synthetic
     /// readers in unit tests.
     byte_pos_handle: Option<Arc<AtomicU64>>,
-    segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
     /// Latest packet handed to [`Demuxer::next_frame`]. Held so the
     /// returned `Frame<'_>` can borrow the packet's `Box<[u8]>` payload
     /// directly — Symphonia owns the allocation, we don't clone it.
     /// Replaced (and the previous packet dropped) on every successful
     /// `next_frame` call.
     current_packet: Option<symphonia::core::packet::Packet>,
+    segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
     /// Time base used to translate packet timestamps into wall-clock
     /// [`std::time::Duration`].
     time_base: Option<TimeBase>,
@@ -178,6 +178,22 @@ impl SymphoniaDemuxer {
 }
 
 impl Demuxer for SymphoniaDemuxer {
+    fn current_segment_index(&self) -> Option<u32> {
+        let byte = self.current_byte()?;
+        self.segment_layout
+            .as_ref()?
+            .segment_at_byte(byte.saturating_sub(1))
+            .map(|d| d.segment_index)
+    }
+
+    fn current_variant_index(&self) -> Option<usize> {
+        let byte = self.current_byte()?;
+        self.segment_layout
+            .as_ref()?
+            .segment_at_byte(byte.saturating_sub(1))
+            .map(|d| d.variant_index)
+    }
+
     fn duration(&self) -> Option<Duration> {
         self.track_info.duration
     }
@@ -241,24 +257,6 @@ impl Demuxer for SymphoniaDemuxer {
 
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
-    }
-
-    fn current_segment_index(&self) -> Option<u32> {
-        // `byte_pos` is the next read offset, so look up by `byte - 1`
-        // to keep the cursor parked at `segment.end` in that segment.
-        let byte = self.current_byte()?;
-        self.segment_layout
-            .as_ref()?
-            .segment_at_byte(byte.saturating_sub(1))
-            .map(|d| d.segment_index)
-    }
-
-    fn current_variant_index(&self) -> Option<usize> {
-        let byte = self.current_byte()?;
-        self.segment_layout
-            .as_ref()?
-            .segment_at_byte(byte.saturating_sub(1))
-            .map(|d| d.variant_index)
     }
 }
 

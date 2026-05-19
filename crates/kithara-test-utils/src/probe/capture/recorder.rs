@@ -49,8 +49,8 @@ pub fn install() -> Recorder {
 #[derive(Clone)]
 pub struct Recorder {
     start_at: Instant,
-    install_id: u64,
     log: SharedLog,
+    install_id: u64,
 }
 
 impl Recorder {

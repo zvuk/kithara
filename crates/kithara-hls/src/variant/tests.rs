@@ -28,9 +28,9 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             .build(),
     );
     PlanCtx {
+        prefetch_budget,
         master_cancel: cancel,
         asset_store: backend,
-        prefetch_budget,
         seek_epoch: 0,
         look_ahead_bytes: None,
     }
@@ -77,12 +77,12 @@ fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) 
     HlsVariant::from_parts(
         variant,
         VariantParts {
+            init,
+            segments,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
             timeline: Timeline::new(),
             codec: None,
             container: None,
-            init,
-            segments,
         },
         ctx,
     )
@@ -148,9 +148,6 @@ fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
         reader_pos.max(seg_boundary),
         "position must follow the requested reader_pos / seg_boundary"
     );
-    // byte_shift = seg_boundary - natural_offset(from_seg). With
-    // init_size=200 and 400-byte segments, natural offset for seg=2
-    // is 200 + 2*400 = 1000. seg_boundary=1500 ⇒ shift=500.
     assert_eq!(
         v.byte_shift(),
         500,
@@ -179,9 +176,6 @@ fn set_position_overrides_cursor() {
 
 #[kithara::test]
 fn find_at_offset_inside_init_prefix_is_none() {
-    // Init prefix occupies its own variant-byte range [0, init.size);
-    // media segments don't cover it — the source reads from
-    // `init_resource()` directly for those offsets.
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400, 400], &ctx);
     assert!(v.find_at_offset(0).is_none());
@@ -199,7 +193,6 @@ fn find_at_offset_at_init_size_returns_segment_zero() {
 
 #[kithara::test]
 fn find_at_offset_mid_segment_binary_search() {
-    // init_size=0 → segment N occupies [sum(media_0..N-1), sum(media_0..N)).
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[400, 400, 400, 400], &ctx);
     let (idx, _, _) = v.find_at_offset(550).expect("mid-segment");
@@ -297,8 +290,6 @@ fn dispatch_respects_budget() {
     v.rebuild(&ctx, 0);
     let cmds = v.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
-    // rebuild pushes every segment in the forward window; dispatch pops
-    // exactly `budget` and leaves the remainder for subsequent ticks.
     assert_eq!(queue_seg_indices(&v), vec![3, 4, 5, 6, 7, 8, 9]);
 }
 
@@ -390,11 +381,11 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let v = HlsVariant::from_parts(
         0,
         VariantParts {
+            init,
             playlist_state: Arc::new(PlaylistState::new(Vec::new())),
             timeline: Timeline::new(),
             codec: None,
             container: None,
-            init,
             segments: vec![seg],
         },
         &ctx,
@@ -403,8 +394,6 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let cmds = v.dispatch(&ctx, 10);
     assert_eq!(cmds.len(), 1);
     assert!(cmds[0].cancel.is_some());
-    // dispatch flips Missing -> Downloading to dedupe in-flight fetches;
-    // settle drives the final transition to Loaded or back to Missing.
     assert_eq!(v.segments[0].state(), SegmentState::Downloading);
 }
 
@@ -502,9 +491,6 @@ fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
     let v = make_var(0, 0, &[100; 20], &ctx);
     v.segments[10].set_state(SegmentState::Loaded);
 
-    // rebuild pushes EVERY segment from from_seg onward — Loaded ones
-    // included. dispatch skips them without consuming budget so the
-    // emitted batch is exactly `budget` Missing segments.
     v.rebuild(&ctx, 10);
     let cmds = v.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);

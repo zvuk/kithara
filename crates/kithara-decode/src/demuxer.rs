@@ -9,6 +9,18 @@ use crate::error::DecodeResult;
 /// and emit raw codec frames with timing metadata. The codec layer
 /// ([`crate::codec::FrameCodec`]) consumes those frames into PCM.
 pub(crate) trait Demuxer: Send {
+    /// Segment index of the frame from the last `next_frame`.
+    /// `None` for non-segmented sources.
+    fn current_segment_index(&self) -> Option<u32> {
+        None
+    }
+
+    /// Variant index of the frame from the last `next_frame`.
+    /// `None` for non-segmented sources.
+    fn current_variant_index(&self) -> Option<usize> {
+        None
+    }
+
     /// Total duration if the container can compute one (HLS playlist
     /// total, mp4 `mvhd`, …); `None` for live or unbounded streams.
     fn duration(&self) -> Option<Duration>;
@@ -38,18 +50,6 @@ pub(crate) trait Demuxer: Send {
 
     /// Track-level metadata exposed by the container.
     fn track_info(&self) -> &TrackInfo;
-
-    /// Segment index of the frame from the last `next_frame`.
-    /// `None` for non-segmented sources.
-    fn current_segment_index(&self) -> Option<u32> {
-        None
-    }
-
-    /// Variant index of the frame from the last `next_frame`.
-    /// `None` for non-segmented sources.
-    fn current_variant_index(&self) -> Option<usize> {
-        None
-    }
 }
 
 /// Track-level metadata produced by [`Demuxer::track_info`].
@@ -88,16 +88,16 @@ pub(crate) struct Frame<'a> {
     /// Raw frame bytes — slice into the demuxer's owned buffer (mp4
     /// segment, Symphonia `Packet`, etc.). Zero-copy: never cloned.
     pub data: &'a [u8],
-    /// Frame duration.
-    pub duration: Duration,
-    /// Presentation time of this frame.
-    pub pts: Duration,
     /// Opaque per-packet metadata for codecs that need it for VBR
     /// decoding. Apple-native MP3 / ALAC paths pass a serialized
     /// `AudioStreamPacketDescription` here; the codec interprets the
     /// bytes. Demuxers without VBR descriptors leave this empty.
     /// Borrow lifetime mirrors `data`.
     pub packet_desc: &'a [u8],
+    /// Frame duration.
+    pub duration: Duration,
+    /// Presentation time of this frame.
+    pub pts: Duration,
 }
 
 /// Result of a [`Demuxer::next_frame`] call.

@@ -676,7 +676,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 /// Phase L2: cross-codec runtime Manual switch (AAC → FLAC) via
 /// `AbrHandle::set_mode`. This is the exact reproducer of the production
 /// bug where clicking Manual(3) (FLAC) in the GUI caused a 10s hang
-/// before Phase K's `decode_next_chunk` recovery + apply_decision split.
+/// before Phase K's `decode_next_chunk` recovery + `apply_decision` split.
 #[kithara::test(
     native,
     tokio,
@@ -756,7 +756,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
         .expect("read");
 
     let targets = applied_targets.lock_sync().clone();
-    let saw_flac = targets.iter().any(|&t| t == 3);
+    let saw_flac = targets.contains(&3);
 
     info!(
         ?targets,
@@ -1166,7 +1166,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 /// User scenario (app.log 2026-05-16): a cross-codec switch followed
 /// by a same-codec switch within the recreate window leaves
 /// `session.media_info` stale and `header_byte_range(v_new)`
-/// returning `Err(NotApplicable)` because of byte_shift, then EOF
+/// returning `Err(NotApplicable)` because of `byte_shift`, then EOF
 /// gets treated as terminal → auto-seek → hang.
 ///
 /// **CURRENT STATE (work in progress)**: this test as written tends
@@ -1175,9 +1175,9 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 /// before the boundary commit fires), so the actual race window is
 /// not reliably hit in the in-process server. It additionally
 /// surfaces a separate, pre-existing bug: a same-codec switch from
-/// AAC v=0 to AAC v=1 with byte_shift hits `unexpected EOF before
+/// AAC v=0 to AAC v=1 with `byte_shift` hits `unexpected EOF before
 /// segment buffer filled` — a layout mismatch unrelated to the
-/// cross-codec race. Marked `#[ignore]` until either the byte_shift
+/// cross-codec race. Marked `#[ignore]` until either the `byte_shift`
 /// boundary mismatch is addressed independently or the test is
 /// rewritten to deterministically force the rapid-recreate race
 /// (likely needs `DelayRule` on segment fetches).
@@ -1278,11 +1278,11 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 
     // We must see both switches applied through the ABR contract.
     assert!(
-        targets.iter().any(|&t| t == 3),
+        targets.contains(&3),
         "Manual(3) cross-codec must be applied, saw: {targets:?}"
     );
     assert!(
-        targets.iter().any(|&t| t == 1),
+        targets.contains(&1),
         "Manual(1) same-codec must be applied, saw: {targets:?}"
     );
 
@@ -1471,7 +1471,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     );
 
     assert!(
-        targets.iter().any(|&t| t == 0),
+        targets.contains(&0),
         "Manual(0) (slq AAC) must publish VariantApplied, saw: {targets:?}"
     );
 

@@ -35,11 +35,6 @@ fn resolve_arg_idents(
     filter_args: Option<Vec<Ident>>,
     all_args: &[Ident],
 ) -> syn::Result<Vec<Ident>> {
-    // `#[kithara::probe]` (no args, no `probe_return`) → marker
-    // probe with zero wire fields (only auto-injected `seq` /
-    // `caller_fn`). Explicit list `#[kithara::probe(a, b)]` → those
-    // parameters as wire fields. There is no implicit "all params"
-    // mode: passing zero args means zero args.
     let Some(names) = filter_args else {
         return Ok(Vec::new());
     };
@@ -73,8 +68,6 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let arg_idents = resolve_arg_idents(filter.args, &all_args)?;
     let computed = filter.computed;
 
-    // Computed wire-names must not clash with parameter wire-names
-    // (would produce two slots labelled the same on tracing/USDT side).
     for (name, _) in &computed {
         if arg_idents.iter().any(|a| a == name) {
             return Err(Error::new_spanned(
@@ -134,11 +127,6 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     let arg_consume: Vec<TokenStream2> =
         arg_idents.iter().map(|a| quote! { let _ = &#a; }).collect();
 
-    // Reference computed expressions unconditionally so production
-    // builds (no `test-utils` feature → probe expansion compiled out)
-    // still see the underlying fields/methods used and avoid spurious
-    // `dead_code` warnings on probe-only payload fields. Gated behind
-    // `if false` so LLVM constant-folds the call out — zero runtime cost.
     let computed_consume: Vec<TokenStream2> = computed
         .iter()
         .map(|(_, expr)| {
@@ -190,7 +178,6 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         }
     } else {
         quote! {
-            // Cheap-path probe: skip backtrace capture.
             let __probe_caller_fn = "";
         }
     };
@@ -205,15 +192,7 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
         &capture_caller_fn,
     );
 
-    // `#[track_caller]` is what makes `Location::caller()` resolve to
-    // the caller of this probe-attributed function rather than the
-    // function's own definition site. Gated on test/test-utils so
-    // production builds (probe = no-op) don't pay the cost.
     let track_caller_attr = if probe_return {
-        // probe_return uses the derived `Probe::record_probe` path,
-        // which doesn't honour caller info today. Skip injection so
-        // we don't generate a misleading track_caller attribute on a
-        // function that won't read Location::caller().
         quote! {}
     } else {
         quote! { #[cfg_attr(any(test, feature = "probe"), track_caller)] }

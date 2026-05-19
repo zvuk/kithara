@@ -857,7 +857,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     );
 
     assert!(
-        applied_targets.iter().any(|&t| t == 3),
+        applied_targets.contains(&3),
         "Manual(3) must surface VariantApplied{{to:3}} (FLAC) — \
          applied_targets={applied_targets:?}"
     );

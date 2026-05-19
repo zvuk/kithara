@@ -44,8 +44,6 @@ pub type OnInvalidatedFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct StoreOptions {
-    /// Directory for persistent cache storage (required).
-    pub cache_dir: PathBuf,
     /// In-memory LRU cache capacity for opened resources.
     pub cache_capacity: Option<NonZeroUsize>,
     /// Shared flush coordinator for the on-disk indexes (`pins.bin`,
@@ -64,6 +62,8 @@ pub struct StoreOptions {
     pub max_bytes: Option<u64>,
     /// Called when a cached resource is invalidated (displaced from LRU cache).
     pub on_invalidated: Option<OnInvalidatedFn>,
+    /// Directory for persistent cache storage (required).
+    pub cache_dir: PathBuf,
     /// Use ephemeral (in-memory) storage instead of disk.
     ///
     /// When `true`, the asset store uses `MemAssetStore` instead of

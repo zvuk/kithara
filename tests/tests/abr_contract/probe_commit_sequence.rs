@@ -1,12 +1,3 @@
-//! Boundary-commit mechanics — peek_pending_decision + apply_decision
-//! invariants from the AbrState split contract.
-//!
-//! These tests sit at the AbrState / AbrDecision API level rather than
-//! the full HLS+probe pipeline: the four invariants below are
-//! data-flow contracts that don't need a Recorder to verify, and the
-//! cross-variant byte continuity already has end-to-end coverage in
-//! `drm_stream_integrity`.
-
 use kithara_abr::{AbrMode, AbrReason, AbrState};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;

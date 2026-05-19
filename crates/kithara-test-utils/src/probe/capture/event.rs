@@ -93,24 +93,18 @@ impl std::fmt::Debug for ProbeEvent {
 }
 
 impl ProbeEvent {
-    /// The `probe` discriminator field (e.g. `"enqueued"`,
-    /// `"fetch_cmd_emitted"`).
+    /// File path of the call site that triggered this probe.
+    ///
+    /// Populated by `#[kithara::probe]` via `Location::caller()` paired
+    /// with the macro-injected `#[track_caller]` attribute, so the
+    /// recorded file is the caller's, not the probe-attributed
+    /// function's own definition. Returns `None` when the probe was
+    /// emitted by an older expansion or by the `probe_return` path
+    /// (which uses the derived `Probe::record_probe` trait method
+    /// without a caller hook).
     #[must_use]
-    pub fn probe_name(&self) -> Option<&str> {
-        self.string_fields.get("probe").map(String::as_str)
-    }
-
-    /// Read a `u64` field (`segment_index`, `request_id`, …).
-    #[must_use]
-    pub fn u64(&self, key: &str) -> Option<u64> {
-        self.fields.get(key).copied()
-    }
-
-    /// Read a string field, e.g. `caller_file` set automatically by the
-    /// `#[kithara::probe]` expansion.
-    #[must_use]
-    pub fn str(&self, key: &str) -> Option<&str> {
-        self.string_fields.get(key).map(String::as_str)
+    pub fn caller_file(&self) -> Option<&str> {
+        self.str("caller_file")
     }
 
     /// Demangled symbol name of the function that called this probe.
@@ -132,25 +126,18 @@ impl ProbeEvent {
         if value.is_empty() { None } else { Some(value) }
     }
 
-    /// File path of the call site that triggered this probe.
-    ///
-    /// Populated by `#[kithara::probe]` via `Location::caller()` paired
-    /// with the macro-injected `#[track_caller]` attribute, so the
-    /// recorded file is the caller's, not the probe-attributed
-    /// function's own definition. Returns `None` when the probe was
-    /// emitted by an older expansion or by the `probe_return` path
-    /// (which uses the derived `Probe::record_probe` trait method
-    /// without a caller hook).
-    #[must_use]
-    pub fn caller_file(&self) -> Option<&str> {
-        self.str("caller_file")
-    }
-
     /// Line of the call site that triggered this probe. Pairs with
     /// [`Self::caller_file`].
     #[must_use]
     pub fn caller_line(&self) -> Option<u64> {
         self.u64("caller_line")
+    }
+
+    /// The `probe` discriminator field (e.g. `"enqueued"`,
+    /// `"fetch_cmd_emitted"`).
+    #[must_use]
+    pub fn probe_name(&self) -> Option<&str> {
+        self.string_fields.get("probe").map(String::as_str)
     }
 
     /// Process-wide monotonic sequence number for this probe firing.
@@ -162,6 +149,13 @@ impl ProbeEvent {
     #[must_use]
     pub fn seq(&self) -> Option<u64> {
         self.u64("seq")
+    }
+
+    /// Read a string field, e.g. `caller_file` set automatically by the
+    /// `#[kithara::probe]` expansion.
+    #[must_use]
+    pub fn str(&self, key: &str) -> Option<&str> {
+        self.string_fields.get(key).map(String::as_str)
     }
 
     /// Hashed identifier of the OS thread that fired this probe.
@@ -185,5 +179,11 @@ impl ProbeEvent {
     #[must_use]
     pub fn thread_seq(&self) -> Option<u64> {
         self.u64("thread_seq")
+    }
+
+    /// Read a `u64` field (`segment_index`, `request_id`, …).
+    #[must_use]
+    pub fn u64(&self, key: &str) -> Option<u64> {
+        self.fields.get(key).copied()
     }
 }

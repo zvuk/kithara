@@ -72,14 +72,14 @@ impl Consts {
     const CROSSFADE_STEP: f32 = 0.5;
     const ELEMENT_SPACING: f32 = 10.0;
     const EMPTY_PLAYLIST_FONT: f32 = 14.0;
+    /// Minimum gap between bands. Anything beyond it gets soaked up by
+    /// `Space::Fill` spacers so the row reads as "evenly spread".
+    const EQ_BAND_MIN_GAP: f32 = 2.0;
     /// Width of a single EQ band column — kept stable so the slider
     /// rails stay readable. The window is allowed to grow; flex
     /// spacers between bands absorb the extra width instead of
     /// stretching the bands themselves.
     const EQ_BAND_WIDTH: f32 = 28.0;
-    /// Minimum gap between bands. Anything beyond it gets soaked up by
-    /// `Space::Fill` spacers so the row reads as "evenly spread".
-    const EQ_BAND_MIN_GAP: f32 = 2.0;
     const EQ_LABEL_FONT: f32 = 11.0;
     const EQ_MAX_DB: f32 = 6.0;
     const EQ_MIN_DB: f32 = -24.0;
@@ -339,11 +339,6 @@ fn view_transport(state: &Kithara) -> Element<'_, Message> {
     .spacing(Consts::TRANSPORT_BUTTON_SPACING)
     .align_y(Alignment::Center);
 
-    // Centered transport+rate stack. `column.align_x(Center)` only kicks in
-    // when the column has a fill width — otherwise it shrinks to its
-    // widest child and centring is a no-op. The outer container's
-    // `.center_x(Fill)` is what actually pulls the rows into the middle
-    // of the section.
     container(
         column![transport_row, view_playrate(state)]
             .spacing(Consts::ELEMENT_SPACING)
@@ -548,11 +543,6 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
 fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
     let band_count = state.ui_state.eq_bands.len();
-    // The bands themselves stay a fixed visual width so the slider
-    // rails read consistently at any window size; spare horizontal
-    // room is soaked up by `Space::Fill` flex spacers between every
-    // band, which means resizing the window fans the bands out
-    // instead of bloating each one.
     let mut bands_row = row![].spacing(Consts::EQ_BAND_MIN_GAP).width(Length::Fill);
 
     for index in 0..band_count {
@@ -588,9 +578,6 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
         .width(Length::Fixed(Consts::EQ_BAND_WIDTH))
         .height(Length::Fill);
 
-        // Flex spacer before every band except the first — equal Fill
-        // weights split the surplus row width evenly, so the bands
-        // appear evenly spread without re-sizing their columns.
         if index > 0 {
             bands_row = bands_row.push(Space::new().width(Length::Fill));
         }
@@ -609,9 +596,6 @@ fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
                     .on_press(Message::EqResetAll)
             ]
             .align_y(Alignment::Center),
-            // Outer container takes the remaining vertical space; the
-            // bands row inside fills it, so each band's slider stretches
-            // along with the window.
             container(bands_row)
                 .width(Length::Fill)
                 .height(Length::Fill)

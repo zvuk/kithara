@@ -31,29 +31,34 @@ struct DataSourceCtx {
 /// Track-level info read out of an [`AMediaFormat`] handle.
 pub(crate) struct TrackFormatInfo {
     pub(crate) mime: String,
-    pub(crate) channels: u16,
-    pub(crate) sample_rate: u32,
-    pub(crate) duration_us: i64,
     /// `csd-0` blob (AAC `AudioSpecificConfig`, FLAC `STREAMINFO`,
     /// ALAC magic cookie). Empty when the format reports none.
     pub(crate) csd_0: Vec<u8>,
+    pub(crate) duration_us: i64,
+    pub(crate) channels: u16,
+    pub(crate) sample_rate: u32,
 }
 
 /// Safe wrapper around an Android NDK `AMediaExtractor` handle fed by a
 /// custom `AMediaDataSource` that bridges to a Rust `Read + Seek` source.
 pub(crate) struct AndroidMediaExtractor {
-    raw: NonNull<AMediaExtractor>,
-    data_source: NonNull<AMediaDataSource>,
     _ctx: Box<DataSourceCtx>,
+    data_source: NonNull<AMediaDataSource>,
+    raw: NonNull<AMediaExtractor>,
     selected_track: Option<usize>,
     track_count: usize,
 }
 
 // SAFETY: `AMediaExtractor` handles are single-threaded; we never share
-// them across threads without an exclusive borrow.
 unsafe impl Send for AndroidMediaExtractor {}
 
 impl AndroidMediaExtractor {
+    /// Advance to the next sample. Returns `false` at EOF.
+    pub(crate) fn advance(&mut self) -> bool {
+        // SAFETY: extractor is live.
+        unsafe { AMediaExtractor_advance(self.raw.as_ptr()) }
+    }
+
     pub(crate) fn open(mut source: BoxedSource) -> DecodeResult<Self> {
         let end = source
             .seek(SeekFrom::End(0))
@@ -65,7 +70,6 @@ impl AndroidMediaExtractor {
         let mut ctx = Box::new(DataSourceCtx { source, size });
 
         // SAFETY: `AMediaDataSource_new` returns NULL on failure; we
-        // null-check immediately. The handle is freed in `Drop`.
         let ds = NonNull::new(unsafe { AMediaDataSource_new() }).ok_or_else(|| {
             DecodeError::Backend(Box::new(std::io::Error::other(
                 "AMediaDataSource_new returned null",
@@ -73,8 +77,6 @@ impl AndroidMediaExtractor {
         })?;
 
         // SAFETY: `ds` is live; `ctx` is boxed (stable address) and
-        // outlives the data source. Callbacks dereference it as
-        // `*mut DataSourceCtx`.
         unsafe {
             AMediaDataSource_setUserdata(
                 ds.as_ptr(),
@@ -85,12 +87,10 @@ impl AndroidMediaExtractor {
         }
 
         // SAFETY: `AMediaExtractor_new` returns NULL on failure; we
-        // null-check immediately.
         let ex = match NonNull::new(unsafe { AMediaExtractor_new() }) {
             Some(e) => e,
             None => {
                 // SAFETY: `ds` is non-null and we're abandoning it
-                // before the extractor takes ownership.
                 unsafe { AMediaDataSource_delete(ds.as_ptr()) };
                 return Err(DecodeError::Backend(Box::new(std::io::Error::other(
                     "AMediaExtractor_new returned null",
@@ -99,11 +99,9 @@ impl AndroidMediaExtractor {
         };
 
         // SAFETY: both handles are live; the extractor takes a reference
-        // on the data source (which we still own and free in `Drop`).
         let st = unsafe { AMediaExtractor_setDataSourceCustom(ex.as_ptr(), ds.as_ptr()) };
         if st != MEDIA_STATUS_OK {
             // SAFETY: both handles are non-null and freshly created; we
-            // free them exactly once here on the failure path.
             unsafe {
                 AMediaExtractor_delete(ex.as_ptr());
                 AMediaDataSource_delete(ds.as_ptr());
@@ -117,31 +115,41 @@ impl AndroidMediaExtractor {
         let track_count = unsafe { AMediaExtractor_getTrackCount(ex.as_ptr()) };
 
         Ok(Self {
+            track_count,
             raw: ex,
             data_source: ds,
             _ctx: ctx,
             selected_track: None,
-            track_count,
         })
     }
 
-    pub(crate) fn track_count(&self) -> usize {
-        self.track_count
+    /// Read the current sample into `buf`. Returns `Ok(Some((n, pts_us)))`
+    /// or `Ok(None)` at EOF.
+    pub(crate) fn read_sample(&mut self, buf: &mut [u8]) -> DecodeResult<Option<(usize, i64)>> {
+        // SAFETY: extractor is live; `buf` is exclusively borrowed for
+        let n = unsafe {
+            AMediaExtractor_readSampleData(self.raw.as_ptr(), buf.as_mut_ptr(), buf.len())
+        };
+        if n < 0 {
+            return Ok(None);
+        }
+        let read = usize::try_from(n).map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        // SAFETY: extractor is live.
+        let pts_us = unsafe { AMediaExtractor_getSampleTime(self.raw.as_ptr()) };
+        Ok(Some((read, pts_us)))
     }
 
-    pub(crate) fn track_info(&self, idx: usize) -> DecodeResult<TrackFormatInfo> {
-        // SAFETY: extractor is live; the NDK bounds-checks `idx` and
-        // returns NULL when out of range or on internal failure.
-        let fmt_raw = unsafe { AMediaExtractor_getTrackFormat(self.raw.as_ptr(), idx) };
-        let fmt = NonNull::new(fmt_raw).ok_or_else(|| {
-            DecodeError::Backend(Box::new(std::io::Error::other(format!(
-                "AMediaExtractor_getTrackFormat({idx}) returned null"
-            ))))
-        })?;
-        let info = read_track_format(fmt);
-        // SAFETY: we own the returned format handle; free it on return.
-        unsafe { AMediaFormat_delete(fmt.as_ptr()) };
-        info
+    /// Seek to nearest previous-sync sample at or before `pts_us`.
+    pub(crate) fn seek_to(&mut self, pts_us: i64) -> DecodeResult<()> {
+        // SAFETY: extractor is live.
+        let st =
+            unsafe { AMediaExtractor_seekTo(self.raw.as_ptr(), pts_us, SEEK_MODE_PREVIOUS_SYNC) };
+        if st != MEDIA_STATUS_OK {
+            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+                format!("AMediaExtractor_seekTo failed: {st}"),
+            ))));
+        }
+        Ok(())
     }
 
     pub(crate) fn select_audio_track(&mut self) -> DecodeResult<TrackFormatInfo> {
@@ -149,7 +157,6 @@ impl AndroidMediaExtractor {
             let info = self.track_info(i)?;
             if info.mime.starts_with("audio/") {
                 // SAFETY: extractor is live; `i` is bounded by
-                // `track_count` (validated by NDK above).
                 let st = unsafe { AMediaExtractor_selectTrack(self.raw.as_ptr(), i) };
                 if st != MEDIA_STATUS_OK {
                     return Err(DecodeError::Backend(Box::new(std::io::Error::other(
@@ -165,47 +172,28 @@ impl AndroidMediaExtractor {
         ))))
     }
 
-    /// Read the current sample into `buf`. Returns `Ok(Some((n, pts_us)))`
-    /// or `Ok(None)` at EOF.
-    pub(crate) fn read_sample(&mut self, buf: &mut [u8]) -> DecodeResult<Option<(usize, i64)>> {
-        // SAFETY: extractor is live; `buf` is exclusively borrowed for
-        // the duration of the call; `buf.len()` matches the slice.
-        let n = unsafe {
-            AMediaExtractor_readSampleData(self.raw.as_ptr(), buf.as_mut_ptr(), buf.len())
-        };
-        if n < 0 {
-            return Ok(None);
-        }
-        let read = usize::try_from(n).map_err(|e| DecodeError::Backend(Box::new(e)))?;
-        // SAFETY: extractor is live.
-        let pts_us = unsafe { AMediaExtractor_getSampleTime(self.raw.as_ptr()) };
-        Ok(Some((read, pts_us)))
+    pub(crate) fn track_count(&self) -> usize {
+        self.track_count
     }
 
-    /// Advance to the next sample. Returns `false` at EOF.
-    pub(crate) fn advance(&mut self) -> bool {
-        // SAFETY: extractor is live.
-        unsafe { AMediaExtractor_advance(self.raw.as_ptr()) }
-    }
-
-    /// Seek to nearest previous-sync sample at or before `pts_us`.
-    pub(crate) fn seek_to(&mut self, pts_us: i64) -> DecodeResult<()> {
-        // SAFETY: extractor is live.
-        let st =
-            unsafe { AMediaExtractor_seekTo(self.raw.as_ptr(), pts_us, SEEK_MODE_PREVIOUS_SYNC) };
-        if st != MEDIA_STATUS_OK {
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!("AMediaExtractor_seekTo failed: {st}"),
-            ))));
-        }
-        Ok(())
+    pub(crate) fn track_info(&self, idx: usize) -> DecodeResult<TrackFormatInfo> {
+        // SAFETY: extractor is live; the NDK bounds-checks `idx` and
+        let fmt_raw = unsafe { AMediaExtractor_getTrackFormat(self.raw.as_ptr(), idx) };
+        let fmt = NonNull::new(fmt_raw).ok_or_else(|| {
+            DecodeError::Backend(Box::new(std::io::Error::other(format!(
+                "AMediaExtractor_getTrackFormat({idx}) returned null"
+            ))))
+        })?;
+        let info = read_track_format(fmt);
+        // SAFETY: we own the returned format handle; free it on return.
+        unsafe { AMediaFormat_delete(fmt.as_ptr()) };
+        info
     }
 }
 
 impl Drop for AndroidMediaExtractor {
     fn drop(&mut self) {
         // SAFETY: both handles are non-null until drop; freed exactly
-        // once here.
         unsafe {
             AMediaExtractor_delete(self.raw.as_ptr());
             AMediaDataSource_delete(self.data_source.as_ptr());
@@ -216,7 +204,6 @@ impl Drop for AndroidMediaExtractor {
 fn read_track_format(fmt: NonNull<ffi::AMediaFormat>) -> DecodeResult<TrackFormatInfo> {
     let mut mime_ptr: *const std::ffi::c_char = ptr::null();
     // SAFETY: `fmt` is non-null; `mime_ptr` is an out-param. The NDK
-    // returns a borrow valid until the format is deleted.
     let ok = unsafe { AMediaFormat_getString(fmt.as_ptr(), KEY_MIME.as_ptr(), &mut mime_ptr) };
     if !ok || mime_ptr.is_null() {
         return Err(DecodeError::Backend(Box::new(std::io::Error::other(
@@ -224,7 +211,6 @@ fn read_track_format(fmt: NonNull<ffi::AMediaFormat>) -> DecodeResult<TrackForma
         ))));
     }
     // SAFETY: `mime_ptr` is a NUL-terminated C string valid for the
-    // lifetime of the format.
     let mime = unsafe { CStr::from_ptr(mime_ptr) }
         .to_string_lossy()
         .into_owned();
@@ -246,7 +232,6 @@ fn read_track_format(fmt: NonNull<ffi::AMediaFormat>) -> DecodeResult<TrackForma
     let mut csd_data: *mut c_void = ptr::null_mut();
     let mut csd_size: usize = 0;
     // SAFETY: out-params; `getBuffer` returns false when the key is
-    // missing and leaves the out-params untouched.
     let has_csd = unsafe {
         AMediaFormat_getBuffer(
             fmt.as_ptr(),
@@ -257,7 +242,6 @@ fn read_track_format(fmt: NonNull<ffi::AMediaFormat>) -> DecodeResult<TrackForma
     };
     let csd_0 = if has_csd && !csd_data.is_null() && csd_size > 0 {
         // SAFETY: NDK returns a buffer valid for the lifetime of the
-        // format; we copy it out before the format is deleted.
         unsafe { std::slice::from_raw_parts(csd_data as *const u8, csd_size) }.to_vec()
     } else {
         Vec::new()
@@ -265,10 +249,10 @@ fn read_track_format(fmt: NonNull<ffi::AMediaFormat>) -> DecodeResult<TrackForma
 
     Ok(TrackFormatInfo {
         mime,
-        channels: u16::try_from(channels_i.max(0)).unwrap_or(2),
-        sample_rate: u32::try_from(sample_rate_i.max(0)).unwrap_or(0),
         duration_us,
         csd_0,
+        channels: u16::try_from(channels_i.max(0)).unwrap_or(2),
+        sample_rate: u32::try_from(sample_rate_i.max(0)).unwrap_or(0),
     })
 }
 
@@ -279,8 +263,6 @@ extern "C" fn read_at_callback(
     size: usize,
 ) -> SSize {
     // SAFETY: `userdata` is the boxed `DataSourceCtx` pinned in
-    // `AndroidMediaExtractor::open`; we hold an exclusive borrow.
-    // `buffer`/`size` come from the NDK and form a valid mutable slice.
     let (ctx, slice) = unsafe {
         (
             &mut *(userdata as *mut DataSourceCtx),

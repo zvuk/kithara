@@ -116,11 +116,6 @@ impl Node for DecoderNode {
         self.sync_seek_epoch();
 
         if !self.outlet.flush() {
-            // PCM ring is full and the overflow slot still holds the
-            // last produced chunk — the consumer is not draining. This
-            // is the paused/idle state, not a stuck source, so
-            // distinguish it from `Waiting` (which the hang watchdog
-            // *does* tick on). See `runtime::observer::PassOutcome`.
             return TickResult::Backpressured;
         }
 
@@ -146,17 +141,6 @@ impl Node for DecoderNode {
                 TickResult::Waiting
             }
 
-            // After the EOF marker has been pushed the track is at AtEof —
-            // `step_track` will keep returning `TrackStep::Eof` until a
-            // seek (or removal) reanimates it. Reporting `Waiting` ticks
-            // the hang watchdog (a paused upstream is expected to
-            // resume), so a fully decoded but seek-recoverable track
-            // would false-positive as a hang. `Backpressured` matches
-            // the enum's own contract: "progress is *not expected* until
-            // the consumer drains the ring" — and importantly keeps the
-            // slot alive, so a subsequent `Audio::seek()` re-enters the
-            // decode loop without the scheduler having terminated it
-            // (which `Done` would do via `slot.is_terminal = true`).
             TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
 
             TrackStep::Eof => {

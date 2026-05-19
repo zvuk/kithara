@@ -133,6 +133,14 @@ enum EnsureCursor {
 }
 
 impl Demuxer for Fmp4SegmentDemuxer {
+    fn current_segment_index(&self) -> Option<u32> {
+        self.cursor.as_ref().map(|c| c.segment_index)
+    }
+
+    fn current_variant_index(&self) -> Option<usize> {
+        self.cursor.as_ref().map(|c| c.variant_index)
+    }
+
     fn duration(&self) -> Option<Duration> {
         self.duration
     }
@@ -203,10 +211,10 @@ impl Demuxer for Fmp4SegmentDemuxer {
         let segment_index = desc.segment_index;
         let variant_index = desc.variant_index;
         self.cursor = Some(SegmentCursor {
-            read: SegmentReadState::new(desc.byte_range),
-            frames: None,
             segment_index,
             variant_index,
+            read: SegmentReadState::new(desc.byte_range),
+            frames: None,
         });
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
@@ -216,14 +224,6 @@ impl Demuxer for Fmp4SegmentDemuxer {
 
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
-    }
-
-    fn current_segment_index(&self) -> Option<u32> {
-        self.cursor.as_ref().map(|c| c.segment_index)
-    }
-
-    fn current_variant_index(&self) -> Option<usize> {
-        self.cursor.as_ref().map(|c| c.variant_index)
     }
 }
 

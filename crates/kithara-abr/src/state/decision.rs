@@ -102,11 +102,6 @@ pub(super) fn decision(current: usize, target: usize, reason: AbrReason) -> AbrD
 }
 
 fn sorted_candidates(variants: &[VariantInfo], max_bw: Option<u64>) -> Vec<(usize, u64)> {
-    // Variants without a declared bandwidth (HLS master without
-    // `BANDWIDTH=...`) collapse to 0 — same fallback the legacy
-    // `build_abr_variants` used. Dropping them here would silently
-    // remove the variant from the candidate set and break ABR auto
-    // switching on minimal fixtures that omit the attribute.
     let mut out: Vec<(usize, u64)> = variants
         .iter()
         .map(|v| (v.variant_index, v.bandwidth_bps.unwrap_or(0)))

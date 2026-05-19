@@ -163,6 +163,9 @@ pub trait Source: Send + Sync + 'static {
         None
     }
 
+    /// Advance the byte cursor by `n` bytes after a successful read.
+    fn advance(&self, n: u64);
+
     /// Optional shared segment-layout handle for segment-aware decoders.
     ///
     /// Segment-aware decoders (fMP4 segment demuxer) call this once at
@@ -195,6 +198,14 @@ pub trait Source: Send + Sync + 'static {
         None
     }
 
+    /// Current variant's full metadata. Adaptive sources (HLS) return
+    /// the live `VariantInfo` for the active variant — pulled from the
+    /// peer on every call so the UI never sees a stale label. Non-adaptive
+    /// sources keep the default `None`.
+    fn current_variant(&self) -> Option<VariantInfo> {
+        None
+    }
+
     /// Byte range of the header (init segment or first served segment)
     /// the decoder must read to re-establish container state after a
     /// format change (HLS ABR cross-codec switch).
@@ -214,6 +225,21 @@ pub trait Source: Send + Sync + 'static {
     /// Transitional — removed in Plan 06.
     fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
         Err(StreamError::Source(SourceError::FormatChangeNotApplicable))
+    }
+
+    /// `true` if a cross-variant transition is in-flight and `read_at` /
+    /// `wait_range` are short-circuited to `Pending(VariantChange)` /
+    /// `Interrupted` until the decoder acks the switch via
+    /// `clear_variant_fence` (HLS) or equivalent.
+    ///
+    /// Sources without a variant fence keep the default `false`. Used by
+    /// the audio decode loop to break out of `Ok(Pending(_))` retry spin
+    /// when Symphonia / other demuxers absorb the underlying
+    /// `VariantChangeError` and surface only an opaque pending — without
+    /// this polled check the loop would yield forever while the fence
+    /// stays closed waiting for a recreate that never starts.
+    fn has_variant_change_pending(&self) -> bool {
+        false
     }
 
     /// Whether the source currently reports zero bytes. Default mirrors
@@ -246,14 +272,6 @@ pub trait Source: Send + Sync + 'static {
         None
     }
 
-    /// Current variant's full metadata. Adaptive sources (HLS) return
-    /// the live `VariantInfo` for the active variant — pulled from the
-    /// peer on every call so the UI never sees a stale label. Non-adaptive
-    /// sources keep the default `None`.
-    fn current_variant(&self) -> Option<VariantInfo> {
-        None
-    }
-
     /// Wake any blocked `wait_range()` calls.
     ///
     /// Called after `Timeline::initiate_seek()` to ensure immediate response
@@ -282,20 +300,10 @@ pub trait Source: Send + Sync + 'static {
     /// by `wait_range()` implementations for fast-path dispatch.
     fn phase_at(&self, range: Range<u64>) -> SourcePhase;
 
-    /// `true` if a cross-variant transition is in-flight and `read_at` /
-    /// `wait_range` are short-circuited to `Pending(VariantChange)` /
-    /// `Interrupted` until the decoder acks the switch via
-    /// `clear_variant_fence` (HLS) or equivalent.
+    /// Current byte position in the source's virtual byte space.
     ///
-    /// Sources without a variant fence keep the default `false`. Used by
-    /// the audio decode loop to break out of `Ok(Pending(_))` retry spin
-    /// when Symphonia / other demuxers absorb the underlying
-    /// `VariantChangeError` and surface only an opaque pending — without
-    /// this polled check the loop would yield forever while the fence
-    /// stays closed waiting for a recreate that never starts.
-    fn has_variant_change_pending(&self) -> bool {
-        false
-    }
+    /// HLS delegates to active variant; file owns its own atomic cursor.
+    fn position(&self) -> u64;
 
     /// Read data at offset into buffer.
     ///
@@ -324,6 +332,11 @@ pub trait Source: Send + Sync + 'static {
     fn seek_time_anchor(&mut self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         Ok(None)
     }
+
+    /// Absolute set of the byte cursor — used by [`Stream::seek`] and
+    /// post-seek landings. Sources implement this via the same atomic
+    /// cursor that backs [`Self::position`] / [`Self::advance`].
+    fn set_position(&self, pos: u64);
 
     /// Set current seek epoch for stale request invalidation.
     ///
@@ -374,19 +387,6 @@ pub trait Source: Send + Sync + 'static {
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome>;
-
-    /// Current byte position in the source's virtual byte space.
-    ///
-    /// HLS delegates to active variant; file owns its own atomic cursor.
-    fn position(&self) -> u64;
-
-    /// Advance the byte cursor by `n` bytes after a successful read.
-    fn advance(&self, n: u64);
-
-    /// Absolute set of the byte cursor — used by [`Stream::seek`] and
-    /// post-seek landings. Sources implement this via the same atomic
-    /// cursor that backs [`Self::position`] / [`Self::advance`].
-    fn set_position(&self, pos: u64);
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented
@@ -429,11 +429,6 @@ pub trait SegmentLayout: Send + Sync + 'static {
         None
     }
 
-    /// Locate the segment whose `[decode_time, decode_time + duration)`
-    /// covers `t`. Resolves against the source's *current layout
-    /// variant* — same variant `init_segment_range` describes.
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor>;
-
     /// Descriptor for the segment at `segment_index` in the current
     /// layout variant. Used by demuxers to re-resolve a cursor's
     /// `byte_range` against the live layout — without this, a DRM
@@ -446,6 +441,11 @@ pub trait SegmentLayout: Send + Sync + 'static {
     fn segment_at_index(&self, _segment_index: u32) -> Option<SegmentDescriptor> {
         None
     }
+
+    /// Locate the segment whose `[decode_time, decode_time + duration)`
+    /// covers `t`. Resolves against the source's *current layout
+    /// variant* — same variant `init_segment_range` describes.
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor>;
 
     /// Total number of segments in the current layout variant.
     fn segment_count(&self) -> Option<u32>;

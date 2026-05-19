@@ -22,13 +22,13 @@ use crate::{
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct MmapOptions {
-    /// Path to the backing file.
-    pub path: PathBuf,
     /// Open mode controlling read/write behavior for existing files.
     #[builder(default)]
     pub mode: OpenMode,
     /// Initial file size for new files. Ignored for existing files.
     pub initial_len: Option<u64>,
+    /// Path to the backing file.
+    pub path: PathBuf,
 }
 
 impl MmapOptions {

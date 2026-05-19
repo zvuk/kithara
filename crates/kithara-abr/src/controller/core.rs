@@ -66,6 +66,8 @@ pub struct AbrSettings {
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
     #[builder(default = Duration::from_secs(5))]
     pub urgent_downswitch_buffer: Duration,
+    /// Seed throughput estimate (bps) applied at controller construction.
+    pub initial_throughput_bps: Option<u64>,
     /// Global data-saver cap.
     pub max_bandwidth_bps: Option<u64>,
     /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
@@ -80,8 +82,6 @@ pub struct AbrSettings {
     /// Hysteresis ratio for up-switch.
     #[builder(default = 1.3)]
     pub up_hysteresis_ratio: f64,
-    /// Seed throughput estimate (bps) applied at controller construction.
-    pub initial_throughput_bps: Option<u64>,
 }
 
 impl Default for AbrSettings {
@@ -111,12 +111,6 @@ impl AbrController {
     #[must_use]
     pub fn new(settings: AbrSettings) -> Arc<Self> {
         Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()))
-    }
-
-    fn seed_estimator(settings: &AbrSettings, estimator: &Arc<dyn Estimator>) {
-        if let Some(bps) = settings.initial_throughput_bps {
-            estimator.seed_initial_bps(bps);
-        }
     }
 
     pub(super) fn allocate_peer_id(&self) -> AbrPeerId {
@@ -195,6 +189,12 @@ impl AbrController {
         });
         self.peers.lock_sync().insert(id, entry);
         AbrHandle::new(Arc::clone(self), id, state, bus)
+    }
+
+    fn seed_estimator(settings: &AbrSettings, estimator: &Arc<dyn Estimator>) {
+        if let Some(bps) = settings.initial_throughput_bps {
+            estimator.seed_initial_bps(bps);
+        }
     }
 
     /// Settings snapshot.

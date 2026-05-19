@@ -37,17 +37,13 @@ impl FileCoord {
         }
     }
 
-    #[must_use]
-    pub(crate) fn position(&self) -> u64 {
-        self.position.load(Ordering::Acquire)
-    }
-
     pub(crate) fn advance_position(&self, n: u64) {
         self.position.fetch_add(n, Ordering::AcqRel);
     }
 
-    pub(crate) fn set_position(&self, pos: u64) {
-        self.position.store(pos, Ordering::Release);
+    #[must_use]
+    pub(crate) fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -57,6 +53,10 @@ impl FileCoord {
 
     pub(crate) fn set_download_pos(&self, value: u64) {
         self.timeline.set_download_position(value);
+    }
+
+    pub(crate) fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]

@@ -22,7 +22,6 @@ use crate::{
 
 struct CallbackCtx {
     source: BoxedSource,
-    size: i64,
     /// Last `io::Error` raised by the read callback while filling the
     /// current `AudioFileReadPacketData` request. `AudioFile` collapses
     /// callback failures into a generic non-zero `OSStatus`, losing the
@@ -31,23 +30,35 @@ struct CallbackCtx {
     /// stash the original error here so the wrapper can rewrap it into
     /// `DecodeError::Backend` with the chain intact.
     last_error: Cell<Option<io::Error>>,
+    size: i64,
 }
 
 /// Safe wrapper around an Apple `AudioFile` handle backed by an
 /// arbitrary `Read + Seek` source via `AudioFileOpenWithCallbacks`.
 pub(crate) struct AppleAudioFile {
     handle: AudioFileID,
-    _ctx: Box<CallbackCtx>,
     data_format: AudioStreamBasicDescription,
-    packet_count: u64,
+    _ctx: Box<CallbackCtx>,
     max_packet_size: u32,
+    packet_count: u64,
 }
 
 // SAFETY: `AudioFileID` is an opaque kernel handle accessed only through
-// the owning `AppleAudioFile`; we never share without `&mut`.
 unsafe impl Send for AppleAudioFile {}
 
 impl AppleAudioFile {
+    pub(crate) fn data_format(&self) -> AudioStreamBasicDescription {
+        self.data_format
+    }
+
+    pub(crate) fn magic_cookie(&self) -> Option<Vec<u8>> {
+        read_magic_cookie(self.handle)
+    }
+
+    pub(crate) fn max_packet_size(&self) -> u32 {
+        self.max_packet_size
+    }
+
     /// Open `source` as an audio file. `hint` is one of the
     /// `kAudioFile*Type` four-cc constants in [`Consts`]; pass `None`
     /// to let `AudioFileServices` auto-detect.
@@ -67,9 +78,6 @@ impl AppleAudioFile {
         let mut handle: AudioFileID = ptr::null_mut();
 
         // SAFETY: `ctx` is boxed (stable address) and outlives the
-        // `AudioFile` handle (dropped together below). Callbacks
-        // dereference it as `*mut CallbackCtx`. `handle` is an out-param
-        // and is written before any other use.
         let status = unsafe {
             AudioFileOpenWithCallbacks(
                 ctx.as_mut() as *mut CallbackCtx as *mut c_void,
@@ -94,27 +102,29 @@ impl AppleAudioFile {
 
         Ok(Self {
             handle,
-            _ctx: ctx,
             data_format,
             packet_count,
             max_packet_size,
+            _ctx: ctx,
         })
-    }
-
-    pub(crate) fn data_format(&self) -> AudioStreamBasicDescription {
-        self.data_format
     }
 
     pub(crate) fn packet_count(&self) -> u64 {
         self.packet_count
     }
 
-    pub(crate) fn max_packet_size(&self) -> u32 {
-        self.max_packet_size
-    }
-
-    pub(crate) fn magic_cookie(&self) -> Option<Vec<u8>> {
-        read_magic_cookie(self.handle)
+    /// Translate an `AudioFileReadPacketData` failure into a
+    /// `DecodeError::Backend`. When the source read callback stashed an
+    /// `io::Error` (transient `PendingReason` / `VariantChangeError`
+    /// from `Stream::read`), we forward that error through so
+    /// `DecodeError::classify` can walk the chain and tag the failure
+    /// as `Interrupted` / `VariantChange`. Otherwise we surface the raw
+    /// `OSStatus` for terminal diagnostics.
+    fn read_failure_error(&self, op: &str, status: OSStatus) -> DecodeError {
+        let io_err = self._ctx.last_error.take().unwrap_or_else(|| {
+            io::Error::other(format!("{op} failed: {}", os_status_to_string(status)))
+        });
+        DecodeError::Backend(Box::new(io_err))
     }
 
     /// Read one VBR packet at `starting_packet` into `buf`. Returns
@@ -133,8 +143,6 @@ impl AppleAudioFile {
         self._ctx.last_error.set(None);
 
         // SAFETY: `self.handle` is non-null (constructor validated it);
-        // all out-params are exclusively borrowed; `buf` is a valid
-        // exclusive slice with capacity `buf.len()`.
         let status = unsafe {
             AudioFileReadPacketData(
                 self.handle,
@@ -173,10 +181,6 @@ impl AppleAudioFile {
         let mut packets: UInt32 = max_packets;
         self._ctx.last_error.set(None);
         // SAFETY: `self.handle` non-null; out-params exclusively
-        // borrowed; `buf` is a valid exclusive slice with capacity
-        // `buf.len()`. `outPacketDescriptions = NULL` is allowed by
-        // `AudioFileReadPacketData` for CBR files (kAudioFormatLinearPCM
-        // has constant `mBytesPerPacket`).
         let status = unsafe {
             AudioFileReadPacketData(
                 self.handle,
@@ -193,27 +197,12 @@ impl AppleAudioFile {
         }
         Ok((bytes, packets))
     }
-
-    /// Translate an `AudioFileReadPacketData` failure into a
-    /// `DecodeError::Backend`. When the source read callback stashed an
-    /// `io::Error` (transient `PendingReason` / `VariantChangeError`
-    /// from `Stream::read`), we forward that error through so
-    /// `DecodeError::classify` can walk the chain and tag the failure
-    /// as `Interrupted` / `VariantChange`. Otherwise we surface the raw
-    /// `OSStatus` for terminal diagnostics.
-    fn read_failure_error(&self, op: &str, status: OSStatus) -> DecodeError {
-        let io_err = self._ctx.last_error.take().unwrap_or_else(|| {
-            io::Error::other(format!("{op} failed: {}", os_status_to_string(status)))
-        });
-        DecodeError::Backend(Box::new(io_err))
-    }
 }
 
 impl Drop for AppleAudioFile {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             // SAFETY: `handle` came from `AudioFileOpenWithCallbacks` and
-            // is non-null; we are the sole owner.
             let _ = unsafe { AudioFileClose(self.handle) };
         }
     }
@@ -224,7 +213,6 @@ fn read_data_format(handle: AudioFileID) -> DecodeResult<AudioStreamBasicDescrip
     let mut size = UInt32::try_from(size_of::<AudioStreamBasicDescription>())
         .map_err(|e| DecodeError::Backend(Box::new(e)))?;
     // SAFETY: `handle` is live; `asbd` and `size` are exclusively
-    // borrowed out-params; `size` matches the ASBD struct size.
     let status = unsafe {
         AudioFileGetProperty(
             handle,
@@ -247,7 +235,6 @@ fn read_packet_count(handle: AudioFileID) -> DecodeResult<u64> {
     let mut size =
         UInt32::try_from(size_of::<u64>()).map_err(|e| DecodeError::Backend(Box::new(e)))?;
     // SAFETY: `handle` live; `count`/`size` exclusively borrowed; size
-    // matches the property type.
     let status = unsafe {
         AudioFileGetProperty(
             handle,
@@ -270,7 +257,6 @@ fn read_max_packet_size(handle: AudioFileID) -> DecodeResult<u32> {
     let mut size =
         UInt32::try_from(size_of::<u32>()).map_err(|e| DecodeError::Backend(Box::new(e)))?;
     // SAFETY: `handle` live; `sz`/`size` exclusively borrowed; size
-    // matches the property type.
     let status = unsafe {
         AudioFileGetProperty(
             handle,
@@ -305,7 +291,6 @@ fn read_magic_cookie(handle: AudioFileID) -> Option<Vec<u8>> {
     }
     let mut buf = vec![0u8; size as usize];
     // SAFETY: `handle` live; `buf` exclusively borrowed; `size` reflects
-    // the alloc length and the actual cookie length reported by NDK.
     let status = unsafe {
         AudioFileGetProperty(
             handle,
@@ -329,10 +314,6 @@ extern "C" fn read_callback(
     actual: *mut UInt32,
 ) -> OSStatus {
     // SAFETY: `user_data` is the boxed `CallbackCtx` we pinned in
-    // `AppleAudioFile::open` and outlives every read callback invocation;
-    // we hold an exclusive borrow for the body. `buffer` and `request`
-    // come from AudioToolbox; the buffer is valid for `request` bytes.
-    // `actual` is an out-param exclusively owned by us for the call.
     let (ctx, slice, actual) = unsafe {
         (
             &mut *(user_data as *mut CallbackCtx),
@@ -374,7 +355,6 @@ extern "C" fn read_callback(
 
 extern "C" fn get_size_callback(user_data: *mut c_void) -> SInt64 {
     // SAFETY: `user_data` is the boxed `CallbackCtx` we pinned in
-    // `AppleAudioFile::open`.
     let ctx = unsafe { &*(user_data as *const CallbackCtx) };
     ctx.size
 }

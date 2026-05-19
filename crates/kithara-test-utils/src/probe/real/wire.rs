@@ -20,9 +20,6 @@ pub trait Probe {
 /// `Self: Copy` is required so the `#[probe]` macro can pass arguments
 /// by value without forcing call-sites to clone non-`Copy` payloads.
 pub trait IntoProbeArg: Copy {
-    /// Encode `self` as a u64 probe argument.
-    fn into_probe_arg(self) -> u64;
-
     /// Decode a packed `u64` back into `Self`. Default panics with the
     /// type name — override on every type whose `into_probe_arg` is
     /// expected to round-trip (scalars, `Duration`, `RequestId`, etc.)
@@ -44,6 +41,9 @@ pub trait IntoProbeArg: Copy {
             std::any::type_name::<Self>(),
         )
     }
+
+    /// Encode `self` as a u64 probe argument.
+    fn into_probe_arg(self) -> u64;
 }
 
 /// Generate a round-trippable [`IntoProbeArg`] impl for an integer type.
@@ -68,20 +68,20 @@ macro_rules! impl_int_probe_arg {
 impl_int_probe_arg!(u64, i64, u32, i32, usize);
 
 impl IntoProbeArg for bool {
-    fn into_probe_arg(self) -> u64 {
-        u64::from(self)
-    }
     fn from_probe_arg(packed: u64) -> Self {
         packed != 0
+    }
+    fn into_probe_arg(self) -> u64 {
+        u64::from(self)
     }
 }
 
 impl IntoProbeArg for Duration {
-    fn into_probe_arg(self) -> u64 {
-        u64::try_from(self.as_micros()).unwrap_or(u64::MAX)
-    }
     fn from_probe_arg(packed: u64) -> Self {
         Self::from_micros(packed)
+    }
+    fn into_probe_arg(self) -> u64 {
+        u64::try_from(self.as_micros()).unwrap_or(u64::MAX)
     }
 }
 
@@ -133,10 +133,6 @@ impl IntoProbeArg for CancelReason {
 
 impl IntoProbeArg for AbrMode {
     fn into_probe_arg(self) -> u64 {
-        // Same wire encoding as `From<AbrMode> for usize`:
-        // `Manual(v)` → `v`, `Auto(None)` → `usize::MAX`,
-        // `Auto(Some(v))` → `usize::MAX - 1 - v`. Tests filter on
-        // the `Manual(idx)` case where the encoding is just `idx`.
         usize::from(self) as u64
     }
 }
@@ -179,14 +175,6 @@ pub fn register_probes() {
 #[cfg(not(target_arch = "wasm32"))]
 #[must_use]
 pub fn caller_fn_above(probe_fn_name: &str) -> Option<String> {
-    // Hot-path consideration: this runs on every `#[kithara::probe]`
-    // firing, including very-frequent ones like `Future::poll_next`.
-    // `backtrace::Backtrace::new()` resolves *every* frame on the
-    // stack — that's tens of frames × demangling each call, easily
-    // >1ms per fire. We use the lower-level `backtrace::trace` +
-    // `resolve_frame` API so we can early-return as soon as the
-    // first non-machinery frame past the probe-attributed function
-    // is resolved.
     let mut found_self = false;
     let mut result: Option<String> = None;
     backtrace::trace(|frame| {

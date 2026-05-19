@@ -710,14 +710,14 @@ pub(crate) mod probe_contracts {
     /// next expected step; intervening probes are tolerated, but
     /// expected steps must appear in the given order.
     ///
-    /// **Switch case** (`expect_midstream_switch=true`, V_old≠V_new):
+    /// **Switch case** (`expect_midstream_switch=true`, `V_old≠V_new)`:
     /// 1. `notify_commit(target=V_new)` — boundary commit fired.
-    /// 2. `rebuild(variant=V_new)` — V_new queue rebuilt from
+    /// 2. `rebuild(variant=V_new)` — `V_new` queue rebuilt from
     ///    `from_seg = decode_seg_at_apply`.
-    /// 3. `dispatch(variant=V_new)` — first V_new fetch dispatched.
+    /// 3. `dispatch(variant=V_new)` — first `V_new` fetch dispatched.
     ///
-    /// **Noop case** (`expect_midstream_switch=false`, V_old==V_new):
-    /// scheduler continues normal V_old dispatch — no rebuild required.
+    /// **Noop case** (`expect_midstream_switch=false`, `V_old==V_new)`:
+    /// scheduler continues normal `V_old` dispatch — no rebuild required.
     /// Sequence: `dispatch(V_old)`.
     ///
     /// Returns the first `dispatch(v_new)` event so the caller
@@ -847,7 +847,7 @@ pub(crate) mod probe_contracts {
     /// of decoded audio (a `build_chunk` event with `timestamp >= target`).
     /// On failure the message reports the last observed timestamp and
     /// total chunks decoded — concrete evidence of a stall instead of
-    /// "wait_for_probe timed out".
+    /// "`wait_for_probe` timed out".
     pub(crate) fn assert_build_chunk_reached(
         recorder: &Recorder,
         target_ts_us: u64,

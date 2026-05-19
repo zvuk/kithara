@@ -25,18 +25,18 @@ use crate::{
 /// `AudioStreamPacketDescription`.
 pub(crate) struct AppleAudioFileDemuxer {
     file: AppleAudioFile,
-    track_info: TrackInfo,
-    read_buf: Vec<u8>,
-    last_read_len: usize,
-    last_packet_desc_blob: [u8; size_of::<AudioStreamPacketDescription>()],
-    next_packet: u64,
-    total_packets: u64,
-    frames_per_packet: u32,
     /// `Some(packets_per_call)` for CBR (`LinearPCM`) — every `next_frame`
     /// issues one batched `AudioFileReadPacketData` for that many
     /// packets. `None` for VBR (MP3, ALAC) — one packet per call so
     /// each `Frame` carries its own `AudioStreamPacketDescription`.
     cbr_batch_packets: Option<u32>,
+    track_info: TrackInfo,
+    read_buf: Vec<u8>,
+    last_packet_desc_blob: [u8; size_of::<AudioStreamPacketDescription>()],
+    frames_per_packet: u32,
+    next_packet: u64,
+    total_packets: u64,
+    last_read_len: usize,
 }
 
 /// Target ~16 `KiB` per CBR read — large enough to amortise the source
@@ -45,22 +45,6 @@ pub(crate) struct AppleAudioFileDemuxer {
 const CBR_BATCH_TARGET_BYTES: u32 = 16 * 1024;
 
 impl AppleAudioFileDemuxer {
-    pub(crate) fn open_wav(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, Some(Consts::kAudioFileWAVEType), AudioCodec::Pcm)
-    }
-
-    pub(crate) fn open_mp3(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, Some(Consts::kAudioFileMP3Type), AudioCodec::Mp3)
-    }
-
-    pub(crate) fn open_alac_m4a(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, Some(Consts::kAudioFileM4AType), AudioCodec::Alac)
-    }
-
-    pub(crate) fn open_alac_caf(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, Some(Consts::kAudioFileCAFType), AudioCodec::Alac)
-    }
-
     fn open(source: BoxedSource, hint: Option<u32>, codec: AudioCodec) -> DecodeResult<Self> {
         let file = AppleAudioFile::open(source, hint)?;
         let asbd = file.data_format();
@@ -68,9 +52,6 @@ impl AppleAudioFileDemuxer {
         let frames_per_packet = if asbd.mFramesPerPacket > 0 {
             asbd.mFramesPerPacket
         } else {
-            // VBR upper bound: MP3 frame = 1152 samples; ALAC default
-            // packet = 4096. Pick the larger so the read buffer is safe
-            // for both before per-packet sizing kicks in.
             4096
         };
 
@@ -101,17 +82,12 @@ impl AppleAudioFileDemuxer {
         let track_info = TrackInfo {
             codec,
             duration,
-            gapless: None,
             extra_data,
             channels,
             sample_rate,
+            gapless: None,
         };
 
-        // CBR: `mBytesPerPacket > 0` and the packet table is implicit
-        // (LinearPCM). Batch reads to amortise per-packet source I/O.
-        // VBR: every packet has its own `AudioStreamPacketDescription`,
-        // so we keep a single-packet rhythm and forward `packet_desc` to
-        // the codec.
         let (cbr_batch_packets, buf_cap) = if asbd.mBytesPerPacket > 0 {
             let packets = (CBR_BATCH_TARGET_BYTES / asbd.mBytesPerPacket).max(1);
             let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
@@ -129,14 +105,30 @@ impl AppleAudioFileDemuxer {
         Ok(Self {
             file,
             track_info,
+            total_packets,
+            frames_per_packet,
+            cbr_batch_packets,
             read_buf: vec![0u8; buf_cap],
             last_read_len: 0,
             last_packet_desc_blob: [0u8; size_of::<AudioStreamPacketDescription>()],
             next_packet: 0,
-            total_packets,
-            frames_per_packet,
-            cbr_batch_packets,
         })
+    }
+
+    pub(crate) fn open_alac_caf(source: BoxedSource) -> DecodeResult<Self> {
+        Self::open(source, Some(Consts::kAudioFileCAFType), AudioCodec::Alac)
+    }
+
+    pub(crate) fn open_alac_m4a(source: BoxedSource) -> DecodeResult<Self> {
+        Self::open(source, Some(Consts::kAudioFileM4AType), AudioCodec::Alac)
+    }
+
+    pub(crate) fn open_mp3(source: BoxedSource) -> DecodeResult<Self> {
+        Self::open(source, Some(Consts::kAudioFileMP3Type), AudioCodec::Mp3)
+    }
+
+    pub(crate) fn open_wav(source: BoxedSource) -> DecodeResult<Self> {
+        Self::open(source, Some(Consts::kAudioFileWAVEType), AudioCodec::Pcm)
     }
 }
 
@@ -179,9 +171,9 @@ impl Demuxer for AppleAudioFileDemuxer {
             let dur = Duration::from_secs_f64(total_frames as f64 / rate);
             self.next_packet = start_packet.saturating_add(u64::from(packets_read));
             return Ok(DemuxOutcome::Frame(Frame {
+                pts,
                 data: &self.read_buf[..self.last_read_len],
                 duration: dur,
-                pts,
                 packet_desc: &[],
             }));
         }
@@ -192,8 +184,6 @@ impl Demuxer for AppleAudioFileDemuxer {
 
         self.last_read_len = bytes as usize;
         // SAFETY: `AudioStreamPacketDescription` is `#[repr(C)]` POD
-        // with no padding traps; we copy its bit pattern into an owned
-        // byte blob the codec layer will read back through `Frame::packet_desc`.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 &desc as *const _ as *const u8,
@@ -214,9 +204,9 @@ impl Demuxer for AppleAudioFileDemuxer {
         let dur = Duration::from_secs_f64(frames as f64 / rate);
 
         let frame = Frame {
+            pts,
             data: &self.read_buf[..self.last_read_len],
             duration: dur,
-            pts,
             packet_desc: &self.last_packet_desc_blob,
         };
 
@@ -271,7 +261,6 @@ impl Demuxer for AppleAudioFileDemuxer {
 fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
     let mut out = vec![0u8; size_of::<AudioStreamBasicDescription>()];
     // SAFETY: `AudioStreamBasicDescription` is `#[repr(C)]` POD; we copy
-    // its bit pattern into a freshly sized `Vec<u8>`. Length matches.
     unsafe {
         std::ptr::copy_nonoverlapping(asbd as *const _ as *const u8, out.as_mut_ptr(), out.len());
     }

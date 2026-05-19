@@ -109,6 +109,29 @@ impl FileInner {
         inner
     }
 
+    /// Mark the resource failed and evict the pre-allocated cache file.
+    ///
+    /// Call on any terminal download error so the file is gone from disk
+    /// before the task returns — without this the clone in `FileInner.asset.res`
+    /// keeps the mmap parked in the cache directory for the full lifetime
+    /// of the holding `Stream<File>`.
+    pub(crate) fn fail_and_evict(&self, reason: &str) {
+        self.set_phase(FilePhase::Complete);
+        self.asset.res.fail(reason.to_string());
+        self.asset.backend.remove_resource(&self.asset.key);
+    }
+
+    /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
+    /// on the `Complete` edge so the hot-path `as_segment_layout` audit
+    /// can short-circuit on `segment_index.get()` without re-reading the
+    /// file each tick.
+    pub(crate) fn set_phase(&self, phase: FilePhase) {
+        self.phase.store(phase as u8, Ordering::Release);
+        if matches!(phase, FilePhase::Complete) {
+            self.try_build_segment_index();
+        }
+    }
+
     /// One-shot fragmented-mp4 parse from the fully cached file bytes.
     /// Idempotent: a second call is a `OnceLock::get` fast-path no-op.
     /// Called from `set_phase(Complete)` (and from `new` for files
@@ -133,29 +156,6 @@ impl FileInner {
         }
         if let Some(index) = FileSegmentIndex::try_build(&buf) {
             let _ = self.segment_index.set(index);
-        }
-    }
-
-    /// Mark the resource failed and evict the pre-allocated cache file.
-    ///
-    /// Call on any terminal download error so the file is gone from disk
-    /// before the task returns — without this the clone in `FileInner.asset.res`
-    /// keeps the mmap parked in the cache directory for the full lifetime
-    /// of the holding `Stream<File>`.
-    pub(crate) fn fail_and_evict(&self, reason: &str) {
-        self.set_phase(FilePhase::Complete);
-        self.asset.res.fail(reason.to_string());
-        self.asset.backend.remove_resource(&self.asset.key);
-    }
-
-    /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
-    /// on the `Complete` edge so the hot-path `as_segment_layout` audit
-    /// can short-circuit on `segment_index.get()` without re-reading the
-    /// file each tick.
-    pub(crate) fn set_phase(&self, phase: FilePhase) {
-        self.phase.store(phase as u8, Ordering::Release);
-        if matches!(phase, FilePhase::Complete) {
-            self.try_build_segment_index();
         }
     }
 }

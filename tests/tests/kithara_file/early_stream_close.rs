@@ -93,33 +93,33 @@ async fn handle_request(
         range_header
     );
 
-    if let Some(range_str) = range_header {
-        if let Some(range_part) = range_str.strip_prefix("bytes=") {
-            let parts: Vec<&str> = range_part.split('-').collect();
-            let start = parts[0].parse::<usize>().unwrap_or(0);
-            let end = parts
-                .get(1)
-                .filter(|s| !s.is_empty())
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(Consts::TOTAL_SIZE - 1);
+    if let Some(range_str) = range_header
+        && let Some(range_part) = range_str.strip_prefix("bytes=")
+    {
+        let parts: Vec<&str> = range_part.split('-').collect();
+        let start = parts[0].parse::<usize>().unwrap_or(0);
+        let end = parts
+            .get(1)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(Consts::TOTAL_SIZE - 1);
 
-            let end = (end + 1).min(Consts::TOTAL_SIZE);
-            tracing::info!("Server: serving range [{}, {})", start, end);
+        let end = (end + 1).min(Consts::TOTAL_SIZE);
+        tracing::info!("Server: serving range [{}, {})", start, end);
 
-            let chunk = Bytes::from(state.file_data[start..end].to_vec());
-            let content_range = format!("bytes {}-{}/{}", start, end - 1, Consts::TOTAL_SIZE);
+        let chunk = Bytes::from(state.file_data[start..end].to_vec());
+        let content_range = format!("bytes {}-{}/{}", start, end - 1, Consts::TOTAL_SIZE);
 
-            return (
-                StatusCode::PARTIAL_CONTENT,
-                [
-                    (header::CONTENT_LENGTH, (end - start).to_string()),
-                    (header::CONTENT_RANGE, content_range),
-                    (header::CONTENT_TYPE, "audio/mpeg".to_string()),
-                ],
-                chunk,
-            )
-                .into_response();
-        }
+        return (
+            StatusCode::PARTIAL_CONTENT,
+            [
+                (header::CONTENT_LENGTH, (end - start).to_string()),
+                (header::CONTENT_RANGE, content_range),
+                (header::CONTENT_TYPE, "audio/mpeg".to_string()),
+            ],
+            chunk,
+        )
+            .into_response();
     }
 
     tracing::warn!(

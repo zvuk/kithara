@@ -258,11 +258,10 @@ async fn test_seek_emits_matching_playback_progress() {
     while Instant::now() < deadline {
         if let Ok(Ok(Event::Audio(AudioEvent::PlaybackProgress { seek_epoch, .. }))) =
             timeout(Duration::from_millis(40), events.recv()).await
+            && seek_epoch == expected_epoch
         {
-            if seek_epoch == expected_epoch {
-                matched_epoch = Some(seek_epoch);
-                break;
-            }
+            matched_epoch = Some(seek_epoch);
+            break;
         }
     }
 

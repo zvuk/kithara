@@ -95,6 +95,18 @@ pub struct ResourceConfig {
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
     pub initial_abr_mode: AbrMode,
+    /// Selects the decoder backend explicitly.
+    #[builder(default)]
+    pub decoder_backend: DecoderBackend,
+    /// How leading/trailing PCM is trimmed after decode.
+    #[builder(default)]
+    pub gapless_mode: kithara_decode::GaplessMode,
+    /// Encryption key handling configuration.
+    #[builder(default)]
+    pub keys: KeyOptions,
+    /// Number of chunks to buffer before signaling preload readiness.
+    #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
+    pub preload_chunks: NonZeroUsize,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
     pub bus: Option<EventBus>,
@@ -102,37 +114,28 @@ pub struct ResourceConfig {
     pub byte_pool: Option<BytePool>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
+    /// Shared downloader instance.
+    pub downloader: Option<Downloader>,
+    /// Shared flush coordinator for `AssetStore` on-disk indexes.
+    pub flush_hub: Option<Arc<FlushHub>>,
+    /// Additional HTTP headers to include in all network requests.
+    pub headers: Option<Headers>,
     /// Optional format hint (file extension like "mp3", "wav").
     pub hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     pub hls_base_url: Option<Url>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
-    /// Encryption key handling configuration.
-    #[builder(default)]
-    pub keys: KeyOptions,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
     pub name: Option<String>,
-    /// Additional HTTP headers to include in all network requests.
-    pub headers: Option<Headers>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
     /// Shared playback rate atomic for the audio pipeline resampler.
     pub playback_rate: Option<Arc<AtomicF32>>,
-    /// Maximum peak bitrate in bits per second for ABR variant selection.
-    #[builder(default = 0.0)]
-    pub preferred_peak_bitrate: f64,
-    /// Maximum peak bitrate for expensive networks (e.g., cellular).
-    #[builder(default = 0.0)]
-    pub preferred_peak_bitrate_for_expensive_networks: f64,
-    /// Number of chunks to buffer before signaling preload readiness.
-    #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
-    pub preload_chunks: NonZeroUsize,
-    /// Selects the decoder backend explicitly.
-    #[builder(default)]
-    pub decoder_backend: DecoderBackend,
+    /// Shared audio worker handle for cooperative multi-track decoding.
+    pub worker: Option<AudioWorkerHandle>,
     /// Resampling quality preset.
     #[builder(default)]
     pub resampler_quality: ResamplerQuality,
@@ -141,55 +144,15 @@ pub struct ResourceConfig {
     /// Storage configuration (cache directory, eviction limits).
     #[builder(default)]
     pub store: StoreOptions,
-    /// Shared downloader instance.
-    pub downloader: Option<Downloader>,
-    /// Shared flush coordinator for `AssetStore` on-disk indexes.
-    pub flush_hub: Option<Arc<FlushHub>>,
-    /// Shared audio worker handle for cooperative multi-track decoding.
-    pub worker: Option<AudioWorkerHandle>,
-    /// How leading/trailing PCM is trimmed after decode.
-    #[builder(default)]
-    pub gapless_mode: kithara_decode::GaplessMode,
+    /// Maximum peak bitrate in bits per second for ABR variant selection.
+    #[builder(default = 0.0)]
+    pub preferred_peak_bitrate: f64,
+    /// Maximum peak bitrate for expensive networks (e.g., cellular).
+    #[builder(default = 0.0)]
+    pub preferred_peak_bitrate_for_expensive_networks: f64,
 }
 
 impl ResourceConfig {
-    /// Parse a URL string or local file path into a [`ResourceSrc`].
-    ///
-    /// Tries URL parsing first. On failure, falls back to absolute file path.
-    /// A `file://` URL is normalized to a `Path`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DecodeError::InvalidData` if the input is an invalid `file://`
-    /// URL or a non-absolute file path.
-    pub fn parse_src<S: AsRef<str>>(input: S) -> Result<ResourceSrc, DecodeError> {
-        let trimmed = input.as_ref().trim();
-
-        match Url::parse(trimmed) {
-            #[cfg(not(target_arch = "wasm32"))]
-            Ok(url) if url.scheme() == "file" => {
-                let path = url.to_file_path().map_err(|()| {
-                    DecodeError::InvalidData(format!("invalid file URL: {trimmed}"))
-                })?;
-                Ok(ResourceSrc::Path(path))
-            }
-            #[cfg(target_arch = "wasm32")]
-            Ok(url) if url.scheme() == "file" => Err(DecodeError::InvalidData(format!(
-                "file:// URL is not supported on wasm: {trimmed}"
-            ))),
-            Ok(url) => Ok(ResourceSrc::Url(url)),
-            Err(_) => {
-                let path = PathBuf::from(trimmed);
-                if !path.is_absolute() {
-                    return Err(DecodeError::InvalidData(format!(
-                        "invalid URL or file path (must be absolute): {trimmed}"
-                    )));
-                }
-                Ok(ResourceSrc::Path(path))
-            }
-        }
-    }
-
     /// Terminal constructor — parses input and returns a fully-built config.
     ///
     /// # Errors
@@ -307,6 +270,43 @@ impl ResourceConfig {
             .maybe_worker(self.worker)
             .gapless_mode(self.gapless_mode)
             .build())
+    }
+
+    /// Parse a URL string or local file path into a [`ResourceSrc`].
+    ///
+    /// Tries URL parsing first. On failure, falls back to absolute file path.
+    /// A `file://` URL is normalized to a `Path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::InvalidData` if the input is an invalid `file://`
+    /// URL or a non-absolute file path.
+    pub fn parse_src<S: AsRef<str>>(input: S) -> Result<ResourceSrc, DecodeError> {
+        let trimmed = input.as_ref().trim();
+
+        match Url::parse(trimmed) {
+            #[cfg(not(target_arch = "wasm32"))]
+            Ok(url) if url.scheme() == "file" => {
+                let path = url.to_file_path().map_err(|()| {
+                    DecodeError::InvalidData(format!("invalid file URL: {trimmed}"))
+                })?;
+                Ok(ResourceSrc::Path(path))
+            }
+            #[cfg(target_arch = "wasm32")]
+            Ok(url) if url.scheme() == "file" => Err(DecodeError::InvalidData(format!(
+                "file:// URL is not supported on wasm: {trimmed}"
+            ))),
+            Ok(url) => Ok(ResourceSrc::Url(url)),
+            Err(_) => {
+                let path = PathBuf::from(trimmed);
+                if !path.is_absolute() {
+                    return Err(DecodeError::InvalidData(format!(
+                        "invalid URL or file path (must be absolute): {trimmed}"
+                    )));
+                }
+                Ok(ResourceSrc::Path(path))
+            }
+        }
     }
 }
 

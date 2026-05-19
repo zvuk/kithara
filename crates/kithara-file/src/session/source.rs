@@ -37,6 +37,18 @@ pub struct FileSource {
 }
 
 impl FileSource {
+    /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
+    /// inner is created up in `stream.rs::Stream<File>::open` and shared
+    /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
+    /// loop, so this constructor does nothing async.
+    pub(crate) fn from_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
+        Self {
+            coord,
+            inner,
+            peer_handle: None,
+        }
+    }
+
     /// Create a source for a local/cached file (no downloads needed).
     ///
     /// `cancel` is a child of the file config master so a track drop
@@ -73,18 +85,6 @@ impl FileSource {
         }
     }
 
-    /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
-    /// inner is created up in `stream.rs::Stream<File>::open` and shared
-    /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
-    /// loop, so this constructor does nothing async.
-    pub(crate) fn from_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
-        Self {
-            coord,
-            inner,
-            peer_handle: None,
-        }
-    }
-
     /// Pin the Downloader peer registration to this source's lifetime.
     /// Called once after `Downloader::register`; mirrors
     /// `HlsSource::set_peer_handle`. Without this the handle returned by
@@ -96,6 +96,10 @@ impl FileSource {
 }
 
 impl kithara_stream::Source for FileSource {
+    fn advance(&self, n: u64) {
+        self.coord.advance_position(n);
+    }
+
     fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>> {
         self.inner.segment_index.get()?;
         Some(Arc::new(FileSegmentLayout {
@@ -122,18 +126,6 @@ impl kithara_stream::Source for FileSource {
         self.phase_at(pos..pos.saturating_add(1))
     }
 
-    fn position(&self) -> u64 {
-        self.coord.position()
-    }
-
-    fn advance(&self, n: u64) {
-        self.coord.advance_position(n);
-    }
-
-    fn set_position(&self, pos: u64) {
-        self.coord.set_position(pos);
-    }
-
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         let contains = self.inner.asset.res.contains_range(range.clone());
         if contains {
@@ -153,6 +145,10 @@ impl kithara_stream::Source for FileSource {
             return SourcePhase::Eof;
         }
         SourcePhase::Waiting
+    }
+
+    fn position(&self) -> u64 {
+        self.coord.position()
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -175,6 +171,10 @@ impl kithara_stream::Source for FileSource {
         trace!(offset, bytes = n, "FileSource read complete");
 
         Ok(ReadOutcome::Bytes(count))
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.coord.set_position(pos);
     }
 
     fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {

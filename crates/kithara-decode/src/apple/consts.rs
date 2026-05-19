@@ -21,6 +21,24 @@ impl Consts {
     /// priming + trailing padding in PCM frames). Available after the
     /// converter has consumed at least one input packet.
     pub(crate) const kAudioConverterPrimeInfo: u32 = 0x7072_696d;
+    /// `'caff'` — Core Audio Format file-type hint.
+    pub(crate) const kAudioFileCAFType: u32 = 0x6361_6666;
+    /// `'m4af'` — M4A (ALAC / AAC) file-type hint.
+    pub(crate) const kAudioFileM4AType: u32 = 0x6d34_6166;
+    /// `'MPG3'` — MPEG-1/2 Layer 3 file-type hint.
+    pub(crate) const kAudioFileMP3Type: u32 = 0x4d50_4733;
+    /// `'pcnt'` — total audio data packet count.
+    pub(crate) const kAudioFilePropertyAudioDataPacketCount: u32 = 0x7063_6e74;
+    /// `'dfmt'` — ASBD of the file's canonical audio data format.
+    pub(crate) const kAudioFilePropertyDataFormat: u32 = 0x6466_6d74;
+    /// `'mgic'` — codec-specific magic cookie (ALAC, ESDS-wrapped AAC).
+    pub(crate) const kAudioFilePropertyMagicCookieData: u32 = 0x6d67_6963;
+    /// `'psze'` — maximum audio packet size in bytes.
+    pub(crate) const kAudioFilePropertyMaximumPacketSize: u32 = 0x7073_7a65;
+    /// `'WAVE'` — RIFF WAV file-type hint for `AudioFileOpenWithCallbacks`.
+    pub(crate) const kAudioFileWAVEType: u32 = 0x5741_5645;
+    /// `'alac'` — Apple Lossless Audio Codec input format ID.
+    pub(crate) const kAudioFormatAppleLossless: AudioFormatID = 0x616c_6163;
     pub(crate) const kAudioFormatFLAC: AudioFormatID = 0x666c_6163;
     pub(crate) const kAudioFormatFlagIsFloat: AudioFormatFlags = 1 << 0;
     pub(crate) const kAudioFormatFlagIsPacked: AudioFormatFlags = 1 << 3;
@@ -30,24 +48,6 @@ impl Consts {
     pub(crate) const kAudioFormatMPEG4AAC: AudioFormatID = 0x6161_6320;
     /// `'.mp3'` — MPEG-1/2 Layer 3 input format ID.
     pub(crate) const kAudioFormatMPEGLayer3: AudioFormatID = 0x2e6d_7033;
-    /// `'alac'` — Apple Lossless Audio Codec input format ID.
-    pub(crate) const kAudioFormatAppleLossless: AudioFormatID = 0x616c_6163;
-    /// `'dfmt'` — ASBD of the file's canonical audio data format.
-    pub(crate) const kAudioFilePropertyDataFormat: u32 = 0x6466_6d74;
-    /// `'mgic'` — codec-specific magic cookie (ALAC, ESDS-wrapped AAC).
-    pub(crate) const kAudioFilePropertyMagicCookieData: u32 = 0x6d67_6963;
-    /// `'pcnt'` — total audio data packet count.
-    pub(crate) const kAudioFilePropertyAudioDataPacketCount: u32 = 0x7063_6e74;
-    /// `'psze'` — maximum audio packet size in bytes.
-    pub(crate) const kAudioFilePropertyMaximumPacketSize: u32 = 0x7073_7a65;
-    /// `'WAVE'` — RIFF WAV file-type hint for `AudioFileOpenWithCallbacks`.
-    pub(crate) const kAudioFileWAVEType: u32 = 0x5741_5645;
-    /// `'MPG3'` — MPEG-1/2 Layer 3 file-type hint.
-    pub(crate) const kAudioFileMP3Type: u32 = 0x4d50_4733;
-    /// `'m4af'` — M4A (ALAC / AAC) file-type hint.
-    pub(crate) const kAudioFileM4AType: u32 = 0x6d34_6166;
-    /// `'caff'` — Core Audio Format file-type hint.
-    pub(crate) const kAudioFileCAFType: u32 = 0x6361_6666;
     pub(crate) const noErr: OSStatus = 0;
 }
 

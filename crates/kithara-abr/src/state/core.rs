@@ -40,8 +40,8 @@ pub struct AbrState {
 /// recorded once the boundary commit lands.
 #[derive(Clone, Copy, Debug)]
 struct PendingApply {
-    target: usize,
     reason: AbrReason,
+    target: usize,
 }
 
 impl AbrState {
@@ -82,6 +82,31 @@ impl AbrState {
         }
         self.current_variant
             .store(d.target_variant_index, Ordering::Release);
+        self.record_switch(now);
+    }
+
+    /// Publish the switch: atomically clear the pending slot **iff** it
+    /// still references the same target as `decision`, then store
+    /// `current_variant := decision.target_variant_index` and record
+    /// the switch timestamp.
+    ///
+    /// The "iff" rule preserves the replace-pending semantic: if an
+    /// external `request_target` overwrote the slot with a different
+    /// target between [`peek_pending_decision`](Self::peek_pending_decision)
+    /// and this call, the new pending stays untouched and the next
+    /// boundary commits it. The captured `decision` still publishes —
+    /// the caller has already prepared `v_new` for that target.
+    pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
+        let mut slot = self.pending.lock_sync();
+        if slot
+            .as_ref()
+            .is_some_and(|p| p.target == decision.target_variant_index)
+        {
+            *slot = None;
+        }
+        drop(slot);
+        self.current_variant
+            .store(decision.target_variant_index, Ordering::Release);
         self.record_switch(now);
     }
 
@@ -143,32 +168,6 @@ impl AbrState {
         AbrMode::from(self.mode.load(Ordering::Acquire))
     }
 
-    fn record_switch(&self, now: Instant) {
-        self.last_switch_at_nanos
-            .store(self.instant_to_nanos(now), Ordering::Release);
-    }
-
-    /// Phase 2 of the two-cursor refactor: record the intent to switch
-    /// to `target` without committing the variant change. The boundary
-    /// commit is driven by [`commit_pending`](Self::commit_pending) at
-    /// segment boundaries (Phase 3 wires the scheduler to call it).
-    ///
-    /// Replace-pending semantics: a fresh `request_target` overwrites
-    /// any prior unobserved entry. This honours the user-stated
-    /// contract that a switch only commits at the next segment boundary
-    /// — between two boundaries we keep the latest intent and discard
-    /// stale ones.
-    pub fn request_target(&self, target: usize, reason: AbrReason) {
-        *self.pending.lock_sync() = Some(PendingApply { target, reason });
-    }
-
-    /// Phase 2 read-only view of the unobserved pending switch (if any).
-    /// Used by the Phase 3 scheduler boundary check and by tests.
-    #[must_use]
-    pub fn pending_target(&self) -> Option<usize> {
-        self.pending.lock_sync().as_ref().map(|p| p.target)
-    }
-
     /// Read-only peek at the pending decision. Returns the
     /// [`AbrDecision`] that [`apply_decision`](Self::apply_decision)
     /// would publish, or `None` when:
@@ -196,29 +195,30 @@ impl AbrState {
         })
     }
 
-    /// Publish the switch: atomically clear the pending slot **iff** it
-    /// still references the same target as `decision`, then store
-    /// `current_variant := decision.target_variant_index` and record
-    /// the switch timestamp.
+    /// Phase 2 read-only view of the unobserved pending switch (if any).
+    /// Used by the Phase 3 scheduler boundary check and by tests.
+    #[must_use]
+    pub fn pending_target(&self) -> Option<usize> {
+        self.pending.lock_sync().as_ref().map(|p| p.target)
+    }
+
+    fn record_switch(&self, now: Instant) {
+        self.last_switch_at_nanos
+            .store(self.instant_to_nanos(now), Ordering::Release);
+    }
+
+    /// Phase 2 of the two-cursor refactor: record the intent to switch
+    /// to `target` without committing the variant change. The boundary
+    /// commit is driven by [`commit_pending`](Self::commit_pending) at
+    /// segment boundaries (Phase 3 wires the scheduler to call it).
     ///
-    /// The "iff" rule preserves the replace-pending semantic: if an
-    /// external `request_target` overwrote the slot with a different
-    /// target between [`peek_pending_decision`](Self::peek_pending_decision)
-    /// and this call, the new pending stays untouched and the next
-    /// boundary commits it. The captured `decision` still publishes —
-    /// the caller has already prepared `v_new` for that target.
-    pub fn apply_decision(&self, decision: &AbrDecision, now: Instant) {
-        let mut slot = self.pending.lock_sync();
-        if slot
-            .as_ref()
-            .is_some_and(|p| p.target == decision.target_variant_index)
-        {
-            *slot = None;
-        }
-        drop(slot);
-        self.current_variant
-            .store(decision.target_variant_index, Ordering::Release);
-        self.record_switch(now);
+    /// Replace-pending semantics: a fresh `request_target` overwrites
+    /// any prior unobserved entry. This honours the user-stated
+    /// contract that a switch only commits at the next segment boundary
+    /// — between two boundaries we keep the latest intent and discard
+    /// stale ones.
+    pub fn request_target(&self, target: usize, reason: AbrReason) {
+        *self.pending.lock_sync() = Some(PendingApply { reason, target });
     }
 
     pub fn set_max_bandwidth_bps(&self, cap: Option<u64>) {

@@ -31,8 +31,8 @@ use syn::{
 pub(crate) struct ProbeFilter {
     pub args: Option<Vec<Ident>>,
     pub computed: Vec<(Ident, Expr)>,
-    pub probe_return: bool,
     pub caller: bool,
+    pub probe_return: bool,
 }
 
 /// One entry inside `#[kithara::probe(...)]`. Either a bare ident

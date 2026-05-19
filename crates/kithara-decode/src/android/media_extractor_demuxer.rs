@@ -18,23 +18,11 @@ pub(crate) struct AndroidMediaExtractorDemuxer {
     extractor: AndroidMediaExtractor,
     track_info: TrackInfo,
     read_buf: Vec<u8>,
-    last_read_len: usize,
     last_pts_us: i64,
+    last_read_len: usize,
 }
 
 impl AndroidMediaExtractorDemuxer {
-    pub(crate) fn open_wav(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, AudioCodec::Pcm)
-    }
-
-    pub(crate) fn open_mp3(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, AudioCodec::Mp3)
-    }
-
-    pub(crate) fn open_alac_m4a(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, AudioCodec::Alac)
-    }
-
     fn open(source: BoxedSource, codec: AudioCodec) -> DecodeResult<Self> {
         let mut extractor = AndroidMediaExtractor::open(source)?;
         let TrackFormatInfo {
@@ -47,6 +35,8 @@ impl AndroidMediaExtractorDemuxer {
 
         let track_info = TrackInfo {
             codec,
+            channels,
+            sample_rate,
             duration: if duration_us > 0 {
                 u64::try_from(duration_us).ok().map(Duration::from_micros)
             } else {
@@ -54,19 +44,27 @@ impl AndroidMediaExtractorDemuxer {
             },
             gapless: None,
             extra_data: csd_0,
-            channels,
-            sample_rate,
         };
 
         Ok(Self {
             extractor,
             track_info,
-            // Android sample max is typically well under 32 KiB; we
-            // round to 64 KiB for headroom on lossless tracks.
             read_buf: vec![0u8; 64 * 1024],
             last_read_len: 0,
             last_pts_us: 0,
         })
+    }
+
+    pub(crate) fn open_alac_m4a(source: BoxedSource) -> DecodeResult<Self> {
+        Self::open(source, AudioCodec::Alac)
+    }
+
+    pub(crate) fn open_mp3(source: BoxedSource) -> DecodeResult<Self> {
+        Self::open(source, AudioCodec::Mp3)
+    }
+
+    pub(crate) fn open_wav(source: BoxedSource) -> DecodeResult<Self> {
+        Self::open(source, AudioCodec::Pcm)
     }
 }
 
@@ -87,14 +85,9 @@ impl Demuxer for AndroidMediaExtractorDemuxer {
             .map(Duration::from_micros)
             .unwrap_or(Duration::ZERO);
         let frame = Frame {
-            data: &self.read_buf[..n],
-            // Per-sample duration is reported by the codec on output; we
-            // leave it zero here since the demuxer side doesn't carry it.
-            duration: Duration::ZERO,
             pts,
-            // Android `MediaCodec` consumes PTS through
-            // `OwnedCodec::queue_input` directly; no opaque per-packet
-            // descriptor is needed on this backend.
+            data: &self.read_buf[..n],
+            duration: Duration::ZERO,
             packet_desc: &[],
         };
         let _ = self.extractor.advance();

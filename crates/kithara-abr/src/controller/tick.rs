@@ -111,11 +111,6 @@ impl AbrController {
 
         if decision.did_change {
             state.request_target(decision.target_variant_index, decision.reason);
-            // Wake the peer so `apply_boundary_crossing` observes the
-            // freshly written pending decision. Without this hook, a
-            // peer parked idle (e.g. all segments cached) would keep
-            // playing the old variant until an unrelated event (seek,
-            // eviction) happens to wake it.
             ctx.peer.wake();
         } else if decision.reason != AbrReason::AlreadyOptimal
             && let Some(ref bus) = bus

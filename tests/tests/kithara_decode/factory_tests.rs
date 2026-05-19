@@ -3,7 +3,6 @@ use std::io::Cursor;
 use std::sync::{Arc, atomic::AtomicU64};
 
 use kithara_decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory};
-use kithara_stream::{AudioCodec, ContainerFormat};
 use kithara_test_utils::kithara;
 
 const TEST_MP3_BYTES: &[u8] =

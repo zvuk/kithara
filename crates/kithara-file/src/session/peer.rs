@@ -27,11 +27,11 @@ use super::inner::{FileInner, FilePhase};
 /// transparently. Returns `Ready(None)` only once the resource has no
 /// gaps left.
 pub(crate) struct FilePeer {
-    inner: Arc<FileInner>,
     /// `true` while a fetch issued by this peer is still in flight.
     /// Cleared from the `on_complete` callback before the Downloader
     /// re-polls.
     inflight: Arc<AtomicBool>,
+    inner: Arc<FileInner>,
 }
 
 impl FilePeer {
@@ -49,10 +49,6 @@ impl FilePeer {
 
         let resource = self.inner.asset.res.clone();
         let coord_writer = Arc::clone(&self.inner.source.coord);
-        // Shared between writer and on_complete: the writer increments
-        // it on every chunk, the on_complete reads it to report the
-        // real bytes-written count even when the body stream errors
-        // mid-transfer (the deliver-path `total` is lost on `?`).
         let offset = Arc::new(AtomicU64::new(resume_from));
         let writer_offset = Arc::clone(&offset);
         let writer = Box::new(move |chunk: &[u8]| -> io::Result<()> {
@@ -62,10 +58,6 @@ impl FilePeer {
             Ok(())
         });
 
-        // Seed Content-Length / Content-Type up front so a reader
-        // already blocked on `wait_range(0..1)` sees a populated coord
-        // (`Source::len() = Some(_)`) the instant the first byte
-        // arrives — `seek(SeekFrom::End)` relies on this.
         let inner_for_resp = Arc::clone(&self.inner);
         let on_response = Box::new(move |headers: &Headers| {
             inner_for_resp.capture_content_metadata(headers, resume_from);
@@ -103,9 +95,6 @@ impl Peer for FilePeer {
         if self.inflight.load(Ordering::Acquire) {
             return Poll::Pending;
         }
-        // Terminal resource state (Failed / Cancelled): stop the peer
-        // so a captive-portal HTML response or a cancelled fetch
-        // doesn't loop us into a retry storm.
         if !matches!(
             self.inner.asset.res.status(),
             kithara_storage::ResourceStatus::Active
@@ -131,20 +120,30 @@ impl Peer for FilePeer {
 }
 
 impl FileInner {
-    /// Start of the next missing byte range on this resource, or
-    /// `None` when the resource is fully covered. Upper bound is the
-    /// known total — committed length (when reactivating a partial)
-    /// or the discovered `Content-Length` (after the first response
-    /// headers seed `coord.total_bytes`). Without either, falls back
-    /// to `u64::MAX` so the gap walker scans the whole space.
-    fn next_gap_start(&self) -> Option<u64> {
-        let upper = self
-            .asset
-            .res
-            .len()
-            .or_else(|| self.source.coord.total_bytes())
-            .unwrap_or(u64::MAX);
-        self.asset.res.next_gap(0, upper).map(|gap| gap.start)
+    /// Pull `Content-Length` and `Content-Type` out of the response
+    /// headers and seed the coord / codec hint. Both lookups try the
+    /// lower-cased header first (per HTTP/2 RFC) and fall back to the
+    /// title-cased form from older HTTP/1.1 servers.
+    ///
+    /// `resume_from` is the byte offset our Range request started at:
+    /// on a `206 Partial Content` response, `Content-Length` describes
+    /// the partial body length, so the resource's full size is
+    /// `resume_from + content_length`.
+    fn capture_content_metadata(&self, headers: &Headers, resume_from: u64) {
+        let content_length = headers
+            .get("content-length")
+            .or_else(|| headers.get("Content-Length"))
+            .and_then(|v| v.parse::<u64>().ok());
+        if let Some(len) = content_length {
+            self.source.coord.set_total_bytes(Some(resume_from + len));
+        }
+        let codec = headers
+            .get("content-type")
+            .or_else(|| headers.get("Content-Type"))
+            .and_then(AudioCodec::from_mime);
+        if let Some(c) = codec {
+            let _ = self.content_type_codec.set(c);
+        }
     }
 
     /// Apply the result of a streaming fetch to the resource.
@@ -170,16 +169,9 @@ impl FileInner {
                     error: FileError::Io(msg),
                 });
             }
-            // Retryable mid-transfer error with bytes on disk: leave
-            // resource active, peer re-polls and emits a new Range
-            // GET starting at the current gap.
             return;
         }
 
-        // Stream completed without error. Only commit when the resource
-        // is fully covered — a single Range response may still leave a
-        // tail gap (e.g. server closed after a partial body), in which
-        // case the peer will re-poll and fill it.
         if self.next_gap_start().is_some() {
             return;
         }
@@ -201,29 +193,19 @@ impl FileInner {
         }
     }
 
-    /// Pull `Content-Length` and `Content-Type` out of the response
-    /// headers and seed the coord / codec hint. Both lookups try the
-    /// lower-cased header first (per HTTP/2 RFC) and fall back to the
-    /// title-cased form from older HTTP/1.1 servers.
-    ///
-    /// `resume_from` is the byte offset our Range request started at:
-    /// on a `206 Partial Content` response, `Content-Length` describes
-    /// the partial body length, so the resource's full size is
-    /// `resume_from + content_length`.
-    fn capture_content_metadata(&self, headers: &Headers, resume_from: u64) {
-        let content_length = headers
-            .get("content-length")
-            .or_else(|| headers.get("Content-Length"))
-            .and_then(|v| v.parse::<u64>().ok());
-        if let Some(len) = content_length {
-            self.source.coord.set_total_bytes(Some(resume_from + len));
-        }
-        let codec = headers
-            .get("content-type")
-            .or_else(|| headers.get("Content-Type"))
-            .and_then(AudioCodec::from_mime);
-        if let Some(c) = codec {
-            let _ = self.content_type_codec.set(c);
-        }
+    /// Start of the next missing byte range on this resource, or
+    /// `None` when the resource is fully covered. Upper bound is the
+    /// known total — committed length (when reactivating a partial)
+    /// or the discovered `Content-Length` (after the first response
+    /// headers seed `coord.total_bytes`). Without either, falls back
+    /// to `u64::MAX` so the gap walker scans the whole space.
+    fn next_gap_start(&self) -> Option<u64> {
+        let upper = self
+            .asset
+            .res
+            .len()
+            .or_else(|| self.source.coord.total_bytes())
+            .unwrap_or(u64::MAX);
+        self.asset.res.next_gap(0, upper).map(|gap| gap.start)
     }
 }

@@ -226,7 +226,6 @@ impl FrameCodec for AppleCodec {
         let desc = if packet_desc.len() == size_of::<AudioStreamPacketDescription>() {
             let mut d = AudioStreamPacketDescription::default();
             // SAFETY: `AudioStreamPacketDescription` is `#[repr(C)]` POD;
-            // length verified above; both sides own `size_of::<...>()` bytes.
             unsafe {
                 ptr::copy_nonoverlapping(
                     packet_desc.as_ptr(),
@@ -249,12 +248,6 @@ impl FrameCodec for AppleCodec {
         self.input_state.set(frame_data, desc);
 
         let channels = self.spec.channels as usize;
-        // CBR codecs (LinearPCM): the demuxer batches many packets into
-        // one `Frame` for HLS streaming amortisation, so the AudioConverter
-        // output must be sized from the actual input packet count, not the
-        // codec's natural packet size. VBR codecs (AAC/MP3/ALAC/FLAC):
-        // `input_bytes_per_packet == 0`, fall back to the codec-natural
-        // `frames_per_packet` capped at the AAC block size.
         #[expect(
             clippy::cast_possible_truncation,
             reason = "frame_data length divided by mBytesPerPacket is bounded by packet count"
@@ -410,9 +403,6 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             })
         }
         AudioCodec::Pcm => {
-            // `AppleAudioFileDemuxer` stashes the source ASBD as a
-            // serialized blob in `track.extra_data`. We rebuild it here
-            // so AudioConverter can repack/widen into the f32 output ASBD.
             let asbd = parse_pcm_extra_data(&track.extra_data)?;
             Ok(AppleInputFormat {
                 asbd,
@@ -424,14 +414,10 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             let asbd = AudioStreamBasicDescription {
                 mSampleRate: f64::from(track.sample_rate),
                 mFormatID: Consts::kAudioFormatMPEGLayer3,
-                // VBR: actual frame counts come via per-packet
-                // `AudioStreamPacketDescription` (Frame::packet_desc).
                 mFramesPerPacket: 0,
                 mChannelsPerFrame: u32::from(track.channels),
                 ..Default::default()
             };
-            // MP3 has no magic cookie; AudioConverter handles Xing / LAME
-            // priming internally.
             Ok(AppleInputFormat {
                 asbd,
                 cookie: None,
@@ -471,7 +457,6 @@ fn parse_pcm_extra_data(extra: &[u8]) -> DecodeResult<AudioStreamBasicDescriptio
     }
     let mut asbd = AudioStreamBasicDescription::default();
     // SAFETY: `AudioStreamBasicDescription` is `#[repr(C)]` POD; length
-    // verified above; both pointers are valid for `size_of::<ASBD>()`.
     unsafe {
         ptr::copy_nonoverlapping(
             extra.as_ptr(),

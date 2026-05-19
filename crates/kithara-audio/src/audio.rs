@@ -189,25 +189,17 @@ impl<S> Audio<S> {
 
     /// Backoff duration between receive attempts.
     const RECV_BACKOFF: Duration = Duration::from_micros(100);
-    fn close_channel_and_mark_eof(&mut self) -> Option<PcmChunk> {
-        self.consumer_phase = ConsumerPhase::Failed;
-        None
-    }
-
-    /// Get total duration of the audio stream.
-    ///
-    /// Returns `None` for streaming sources where duration is unknown.
-    #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        self.timeline.total_duration()
-    }
-
     /// Runtime ABR handle (cloned from the stream's source at
     /// construction). `Some` for adaptive sources (HLS), `None` for
     /// file/non-adaptive sources.
     #[must_use]
     pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.abr_handle.clone()
+    }
+
+    fn close_channel_and_mark_eof(&mut self) -> Option<PcmChunk> {
+        self.consumer_phase = ConsumerPhase::Failed;
+        None
     }
 
     /// Current variant's metadata. Pulled live from the ABR peer on
@@ -217,6 +209,14 @@ impl<S> Audio<S> {
     #[must_use]
     pub fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
         self.abr_handle.as_ref()?.current_variant()
+    }
+
+    /// Get total duration of the audio stream.
+    ///
+    /// Returns `None` for streaming sources where duration is unknown.
+    #[must_use]
+    pub fn duration(&self) -> Option<Duration> {
+        self.timeline.total_duration()
     }
 
     fn emit_audio_event(&self, event: AudioEvent) {

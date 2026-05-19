@@ -1,11 +1,3 @@
-//! Generate small ALAC fixtures on demand.
-//!
-//! On Apple hosts we shell out to `afconvert` (always present on
-//! macOS/iOS). On non-Apple hosts (Linux build pipelines that
-//! cross-compile for Android) we shell out to `ffmpeg`. Either tool
-//! materialises a deterministic .m4a under a cache directory so callers
-//! can [`std::fs::read`] it without paying generation cost more than once.
-
 use std::{
     path::{Path, PathBuf},
     process::Command,

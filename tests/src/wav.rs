@@ -178,7 +178,7 @@ mod tests {
             Finite::from_duration(Duration::from_secs(1), sample_rate),
         );
 
-        let data_size = sample_rate as u64 * 2 * 2;
+        let data_size = u64::from(sample_rate) * 2 * 2;
         let file_size = 36 + data_size;
 
         let buf = create_wav_from_signal(pcm);

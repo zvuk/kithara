@@ -196,7 +196,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 
 /// Sanity guard: if `Queue::tick` regresses to skipping
 /// `process_notifications`, this test must fail. We confirm the
-/// fix-under-test by asserting both PrefetchRequested and HandoverRequested
+/// fix-under-test by asserting both `PrefetchRequested` and `HandoverRequested`
 /// reach the bus during a cf>0 cycle — purely event-level, but pinned to
 /// the real `Queue::tick` path.
 #[kithara::test(tokio)]

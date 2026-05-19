@@ -34,8 +34,8 @@ use crate::{
 /// and the per-track [`AssetStore`] used by reader paths and by every
 /// variant's `dispatch` closures.
 pub(crate) struct HlsCoordEnv {
-    pub(crate) cancel: CancellationToken,
     pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
+    pub(crate) cancel: CancellationToken,
 }
 
 /// Thin router over a fixed `Vec<Arc<HlsVariant>>`. Every `Source`-side
@@ -46,17 +46,17 @@ pub(crate) struct HlsCoordEnv {
 /// variant-change fence, and the per-track playlist/asset/timeline
 /// references it hands to variants and to peer `PlanCtx`-builders.
 pub(crate) struct HlsCoord {
+    pub(crate) abr: AbrHandle,
+    pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
+    pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
     pub(crate) cancel: CancellationToken,
     pub(crate) timeline: Timeline,
-    pub(crate) abr: AbrHandle,
-    pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
-    pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
     playlist_state: Arc<PlaylistState>,
-    /// Reader→peer wake handle, installed once when the owning `HlsPeer`
-    /// binds. Forwarded to every variant via [`Self::set_peer_wake`] so
-    /// `wait_range` / `seek_time_anchor` running inside a variant can
-    /// resume `HlsPeer::poll_next` directly.
-    peer_wake: OnceLock<Arc<Notify>>,
+    /// Last generation acknowledged by the reader. When `<
+    /// variant_generation` the read gate is closed; when equal the gate
+    /// is open. [`Self::clear_variant_fence`] copies the current
+    /// generation here.
+    fence_at: AtomicU64,
     /// Monotonic counter bumped by [`Self::commit_variant_switch`] on
     /// cross-codec switches. `read_at` / `wait_range` compare against
     /// [`Self::fence_at`] and short-circuit with `Pending(VariantChange)`
@@ -65,11 +65,11 @@ pub(crate) struct HlsCoord {
     /// it — smooth ABR (FLAC@hi → FLAC@lo) keeps reading without a
     /// fence.
     variant_generation: AtomicU64,
-    /// Last generation acknowledged by the reader. When `<
-    /// variant_generation` the read gate is closed; when equal the gate
-    /// is open. [`Self::clear_variant_fence`] copies the current
-    /// generation here.
-    fence_at: AtomicU64,
+    /// Reader→peer wake handle, installed once when the owning `HlsPeer`
+    /// binds. Forwarded to every variant via [`Self::set_peer_wake`] so
+    /// `wait_range` / `seek_time_anchor` running inside a variant can
+    /// resume `HlsPeer::poll_next` directly.
+    peer_wake: OnceLock<Arc<Notify>>,
 }
 
 impl HlsCoord {
@@ -89,34 +89,15 @@ impl HlsCoord {
             "HlsCoord requires an AbrHandle with state — HlsPeer must construct AbrState"
         );
         Self {
-            cancel: env.cancel,
             timeline,
             abr,
             variants,
-            asset_store: env.asset_store,
             playlist_state,
+            cancel: env.cancel,
+            asset_store: env.asset_store,
             peer_wake: OnceLock::new(),
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),
-        }
-    }
-
-    /// Install the wake handle that `HlsPeer` listens on. Called once by
-    /// `HlsSource::set_hls_peer` after the peer is bound. Subsequent
-    /// calls silently keep the first registration. Forwarded to every
-    /// variant so reader-path waits inside a variant can wake the peer
-    /// directly.
-    pub(crate) fn set_peer_wake(&self, notify: &Arc<Notify>) {
-        if self.peer_wake.set(Arc::clone(notify)).is_ok() {
-            for v in self.variants.iter() {
-                v.set_peer_wake(Arc::clone(notify));
-            }
-        }
-    }
-
-    fn wake_peer(&self) {
-        if let Some(notify) = self.peer_wake.get() {
-            notify.notify_one();
         }
     }
 
@@ -134,139 +115,39 @@ impl HlsCoord {
             .expect("HlsCoord constructed without variants — bug")
     }
 
-    /// Single source of truth: the variant index lives in
-    /// [`AbrState::current_variant`]. The previous duplicate
-    /// `HlsCoord::active_variant` was removed — `apply_decision`
-    /// publishes the switch after `v_new` is fully prepared, so a
-    /// reader observing `current_variant := new` is guaranteed to see
-    /// `v_new` ready.
-    pub(crate) fn variant_index(&self) -> usize {
-        self.abr
-            .current_variant_index()
-            .expect("HlsCoord requires AbrHandle with state — checked in new()")
-    }
-
-    pub(crate) fn timeline(&self) -> Timeline {
-        self.timeline.clone()
-    }
-
-    delegate! {
-        to self.active_required().as_ref() {
-            #[call(get_position)]
-            pub(crate) fn position(&self) -> u64;
-            pub(crate) fn advance(&self, n: u64);
-            pub(crate) fn set_position(&self, pos: u64);
-            pub(crate) fn total_bytes(&self) -> u64;
-            pub(crate) fn download_head(&self) -> u32;
-            pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
-            pub(crate) fn seek_time_anchor(
-                &self,
-                position: Duration,
-            ) -> StreamResult<Option<SourceSeekAnchor>>;
-        }
-    }
-
-    /// Find the variant whose served range covers `offset`. Priority:
-    ///
-    /// 1. The ABR-active variant — the normal steady-state hit.
-    /// 2. Any non-active variant whose served range has been *shrunk*
-    ///    from its default span by a prior ABR commit (i.e.
-    ///    `served_from > 0` or `served_until < num_segments`). These
-    ///    are `v_old`s that still serve their pre-switch byte range so
-    ///    a reader crossing the boundary mid-buffer hits the right
-    ///    payload.
-    ///
-    /// Idle variants with default served bounds are deliberately
-    /// excluded: their layout overlaps the active range but their
-    /// resources were never fetched, so routing to them would return
-    /// `NotFound` / `Pending(Retry)`.
-    pub(crate) fn variant_serving(&self, offset: u64) -> &Arc<HlsVariant> {
-        let active = self.active_required();
-        if active.init_descriptor_at(offset).is_some() || active.find_at_offset(offset).is_some() {
-            return active;
-        }
-        for v in self.variants.iter() {
-            if Arc::ptr_eq(v, active) {
-                continue;
-            }
-            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
-            if !shrunk {
-                continue;
-            }
-            if v.init_descriptor_at(offset).is_some() || v.find_at_offset(offset).is_some() {
-                return v;
+    /// Process one evicted resource key. Marks the lost segment
+    /// `Missing` on every variant that owned it. When the active
+    /// variant is among them, fires a full `rebuild` from the reader's
+    /// current segment so the queue is refilled with the now-Missing
+    /// slot reincluded. Non-active variants stay relaxed — their next
+    /// activation (ABR flip) calls `rebuild` and picks up the Missing
+    /// entries then.
+    pub(crate) fn broadcast_eviction(&self, ctx: &PlanCtx, key: &ResourceKey, seg_at_reader: u32) {
+        let active_idx = self.variant_index();
+        let mut active_lost = false;
+        for (v_idx, v) in self.variants.iter().enumerate() {
+            if v.on_evict(key).is_some() && v_idx == active_idx {
+                active_lost = true;
             }
         }
-        active
-    }
-
-    /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
-    /// priority: active first, then shrunk `v_old`s. Returns `None` if no
-    /// engaged variant claims the offset.
-    pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
-        let active = self.active_required();
-        if let Some(found) = active.find_at_offset(byte_offset) {
-            return Some(found);
-        }
-        for v in self.variants.iter() {
-            if Arc::ptr_eq(v, active) {
-                continue;
-            }
-            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
-            if !shrunk {
-                continue;
-            }
-            if let Some(found) = v.find_at_offset(byte_offset) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    /// Active variant's media info. `HlsCoord` is constructed
-    /// non-empty (asserted in [`Self::new`]) so this always succeeds —
-    /// the `Source` trait's `Option<MediaInfo>` shape is restored at
-    /// the [`HlsSource`](crate::source::HlsSource) façade.
-    pub(crate) fn media_info(&self) -> MediaInfo {
-        self.active_required().media_info()
-    }
-
-    /// Track-level phase. Master-cancel takes precedence (terminal
-    /// `Cancelled`); otherwise the variant that currently serves
-    /// `range.start` decides — mid-buffer boundary cross resolves to
-    /// the right `range_ready` / `is_flushing` / `total_bytes` view.
-    pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        if self.cancel.is_cancelled() {
-            return SourcePhase::Cancelled;
-        }
-        self.variant_serving(range.start).phase_at(range)
-    }
-
-    /// Total bytes are >0 — the value used by `Source::len` accessor.
-    pub(crate) fn len(&self) -> Option<u64> {
-        let total = self.total_bytes();
-        (total > 0).then_some(total)
-    }
-
-    /// Mirror `abr.lock()` state to `timeline.is_seek_pending()`.
-    pub(crate) fn sync_abr_lock(&self) {
-        let pending = self.timeline.is_seek_pending();
-        let locked = self.abr.is_locked();
-        if pending && !locked {
-            self.abr.lock();
-        } else if !pending && locked {
-            self.abr.unlock();
+        if active_lost && let Some(active) = self.active() {
+            active.rebuild(ctx, seg_at_reader);
         }
     }
 
-    /// Reset the active variant to a "fresh" single-variant layout on
-    /// seek. Random seek may land far from the post-ABR-commit window,
-    /// so collapse `byte_shift` / `served_from` / `served_until` back
-    /// to the natural range — subsequent ABR commits at boundary will
-    /// re-build the layering as usual.
-    pub(crate) fn reset_for_seek(&self) {
-        if let Some(active) = self.active() {
-            active.reset_to_full_range();
+    /// Notify the audio FSM that the cross-codec switch is acknowledged
+    /// — opens the read gate by aligning `fence_at` to the current
+    /// generation. Called from `HlsSource::clear_variant_fence` after
+    /// the decoder has been recreated against the new variant.
+    pub(crate) fn clear_variant_fence(&self) {
+        let current_gen = self.variant_generation.load(Ordering::Acquire);
+        let prev = self.fence_at.swap(current_gen, Ordering::AcqRel);
+        if prev != current_gen {
+            info!(
+                fence_was = prev,
+                fence_now = current_gen,
+                "HlsCoord: clear_variant_fence"
+            );
         }
     }
 
@@ -300,11 +181,6 @@ impl HlsCoord {
         };
         let v_old = self.variants.get(current_before);
         let reader_pos_at_entry = self.position();
-        // Raw PCM in RIFF is the only container we can't decode-recreate
-        // mid-track (header at offset 0, payload byte-sequential, no
-        // time-based seek). Such switches keep the decoder alive and
-        // align bytes via `activate_at_segment_with_shift`; every other
-        // container goes through the fence + recreate flow.
         let needs_byte_continuity = matches!(
             self.playlist_state.variant_container(new_v),
             Some(ContainerFormat::Wav)
@@ -362,8 +238,27 @@ impl HlsCoord {
         true
     }
 
-    fn variant_change_pending(&self) -> bool {
-        self.variant_generation.load(Ordering::Acquire) > self.fence_at.load(Ordering::Acquire)
+    /// Cross-variant segment lookup. Mirrors [`Self::variant_serving`]'s
+    /// priority: active first, then shrunk `v_old`s. Returns `None` if no
+    /// engaged variant claims the offset.
+    pub(crate) fn find_at_offset(&self, byte_offset: u64) -> Option<(u32, u64, u64)> {
+        let active = self.active_required();
+        if let Some(found) = active.find_at_offset(byte_offset) {
+            return Some(found);
+        }
+        for v in self.variants.iter() {
+            if Arc::ptr_eq(v, active) {
+                continue;
+            }
+            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
+            if !shrunk {
+                continue;
+            }
+            if let Some(found) = v.find_at_offset(byte_offset) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     /// Public-API mirror of [`Self::variant_change_pending`] used by the
@@ -371,6 +266,37 @@ impl HlsCoord {
     /// the underlying `VariantChangeError` was absorbed by the demuxer.
     pub(crate) fn has_variant_change_pending(&self) -> bool {
         self.variant_change_pending()
+    }
+
+    /// Total bytes are >0 — the value used by `Source::len` accessor.
+    pub(crate) fn len(&self) -> Option<u64> {
+        let total = self.total_bytes();
+        (total > 0).then_some(total)
+    }
+
+    /// Active variant's media info. `HlsCoord` is constructed
+    /// non-empty (asserted in [`Self::new`]) so this always succeeds —
+    /// the `Source` trait's `Option<MediaInfo>` shape is restored at
+    /// the [`HlsSource`](crate::source::HlsSource) façade.
+    pub(crate) fn media_info(&self) -> MediaInfo {
+        self.active_required().media_info()
+    }
+
+    /// External signal that the reader is blocked — wake the peer so
+    /// the next `poll_next` runs immediately.
+    pub(crate) fn notify_waiting(&self) {
+        self.wake_peer();
+    }
+
+    /// Track-level phase. Master-cancel takes precedence (terminal
+    /// `Cancelled`); otherwise the variant that currently serves
+    /// `range.start` decides — mid-buffer boundary cross resolves to
+    /// the right `range_ready` / `is_flushing` / `total_bytes` view.
+    pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        if self.cancel.is_cancelled() {
+            return SourcePhase::Cancelled;
+        }
+        self.variant_serving(range.start).phase_at(range)
     }
 
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
@@ -383,6 +309,101 @@ impl HlsCoord {
             return Ok(ReadOutcome::Pending(PendingReason::VariantChange));
         }
         self.variant_serving(offset).read_at(offset, buf)
+    }
+
+    /// Reset the active variant to a "fresh" single-variant layout on
+    /// seek. Random seek may land far from the post-ABR-commit window,
+    /// so collapse `byte_shift` / `served_from` / `served_until` back
+    /// to the natural range — subsequent ABR commits at boundary will
+    /// re-build the layering as usual.
+    pub(crate) fn reset_for_seek(&self) {
+        if let Some(active) = self.active() {
+            active.reset_to_full_range();
+        }
+    }
+
+    /// Install the wake handle that `HlsPeer` listens on. Called once by
+    /// `HlsSource::set_hls_peer` after the peer is bound. Subsequent
+    /// calls silently keep the first registration. Forwarded to every
+    /// variant so reader-path waits inside a variant can wake the peer
+    /// directly.
+    pub(crate) fn set_peer_wake(&self, notify: &Arc<Notify>) {
+        if self.peer_wake.set(Arc::clone(notify)).is_ok() {
+            for v in self.variants.iter() {
+                v.set_peer_wake(Arc::clone(notify));
+            }
+        }
+    }
+
+    /// Wake the peer on receipt of a new seek epoch. The epoch value
+    /// itself lives on `Timeline` — we just resume `poll_next`.
+    pub(crate) fn set_seek_epoch(&self, _seek_epoch: u64) {
+        self.wake_peer();
+    }
+
+    /// Mirror `abr.lock()` state to `timeline.is_seek_pending()`.
+    pub(crate) fn sync_abr_lock(&self) {
+        let pending = self.timeline.is_seek_pending();
+        let locked = self.abr.is_locked();
+        if pending && !locked {
+            self.abr.lock();
+        } else if !pending && locked {
+            self.abr.unlock();
+        }
+    }
+
+    pub(crate) fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
+
+    fn variant_change_pending(&self) -> bool {
+        self.variant_generation.load(Ordering::Acquire) > self.fence_at.load(Ordering::Acquire)
+    }
+
+    /// Single source of truth: the variant index lives in
+    /// [`AbrState::current_variant`]. The previous duplicate
+    /// `HlsCoord::active_variant` was removed — `apply_decision`
+    /// publishes the switch after `v_new` is fully prepared, so a
+    /// reader observing `current_variant := new` is guaranteed to see
+    /// `v_new` ready.
+    pub(crate) fn variant_index(&self) -> usize {
+        self.abr
+            .current_variant_index()
+            .expect("HlsCoord requires AbrHandle with state — checked in new()")
+    }
+
+    /// Find the variant whose served range covers `offset`. Priority:
+    ///
+    /// 1. The ABR-active variant — the normal steady-state hit.
+    /// 2. Any non-active variant whose served range has been *shrunk*
+    ///    from its default span by a prior ABR commit (i.e.
+    ///    `served_from > 0` or `served_until < num_segments`). These
+    ///    are `v_old`s that still serve their pre-switch byte range so
+    ///    a reader crossing the boundary mid-buffer hits the right
+    ///    payload.
+    ///
+    /// Idle variants with default served bounds are deliberately
+    /// excluded: their layout overlaps the active range but their
+    /// resources were never fetched, so routing to them would return
+    /// `NotFound` / `Pending(Retry)`.
+    pub(crate) fn variant_serving(&self, offset: u64) -> &Arc<HlsVariant> {
+        let active = self.active_required();
+        if active.init_descriptor_at(offset).is_some() || active.find_at_offset(offset).is_some() {
+            return active;
+        }
+        for v in self.variants.iter() {
+            if Arc::ptr_eq(v, active) {
+                continue;
+            }
+            let shrunk = v.served_from() > 0 || v.served_until() < v.num_segments();
+            if !shrunk {
+                continue;
+            }
+            if v.init_descriptor_at(offset).is_some() || v.find_at_offset(offset).is_some() {
+                return v;
+            }
+        }
+        active
     }
 
     pub(crate) fn wait_range(
@@ -401,51 +422,25 @@ impl HlsCoord {
         self.variant_serving(range.start).wait_range(range, timeout)
     }
 
-    /// Wake the peer on receipt of a new seek epoch. The epoch value
-    /// itself lives on `Timeline` — we just resume `poll_next`.
-    pub(crate) fn set_seek_epoch(&self, _seek_epoch: u64) {
-        self.wake_peer();
-    }
-
-    /// Notify the audio FSM that the cross-codec switch is acknowledged
-    /// — opens the read gate by aligning `fence_at` to the current
-    /// generation. Called from `HlsSource::clear_variant_fence` after
-    /// the decoder has been recreated against the new variant.
-    pub(crate) fn clear_variant_fence(&self) {
-        let current_gen = self.variant_generation.load(Ordering::Acquire);
-        let prev = self.fence_at.swap(current_gen, Ordering::AcqRel);
-        if prev != current_gen {
-            info!(
-                fence_was = prev,
-                fence_now = current_gen,
-                "HlsCoord: clear_variant_fence"
-            );
+    fn wake_peer(&self) {
+        if let Some(notify) = self.peer_wake.get() {
+            notify.notify_one();
         }
     }
 
-    /// External signal that the reader is blocked — wake the peer so
-    /// the next `poll_next` runs immediately.
-    pub(crate) fn notify_waiting(&self) {
-        self.wake_peer();
-    }
-
-    /// Process one evicted resource key. Marks the lost segment
-    /// `Missing` on every variant that owned it. When the active
-    /// variant is among them, fires a full `rebuild` from the reader's
-    /// current segment so the queue is refilled with the now-Missing
-    /// slot reincluded. Non-active variants stay relaxed — their next
-    /// activation (ABR flip) calls `rebuild` and picks up the Missing
-    /// entries then.
-    pub(crate) fn broadcast_eviction(&self, ctx: &PlanCtx, key: &ResourceKey, seg_at_reader: u32) {
-        let active_idx = self.variant_index();
-        let mut active_lost = false;
-        for (v_idx, v) in self.variants.iter().enumerate() {
-            if v.on_evict(key).is_some() && v_idx == active_idx {
-                active_lost = true;
-            }
-        }
-        if active_lost && let Some(active) = self.active() {
-            active.rebuild(ctx, seg_at_reader);
+    delegate! {
+        to self.active_required().as_ref() {
+            #[call(get_position)]
+            pub(crate) fn position(&self) -> u64;
+            pub(crate) fn advance(&self, n: u64);
+            pub(crate) fn set_position(&self, pos: u64);
+            pub(crate) fn total_bytes(&self) -> u64;
+            pub(crate) fn download_head(&self) -> u32;
+            pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
+            pub(crate) fn seek_time_anchor(
+                &self,
+                position: Duration,
+            ) -> StreamResult<Option<SourceSeekAnchor>>;
         }
     }
 }
@@ -458,6 +453,10 @@ impl SegmentLayout for HlsCoord {
         self.active().map(|v| v.init_byte_range()).unwrap_or(0..0)
     }
 
+    fn len(&self) -> Option<u64> {
+        Some(self.active()?.total_bytes())
+    }
+
     fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
         self.active()?.descriptor_after_byte(byte)
     }
@@ -466,19 +465,15 @@ impl SegmentLayout for HlsCoord {
         self.variant_serving(byte).descriptor_at_byte(byte)
     }
 
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.active()?.descriptor_at_time(t)
-    }
-
     fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
         self.active()?.descriptor(segment_index as usize)
     }
 
-    fn segment_count(&self) -> Option<u32> {
-        Some(self.active()?.num_segments())
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.active()?.descriptor_at_time(t)
     }
 
-    fn len(&self) -> Option<u64> {
-        Some(self.active()?.total_bytes())
+    fn segment_count(&self) -> Option<u32> {
+        Some(self.active()?.num_segments())
     }
 }

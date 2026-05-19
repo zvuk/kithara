@@ -105,11 +105,6 @@ impl File {
         let asset_root = asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            // child_token, not clone — `DownloaderInner::Drop` cancels
-            // its own token; handing the caller's master cancel here
-            // would tear down the whole stream on any speculative
-            // drop (e.g. when the file turns out to be fully cached
-            // and the downloader is never used). Mirrors HLS.
             Downloader::new(
                 DownloaderConfig::builder()
                     .cancel(cancel.child_token())
@@ -153,13 +148,13 @@ impl File {
 
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
-                coord: Arc::clone(&coord),
                 cancel,
+                coord: Arc::clone(&coord),
                 bus: state.bus.clone(),
             },
             FileAssetCtx {
-                headers: config.headers,
                 url,
+                headers: config.headers,
                 backend: Arc::clone(&state.backend),
                 res: state.res.clone(),
                 key: state.key.clone(),

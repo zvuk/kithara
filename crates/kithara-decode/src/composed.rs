@@ -164,8 +164,6 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 }
                 DemuxOutcome::Eof => return Ok(DecoderChunkOutcome::Eof),
             };
-            // Got a frame from the demuxer — forward motion through the
-            // stream regardless of whether we decode it or skip past it.
             hang_reset!();
             if let Some(target) = self.pending_seek_target {
                 let frame_end = frame.pts.saturating_add(frame.duration);

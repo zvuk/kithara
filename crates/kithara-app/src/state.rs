@@ -15,24 +15,24 @@ use tokio_util::sync::CancellationToken;
 /// listener task and direct setter calls from the UI controller.
 #[derive(Debug, Clone)]
 pub struct UiState {
-    pub tracks: Vec<TrackEntry>,
+    pub crossfade_progress: Option<f32>,
     pub current_track_index: Option<usize>,
+    pub selected_variant: Option<usize>,
+    pub status_note: Option<String>,
     pub track_name: String,
     pub variant_label: String,
     pub abr_variants: Vec<(usize, String)>,
-    pub abr_mode_is_auto: bool,
-    pub selected_variant: Option<usize>,
-    pub playing: bool,
-    pub position: f64,
-    pub duration: f64,
-    pub volume: f32,
-    pub crossfade: f32,
-    pub crossfade_progress: Option<f32>,
     pub eq_bands: Vec<f32>,
-    pub status_note: Option<String>,
+    pub tracks: Vec<TrackEntry>,
+    pub abr_mode_is_auto: bool,
     pub is_seeking: bool,
-    pub seek_position: f64,
+    pub playing: bool,
+    pub crossfade: f32,
     pub selected_rate: f32,
+    pub volume: f32,
+    pub duration: f64,
+    pub position: f64,
+    pub seek_position: f64,
 }
 
 impl UiState {
@@ -98,16 +98,20 @@ impl StateController {
         }
     }
 
+    /// Apply a closure under the lock. Returns the closure's result.
+    /// Used for UI-driven optimistic mutations (seek scrub, crossfade,
+    /// abr selection) that must outlive the next event echo.
+    pub fn mutate<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut UiState) -> R,
+    {
+        let mut st = self.state.lock_sync();
+        f(&mut st)
+    }
+
     #[must_use]
     pub fn queue(&self) -> &Arc<Queue> {
         &self.queue
-    }
-
-    /// Cheap clone of the current state — UI consumers call this once
-    /// per frame and render off the snapshot.
-    #[must_use]
-    pub fn snapshot(&self) -> UiState {
-        self.state.lock_sync().clone()
     }
 
     /// Pull the continuous values (position, duration, volume, tracks,
@@ -142,15 +146,11 @@ impl StateController {
         };
     }
 
-    /// Apply a closure under the lock. Returns the closure's result.
-    /// Used for UI-driven optimistic mutations (seek scrub, crossfade,
-    /// abr selection) that must outlive the next event echo.
-    pub fn mutate<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut UiState) -> R,
-    {
-        let mut st = self.state.lock_sync();
-        f(&mut st)
+    /// Cheap clone of the current state — UI consumers call this once
+    /// per frame and render off the snapshot.
+    #[must_use]
+    pub fn snapshot(&self) -> UiState {
+        self.state.lock_sync().clone()
     }
 }
 
@@ -189,9 +189,6 @@ fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
             st.track_name = current_index
                 .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
                 .unwrap_or_default();
-            // Variant fields are pulled live by `refresh_continuous`;
-            // reset the user-selected override so the renderer doesn't
-            // surface a stale manual selection across track switches.
             st.selected_variant = None;
             st.is_seeking = false;
         }

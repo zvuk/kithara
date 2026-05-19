@@ -112,9 +112,6 @@ pub(crate) fn fill_segment_buffer(
 
         let abs_offset = state.range.start + state.filled as u64;
         source.seek(SeekFrom::Start(abs_offset))?;
-        // `Stream::seek` waits on `wait_range` — during that wait, an
-        // apply_commit can shift the live range. Re-resolve once more
-        // so the read below uses the post-wait layout.
         if refresh_range(state, live) {
             let total_after = state.total();
             if state.buffer.len() != total_after {
@@ -138,14 +135,6 @@ pub(crate) fn fill_segment_buffer(
                 if state.filled == state.total() {
                     return Ok(FillStatus::Ready);
                 }
-                // Storage reached the end of this segment's resource
-                // before `segment.size` atomic was updated by
-                // `apply_commit` (DRM settle is async — encrypted HEAD
-                // estimate is replaced with the post-decrypt actual size
-                // only after the segment finishes settling). Refresh
-                // against the live layout once more — if the segment's
-                // byte_range has since shrunk to match what we actually
-                // read, treat that as a successful fill.
                 if refresh_range(state, live) {
                     let new_total = state.total();
                     if state.buffer.len() != new_total {

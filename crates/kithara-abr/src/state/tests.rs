@@ -201,10 +201,6 @@ fn apply_noop_when_same_variant() {
     assert_eq!(state.current_variant_index(), 1);
 }
 
-// `set_mode_rejects_out_of_bounds_manual` removed — variant validation
-// is now `AbrHandle::set_mode`'s responsibility (variants live on the
-// peer, not the state). See handle.rs tests for the corresponding cover.
-
 #[kithara::test]
 fn lock_is_refcounted() {
     let state = AbrState::new(AbrMode::Auto(None));
@@ -216,9 +212,6 @@ fn lock_is_refcounted() {
     state.unlock();
     assert!(!state.is_locked());
 }
-
-// Phase 2 of the two-cursor refactor: boundary-commit primitive
-// (`request_target` / `commit_pending` / `pending_target`).
 
 #[kithara::test]
 fn pending_target_is_empty_on_fresh_state() {
@@ -293,9 +286,6 @@ fn apply_decision_publishes_and_clears_matching_pending() {
 
 #[kithara::test]
 fn apply_decision_preserves_pending_overwritten_after_peek() {
-    // Race: external request_target overwrites pending between peek and
-    // apply. Our captured decision still publishes; the new pending
-    // stays for the next boundary commit.
     let state = AbrState::new(AbrMode::Auto(Some(0)));
     state.request_target(2, AbrReason::UpSwitch);
     let decision = state

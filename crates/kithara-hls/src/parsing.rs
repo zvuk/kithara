@@ -105,12 +105,12 @@ pub struct InitSegment {
 /// Parsed media playlist.
 #[derive(Debug, Clone)]
 pub struct MediaPlaylist {
-    /// Absolute URL of the media playlist itself (the `.m3u8`).
-    pub url: Url,
     /// Container format detected from segment/init URIs.
     pub detected_container: Option<ContainerFormat>,
     /// Optional initialization segment (for fMP4 streams).
     pub init_segment: Option<InitSegment>,
+    /// Absolute URL of the media playlist itself (the `.m3u8`).
+    pub url: Url,
     /// List of segments in the order they appear.
     pub segments: Vec<MediaSegment>,
 }
@@ -314,9 +314,9 @@ pub fn parse_media_playlist(url: Url, data: &[u8]) -> HlsResult<MediaPlaylist> {
         });
 
     Ok(MediaPlaylist {
-        url,
         detected_container,
         init_segment,
+        url,
         segments,
     })
 }
@@ -350,9 +350,9 @@ pub fn variant_info_from_master(
                 },
             );
             VariantInfo {
+                duration,
                 variant_index: v.id.0,
                 bandwidth_bps: v.bandwidth,
-                duration,
                 name: v.name.clone(),
                 codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),
                 container: v
