@@ -1,45 +1,3 @@
-//! RED test: `live_real_stream_seek_resume_native_drm` LEAK.
-//!
-//! Observed on `just test` runs: `LEAK [0.438s] (1325/1800)`. The test body
-//! completes in ~0.2-0.5s in isolation (PASS), but under the workspace-wide
-//! 1800-test matrix the same test flips to LEAK. nextest's LEAK detector
-//! fires when the per-test subprocess has not exited within `leak-timeout`
-//! (100ms default) after `main()` returns. That maps directly to "some
-//! thread owned by the test refuses to join, which blocks process exit".
-//!
-//! Hypothesis
-//! The DRM-path through `Audio<Stream<Hls>>` with `seek()` + `preload()`
-//! cycles leaves a thread/task artifact alive past `Audio::drop`:
-//!
-//! 1. `Audio::drop` cancels the caller cancel token + shuts down the
-//!    `AudioWorkerHandle` (standalone worker).
-//! 2. The `Stream<Hls>` inside `Audio` is dropped, which drops `HlsSource`,
-//!    which drops the owned `PeerHandle`. `PeerInner::Drop` fires its
-//!    handle-cancel token.
-//! 3. The Downloader's Registry sees `peer_cancel.is_cancelled()` on its
-//!    next `tick()` and removes the peer entry, releasing the final
-//!    `Arc<HlsPeer>`. `HlsPeer::Drop` fires `wake_cancel`, so the waker-
-//!    forwarding task exits.
-//! 4. `TestHttpServer::Drop` signals `shutdown_tx` but does NOT join the
-//!    spawned axum server task. Any in-flight DRM segment / key request
-//!    keeps the task alive until the `__rt.shutdown_timeout(100ms)` force
-//!    kills it (native test macro, line ~595).
-//!
-//! With 3 seeks that each kick off fresh segment + key fetches, a single
-//! in-flight reqwest connection can easily straddle the 100ms window,
-//! delaying process exit past leak-timeout.
-//!
-//! RED strategy
-//! Exercise the same Audio<Stream<Hls>>`::new` + preload + `seek()` cycle with
-//! DRM, then drop everything. Count kithara-owned named threads (exposed
-//! by `kithara_platform::thread::active_named_thread_count`) across N
-//! iterations against a SHARED Downloader + SHARED `TestServer` — the
-//! server-side artifact is amortised, and any growth per iteration is
-//! thread/task leakage tied to a single session.
-//!
-//! This is intentionally deterministic: no timing games, just
-//! iteration-over-iteration thread-budget growth.
-
 #![forbid(unsafe_code)]
 
 use std::{error::Error as StdError, num::NonZeroUsize, time::Duration};
@@ -50,9 +8,9 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
 use kithara_platform::{thread::active_named_thread_count, time::sleep};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -87,17 +45,22 @@ async fn run_drm_seek_resume_cycle(
     iter_idx: usize,
 ) {
     let url = server.asset("drm/master.m3u8");
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
+        .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_downloader(downloader.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .downloader(downloader.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::new(hls_config).with_worker(shared_worker.clone()),
+        AudioConfig::<Hls>::for_stream(hls_config)
+            .worker(shared_worker.clone())
+            .build(),
     )
     .await
     .expect("audio creation");
@@ -142,8 +105,11 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     let server = TestServerHelper::new().await;
     let shared_worker = AudioWorkerHandle::new();
 
-    let downloader =
-        Downloader::new(DownloaderConfig::default().with_cancel(CancellationToken::new()));
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .cancel(CancellationToken::new())
+            .build(),
+    );
 
     run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;
     sleep(Duration::from_millis(Consts::SETTLE_MS)).await;

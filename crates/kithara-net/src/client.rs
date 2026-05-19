@@ -88,11 +88,6 @@ impl HttpClient {
         Self { inner, options }
     }
 
-    #[must_use]
-    pub fn options(&self) -> &NetOptions {
-        &self.options
-    }
-
     fn apply_headers(
         mut req: reqwest::RequestBuilder,
         headers: Option<Headers>,
@@ -142,6 +137,11 @@ impl HttpClient {
     #[cfg(target_arch = "wasm32")]
     fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
         self.inner.get(url).header("Range", "bytes=0-0")
+    }
+
+    #[must_use]
+    pub fn options(&self) -> &NetOptions {
+        &self.options
     }
 
     /// Convert a reqwest Response to a [`ByteStream`](crate::ByteStream).

@@ -1,8 +1,3 @@
-//! Smoke tests for `PlayerResource` — the RT-safe wrapper around
-//! `Resource` with internal scratch buffers used by the audio thread.
-//! Drives `read` / `seek` / `duration` / `frames_until_eof` against
-//! `TestPcmReader` and two minimal local fixtures.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![allow(
     clippy::cast_possible_truncation,

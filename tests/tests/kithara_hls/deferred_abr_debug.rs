@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Diagnostic test for `sequential_read_across_segments_maintains_variant`
-
 use std::io::Read;
 
 use kithara::{
@@ -10,9 +8,8 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::TestServer;
+use kithara_integration_tests::{TestTempDir, cancel_token, hls_server::TestServer, temp_dir};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -34,11 +31,12 @@ async fn debug_sequential_read(temp_dir: TestTempDir, cancel_token: Cancellation
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_initial_abr_mode(AbrMode::Manual(1))
-        .with_events(bus);
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .initial_abr_mode(AbrMode::Manual(1))
+        .events(bus)
+        .build();
 
     info!("Opening HLS stream...");
     let mut stream = Stream::<Hls>::new(config).await.unwrap();

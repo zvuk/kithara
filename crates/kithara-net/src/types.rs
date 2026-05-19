@@ -1,7 +1,6 @@
 use std::{cmp::min, collections::HashMap, time::Duration};
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Headers {
@@ -72,16 +71,22 @@ impl RangeSpec {
     }
 }
 
-#[derive(Clone, Debug, Derivative)]
-#[derivative(Default)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct RetryPolicy {
-    #[derivative(Default(value = "Duration::from_millis(100)"))]
     pub base_delay: Duration,
-    #[derivative(Default(value = "Duration::from_secs(5)"))]
     pub max_delay: Duration,
-    #[derivative(Default(value = "3"))]
     pub max_retries: u32,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            base_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(5),
+            max_retries: 3,
+        }
+    }
 }
 
 impl RetryPolicy {
@@ -106,9 +111,7 @@ impl RetryPolicy {
     }
 }
 
-#[derive(Clone, Debug, Derivative, Setters)]
-#[derivative(Default)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct NetOptions {
     /// Maximum allowed inactivity between consecutive read operations.
@@ -127,7 +130,7 @@ pub struct NetOptions {
     /// spikes) without aborting valid slow streams — the player's
     /// contract is "wait for the segment, regardless of connection
     /// speed", and a 10s cap raced real fixtures.
-    #[derivative(Default(value = "Duration::from_secs(30)"))]
+    #[builder(default = Duration::from_secs(30))]
     pub inactivity_timeout: Duration,
     /// Hard cap on total request lifetime. Maps to
     /// [`reqwest::RequestBuilder::timeout`]. `None` lets streaming
@@ -137,17 +140,26 @@ pub struct NetOptions {
     /// keeps a safety net against pathological cases (server stuck in
     /// mid-body without ever closing) while not racing realistic
     /// slow-network seeks.
-    #[derivative(Default(value = "Some(Duration::from_secs(120))"))]
     pub total_timeout: Option<Duration>,
+    #[builder(default)]
     pub retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
+    #[builder(default)]
     pub is_insecure: bool,
     /// Max idle connections per host. Enables HTTP keep-alive connection
     /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
     /// Set to 0 to disable pooling.
-    #[derivative(Default(value = "8"))]
+    #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
+}
+
+impl Default for NetOptions {
+    fn default() -> Self {
+        Self::builder()
+            .total_timeout(Duration::from_secs(120))
+            .build()
+    }
 }
 
 #[cfg(test)]

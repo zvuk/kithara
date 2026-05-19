@@ -1,5 +1,3 @@
-//! Configuration for [`Item`](crate::impls::item::Item).
-
 use std::{
     fmt,
     num::{NonZeroU32, NonZeroUsize},
@@ -7,35 +5,27 @@ use std::{
     sync::Arc,
 };
 
-use derive_setters::Setters;
-#[cfg(feature = "hls")]
+use bon::Builder;
 use kithara_abr::AbrMode;
-#[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::{FlushHub, StoreOptions};
 use kithara_audio::{AudioConfig, AudioWorkerHandle, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
-#[cfg(feature = "file")]
 use kithara_file::{FileConfig, FileSrc};
-#[cfg(feature = "hls")]
 use kithara_hls::{HlsConfig, KeyOptions};
-#[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::Headers;
-#[cfg(any(feature = "file", feature = "hls"))]
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-#[cfg(feature = "file")]
 fn derive_remote_file_hint(url: &Url) -> Option<String> {
     url.path_segments()
         .and_then(|mut segments| segments.next_back())
         .and_then(derive_extension_hint)
 }
 
-#[cfg(feature = "file")]
 fn derive_extension_hint(segment: &str) -> Option<String> {
     let (_, extension) = segment.rsplit_once('.')?;
     if extension.is_empty() || !extension.chars().all(|ch| ch.is_ascii_alphanumeric()) {
@@ -95,149 +85,218 @@ const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 ///
 /// // With options
 /// let config = ResourceConfig::new("https://example.com/playlist.m3u8")?
-///     .with_hint("mp3")
-///     .with_look_ahead_bytes(1_000_000);
+///     .hint("mp3")
+///     .look_ahead_bytes(1_000_000);
 /// ```
-#[derive(Clone, Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct ResourceConfig {
-    /// Initial ABR mode passed to the HLS stream. The shared
-    /// `AbrController` lives on the `Downloader` and runs per-sample
-    /// decisions; this field only seeds the starting variant.
-    #[cfg(feature = "hls")]
+    /// Initial ABR mode passed to the HLS stream.
+    #[builder(default)]
     pub initial_abr_mode: AbrMode,
+    /// Selects the decoder backend explicitly.
+    #[builder(default)]
+    pub decoder_backend: DecoderBackend,
+    /// How leading/trailing PCM is trimmed after decode.
+    #[builder(default)]
+    pub gapless_mode: kithara_decode::GaplessMode,
+    /// Encryption key handling configuration.
+    #[builder(default)]
+    pub keys: KeyOptions,
+    /// Number of chunks to buffer before signaling preload readiness.
+    #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
+    pub preload_chunks: NonZeroUsize,
     /// Unified event bus for streaming, decode, and audio events.
-    ///
-    /// When set, the bus is propagated to the underlying stream and audio
-    /// pipeline. All events (`FileEvent`, `HlsEvent`, `AudioEvent`) are
-    /// published to this bus, enabling a single subscription point.
-    /// When `None`, a fresh bus is created per resource.
-    #[setters(rename = "with_events")]
+    #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
+    /// Shared downloader instance.
+    pub downloader: Option<Downloader>,
+    /// Shared flush coordinator for `AssetStore` on-disk indexes.
+    pub flush_hub: Option<Arc<FlushHub>>,
+    /// Additional HTTP headers to include in all network requests.
+    pub headers: Option<Headers>,
     /// Optional format hint (file extension like "mp3", "wav").
-    #[setters(skip)]
     pub hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
-    #[cfg(feature = "hls")]
     pub hls_base_url: Option<Url>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
-    /// Encryption key handling configuration.
-    #[cfg(feature = "hls")]
-    pub keys: KeyOptions,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
-    /// - `None` — no backpressure, download as fast as possible
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (e.g. differ only in
-    /// query parameters), setting a unique `name` ensures each gets its own
-    /// cache directory.
-    #[setters(skip)]
     pub name: Option<String>,
-    /// Additional HTTP headers to include in all network requests.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    pub headers: Option<Headers>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
     /// Shared playback rate atomic for the audio pipeline resampler.
-    ///
-    /// When set, propagated to `AudioConfig` so the resampler can dynamically
-    /// adjust its ratio based on the current playback rate.
     pub playback_rate: Option<Arc<AtomicF32>>,
-    /// Maximum peak bitrate in bits per second for ABR variant selection.
-    ///
-    /// When greater than zero, variants with bandwidth exceeding this value
-    /// are excluded from ABR decisions. Maps to `AVPlayer`'s
-    /// `preferredPeakBitRate`. Default: `0.0` (no limit).
-    pub preferred_peak_bitrate: f64,
-    /// Maximum peak bitrate for expensive networks (e.g., cellular).
-    ///
-    /// Stored for use by the FFI layer which determines network type.
-    /// Not consumed by `into_hls_config()` directly. Default: `0.0` (no limit).
-    pub preferred_peak_bitrate_for_expensive_networks: f64,
-    /// Number of chunks to buffer before signaling preload readiness.
-    ///
-    /// Higher values reduce the chance of the audio thread blocking on `recv()`
-    /// after preload, but increase initial latency. Default: 3.
-    pub preload_chunks: NonZeroUsize,
-    /// Forwarded to [`AudioConfig::with_decoder_backend`] via
-    /// `into_file_config` / `into_hls_config`. Selects the decoder
-    /// backend explicitly. No runtime fallback between paths —
-    /// a failure is terminal.
-    pub decoder_backend: DecoderBackend,
+    /// Shared audio worker handle for cooperative multi-track decoding.
+    pub worker: Option<AudioWorkerHandle>,
     /// Resampling quality preset.
+    #[builder(default)]
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
     pub src: ResourceSrc,
     /// Storage configuration (cache directory, eviction limits).
-    #[cfg(any(feature = "file", feature = "hls"))]
+    #[builder(default)]
     pub store: StoreOptions,
-    /// Shared downloader instance.
-    ///
-    /// When set, the underlying `FileConfig` / `HlsConfig` reuses this
-    /// downloader instead of spawning a private one. Lets multiple
-    /// resources share a single HTTP pool and runtime handle.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[setters(skip)]
-    pub downloader: Option<Downloader>,
-    /// Shared flush coordinator for `AssetStore` on-disk indexes.
-    ///
-    /// When set, the underlying [`StoreOptions`] uses this hub instead
-    /// of the per-store default. Lets multiple tracks coalesce index
-    /// flushes through a single (optionally worker-backed) coordinator
-    /// — analogous to a shared [`Downloader`] or audio worker.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[setters(skip)]
-    pub flush_hub: Option<Arc<FlushHub>>,
-    /// Shared audio worker handle for cooperative multi-track decoding.
-    ///
-    /// When set, all resources sharing the same worker decode on a single
-    /// OS thread. When `None`, each `Audio` pipeline creates its own
-    /// standalone worker thread (backward-compatible default).
-    #[setters(skip)]
-    pub worker: Option<AudioWorkerHandle>,
-    /// How leading/trailing PCM is trimmed after decode. Forwarded to
-    /// the underlying [`AudioConfig::with_gapless_mode`] in
-    /// `into_file_config` / `into_hls_config`.
-    pub gapless_mode: kithara_decode::GaplessMode,
+    /// Maximum peak bitrate in bits per second for ABR variant selection.
+    #[builder(default = 0.0)]
+    pub preferred_peak_bitrate: f64,
+    /// Maximum peak bitrate for expensive networks (e.g., cellular).
+    #[builder(default = 0.0)]
+    pub preferred_peak_bitrate_for_expensive_networks: f64,
 }
 
 impl ResourceConfig {
-    /// Create a new config from a URL string or local file path.
-    ///
-    /// Parses the input as a URL first. If parsing fails, treats it as a local
-    /// file path (must be absolute). A `file://` URL is normalized to a `Path`.
+    /// Terminal constructor — parses input and returns a fully-built config.
     ///
     /// # Errors
     ///
-    /// Returns `DecodeError::InvalidData` if the input is an invalid `file://` URL
-    /// or a non-absolute file path.
+    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
+    /// absolute path. See [`Self::parse_src`].
     pub fn new<S: AsRef<str>>(input: S) -> Result<Self, DecodeError> {
+        Self::for_src(input).map(ResourceConfigBuilder::build)
+    }
+
+    /// Chainable counterpart to [`Self::new`]: parses input and returns a
+    /// builder with `src` already populated so call-sites can add options
+    /// before `.build()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
+    /// absolute path. See [`Self::parse_src`].
+    pub fn for_src<S: AsRef<str>>(
+        input: S,
+    ) -> Result<ResourceConfigBuilder<resource_config_builder::SetSrc>, DecodeError> {
+        Self::parse_src(input).map(|src| Self::builder().src(src))
+    }
+
+    /// Convert into an `AudioConfig<File>`.
+    pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
+        let (file_src, derived_hint) = match self.src {
+            ResourceSrc::Url(ref url) => {
+                (FileSrc::Remote(url.clone()), derive_remote_file_hint(url))
+            }
+            ResourceSrc::Path(ref path) => (
+                FileSrc::Local(path.clone()),
+                path.extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_lowercase),
+            ),
+        };
+        let store = StoreOptions::builder()
+            .cache_dir(self.store.cache_dir.clone())
+            .maybe_flush_hub(
+                self.flush_hub
+                    .clone()
+                    .or_else(|| self.store.flush_hub.clone()),
+            )
+            .build();
+        let downloader = self
+            .downloader
+            .clone()
+            .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
+        let file_config = FileConfig::for_src(file_src)
+            .store(store)
+            .downloader(downloader)
+            .maybe_look_ahead_bytes(self.look_ahead_bytes)
+            .maybe_headers(self.headers.clone())
+            .maybe_name(self.name.clone())
+            .maybe_events(self.bus.clone())
+            .maybe_cancel(self.cancel.clone())
+            .build();
+        AudioConfig::<kithara_file::File>::for_stream(file_config)
+            .maybe_cancel(self.cancel)
+            .maybe_hint(self.hint.or(derived_hint))
+            .maybe_byte_pool(self.byte_pool)
+            .maybe_pcm_pool(self.pcm_pool)
+            .maybe_host_sample_rate(self.host_sample_rate)
+            .resampler_quality(self.resampler_quality)
+            .preload_chunks(self.preload_chunks)
+            .decoder_backend(self.decoder_backend)
+            .maybe_playback_rate(self.playback_rate)
+            .maybe_worker(self.worker)
+            .gapless_mode(self.gapless_mode)
+            .build()
+    }
+
+    /// Convert into an `AudioConfig<Hls>`.
+    pub(crate) fn into_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
+        let url = match self.src {
+            ResourceSrc::Url(ref url) => url.clone(),
+            ResourceSrc::Path(ref p) => {
+                return Err(DecodeError::InvalidData(format!(
+                    "HLS requires a URL, got local path: {}",
+                    p.display()
+                )));
+            }
+        };
+        let store = StoreOptions::builder()
+            .cache_dir(self.store.cache_dir.clone())
+            .maybe_flush_hub(
+                self.flush_hub
+                    .clone()
+                    .or_else(|| self.store.flush_hub.clone()),
+            )
+            .build();
+        let hls_config = HlsConfig::for_url(url)
+            .store(store)
+            .keys(self.keys)
+            .maybe_downloader(self.downloader)
+            .initial_abr_mode(self.initial_abr_mode)
+            .maybe_look_ahead_bytes(self.look_ahead_bytes)
+            .maybe_headers(self.headers)
+            .maybe_name(self.name)
+            .maybe_base_url(self.hls_base_url)
+            .maybe_events(self.bus.clone())
+            .maybe_cancel(self.cancel.clone())
+            .build();
+        Ok(AudioConfig::<kithara_hls::Hls>::for_stream(hls_config)
+            .maybe_cancel(self.cancel)
+            .maybe_hint(self.hint)
+            .maybe_byte_pool(self.byte_pool)
+            .maybe_pcm_pool(self.pcm_pool)
+            .maybe_host_sample_rate(self.host_sample_rate)
+            .resampler_quality(self.resampler_quality)
+            .preload_chunks(self.preload_chunks)
+            .decoder_backend(self.decoder_backend)
+            .maybe_playback_rate(self.playback_rate)
+            .maybe_worker(self.worker)
+            .gapless_mode(self.gapless_mode)
+            .build())
+    }
+
+    /// Parse a URL string or local file path into a [`ResourceSrc`].
+    ///
+    /// Tries URL parsing first. On failure, falls back to absolute file path.
+    /// A `file://` URL is normalized to a `Path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::InvalidData` if the input is an invalid `file://`
+    /// URL or a non-absolute file path.
+    pub fn parse_src<S: AsRef<str>>(input: S) -> Result<ResourceSrc, DecodeError> {
         let trimmed = input.as_ref().trim();
 
-        let src = match Url::parse(trimmed) {
+        match Url::parse(trimmed) {
             #[cfg(not(target_arch = "wasm32"))]
             Ok(url) if url.scheme() == "file" => {
                 let path = url.to_file_path().map_err(|()| {
                     DecodeError::InvalidData(format!("invalid file URL: {trimmed}"))
                 })?;
-                ResourceSrc::Path(path)
+                Ok(ResourceSrc::Path(path))
             }
             #[cfg(target_arch = "wasm32")]
-            Ok(url) if url.scheme() == "file" => {
-                return Err(DecodeError::InvalidData(format!(
-                    "file:// URL is not supported on wasm: {trimmed}"
-                )));
-            }
-            Ok(url) => ResourceSrc::Url(url),
+            Ok(url) if url.scheme() == "file" => Err(DecodeError::InvalidData(format!(
+                "file:// URL is not supported on wasm: {trimmed}"
+            ))),
+            Ok(url) => Ok(ResourceSrc::Url(url)),
             Err(_) => {
                 let path = PathBuf::from(trimmed);
                 if !path.is_absolute() {
@@ -245,237 +304,9 @@ impl ResourceConfig {
                         "invalid URL or file path (must be absolute): {trimmed}"
                     )));
                 }
-                ResourceSrc::Path(path)
+                Ok(ResourceSrc::Path(path))
             }
-        };
-
-        Ok(Self {
-            src,
-            #[cfg(feature = "hls")]
-            initial_abr_mode: AbrMode::default(),
-            bus: None,
-            byte_pool: None,
-            cancel: None,
-            hint: None,
-            #[cfg(any(feature = "file", feature = "hls"))]
-            headers: None,
-            #[cfg(feature = "hls")]
-            hls_base_url: None,
-            host_sample_rate: None,
-            #[cfg(feature = "hls")]
-            keys: KeyOptions::default(),
-            look_ahead_bytes: None,
-            name: None,
-            pcm_pool: None,
-            playback_rate: None,
-            preferred_peak_bitrate: 0.0,
-            preferred_peak_bitrate_for_expensive_networks: 0.0,
-            preload_chunks: DEFAULT_PRELOAD_CHUNKS,
-            decoder_backend: DecoderBackend::default(),
-            resampler_quality: ResamplerQuality::default(),
-            #[cfg(any(feature = "file", feature = "hls"))]
-            store: StoreOptions::default(),
-            #[cfg(any(feature = "file", feature = "hls"))]
-            downloader: None,
-            #[cfg(any(feature = "file", feature = "hls"))]
-            flush_hub: None,
-            worker: None,
-            gapless_mode: kithara_decode::GaplessMode::default(),
-        })
-    }
-
-    /// Convert into an `AudioConfig<File>`.
-    #[cfg(feature = "file")]
-    pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
-        let (file_src, hint) = match self.src {
-            ResourceSrc::Url(url) => {
-                let h = derive_remote_file_hint(&url);
-                (FileSrc::Remote(url), h)
-            }
-            ResourceSrc::Path(path) => {
-                let h = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(str::to_lowercase);
-                (FileSrc::Local(path), h)
-            }
-        };
-
-        let dl = self
-            .downloader
-            .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
-        let mut store = self.store;
-        if let Some(hub) = self.flush_hub {
-            store = store.with_flush_hub(hub);
         }
-        let mut file_config = FileConfig::new(file_src)
-            .with_store(store)
-            .with_downloader(dl);
-
-        if let Some(bytes) = self.look_ahead_bytes {
-            file_config = file_config.with_look_ahead_bytes(bytes);
-        }
-
-        if let Some(headers) = self.headers {
-            file_config = file_config.with_headers(headers);
-        }
-
-        if let Some(name) = self.name {
-            file_config = file_config.with_name(name);
-        }
-
-        if let Some(ref bus) = self.bus {
-            file_config = file_config.with_events(bus.clone());
-        }
-        let cancel_for_audio = self.cancel.clone();
-        if let Some(cancel) = self.cancel {
-            file_config = file_config.with_cancel(cancel);
-        }
-        let mut config = AudioConfig::<kithara_file::File>::new(file_config);
-        config.cancel = cancel_for_audio;
-
-        if let Some(h) = self.hint {
-            config = config.with_hint(h);
-        } else if let Some(ext) = hint {
-            config = config.with_hint(ext);
-        }
-        if let Some(pool) = self.byte_pool {
-            config = config.with_byte_pool(pool);
-        }
-        if let Some(pool) = self.pcm_pool {
-            config = config.with_pcm_pool(pool);
-        }
-        if let Some(sr) = self.host_sample_rate {
-            config = config.with_host_sample_rate(sr);
-        }
-        config = config.with_resampler_quality(self.resampler_quality);
-        config = config.with_preload_chunks(self.preload_chunks);
-        config = config.with_decoder_backend(self.decoder_backend);
-        if let Some(rate) = self.playback_rate {
-            config = config.with_playback_rate(rate);
-        }
-        if let Some(worker) = self.worker {
-            config = config.with_worker(worker);
-        }
-        config = config.with_gapless_mode(self.gapless_mode);
-
-        config
-    }
-
-    /// Convert into an `AudioConfig<Hls>`.
-    #[cfg(feature = "hls")]
-    pub(crate) fn into_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
-        let url = match self.src {
-            ResourceSrc::Url(url) => url,
-            ResourceSrc::Path(p) => {
-                return Err(DecodeError::InvalidData(format!(
-                    "HLS requires a URL, got local path: {}",
-                    p.display()
-                )));
-            }
-        };
-
-        let mut store = self.store;
-        if let Some(hub) = self.flush_hub {
-            store = store.with_flush_hub(hub);
-        }
-        let mut hls_config = HlsConfig::new(url).with_store(store).with_keys(self.keys);
-        if let Some(dl) = self.downloader {
-            hls_config = hls_config.with_downloader(dl);
-        }
-
-        hls_config = hls_config.with_initial_abr_mode(self.initial_abr_mode);
-
-        // NOTE: `preferred_peak_bitrate` per-track cap now lives on the
-
-        if let Some(bytes) = self.look_ahead_bytes {
-            hls_config = hls_config.with_look_ahead_bytes(bytes);
-        }
-
-        if let Some(headers) = self.headers {
-            hls_config = hls_config.with_headers(headers);
-        }
-
-        if let Some(name) = self.name {
-            hls_config = hls_config.with_name(name);
-        }
-
-        if let Some(base_url) = self.hls_base_url {
-            hls_config = hls_config.with_base_url(base_url);
-        }
-        if let Some(ref bus) = self.bus {
-            hls_config = hls_config.with_events(bus.clone());
-        }
-        let cancel_for_audio = self.cancel.clone();
-        if let Some(cancel) = self.cancel {
-            hls_config = hls_config.with_cancel(cancel);
-        }
-
-        let mut config = AudioConfig::<kithara_hls::Hls>::new(hls_config);
-        config.cancel = cancel_for_audio;
-
-        if let Some(h) = self.hint {
-            config = config.with_hint(h);
-        }
-        if let Some(pool) = self.byte_pool {
-            config = config.with_byte_pool(pool);
-        }
-        if let Some(pool) = self.pcm_pool {
-            config = config.with_pcm_pool(pool);
-        }
-        if let Some(sr) = self.host_sample_rate {
-            config = config.with_host_sample_rate(sr);
-        }
-        config = config.with_resampler_quality(self.resampler_quality);
-        config = config.with_preload_chunks(self.preload_chunks);
-        config = config.with_decoder_backend(self.decoder_backend);
-        if let Some(rate) = self.playback_rate {
-            config = config.with_playback_rate(rate);
-        }
-        if let Some(worker) = self.worker {
-            config = config.with_worker(worker);
-        }
-        config = config.with_gapless_mode(self.gapless_mode);
-
-        Ok(config)
-    }
-
-    /// Set a shared downloader for the underlying stream.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_downloader(mut self, dl: Downloader) -> Self {
-        self.downloader = Some(dl);
-        self
-    }
-
-    /// Set a shared [`FlushHub`] for the underlying `AssetStore`.
-    /// When omitted, each store gets its own no-worker hub.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_flush_hub(mut self, hub: Arc<FlushHub>) -> Self {
-        self.flush_hub = Some(hub);
-        self
-    }
-
-    /// Set format hint (file extension like "mp3", "wav").
-    #[must_use]
-    pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
-
-    /// Set name for cache disambiguation.
-    #[must_use]
-    pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
-    /// Set shared audio worker for cooperative multi-track decoding.
-    #[must_use]
-    pub fn with_worker(mut self, worker: AudioWorkerHandle) -> Self {
-        self.worker = Some(worker);
-        self
     }
 }
 
@@ -493,7 +324,6 @@ mod tests {
         assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == "https"));
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn config_file_url_derives_extension_hint_from_last_path_segment() {
         let config = ResourceConfig::new("https://example.com/audio/get-mp3/song.MP3?sign=test")
@@ -503,7 +333,6 @@ mod tests {
         assert_eq!(config.hint.as_deref(), Some("mp3"));
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn config_file_url_without_extension_does_not_derive_hint() {
         let config = ResourceConfig::new("https://example.com/get-mp3/42?sign=test")
@@ -534,43 +363,41 @@ mod tests {
     #[case(false)]
     #[case(true)]
     fn config_bus_presence(#[case] with_events: bool) {
-        let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
-        if with_events {
-            config = config.with_events(EventBus::new(32));
-        }
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
+            .unwrap()
+            .maybe_events(with_events.then(|| EventBus::new(32)))
+            .build();
         assert_eq!(config.bus.is_some(), with_events);
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn config_bus_propagates_to_file_config() {
-        let bus = EventBus::new(32);
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .with_events(bus);
+            .events(EventBus::new(32))
+            .build();
         let audio_config = config.into_file_config();
         assert!(audio_config.stream.bus.is_some());
     }
 
-    #[cfg(feature = "hls")]
     #[kithara::test]
     fn config_bus_propagates_to_hls_config() {
-        let bus = EventBus::new(32);
-        let config = ResourceConfig::new("https://example.com/live.m3u8")
+        let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
-            .with_events(bus);
+            .events(EventBus::new(32))
+            .build();
         let audio_config = config.into_hls_config().unwrap();
         assert!(audio_config.stream.bus.is_some());
     }
 
-    #[cfg(any(feature = "file", feature = "hls"))]
     #[kithara::test]
     fn config_with_headers() {
         let mut headers = Headers::new();
         headers.insert("Authorization", "Bearer test");
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .with_headers(headers);
+            .headers(headers)
+            .build();
 
         assert!(config.headers.is_some());
         assert_eq!(
@@ -581,13 +408,13 @@ mod tests {
 
     #[kithara::test]
     fn config_builder_chain() {
-        let bus = EventBus::new(32);
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .with_events(bus)
-            .with_hint("mp3")
-            .with_name("test")
-            .with_preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"));
+            .events(EventBus::new(32))
+            .hint("mp3".to_string())
+            .name("test".to_string())
+            .preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"))
+            .build();
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
         assert_eq!(config.name.as_deref(), Some("test"));
@@ -601,12 +428,12 @@ mod tests {
         assert!((config.preferred_peak_bitrate_for_expensive_networks - 0.0).abs() < f64::EPSILON);
     }
 
-    #[cfg(feature = "hls")]
     #[kithara::test]
     fn config_bitrate_propagates_to_hls_abr() {
-        let config = ResourceConfig::new("https://example.com/live.m3u8")
+        let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
-            .with_preferred_peak_bitrate(512_000.0);
+            .preferred_peak_bitrate(512_000.0)
+            .build();
         let _audio_config = config.into_hls_config().unwrap();
     }
 
@@ -619,38 +446,38 @@ mod tests {
     #[kithara::test]
     fn config_with_worker_sets_field() {
         let worker = AudioWorkerHandle::new();
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .with_worker(worker.clone());
+            .worker(worker.clone())
+            .build();
         assert!(config.worker.is_some());
         worker.shutdown();
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn config_worker_propagates_to_file_config() {
         let worker = AudioWorkerHandle::new();
-        let config = ResourceConfig::new("https://example.com/song.mp3")
+        let config = ResourceConfig::for_src("https://example.com/song.mp3")
             .unwrap()
-            .with_worker(worker.clone());
+            .worker(worker.clone())
+            .build();
         let audio_config = config.into_file_config();
         assert!(audio_config.worker.is_some());
         worker.shutdown();
     }
 
-    #[cfg(feature = "hls")]
     #[kithara::test]
     fn config_worker_propagates_to_hls_config() {
         let worker = AudioWorkerHandle::new();
-        let config = ResourceConfig::new("https://example.com/live.m3u8")
+        let config = ResourceConfig::for_src("https://example.com/live.m3u8")
             .unwrap()
-            .with_worker(worker.clone());
+            .worker(worker.clone())
+            .build();
         let audio_config = config.into_hls_config().unwrap();
         assert!(audio_config.worker.is_some());
         worker.shutdown();
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     fn file_hint_none_for_url_without_extension() {
         let config =
@@ -662,7 +489,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "file")]
     #[kithara::test]
     #[case("https://example.com/song.mp3", Some("mp3"))]
     #[case("https://example.com/audio.flac", Some("flac"))]

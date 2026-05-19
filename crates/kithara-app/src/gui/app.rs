@@ -25,14 +25,14 @@ use crate::{
 /// a single, consistent snapshot.
 pub(crate) struct Kithara {
     pub(crate) controller: Arc<StateController>,
-    pub(crate) ui_state: UiState,
-
     pub(crate) palette: gui::GuiPalette,
-    pub(crate) active_tab: Tab,
+
     pub(crate) selected_track_index: Option<usize>,
-    pub(crate) blink_counter: u8,
     pub(crate) url_text: String,
+    pub(crate) active_tab: Tab,
+    pub(crate) ui_state: UiState,
     pub(crate) previous_volume: f32,
+    pub(crate) blink_counter: u8,
 }
 
 impl Kithara {

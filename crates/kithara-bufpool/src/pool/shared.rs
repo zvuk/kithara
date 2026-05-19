@@ -1,5 +1,3 @@
-//! `SharedPool` — Arc-wrapped pool for shared access across components.
-
 use std::{fmt, sync::Arc};
 
 use super::{

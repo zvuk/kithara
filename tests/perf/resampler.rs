@@ -1,7 +1,3 @@
-//! Performance tests for audio resampler.
-//!
-//! Run with: `cargo test --test resampler --features perf --release`
-
 #![cfg(feature = "perf")]
 
 use std::sync::{Arc, atomic::AtomicU32};
@@ -87,12 +83,12 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
 
             for quality in qualities {
                 let host_rate = Arc::new(AtomicU32::new(output_rate));
-                let params = ResamplerParams::new(
+                let mut params = ResamplerParams::new(
                     host_rate,
                     input_spec.sample_rate,
                     input_spec.channels as usize,
-                )
-                .with_quality(quality);
+                );
+                params.quality = quality;
                 let mut resampler = ResamplerProcessor::new(params);
                 let chunk = create_test_chunk(test_frames, input_spec);
 
@@ -115,8 +111,9 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
                 sample_rate: 44100,
             };
             let host_rate = Arc::new(AtomicU32::new(spec.sample_rate));
-            let params = ResamplerParams::new(host_rate, spec.sample_rate, spec.channels as usize)
-                .with_quality(ResamplerQuality::Good);
+            let mut params =
+                ResamplerParams::new(host_rate, spec.sample_rate, spec.channels as usize);
+            params.quality = ResamplerQuality::Good;
             let mut resampler = ResamplerProcessor::new(params);
             let chunk = create_test_chunk(2048, spec);
 
@@ -174,12 +171,12 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             };
             let output_rate = 44100;
             let host_rate = Arc::new(AtomicU32::new(output_rate));
-            let params = ResamplerParams::new(
+            let mut params = ResamplerParams::new(
                 host_rate,
                 input_spec.sample_rate,
                 input_spec.channels as usize,
-            )
-            .with_quality(ResamplerQuality::High);
+            );
+            params.quality = ResamplerQuality::High;
             let mut resampler = ResamplerProcessor::new(params);
             let chunk_sizes = [512, 1024, 2048, 4096];
 

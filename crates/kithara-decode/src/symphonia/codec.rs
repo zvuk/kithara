@@ -1,18 +1,3 @@
-//! `SymphoniaCodec` — generic [`FrameCodec`] over `symphonia`'s codec
-//! registry.
-//!
-//! Wraps `Box<dyn symphonia::core::codecs::audio::AudioDecoder>` built
-//! from a [`TrackInfo`]. Codec id is selected from
-//! [`TrackInfo::codec`]; codec-specific extra data
-//! (`AudioSpecificConfig` for AAC, `STREAMINFO` for FLAC, ESDS cookie
-//! for ALAC, etc.) flows through `TrackInfo::extra_data`.
-//!
-//! PCM and ADPCM tracks need the specific bit-depth / endian variant
-//! which our generic [`AudioCodec`] enum does not encode. For those
-//! cases, the factory uses [`SymphoniaCodec::open_native`], passing the
-//! original `AudioCodecParameters` straight through from
-//! [`crate::demuxer::SymphoniaDemuxer::native_params`].
-
 use kithara_bufpool::PcmBuf;
 use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
@@ -157,6 +142,7 @@ impl FrameCodec for SymphoniaCodec {
         &mut self,
         frame_data: &[u8],
         pts: Duration,
+        _packet_desc: &[u8],
         out: &mut PcmBuf,
     ) -> DecodeResult<u32> {
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate);

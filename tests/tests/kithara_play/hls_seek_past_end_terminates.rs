@@ -1,27 +1,3 @@
-//! Pin the production "seek hang" bug observed in `app.log` (2026-04-25):
-//!
-//! After a seek that the decoder cannot satisfy (e.g. Symphonia computes a
-//! byte target outside the file via sidx extrapolation, or a plain
-//! seek-past-EOF), `apply_time_anchor_seek` enters
-//! `recover_from_decoder_seek_error`, recreates the decoder, re-issues the
-//! same seek, fails identically, and loops forever — `request.attempt`
-//! stays at `0` across iterations because the counter is never advanced
-//! when re-entering `RecreateNext::Seek(request)`.
-//!
-//! Symptom: `OfflinePlayer::position()` is frozen at the seek target and
-//! no `TrackError` / `TrackPlaybackStopped` notification ever arrives.
-//!
-//! Contract this test pins:
-//!   - When `decoder.seek` fails deterministically, the FSM must hit a
-//!     terminal state (Failed → `TrackError`) within a bounded number of
-//!     attempts. No infinite recreate loop.
-//!
-//! Trigger: seek to a target far past the track duration (12 s fixture →
-//! 50 s target). Symphonia's `Seek::seek` on the underlying
-//! `MediaSourceStream` returns "seek past EOF", which the audio pipeline
-//! surfaces as `SeekFailed`. That is the same failure class as the prod
-//! `app.log` repro (`SeekFailed("seek past EOF: new_pos=… len=…")`).
-
 #![forbid(unsafe_code)]
 
 use std::time::Duration;
@@ -31,8 +7,11 @@ use kithara::{
     play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_integration_tests::offline::{NotificationKind, OfflinePlayer};
-use kithara_test_utils::{PackagedTestServer, temp_dir};
+use kithara_integration_tests::{
+    PackagedTestServer,
+    offline::{NotificationKind, OfflinePlayer},
+    temp_dir,
+};
 use tokio::time::sleep;
 
 use crate::common::test_defaults::Consts as Shared;
@@ -82,9 +61,12 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(DownloaderConfig::default());
 
-    let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
-    cfg = cfg.with_downloader(downloader.clone()).with_name("t0");
-    cfg.store = store;
+    let cfg = ResourceConfig::for_src(master.as_str())
+        .expect("valid master URL")
+        .downloader(downloader.clone())
+        .name("t0".to_string())
+        .store(store)
+        .build();
 
     let resource = Resource::new(cfg)
         .await

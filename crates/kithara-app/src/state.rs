@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use kithara::{
-    abr::VariantInfo,
-    events::{AbrEvent, AppEvent, EngineEvent, Event, PlayerEvent},
+    abr::AbrHandle,
+    events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo},
 };
 use kithara_platform::sync::Mutex;
 use kithara_queue::{Queue, QueueEvent, TrackEntry};
@@ -15,24 +15,24 @@ use tokio_util::sync::CancellationToken;
 /// listener task and direct setter calls from the UI controller.
 #[derive(Debug, Clone)]
 pub struct UiState {
-    pub tracks: Vec<TrackEntry>,
+    pub crossfade_progress: Option<f32>,
     pub current_track_index: Option<usize>,
+    pub selected_variant: Option<usize>,
+    pub status_note: Option<String>,
     pub track_name: String,
     pub variant_label: String,
     pub abr_variants: Vec<(usize, String)>,
-    pub abr_mode_is_auto: bool,
-    pub selected_variant: Option<usize>,
-    pub playing: bool,
-    pub position: f64,
-    pub duration: f64,
-    pub volume: f32,
-    pub crossfade: f32,
-    pub crossfade_progress: Option<f32>,
     pub eq_bands: Vec<f32>,
-    pub status_note: Option<String>,
+    pub tracks: Vec<TrackEntry>,
+    pub abr_mode_is_auto: bool,
     pub is_seeking: bool,
-    pub seek_position: f64,
+    pub playing: bool,
+    pub crossfade: f32,
     pub selected_rate: f32,
+    pub volume: f32,
+    pub duration: f64,
+    pub position: f64,
+    pub seek_position: f64,
 }
 
 impl UiState {
@@ -98,33 +98,6 @@ impl StateController {
         }
     }
 
-    #[must_use]
-    pub fn queue(&self) -> &Arc<Queue> {
-        &self.queue
-    }
-
-    /// Cheap clone of the current state — UI consumers call this once
-    /// per frame and render off the snapshot.
-    #[must_use]
-    pub fn snapshot(&self) -> UiState {
-        self.state.lock_sync().clone()
-    }
-
-    /// Pull the continuous values (position, duration, volume, tracks)
-    /// from the queue. Event-driven mirrors keep the rest in sync.
-    pub fn refresh_continuous(&self) {
-        let position = self.queue.position_seconds().unwrap_or(0.0);
-        let duration = self.queue.duration_seconds().unwrap_or(0.0);
-        let mut st = self.state.lock_sync();
-        st.playing = self.queue.is_playing();
-        st.volume = self.queue.volume();
-        st.position = position;
-        st.duration = duration;
-        if let Some(idx) = self.queue.current_index() {
-            st.current_track_index = Some(idx);
-        }
-    }
-
     /// Apply a closure under the lock. Returns the closure's result.
     /// Used for UI-driven optimistic mutations (seek scrub, crossfade,
     /// abr selection) that must outlive the next event echo.
@@ -134,6 +107,50 @@ impl StateController {
     {
         let mut st = self.state.lock_sync();
         f(&mut st)
+    }
+
+    #[must_use]
+    pub fn queue(&self) -> &Arc<Queue> {
+        &self.queue
+    }
+
+    /// Pull the continuous values (position, duration, volume, tracks,
+    /// active variant) from the queue. Event-driven mirrors keep the
+    /// rest in sync.
+    pub fn refresh_continuous(&self) {
+        let position = self.queue.position_seconds().unwrap_or(0.0);
+        let duration = self.queue.duration_seconds().unwrap_or(0.0);
+        let abr = self.queue.current_abr_handle();
+        let current_variant = abr.as_ref().and_then(AbrHandle::current_variant);
+        let variants = abr.as_ref().map(AbrHandle::variants).unwrap_or_default();
+        let mode = abr.as_ref().and_then(AbrHandle::mode);
+        let mut st = self.state.lock_sync();
+        st.playing = self.queue.is_playing();
+        st.volume = self.queue.volume();
+        st.position = position;
+        st.duration = duration;
+        if let Some(idx) = self.queue.current_index() {
+            st.current_track_index = Some(idx);
+        }
+        st.variant_label = current_variant
+            .as_ref()
+            .map(variant_display_label_from_info)
+            .unwrap_or_default();
+        st.abr_variants = variants
+            .iter()
+            .map(|v| (v.variant_index, variant_short_label(v)))
+            .collect();
+        st.abr_mode_is_auto = match mode {
+            Some(AbrMode::Manual(_)) => false,
+            Some(AbrMode::Auto(_)) | None => true,
+        };
+    }
+
+    /// Cheap clone of the current state — UI consumers call this once
+    /// per frame and render off the snapshot.
+    #[must_use]
+    pub fn snapshot(&self) -> UiState {
+        self.state.lock_sync().clone()
     }
 }
 
@@ -147,8 +164,6 @@ fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: Cancell
     let mut rx = queue.subscribe();
 
     tokio::spawn(async move {
-        let mut variants_cache: Vec<VariantInfo> = Vec::new();
-
         loop {
             let event = tokio::select! {
                 biased;
@@ -157,7 +172,7 @@ fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: Cancell
             };
 
             match event {
-                Ok(event) => apply_event(event, &queue, &state, &mut variants_cache),
+                Ok(event) => apply_event(event, &queue, &state),
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             }
@@ -165,37 +180,15 @@ fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: Cancell
     });
 }
 
-fn apply_event(
-    event: Event,
-    queue: &Queue,
-    state: &Mutex<UiState>,
-    variants_cache: &mut Vec<VariantInfo>,
-) {
+fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
     match event {
-        Event::Abr(AbrEvent::VariantsRegistered { variants, initial }) => {
-            *variants_cache = variants;
-            let mut st = state.lock_sync();
-            st.variant_label = variant_display_label(variants_cache, initial);
-            st.abr_variants = variants_cache
-                .iter()
-                .map(|vi| (vi.index, variant_short_label(vi)))
-                .collect();
-        }
-        Event::Abr(AbrEvent::VariantApplied { to, .. }) => {
-            let mut st = state.lock_sync();
-            st.variant_label = variant_display_label(variants_cache, to);
-        }
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
-            variants_cache.clear();
             let mut st = state.lock_sync();
             st.current_track_index = current_index;
             st.track_name = current_index
                 .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
                 .unwrap_or_default();
-            st.variant_label.clear();
-            st.abr_variants.clear();
-            st.abr_mode_is_auto = true;
             st.selected_variant = None;
             st.is_seeking = false;
         }
@@ -229,23 +222,20 @@ fn apply_event(
     }
 }
 
-fn variant_display_label(variants: &[VariantInfo], index: usize) -> String {
-    variants.get(index).map_or_else(
-        || format!("variant {index}"),
-        |v| {
-            v.name.clone().unwrap_or_else(|| {
-                v.bandwidth_bps.map_or_else(
-                    || format!("variant {index}"),
-                    |b| format!("{} kbps", b / 1000),
-                )
-            })
-        },
-    )
+fn variant_display_label_from_info(v: &VariantInfo) -> String {
+    v.name.clone().unwrap_or_else(|| {
+        v.bandwidth_bps.map_or_else(
+            || format!("variant {}", v.variant_index),
+            |b| format!("{} kbps", b / 1000),
+        )
+    })
 }
 
 fn variant_short_label(v: &VariantInfo) -> String {
     v.name.clone().unwrap_or_else(|| {
-        v.bandwidth_bps
-            .map_or_else(|| format!("v{}", v.index), |b| format!("{}k", b / 1000))
+        v.bandwidth_bps.map_or_else(
+            || format!("v{}", v.variant_index),
+            |b| format!("{}k", b / 1000),
+        )
     })
 }

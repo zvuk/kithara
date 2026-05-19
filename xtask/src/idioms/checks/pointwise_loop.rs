@@ -1,10 +1,3 @@
-//! Flag for-loops that perform a pointwise binary op over zipped iterators.
-//!
-//! Pattern: `for ($a, $b) in <expr>.zip(...) { *lhs OP_EQ rhs }`. The
-//! body is exactly one statement that's a deref/index assignment or
-//! assign-op against a binding from the for-pattern. Suggest `.for_each`
-//! or a SIMD primitive (kithara-audio `fast_interleave`).
-
 use anyhow::Result;
 use syn::{BinOp, Block, Expr, ExprForLoop, Stmt, visit::Visit};
 

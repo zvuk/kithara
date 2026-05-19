@@ -1,0 +1,502 @@
+use std::sync::{Arc, atomic::AtomicU64};
+
+use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
+use kithara_drm::DecryptContext;
+use kithara_platform::time::Duration;
+use kithara_stream::Timeline;
+use kithara_test_utils::kithara;
+use tokio_util::sync::CancellationToken;
+use url::Url;
+
+use super::{
+    HlsVariant, InitEntry, PlanCtx, PlannedFetch, SegmentEntry, SegmentState, VariantParts,
+};
+use crate::playlist::PlaylistState;
+
+fn test_ctx(prefetch_budget: usize) -> PlanCtx {
+    let cancel = CancellationToken::new();
+    let passthrough: ProcessChunkFn<DecryptContext> =
+        Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
+            output[..input.len()].copy_from_slice(input);
+            Ok(input.len())
+        });
+    let backend = Arc::new(
+        AssetStoreBuilder::new()
+            .ephemeral(true)
+            .cancel(cancel.clone())
+            .process_fn(passthrough)
+            .build(),
+    );
+    PlanCtx {
+        prefetch_budget,
+        master_cancel: cancel,
+        asset_store: backend,
+        seek_epoch: 0,
+        look_ahead_bytes: None,
+    }
+}
+
+fn make_init(size: u64) -> InitEntry {
+    if size == 0 {
+        return InitEntry::empty();
+    }
+    let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
+    let resource_id = ResourceKey::from_url(&url);
+    InitEntry {
+        url,
+        resource_id,
+        state: SegmentState::Missing.into(),
+        size: AtomicU64::new(size),
+        decrypt_ctx: None,
+    }
+}
+
+fn make_seg(idx: u32, size: u64) -> SegmentEntry {
+    let url: Url = format!("https://example.com/seg{idx}.m4s")
+        .parse()
+        .expect("valid url");
+    let resource_id = ResourceKey::from_url(&url);
+    SegmentEntry {
+        url,
+        resource_id,
+        state: SegmentState::Missing.into(),
+        size: AtomicU64::new(size),
+        decrypt_ctx: None,
+        decode_time: Duration::from_millis(u64::from(idx) * 2000),
+        duration: Duration::from_secs(2),
+    }
+}
+
+fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
+    let init = make_init(init_size);
+    let segments: Vec<SegmentEntry> = media_sizes
+        .iter()
+        .enumerate()
+        .map(|(i, &size)| make_seg(u32::try_from(i).expect("segment index < u32::MAX"), size))
+        .collect();
+    HlsVariant::from_parts(
+        variant,
+        VariantParts {
+            init,
+            segments,
+            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+            timeline: Timeline::new(),
+            codec: None,
+            container: None,
+        },
+        ctx,
+    )
+}
+
+fn push_planned(v: &HlsVariant, seg: u32) {
+    v.queue.lock_sync().push_back(PlannedFetch::Segment(seg));
+}
+
+fn queue_seg_indices(v: &HlsVariant) -> Vec<u32> {
+    v.queue
+        .lock_sync()
+        .iter()
+        .filter_map(|p| match p {
+            PlannedFetch::Segment(seg) => Some(*seg),
+            PlannedFetch::Init => None,
+        })
+        .collect()
+}
+
+#[kithara::test]
+fn position_starts_at_zero() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400], &ctx);
+    assert_eq!(v.get_position(), 0);
+}
+
+/// Phase K.0.2 invariant. `HlsCoord::commit_variant_switch`
+/// (same-codec branch) calls `activate_at_segment_with_shift` BEFORE
+/// `abr.apply_decision`, so a reader observing `current_variant := new`
+/// must see `v_new` with all activation atomics published. This test
+/// asserts the variant-side half of that contract: every relevant
+/// atomic carries the post-activation value the moment the call
+/// returns.
+#[kithara::test]
+fn activate_at_segment_with_shift_publishes_all_state_before_returning() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
+    let pre_shift = v.byte_shift();
+    let pre_served_from = v.served_from();
+    let pre_served_until = v.served_until();
+    assert_eq!(pre_shift, 0);
+    assert_eq!(pre_served_from, 0);
+    assert_eq!(pre_served_until, v.num_segments());
+
+    let from_seg: u32 = 2;
+    let seg_boundary: u64 = 1_500;
+    let reader_pos: u64 = 1_600;
+    v.activate_at_segment_with_shift(&ctx, from_seg, seg_boundary, reader_pos);
+
+    assert_eq!(
+        v.served_from(),
+        from_seg,
+        "served_from must equal the activation segment after return"
+    );
+    assert_eq!(
+        v.served_until(),
+        v.num_segments(),
+        "served_until must equal num_segments after a fresh activate"
+    );
+    assert_eq!(
+        v.get_position(),
+        reader_pos.max(seg_boundary),
+        "position must follow the requested reader_pos / seg_boundary"
+    );
+    assert_eq!(
+        v.byte_shift(),
+        500,
+        "byte_shift must reflect (seg_boundary - natural_offset)"
+    );
+}
+
+#[kithara::test]
+fn advance_increments_position() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400], &ctx);
+    v.advance(64);
+    assert_eq!(v.get_position(), 64);
+    v.advance(36);
+    assert_eq!(v.get_position(), 100);
+}
+
+#[kithara::test]
+fn set_position_overrides_cursor() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400], &ctx);
+    v.advance(50);
+    v.set_position(1234);
+    assert_eq!(v.get_position(), 1234);
+}
+
+#[kithara::test]
+fn find_at_offset_inside_init_prefix_is_none() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400], &ctx);
+    assert!(v.find_at_offset(0).is_none());
+    assert!(v.find_at_offset(199).is_none());
+}
+
+#[kithara::test]
+fn find_at_offset_at_init_size_returns_segment_zero() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400], &ctx);
+    let (idx, byte_offset, _) = v.find_at_offset(200).expect("hit");
+    assert_eq!(idx, 0);
+    assert_eq!(byte_offset, 200);
+}
+
+#[kithara::test]
+fn find_at_offset_mid_segment_binary_search() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[400, 400, 400, 400], &ctx);
+    let (idx, _, _) = v.find_at_offset(550).expect("mid-segment");
+    assert_eq!(idx, 1);
+    let (idx, _, _) = v.find_at_offset(1199).expect("last byte of seg 2");
+    assert_eq!(idx, 2);
+    let (idx, _, _) = v.find_at_offset(1200).expect("first byte of seg 3");
+    assert_eq!(idx, 3);
+}
+
+#[kithara::test]
+fn total_bytes_includes_init_and_segments() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400, 400, 400], &ctx);
+    assert_eq!(v.total_bytes(), 200 + 400 * 4);
+}
+
+#[kithara::test]
+fn init_byte_range_present_when_size_positive() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[], &ctx);
+    assert_eq!(v.init_byte_range(), 0..200);
+}
+
+#[kithara::test]
+fn init_byte_range_empty_when_size_zero() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[], &ctx);
+    assert!(v.init_byte_range().is_empty());
+}
+
+#[kithara::test]
+fn descriptor_at_time_clamps_to_last() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100, 100], &ctx);
+    let d = v
+        .descriptor_at_time(Duration::from_secs(2))
+        .expect("descriptor");
+    assert_eq!(d.segment_index, 1);
+    let d = v
+        .descriptor_at_time(Duration::from_secs(999))
+        .expect("descriptor");
+    assert_eq!(d.segment_index, 2);
+}
+
+#[kithara::test]
+fn descriptor_after_byte_finds_next_segment() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100, 100], &ctx);
+    let d = v.descriptor_after_byte(50).expect("descriptor");
+    assert_eq!(d.segment_index, 1);
+    let d = v.descriptor_after_byte(100).expect("descriptor");
+    assert_eq!(d.segment_index, 1);
+}
+
+#[kithara::test]
+fn rebuild_refills_queue_without_touching_cancel_token() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100; 6], &ctx);
+    push_planned(&v, 0);
+    let token = v.cancel_handle();
+    assert!(!token.is_cancelled());
+    v.rebuild(&ctx, 2);
+    assert!(
+        !token.is_cancelled(),
+        "rebuild must NOT cancel the variant token — that's reserved for variant deactivation"
+    );
+    assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5]);
+}
+
+#[kithara::test]
+fn dispatch_emits_init_first_then_segments_under_budget() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[400, 400, 400], &ctx);
+    let init_url = v.init.url.clone();
+    let seg0_url = v.segments[0].url.clone();
+    let seg1_url = v.segments[1].url.clone();
+    let seg2_url = v.segments[2].url.clone();
+    v.rebuild(&ctx, 0);
+    let cmds = v.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 4);
+    assert_eq!(cmds[0].url, init_url, "init dispatched first");
+    assert_eq!(cmds[1].url, seg0_url);
+    assert_eq!(cmds[2].url, seg1_url);
+    assert_eq!(cmds[3].url, seg2_url);
+    for cmd in &cmds {
+        assert!(cmd.cancel.is_some(), "every cmd carries a cancel token");
+    }
+}
+
+#[kithara::test]
+fn dispatch_respects_budget() {
+    let ctx = test_ctx(5);
+    let v = make_var(0, 0, &[100; 10], &ctx);
+    v.rebuild(&ctx, 0);
+    let cmds = v.dispatch(&ctx, 3);
+    assert_eq!(cmds.len(), 3);
+    assert_eq!(queue_seg_indices(&v), vec![3, 4, 5, 6, 7, 8, 9]);
+}
+
+#[kithara::test]
+fn dispatch_skips_non_missing_segments() {
+    let ctx = test_ctx(5);
+    let v = make_var(0, 0, &[100, 100, 100], &ctx);
+    v.init.set_state(SegmentState::Loaded);
+    v.segments[1].set_state(SegmentState::Loaded);
+    v.queue.lock_sync().clear();
+    for seg in 0..3_u32 {
+        push_planned(&v, seg);
+    }
+    let cmds = v.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 2);
+    assert_eq!(v.segments[1].state(), SegmentState::Loaded);
+}
+
+#[kithara::test]
+fn on_evict_returns_minus_one_for_init() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[100, 100, 100], &ctx);
+    v.init.set_state(SegmentState::Loaded);
+    v.segments[1].set_state(SegmentState::Loaded);
+    let key = v.init.resource_id.clone();
+    let res = v.on_evict(&key);
+    assert_eq!(res, Some(-1));
+    assert_eq!(v.init.state(), SegmentState::Missing);
+    assert_eq!(
+        v.segments[1].state(),
+        SegmentState::Loaded,
+        "init eviction must not touch segment states"
+    );
+}
+
+#[kithara::test]
+fn on_evict_returns_seg_idx_for_segment() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    v.segments[1].set_state(SegmentState::Loaded);
+    let key = v.segments[1].resource_id.clone();
+    let res = v.on_evict(&key);
+    assert_eq!(res, Some(1));
+    assert_eq!(v.segments[1].state(), SegmentState::Missing);
+}
+
+#[kithara::test]
+fn on_evict_returns_none_for_foreign_asset() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100], &ctx);
+    let foreign: Url = "https://other.example.com/x.m4s".parse().expect("url");
+    let foreign_key = ResourceKey::from_url(&foreign);
+    let res = v.on_evict(&foreign_key);
+    assert_eq!(res, None);
+}
+
+#[kithara::test]
+fn rebuild_fills_forward_window_from_seg() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100; 10], &ctx);
+    v.rebuild(&ctx, 2);
+    assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5, 6, 7, 8, 9]);
+}
+
+#[kithara::test]
+fn skeleton_types_instantiate() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 200, &[], &ctx);
+    assert_eq!(v.num_segments(), 0);
+}
+
+#[kithara::test]
+fn dispatch_drm_segment_routes_through_with_ctx() {
+    let ctx = test_ctx(3);
+    let init = make_init(0);
+    init.set_state(SegmentState::Loaded);
+    let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
+    let resource_id = ResourceKey::from_url(&url);
+    let key = *b"0123456789abcdef";
+    let seg = SegmentEntry {
+        url,
+        resource_id,
+        state: SegmentState::Missing.into(),
+        size: AtomicU64::new(100),
+        decrypt_ctx: Some(DecryptContext::new(key, [0u8; 16])),
+        decode_time: Duration::ZERO,
+        duration: Duration::from_secs(2),
+    };
+    let v = HlsVariant::from_parts(
+        0,
+        VariantParts {
+            init,
+            playlist_state: Arc::new(PlaylistState::new(Vec::new())),
+            timeline: Timeline::new(),
+            codec: None,
+            container: None,
+            segments: vec![seg],
+        },
+        &ctx,
+    );
+    push_planned(&v, 0);
+    let cmds = v.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 1);
+    assert!(cmds[0].cancel.is_some());
+    assert_eq!(v.segments[0].state(), SegmentState::Downloading);
+}
+
+#[kithara::test]
+fn positions_of_two_variants_are_independent_after_flip() {
+    let ctx = test_ctx(3);
+    let v_old = make_var(0, 0, &[400; 20], &ctx);
+    let v_new = make_var(1, 0, &[800; 20], &ctx);
+    let v_new_seg10_offset = v_new.segment_byte_offset(10).expect("seg 10");
+    v_old.set_position(5000);
+    v_new.set_position(v_new_seg10_offset);
+    assert_eq!(v_old.get_position(), 5000);
+    assert_eq!(v_new.get_position(), v_new_seg10_offset);
+
+    v_new.advance(123);
+    assert_eq!(
+        v_old.get_position(),
+        5000,
+        "advance(V_new) must not touch V_old"
+    );
+    assert_eq!(v_new.get_position(), v_new_seg10_offset + 123);
+}
+
+#[kithara::test]
+fn position_advances_are_strictly_monotonic() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100], &ctx);
+    let mut expected = 0_u64;
+    let mut observed = Vec::new();
+    for n in [10_u64, 25, 7, 64, 1, 100] {
+        v.advance(n);
+        expected += n;
+        observed.push(v.get_position());
+        assert_eq!(v.get_position(), expected);
+    }
+    let mut sorted = observed.clone();
+    sorted.sort_unstable();
+    assert_eq!(observed, sorted);
+}
+
+#[kithara::test]
+fn dispatch_cmd_cancel_shares_cancellation_with_variant_cancel() {
+    let ctx = test_ctx(5);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    v.init.set_state(SegmentState::Loaded);
+    let variant_cancel = v.cancel_handle();
+    for seg in 0..2_u32 {
+        push_planned(&v, seg);
+    }
+    let cmds = v.dispatch(&ctx, 10);
+    for cmd in &cmds {
+        let token = cmd.cancel.as_ref().expect("cmd carries cancel");
+        assert!(!token.is_cancelled());
+    }
+    variant_cancel.cancel();
+    for cmd in &cmds {
+        let token = cmd.cancel.as_ref().expect("cmd carries cancel");
+        assert!(
+            token.is_cancelled(),
+            "cmd cancel must follow variant.cancel"
+        );
+    }
+}
+
+#[kithara::test]
+fn variant_flip_cancels_v_old_and_keeps_v_new_token_live() {
+    let ctx = test_ctx(3);
+    let v_old = make_var(0, 0, &[100; 20], &ctx);
+    let v_new = make_var(1, 0, &[200; 20], &ctx);
+    v_old.init.set_state(SegmentState::Loaded);
+    v_new.init.set_state(SegmentState::Loaded);
+    let v_old_token = v_old.cancel_handle();
+    let v_new_token = v_new.cancel_handle();
+
+    let from_seg = 7_u32;
+    let v_new_seg7_offset = v_new.segment_byte_offset(from_seg).expect("seg 7");
+    v_new.set_position(v_new_seg7_offset);
+    v_old.cancel();
+    v_new.rebuild(&ctx, from_seg);
+
+    assert!(
+        v_old_token.is_cancelled(),
+        "v_old.cancel() cancels v_old's token"
+    );
+    assert!(
+        !v_new_token.is_cancelled(),
+        "rebuild on v_new must NOT touch v_new's cancel token"
+    );
+    assert_eq!(v_new.get_position(), v_new_seg7_offset);
+}
+
+#[kithara::test]
+fn dispatch_skips_loaded_segments_in_queue_without_burning_budget() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100; 20], &ctx);
+    v.segments[10].set_state(SegmentState::Loaded);
+
+    v.rebuild(&ctx, 10);
+    let cmds = v.dispatch(&ctx, 3);
+    assert_eq!(cmds.len(), 3);
+    let seg10_url = v.segments[10].url.clone();
+    assert!(
+        cmds.iter().all(|c| c.url != seg10_url),
+        "Loaded seg 10 must not be re-emitted"
+    );
+}

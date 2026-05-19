@@ -1,16 +1,3 @@
-//! `cargo xtask viz` — visual maps of architecture problems detected by
-//! the lint suite. Two read-only subcommands:
-//!
-//!   * `viz hierarchy [<crate>]` — tree of modules and the public items
-//!     they declare. Pairs with `god_module` / `mixed_entities` /
-//!     `pub_struct_open_fields` warnings to make crate-surface obvious.
-//!   * `viz arc-map [<crate>]` — every site that creates, clones, or
-//!     holds an `Arc<T>`. Pairs with `shared_state` / `arc_clone_hotspots`
-//!     warnings to make the ownership-distribution graph visible.
-//!
-//! Output is plain text, sorted, scannable in a terminal. No baseline,
-//! no exit-code semantics — these are explorers, not gates.
-
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},

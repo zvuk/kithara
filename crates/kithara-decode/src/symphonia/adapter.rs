@@ -1,10 +1,3 @@
-//! `MediaSource` adapter bridging a `Read + Seek` source to Symphonia.
-//!
-//! Tracks the byte length dynamically via an `Arc<AtomicU64>` so that HLS
-//! flows can update the reported length after construction, and exposes a
-//! seek-enable toggle so fMP4 reader initialization can temporarily disable
-//! seeking.
-
 use std::{
     io::{self, Read, Seek, SeekFrom},
     sync::{

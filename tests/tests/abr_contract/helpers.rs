@@ -1,22 +1,3 @@
-//! Shared infrastructure for the ABR-switch contract tests
-//! (`tests/tests/kithara_hls/abr_contract/T1..T8`).
-//!
-//! Every helper here is purpose-built for the contract spec at
-//! `.docs/plans/2026-05-03-abr-switch-contract.md`. None of them
-//! relax the contract: assertions are exact and there are no escape
-//! hatches.
-//!
-//! Modules:
-//! * [`phase_oracle`] — analytic 440 Hz phase reference and atan2
-//!   quadrature measurement; reports the exact number of lost or
-//!   repeated samples on a seam violation.
-//! * [`params`] — production-shaped 4-variant wave fixture
-//!   (3×AAC + 1×FLAC), network profiles, and audio-open boilerplate.
-//! * [`counters`] — typed views over `emit_fetch_cmd`,
-//!   `finish_request`, and disk inventory probes.
-//! * [`assertions`] — equality predicates that print a precise diff
-//!   on failure.
-
 /// Single point of truth for every constant the contract suite
 /// shares. Grouped on a uninhabited type so callers spell the
 /// constant out as `Consts::SAMPLE_RATE` etc. — that satisfies the
@@ -55,15 +36,6 @@ impl Consts {
 }
 
 pub(crate) mod phase_oracle {
-    //! 440 Hz sine phase reference per the contract A1.
-    //!
-    //! The wave fixture renders an identical
-    //! `sin(2π · 440 · frame_offset / sample_rate) · 32767` waveform on
-    //! every variant via `kithara_test_utils::signal::SineWave`. The
-    //! decoder pipeline (AAC and FLAC) introduces a static phase
-    //! offset that varies per backend; we calibrate that offset on the
-    //! first PRE-switch chunk and check seam continuity against the
-    //! calibrated baseline.
     use std::f64::consts::TAU;
 
     /// Analytic phase of the source 440 Hz sine at the given absolute
@@ -208,10 +180,6 @@ pub(crate) mod phase_oracle {
 }
 
 pub(crate) mod params {
-    //! 4-variant production-shaped wave fixture: 3×AAC LQ/MQ/HQ +
-    //! 1×FLAC, all rendering the same 440 Hz sine through the
-    //! fixture-server signal pipeline. Network profiles cover the
-    //! `instant`, `slow`, and `flaky` axes called out in the spec.
     use kithara::{
         assets::StoreOptions,
         audio::Audio,
@@ -221,7 +189,7 @@ pub(crate) mod params {
     };
     use kithara_audio::AudioConfig;
     use kithara_encode::codec::AudioCodec;
-    use kithara_test_utils::{
+    use kithara_integration_tests::{
         HlsFixtureBuilder,
         fixture_protocol::{DelayRule, PackagedSignal},
     };
@@ -301,20 +269,22 @@ pub(crate) mod params {
         prefetch_count: usize,
     ) -> Audio<Stream<Hls>> {
         let cancel = CancellationToken::new();
-        let hls_config = HlsConfig::new(url.clone())
-            .with_store(store)
-            .with_cancel(cancel)
-            .with_initial_abr_mode(abr)
-            .with_download_batch_size(prefetch_count);
+        let hls_config = HlsConfig::for_url(url.clone())
+            .store(store)
+            .cancel(cancel)
+            .initial_abr_mode(abr)
+            .download_batch_size(prefetch_count)
+            .build();
         // pcm_buffer_chunks по умолчанию 10 (~1s аудио). RED-тестам
         // нужно ждать определённые пробы (например, decoder build_chunk
         // на timestamp >= 4s) без активного потребителя — поэтому буфер
         // расширен до ~30s, чтобы декодер фоновым worker'ом работал
         // автономно и наполнял канал, пока тестовый поток ждёт через
         // `wait_for_probe`.
-        let config = AudioConfig::<Hls>::new(hls_config)
-            .with_decoder_backend(backend)
-            .with_pcm_buffer_chunks(300);
+        let config = AudioConfig::<Hls>::for_stream(hls_config)
+            .decoder_backend(backend)
+            .pcm_buffer_chunks(300)
+            .build();
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
             .unwrap_or_else(|err| panic!("audio open failed for {url}: {err}"));
@@ -324,18 +294,15 @@ pub(crate) mod params {
 }
 
 pub(crate) mod counters {
-    //! Typed views over the production probes that the contract
-    //! suite asserts on. Each helper returns concrete, typed events —
-    //! tests should NOT hand-decode tracing fields.
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,
     };
 
     use kithara_platform::time::Instant;
-    use kithara_test_utils::probe_capture::{ProbeEvent, Recorder};
+    use kithara_test_utils::probe::capture::{ProbeEvent, Recorder};
 
-    /// One `emit_fetch_cmd` USDT event lifted into typed form.
+    /// One `dispatch` USDT event lifted into typed form.
     #[derive(Clone, Debug)]
     pub(crate) struct FetchEmit {
         pub(crate) at: Instant,
@@ -357,7 +324,7 @@ pub(crate) mod counters {
         }
     }
 
-    /// All `emit_fetch_cmd` events on or after `since` for the given
+    /// All `dispatch` events on or after `since` for the given
     /// variant. Native scheduler ground truth — what the scheduler
     /// decided to fetch, regardless of whether the bytes ever
     /// arrived.
@@ -367,7 +334,7 @@ pub(crate) mod counters {
         since: Instant,
     ) -> Vec<FetchEmit> {
         recorder
-            .events_with_probe("emit_fetch_cmd")
+            .events_with_probe("dispatch")
             .iter()
             .filter(|e| e.at >= since)
             .filter_map(FetchEmit::from_event)
@@ -375,12 +342,11 @@ pub(crate) mod counters {
             .collect()
     }
 
-    /// Every `emit_fetch_cmd` event since the recorder started, any
-    /// variant. T7-style tests use this to walk the global decision
-    /// log.
+    /// Every `dispatch` event since the recorder started, any
+    /// variant. Walks the global ABR-driven scheduler decision log.
     pub(crate) fn all_fetch_emits(recorder: &Recorder) -> Vec<FetchEmit> {
         recorder
-            .events_with_probe("emit_fetch_cmd")
+            .events_with_probe("dispatch")
             .iter()
             .filter_map(FetchEmit::from_event)
             .collect()
@@ -423,13 +389,11 @@ pub(crate) mod counters {
         }
     }
 
-    /// First `AbrState::apply` event whose target variant is
+    /// First `notify_commit` event whose target variant is
     /// `variant_to`, or `None` if no such commit fired.
     ///
-    /// `variant_from` is accepted for caller readability and to keep the
-    /// single-`AbrState::apply` probe's `d`-encoded target distinguishable
-    /// from spurious unrelated commits in multi-step scenarios. The probe
-    /// itself only carries the *target* variant (`d` ↦ `target_variant_index`),
+    /// `variant_from` is accepted for caller readability. The probe
+    /// carries the *target* variant (`target` ↦ `target_variant_index`),
     /// so we filter on `variant_to`; the `variant_from` argument is unused
     /// at the probe-event level today.
     pub(crate) fn first_abr_commit(
@@ -439,38 +403,27 @@ pub(crate) mod counters {
     ) -> Option<Instant> {
         let _ = variant_from;
         recorder
-            .events_with_probe("apply")
+            .events_with_probe("notify_commit")
             .into_iter()
-            .find(|e| e.u64("d") == Some(variant_to as u64))
+            .find(|e| e.u64("target") == Some(variant_to as u64))
             .map(|e| e.at)
     }
 }
 
 pub(crate) mod diagnostics {
-    //! On-failure helpers: dump captured probe events so a panic message
-    //! reports WHICH part of the production chain actually executed.
-    //! Per-event formatting comes from `ProbeEvent`'s `Debug` impl, which
-    //! prints only the keys the probe actually carried — no `None`
-    //! placeholders for irrelevant fields.
     use std::collections::BTreeMap;
 
-    use kithara_test_utils::probe_capture::Recorder;
+    use kithara_test_utils::probe::capture::Recorder;
 
     /// Probes printed in full — they describe the scheduler's decision
     /// stream end-to-end. Listed once, every firing is shown.
     const KEY_PROBES: &[&str] = &[
         "poll_next",
-        "apply_variant_readiness",
-        "handle_midstream_switch",
-        "build_batch",
-        "skip_planned_segment",
-        "should_skip_planned_segment",
-        "emit_fetch_cmd",
-        "commit_segment",
-        "commit_fetch_inline",
-        "record_demand_cursor_protection_rewind",
-        "reset_cursor",
-        "rewind_current_segment_index",
+        "dispatch",
+        "on_complete_seg",
+        "rebuild",
+        "on_reader_advance",
+        "on_evict",
         "start_request",
         "establish",
         "with_soft_timeout",
@@ -478,12 +431,15 @@ pub(crate) mod diagnostics {
         "finish_request",
         "abort_request",
         "fail_request",
-        "apply",
-        "apply_format_change",
-        "detect_format_change",
-        "format_change_segment_range",
-        "dispatch_seek_demand",
-        "seek_epoch_reset",
+        "commit_pending",
+        "notify_commit",
+        "init_segment_range",
+        "segment_after_byte",
+        "segment_at_time",
+        "find_at_offset",
+        "set_position",
+        "advance",
+        "position",
         "queue_resolved_segment_request",
     ];
 
@@ -530,21 +486,9 @@ pub(crate) mod diagnostics {
 }
 
 pub(crate) mod probe_contracts {
-    //! Per-thread probe-sequence contracts.
-    //!
-    //! Each contract describes "on thread T, the probes fire in this exact
-    //! order with these args" and produces a precise diff on failure
-    //! (which thread, which `thread_seq`, expected vs observed). This
-    //! replaces "wait for some probe with a 45s budget and panic on
-    //! timeout" — the failure message names the violated invariant
-    //! directly so the operator does not have to scan a 3000-line dump.
-    //!
-    //! The contracts read from the global `Recorder` snapshot; they do
-    //! not block, so call them after the test has finished its runtime
-    //! work (drain done, EOF or budget exhausted).
     use std::collections::{BTreeMap, BTreeSet};
 
-    use kithara_test_utils::probe_capture::{ProbeEvent, Recorder};
+    use kithara_test_utils::probe::capture::{ProbeEvent, Recorder};
 
     /// Bucket events by `thread_id`, sorted by `thread_seq` within each
     /// bucket. Events without a `thread_id` (older probe expansions, or
@@ -637,7 +581,7 @@ pub(crate) mod probe_contracts {
         Ok(())
     }
 
-    /// Verify `commit_segment` fires **exactly once per `seg=0..n`** on
+    /// Verify `on_complete_seg` fires **exactly once per `seg=0..n`** on
     /// the pinned `variant`, all on a single thread. The set of
     /// committed `(variant, seg_idx)` pairs must equal
     /// `{(v, 0), (v, 1), …, (v, n-1)}` — no missing seg, no duplicates,
@@ -645,26 +589,22 @@ pub(crate) mod probe_contracts {
     ///
     /// **Order is NOT enforced** because the streaming download path
     /// runs up to `max_concurrent` fetches in parallel, and
-    /// `on_complete` (the closure that calls `commit_fetch_inline`)
-    /// fires in completion order, not in segment order. T8 still
-    /// requires sequential decoder output (verified by
-    /// `frame_offset` continuity in the drain loop), but commits at
-    /// the scheduler boundary are concurrent by design.
+    /// `on_complete` fires in completion order, not in segment order.
     pub(crate) fn assert_commit_segment_strict(
         recorder: &Recorder,
         variant: usize,
         n: usize,
     ) -> Result<(), String> {
-        let by_thread = filter_by_thread(recorder, |e| e.probe_name() == Some("commit_segment"));
+        let by_thread = filter_by_thread(recorder, |e| e.probe_name() == Some("on_complete_seg"));
         if by_thread.is_empty() {
             return Err(format!(
-                "commit_segment: ни одного события. ожидалось seg=0..{} на variant={variant}.",
+                "on_complete_seg: ни одного события. ожидалось seg=0..{} на variant={variant}.",
                 n - 1,
             ));
         }
         if by_thread.len() > 1 {
             return Err(format!(
-                "commit_segment: события на нескольких потоках {:?} — \
+                "on_complete_seg: события на нескольких потоках {:?} — \
                  single-variant scheduler контракт нарушен.",
                 by_thread.keys().collect::<Vec<_>>(),
             ));
@@ -683,19 +623,13 @@ pub(crate) mod probe_contracts {
         let total_events = pairs.len();
         let unique_seg_count = actual.len();
         if actual != expected || total_events != n {
-            let inline_events: Vec<ProbeEvent> = recorder.events_with_probe("commit_fetch_inline");
-            let emit_events: Vec<ProbeEvent> = recorder.events_with_probe("emit_fetch_cmd");
-            let rewind_events: Vec<ProbeEvent> =
-                recorder.events_with_probe("record_demand_cursor_protection_rewind");
-            let readiness_events: Vec<ProbeEvent> =
-                recorder.events_with_probe("apply_variant_readiness");
+            let emit_events: Vec<ProbeEvent> = recorder.events_with_probe("dispatch");
+            let notify_events: Vec<ProbeEvent> = recorder.events_with_probe("notify_commit");
             let missing: Vec<(usize, usize)> = expected.difference(&actual).copied().collect();
             let extra: Vec<(usize, usize)> = actual.difference(&expected).copied().collect();
             // Считаем сколько раз каждый (variant, seg_idx) появился —
             // показываем только те, что встретились >1 раза, чтобы
-            // мгновенно увидеть какой именно seg задвоился (это признак
-            // реальной race-condition в commit-цепочке, не порядкового
-            // race'а).
+            // мгновенно увидеть какой именно seg задвоился.
             let mut counts: BTreeMap<(usize, usize), usize> = BTreeMap::new();
             for pair in &pairs {
                 *counts.entry(*pair).or_default() += 1;
@@ -707,17 +641,15 @@ pub(crate) mod probe_contracts {
             } else {
                 format!(
                     "\nдубликаты ({}):\n{:#?}\n\
-                     это означает что один и тот же (variant, seg_idx) \
-                     попал в commit_segment несколько раз — реальная \
-                     race-condition в commit-цепочке (cached path vs \
-                     on-complete closure?). Сравни caller_fn у соседних \
-                     commit_fetch_inline для этого seg_idx.",
+                     один и тот же (variant, seg_idx) попал в \
+                     on_complete_seg несколько раз — race-condition \
+                     в commit-цепочке.",
                     duplicates.len(),
                     duplicates,
                 )
             };
             return Err(format!(
-                "commit_segment, thread_id={thread_id}: множество \
+                "on_complete_seg, thread_id={thread_id}: множество \
                  закоммиченных сегментов не совпадает \
                  ({total_events} событий, {unique_seg_count} уникальных, \
                  ожидалось n={n}).\n\
@@ -726,18 +658,12 @@ pub(crate) mod probe_contracts {
                  missing:  {missing:?}\n\
                  extra:    {extra:?}\
                  {duplicates_diag}\n\
-                 emit_fetch_cmd события ({}):\n{:#?}\n\
-                 commit_fetch_inline события ({}):\n{:#?}\n\
-                 apply_variant_readiness события ({}):\n{:#?}\n\
-                 record_demand_cursor_protection_rewind события ({}):\n{:#?}",
+                 dispatch события ({}):\n{:#?}\n\
+                 notify_commit события ({}):\n{:#?}",
                 emit_events.len(),
                 emit_events,
-                inline_events.len(),
-                inline_events,
-                readiness_events.len(),
-                readiness_events,
-                rewind_events.len(),
-                rewind_events,
+                notify_events.len(),
+                notify_events,
             ));
         }
         Ok(())
@@ -778,41 +704,24 @@ pub(crate) mod probe_contracts {
     ///
     /// Encodes the FULL expected probe sequence that should fire on the
     /// peer-thread between `apply_thread_seq` (a baseline event from ABR
-    /// commit / `tick`) and the first `emit_fetch_cmd(variant=v_new)`.
+    /// commit) and the first `dispatch(variant=v_new)`.
     /// **Order is enforced strictly**: the matcher walks `peer_events`
     /// and increments an `expected[]` cursor every time it finds the
-    /// next expected step; intervening probes (poll_next, skip checks,
-    /// etc.) are tolerated, but expected steps must appear in the given
-    /// order. On failure the error message names exactly which step did
-    /// not match and what the operator should be looking at.
+    /// next expected step; intervening probes are tolerated, but
+    /// expected steps must appear in the given order.
     ///
-    /// **Forbidden post-apply (regardless of order)**:
-    /// `record_demand_cursor_protection_rewind(variant=v_new)` —
-    /// rewinds the scheduler cursor backwards onto a demand_segment, which
-    /// destroys the C-A5 forward-only invariant and leads to V_new media
-    /// fetches at seg=0.
+    /// **Switch case** (`expect_midstream_switch=true`, `V_old≠V_new)`:
+    /// 1. `notify_commit(target=V_new)` — boundary commit fired.
+    /// 2. `rebuild(variant=V_new)` — `V_new` queue rebuilt from
+    ///    `from_seg = decode_seg_at_apply`.
+    /// 3. `dispatch(variant=V_new)` — first `V_new` fetch dispatched.
     ///
-    /// **Switch case** (`expect_midstream_switch=true`, V_old≠V_new):
-    /// 1. `apply_variant_readiness(variant=V_new, old_variant=V_old)` —
-    ///    first poll_next post-apply must observe ABR.current=V_new while
-    ///    download_variant is still V_old.
-    /// 2. `handle_midstream_switch(is_midstream_switch=1)` — variant
-    ///    switch with cursor>0 must trigger midstream-switch handling
-    ///    (cursor reposition + had_midstream_switch latch).
-    /// 3. `build_batch(variant=V_new, old_variant=V_old)` — after the
-    ///    cursor has been repositioned for V_new, scheduler must walk
-    ///    the V_new prefetch window.
-    /// 4. `emit_fetch_cmd(variant=V_new, plan_need_init=1)` — first
-    ///    V_new media emit must request init range (per-variant fMP4
-    ///    init segment in the commit metadata).
+    /// **Noop case** (`expect_midstream_switch=false`, `V_old==V_new)`:
+    /// scheduler continues normal `V_old` dispatch — no rebuild required.
+    /// Sequence: `dispatch(V_old)`.
     ///
-    /// **Noop case** (`expect_midstream_switch=false`, V_old==V_new):
-    /// scheduler must continue normal V_old prefetch — no switch, no
-    /// rewind. Sequence: `apply_variant_readiness(V_old, V_old) →
-    /// build_batch(V_old) → emit_fetch_cmd(V_old)`.
-    ///
-    /// Returns the first `emit_fetch_cmd(v_new)` event so the caller
-    /// can assert C-A5 on its `segment_index`.
+    /// Returns the first `dispatch(v_new)` event so the caller
+    /// can assert C-A5 (forward-only) on its `segment_index`.
     pub(crate) fn assert_post_apply_fetch_chain(
         recorder: &Recorder,
         peer_thread_id: u64,
@@ -832,147 +741,26 @@ pub(crate) mod probe_contracts {
             .collect();
         peer_events.sort_by_key(|e| e.thread_seq().unwrap_or(u64::MAX));
 
-        // Detect a fresh seek_epoch boundary post-apply: a user seek
-        // legitimately resets forward-only — segments behind
-        // `forward_only_floor` are again fetchable. Until that boundary
-        // we enforce forward-only strictly. (T14 itself has no
-        // post-apply seek; this is the principled formulation that
-        // generalises to T1..T13 once they call this helper.)
-        let post_seek_seq = peer_events
-            .iter()
-            .find(|e| e.probe_name() == Some("seek_epoch_reset"))
-            .and_then(ProbeEvent::thread_seq);
-        let is_pre_seek = move |e: &ProbeEvent| -> bool {
-            match (e.thread_seq(), post_seek_seq) {
-                (Some(s), Some(boundary)) => s < boundary,
-                _ => true,
-            }
-        };
-
-        // Forbidden invariant (C-A5): never emit a media fetch for
-        // V_new at `seg_idx < forward_only_floor` while seek_epoch did
-        // not change post-apply. `forward_only_floor` is the
-        // decode_seg-at-apply hint (the segment the decoder was
-        // playing when set_mode fired): after a switch all those
-        // segments are already in the decoder, fetching V_new copies
-        // of them means scheduler walked backwards onto already-played
-        // data. A user seek post-apply (`seek_epoch_reset` fired)
-        // legitimately resets this constraint — forward-only is
-        // anchored to the decode head at the most recent seek-or-apply
-        // boundary, not to apply alone.
+        // Forbidden invariant (C-A5 forward-only): never dispatch a
+        // media fetch for V_new at `seg_idx < forward_only_floor`.
+        // After a switch all those segments are already in the
+        // decoder; fetching V_new copies of them means scheduler
+        // walked backwards onto already-played data.
         if expect_midstream_switch
             && let Some(bad_emit) = peer_events.iter().find(|e| {
-                is_pre_seek(e)
-                    && e.probe_name() == Some("emit_fetch_cmd")
+                e.probe_name() == Some("dispatch")
                     && e.u64("variant") == Some(v_new as u64)
                     && e.u64("segment_index")
                         .is_some_and(|s| (s as usize) < forward_only_floor)
             })
         {
-            let bad_seq = bad_emit.thread_seq().unwrap_or(u64::MAX);
-            // Cursor mutation context: every reset_cursor /
-            // rewind_current_segment_index fired ON the peer-thread
-            // before the bad emit, with the caller_fn so the operator
-            // can see exactly which production function pulled the
-            // cursor onto seg=0.
-            let cursor_history: Vec<&ProbeEvent> = peer_events
-                .iter()
-                .filter(|e| {
-                    e.thread_seq().is_some_and(|s| s <= bad_seq)
-                        && matches!(
-                            e.probe_name(),
-                            Some("reset_cursor")
-                                | Some("rewind_current_segment_index")
-                                | Some("dispatch_seek_demand")
-                                | Some("seek_epoch_reset")
-                                | Some("apply_variant_readiness")
-                                | Some("handle_midstream_switch")
-                        )
-                })
-                .collect();
             let bad_seg = bad_emit.u64("segment_index").unwrap_or(u64::MAX) as usize;
             return Err(format!(
-                "T14 forbidden invariant (C-A5 forward-only): \
-                 `emit_fetch_cmd(variant=V_new={v_new}, segment_index={bad_seg})` \
+                "Forward-only invariant violated: \
+                 `dispatch(variant=V_new={v_new}, segment_index={bad_seg})` \
                  fired post-apply on peer_thread={peer_thread_id} \
-                 (forward_only_floor={forward_only_floor}, no seek epoch reset \
-                 has fired since apply, so any seg < floor is forbidden).\n\
-                 plan_need_init={pni:?}, seek_epoch={se:?}, \
-                 caller_fn={caller:?}\n\
-                 event: {bad_emit:?}\n\
-                 \n\
-                 cursor mutation context up to the bad emit \
-                 ({n} events; reset_cursor + rewind_current_segment_index \
-                 carry `caller_fn` so the operator sees WHICH \
-                 production fn pulled cursor backwards):\n\
-                 {ctx:#?}\n\
-                 \n\
-                 После set_mode(V_new) decoder уже на seg >= {forward_only_floor}; \
-                 fetching media seg={bad_seg} для V_new — это качать сегменты \
-                 которые уже были проиграны в V_old. C-A5 forward-only \
-                 разрешает download назад только после user seek, который \
-                 fires `seek_epoch_reset` — здесь его не было.",
-                pni = bad_emit.u64("plan_need_init"),
-                se = bad_emit.u64("seek_epoch"),
-                caller = bad_emit.caller_fn(),
-                n = cursor_history.len(),
-                ctx = cursor_history,
-            ));
-        }
-
-        // Forbidden invariant: never rewind cursor backwards on V_new
-        // post-apply. The probe fires from
-        // `apply_variant_readiness::demand_cursor_protection`. On
-        // failure we dump the full peer-thread context — every
-        // `apply_variant_readiness` (with all its args), every
-        // `handle_midstream_switch`, every `dispatch_seek_demand` —
-        // so the operator can see WHICH call to apply_variant_readiness
-        // (and with what `demand_variant_override`) preceded the
-        // rewind. That tells you whether the rewind branch should
-        // have been guarded by `demand_variant_override.is_none()`,
-        // by `is_variant_switch`, or by something else entirely.
-        if let Some(rewind) = peer_events.iter().find(|e| {
-            e.probe_name() == Some("record_demand_cursor_protection_rewind")
-                && e.u64("variant") == Some(v_new as u64)
-        }) {
-            let rewind_seq = rewind.thread_seq().unwrap_or(u64::MAX);
-            let context: Vec<&ProbeEvent> = peer_events
-                .iter()
-                .filter(|e| {
-                    e.thread_seq().is_some_and(|s| s <= rewind_seq)
-                        && matches!(
-                            e.probe_name(),
-                            Some("apply_variant_readiness")
-                                | Some("handle_midstream_switch")
-                                | Some("dispatch_seek_demand")
-                                | Some("seek_epoch_reset")
-                                | Some("record_demand_cursor_protection_rewind")
-                        )
-                })
-                .collect();
-            return Err(format!(
-                "T14 forbidden invariant: \
-                 `record_demand_cursor_protection_rewind` fired for \
-                 V_new={v_new} post-apply on peer_thread={peer_thread_id}.\n\
-                 prev_cursor={prev:?}, demand_segment={ds:?}, \
-                 thread_seq={rewind_seq}\n\
-                 rewind event: {rewind:?}\n\
-                 \n\
-                 peer-thread context up to and including the rewind \
-                 ({n} key events; apply_variant_readiness shows \
-                 variant/old_variant/demand_segment/demand_variant_override):\n\
-                 {context:#?}\n\
-                 \n\
-                 Корень — нужно прочитать **последний** \
-                 apply_variant_readiness ПЕРЕД rewind: его args диктуют, \
-                 какой guard в demand_cursor_protection block должен был \
-                 пропустить rewind. Если demand_variant_override is_some \
-                 — значит reader демандит V_new init/gap, не media; \
-                 rewind на demand_segment=0 в media-cursor неуместен.",
-                prev = rewind.u64("prev_cursor"),
-                ds = rewind.u64("demand_segment"),
-                n = context.len(),
-                context = context,
+                 (forward_only_floor={forward_only_floor}).\n\
+                 event: {bad_emit:?}",
             ));
         }
 
@@ -980,46 +768,29 @@ pub(crate) mod probe_contracts {
         let v_new_u = v_new as u64;
         let _ = v_old_u;
 
-        // The probe `old_variant` field is `sched.abr.current_variant_index()`
-        // BEFORE `make_abr_decision`. After ABR.apply(V_new), abr.current is
-        // already V_new — so `old_variant == variant` even on the first
-        // post-apply poll. We don't constrain on it; what the contract
-        // dictates is the **observable side-effect chain**:
-        // `apply_variant_readiness` for V_new fires → `handle_midstream_switch(=1)`
-        // fires (cursor reposition for V_new) → `build_batch` for V_new fires →
-        // `emit_fetch_cmd` for V_new fires with `plan_need_init=1` AND
-        // `segment_index >= 1` (forward of decode_seg, never seg=0 media-fetch).
-        // The full expected sequence post-apply on peer-thread:
-        // `apply_variant_readiness(V_new)` → `build_batch(V_new)` →
-        // `emit_fetch_cmd(V_new)`. Note that `handle_midstream_switch`
-        // is NOT in this list: it can legitimately fire on a poll that
-        // sits between `ABR.apply` (which we observe) and the user-visible
-        // baseline event the test pins (which can be slightly later).
-        // The forward-only invariant is enforced by the forbidden
-        // `emit_fetch_cmd(V_new, seg < forward_only_floor)` check above
-        // — that is the user-visible behavioural contract.
         let probe_variant = if expect_midstream_switch {
             v_new_u
         } else {
             v_old_u
         };
-        let expected: Vec<ExpectedEvent<'static>> = vec![
-            ExpectedEvent {
-                name: "apply_variant_readiness",
-                args: vec![("variant", probe_variant)],
-                note: "first poll_next post-apply must observe ABR.current=V_new (or V_old in noop)",
-            },
-            ExpectedEvent {
-                name: "build_batch",
-                args: vec![("variant", probe_variant)],
-                note: "build_batch must walk the V_new (or V_old in noop) prefetch window",
-            },
-            ExpectedEvent {
-                name: "emit_fetch_cmd",
-                args: vec![("variant", probe_variant)],
-                note: "first emit_fetch_cmd post-apply for the target variant — its segment_index must be >= forward_only_floor (enforced by forbidden invariant above)",
-            },
-        ];
+        let mut expected: Vec<ExpectedEvent<'static>> = Vec::new();
+        if expect_midstream_switch {
+            expected.push(ExpectedEvent {
+                name: "notify_commit",
+                args: vec![("target", v_new_u)],
+                note: "boundary commit must fire for V_new",
+            });
+            expected.push(ExpectedEvent {
+                name: "rebuild",
+                args: vec![("variant", v_new_u)],
+                note: "V_new queue must be rebuilt before dispatch",
+            });
+        }
+        expected.push(ExpectedEvent {
+            name: "dispatch",
+            args: vec![("variant", probe_variant)],
+            note: "first dispatch post-apply for the target variant — segment_index must be >= forward_only_floor",
+        });
 
         let mut next_idx = 0usize;
         let mut last_match_pos: Option<usize> = None;
@@ -1048,7 +819,7 @@ pub(crate) mod probe_contracts {
                 )
             };
             return Err(format!(
-                "T14 expected[{next_idx}/{total}] not observed: \
+                "post-apply chain expected[{next_idx}/{total}] not observed: \
                  expected `{exp}` ({note}).\n\
                  {prev_summary}.\n\
                  peer_thread={peer_thread_id}, \
@@ -1065,16 +836,9 @@ pub(crate) mod probe_contracts {
             ));
         }
 
-        let probe_variant = if expect_midstream_switch {
-            v_new_u
-        } else {
-            v_old_u
-        };
         Ok(peer_events
             .iter()
-            .find(|e| {
-                e.probe_name() == Some("emit_fetch_cmd") && e.u64("variant") == Some(probe_variant)
-            })
+            .find(|e| e.probe_name() == Some("dispatch") && e.u64("variant") == Some(probe_variant))
             .cloned()
             .expect("matched in expected sequence above"))
     }
@@ -1083,7 +847,7 @@ pub(crate) mod probe_contracts {
     /// of decoded audio (a `build_chunk` event with `timestamp >= target`).
     /// On failure the message reports the last observed timestamp and
     /// total chunks decoded — concrete evidence of a stall instead of
-    /// "wait_for_probe timed out".
+    /// "`wait_for_probe` timed out".
     pub(crate) fn assert_build_chunk_reached(
         recorder: &Recorder,
         target_ts_us: u64,
@@ -1121,7 +885,6 @@ pub(crate) mod probe_contracts {
 }
 
 pub(crate) mod assertions {
-    //! Equality predicates with exact failure messages.
     use std::{collections::BTreeSet, fmt::Debug};
 
     /// Assert that `actual == expected`. Failure prints both values

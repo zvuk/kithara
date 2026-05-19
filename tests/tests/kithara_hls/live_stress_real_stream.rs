@@ -17,12 +17,11 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::abr_fast;
+use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, abr_fast, temp_dir};
 use kithara_platform::{
     time::{Instant, sleep},
     tokio,
 };
-use kithara_test_utils::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
 use tokio::{sync::broadcast::error::RecvError, task::spawn, time::timeout};
 use tracing::info;
 
@@ -199,13 +198,16 @@ async fn build_live_audio(
     temp_dir: &TestTempDir,
 ) -> Audio<Stream<Hls>> {
     let url = server.asset(path);
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"));
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"))
+        .build();
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -318,18 +320,21 @@ async fn live_real_drm_playback_smoke(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("drm/master.m3u8");
     info!(%url, "starting real DRM playback smoke");
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
+        .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = timeout(
         Consts::browser_timeout(10, 15),
-        Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config)),
+        Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build()),
     )
     .await
     .expect("audio creation timed out")
@@ -390,17 +395,25 @@ async fn live_ephemeral_revisit_sequence_regression(
     temp_dir: TestTempDir,
     _abr_fast: kithara_abr::AbrSettings,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(24).expect("nonzero"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
+        .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_decoder_backend(backend);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");
@@ -639,15 +652,18 @@ async fn live_real_stream_seek_resume_native(
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(8).expect("nonzero"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
+        .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -733,11 +749,12 @@ async fn live_stress_real_stream_seek_read_cache(
         store.cache_capacity = Some(NonZeroUsize::new(24).expect("nonzero"));
     }
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -1026,15 +1043,18 @@ async fn live_ephemeral_small_cache_playback(
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
+        .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -1103,15 +1123,20 @@ async fn live_ephemeral_small_cache_seek_stress(
 
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
+        .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_decoder_backend(backend);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("audio creation");

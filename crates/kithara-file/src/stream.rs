@@ -1,8 +1,3 @@
-//! File stream type implementation.
-//!
-//! Provides `File` marker type implementing `StreamType` trait.
-//! All code is synchronous — async HTTP I/O is handled by the [`Downloader`].
-
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{AssetStoreBuilder, ResourceKey, asset_root_for_url};
@@ -18,7 +13,9 @@ use crate::{
     config::{FileConfig, FileSrc},
     coord::FileCoord,
     error::SourceError,
-    session::{FilePeer, FileSource, FileStreamState},
+    session::{
+        FileAssetCtx, FileInner, FilePeer, FilePhase, FileSource, FileSourceCtx, FileStreamState,
+    },
 };
 
 /// Marker type for file streaming.
@@ -108,7 +105,11 @@ impl File {
         let asset_root = asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()))
+            Downloader::new(
+                DownloaderConfig::builder()
+                    .cancel(cancel.child_token())
+                    .build(),
+            )
         });
 
         let backend_builder = AssetStoreBuilder::new()
@@ -145,20 +146,28 @@ impl File {
             ));
         }
 
+        let inner = Arc::new(FileInner::new(
+            FileSourceCtx {
+                cancel,
+                coord: Arc::clone(&coord),
+                bus: state.bus.clone(),
+            },
+            FileAssetCtx {
+                url,
+                headers: config.headers,
+                backend: Arc::clone(&state.backend),
+                res: state.res.clone(),
+                key: state.key.clone(),
+            },
+            FilePhase::Init,
+        ));
+
         let peer_handle = downloader
-            .register(Arc::new(FilePeer::new(coord.timeline())))
+            .register(Arc::new(FilePeer::new(Arc::clone(&inner))))
             .with_bus(state.bus.clone());
 
-        let source = FileSource::remote(
-            &state,
-            coord,
-            cancel,
-            url,
-            config.headers,
-            config.look_ahead_bytes,
-            peer_handle,
-        );
-
+        let mut source = FileSource::from_inner(inner, coord);
+        source.set_peer_handle(peer_handle);
         Ok(source)
     }
 }

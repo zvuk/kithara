@@ -1,17 +1,17 @@
 #![forbid(unsafe_code)]
 
-//! Source trait for sync random-access data.
-//!
-//! Sources provide sync random-access via `wait_range()` and `read_at()`.
-//! Reader wraps this directly for `Read + Seek`.
-
 use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Arc};
 
+use kithara_events::VariantInfo;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
-use crate::{Timeline, error::StreamResult, media::MediaInfo};
+use crate::{
+    Timeline,
+    error::{SourceError, StreamError, StreamResult},
+    media::MediaInfo,
+};
 
 /// Per-segment metadata exposed by segmented sources (HLS).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,29 +133,16 @@ pub enum ReadOutcome {
 ///
 /// Represents a deterministic mapping from target playback time to a byte
 /// position and segment context inside the source.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, derive_setters::Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bon::Builder)]
 #[non_exhaustive]
 pub struct SourceSeekAnchor {
+    #[builder(default)]
     pub segment_start: Duration,
     pub segment_end: Option<Duration>,
     pub segment_index: Option<u32>,
     pub variant_index: Option<usize>,
+    #[builder(default)]
     pub byte_offset: u64,
-}
-
-impl SourceSeekAnchor {
-    /// Create a minimal anchor with just a byte offset and segment start
-    /// time. Optional fields default to `None`; set them via the
-    /// `with_*` builders.
-    #[must_use]
-    pub fn new(byte_offset: u64, segment_start: Duration) -> Self {
-        Self {
-            segment_start,
-            byte_offset,
-            ..Self::default()
-        }
-    }
 }
 
 /// Sync random-access source.
@@ -175,6 +162,9 @@ pub trait Source: Send + Sync + 'static {
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         None
     }
+
+    /// Advance the byte cursor by `n` bytes after a successful read.
+    fn advance(&self, n: u64);
 
     /// Optional shared segment-layout handle for segment-aware decoders.
     ///
@@ -200,44 +190,56 @@ pub trait Source: Send + Sync + 'static {
     /// Default no-op for sources that do not need post-seek reconciliation.
     fn commit_seek_landing(&mut self, _anchor: Option<SourceSeekAnchor>) {}
 
-    /// Switch layout to the ABR target variant.
+    /// Current segment byte range (HLS-only).
     ///
-    /// Must be called right before decoder recreation so the new decoder
-    /// reads from the correct variant's byte map. Separate from
-    /// `format_change_segment_range()` to avoid switching layout while
-    /// the old decoder is still reading.
-    fn commit_variant_layout(&mut self) {}
-
-    /// Get current segment byte range.
-    ///
-    /// For segmented sources (HLS), returns `Some(range)` of the current segment.
-    /// For non-segmented sources (File), returns `None`.
-    /// Used by decoder to detect segment boundaries for format change handling.
+    /// Transitional — removed in Plan 06 once the audio FSM consumes
+    /// segment boundaries through [`SegmentLayout`].
     fn current_segment_range(&self) -> Option<Range<u64>> {
         None
     }
 
-    /// Signal that the given byte range will be needed soon.
-    ///
-    /// Non-blocking hint that allows the source to enqueue background
-    /// fetch requests without entering the blocking [`wait_range`](Self::wait_range)
-    /// path.  Called by the audio worker FSM when it discovers that a
-    /// range is not ready and cannot block to wait for it.
-    ///
-    /// Segmented sources (HLS) use this to issue on-demand segment
-    /// requests that wake the downloader.  Non-segmented sources
-    /// (File) keep the default no-op because their downloader fetches
-    /// sequentially and does not need explicit demand signals.
-    fn demand_range(&self, _range: Range<u64>) {}
-
-    /// Get byte range of the first segment with current format after a format change.
-    ///
-    /// For HLS ABR switch: returns the first segment of the new variant which contains
-    /// init data (ftyp/moov). This is where the decoder should be recreated.
-    ///
-    /// Returns `None` if no format change occurred or for non-segmented sources.
-    fn format_change_segment_range(&self) -> Option<Range<u64>> {
+    /// Current variant's full metadata. Adaptive sources (HLS) return
+    /// the live `VariantInfo` for the active variant — pulled from the
+    /// peer on every call so the UI never sees a stale label. Non-adaptive
+    /// sources keep the default `None`.
+    fn current_variant(&self) -> Option<VariantInfo> {
         None
+    }
+
+    /// Byte range of the header (init segment or first served segment)
+    /// the decoder must read to re-establish container state after a
+    /// format change (HLS ABR cross-codec switch).
+    ///
+    /// Returns `Ok(range)` — header byte range that `apply_format_change`
+    /// seeks to and the decoder factory's probe reads.
+    ///
+    /// # Errors
+    ///
+    /// `Err(SourceError::FormatChangeNotApplicable)` — source has no
+    /// HLS-style format-change recovery (file source — default impl) or
+    /// the active HLS variant was activated with `served_from > 0` so
+    /// the init prefix lives outside the served virtual byte range.
+    /// Callers should fall back to a non-init recovery anchor (e.g.
+    /// the current segment boundary).
+    ///
+    /// Transitional — removed in Plan 06.
+    fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        Err(StreamError::Source(SourceError::FormatChangeNotApplicable))
+    }
+
+    /// `true` if a cross-variant transition is in-flight and `read_at` /
+    /// `wait_range` are short-circuited to `Pending(VariantChange)` /
+    /// `Interrupted` until the decoder acks the switch via
+    /// `clear_variant_fence` (HLS) or equivalent.
+    ///
+    /// Sources without a variant fence keep the default `false`. Used by
+    /// the audio decode loop to break out of `Ok(Pending(_))` retry spin
+    /// when Symphonia / other demuxers absorb the underlying
+    /// `VariantChangeError` and surface only an opaque pending — without
+    /// this polled check the loop would yield forever while the fence
+    /// stays closed waiting for a recreate that never starts.
+    fn has_variant_change_pending(&self) -> bool {
+        false
     }
 
     /// Whether the source currently reports zero bytes. Default mirrors
@@ -288,7 +290,7 @@ pub trait Source: Send + Sync + 'static {
     /// Default checks a single byte at the current position.
     /// HLS overrides with segment-aware logic, File with 32KB-window logic.
     fn phase(&self) -> SourcePhase {
-        let pos = self.timeline().byte_position();
+        let pos = self.position();
         self.phase_at(pos..pos.saturating_add(1))
     }
 
@@ -297,6 +299,11 @@ pub trait Source: Send + Sync + 'static {
     /// Returns the current [`SourcePhase`] without blocking. Used internally
     /// by `wait_range()` implementations for fast-path dispatch.
     fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+
+    /// Current byte position in the source's virtual byte space.
+    ///
+    /// HLS delegates to active variant; file owns its own atomic cursor.
+    fn position(&self) -> u64;
 
     /// Read data at offset into buffer.
     ///
@@ -325,6 +332,11 @@ pub trait Source: Send + Sync + 'static {
     fn seek_time_anchor(&mut self, _position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         Ok(None)
     }
+
+    /// Absolute set of the byte cursor — used by [`Stream::seek`] and
+    /// post-seek landings. Sources implement this via the same atomic
+    /// cursor that backs [`Self::position`] / [`Self::advance`].
+    fn set_position(&self, pos: u64);
 
     /// Set current seek epoch for stale request invalidation.
     ///
@@ -388,9 +400,13 @@ pub trait Source: Send + Sync + 'static {
 /// segment-aware return `None` from [`Source::as_segment_layout`].
 pub trait SegmentLayout: Send + Sync + 'static {
     /// Init segment range (e.g. ftyp+moov from `EXT-X-MAP`) for the
-    /// current layout variant. Returns `None` until the init segment is
-    /// announced.
-    fn init_segment_range(&self) -> Option<Range<u64>>;
+    /// current layout variant. Returns an **empty** range (`0..0`) when
+    /// the layout has no init segment (raw TS/AAC/MPEG-ES) or when the
+    /// active variant has not yet announced one. Callers that require an
+    /// init must check `Range::is_empty()` — distinguishing "no init"
+    /// from "init at offset 0..0" is unsupported because every init we
+    /// emit is non-empty by construction.
+    fn init_segment_range(&self) -> Range<u64>;
 
     /// Whether the layout currently reports zero bytes. `len()` is `Option`
     /// because some segmented sources do not know their total upfront, so
@@ -406,6 +422,25 @@ pub trait SegmentLayout: Send + Sync + 'static {
     /// Next segment whose byte range starts at or after `byte_offset`.
     /// Used for sequential play after the current segment is consumed.
     fn segment_after_byte(&self, byte_offset: u64) -> Option<SegmentDescriptor>;
+
+    /// Segment whose `byte_range` covers `byte_offset`. Default `None`
+    /// keeps non-segmented sources transparent.
+    fn segment_at_byte(&self, _byte_offset: u64) -> Option<SegmentDescriptor> {
+        None
+    }
+
+    /// Descriptor for the segment at `segment_index` in the current
+    /// layout variant. Used by demuxers to re-resolve a cursor's
+    /// `byte_range` against the live layout — without this, a DRM
+    /// post-decrypt size shrink (PKCS7 padding stripped) between cursor
+    /// setup and the actual read leaves `state.range` pointing past
+    /// the segment's real end and `HlsSource::read_at` splices bytes
+    /// from the next segment onto the buffer's tail. Returns `None`
+    /// for non-segmented sources or for indices outside the current
+    /// layout's range.
+    fn segment_at_index(&self, _segment_index: u32) -> Option<SegmentDescriptor> {
+        None
+    }
 
     /// Locate the segment whose `[decode_time, decode_time + duration)`
     /// covers `t`. Resolves against the source's *current layout
@@ -434,9 +469,11 @@ mod tests {
 
     #[kithara::test]
     fn phase_default_delegates_to_phase_at() {
-        #[derive(Default)]
+        use std::sync::atomic::{AtomicU64, Ordering};
+
         struct ReadySource {
             timeline: Timeline,
+            position: Arc<AtomicU64>,
         }
         impl Source for ReadySource {
             fn timeline(&self) -> Timeline {
@@ -458,8 +495,20 @@ mod tests {
             fn len(&self) -> Option<u64> {
                 Some(100)
             }
+            fn position(&self) -> u64 {
+                self.position.load(Ordering::Acquire)
+            }
+            fn advance(&self, n: u64) {
+                self.position.fetch_add(n, Ordering::AcqRel);
+            }
+            fn set_position(&self, pos: u64) {
+                self.position.store(pos, Ordering::Release);
+            }
         }
-        let source = ReadySource::default();
+        let source = ReadySource {
+            timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
+        };
         assert_eq!(source.phase(), SourcePhase::Ready);
     }
 }

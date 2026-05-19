@@ -1,8 +1,3 @@
-//! Per-track state with `MixDSP` fade control.
-//!
-//! Each track loaded into the processor gets a [`PlayerTrack`] that wraps
-//! the shared [`PlayerResource`] and manages its fade/state lifecycle.
-
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
 #[rustfmt::skip]
@@ -652,7 +647,7 @@ mod tests {
         )
     }
 
-    /// PcmReader fixture that reports a 10s duration but actually serves
+    /// `PcmReader` fixture that reports a 10s duration but actually serves
     /// a much shorter buffer. Used to verify that the gapless trigger
     /// logic relies on observed-EOF, not on a possibly-stale duration.
     struct MisreportedDurationReader {
@@ -689,7 +684,9 @@ mod tests {
         }
 
         fn position(&self) -> Duration {
-            Duration::from_secs_f64(self.position_frames as f64 / f64::from(self.spec.sample_rate))
+            let frames =
+                u64::try_from(self.position_frames).expect("test mock position non-negative");
+            Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate))
         }
 
         fn read(

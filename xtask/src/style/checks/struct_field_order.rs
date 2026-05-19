@@ -1,12 +1,3 @@
-//! Fields inside `struct` and `union` should be ordered by `(visibility, type, name)`.
-//!
-//! Within one block, fields are grouped by visibility (configurable order in
-//! `thresholds.toml`); inside each visibility bucket, fields are sorted by
-//! type name (last path segment), then by field name.
-//!
-//! Structs carrying any exempt outer attribute (default: `#[repr(...)]`) are
-//! skipped — their layout is part of the contract and must not be reordered.
-
 use std::{cmp::Ordering, ops::Range};
 
 use anyhow::Result;

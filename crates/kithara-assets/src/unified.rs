@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Unified asset store: disk or memory backend.
-
 use std::{fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use rangemap::RangeSet;

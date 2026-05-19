@@ -1,24 +1,3 @@
-//! Long `if/else if/else` chains hide a classifier that's better expressed as a
-//! `match` (homogeneous arms) or a tag-enum + `match` (heterogeneous arms).
-//!
-//! Tiers:
-//!
-//! - **B1 — homogeneous**: every arm tests the same canonical expression with
-//!   the same operator (or `matches!` on the same receiver). Even short chains
-//!   here are strong match-conversion candidates.
-//! - **B2 — heterogeneous**: arms test unrelated predicates. Hint: extract
-//!   predicates into named bindings, or build a tag enum.
-//! - **B3 — long**: any chain past `general_arms` triggers a generic
-//!   cognitive-load signal.
-//!
-//! Modern CPUs penalise long mispredicted chains (~20 cycles per miss) and the
-//! optimiser cannot turn unrelated predicates into a jump table. Even purely
-//! cold chains hurt readability.
-//!
-//! Out of scope:
-//! - chains where every condition is a `cfg!()` macro call (compile-time)
-//! - `if let` chains (configurable via `count_if_let`; default off)
-
 use std::collections::BTreeSet;
 
 use anyhow::Result;

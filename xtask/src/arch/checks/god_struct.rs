@@ -1,14 +1,3 @@
-//! `fields + methods` per struct.
-//!
-//! Catches god-types: a struct with many fields *and* many methods is doing
-//! too much. Methods include both inherent (`impl X`) and trait-impl
-//! (`impl Trait for X`) functions, aggregated across every `impl` block in
-//! the file (so a type whose surface is split across many traits still hits
-//! the threshold). Fields are counted from the struct definition.
-//!
-//! Tuple structs and unit structs count as zero fields. Generic params do
-//! not count as fields.
-
 use std::collections::BTreeMap;
 
 use anyhow::Result;

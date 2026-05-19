@@ -1,9 +1,3 @@
-//! ANSI styling helpers with automatic TTY fallback.
-//!
-//! When stdout is a tty, helpers wrap text in ANSI escape codes; when
-//! piped or redirected they return the input unchanged so logs and CI
-//! captures stay clean.
-
 use std::{
     io::{IsTerminal, stdout},
     sync::OnceLock,

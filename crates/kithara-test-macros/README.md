@@ -4,7 +4,6 @@
 
 <div align="center">
 
-[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
@@ -15,8 +14,18 @@ Workspace proc-macro crate (`publish = false`) with unified test attributes for 
 
 ## Macros
 
-- `#[kithara::test(...)]`
-- `#[kithara::fixture]`
+Attribute macros:
+
+- `#[kithara::test(...)]` — unified async/wasm test attribute (see flags below)
+- `#[kithara::fixture]` — rstest-style fixture helper
+- `#[kithara::probe(...)]` — USDT probe-point emitter consumed by `kithara-test-utils::probes`
+- `#[kithara::mock(...)]` — wraps trait or impl with `unimock` mock generation
+- `#[kithara::hang_watchdog(...)]` — wraps test bodies with the hang-detector watchdog
+
+Derive macros:
+
+- `#[derive(Probe)]` — generate probe glue for an enum
+- `#[derive(IntoProbeArg)]` — generate the conversion required to pass a value as a probe argument
 
 ## `#[kithara::test]` flags
 

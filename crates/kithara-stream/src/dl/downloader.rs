@@ -1,5 +1,3 @@
-//! [`Downloader`] — unified download orchestrator implementation.
-
 use std::sync::{Arc, atomic::AtomicUsize};
 
 use futures::task::AtomicWaker;
@@ -7,6 +5,7 @@ use kithara_abr::{Abr, AbrController, AbrPeerId};
 use kithara_events::EventBus;
 use kithara_net::HttpClient;
 use kithara_platform::{Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc};
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -203,7 +202,7 @@ impl Downloader {
     /// - `Stalled` — work exists (queued cmds or inflight > 0) but no
     ///   forward motion this tick. Tick the watchdog; N consecutive
     ///   stalls across the timeout window → panic.
-    #[kithara_hang_detector::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
+    #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
         let mut registry = Registry::new();
 

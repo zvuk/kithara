@@ -1,5 +1,3 @@
-//! End-to-end test of the segment-aware decoder pipeline.
-
 use std::{
     io::{Cursor, Seek, SeekFrom},
     ops::Range,
@@ -58,8 +56,8 @@ struct FakeSegmented {
 }
 
 impl SegmentLayout for FakeSegmented {
-    fn init_segment_range(&self) -> Option<Range<u64>> {
-        Some(self.init_range.clone())
+    fn init_segment_range(&self) -> Range<u64> {
+        self.init_range.clone()
     }
 
     fn len(&self) -> Option<u64> {
@@ -153,15 +151,7 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
     let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
-    let decoder = ComposedDecoder::new(
-        demuxer,
-        codec,
-        PcmPool::default().clone(),
-        0,
-        None,
-        None,
-        None,
-    );
+    let decoder = ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
     (decoder, reads, record)
 }
 
@@ -203,7 +193,7 @@ fn pull_one_chunk(
 }
 
 /// RED scaffold for ABR variant-switch sub-problem #3
-/// (see project_hls_abr_variant_switch_init_range_bug).
+/// (see `project_hls_abr_variant_switch_init_range_bug`).
 ///
 /// `Fmp4SegmentDemuxer::open` hardcodes `next_byte = 0`. Production
 /// calls `apply_format_change` with `target_offset` equal to the
@@ -269,8 +259,6 @@ fn red_open_always_starts_at_layout_seg_0() {
             the parse_segment_frames panic. Add when implementing \
             the cursor-freshness contract."]
 fn red_cursor_byte_range_freezes_when_layout_size_grows() {
-    // Intentional placeholder. See the doc comment above for the
-    // contract and the TODO list for the fix author.
     panic!("RED scaffold — see doc comment");
 }
 

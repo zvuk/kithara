@@ -1,20 +1,3 @@
-//! Generic-parameter and where-clause bound counts.
-//!
-//! Functions/structs/traits with many generic parameters or many
-//! where-clause predicates almost always indicate over-abstraction:
-//! the type is trying to be too general for the few callers it has.
-//! High generic load is usually a smell of "design for hypothetical
-//! future requirements" — pick the concrete shape the code needs now.
-//!
-//! Detection counts:
-//!   * generic params: type-params + lifetime-params + const-params
-//!     (the `<T, 'a, N: usize>` count, declared on a function/struct/trait);
-//!   * where bounds: number of where-clause predicates (each `T: Trait + …`
-//!     entry is one predicate, regardless of trait-bound count inside).
-//!
-//! Two thresholds in one check; either one triggers a separate violation
-//! line so the report lists which bound was breached.
-
 use anyhow::Result;
 use syn::{Generics, ImplItem, Item, ItemImpl};
 

@@ -1,9 +1,3 @@
-//! Shared audio worker — cooperative multi-track decoder on a single OS thread.
-//!
-//! [`AudioWorkerHandle`] is the user-facing handle (clonable). It spawns a
-//! background OS thread that runs a `crate::runtime::Scheduler`, serving all
-//! registered tracks via priority scheduling.
-
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},

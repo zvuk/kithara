@@ -1,8 +1,3 @@
-//! JS-heap channels for reply and event transport.
-//!
-//! Command payloads use shared-memory MPSC from `kithara_platform::sync::mpsc`.
-//! Reply and event signals use BroadcastChannel in the JS heap.
-
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use js_sys::{Array, Object, Promise, Reflect};

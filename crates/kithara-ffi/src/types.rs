@@ -1,5 +1,3 @@
-//! FFI-compatible type conversions between `kithara-play` and platform bindings.
-
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 use kithara_events::TrackStatus as TS;
 use kithara_platform::time::Duration;
@@ -498,19 +496,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn seconds_to_duration_nan() {
-        assert!(seconds_to_duration(f64::NAN).is_err());
-    }
-
-    #[kithara::test]
-    fn seconds_to_duration_infinity() {
-        assert!(seconds_to_duration(f64::INFINITY).is_err());
-        assert!(seconds_to_duration(f64::NEG_INFINITY).is_err());
-    }
-
-    #[kithara::test]
-    fn seconds_to_duration_negative() {
-        assert!(seconds_to_duration(-1.0).is_err());
+    #[case::nan(f64::NAN)]
+    #[case::positive_infinity(f64::INFINITY)]
+    #[case::negative_infinity(f64::NEG_INFINITY)]
+    #[case::negative(-1.0)]
+    fn seconds_to_duration_rejects_non_finite_or_negative(#[case] input: f64) {
+        assert!(seconds_to_duration(input).is_err());
     }
 
     #[kithara::test]
@@ -548,24 +539,18 @@ mod tests {
     }
 
     #[kithara::test]
-    fn play_error_not_ready() {
-        let ffi: FfiError = PlayError::NotReady.into();
-        assert!(matches!(ffi, FfiError::NotReady));
-    }
-
-    #[kithara::test]
-    fn play_error_item_failed() {
-        let ffi: FfiError = PlayError::ItemFailed {
-            reason: "bad codec".into(),
-        }
-        .into();
-        assert!(matches!(ffi, FfiError::ItemFailed { .. }));
-    }
-
-    #[kithara::test]
-    fn play_error_internal_fallback() {
-        let ffi: FfiError = PlayError::ArenaFull.into();
-        assert!(matches!(ffi, FfiError::Internal { .. }));
+    #[case::not_ready(PlayError::NotReady, (|f: &FfiError| matches!(f, FfiError::NotReady)) as fn(&FfiError) -> bool)]
+    #[case::item_failed(
+        PlayError::ItemFailed { reason: "bad codec".into() },
+        (|f: &FfiError| matches!(f, FfiError::ItemFailed { .. })) as fn(&FfiError) -> bool
+    )]
+    #[case::internal_fallback(PlayError::ArenaFull, (|f: &FfiError| matches!(f, FfiError::Internal { .. })) as fn(&FfiError) -> bool)]
+    fn play_error_maps_to_expected_ffi_variant(
+        #[case] input: PlayError,
+        #[case] matches_variant: fn(&FfiError) -> bool,
+    ) {
+        let ffi: FfiError = input.into();
+        assert!(matches_variant(&ffi));
     }
 
     #[kithara::test]

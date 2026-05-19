@@ -1,10 +1,3 @@
-//! Contract tests for `wait_range` behavior through public `Stream<Hls>` API.
-//!
-//! These tests intentionally avoid touching HLS internals and validate
-//! user-visible guarantees:
-//! 1. Rapid seek burst never returns premature EOF.
-//! 2. After seek burst, sequential tail read is contiguous and exact.
-
 use std::{
     io::{Read, Seek, SeekFrom},
     num::NonZeroUsize,
@@ -15,9 +8,11 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    TestTempDir, Xorshift64,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, Xorshift64};
 use tokio_util::sync::CancellationToken;
 
 struct Consts;
@@ -48,13 +43,16 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     .await;
     let url = server.url("/master.m3u8");
 
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(ephemeral)
-        .with_cache_capacity(NonZeroUsize::new(256).unwrap());
-    let config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(CancellationToken::new())
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(ephemeral)
+        .cache_capacity(NonZeroUsize::new(256).unwrap())
+        .build();
+    let config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(CancellationToken::new())
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
     let total_bytes = server.total_bytes();
@@ -157,13 +155,16 @@ async fn ephemeral_small_cache_reads_entire_stream() {
     let url = server.url("/master.m3u8");
     let total_bytes = server.total_bytes();
 
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(5).expect("5 > 0"));
-    let config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(CancellationToken::new())
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(5).expect("5 > 0"))
+        .build();
+    let config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(CancellationToken::new())
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
     let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
 
     let result = spawn_blocking(move || {

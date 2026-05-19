@@ -1,9 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! [`MemDriver`] struct, options, state, and the [`Driver`] factory impl.
-//! [`MemResource`] type alias and its convenience constructors live here too.
-//! The [`DriverIo`](crate::DriverIo) impl is in the sibling `io` module.
-
 use std::fmt;
 
 use kithara_bufpool::{BytePool, PooledOwned};

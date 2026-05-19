@@ -63,8 +63,10 @@ pub fn make_key_registry(domains: &[String], auth_token: Option<String>) -> KeyP
         headers.insert("X-Auth-Token".to_string(), token);
     }
 
-    let rule = KeyProcessorRule::new(domains, Arc::new(move |key| Ok(cipher.decrypt(&key))))
-        .with_headers(headers);
+    let rule =
+        KeyProcessorRule::for_domains(domains, Arc::new(move |key| Ok(cipher.decrypt(&key))))
+            .headers(headers)
+            .build();
 
     let mut registry = KeyProcessorRegistry::new();
     registry.add(rule);

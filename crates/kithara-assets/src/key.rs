@@ -284,42 +284,33 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_asset_root_with_name_differs_from_without() {
-        let url = Url::parse("https://example.com/stream").unwrap();
-
-        let root_no_name = asset_root_for_url(&url, None);
-        let root_with_name = asset_root_for_url(&url, Some("track_123"));
-
-        assert_ne!(
-            root_no_name, root_with_name,
-            "asset_root with name should differ from without"
-        );
-    }
-
-    #[kithara::test]
-    fn test_asset_root_same_url_different_names_differ() {
-        let url = Url::parse("https://cdn.example.com/stream").unwrap();
-
-        let root_a = asset_root_for_url(&url, Some("track_123"));
-        let root_b = asset_root_for_url(&url, Some("track_456"));
-
-        assert_ne!(
-            root_a, root_b,
-            "same URL with different names should produce different asset roots"
-        );
-    }
-
-    #[kithara::test]
-    fn test_asset_root_same_url_same_name_equal() {
-        let url = Url::parse("https://cdn.example.com/stream").unwrap();
-
-        let root_a = asset_root_for_url(&url, Some("track_123"));
-        let root_b = asset_root_for_url(&url, Some("track_123"));
-
-        assert_eq!(
-            root_a, root_b,
-            "same URL with same name should produce identical asset roots"
-        );
+    #[case::name_vs_no_name("https://example.com/stream", None, Some("track_123"), false)]
+    #[case::different_names(
+        "https://cdn.example.com/stream",
+        Some("track_123"),
+        Some("track_456"),
+        false
+    )]
+    #[case::same_name(
+        "https://cdn.example.com/stream",
+        Some("track_123"),
+        Some("track_123"),
+        true
+    )]
+    fn test_asset_root_name_distinguishes(
+        #[case] url_str: &str,
+        #[case] name_a: Option<&str>,
+        #[case] name_b: Option<&str>,
+        #[case] should_equal: bool,
+    ) {
+        let url = Url::parse(url_str).unwrap();
+        let root_a = asset_root_for_url(&url, name_a);
+        let root_b = asset_root_for_url(&url, name_b);
+        if should_equal {
+            assert_eq!(root_a, root_b);
+        } else {
+            assert_ne!(root_a, root_b);
+        }
     }
 
     #[kithara::test]
@@ -365,18 +356,19 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_resource_key_absolute() {
-        let path = PathBuf::from("/tmp/song.mp3");
-        let key = ResourceKey::absolute(&path);
-        assert!(key.is_absolute());
-        assert_eq!(key.as_absolute_path(), Some(path.as_path()));
-    }
-
-    #[kithara::test]
-    fn test_resource_key_relative_is_not_absolute() {
-        let key = ResourceKey::new("seg.m4s");
-        assert!(!key.is_absolute());
-        assert_eq!(key.as_absolute_path(), None);
+    #[case::absolute(true)]
+    #[case::relative(false)]
+    fn test_resource_key_absolute_flag(#[case] is_absolute: bool) {
+        if is_absolute {
+            let path = PathBuf::from("/tmp/song.mp3");
+            let key = ResourceKey::absolute(&path);
+            assert!(key.is_absolute());
+            assert_eq!(key.as_absolute_path(), Some(path.as_path()));
+        } else {
+            let key = ResourceKey::new("seg.m4s");
+            assert!(!key.is_absolute());
+            assert_eq!(key.as_absolute_path(), None);
+        }
     }
 
     #[kithara::test]

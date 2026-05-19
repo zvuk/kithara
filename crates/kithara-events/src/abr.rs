@@ -1,13 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Shared ABR (adaptive bitrate) vocabulary and events.
-//!
-//! Cross-crate types live here (those referenced by [`AbrEvent`]). Controller-
-//! internal shapes (`AbrSettings`, `AbrDecision`, `AbrPeerId`) live in
-//! `kithara-abr`; events only carry `AbrMode`, `AbrReason`, `BandwidthSource`,
-//! `AbrVariant`, `VariantDuration`, `VariantInfo`, `AbrProgressSnapshot`.
-
-use derivative::Derivative;
 use kithara_platform::time::Duration;
 
 /// Threshold separating Manual (below) from Auto (at or above) in the packed
@@ -15,15 +7,19 @@ use kithara_platform::time::Duration;
 const ABR_MODE_AUTO_THRESHOLD: usize = usize::MAX / 2;
 
 /// ABR mode selection.
-#[derive(Clone, Copy, Debug, Derivative, PartialEq, Eq)]
-#[derivative(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbrMode {
     /// Automatic bitrate adaptation.
     /// Optional initial variant index (defaults to 0 when `None`).
-    #[derivative(Default)]
     Auto(Option<usize>),
     /// Manual variant selection — ABR disabled, fixed variant.
     Manual(usize),
+}
+
+impl Default for AbrMode {
+    fn default() -> Self {
+        Self::Auto(None)
+    }
 }
 
 impl From<AbrMode> for usize {
@@ -64,8 +60,6 @@ pub enum AbrReason {
     DownSwitch,
     MinInterval,
     NoEstimate,
-    /// Bandwidth samples below warmup threshold — no switching yet.
-    Warmup,
     BufferTooLowForUpSwitch,
     /// Buffer ahead below urgent-threshold; force down-switch.
     UrgentDownSwitch,
@@ -81,15 +75,7 @@ pub enum BandwidthSource {
     Cache,
 }
 
-/// Variant known to the ABR controller (bandwidth + duration shape).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AbrVariant {
-    pub duration: VariantDuration,
-    pub bandwidth_bps: u64,
-    pub variant_index: usize,
-}
-
-/// Duration shape for an `AbrVariant`.
+/// Duration shape for a variant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VariantDuration {
     /// Single total duration (e.g. MP3, WAV).
@@ -107,14 +93,18 @@ pub struct AbrProgressSnapshot {
     pub reader_playback_time: Duration,
 }
 
-/// Extended variant metadata for UI and monitoring.
+/// Variant metadata. Single source of truth across HLS parsing, ABR
+/// scheduler, event payload, and UI surfaces. Replaces the historical
+/// split between `AbrVariant` (bandwidth + duration) and a separate
+/// `VariantInfo` for UI metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VariantInfo {
     pub bandwidth_bps: Option<u64>,
     pub codecs: Option<String>,
     pub container: Option<String>,
     pub name: Option<String>,
-    pub index: usize,
+    pub duration: VariantDuration,
+    pub variant_index: usize,
 }
 
 /// Events emitted by the ABR controller for a single registered peer.
@@ -154,7 +144,6 @@ pub enum AbrEvent {
     DecisionSkipped {
         reason: AbrReason,
     },
-    WarmupCompleted,
     /// Reader did not advance within `incoherence_deadline` after a
     /// `VariantApplied` event. Signals a potential deadlock between the
     /// scheduler and the reader.

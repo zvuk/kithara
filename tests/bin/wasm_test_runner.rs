@@ -1,11 +1,3 @@
-//! Custom WASM test runner that starts the unified test server automatically.
-//!
-//! Cargo invokes this as: `wasm_test_runner <test.wasm> [filter] [--options...]`
-//!
-//! It starts the test server binary, waits for it to be ready, then delegates
-//! to `wasm-bindgen-test-runner` with all args forwarded. When the process
-//! exits, the test server dies with it.
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::{
     env,

@@ -1,14 +1,3 @@
-//! Reproduces the user-reported cold-cache mid-track seek hang against
-//! a local `PackagedTestServer` — the whole production pipeline (Queue,
-//! `PlayerImpl`, `OfflineBackend`) end-to-end, no real network.
-//!
-//! Scenario: two HLS tracks, caller selects the second, plays briefly,
-//! then seeks to the middle of an uncached range. The test asserts the
-//! queue's watchdog either confirms progress or fires its panic+dump.
-//! If the hang reproduces, `Queue::tick` panics through
-//! `HangDetector`; the panic payload + `/tmp/kithara-seek-hang-*.json`
-//! pinpoint the frozen state.
-
 #![forbid(unsafe_code)]
 
 use std::{
@@ -18,14 +7,13 @@ use std::{
 
 use kithara_assets::StoreOptions;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
+    fixture_protocol::DelayRule, kithara, offline::OfflineSession, temp_dir,
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{
-    HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
-    fixture_protocol::DelayRule, kithara, temp_dir,
-};
 use tokio::time::sleep;
 
 fn install_tracing() {
@@ -99,7 +87,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
@@ -169,7 +159,9 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let downloader = Downloader::new(DownloaderConfig::default());
 
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
@@ -187,9 +179,11 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let ids: Vec<TrackId> = resolved
         .iter()
         .map(|u| {
-            let mut cfg = ResourceConfig::new(u).expect("valid URL");
-            cfg = cfg.with_downloader(downloader.clone());
-            cfg.store = store.clone();
+            let cfg = ResourceConfig::for_src(u)
+                .expect("valid URL")
+                .downloader(downloader.clone())
+                .store(store.clone())
+                .build();
             queue.append(TrackSource::Config(Box::new(cfg)))
         })
         .collect();
@@ -284,7 +278,7 @@ async fn queue_seek_two_tracks_index1(temp_dir: TestTempDir) {
 /// Без `#[ignore]` — пинит реальную регрессию: пока coalescer не написан,
 /// этот тест падает в `just test` и держит баг на виду.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(20)))]
-#[ignore]
+#[ignore = "pins real regression — pending downloader request coalescer (see .docs/plans/2026-04-21-downloader-request-coalescing.md); unignore when single-flight layer lands"]
 async fn queue_seek_same_url_twice_index0(temp_dir: TestTempDir) {
     run_seek_scenario(&["/master.m3u8", "/master.m3u8"], 0, temp_dir).await;
 }
@@ -316,10 +310,11 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
 
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
     let track_source = |url: &str| -> TrackSource {
-        let mut cfg = ResourceConfig::new(url)
+        let cfg = ResourceConfig::for_src(url)
             .expect("valid URL")
-            .with_downloader(downloader.clone());
-        cfg.store = store.clone();
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .build();
         TrackSource::Config(Box::new(cfg))
     };
 
@@ -403,10 +398,11 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
 
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
     let track_source = |url: &str| -> TrackSource {
-        let mut cfg = ResourceConfig::new(url)
+        let cfg = ResourceConfig::for_src(url)
             .expect("valid URL")
-            .with_downloader(downloader.clone());
-        cfg.store = store.clone();
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .build();
         TrackSource::Config(Box::new(cfg))
     };
 

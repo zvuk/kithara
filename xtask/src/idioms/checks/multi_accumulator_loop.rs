@@ -1,11 +1,3 @@
-//! `for x in xs { sum += x.weight; names.push(x.name) }` — one loop, multiple
-//! independent accumulators. Hint: split into separate iterator chains, or
-//! use a `fold((acc1, acc2), ...)` if the two accumulators are coupled.
-//!
-//! Detection: a `for`-loop body has ≥2 statements, **every** statement matches
-//! an accumulator pattern (push / extend / `+=` / `-=` / `*=` / `/=`), and ≥2
-//! distinct accumulator targets are present.
-
 use std::collections::BTreeSet;
 
 use anyhow::Result;

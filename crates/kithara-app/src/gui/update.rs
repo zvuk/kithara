@@ -1,7 +1,7 @@
 use iced::Task;
 use kithara::abr::AbrMode;
 use kithara_queue::{TrackId, Transition};
-use tracing::error;
+use tracing::{error, info};
 
 use super::{
     app::Kithara,
@@ -186,11 +186,20 @@ fn handle_tab_selected(state: &mut Kithara, tab: Tab) {
 }
 
 fn handle_set_abr_mode(state: &Kithara, variant: Option<usize>) {
-    if let Some(handle) = state.controller.queue().current_abr_handle() {
+    let handle = state.controller.queue().current_abr_handle();
+    info!(
+        ?variant,
+        handle_present = handle.is_some(),
+        "GUI: SetAbrMode received"
+    );
+    if let Some(handle) = handle {
         let mode = variant.map_or(AbrMode::Auto(None), AbrMode::Manual);
-        if let Err(err) = handle.set_mode(mode) {
-            error!(?err, ?variant, "SetAbrMode rejected by ABR state");
+        match handle.set_mode(mode) {
+            Ok(()) => info!(?variant, ?mode, "GUI: set_mode accepted"),
+            Err(err) => error!(?err, ?variant, "SetAbrMode rejected by ABR state"),
         }
+    } else {
+        error!(?variant, "GUI: no current AbrHandle — set_mode skipped");
     }
     state.controller.mutate(|st| {
         st.abr_mode_is_auto = variant.is_none();

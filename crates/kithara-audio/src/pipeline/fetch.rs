@@ -1,11 +1,3 @@
-//! Fetch result with epoch tracking for seek invalidation.
-//!
-//! Carries a decoded PCM chunk (or any `C`) from the audio source worker
-//! to the consumer with an epoch tag so stale chunks emitted before a
-//! seek can be discarded. The `kind` distinguishes normal data from the
-//! two terminal markers — natural EOF vs. transient failure — so the
-//! consumer can finalise the track only on natural EOF.
-
 /// Kind of fetch marker on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchKind {

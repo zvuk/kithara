@@ -1,14 +1,7 @@
 #![forbid(unsafe_code)]
 
-//! DRM key fetch + processor pipeline.
-//!
-//! Owns the disk cache + downloader handles directly — no dependency
-//! on `FetchManager`. Shares the same atomic-body helper as
-//! [`crate::playlist_cache::PlaylistCache`] so the cache lookup,
-//! network fetch, and write-back logic is not duplicated.
-
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -73,6 +66,23 @@ impl KeyManager {
             byte_pool,
             decrypted_keys: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    fn aes128_key_urls(media_playlists: &[crate::parsing::MediaPlaylist]) -> HashSet<Url> {
+        let mut urls: HashSet<Url> = HashSet::new();
+        for playlist in media_playlists {
+            for segment in &playlist.segments {
+                if let Some(ref seg_key) = segment.key
+                    && matches!(seg_key.method, crate::parsing::EncryptionMethod::Aes128)
+                    && let Some(ref key_info) = seg_key.key_info
+                    && let Ok(seg_url) = playlist.url.join(&segment.uri)
+                    && let Ok(key_url) = Self::resolve_key_url(key_info, &seg_url)
+                {
+                    urls.insert(key_url);
+                }
+            }
+        }
+        urls
     }
 
     pub(crate) fn derive_iv(
@@ -203,7 +213,7 @@ impl KeyManager {
         }
         let headers = self.merged_headers(rule.headers.as_ref());
 
-        let cmd = FetchCmd::get(fetch_url).headers(headers);
+        let cmd = FetchCmd::get(fetch_url).maybe_headers(headers).build();
         let resp = self.downloader.execute(cmd).await.map_err(HlsError::from)?;
         let raw_key = resp.body.collect().await.map_err(HlsError::from)?;
 
@@ -234,6 +244,85 @@ impl KeyManager {
         }
     }
 
+    /// Eagerly fetch every AES-128 key referenced by `media_playlists`,
+    /// so [`Self::resolve_decrypt_ctx`] can serve them synchronously
+    /// during variant construction. Cleartext playlists yield no
+    /// fetches and the call resolves immediately.
+    ///
+    /// # Errors
+    /// Returns the first [`HlsError`] from an underlying key fetch.
+    pub(crate) async fn prefetch_aes128_keys(
+        &self,
+        media_playlists: &[crate::parsing::MediaPlaylist],
+    ) -> HlsResult<()> {
+        let urls = Self::aes128_key_urls(media_playlists);
+        let futs = urls
+            .into_iter()
+            .map(|url| async move { self.get_raw_key(&url, None).await.map(drop) });
+        futures::future::try_join_all(futs).await?;
+        Ok(())
+    }
+
+    /// Build a [`DecryptContext`] from a pre-fetched key. Glues
+    /// `resolve_key_url` + `get_cached_key` + `derive_iv` into a single
+    /// sync step that runs after [`Self::get_raw_key`] has populated the
+    /// cache. Caller invokes this only for AES-128 segments — the
+    /// presence of [`KeyInfo`](crate::parsing::KeyInfo) means a key is
+    /// required, so every failure path here is a real error.
+    ///
+    /// # Errors
+    /// - [`HlsError::InvalidUrl`] when the key URI cannot be resolved.
+    /// - [`HlsError::KeyProcessing`] when the cached key is missing,
+    ///   empty, or not 16 bytes (AES-128 size).
+    pub(crate) fn resolve_decrypt_ctx(
+        &self,
+        key_info: &crate::parsing::KeyInfo,
+        segment_url: &Url,
+        sequence: u64,
+    ) -> HlsResult<DecryptContext> {
+        let key_url = Self::resolve_key_url(key_info, segment_url)?;
+        let key_bytes = self.get_cached_key(&key_url)?;
+        let key: [u8; Self::AES_KEY_LEN] = key_bytes.as_ref().try_into().map_err(|_| {
+            HlsError::KeyProcessing(format!(
+                "AES-128 key must be {} bytes, got {} for {key_url}",
+                Self::AES_KEY_LEN,
+                key_bytes.len()
+            ))
+        })?;
+        Ok(DecryptContext::new(
+            key,
+            Self::derive_iv(key_info, sequence),
+        ))
+    }
+
+    /// Resolve the [`DecryptContext`] for a variant's init segment.
+    /// Returns `None` when the playlist has no init segment, when the
+    /// init segment carries no key (cleartext), or when key resolution
+    /// fails (same fallback policy as media segments).
+    pub(crate) fn resolve_init_decrypt_ctx(
+        &self,
+        playlist: &crate::parsing::MediaPlaylist,
+    ) -> Option<DecryptContext> {
+        let init = playlist.init_segment.as_ref()?;
+        let key = init.key.as_ref()?;
+        if !matches!(key.method, crate::parsing::EncryptionMethod::Aes128) {
+            return None;
+        }
+        let key_info = key.key_info.as_ref()?;
+        let init_url = playlist.url.join(&init.uri).ok()?;
+        match self.resolve_decrypt_ctx(key_info, &init_url, 0) {
+            Ok(ctx) => Some(ctx),
+            Err(e) => {
+                tracing::warn!(
+                    url = %init_url,
+                    error = %e,
+                    "resolve_init_decrypt_ctx failed; init will be unreadable",
+                );
+                None
+            }
+        }
+    }
+
     pub(crate) fn resolve_key_url(
         key_info: &crate::parsing::KeyInfo,
         segment_url: &Url,
@@ -250,6 +339,49 @@ impl KeyManager {
                 .join(key_uri)
                 .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve key URL: {e}")))
         }
+    }
+
+    fn resolve_segment_decrypt_ctx(
+        &self,
+        media_url: &Url,
+        segment: &crate::parsing::MediaSegment,
+    ) -> Option<DecryptContext> {
+        let key = segment.key.as_ref()?;
+        if !matches!(key.method, crate::parsing::EncryptionMethod::Aes128) {
+            return None;
+        }
+        let key_info = key.key_info.as_ref()?;
+        let segment_url = media_url.join(&segment.uri).ok()?;
+        match self.resolve_decrypt_ctx(key_info, &segment_url, segment.sequence) {
+            Ok(ctx) => Some(ctx),
+            Err(e) => {
+                tracing::warn!(
+                    url = %segment_url,
+                    sequence = segment.sequence,
+                    error = %e,
+                    "resolve_decrypt_ctx failed; segment will be unreadable",
+                );
+                None
+            }
+        }
+    }
+
+    /// Resolve one [`DecryptContext`] per segment of `playlist`, using
+    /// keys already pre-fetched by [`Self::prefetch_aes128_keys`].
+    /// Cleartext segments map to `None`; AES-128 segments map to
+    /// `Some(ctx)`. A resolution failure on an encrypted segment is
+    /// logged and the segment falls back to `None` — the dispatch path
+    /// will surface a decoder error, which is preferable to silently
+    /// shipping garbage bytes.
+    pub(crate) fn resolve_variant_decrypt_contexts(
+        &self,
+        playlist: &crate::parsing::MediaPlaylist,
+    ) -> Vec<Option<DecryptContext>> {
+        playlist
+            .segments
+            .iter()
+            .map(|segment| self.resolve_segment_decrypt_ctx(&playlist.url, segment))
+            .collect()
     }
 }
 

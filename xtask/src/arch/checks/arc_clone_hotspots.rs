@@ -1,20 +1,3 @@
-//! Functions with many `Arc::clone(...)` / `Rc::clone(...)` calls.
-//!
-//! High clone-density inside one function signals an orchestrator that
-//! distributes ownership of shared state — usually a god-object that owns
-//! everything and hands `Arc` clones out to children. `arch::shared_state`
-//! counts *declarations* of `Arc<Mutex/RwLock>`; this check counts
-//! *propagation points* and is a complementary angle.
-//!
-//! Detection counts only the explicit `Arc::clone(&x)` / `Rc::clone(&x)`
-//! form (the `clippy::clone_on_ref_ptr`-blessed shape). Method-call
-//! `x.clone()` is intentionally not counted — the AST cannot tell whether
-//! the receiver is `Arc<T>` or `MyValueType`.
-//!
-//! Each function is reported once with its full path. Closures inside a
-//! function attribute their clones to the enclosing function, since the
-//! whole expression body shares the same orchestration responsibility.
-
 use anyhow::Result;
 use syn::{
     Expr, ImplItem, Item, ItemImpl, Type,

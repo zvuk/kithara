@@ -1,16 +1,3 @@
-//! Stress test: chunk-level ABR integrity via `PcmReader::next_chunk`.
-//!
-//! Same ABR scenario as `stress_seek_abr_audio` (ascending V0, descending V1,
-//! delayed V0 → ABR switch to V1), but reads whole `PcmChunk` values instead
-//! of raw f32 samples. This gives access to `PcmMeta` (`frame_offset`, timestamp,
-//! `segment_index`, `variant_index`, epoch) for precise root-cause diagnosis.
-//!
-//! Four-phase verification:
-//! 1. **Warmup**: read chunks until ABR switches from V0 (ascending) to V1 (descending)
-//! 2. **Post-switch**: 50 sequential V1 chunks with `frame_offset` continuity
-//! 3. **Random seeks**: 200 seek + 5 chunk reads with continuity + saw-tooth checks
-//! 4. **EOF**: seek near end, drain to EOF
-
 use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara::{
@@ -20,15 +7,15 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
     fixture_protocol::DelayRule,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
+use kithara_platform::time::{Duration, Instant, sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -186,13 +173,16 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         store.is_ephemeral = true;
     }
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");

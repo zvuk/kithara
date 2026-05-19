@@ -1,5 +1,3 @@
-//! FFI wrapper for `UniqueBinaryCipher` from `kithara-drm`.
-
 use std::sync::Arc;
 
 use bytes::Bytes;

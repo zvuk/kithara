@@ -47,7 +47,6 @@ impl Frontend for GuiFrontend {
         let palette = self.palette;
         let config = self.config.clone();
 
-        // Create a Tokio runtime to support kithara-queue spawning tasks
         let rt = tokio::runtime::Runtime::new()
             .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
         let _guard = rt.enter();

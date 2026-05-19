@@ -1,41 +1,3 @@
-//! RED test: systemic leak in `Downloader::Registry` peer lifecycle.
-//!
-//! Hypothesis
-//! In `registry.rs::poll_peers`, a registered peer is only removed from
-//! `self.peers` when BOTH:
-//!
-//!   - `entry.peer_done == true` — set when `Peer::poll_next` returned
-//!     `Poll::Ready(None)`; AND
-//!   - `entry.peer_cancel.is_cancelled() == true` — `peer_cancel` is a
-//!     *child* of the cancel token passed to `Registry::add`.
-//!
-//! On the HLS side:
-//!   1. `HlsPeer::poll_next` never returns `Ready(None)`; it only returns
-//!      `Pending` or `Ready(Some(_))`. So `peer_done` stays `false`.
-//!   2. `HlsSource` only holds a `PeerHandle` (`_peer_handle`). Dropping
-//!      `HlsSource` drops the `PeerHandle`, which fires `PeerInner::cancel`
-//!      (a cancel token). But that cancel token is **not the same token**
-//!      as the one Registry's `peer_cancel` is a child of. Registry's
-//!      `peer_cancel` is a child of `inner.cancel` (the whole-Downloader
-//!      cancel), not of the `PeerHandle`'s cancel.
-//!
-//! → Registry never removes the `Arc<dyn Peer>` entry for this source.
-//! → The `Arc<HlsPeer>` lives forever (until the Downloader itself is
-//!   dropped).
-//! → The waker-forwarding task spawned in `HlsPeer::activate` also
-//!   never terminates, because it holds `Arc::clone(self)` AND its
-//!   `wake_cancel` + `scheduler.coord.cancel` are never fired by a
-//!   plain source drop.
-//!
-//! This test proves the Registry half of the leak (the part that is
-//! **not HLS-specific**). It uses a custom `Peer` whose `poll_next`
-//! never returns `None`, registers it, drops the `PeerHandle`, and
-//! asserts the peer's `Arc` count drops to 1 within a reasonable
-//! window. It FAILS today because the Registry keeps its clone alive.
-//!
-//! If you want the HLS-side observation instead, see the second test
-//! which exercises the same defect through a real `Stream::<Hls>`.
-
 #![forbid(unsafe_code)]
 
 use std::{
@@ -50,10 +12,9 @@ use kithara::{
     stream::Stream,
 };
 use kithara_abr::Abr;
-use kithara_integration_tests::hls_fixture::TestServer;
+use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_platform::time::{Duration, sleep};
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 /// A peer that behaves like `HlsPeer`: `poll_next` never returns
@@ -92,7 +53,7 @@ impl Peer for ImmortalPeer {
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
     let cancel = CancellationToken::new();
-    let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
+    let downloader = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
 
     let peer: Arc<ImmortalPeer> = Arc::new(ImmortalPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();
@@ -144,15 +105,19 @@ async fn red_hls_source_drop_leaks_peer(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
 
-    let downloader =
-        Downloader::new(DownloaderConfig::default().with_cancel(CancellationToken::new()));
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .cancel(CancellationToken::new())
+            .build(),
+    );
 
     {
         let stream = Stream::<Hls>::new(
-            HlsConfig::new(url.clone())
-                .with_store(StoreOptions::new(temp_dir.path()))
-                .with_cancel(CancellationToken::new())
-                .with_downloader(downloader.clone()),
+            HlsConfig::for_url(url.clone())
+                .store(StoreOptions::new(temp_dir.path()))
+                .cancel(CancellationToken::new())
+                .downloader(downloader.clone())
+                .build(),
         )
         .await?;
         drop(stream);
@@ -163,10 +128,11 @@ async fn red_hls_source_drop_leaks_peer(
 
     for i in 0..ITERATIONS {
         let stream = Stream::<Hls>::new(
-            HlsConfig::new(url.clone())
-                .with_store(StoreOptions::new(temp_dir.path()))
-                .with_cancel(CancellationToken::new())
-                .with_downloader(downloader.clone()),
+            HlsConfig::for_url(url.clone())
+                .store(StoreOptions::new(temp_dir.path()))
+                .cancel(CancellationToken::new())
+                .downloader(downloader.clone())
+                .build(),
         )
         .await?;
         drop(stream);

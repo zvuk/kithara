@@ -1,7 +1,3 @@
-//! Encryption and decryption utilities for HLS tests
-//!
-//! Provides AES-128 encryption helpers for testing encrypted HLS content.
-
 #[cfg(not(target_arch = "wasm32"))]
 use aes::Aes128;
 #[cfg(not(target_arch = "wasm32"))]

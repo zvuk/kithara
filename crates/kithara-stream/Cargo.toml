@@ -1,6 +1,6 @@
 [package]
 name = "kithara-stream"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -12,14 +12,13 @@ workspace = true
 
 [dependencies]
 bitflags = { workspace = true }
+bon = { workspace = true }
 bytes = { workspace = true }
 delegate = { workspace = true }
-derive_setters = { workspace = true }
 futures = { workspace = true }
 kithara-abr = { workspace = true }
 kithara-events = { workspace = true, features = ["abr", "downloader"] }
 kithara-net = { workspace = true }
-kithara-hang-detector = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-utils = { workspace = true }
@@ -33,15 +32,11 @@ unimock = { workspace = true }
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
-test-utils = []
-disable-hang-detector = [
-    "kithara-hang-detector/disable-hang-detector",
-    "kithara-platform/disable-hang-detector",
-    "kithara-storage/disable-hang-detector",
-]
+probe = []
+mock = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -50,7 +45,7 @@ wasm_safe_thread = { workspace = true }
 
 [dev-dependencies]
 kithara-stream = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 tokio-stream = { workspace = true }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }

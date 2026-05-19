@@ -1,29 +1,3 @@
-//! Regression: the `Registry → Arc<dyn Peer> → PeerHandle` reference
-//! cycle and the tear-down contract that breaks it.
-//!
-//! Background
-//! `HlsPeer` is held by the `Downloader` Registry as `Arc<dyn Peer>`. The
-//! Registry only drops that Arc when `entry.peer_cancel.is_cancelled()`
-//! becomes true. `peer_cancel` is the `PeerHandle`'s inner cancel token,
-//! which fires from `PeerInner::Drop` when the last `PeerHandle` clone is
-//! dropped.
-//!
-//! On activation, `HlsPeer` stores an `Arc<SegmentLoader>` inside its
-//! internal `HlsState`. The `SegmentLoader` + `PlaylistCache` +
-//! `KeyManager` each hold a `PeerHandle` clone.
-//!
-//! Cycle: `Registry → Arc<HlsPeer> → HlsState.loader → PeerHandle →
-//! PeerInner (cancel unfired) → Registry keeps peer`.
-//!
-//! Contract
-//! Breaking the cycle requires *the peer* to release its internal
-//! `PeerHandle` clones when the user-visible source drops. In production
-//! this is done by `HlsSource::Drop` calling `HlsPeer::teardown()`, which
-//! clears the stashed `HlsState`. This test documents the contract by
-//! exercising a mini-peer with an explicit `teardown()` method that
-//! mirrors `HlsPeer::teardown`. Without `teardown`, the Registry leaks
-//! the peer until the `Downloader` itself is dropped.
-
 #![forbid(unsafe_code)]
 
 use std::{
@@ -96,7 +70,7 @@ impl Peer for SelfReferencingPeer {
 async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancellationToken::new();
-    let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
+    let downloader = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();
@@ -136,7 +110,7 @@ async fn registry_releases_peer_when_teardown_clears_self_stored_handle()
 async fn registry_leaks_peer_without_teardown_when_handle_is_self_stored()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let cancel = CancellationToken::new();
-    let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
+    let downloader = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
 
     let peer: Arc<SelfReferencingPeer> = Arc::new(SelfReferencingPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();

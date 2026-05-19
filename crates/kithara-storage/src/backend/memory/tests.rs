@@ -1,9 +1,4 @@
 #![forbid(unsafe_code)]
-#![cfg(test)]
-
-//! Unit tests for the in-memory storage driver. Lives in its own file
-//! per the workspace `lib.rs` / `mod.rs` discipline rule (mod.rs holds
-//! only declarations).
 
 mod kithara {
     pub(crate) use kithara_test_macros::test;
@@ -204,15 +199,17 @@ fn test_write_rejected_after_commit() {
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
-fn test_sparse_write() {
+#[case::sparse(100, b"sparse")]
+#[case::growable_sparse(1000, b"far away")]
+fn test_sparse_write(#[case] offset: u64, #[case] payload: &[u8]) {
     let res = create_resource();
 
-    res.write_at(100, b"sparse").unwrap();
+    res.write_at(offset, payload).unwrap();
 
-    let mut buf = [0u8; 6];
-    let n = res.read_at(100, &mut buf).unwrap();
-    assert_eq!(n, 6);
-    assert_eq!(&buf, b"sparse");
+    let mut buf = vec![0u8; payload.len()];
+    let n = res.read_at(offset, &mut buf).unwrap();
+    assert_eq!(n, payload.len());
+    assert_eq!(&buf[..], payload);
 
     let mut zero_buf = [0xFFu8; 4];
     let n = res.read_at(0, &mut zero_buf).unwrap();
@@ -238,23 +235,6 @@ fn test_growable_write_beyond_initial_capacity() {
     let n = res.read_at(0, &mut buf).unwrap();
     assert_eq!(n, 128);
     assert!(buf.iter().all(|b| *b == 0xAB));
-}
-
-#[kithara::test(timeout(Duration::from_secs(1)))]
-fn test_growable_sparse_write() {
-    let res = create_resource();
-
-    res.write_at(1000, b"far away").unwrap();
-
-    let mut buf = [0u8; 8];
-    let n = res.read_at(1000, &mut buf).unwrap();
-    assert_eq!(n, 8);
-    assert_eq!(&buf, b"far away");
-
-    let mut zero_buf = [0xFFu8; 4];
-    let n = res.read_at(0, &mut zero_buf).unwrap();
-    assert_eq!(n, 4);
-    assert_eq!(&zero_buf, &[0, 0, 0, 0]);
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]

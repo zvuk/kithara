@@ -12,15 +12,20 @@ use crate::config::AppConfig;
 /// (e.g. silvercomet keys, which need no unwrap).
 #[must_use]
 pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
-    match ResourceConfig::new(url) {
-        Ok(mut cfg) => {
-            if !config.key_registry.is_empty() {
-                cfg =
-                    cfg.with_keys(KeyOptions::new().with_key_registry(config.key_registry.clone()));
-            }
-            cfg = cfg
-                .with_downloader(config.downloader.clone())
-                .with_flush_hub(config.flush_hub.clone());
+    match ResourceConfig::for_src(url) {
+        Ok(builder) => {
+            let keys = if config.key_registry.is_empty() {
+                KeyOptions::default()
+            } else {
+                KeyOptions::builder()
+                    .key_registry(config.key_registry.clone())
+                    .build()
+            };
+            let cfg = builder
+                .downloader(config.downloader.clone())
+                .flush_hub(config.flush_hub.clone())
+                .keys(keys)
+                .build();
             TrackSource::Config(Box::new(cfg))
         }
         Err(e) => {

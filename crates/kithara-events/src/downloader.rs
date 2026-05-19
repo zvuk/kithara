@@ -1,28 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Events emitted by the unified downloader layer.
-//!
-//! All facts about HTTP fetches (lifecycle, cancellation, slow-load
-//! signal) live here. Protocol crates (HLS, file) layer their own
-//! semantics on top via their own events; they do NOT publish facts
-//! about byte downloads themselves.
-//!
-//! Attribution to a track/peer is given by the **bus scope** the event
-//! is published on — every peer registers a `scoped()` bus, and a
-//! per-track subscriber sees only its scope's events. There is no
-//! `peer_id`/`track_id` field in event payloads; if you need a
-//! cross-track aggregate, subscribe to the root bus.
-//!
-//! Correlation across one fetch's lifecycle is via [`RequestId`]: the
-//! same id appears in every event for one logical fetch (Enqueued →
-//! Started → `LoadSlow` → Completed/Failed/Cancelled). The id is
-//! allocated by the Downloader when it wraps an incoming `FetchCmd`
-//! into its internal command — protocols do not need to know about
-//! it; subscribers reconstruct the lifecycle by joining on `request_id`.
-//! Subscribers can build their own `request_id → meaning` table by
-//! reading the leading [`DownloaderEvent::RequestEnqueued`], which
-//! carries the URL plus method and priority.
-
 use std::num::NonZeroU64;
 
 use kithara_net::NetError;

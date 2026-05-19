@@ -9,8 +9,6 @@
 
 #![forbid(unsafe_code)]
 
-mod context;
-mod demand;
 pub mod dl;
 mod error;
 mod hooks;
@@ -20,11 +18,9 @@ mod source;
 mod stream;
 mod timeline;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
-pub use context::{NullStreamContext, StreamContext};
-pub use demand::DemandSlot;
 pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};

@@ -4,7 +4,6 @@
 
 <div align="center">
 
-[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
@@ -13,37 +12,40 @@
 
 Workspace application crate (`publish = false`) that wires demo binaries around shared engine/UI crates.
 
-## Binaries
+## Binary
 
-<table>
-<tr><th>Binary</th><th>Purpose</th></tr>
-<tr><td><code>kithara</code></td><td>CLI entrypoint with mode auto-detection (<code>--mode auto|tui|gui</code>)</td></tr>
-<tr><td><code>kithara-tui</code></td><td>Terminal dashboard player (ratatui)</td></tr>
-<tr><td><code>kithara-gui</code></td><td>Desktop GUI player (iced)</td></tr>
-</table>
+Single binary `kithara` with mode auto-detection (`--mode auto|tui|gui`).
 
 ## Run
 
 ```bash
-# Auto mode
-cargo run -p kithara-app --bin kithara -- --mode auto <TRACK_URL_1> <TRACK_URL_2>
+# Auto mode (picks tui or gui based on the terminal)
+cargo run -p kithara-app -- --mode auto <TRACK_URL_1> <TRACK_URL_2>
 
 # Force TUI
-cargo run -p kithara-app --bin kithara-tui -- <TRACK_URL_1> <TRACK_URL_2>
+cargo run -p kithara-app -- --mode tui <TRACK_URL_1> <TRACK_URL_2>
 
 # Force GUI
-cargo run -p kithara-app --bin kithara-gui -- <TRACK_URL_1> <TRACK_URL_2>
+cargo run -p kithara-app -- --mode gui <TRACK_URL_1> <TRACK_URL_2>
 ```
 
 If no tracks are provided, the app loads built-in defaults (one MP3 + one HLS URL).
+
+## Features
+
+- `tui` — terminal dashboard player (ratatui + crossterm).
+- `gui` — desktop GUI player (iced).
+- `lib` — build as a plain library (used by integration tests).
+
+Defaults: `tui` + `gui`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    cli["kithara-app binaries"] --> mode{"mode"}
-    mode -->|tui| tui["kithara-tui"]
-    mode -->|gui| gui["kithara-ui"]
+    cli["kithara binary"] --> mode{"--mode"}
+    mode -->|tui| tui["kithara-app::tui"]
+    mode -->|gui| gui["kithara-app::gui"]
     tui --> core["kithara::PlayerImpl"]
     gui --> core
 ```
@@ -51,5 +53,4 @@ flowchart LR
 ## Integration
 
 - Depends on `kithara` with `file` + `hls` features.
-- Uses `kithara-tui` for terminal rendering/session handling.
-- Uses `kithara-ui` for iced GUI state/view/update loop.
+- TUI and GUI frontends are gated by the `tui` / `gui` Cargo features.

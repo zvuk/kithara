@@ -5,8 +5,8 @@ use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     storage::ResourceExt,
 };
+use kithara_integration_tests::{TestTempDir, temp_dir};
 use kithara_platform::time::Duration;
-use kithara_test_utils::{TestTempDir, temp_dir};
 
 fn asset_store_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetStore {
     AssetStoreBuilder::new()

@@ -1,293 +1,192 @@
-//! Segment size estimation strategies (avoids HEAD requests when possible).
-//!
-//! Tried in order:
-//! 1. `#EXT-X-BYTERANGE` — exact sizes from the media playlist.
-//! 2. Init segment bitrate — `avg_bitrate` from fMP4 `esds` descriptor.
-//! 3. HEAD requests — network fallback.
+use std::sync::Arc;
 
-use kithara_stream::dl::FetchCmd;
-use re_mp4::{Mp4, StsdBoxContent};
+use kithara_stream::dl::{FetchCmd, FetchResponse, PeerHandle};
 use tracing::debug;
-
-const BITS_PER_BYTE: f64 = 8.0;
+use url::Url;
 
 use crate::{
-    loading::SegmentLoader,
     parsing::MediaPlaylist,
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
 };
 
-/// Estimate segment sizes for all variants that don't have a size map yet.
+/// Owns the inputs required to compute [`VariantSizeMap`]s. Pure: the
+/// estimator does not touch [`PlaylistState`]; the caller applies the
+/// returned maps via [`PlaylistState::set_size_map`]. `media_playlists`
+/// is moved in and returned by value alongside the maps so the caller
+/// can keep using it after estimation.
 ///
-/// Tries three strategies in order, per variant:
-/// 1. Byte-range from playlist (`#EXT-X-BYTERANGE`)
-/// 2. Average bitrate from init segment (fMP4 `esds`)
-/// 3. HEAD requests (network fallback)
-pub(crate) async fn estimate_size_maps(
-    peer_handle: &kithara_stream::dl::PeerHandle,
-    playlist_state: &PlaylistState,
-    loader: &SegmentLoader,
-    media_playlists: &[(url::Url, MediaPlaylist)],
-    headers: Option<&kithara_net::Headers>,
-    byte_pool: &kithara_bufpool::BytePool,
-) {
-    let num_variants = playlist_state.num_variants();
-    let mut buf = byte_pool.get();
+/// Two strategies are tried in order, per variant:
+/// 1. Byte-range from the media playlist (`#EXT-X-BYTERANGE`) — offline.
+/// 2. HEAD requests against init/media URLs (network fallback).
+///
+/// The previous "init segment average-bitrate" strategy required the init
+/// segment to already be cached. In the pull-driven architecture init
+/// segments are fetched on demand by
+/// [`HlsVariant::dispatch`](crate::variant::HlsVariant) *after* this
+/// estimator runs, so the bitrate strategy was always a no-op and has
+/// been removed.
+pub(crate) struct SizeEstimator {
+    playlist: Arc<PlaylistState>,
+    headers: Option<kithara_net::Headers>,
+    peer: PeerHandle,
+    media_playlists: Vec<MediaPlaylist>,
+}
 
-    for variant in 0..num_variants {
-        estimate_variant_size_map(
-            peer_handle,
-            playlist_state,
-            loader,
-            media_playlists,
+/// Result of [`SizeEstimator::estimate`]: a `size_maps` vector indexed by
+/// variant (always the same length as `media_playlists`) and the
+/// originally-moved `media_playlists` returned by value. Variants that
+/// already had a size map or that failed both estimation strategies land
+/// as [`VariantSizeMap::is_empty`] entries; the caller skips those when
+/// folding maps back into [`PlaylistState`].
+pub(crate) struct Estimation {
+    pub(crate) media_playlists: Vec<MediaPlaylist>,
+    pub(crate) size_maps: Vec<VariantSizeMap>,
+}
+
+impl SizeEstimator {
+    pub(crate) fn new(
+        peer: PeerHandle,
+        playlist: Arc<PlaylistState>,
+        media_playlists: Vec<MediaPlaylist>,
+        headers: Option<kithara_net::Headers>,
+    ) -> Self {
+        Self {
+            playlist,
             headers,
-            variant,
-            &mut buf,
-        )
-        .await;
-    }
-}
-
-/// Fill the size map for a single variant using the first strategy that
-/// produces a result: byte-range, init bitrate, or HEAD requests.
-async fn estimate_variant_size_map(
-    peer_handle: &kithara_stream::dl::PeerHandle,
-    playlist_state: &PlaylistState,
-    loader: &SegmentLoader,
-    media_playlists: &[(url::Url, MediaPlaylist)],
-    headers: Option<&kithara_net::Headers>,
-    variant: usize,
-    buf: &mut Vec<u8>,
-) {
-    if playlist_state.has_size_map(variant) {
-        return;
+            peer,
+            media_playlists,
+        }
     }
 
-    let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
-    if num_segments == 0 {
-        return;
+    fn content_length(resp: &FetchResponse) -> u64 {
+        resp.headers
+            .get("content-length")
+            .or_else(|| resp.headers.get("Content-Length"))
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0)
     }
 
-    if let Some((source, size_map)) =
-        run_offline_strategies(loader, media_playlists, variant, num_segments, buf)
-    {
-        debug!(variant, "size_map: from {source}");
-        playlist_state.set_size_map(variant, size_map);
-        return;
+    /// Estimate every variant. The returned `size_maps` is indexed by
+    /// variant: failed/skipped entries are [`VariantSizeMap::default`].
+    pub(crate) async fn estimate(self) -> Estimation {
+        let mut size_maps = Vec::with_capacity(self.playlist.num_variants());
+        for variant in 0..self.playlist.num_variants() {
+            size_maps.push(self.estimate_variant(variant).await);
+        }
+        Estimation {
+            size_maps,
+            media_playlists: self.media_playlists,
+        }
     }
 
-    if let Some(size_map) =
-        try_head_requests(peer_handle, playlist_state, variant, num_segments, headers).await
-    {
-        debug!(variant, "size_map: from HEAD requests");
-        playlist_state.set_size_map(variant, size_map);
-    }
-}
-
-/// Try non-network strategies in priority order. Returns
-/// `(source_name, size_map)` on the first hit.
-fn run_offline_strategies(
-    loader: &SegmentLoader,
-    media_playlists: &[(url::Url, MediaPlaylist)],
-    variant: usize,
-    num_segments: usize,
-    buf: &mut Vec<u8>,
-) -> Option<(&'static str, VariantSizeMap)> {
-    if let Some(size_map) = try_byte_range(media_playlists, variant, num_segments) {
-        return Some(("EXT-X-BYTERANGE", size_map));
-    }
-    if let Some(size_map) = try_init_bitrate(loader, media_playlists, variant, num_segments, buf) {
-        return Some(("init segment avg_bitrate", size_map));
-    }
-    None
-}
-
-/// Strategy 1: exact sizes from `#EXT-X-BYTERANGE`.
-fn try_byte_range(
-    media_playlists: &[(url::Url, MediaPlaylist)],
-    variant: usize,
-    num_segments: usize,
-) -> Option<VariantSizeMap> {
-    let (_, playlist) = media_playlists.get(variant)?;
-
-    let all_have_range = playlist
-        .segments
-        .iter()
-        .take(num_segments)
-        .all(|s| s.byte_range_len.is_some());
-
-    if !all_have_range {
-        return None;
-    }
-
-    let init_size = playlist.init_segment.as_ref().map_or(0, |_init| 0);
-
-    let mut offsets = Vec::with_capacity(num_segments);
-    let mut segment_sizes = Vec::with_capacity(num_segments);
-    let mut cumulative = 0u64;
-
-    for (i, seg) in playlist.segments.iter().take(num_segments).enumerate() {
-        let media_len = seg.byte_range_len.unwrap_or(0);
-        let total_seg = if i == 0 {
-            init_size + media_len
-        } else {
-            media_len
+    async fn estimate_variant(&self, variant: usize) -> VariantSizeMap {
+        if self.playlist.has_size_map(variant) {
+            return VariantSizeMap::default();
+        }
+        let Some(num_segments) = self.playlist.num_segments(variant) else {
+            return VariantSizeMap::default();
         };
-        offsets.push(cumulative);
-        segment_sizes.push(total_seg);
-        cumulative += total_seg;
+        if num_segments == 0 {
+            return VariantSizeMap::default();
+        }
+        if let Some(map) = self.try_byte_range(variant, num_segments) {
+            debug!(variant, "size_map: from EXT-X-BYTERANGE");
+            return map;
+        }
+        if let Some(map) = self.try_head_requests(variant, num_segments).await {
+            debug!(variant, "size_map: from HEAD requests");
+            return map;
+        }
+        VariantSizeMap::default()
     }
 
-    Some(VariantSizeMap {
-        segment_sizes,
-        offsets,
-        total: cumulative,
-    })
-}
-
-/// Strategy 2: estimate from init segment's average bitrate.
-fn try_init_bitrate(
-    loader: &SegmentLoader,
-    media_playlists: &[(url::Url, MediaPlaylist)],
-    variant: usize,
-    num_segments: usize,
-    buf: &mut Vec<u8>,
-) -> Option<VariantSizeMap> {
-    let init_meta = loader.get_init_segment_cached(variant)?;
-    let init_len = init_meta.len;
-
-    loader.read_init_bytes(variant, buf)?;
-    let avg_bitrate = extract_avg_bitrate(buf)?;
-
-    let (_, playlist) = media_playlists.get(variant)?;
-
-    let mut offsets = Vec::with_capacity(num_segments);
-    let mut segment_sizes = Vec::with_capacity(num_segments);
-    let mut cumulative = 0u64;
-
-    for (i, seg) in playlist.segments.iter().take(num_segments).enumerate() {
-        let duration_secs = seg.duration.as_secs_f64();
-        let media_len = num_traits::cast::ToPrimitive::to_u64(
-            &(f64::from(avg_bitrate) / BITS_PER_BYTE * duration_secs),
-        )
-        .unwrap_or(u64::MAX);
-        let total_seg = if i == 0 {
-            init_len + media_len
-        } else {
-            media_len
-        };
-        offsets.push(cumulative);
-        segment_sizes.push(total_seg);
-        cumulative += total_seg;
+    fn head_cmd(&self, url: Url) -> FetchCmd {
+        FetchCmd::head(url)
+            .maybe_headers(self.headers.clone())
+            .build()
     }
 
-    debug!(
-        variant,
-        avg_bitrate,
-        init_len,
-        num_segments,
-        estimated_total = cumulative,
-        "init bitrate estimation"
-    );
+    /// Strategy 1: exact sizes from `#EXT-X-BYTERANGE` on every segment.
+    fn try_byte_range(&self, variant: usize, num_segments: usize) -> Option<VariantSizeMap> {
+        let playlist = self.media_playlists.get(variant)?;
+        let all_have_range = playlist
+            .segments
+            .iter()
+            .take(num_segments)
+            .all(|s| s.byte_range_len.is_some());
+        if !all_have_range {
+            return None;
+        }
+        let mut offsets = Vec::with_capacity(num_segments);
+        let mut segment_sizes = Vec::with_capacity(num_segments);
+        let mut cumulative = 0u64;
+        for seg in playlist.segments.iter().take(num_segments) {
+            let media_len = seg.byte_range_len.unwrap_or(0);
+            offsets.push(cumulative);
+            segment_sizes.push(media_len);
+            cumulative += media_len;
+        }
+        Some(VariantSizeMap {
+            segment_sizes,
+            offsets,
+            total: cumulative,
+            init_size: 0,
+        })
+    }
 
-    Some(VariantSizeMap {
-        segment_sizes,
-        offsets,
-        total: cumulative,
-    })
-}
-
-/// Extract average bitrate (bits/sec) from fMP4 init segment.
-///
-/// Walks `moov/trak/mdia/minf/stbl/stsd` → `Mp4a` → `esds` →
-/// `DecoderConfigDescriptor.avg_bitrate`.
-fn extract_avg_bitrate(data: &[u8]) -> Option<u32> {
-    let mp4 = Mp4::read_bytes(data).ok()?;
-    for track in mp4.tracks().values() {
-        let trak = track.trak(&mp4);
-        let stsd = &trak.mdia.minf.stbl.stsd;
-        if let StsdBoxContent::Mp4a(ref mp4a) = stsd.contents
-            && let Some(ref esds) = mp4a.esds
-        {
-            let avg = esds.es_desc.dec_config.avg_bitrate;
-            if avg > 0 {
-                return Some(avg);
+    /// Strategy 2: HEAD requests for `Content-Length` on init + every
+    /// media segment URL. Folds `init_size` into `segment_sizes[0]` so
+    /// the reader's variant-byte space starts at offset 0 with the init
+    /// prefix already absorbed.
+    async fn try_head_requests(
+        &self,
+        variant: usize,
+        num_segments: usize,
+    ) -> Option<VariantSizeMap> {
+        let init_url = self.playlist.init_url(variant);
+        let mut cmds: Vec<FetchCmd> = Vec::new();
+        if let Some(ref url) = init_url {
+            cmds.push(self.head_cmd(url.clone()));
+        }
+        for i in 0..num_segments {
+            if let Some(url) = self.playlist.segment_url(variant, i) {
+                cmds.push(self.head_cmd(url));
             }
         }
-    }
-    None
-}
-
-fn parse_content_length(resp: &kithara_stream::dl::FetchResponse) -> u64 {
-    resp.headers
-        .get("content-length")
-        .or_else(|| resp.headers.get("Content-Length"))
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(0)
-}
-
-/// Strategy 3: HEAD requests for Content-Length (network fallback).
-async fn try_head_requests(
-    peer_handle: &kithara_stream::dl::PeerHandle,
-    playlist_state: &PlaylistState,
-    variant: usize,
-    num_segments: usize,
-    headers: Option<&kithara_net::Headers>,
-) -> Option<VariantSizeMap> {
-    let init_url = playlist_state.init_url(variant);
-    let mut cmds: Vec<FetchCmd> = Vec::new();
-    let has_init = init_url.is_some();
-
-    if let Some(ref url) = init_url {
-        cmds.push(FetchCmd::head(url.clone()).headers(headers.cloned()));
-    }
-    for i in 0..num_segments {
-        if let Some(url) = playlist_state.segment_url(variant, i) {
-            cmds.push(FetchCmd::head(url).headers(headers.cloned()));
+        if cmds.is_empty() {
+            return None;
         }
-    }
 
-    if cmds.is_empty() {
-        return None;
-    }
-
-    let results = peer_handle.batch(cmds).await;
-
-    let mut idx = 0;
-    let init_size = if has_init {
-        let s = results
-            .get(idx)
+        let results = self.peer.batch(cmds).await;
+        let mut iter = results.iter();
+        let init_size = init_url
+            .as_ref()
+            .and_then(|_| iter.next())
             .and_then(|r| r.as_ref().ok())
-            .map_or(0, parse_content_length);
-        idx += 1;
-        s
-    } else {
-        0
-    };
+            .map_or(0, Self::content_length);
 
-    let mut offsets = Vec::with_capacity(num_segments);
-    let mut segment_sizes = Vec::with_capacity(num_segments);
-    let mut cumulative = 0u64;
-
-    for i in 0..num_segments {
-        let media_len = results
-            .get(idx)
-            .and_then(|r| r.as_ref().ok())
-            .map_or(0, parse_content_length);
-        idx += 1;
-        let total_seg = if i == 0 {
-            init_size + media_len
-        } else {
-            media_len
-        };
-        offsets.push(cumulative);
-        segment_sizes.push(total_seg);
-        cumulative += total_seg;
+        let mut offsets = Vec::with_capacity(num_segments);
+        let mut segment_sizes = Vec::with_capacity(num_segments);
+        let mut cumulative = 0u64;
+        for i in 0..num_segments {
+            let media_len = iter
+                .next()
+                .and_then(|r| r.as_ref().ok())
+                .map_or(0, Self::content_length);
+            let total_seg = if i == 0 {
+                init_size + media_len
+            } else {
+                media_len
+            };
+            offsets.push(cumulative);
+            segment_sizes.push(total_seg);
+            cumulative += total_seg;
+        }
+        Some(VariantSizeMap {
+            segment_sizes,
+            offsets,
+            init_size,
+            total: cumulative,
+        })
     }
-
-    Some(VariantSizeMap {
-        segment_sizes,
-        offsets,
-        total: cumulative,
-    })
 }

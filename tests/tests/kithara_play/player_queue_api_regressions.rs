@@ -3,11 +3,11 @@
 use std::{path::Path, sync::Arc};
 
 use kithara_assets::StoreOptions;
-use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_play::{PlayerConfig, PlayerEvent, PlayerImpl, Resource, ResourceConfig};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara, temp_dir,
 };
+use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_play::{PlayerConfig, PlayerEvent, PlayerImpl, Resource, ResourceConfig};
 
 use super::offline_player_harness::OfflinePlayerHarness;
 
@@ -24,7 +24,7 @@ const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_crossfade_duration(0.0),
+        PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
     let first_id = Arc::<str>::from("item-1");
@@ -126,10 +126,11 @@ async fn make_signal_resource(
         format: SignalFormat::Wav,
     };
     let url = server.sine(&spec, freq_hz).await;
-    let mut config = ResourceConfig::new(url.as_str())
+    let mut config = ResourceConfig::for_src(url.as_str())
         .expect("valid signal fixture URL")
-        .with_store(StoreOptions::new(cache_dir));
-    player.prepare_config(&mut config);
+        .store(StoreOptions::new(cache_dir))
+        .build();
+    config = player.prepare_config(config);
 
     Resource::new(config)
         .await

@@ -1,4 +1,3 @@
-use derivative::Derivative;
 pub use kithara_events::BpmInfo;
 use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 
@@ -8,15 +7,22 @@ mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
 
-#[derive(Clone, Debug, Derivative, PartialEq)]
-#[derivative(Default)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct BeatGrid {
     pub offset: Duration,
-    #[derivative(Default(value = "120.0"))]
     pub bpm: f64,
-    #[derivative(Default(value = "4"))]
     pub beats_per_bar: u8,
+}
+
+impl Default for BeatGrid {
+    fn default() -> Self {
+        Self {
+            offset: Duration::ZERO,
+            bpm: 120.0,
+            beats_per_bar: 4,
+        }
+    }
 }
 
 #[kithara::mock(api = BpmAnalyzerMock)]

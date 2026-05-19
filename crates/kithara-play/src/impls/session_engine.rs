@@ -25,6 +25,7 @@ use kithara_platform::{
     sync::mpsc,
     thread::{sleep as thread_sleep, spawn_named},
 };
+use kithara_test_utils::kithara;
 #[cfg(not(target_arch = "wasm32"))]
 use ringbuf::{
     HeapCons,
@@ -428,9 +429,11 @@ impl SessionClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::hang_watchdog]
     fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
         let mut pending = msg;
         loop {
+            hang_tick!();
             match self.cmd_tx.lock_sync().try_push(pending) {
                 Ok(()) => {
                     self.engine_thread.unpark();

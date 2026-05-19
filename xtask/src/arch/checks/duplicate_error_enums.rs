@@ -1,8 +1,3 @@
-//! No crate defines `pub enum Error` more than once.
-//!
-//! Severity is `warn` to match legacy behavior; PR 3 promotes it to `deny`
-//! once the ratchet baseline lands.
-
 use std::{collections::HashMap, fs};
 
 use anyhow::Result;

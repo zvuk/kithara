@@ -1,6 +1,3 @@
-//! `delegate!`-forwarded `PlayerImpl` controls (play/pause/volume/EQ/...).
-//! Pure delegation; no queue-level logic.
-
 use delegate::delegate;
 use kithara_events::EventBus;
 use kithara_play::{PlayError, PlayerStatus};

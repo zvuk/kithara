@@ -4,9 +4,6 @@
 
 <div align="center">
 
-[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/kithara-bufpool.svg)](https://crates.io/crates/kithara-bufpool)
-[![docs.rs](https://docs.rs/kithara-bufpool/badge.svg)](https://docs.rs/kithara-bufpool)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
@@ -18,40 +15,39 @@ Generic sharded buffer pool for zero-allocation hot paths. Provides thread-safe,
 ## Usage
 
 ```rust
-use kithara_bufpool::{SharedPool, BytePool, PcmPool, byte_pool, pcm_pool};
+use kithara_bufpool::{BytePool, PcmPool};
 
-// Shared pool (Arc-wrapped, sharded by thread)
-let pool = SharedPool::<32, Vec<u8>>::new(1024, 128 * 1024);
-let mut buf = pool.get_with(|b| b.resize(4096, 0));
-buf[0] = 42;
-// buf returns to pool on drop
+// Use the default singleton — typically constructed once at the top of the
+// app and injected through your config structs. Library code should read
+// the pool from injected config rather than calling `default()` itself.
+let pool = PcmPool::default();
+let mut buf = pool.get();
+buf.resize(1024, 0.0);
+// `buf` returns to the pool on drop.
 
-// Global singletons
-let bytes = byte_pool().get_with(|b| b.resize(1024, 0));
-let pcm = pcm_pool().get_with(|b| b.clear());
+let bytes = BytePool::default();
+let mut chunk = bytes.get();
+chunk.resize(4096, 0);
 ```
 
-## Type aliases
+## Public Types
 
 <table>
-<tr><th>Alias</th><th>Definition</th><th>Global accessor</th></tr>
-<tr><td><code>BytePool</code></td><td><code>SharedPool&lt;32, Vec&lt;u8&gt;&gt;</code></td><td><code>byte_pool()</code></td></tr>
-<tr><td><code>PcmPool</code></td><td><code>SharedPool&lt;32, Vec&lt;f32&gt;&gt;</code></td><td><code>pcm_pool()</code></td></tr>
+<tr><th>Type</th><th>Role</th></tr>
+<tr><td><code>BytePool</code></td><td>Sharded pool of <code>Vec&lt;u8&gt;</code> for I/O and segment buffers</td></tr>
+<tr><td><code>PcmPool</code></td><td>Sharded pool of <code>Vec&lt;f32&gt;</code> for decoded PCM frames</td></tr>
+<tr><td><code>PcmBuf</code></td><td>RAII handle for a pooled PCM buffer</td></tr>
+<tr><td><code>ByteBudget</code></td><td>Soft cap on outstanding bytes; returns <code>BudgetExhausted</code> when exceeded</td></tr>
+<tr><td><code>BudgetExhausted</code></td><td>Error returned when a budgeted allocation would breach <code>ByteBudget</code></td></tr>
 </table>
+
+The lower-level `SharedPool`, `Pool`, `Pooled`, `PooledOwned`, `Reuse`, and `PoolStats` items are re-exported as `#[doc(hidden)]` for internal use by other workspace crates.
 
 ## Allocation Flow
 
-1. **Get:** Lock home shard (determined by thread ID hash) and pop a buffer. If empty, try other shards (work-stealing). If all empty, allocate a new buffer via `T::default()`. Apply the initialization closure.
-2. **Return (drop):** Call `value.reuse(trim_capacity)` to clear and optionally shrink. If the shard is not full and reuse returns `true`, push back. Otherwise, drop silently.
-
-## Global Pools
-
-<table>
-<tr><th>Pool</th><th>Type</th><th>Max Buffers</th><th>Trim Capacity</th></tr>
-<tr><td><code>byte_pool()</code></td><td><code>SharedPool&lt;32, Vec&lt;u8&gt;&gt;</code></td><td>1024</td><td>64 KB</td></tr>
-<tr><td><code>pcm_pool()</code></td><td><code>SharedPool&lt;32, Vec&lt;f32&gt;&gt;</code></td><td>64</td><td>200,000 samples</td></tr>
-</table>
+1. **Get:** lock the home shard (determined by thread ID hash) and pop a buffer. If empty, try other shards (work-stealing). If all empty, allocate a new buffer via `T::default()`.
+2. **Return (drop):** call `value.reuse(trim_capacity)` to clear and optionally shrink. If the shard is not full and `reuse()` returns `true`, push back; otherwise drop silently.
 
 ## Integration
 
-Used across the entire kithara workspace to eliminate allocations on hot paths (segment reads, PCM decode/resample, network I/O). Global pools are lazy-initialized via `OnceLock`.
+Used across the workspace to eliminate allocations on hot paths (segment reads, PCM decode and resample, network I/O). Pools are wired through `Config` structs (`AudioConfig::byte_pool` / `pcm_pool`, `FileConfig` / `HlsConfig`, `ResamplerParams::pool`) so each surface is responsible for choosing its own pool sizing.

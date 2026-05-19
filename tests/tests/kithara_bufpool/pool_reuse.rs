@@ -96,31 +96,23 @@ fn test_pcm_pool_no_cross_shard_needed_typical() {
 }
 
 #[kithara::test]
-fn test_cross_shard_probe_finds_nearby() {
+#[case::nearby_probe_finds_buf(2, true)]
+#[case::out_of_range_fresh_alloc(7, false)]
+fn test_cross_shard_probe(#[case] offset: usize, #[case] expect_reuse: bool) {
     let pool = Pool::<8, Vec<u8>>::new(128, 1024);
     let home = pool.shard_index_of();
-    let target = (home + 2) % 8;
+    let target = (home + offset) % 8;
 
     let mut buf = Vec::with_capacity(512);
     buf.push(0);
     pool.put(buf, target);
 
     let retrieved = pool.get();
-    assert!(retrieved.capacity() > 0);
-}
-
-#[kithara::test]
-fn test_cross_shard_fresh_alloc_when_out_of_range() {
-    let pool = Pool::<8, Vec<u8>>::new(128, 1024);
-    let home = pool.shard_index_of();
-    let far = (home + 7) % 8;
-
-    let mut buf = Vec::with_capacity(512);
-    buf.push(0);
-    pool.put(buf, far);
-
-    let retrieved = pool.get();
-    assert_eq!(retrieved.capacity(), 0);
+    if expect_reuse {
+        assert!(retrieved.capacity() > 0);
+    } else {
+        assert_eq!(retrieved.capacity(), 0);
+    }
 }
 
 #[kithara::test]

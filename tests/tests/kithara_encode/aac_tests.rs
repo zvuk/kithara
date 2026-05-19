@@ -1,8 +1,8 @@
 use kithara_encode::{
     EncoderFactory, PackagedEncodeRequest,
     codec::{AudioCodec, ContainerFormat, MediaInfo},
-    test_pcm::SawtoothPcmFixture,
 };
+use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
 use kithara_test_utils::kithara;
 
 #[kithara::test]
@@ -14,9 +14,10 @@ fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
         .expect("BUG: AacLc must be supported by the packaged encoder");
     let total_frames = 4 * frame_samples;
     let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);
-    let media_info = MediaInfo::default()
-        .with_codec(AudioCodec::AacLc)
-        .with_container(ContainerFormat::Fmp4);
+    let media_info = MediaInfo::builder()
+        .codec(AudioCodec::AacLc)
+        .container(ContainerFormat::Fmp4)
+        .build();
 
     let encoded = EncoderFactory::encode_packaged(PackagedEncodeRequest {
         media_info,

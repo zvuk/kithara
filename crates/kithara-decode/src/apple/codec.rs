@@ -1,15 +1,3 @@
-//! `AppleCodec` — Apple `AudioToolbox` `AudioConverter` as a [`FrameCodec`].
-//!
-//! Container parsing happens upstream in a [`crate::Demuxer`]; this codec
-//! consumes already-demuxed frame bytes and produces interleaved f32 PCM.
-//! Magic cookie and ASBD are derived from [`TrackInfo`] alone — no
-//! `AudioFile`, no fragmented-mp4 reader, no per-codec container glue.
-//!
-//! Initial scope: AAC-LC and FLAC, the two codecs that flow through
-//! [`crate::fmp4::Fmp4SegmentDemuxer`] today. ALAC / MP3 require codec-specific
-//! ASBD + magic-cookie parameters that aren't carried by `TrackInfo` yet
-//! and will land alongside the file-Symphonia migration.
-
 #![allow(unsafe_code)]
 
 use std::{ffi::c_void, ptr, time::Duration};
@@ -62,6 +50,12 @@ pub(crate) struct AppleCodec {
     /// converter writes directly into pool memory — no internal scratch
     /// buffer needed.
     frames_per_packet: u32,
+    /// Input ASBD `mBytesPerPacket` snapshot, copied at open. Non-zero
+    /// for CBR codecs (`LinearPCM`); zero for VBR (AAC/MP3/ALAC/FLAC).
+    /// `decode_frame` uses this to size the `AudioConverter` output to
+    /// match the actual input packet count when the demuxer batched
+    /// multiple packets into one `Frame`.
+    input_bytes_per_packet: u32,
 }
 
 // SAFETY: `AudioConverterRef` is an opaque CoreAudio handle. Apple's
@@ -84,6 +78,7 @@ impl AppleCodec {
             frames_per_packet,
             cookie,
         } = build_input_format(track)?;
+        let input_bytes_per_packet = input_format.mBytesPerPacket;
         let output_format = build_pcm_output_format(track.sample_rate, track.channels);
 
         let mut converter: AudioConverterRef = ptr::null_mut();
@@ -128,6 +123,7 @@ impl AppleCodec {
             converter,
             spec,
             frames_per_packet,
+            input_bytes_per_packet,
             input_state: Box::new(ConverterInputState::new()),
             track_info: DecoderTrackInfo::default(),
             last_prime_info: None,
@@ -186,11 +182,22 @@ impl AppleCodec {
 
     /// Whether the Apple `AudioConverter` accepts this codec at the
     /// codec layer alone (i.e. without an external container parser).
-    /// Initial scope: AAC family + FLAC. ALAC / MP3 land in a follow-up
-    /// when `TrackInfo` carries a codec-specific extra-data shape.
+    ///
+    /// Scope: AAC-LC and FLAC over fMP4 (HLS), plus standalone WAV/PCM,
+    /// MP3, and ALAC paired with [`super::AppleAudioFileDemuxer`]. PCM
+    /// requires the demuxer to stash the source ASBD as a serialized
+    /// 40-byte blob in `TrackInfo.extra_data`; ALAC requires the magic
+    /// cookie in the same field.
     #[must_use]
     pub(crate) fn supports(codec: AudioCodec) -> bool {
-        matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
+        matches!(
+            codec,
+            AudioCodec::AacLc
+                | AudioCodec::Flac
+                | AudioCodec::Pcm
+                | AudioCodec::Mp3
+                | AudioCodec::Alac
+        )
     }
 }
 
@@ -208,6 +215,7 @@ impl FrameCodec for AppleCodec {
         &mut self,
         frame_data: &[u8],
         _pts: Duration,
+        packet_desc: &[u8],
         out: &mut PcmBuf,
     ) -> DecodeResult<u32> {
         if frame_data.is_empty() {
@@ -215,19 +223,44 @@ impl FrameCodec for AppleCodec {
             return Ok(0);
         }
 
-        let desc = AudioStreamPacketDescription {
-            mStartOffset: 0,
-            mVariableFramesInPacket: 0,
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "frame size fits in u32 for any realistic codec packet"
-            )]
-            mDataByteSize: frame_data.len() as UInt32,
+        let desc = if packet_desc.len() == size_of::<AudioStreamPacketDescription>() {
+            let mut d = AudioStreamPacketDescription::default();
+            // SAFETY: `AudioStreamPacketDescription` is `#[repr(C)]` POD;
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    packet_desc.as_ptr(),
+                    &mut d as *mut _ as *mut u8,
+                    size_of::<AudioStreamPacketDescription>(),
+                );
+            }
+            d
+        } else {
+            AudioStreamPacketDescription {
+                mStartOffset: 0,
+                mVariableFramesInPacket: 0,
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "frame size fits in u32 for any realistic codec packet"
+                )]
+                mDataByteSize: frame_data.len() as UInt32,
+            }
         };
         self.input_state.set(frame_data, desc);
 
         let channels = self.spec.channels as usize;
-        let target_frames = self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "frame_data length divided by mBytesPerPacket is bounded by packet count"
+        )]
+        let target_frames = if self.input_bytes_per_packet > 0 {
+            (frame_data.len() / self.input_bytes_per_packet as usize) as u32
+        } else {
+            self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
+        };
+        if target_frames == 0 {
+            out.clear();
+            return Ok(0);
+        }
         let needed_samples = target_frames as usize * channels;
         out.ensure_len(needed_samples)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
@@ -369,8 +402,69 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
                 cookie: Some(cookie),
             })
         }
+        AudioCodec::Pcm => {
+            let asbd = parse_pcm_extra_data(&track.extra_data)?;
+            Ok(AppleInputFormat {
+                asbd,
+                cookie: None,
+                frames_per_packet: 1,
+            })
+        }
+        AudioCodec::Mp3 => {
+            let asbd = AudioStreamBasicDescription {
+                mSampleRate: f64::from(track.sample_rate),
+                mFormatID: Consts::kAudioFormatMPEGLayer3,
+                mFramesPerPacket: 0,
+                mChannelsPerFrame: u32::from(track.channels),
+                ..Default::default()
+            };
+            Ok(AppleInputFormat {
+                asbd,
+                cookie: None,
+                frames_per_packet: 1152,
+            })
+        }
+        AudioCodec::Alac => {
+            if track.extra_data.is_empty() {
+                return Err(DecodeError::InvalidData(
+                    "alac: missing magic cookie (kAudioFilePropertyMagicCookieData)".to_string(),
+                ));
+            }
+            let asbd = AudioStreamBasicDescription {
+                mSampleRate: f64::from(track.sample_rate),
+                mFormatID: Consts::kAudioFormatAppleLossless,
+                mFramesPerPacket: 0,
+                mChannelsPerFrame: u32::from(track.channels),
+                ..Default::default()
+            };
+            Ok(AppleInputFormat {
+                asbd,
+                cookie: Some(track.extra_data.clone()),
+                frames_per_packet: 4096,
+            })
+        }
         other => Err(DecodeError::UnsupportedCodec(other)),
     }
+}
+
+fn parse_pcm_extra_data(extra: &[u8]) -> DecodeResult<AudioStreamBasicDescription> {
+    if extra.len() < size_of::<AudioStreamBasicDescription>() {
+        return Err(DecodeError::InvalidData(format!(
+            "pcm: extra_data too short ({} bytes, need {})",
+            extra.len(),
+            size_of::<AudioStreamBasicDescription>()
+        )));
+    }
+    let mut asbd = AudioStreamBasicDescription::default();
+    // SAFETY: `AudioStreamBasicDescription` is `#[repr(C)]` POD; length
+    unsafe {
+        ptr::copy_nonoverlapping(
+            extra.as_ptr(),
+            &mut asbd as *mut _ as *mut u8,
+            size_of::<AudioStreamBasicDescription>(),
+        );
+    }
+    Ok(asbd)
 }
 
 fn build_pcm_output_format(sample_rate: u32, channels: u16) -> AudioStreamBasicDescription {

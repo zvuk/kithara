@@ -1,17 +1,6 @@
-//! Pure decision logic for ABR variant switching.
-//!
-//! [`evaluate`] is the entry point — it gathers inputs in parallel, then
-//! dispatches via a single tuple match. Heterogeneous-cascade `if`s with
-//! distinct early-return reasons are an anti-pattern (CPU branch
-//! predictor cannot fold them into a jump table). The match collapses
-//! the dispatch into one site that the compiler can lay out as branchless
-//! / jump-table code while preserving per-gate `AbrReason` attribution
-//! for telemetry. See `xtask/src/idioms/checks/guard_cascade.rs` module
-//! docs for the rationale.
-
-use kithara_events::{AbrMode, AbrReason, AbrVariant};
+use kithara_events::{AbrMode, AbrReason, VariantInfo};
 use kithara_platform::time::Instant;
-use kithara_test_utils::probes::IntoProbeArg;
+use kithara_test_utils::probe::IntoProbeArg;
 use num_traits::ToPrimitive;
 
 use super::{core::AbrState, view::AbrView};
@@ -52,16 +41,14 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
         AbrMode::Auto(_) => None,
     };
     let cant_switch = !state.can_switch_now(now, view.settings.min_switch_interval);
-    let warming = view.bytes_downloaded < view.settings.warmup_min_bytes;
     let estimate_bps = view.estimate_bps;
 
-    let estimate_bps: u64 = match (locked, manual_target, cant_switch, warming, estimate_bps) {
-        (true, _, _, _, _) => return decision(current, current, AbrReason::Locked),
-        (_, Some(idx), _, _, _) => return decision(current, idx, AbrReason::ManualOverride),
-        (_, _, true, _, _) => return decision(current, current, AbrReason::MinInterval),
-        (_, _, _, true, _) => return decision(current, current, AbrReason::Warmup),
-        (_, _, _, _, None) => return decision(current, current, AbrReason::NoEstimate),
-        (false, None, false, false, Some(bps)) => bps,
+    let estimate_bps: u64 = match (locked, manual_target, cant_switch, estimate_bps) {
+        (true, _, _, _) => return decision(current, current, AbrReason::Locked),
+        (_, Some(idx), _, _) => return decision(current, idx, AbrReason::ManualOverride),
+        (_, _, true, _) => return decision(current, current, AbrReason::MinInterval),
+        (_, _, _, None) => return decision(current, current, AbrReason::NoEstimate),
+        (false, None, false, Some(bps)) => bps,
     };
 
     let max_bw = state.max_bandwidth_bps();
@@ -114,11 +101,11 @@ pub(super) fn decision(current: usize, target: usize, reason: AbrReason) -> AbrD
     }
 }
 
-fn sorted_candidates(variants: &[AbrVariant], max_bw: Option<u64>) -> Vec<(usize, u64)> {
+fn sorted_candidates(variants: &[VariantInfo], max_bw: Option<u64>) -> Vec<(usize, u64)> {
     let mut out: Vec<(usize, u64)> = variants
         .iter()
-        .filter(|v| max_bw.is_none_or(|cap| v.bandwidth_bps <= cap))
-        .map(|v| (v.variant_index, v.bandwidth_bps))
+        .map(|v| (v.variant_index, v.bandwidth_bps.unwrap_or(0)))
+        .filter(|(_, bw)| max_bw.is_none_or(|cap| *bw <= cap))
         .collect();
     out.sort_by_key(|(_, bw)| *bw);
     out

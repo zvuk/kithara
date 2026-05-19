@@ -74,8 +74,7 @@ to prevent.
 
 ## Escape hatches (skip without writing)
 
-A check's `fix()` should refuse to touch a scope (returning
-`FixOutcome::Skipped { reasons }`) when:
+A check's `fix()` should refuse to touch a scope (recording the reasons into `FixOutcome::skipped` instead of patching) when:
 
 - An item is inside a `macro_rules!` body or a macro invocation —
   spans there are unreliable.
@@ -136,20 +135,21 @@ impl<'src> SourceRewriter<'src> {
 }
 
 // mod.rs
-pub(crate) enum FixOutcome {
-    NoOp,
-    Patched { writes: usize },
-    Skipped { reasons: Vec<String> },
+#[derive(Debug, Default)]
+pub(crate) struct FixOutcome {
+    pub(crate) writes: usize,
+    pub(crate) skipped: Vec<String>,
 }
 ```
 
-## Why `#![allow(dead_code)]` on the engine modules?
+## Consumers
 
-This engine landed ahead of its first consumer (the Phase 2 style
-fixes — `struct_init_order`, `struct_field_order`, `trait_item_order`).
-Once that PR lands, the `dead_code` suppression will be removed.
+The Phase 2 style autofixes that originally drove this engine are now in `xtask/src/style/checks/`:
 
-The `Cargo.toml` workspace lints policy normally rejects this kind of
-suppression (see `feedback_no_lint_suppression.md`). The exception is
-recorded here per the policy ("if you must suppress, document why in
-the owning crate `README.md` or in a short comment on the same item").
+- `struct_init_order` — reorder struct-init field expressions to match the type definition
+- `struct_field_order` — reorder fields in a struct definition
+- `trait_item_order` — reorder items within a trait or impl block
+- `comment_hygiene` — strip non-conforming inline comments
+- `const_locality` — move `const` declarations closer to their first use
+
+All of them go through the engine described above, so the four invariants (I1–I4) apply uniformly.

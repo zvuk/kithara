@@ -1,7 +1,6 @@
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf};
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_assets::StoreOptions;
 use kithara_events::EventBus;
 use kithara_net::Headers;
@@ -33,70 +32,65 @@ impl From<PathBuf> for FileSrc {
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File>::new(config)`.
-#[derive(Clone, Debug, Derivative, Setters)]
-#[derivative(Default)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct FileConfig {
     /// File source (remote URL or local path).
-    #[derivative(Default(
-        value = "FileSrc::Remote(Url::parse(\"http://localhost/audio.mp3\").expect(\"valid default URL\"))"
-    ))]
     pub src: FileSrc,
     /// Event bus (optional - if not provided, one is created internally).
-    #[setters(rename = "with_events")]
+    #[builder(name = events)]
     pub bus: Option<EventBus>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Shared downloader (created lazily if not provided).
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
     pub downloader: Option<Downloader>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
-    /// - `None` — no backpressure, download as fast as possible
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (e.g. differ only in
-    /// query parameters), setting a unique `name` ensures each gets its own
-    /// cache directory.
-    #[setters(skip)]
     pub name: Option<String>,
     /// Storage configuration.
+    #[builder(default)]
     pub store: StoreOptions,
     /// Event bus channel capacity (used when `bus` is not provided).
-    #[derivative(Default(value = "kithara_events::DEFAULT_EVENT_BUS_CAPACITY"))]
+    #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
+}
+
+impl fmt::Debug for FileConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileConfig")
+            .field("src", &self.src)
+            .field("bus", &self.bus)
+            .field("cancel", &self.cancel)
+            .field("headers", &self.headers)
+            .field("look_ahead_bytes", &self.look_ahead_bytes)
+            .field("name", &self.name)
+            .field("store", &self.store)
+            .field("event_channel_capacity", &self.event_channel_capacity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for FileConfig {
+    fn default() -> Self {
+        let url = Url::parse("http://localhost/audio.mp3").expect("valid default URL");
+        Self::for_src(FileSrc::Remote(url)).build()
+    }
 }
 
 impl FileConfig {
     /// Create new file config with source.
     #[must_use]
     pub fn new(src: FileSrc) -> Self {
-        Self {
-            src,
-            ..Self::default()
-        }
+        Self::for_src(src).build()
     }
 
-    /// Set shared downloader.
-    ///
-    /// When not provided, a private downloader is created and spawned
-    /// during [`StreamType::create`](kithara_stream::StreamType::create).
-    #[must_use]
-    pub fn with_downloader(mut self, dl: Downloader) -> Self {
-        self.downloader = Some(dl);
-        self
-    }
-
-    /// Set name for cache disambiguation.
-    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.name = Some(name.into());
-        self
+    /// Chainable counterpart to [`FileConfig::new`].
+    pub fn for_src(src: FileSrc) -> FileConfigBuilder<file_config_builder::SetSrc> {
+        Self::builder().src(src)
     }
 }
 
@@ -129,23 +123,26 @@ mod tests {
     #[kithara::test]
     fn test_with_store() {
         let store = StoreOptions::default();
-        let config = FileConfig::new(test_src()).with_store(store);
+        let config = FileConfig::for_src(test_src()).store(store).build();
 
         assert!(config.bus.is_none());
     }
 
-    fn apply_cancel(config: FileConfig) -> FileConfig {
-        config.with_cancel(CancellationToken::new())
+    fn apply_cancel(mut config: FileConfig) -> FileConfig {
+        config.cancel = Some(CancellationToken::new());
+        config
     }
 
-    fn apply_events(config: FileConfig) -> FileConfig {
-        config.with_events(EventBus::new(32))
+    fn apply_events(mut config: FileConfig) -> FileConfig {
+        config.bus = Some(EventBus::new(32));
+        config
     }
 
-    fn apply_headers(config: FileConfig) -> FileConfig {
+    fn apply_headers(mut config: FileConfig) -> FileConfig {
         let mut headers = Headers::new();
         headers.insert("Authorization", "Bearer token123");
-        config.with_headers(headers)
+        config.headers = Some(headers);
+        config
     }
 
     fn has_cancel(config: &FileConfig) -> bool {
@@ -178,10 +175,11 @@ mod tests {
         let cancel = CancellationToken::new();
         let bus = EventBus::new(32);
 
-        let config = FileConfig::new(test_src())
-            .with_store(store)
-            .with_cancel(cancel.clone())
-            .with_events(bus);
+        let config = FileConfig::for_src(test_src())
+            .store(store)
+            .cancel(cancel.clone())
+            .events(bus)
+            .build();
 
         assert!(config.cancel.is_some());
         assert!(config.bus.is_some());
@@ -191,7 +189,9 @@ mod tests {
     #[case("stream-a")]
     #[case("stream-b")]
     fn test_with_name_sets_name(#[case] name: &str) {
-        let config = FileConfig::new(test_src()).with_name(name);
+        let config = FileConfig::for_src(test_src())
+            .name(name.to_string())
+            .build();
         assert_eq!(config.name.as_deref(), Some(name));
     }
 
@@ -206,7 +206,7 @@ mod tests {
     #[kithara::test]
     fn test_clone() {
         let bus = EventBus::new(32);
-        let config = FileConfig::new(test_src()).with_events(bus);
+        let config = FileConfig::for_src(test_src()).events(bus).build();
 
         let cloned = config.clone();
 

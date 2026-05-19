@@ -31,7 +31,7 @@ mod symphonia;
 mod traits;
 mod types;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
 #[cfg(all(feature = "android", target_os = "android"))]

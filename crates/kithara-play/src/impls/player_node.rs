@@ -1,13 +1,3 @@
-//! Player source node for the Firewheel audio graph.
-//!
-//! [`PlayerNode`] is a source node (zero inputs, stereo outputs) that
-//! communicates with its [`PlayerNodeProcessor`] via a command
-//! channel. This avoids Diff/Patch complexity with `Arc<Mutex<>>` types.
-//!
-//! The command channel and shared state are embedded in the node and
-//! marked `#[diff(skip)]` so they are excluded from Diff/Patch. The
-//! processor receives them via `construct_processor(&self, ...)`.
-
 use std::sync::Arc;
 
 use firewheel::{

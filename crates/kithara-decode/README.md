@@ -4,21 +4,15 @@
 
 <div align="center">
 
-[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/kithara-decode.svg)](https://crates.io/crates/kithara-decode)
-[![docs.rs](https://docs.rs/kithara-decode/badge.svg)](https://docs.rs/kithara-decode)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
 
 # kithara-decode
 
-Audio decoding library with explicit, typed backend selection. `DecoderFactory` creates synchronous `Decoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk` samples (pool-backed `Vec<f32>`). No threading, no channels — just decoding.
+Audio decoding library with explicit, typed backend selection. `DecoderFactory` creates synchronous `Decoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, ALAC, …) into pool-backed PCM (`Vec<f32>`). No threading, no channels — just decoding.
 
-Two traits drive the crate:
-
-- `Decoder` (public) — runtime instance contract: `next_chunk`, `seek`, `spec`, `duration`, `update_byte_len`, `metadata`. Used through `Box<dyn Decoder>` by `kithara-audio` and tests.
-- `Backend: Decoder` (`pub(crate)`) — static-dispatch factory: `supports(codec, container) -> bool` plus `try_create(...) -> Self`. Every real backend is also a `Decoder`, so `dispatch::<B>` boxes the result straight into `Box<dyn Decoder>` without juggling associated types.
+The public surface centres on one trait — `Decoder`. Concrete backends (Symphonia / Apple / Android) implement it directly. Internally, container parsing and codec stepping are split: the `Demuxer` trait owns container framing, the `FrameCodec` trait owns codec decoding, and `ComposedDecoder<D, C>` (internal) wires them together so backends can be mixed and matched. The factory hides this detail — callers only ever see `Box<dyn Decoder>`.
 
 ## Usage
 
@@ -27,8 +21,7 @@ use std::io::Cursor;
 use kithara_decode::{DecoderBackend, DecoderConfig, DecoderFactory};
 
 let reader = Cursor::new(wav_bytes);
-let mut config = DecoderConfig::default();
-config.backend = DecoderBackend::Symphonia;
+let config = DecoderConfig { backend: DecoderBackend::Symphonia, ..Default::default() };
 let mut decoder = DecoderFactory::create_with_probe(reader, Some("wav"), config)?;
 
 let spec = decoder.spec(); // sample_rate, channels
@@ -40,6 +33,8 @@ loop {
     }
 }
 ```
+
+For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_info(reader, &media_info, config)` — it skips probing and uses the carried `MediaInfo` to pick the backend.
 
 ## Backends
 
@@ -117,35 +112,43 @@ Current metadata sources:
 ## Feature Flags
 
 <table>
-<tr><th>Feature</th><th>Effect</th></tr>
-<tr><td><code>apple</code></td><td>Enables Apple AudioToolbox hardware decoder</td></tr>
-<tr><td><code>android</code></td><td>Enables Android MediaCodec hardware backend and fallback plumbing</td></tr>
-<tr><td><code>perf</code></td><td>Performance instrumentation via <code>hotpath</code></td></tr>
-<tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
+<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>symphonia</code></td><td>yes</td><td>Software decoder path (Symphonia)</td></tr>
+<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder (gated on <code>target_os = "macos" | "ios"</code>)</td></tr>
+<tr><td><code>android</code></td><td>no</td><td>Android <code>MediaExtractor</code>/<code>MediaCodec</code> hardware decoder (gated on <code>target_os = "android"</code>)</td></tr>
+<tr><td><code>probe</code></td><td>no</td><td>USDT probes for tracing</td></tr>
+<tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks of the public traits</td></tr>
+<tr><td><code>perf</code></td><td>no</td><td>Performance instrumentation via <code>hotpath</code></td></tr>
 </table>
+
+When `symphonia` is disabled (`default-features = false` + only `apple` / `android`), the factory has no software fallback — it errors if the active hardware backend cannot handle a codec/container.
 
 ## Module layout
 
-- `src/traits.rs` — public `Decoder` runtime trait, plus typed outcomes (`DecoderChunkOutcome`, `DecoderSeekOutcome`, `InputReadOutcome`) and the `DecoderInput` source supertrait.
-- `src/backend/` — `pub(crate) trait Backend: Decoder` (capability + factory). One file per concern: `protocol.rs` (the trait), `tests.rs` (capability-only test backends).
-- `src/apple/` — `AppleDecoder` (in `decoder.rs`) implements `Decoder`; `backend.rs` carries `impl Backend for AppleDecoder` plus the codec/container helpers (`supports_codec`, `default_container_for_codec`, `can_seek_container`). FFI under `audiofile.rs` / `fmp4.rs` / `converter.rs` / `ffi.rs`.
-- `src/codec/apple.rs` — `AppleCodec` is a frame-level wrapper over the same `AudioConverter` FFI surface as `src/apple/`, exposed as a `FrameCodec` for `UniversalDecoder<D, AppleCodec>` paths. Carries the same FFI lint carve-outs (unsafe blocks, `cast_possible_truncation` on `UInt32` packet/byte sizes mirroring CoreAudio API contracts) and is whitelisted in `.config/ast-grep/rust.no-lint-suppression.yml` alongside `src/apple/**`.
-- `src/android/` — `AndroidDecoder` (`decoder.rs`) implements `Decoder`; `backend.rs` carries `impl Backend for AndroidDecoder`. Whole module gated once in `lib.rs`; no internal `#[cfg(target_os = "android")]`.
-- `src/symphonia/` — `SymphoniaDecoder` (`decoder.rs`) implements `Decoder`; `backend.rs` carries `impl Backend for SymphoniaDecoder` plus the `SymphoniaConfig` assembly. `probe.rs` and `adapter.rs` host the probe/direct paths and `ReadSeekAdapter`.
-- `src/pcm/` — host-agnostic PCM conversion helpers (`pcm16_to_f32`, `pcm_float_to_pool`) and timeline math (`pcm_meta_from_pts_us`, `seek_trim_for_buffer`) shared across backends.
-- `src/factory/` — public `DecoderConfig` + `DecoderFactory` + the `DecoderBackend` enum selector. `dispatch::<B: Backend>` is the single point that boxes the concrete decoder into `Box<dyn Decoder>`.
-- `src/hooks.rs` — `HookedDecoder` adapter that wraps any `Box<dyn Decoder>` and forwards `DecoderHooks` callbacks at the chunk/seek boundary.
+- `src/traits.rs` — public `Decoder` trait plus typed outcomes (`DecoderChunkOutcome`, `DecoderSeekOutcome`, `InputReadOutcome`) and the `DecoderInput` source supertrait.
+- `src/factory/` — `DecoderConfig`, `DecoderFactory`, and the `DecoderBackend` selector enum. The factory boxes every backend into `Box<dyn Decoder>` so callers stay codec-agnostic.
+- `src/composed.rs` — internal `ComposedDecoder<D: Demuxer, C: FrameCodec>` that implements `Decoder` by pairing a demuxer with a frame-level codec.
+- `src/demuxer/` — internal `Demuxer` trait and concrete demuxers (fMP4, …).
+- `src/fmp4/`, `src/mp4.rs` — fMP4/MP4 container helpers.
+- `src/symphonia/` (feature `symphonia`) — Symphonia `Decoder` implementation; probe and direct paths; `ReadSeekAdapter`.
+- `src/apple/` (feature `apple`, macOS / iOS) — Apple `AudioToolbox` backend over `AudioFile` / `AudioConverter` FFI.
+- `src/android/` (feature `android`, Android) — `MediaExtractor` / `MediaCodec` backend over JNI.
+- `src/gapless.rs` — `GaplessInfo`, `GaplessMode`, `GaplessTrimmer`, `SilenceTrimParams`, plus `codec_priming_frames` and the MP4 gapless probe.
+- `src/pcm_time.rs` — timeline math (`duration_for_frames`, `frames_for_duration`, PTS helpers) shared across backends.
+- `src/types.rs`, `src/error.rs` — shared types and `DecodeError` / `ErrorClass`.
 
 ## Cross-decoder protocol test
 
-`tests/protocol.rs` (integration test) decodes the same MP3 with
-every available backend and asserts agreement on `spec()`, `duration()`,
-total frame count, post-seek timestamp, EOF semantics, and — when the
-`apple` feature is enabled on macOS/iOS — the full-decode PCM L2 norm
-within 2 %. Run with:
+The cross-decoder protocol test lives in `kithara-integration-tests` under `tests/tests/kithara_decode/`. It decodes the same MP3 with every available backend and asserts agreement on `spec()`, `duration()`, total frame count, post-seek timestamp, EOF semantics, and (when the `apple` feature is enabled on macOS/iOS) the full-decode PCM L2 norm within 2 %.
 
+```bash
+cargo nextest run -p kithara-integration-tests kithara_decode::
 ```
-cargo test -p kithara-decode --test protocol --features apple
+
+To exercise the same protocol per backend in isolation (no cross-feature unification):
+
+```bash
+just test-decoders
 ```
 
 ## Integration

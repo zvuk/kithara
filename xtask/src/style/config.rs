@@ -1,8 +1,3 @@
-//! Loaders for `.config/style/*.toml`.
-//!
-//! Each style check has its own typed section in `thresholds.toml`. Missing
-//! files default to empty, mirroring `arch::config` behavior.
-
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result};

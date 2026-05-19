@@ -1,9 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! `Resource<D>::read_at_inner` and `write_at_inner` — the read/write
-//! hot-path bodies for the [`ResourceExt`](crate::ResourceExt) impl.
-//! Methods are ordered alphabetically per `trait_item_order`.
-
 use crate::{
     StorageError, StorageResult,
     backend::{resource::state::Resource, traits::DriverIo},

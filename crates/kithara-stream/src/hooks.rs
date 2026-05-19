@@ -1,19 +1,3 @@
-//! Reader-side decoder hooks.
-//!
-//! `kithara-stream` defines the **shape** of the hook contract — what
-//! the decoder layer signals, what arguments arrive — without depending
-//! on `kithara-decode` or knowing about PCM payloads. The hook trait
-//! takes lightweight signals (`ReaderChunkSignal` / `ReaderSeekSignal`)
-//! that mirror the meaningful shape of `DecoderChunkOutcome` /
-//! `DecoderSeekOutcome` for event-emission purposes only — no PCM
-//! buffer, no decoder-specific error type.
-//!
-//! `kithara-decode` owns the wrapper (`HookedDecoder`) that intercepts
-//! `Decoder::next_chunk` / `seek` and feeds the corresponding
-//! signal into the hook. Source impls (`HlsSource`, `FileSource`) live
-//! in their own crates and produce hook instances via
-//! [`Source::take_reader_hooks`](crate::Source::take_reader_hooks).
-
 use std::sync::{Arc, Mutex};
 
 use crate::source::PendingReason;

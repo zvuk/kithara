@@ -1,5 +1,3 @@
-//! Lock-free ports for data flow between nodes.
-
 use std::sync::Arc;
 
 #[cfg(test)]

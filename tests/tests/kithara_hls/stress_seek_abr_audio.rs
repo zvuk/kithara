@@ -1,15 +1,3 @@
-//! Stress test: ABR variant switch and seek on `Audio<Stream<Hls>>`.
-//!
-//! Two HLS variants with different saw-tooth directions (ascending vs. descending).
-//! V0 segments are delayed after segment 3 to trigger ABR downgrade to V1.
-//! WAV header as HLS init segment (`#EXT-X-MAP`).
-//!
-//! Four-phase verification:
-//! 1. **Warmup**: read until ABR switches from V0 (ascending) to V1 (descending)
-//! 2. **Post-switch**: 10 chunks of descending data confirm stable V1
-//! 3. **Random seeks**: 200 seek+read cycles with integrity/continuity/direction checks
-//! 4. **EOF**: seek near the end, read to EOF
-
 use std::{sync::Arc, time::Duration};
 
 use kithara::{
@@ -18,15 +6,15 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
     fixture_protocol::DelayRule,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
+use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -122,13 +110,16 @@ async fn stress_seek_abr_audio() {
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");

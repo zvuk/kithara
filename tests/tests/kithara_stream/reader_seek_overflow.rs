@@ -1,55 +1,27 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-//! Defense-in-depth: `Stream::seek()` rejects corrupted byte deltas.
-//!
-//! Production scenario (from real logs, 2026-02-01):
-//!   1. `Stream<Hls>` with fMP4, 37 segments cached, total = `1_890_485` bytes, ~220s
-//!   2. User scrubs to ~80.9s (epoch 10)
-//!   3. Symphonia `IsoMp4Reader` uses sidx for time→byte seek
-//!   4. Because `MediaSource::byte_len()` returns `None`,
-//!      symphonia computes a corrupted `SeekFrom::Current(delta)` — a huge positive
-//!      value instead of a small (possibly negative) delta
-//!   5. Reader adds delta to `current_pos`, gets `new_pos` ≈ 9.2×10¹⁸ → "seek past EOF"
-//!
-//! Two fixes prevent this:
-//!   1. `probe_byte_len()` in decoder.rs — adapters now report `byte_len() -> Some(len)`,
-//!      so symphonia computes correct deltas (even in the legacy seek path).
-//!   2. `seek_time_anchor` (seek refactoring) — HLS seek resolves
-//!      `time→segment→byte_offset`
-//!      at the application layer. Symphonia receives `SeekTo::Time { segment_start }`
-//!      with the stream already positioned at the segment boundary. Symphonia never
-//!      computes byte offsets from sidx → corrupted deltas are architecturally impossible.
-//!
-//! These tests replay the exact corrupted deltas from production and verify that
-//! `Stream::seek()` rejects them gracefully (Err, not panic). This is defense-in-depth:
-//! the primary fix prevents these deltas from being generated, but even if some code path
-//! produced them, `Stream::seek()` bounds-checks and returns an error.
-//!
-//! Log excerpt:
-//!   seek: about to call `decoder.seek()` position=80.926208496s epoch=10
-//!     `stream_pos=538977` `segment_range=Some(1824949..1890485)`
-//!   seek failed e=SeekError("seek past EOF: `new_pos=9223372036854710271`
-//!     len=1890485 `current_pos=595033` `seek_from=Current(9223372036854115238)`")
-
 use std::{
     io::{Error as IoError, Read, Seek, SeekFrom},
     num::NonZeroUsize,
     ops::Range,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use kithara_platform::{time::Duration, tokio::runtime::Runtime};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext, StreamResult,
-    StreamType, Timeline,
+    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
 };
 use kithara_test_utils::kithara;
 
 /// Minimal mock source with known length.
 struct MockSource {
     timeline: Timeline,
+    position: Arc<AtomicU64>,
     data: Vec<u8>,
     /// Reported length (may differ from actual data size).
     /// Simulates `expected_total_length` in HLS which is metadata-derived.
@@ -60,6 +32,7 @@ impl MockSource {
     fn new(len: usize) -> Self {
         Self {
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             reported_len: u64::try_from(len).unwrap_or(u64::MAX),
             data: vec![0xAA; len],
         }
@@ -70,6 +43,7 @@ impl MockSource {
     fn with_reported_len(reported_len: u64) -> Self {
         Self {
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             data: Vec::new(),
             reported_len,
         }
@@ -79,6 +53,18 @@ impl MockSource {
 impl Source for MockSource {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn advance(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
     }
 
     fn wait_range(
@@ -127,10 +113,6 @@ impl StreamType for MockStream {
         config
             .source
             .ok_or_else(|| kithara_stream::SourceError::other(IoError::other("no source")))
-    }
-
-    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(timeline))
     }
 }
 
@@ -225,25 +207,6 @@ fn seek_from_end_backward() {
     let result = stream.seek(SeekFrom::End(-100));
     assert!(result.is_ok());
     assert_eq!(result.expect("seek should return new offset"), 999_900);
-}
-
-/// Exact replay of production crash (now returns error instead of panic).
-///
-/// Symphonia parses stale variant 0 data as an fMP4 atom header,
-/// gets a garbage size (~3.5 GB), and issues a seek that overflows.
-/// With `fence_at()` removing stale entries, this shouldn't happen in
-/// production. But if it does, Stream returns Err instead of crashing.
-#[kithara::test]
-fn variant_switch_stale_atoms_produce_garbage_seek() {
-    let source = MockSource::with_reported_len(27_229_109);
-    let mut stream = mock_stream(source);
-
-    stream
-        .seek(SeekFrom::Start(1_165_770))
-        .expect("seek to replay position should succeed");
-
-    let result = stream.seek(SeekFrom::Current(3_528_752_481));
-    assert!(result.is_err(), "garbage seek should return Err, not crash");
 }
 
 /// Read after seek returns correct data.

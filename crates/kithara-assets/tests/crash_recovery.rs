@@ -1,24 +1,3 @@
-//! Worst-case persistence tests: every test simulates a process
-//! crash by either (a) skipping the explicit `checkpoint()` /
-//! teardown or (b) externally mangling the on-disk artefacts a real
-//! crash would leave behind. Each test then opens a fresh
-//! `AssetStore` over the same cache dir and asserts the rebuilt state
-//! is safe — never claims bytes that aren't durable, never panics, and
-//! survives obviously bad inputs.
-//!
-//! The matrix:
-//!   1. `pins.bin` truncated to zero / replaced with garbage
-//!   2. `lru.bin` truncated to zero / replaced with garbage
-//!   3. `availability.bin` truncated / garbage
-//!   4. Segment file deleted out from under the store after checkpoint
-//!   5. Segment partially written, no commit, no checkpoint
-//!   6. Crash between `commit()` and `checkpoint()` — slow-path recovers
-//!   7. Multi-store: per-store crash leaves siblings consistent
-//!
-//! These pin the contract: a crash anywhere in the persistence path
-//! degrades gracefully to an empty index plus the on-disk slow-path
-//! fallback; no hang, no panic, no decode-of-garbage.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{fs, path::Path};
@@ -63,11 +42,11 @@ fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path)) {
         .asset_root(Some(Consts::ASSET_ROOT))
         .build();
     let key = ResourceKey::new(Consts::KEY_NAME);
-    let res = store.acquire_resource(&key).unwrap();
-    res.write_at(0, b"hello-world!").unwrap();
-    res.commit(Some(12)).unwrap();
+    let res = store.acquire_resource(&key).expect("acquire");
+    res.write_at(0, b"hello-world!").expect("write_at");
+    res.commit(Some(12)).expect("commit");
     drop(res);
-    store.checkpoint().unwrap();
+    store.checkpoint().expect("checkpoint");
     mangle(dir);
 }
 

@@ -49,7 +49,6 @@ warn = 8
 "kithara-wasm" = 20
 "kithara-test-utils" = 20
 "kithara-test-macros" = 20
-"kithara-hang-detector-macros" = 20
 "kithara-wasm-macros" = 20
 "xtask" = 20
 
@@ -121,7 +120,6 @@ exempt_crates = [
     "xtask",
     "kithara-test-utils",
     "kithara-test-macros",
-    "kithara-hang-detector-macros",
     "kithara-wasm-macros",
     "kithara-probe-macros",
 ]
@@ -158,7 +156,6 @@ exempt_crates = []
 exempt = [
     "kithara-workspace-hack",
     "kithara-test-macros",
-    "kithara-hang-detector-macros",
     "kithara-wasm-macros",
 ]
 min_bytes = 200

@@ -1,10 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Processing layer for resources.
-//!
-//! Processes content chunk-by-chunk on commit, writes to disk.
-//! Uses buffer pool — no allocations during processing.
-
 use std::{fmt, fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;

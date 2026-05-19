@@ -1,11 +1,3 @@
-//! `AudioConverter` input-data callback and associated state.
-//!
-//! The callback hands `AudioConverter` a pointer+len into the active
-//! packet buffer without any per-packet allocation. `AppleDecoder` writes
-//! the current packet into `ConverterInputState` before each
-//! `AudioConverterFillComplexBuffer` call and clears `has_packet` once
-//! the converter consumes it.
-
 #![allow(unsafe_code)]
 
 use std::{ffi::c_void, mem::size_of, ptr};

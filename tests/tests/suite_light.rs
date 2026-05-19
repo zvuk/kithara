@@ -34,7 +34,10 @@ mod kithara_encode {
 mod kithara_decode {
     mod decoder_seek_tests;
     mod decoder_tests;
+    mod factory_tests;
+    mod protocol_tests;
     mod symphonia_seek_stale_duration;
+    mod symphonia_tests;
     mod timeline_tests;
 }
 

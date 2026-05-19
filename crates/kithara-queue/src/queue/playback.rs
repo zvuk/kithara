@@ -1,6 +1,3 @@
-//! Runtime tick: position cache, crossfade arming, engine event drain
-//! (`ItemDidPlayToEnd` / `CurrentItemChanged`), and `seek`.
-
 use std::sync::PoisonError;
 
 use kithara_events::{Event, PlayerEvent, QueueEvent};
@@ -252,7 +249,7 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(
-            should_arm_crossfade(PlaybackTime { pos, dur }, crossfade, current_id, armed_for,),
+            should_arm_crossfade(PlaybackTime { dur, pos }, crossfade, current_id, armed_for,),
             expected
         );
     }

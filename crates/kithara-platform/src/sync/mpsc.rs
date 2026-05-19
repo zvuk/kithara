@@ -1,8 +1,3 @@
-//! Platform-optimal multi-producer single-consumer channel.
-//!
-//! * **Native** — [`std::sync::mpsc`].
-//! * **WASM** — [`wasm_safe_thread::mpsc`] (async-capable on Web Workers).
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use std::sync::mpsc::{RecvError, SendError, TryRecvError};
 

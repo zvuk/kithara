@@ -1,8 +1,7 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
+use bon::Builder;
 use bytes::Bytes;
-use derivative::Derivative;
-use derive_setters::Setters;
 use url::Url;
 
 /// Result of processing a key through a [`KeyProcessor`].
@@ -61,47 +60,63 @@ impl DomainMatcher {
 /// A rule binding domain patterns to a key processor + per-provider
 /// request shape (headers, query params).
 ///
-/// Build with [`KeyProcessorRule::new`] + `.with_headers(...)` /
-/// `.with_query_params(...)` setters.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Debug)]
-#[setters(prefix = "with_", strip_option)]
+/// Build with [`KeyProcessorRule::new`] then chain bon-generated
+/// `headers(...)` / `query_params(...)` setters and `.build()`.
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct KeyProcessorRule {
     /// Headers appended to key requests that match this rule.
     pub headers: Option<HashMap<String, String>>,
     /// Query parameters appended to key URLs that match this rule.
     pub query_params: Option<HashMap<String, String>>,
-    #[setters(skip)]
-    #[derivative(Debug(format_with = "fmt_processor"))]
     processor: KeyProcessor,
-    #[setters(skip)]
     matchers: Vec<DomainMatcher>,
 }
 
-fn fmt_processor(_: &KeyProcessor, f: &mut fmt::Formatter) -> fmt::Result {
-    f.write_str("<fn>")
+impl fmt::Debug for KeyProcessorRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyProcessorRule")
+            .field("headers", &self.headers)
+            .field("query_params", &self.query_params)
+            .field("processor", &"<fn>")
+            .field("matchers", &self.matchers)
+            .finish()
+    }
 }
 
 impl KeyProcessorRule {
-    /// Create a rule bound to `patterns` (parsed via
-    /// [`DomainMatcher::parse`]) with the given `processor`. Headers
-    /// and query params default to `None`.
+    /// Rule bound to `patterns` (parsed via [`DomainMatcher::parse`])
+    /// and the given `processor`. Headers and query params default to
+    /// `None`; for those use [`KeyProcessorRule::for_domains`].
     #[must_use]
     pub fn new<P, I>(patterns: I, processor: KeyProcessor) -> Self
     where
         P: AsRef<str>,
         I: IntoIterator<Item = P>,
     {
-        Self {
-            processor,
-            matchers: patterns
+        Self::for_domains(patterns, processor).build()
+    }
+
+    /// Chainable counterpart to [`KeyProcessorRule::new`]: returns a
+    /// builder with `processor` and `matchers` already set so callers
+    /// can attach `.headers(...)` / `.query_params(...)` then `.build()`.
+    pub fn for_domains<P, I>(
+        patterns: I,
+        processor: KeyProcessor,
+    ) -> KeyProcessorRuleBuilder<
+        key_processor_rule_builder::SetMatchers<key_processor_rule_builder::SetProcessor>,
+    >
+    where
+        P: AsRef<str>,
+        I: IntoIterator<Item = P>,
+    {
+        Self::builder().processor(processor).matchers(
+            patterns
                 .into_iter()
                 .map(|p| DomainMatcher::parse(p.as_ref()))
                 .collect(),
-            headers: None,
-            query_params: None,
-        }
+        )
     }
 
     #[must_use]

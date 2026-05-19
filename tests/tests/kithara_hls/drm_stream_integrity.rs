@@ -1,11 +1,3 @@
-//! Byte-stream integrity validation for HLS vs DRM across ABR modes and storage backends.
-//!
-//! Scans raw fMP4 box structure from the virtual byte stream to verify that
-//! decrypted segment data is contiguous, box headers are valid, and
-//! `total_bytes` (stream length) matches the actual box coverage.
-//!
-//! Parametrized: `{hls, drm} × {ephemeral, disk} × {manual(0), manual(3), auto(0)}`.
-
 use std::{
     io::{ErrorKind, Read, Seek, SeekFrom},
     num::NonZeroUsize,
@@ -16,12 +8,12 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
-use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -172,10 +164,11 @@ async fn drm_stream_byte_integrity(
         AbrMode::Manual(abr_variant)
     };
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(cancel.clone())
-        .with_initial_abr_mode(abr_mode);
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(cancel.clone())
+        .initial_abr_mode(abr_mode)
+        .build();
 
     let mut stream = Stream::<Hls>::new(hls_config)
         .await

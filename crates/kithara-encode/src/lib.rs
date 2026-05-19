@@ -19,7 +19,6 @@
 pub mod codec;
 mod error;
 mod factory;
-pub mod test_pcm;
 mod traits;
 mod types;
 

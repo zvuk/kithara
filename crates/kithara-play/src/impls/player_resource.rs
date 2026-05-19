@@ -1,10 +1,3 @@
-//! RT-safe wrapper around [`Resource`] for audio-thread access.
-//!
-//! [`PlayerResource`] adds internal PCM scratch buffers so that the audio
-//! callback can read planar PCM data without allocating. Access from the
-//! audio thread is always via `Arc<kithara_platform::Mutex<PlayerResource>>`
-//! with `try_lock()`.
-
 use std::{num::NonZeroU32, ops::Range, sync::Arc, time::Duration};
 
 use kithara_audio::ServiceClass;

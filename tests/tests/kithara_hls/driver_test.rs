@@ -1,9 +1,3 @@
-//! Isolated tests for HLS driver (Stream<Hls> seek behavior).
-//!
-//! Tests:
-//! - Driver-1: Seek works after all segments downloaded (playlist finished)
-//! - Driver-2: ABR switch + seek backward
-
 use std::{
     io::{Read, Seek, SeekFrom},
     sync::{Arc, Mutex as StdMutex},
@@ -16,15 +10,18 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::{
-    TestServer,
-    abr::{AbrTestServer, master_playlist},
+use kithara_integration_tests::{
+    TestTempDir, cancel_token,
+    hls_server::{
+        TestServer,
+        abr::{AbrTestServer, master_playlist},
+    },
+    temp_dir,
 };
 use kithara_platform::{
     time::sleep,
     tokio::task::{spawn, spawn_blocking},
 };
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -50,10 +47,11 @@ async fn test_driver_seek_after_playlist_finished(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
@@ -118,11 +116,12 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, cancel_token: Canc
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_events(bus)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .events(bus)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 

@@ -1,5 +1,3 @@
-//! E2E tests verifying `PcmMeta` timeline correctness.
-
 use std::{io::Cursor, time::Duration};
 
 use kithara::decode::{DecoderConfig, DecoderFactory};
@@ -81,10 +79,13 @@ mod hls_timeline {
         assets::StoreOptions,
         decode::{DecoderConfig, DecoderFactory},
         hls::{AbrMode, Hls, HlsConfig},
-        stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
+        stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     };
-    use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-    use kithara_test_utils::{TestTempDir, create_wav_exact_bytes, signal_pcm::signal};
+    use kithara_integration_tests::{
+        TestTempDir, create_wav_exact_bytes,
+        hls_server::{HlsTestServer, HlsTestServerConfig},
+        signal_pcm::signal,
+    };
     use tokio_util::sync::CancellationToken;
 
     use crate::common::test_defaults::SawWav;
@@ -122,18 +123,19 @@ mod hls_timeline {
         let temp_dir = TestTempDir::new();
         let cancel = CancellationToken::new();
 
-        let hls_config = HlsConfig::new(url)
-            .with_store(StoreOptions::new(temp_dir.path()))
-            .with_cancel(cancel)
-            .with_initial_abr_mode(AbrMode::Manual(0));
+        let hls_config = HlsConfig::for_url(url)
+            .store(StoreOptions::new(temp_dir.path()))
+            .cancel(cancel)
+            .initial_abr_mode(AbrMode::Manual(0))
+            .build();
 
         let stream = Stream::<Hls>::new(hls_config).await.unwrap();
-        let stream_ctx = Hls::build_stream_context(stream.source(), stream.timeline());
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let decoder_config = DecoderConfig::default()
-            .with_stream_ctx(stream_ctx)
-            .with_hint("wav".to_string());
+        let decoder_config = DecoderConfig::builder()
+            .hint("wav".to_string())
+            .maybe_segment_layout(stream.as_segment_layout())
+            .build();
 
         let result = tokio::task::spawn_blocking(move || {
             let mut decoder =

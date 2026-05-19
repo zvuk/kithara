@@ -1,5 +1,3 @@
-//! Render `Report` as markdown, JSON, or grouped terminal output.
-
 use std::collections::BTreeMap;
 
 use super::{

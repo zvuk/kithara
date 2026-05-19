@@ -3,7 +3,7 @@ use kithara::{
     platform::time::Duration,
 };
 use kithara_bufpool::PcmPool;
-use kithara_test_utils::signal_pcm::signal::{SignalFn, SineWave};
+use kithara_integration_tests::signal_pcm::signal::{SignalFn, SineWave};
 
 use crate::gapless_common::{
     AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,

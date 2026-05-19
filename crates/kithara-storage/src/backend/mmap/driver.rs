@@ -1,13 +1,9 @@
 #![forbid(unsafe_code)]
 
-//! [`MmapDriver`] struct, options, mmap state machine, and the
-//! [`Driver`] factory impl. [`MmapResource`] alias lives here.
-//! The [`DriverIo`](crate::DriverIo) impl is in the sibling `io` module.
-
 use std::{fmt, fs, ops::Range, path::PathBuf};
 
+use bon::Builder;
 use crossbeam_queue::SegQueue;
-use derive_setters::Setters;
 use kithara_platform::Mutex;
 use mmap_io::MemoryMappedFile;
 use rangemap::RangeSet;
@@ -22,28 +18,32 @@ use crate::{
 };
 
 /// Options for opening a [`MmapResource`].
-#[derive(Debug, Clone, Default, Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Debug, Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct MmapOptions {
     /// Open mode controlling read/write behavior for existing files.
+    #[builder(default)]
     pub mode: OpenMode,
     /// Initial file size for new files. Ignored for existing files.
     pub initial_len: Option<u64>,
     /// Path to the backing file.
-    #[setters(skip)]
     pub path: PathBuf,
 }
 
 impl MmapOptions {
-    /// Create options for the given backing-file path. Other fields
-    /// take their default values; override via `with_*` setters.
+    /// Options for the given backing-file path with all other fields at
+    /// their builder defaults. For chains use [`MmapOptions::for_path`].
     #[must_use]
     pub fn new(path: PathBuf) -> Self {
-        Self {
-            path,
-            ..Self::default()
-        }
+        Self::for_path(path).build()
+    }
+
+    /// Chainable counterpart to [`MmapOptions::new`]: returns a builder
+    /// with `path` set so callers can attach `.mode(...)` /
+    /// `.initial_len(...)` then `.build()`.
+    pub fn for_path(path: PathBuf) -> MmapOptionsBuilder<mmap_options_builder::SetPath> {
+        Self::builder().path(path)
     }
 }
 

@@ -17,8 +17,6 @@ members = [
     "crates/kithara-bufpool",
     "crates/kithara-wasm",
     "crates/kithara-platform",
-    "crates/kithara-hang-detector",
-    "crates/kithara-hang-detector-macros",
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-test-utils",
@@ -29,7 +27,6 @@ members = [
     "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
-    "examples",
     "xtask",
 ]
 default-members = [
@@ -49,14 +46,11 @@ default-members = [
     "crates/kithara-bufpool",
     "crates/kithara-wasm",
     "crates/kithara-platform",
-    "crates/kithara-hang-detector",
-    "crates/kithara-hang-detector-macros",
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
     "tests",
-    "examples",
 ]
 
 [workspace.lints.rust]
@@ -139,7 +133,7 @@ approx_constant = "warn"
 tools = { rustfmt = "rustfmt.toml", clippy = "clippy.toml", deny = "deny.toml" }
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.1-alpha1"
 edition = "2024"
 rust-version = "1.89"
 authors = ["kithara contributors"]
@@ -155,32 +149,30 @@ homepage = "https://github.com/zvuk/kithara"
 # - In crate Cargo.toml files use `{ workspace = true }`.
 [workspace.dependencies]
 # workspace crates (path deps)
-kithara = { path = "crates/kithara", version = "0.1.0" }
-kithara-abr = { path = "crates/kithara-abr", version = "0.1.0" }
-kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
-kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
-kithara-audio = { path = "crates/kithara-audio", version = "0.1.0" }
-kithara-encode = { path = "crates/kithara-encode", version = "0.1.0" }
-kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
-kithara-drm = { path = "crates/kithara-drm", version = "0.1.0" }
-kithara-events = { path = "crates/kithara-events", version = "0.1.0" }
-kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
-kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
-kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
-kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
-kithara-hang-detector = { path = "crates/kithara-hang-detector", version = "0.1.0" }
-kithara-hang-detector-macros = { path = "crates/kithara-hang-detector-macros", version = "0.1.0" }
-kithara-play = { path = "crates/kithara-play", version = "0.1.0", default-features = false }
-kithara-queue = { path = "crates/kithara-queue", version = "0.1.0" }
-kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
-kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara = { path = "crates/kithara", version = "0.0.1-alpha1" }
+kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha1" }
+kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha1" }
+kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha1" }
+kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha1" }
+kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha1" }
+kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha1" }
+kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha1" }
+kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha1" }
+kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha1" }
+kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha1" }
+kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha1" }
+kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha1" }
+kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha1", default-features = false }
+kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha1" }
+kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha1" }
+kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha1" }
 kithara-test-macros = { path = "crates/kithara-test-macros" }
 kithara-test-utils = { path = "crates/kithara-test-utils" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
 kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
-kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.1.0" }
+kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha1" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.4.0"
 unimock = { version = "0.6", features = ["std"] }
@@ -189,7 +181,7 @@ unimock = { version = "0.6", features = ["std"] }
 backtrace = "0.3"
 
 # async/runtime
-tokio = { version = "1.52.1", default-features = false, features = ["sync", "macros", "rt", "time"] }
+tokio = { version = "1.52.3", default-features = false, features = ["sync", "macros", "rt", "time"] }
 tokio_with_wasm = { version = "0.9", features = ["full"] }
 tokio-util = { version = "0.7.18", default-features = false }
 tokio-stream = "0.1.18"
@@ -201,30 +193,30 @@ parking_lot = "0.12"
 
 # channels/buffers
 bytes = "1.11.1"
-ringbuf = "0.4.8"
+ringbuf = "0.5.0"
 slice_ring_buf = "0.3"
 async-stream = "0.3.6"
 crossbeam-queue = "0.3"
 
 # http/url
-reqwest = { version = "0.13.2", default-features = false }
+reqwest = { version = "0.13.3", default-features = false }
 url = "2.5.8"
 axum = "0.8.9"
 
 # hls parsing
-hls_m3u8 = "0.5.1"
+hls_m3u8 = "0.7.0"
 
 # iterators
 fallible-iterator = "0.3"
 
 # decoding / mp4 parsing
 re_mp4 = "0.4.0"
-symphonia = { version = "0.6.0-alpha.1", features = ["all", "opt-simd"] }
+symphonia = { version = "0.6.0", features = ["all", "opt-simd"] }
 # Pulled in stand-alone for the Apple hardware backend so it can run a
 # streaming fMP4 container parser without requiring the full Symphonia
 # decoder suite.
-symphonia-format-isomp4 = "0.6.0-alpha.1"
-symphonia-core = "0.6.0-alpha.1"
+symphonia-format-isomp4 = "0.6.0"
+symphonia-core = "0.6.0"
 ffmpeg-next = "8.1.0"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
 ratatui = "0.30.0"
@@ -251,7 +243,7 @@ thiserror = "2.0.18"
 # USDT probe runtime (consumed by `kithara-test-utils::probes`).
 # Default-features off + `asm` keeps the inline-asm path on macOS/Linux
 # without dragging in the linker shim used by older toolchains.
-usdt = { version = "0.5", default-features = false, features = ["asm"] }
+usdt = { version = "0.6", default-features = false, features = ["asm"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 tracing-wasm = "0.2"
@@ -272,7 +264,7 @@ web-sys = { version = "0.3", features = ["Blob", "BroadcastChannel", "console", 
 base64 = "0.22.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = { version = "0.8", features = ["preserve_order"] }
+toml = { version = "1.1", features = ["preserve_order"] }
 rkyv = "0.8.16"
 bytecheck = "0.8.2"
 
@@ -302,7 +294,7 @@ rustls-platform-verifier = "0.7.0"
 
 # async traits
 async-trait = "0.1.89"
-thirtyfour = "0.36.1"
+thirtyfour = "0.37.0"
 
 # delegation
 delegate = "0.13"
@@ -315,11 +307,10 @@ syn = { version = "2", features = ["full"] }
 
 # storage (range maps + mmap)
 rangemap = { version = "1.7.1", features = ["serde1"] }
-mmap-io = { version = "0.9", default-features = false }
-dashmap = "6.1.0"
-derivative = "2.2"
-derive_setters = "0.1"
-lru = "0.17"
+mmap-io = { version = "1.0", default-features = false }
+dashmap = "6.2.1"
+bon = "3.9"
+lru = "0.18"
 
 # fuzzing
 libfuzzer-sys = "0.4"
@@ -333,7 +324,7 @@ stats_alloc = "0.1"
 assert_no_alloc = "1.1"
 
 # performance monitoring
-hotpath = "0.15.0"
+hotpath = "0.16.1"
 criterion = "0.8.2"
 
 # fast interleave/deinterleave
@@ -347,7 +338,7 @@ core-foundation-sys = "0.8"
 
 # UI frameworks
 iced = { version = "0.14", features = ["tokio", "svg"] }
-iced_aw = { version = "0.13.1", default-features = false, features = ["tabs", "tab_bar", "selection_list"] }
+iced_aw = { version = "0.14.1", default-features = false, features = ["tabs", "tab_bar", "selection_list"] }
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env"] }

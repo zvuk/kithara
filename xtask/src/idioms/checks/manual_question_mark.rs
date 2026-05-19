@@ -1,27 +1,3 @@
-//! Match expressions that hand-roll what the `?` operator (or
-//! `Result::map_err` / `Option::map`) does in one character.
-//!
-//! Recognised shapes (patterns are matched modulo arm order):
-//!
-//! - **Q1 — bubble**: `match x { Ok(v) => v, Err(e) => return Err(e) }`
-//!   → `x?`
-//! - **Q2 — bubble-with-into**: `match x { Ok(v) => v, Err(e) => return Err(e.into()) }`
-//!   → `x.map_err(Into::into)?`
-//! - **Q3 — wrap**: `match x { Ok(v) => Ok(v), Err(e) => Err(e.into()) }`
-//!   → `x.map_err(Into::into)`
-//! - **Q4 — identity**: `match x { Ok(v) => Ok(v), Err(e) => Err(e) }`
-//!   (and the `Some/None` mirror) — fully redundant pair.
-//! - **Q5 — option-bubble**: `match opt { Some(v) => v, None => return None }`
-//!   → `opt?`
-//! - **Q6 — option-map**: `match opt { Some(v) => Some(f(v)), None => None }`
-//!   → `opt.map(f)`
-//!
-//! Heuristic only: the bound identifier in the success arm must match
-//! the expression returned (i.e. literally pass through). This skips
-//! cases where the success arm transforms the value via an unbound
-//! computation — `?` would change semantics. `// xtask-lint-ignore:
-//! manual_question_mark` opts out a single match.
-
 use anyhow::Result;
 use syn::{
     Arm, Expr, ExprMatch, ExprPath, ExprReturn, Pat, PatIdent, PatStruct, PatTupleStruct, Path,

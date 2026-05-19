@@ -1,19 +1,11 @@
 #![forbid(unsafe_code)]
 
-//! Tests for deferred ABR switch logic.
-//!
-//! These tests verify the core invariants of variant switching:
-//!
-//! 1. Manual variant selection returns correct data
-//! 2. Sequential reads maintain variant consistency
-//! 3. Seek returns data from correct variant
-//! 4. Multiple seeks maintain correct variant tracking
-
 use std::io::{Read, Seek, SeekFrom};
 
-use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};
+use kithara_integration_tests::{
+    TestTempDir, cancel_token, hls_fixture::HlsStreamBuilder, hls_server::TestServer, temp_dir,
+};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 

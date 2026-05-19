@@ -55,7 +55,9 @@ fuzz_target!(|input: Input| {
     let path = dir.path().join("mmap_fuzz.bin");
     let res = match MmapResource::open(
         CancellationToken::new(),
-        MmapOptions::new(path).with_initial_len(u64::from(input.initial_len)),
+        MmapOptions::for_path(path)
+            .initial_len(u64::from(input.initial_len))
+            .build(),
     ) {
         Ok(res) => res,
         Err(_) => return,

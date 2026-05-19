@@ -1,10 +1,8 @@
-//! Watchdog observer for the audio worker.
-
-use kithara_hang_detector::{HangDetector, default_timeout};
+use kithara_test_utils::hang::{HangDetector, default_timeout};
 
 use crate::runtime::{SchedulerEvent, SchedulerObserver};
 
-/// Observer that integrates the scheduler with `kithara_hang_detector`.
+/// Observer that integrates the scheduler with `kithara_test_utils::hang`.
 pub(crate) struct HangWatchdogObserver {
     detector: HangDetector,
 }
@@ -20,8 +18,11 @@ impl HangWatchdogObserver {
 impl SchedulerObserver for HangWatchdogObserver {
     fn on_event(&mut self, event: SchedulerEvent) {
         match event {
-            SchedulerEvent::Progress | SchedulerEvent::Idle => {
+            SchedulerEvent::Progress | SchedulerEvent::Idle | SchedulerEvent::Backpressured => {
                 self.detector.reset();
+            }
+            SchedulerEvent::Waiting => {
+                self.detector.tick();
             }
             SchedulerEvent::SlowTick { slot, elapsed } => {
                 tracing::debug!(

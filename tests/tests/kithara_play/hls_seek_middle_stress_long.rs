@@ -1,8 +1,3 @@
-//! 20-iteration stress run mirrored from
-//! `kithara_play/hls_seek_middle_stress.rs`. Lives in `suite_stress`
-//! so the long wall time does not bloat default `just test`. Mirrors
-//! the user-reported 1/N seek flake in `kithara-app`.
-
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};
@@ -13,8 +8,9 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_decode::DecoderBackend;
-use kithara_integration_tests::offline::OfflinePlayer;
-use kithara_test_utils::{PackagedTestServer, fixture_protocol::DelayRule, temp_dir};
+use kithara_integration_tests::{
+    PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
+};
 use tokio::time::sleep;
 
 use crate::common::test_defaults::Consts as Shared;
@@ -82,6 +78,9 @@ async fn render_until_position(
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = PackagedTestServer::with_delay_rules(vec![DelayRule {
         variant: None,
         segment_eq: None,
@@ -95,10 +94,13 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
     let store = StoreOptions::new(temp.path());
     let downloader = Downloader::new(DownloaderConfig::default());
 
-    let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
-    cfg = cfg.with_downloader(downloader.clone()).with_name("t0");
-    cfg.store = store;
-    cfg.decoder_backend = backend;
+    let cfg = ResourceConfig::for_src(master.as_str())
+        .expect("valid master URL")
+        .downloader(downloader.clone())
+        .name("t0".to_string())
+        .store(store)
+        .decoder_backend(backend)
+        .build();
 
     let resource = Resource::new(cfg)
         .await

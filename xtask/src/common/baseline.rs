@@ -1,10 +1,3 @@
-//! Ratchet baseline: known violation counts per (check, key).
-//!
-//! The baseline file caps regressions: any observed count strictly greater
-//! than the recorded one is a failure; equal-or-less is allowed (improvements
-//! are reported but do not fail). `--update-baseline` rewrites the file from
-//! the current observation set.
-
 use std::{
     collections::BTreeMap,
     fs,

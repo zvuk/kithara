@@ -4,19 +4,6 @@
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
 
-//! End-to-end integration tests that hit real networks and real audio hardware.
-//!
-//! This suite is gated behind the `e2e` cargo feature so `just test` never
-//! compiles or runs it. Every test is `#[ignore]` because it requires live
-//! external services (silvercomet.top, zvq.me) or a real cpal audio device.
-//!
-//! Run with:
-//!   just test-e2e
-//! or directly:
-//!   cargo nextest run -p kithara-integration-tests \
-//!       --features e2e --cargo-profile test-release \
-//!       --test suite_e2e --run-ignored all
-
 mod common;
 
 #[cfg(not(target_arch = "wasm32"))]

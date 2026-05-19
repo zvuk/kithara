@@ -1,8 +1,3 @@
-//! Platform-optimal [`Condvar`] and [`WaitTimeoutResult`].
-//!
-//! * **Native** — [`parking_lot::Condvar`].
-//! * **WASM** — [`wasm_safe_thread::condvar::Condvar`].
-
 #[cfg(not(target_arch = "wasm32"))]
 use parking_lot::Condvar as ParkingLotCondvar;
 

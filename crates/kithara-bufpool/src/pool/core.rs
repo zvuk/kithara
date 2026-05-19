@@ -1,5 +1,3 @@
-//! `Pool` (sharded buffer pool) + `PoolStats`.
-
 use std::{
     array,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},

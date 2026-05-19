@@ -1,17 +1,5 @@
-//! Isolator-style crossover EQ.
-//!
-//! Splits the input signal into N frequency bands using Linkwitz-Riley (LR-4)
-//! crossover filters with explicit LP/HP pairs, applies independent linear
-//! gain to each band, and sums the result. At minimum gain the band
-//! multiplier is exactly zero — true silence.
-//!
-//! Each crossover splits the signal with parallel LP and HP LR-4 filters
-//! (24 dB/oct). Allpass compensation on earlier bands ensures flat magnitude
-//! sum at unity gains.
-
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_decode::PcmChunk;
 
 use crate::AudioEffect;
@@ -106,21 +94,28 @@ impl From<u8> for FilterKind {
 }
 
 /// Configuration for a single EQ band.
-#[derive(Debug, Clone, Copy, Derivative, PartialEq, Setters)]
-#[derivative(Default)]
-#[setters(prefix = "with_")]
+#[derive(Debug, Clone, Copy, PartialEq, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EqBandConfig {
     /// Filter type label for this band.
+    #[builder(default)]
     pub kind: FilterKind,
     /// Center frequency in Hz.
-    #[derivative(Default(value = "1000.0"))]
+    #[builder(default = 1000.0)]
     pub frequency: f32,
     /// Gain in dB (clamped to [`MIN_GAIN_DB`]..=[`MAX_GAIN_DB`] on set).
+    #[builder(default)]
     pub gain_db: f32,
     /// Q factor (used only by `compute_coefficients` for parametric mode).
-    #[derivative(Default(value = "std::f32::consts::FRAC_1_SQRT_2"))]
+    #[builder(default = std::f32::consts::FRAC_1_SQRT_2)]
     pub q_factor: f32,
+}
+
+impl Default for EqBandConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 /// Generate logarithmically-spaced EQ bands from 60 Hz to 18 kHz.
@@ -808,20 +803,22 @@ mod tests {
         let warmup = vec![0.0f32; 4096];
         let _ = eq.process(test_chunk(spec, warmup));
 
-        let num_frames = 44100;
+        let num_frames: u16 = 44100;
         let pcm: Vec<f32> = (0..num_frames)
-            .map(|i| (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin())
+            .map(|i| (2.0 * PI * 1000.0 * f32::from(i) / 44100.0).sin())
             .collect();
 
-        let input_rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
+        let input_rms: f32 =
+            (pcm.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
         let chunk = test_chunk(spec, pcm);
         let output = eq.process(chunk).unwrap();
         let out = &output.pcm[..];
 
         let steady = &out[4096..];
+        let steady_len = u16::try_from(steady.len()).expect("test fixture steady < u16::MAX");
         let output_rms: f32 =
-            (steady.iter().map(|s| s * s).sum::<f32>() / steady.len() as f32).sqrt();
+            (steady.iter().map(|s| s * s).sum::<f32>() / f32::from(steady_len)).sqrt();
         let gain = output_rms / input_rms;
 
         assert!(
@@ -1038,16 +1035,16 @@ mod tests {
         };
         let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
 
-        let warmup: Vec<f32> = (0..4096)
-            .map(|i| (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin())
+        let warmup: Vec<f32> = (0u16..4096)
+            .map(|i| (2.0 * PI * 1000.0 * f32::from(i) / 44100.0).sin())
             .collect();
         let chunk = test_chunk(spec, warmup);
         let _ = eq.process(chunk);
 
         eq.set_gain(0, MAX_GAIN_DB);
 
-        let signal: Vec<f32> = (0..4096)
-            .map(|i| (2.0 * PI * 1000.0 * (i + 4096) as f32 / 44100.0).sin())
+        let signal: Vec<f32> = (0u16..4096)
+            .map(|i| (2.0 * PI * 1000.0 * f32::from(i + 4096) / 44100.0).sin())
             .collect();
         let chunk = test_chunk(spec, signal);
         let output = eq.process(chunk).unwrap();
@@ -1115,7 +1112,7 @@ mod tests {
                 eq.set_gain(band, gain);
             }
 
-            let pcm: Vec<f32> = (0..1024).map(|i| (i as f32 * 0.1).sin()).collect();
+            let pcm: Vec<f32> = (0u16..1024).map(|i| (f32::from(i) * 0.1).sin()).collect();
             let chunk = test_chunk(spec, pcm);
             let output = eq.process(chunk).unwrap();
             for (i, &s) in output.pcm.iter().enumerate() {
@@ -1166,7 +1163,7 @@ mod tests {
             eq.set_gain(1, -gain);
             eq.set_gain(2, gain);
 
-            let pcm: Vec<f32> = (0..512).map(|i| ((i as f32) * 0.3).sin()).collect();
+            let pcm: Vec<f32> = (0u16..512).map(|i| (f32::from(i) * 0.3).sin()).collect();
             let chunk = test_chunk(spec, pcm);
             let output = eq.process(chunk).unwrap();
             for &s in &output.pcm[..] {
@@ -1192,14 +1189,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn db_to_linear_unity_at_zero() {
-        assert!((db_to_linear(0.0) - 1.0).abs() < 0.001);
-    }
-
-    #[kithara::test]
-    fn db_to_linear_boost_at_6db() {
-        let gain = db_to_linear(6.0);
-        assert!((gain - 2.0).abs() < 0.02, "+6dB should be ~2.0, got {gain}");
+    #[case::unity_at_zero(0.0, 1.0, 0.001)]
+    #[case::boost_at_6db(6.0, 2.0, 0.02)]
+    fn db_to_linear_maps_to_gain(#[case] db: f32, #[case] expected_gain: f32, #[case] eps: f32) {
+        let gain = db_to_linear(db);
+        assert!(
+            (gain - expected_gain).abs() < eps,
+            "{db}dB should be ~{expected_gain}, got {gain}"
+        );
     }
 
     #[kithara::test]

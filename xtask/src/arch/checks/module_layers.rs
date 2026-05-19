@@ -1,9 +1,3 @@
-//! Intra-crate layered architecture: `use crate::*` references must respect layers.
-//!
-//! Each `[[crate]]` entry in `module-layers.toml` declares a list of layers
-//! with file globs. A file in layer N is allowed to depend only on files in
-//! layers ≤ N. Crates without a `[[crate]]` entry are skipped.
-
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},

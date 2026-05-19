@@ -1,5 +1,3 @@
-//! Tests for the unified downloader.
-
 use std::{
     net::SocketAddr,
     sync::{
@@ -93,7 +91,7 @@ async fn body_stream_empty_collects_to_empty() {
 
 #[kithara::test(tokio)]
 async fn peer_handle_cancel_scoped_to_peer() {
-    let dl = Downloader::new(DownloaderConfig::default());
+    let dl = Downloader::new(DownloaderConfig::builder().build());
     let peer_a = dl.register(Arc::new(MockPeer));
     let peer_b = dl.register(Arc::new(MockPeer));
 
@@ -127,19 +125,22 @@ async fn peer_handle_cancel_fires_on_last_clone_drop() {
 
 #[kithara::test(tokio)]
 async fn peer_handle_execute_returns_error_on_unreachable() {
-    let net = NetOptions::default()
-        .with_inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .with_total_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS));
-    let dl = Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .total_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .build();
+    let dl = Downloader::new(
+        DownloaderConfig::builder()
+            .client(HttpClient::new(net))
+            .build(),
+    );
     let handle = dl.register(Arc::new(MockPeer));
 
     let h2 = handle.clone();
     let task = tokio_spawn(async move {
         let start = Instant::now();
         let result = h2
-            .execute(FetchCmd::get(
-                Url::parse("http://192.0.2.1:1/").expect("valid url"),
-            ))
+            .execute(FetchCmd::get(Url::parse("http://192.0.2.1:1/").expect("valid url")).build())
             .await;
         (start.elapsed(), result)
     });
@@ -162,7 +163,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
 #[kithara::test(tokio)]
 async fn peer_handle_downloader_cancel_cascades() {
     let cancel = CancellationToken::new();
-    let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()));
+    let dl = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
     let handle = dl.register(Arc::new(MockPeer));
 
     cancel.cancel();
@@ -228,7 +229,7 @@ async fn max_concurrent_limits_inflight_connections() {
     let handle = dl.register(Arc::new(MockPeer));
 
     let cmds: Vec<FetchCmd> = (0..TOTAL_REQUESTS)
-        .map(|_| FetchCmd::head(url.clone()))
+        .map(|_| FetchCmd::head(url.clone()).build())
         .collect();
     let results = handle.batch(cmds).await;
 
@@ -305,7 +306,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
             let dl = Downloader::new(config);
             let handle = dl.register(Arc::new(MockPeer));
             let cmds: Vec<FetchCmd> = (0..REQUESTS_PER_DL)
-                .map(|_| FetchCmd::head(url.clone()))
+                .map(|_| FetchCmd::head(url.clone()).build())
                 .collect();
             let results = handle.batch(cmds).await;
             results.into_iter().filter(Result::is_ok).count()
@@ -392,16 +393,19 @@ async fn poll_next_respects_max_concurrent() {
         }
 
         fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
-            let mut rem = self.remaining.lock_sync();
-            if *rem == 0 {
-                return Poll::Ready(None);
-            }
-            let batch_size = (*rem).min(FLOOD_BATCH_SIZE);
-            *rem -= batch_size;
+            let (batch_size, more) = {
+                let mut rem = self.remaining.lock_sync();
+                if *rem == 0 {
+                    return Poll::Ready(None);
+                }
+                let batch_size = (*rem).min(FLOOD_BATCH_SIZE);
+                *rem -= batch_size;
+                (batch_size, *rem > 0)
+            };
             let cmds: Vec<FetchCmd> = (0..batch_size)
-                .map(|_| FetchCmd::head(self.url.clone()))
+                .map(|_| FetchCmd::head(self.url.clone()).build())
                 .collect();
-            if *rem > 0 {
+            if more {
                 cx.waker().wake_by_ref();
             }
             Poll::Ready(Some(cmds))
@@ -519,7 +523,9 @@ async fn shared_client_keepalive_bounds_socket_count() {
 
     let url = Url::parse(&format!("http://{addr}/head")).expect("url");
     let shared_client = HttpClient::new(
-        NetOptions::default().with_pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT),
+        NetOptions::builder()
+            .pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT)
+            .build(),
     );
 
     let mut total_ok = 0;
@@ -540,7 +546,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
                 let dl = Downloader::new(config);
                 let handle = dl.register(Arc::new(MockPeer));
                 let cmds: Vec<FetchCmd> = (0..REQUESTS_PER_DL)
-                    .map(|_| FetchCmd::head(url.clone()))
+                    .map(|_| FetchCmd::head(url.clone()).build())
                     .collect();
                 let results = handle.batch(cmds).await;
                 let failures: Vec<String> = results
@@ -602,8 +608,9 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     });
     let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
 
-    let config =
-        DownloaderConfig::default().with_soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS));
+    let config = DownloaderConfig::builder()
+        .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
+        .build();
     let dl = Downloader::new(config);
 
     let root = EventBus::new(EVENT_BUS_CAPACITY);
@@ -611,7 +618,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let mut rx = scoped.subscribe();
 
     let handle = dl.register(Arc::new(MockPeer)).with_bus(scoped.clone());
-    let _ = handle.execute(FetchCmd::get(url)).await;
+    let _ = handle.execute(FetchCmd::get(url).build()).await;
 
     let deadline = Instant::now() + Duration::from_secs(SLOW_DEADLINE_SECS);
     let mut seen_slow = false;
@@ -637,12 +644,14 @@ enum PeerTag {
     Preload,
 }
 
+type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
+
 /// Peer that emits `total_cmds` GET commands and stamps each with its
 /// tag when the response arrives. `priority()` reads the shared
 /// Timeline so a mid-stream flip of `set_playing` is observable.
 struct TaggedPriorityPeer {
     completion_counter: Arc<AtomicUsize>,
-    completion_log: Arc<Mutex<Vec<(PeerTag, usize)>>>,
+    completion_log: CompletionLog,
     remaining: Mutex<usize>,
     tag: PeerTag,
     timeline: crate::Timeline,
@@ -656,7 +665,7 @@ impl TaggedPriorityPeer {
         url: Url,
         cmds: usize,
         completion_counter: &Arc<AtomicUsize>,
-        completion_log: &Arc<Mutex<Vec<(PeerTag, usize)>>>,
+        completion_log: &CompletionLog,
     ) -> Self {
         Self {
             tag,
@@ -672,12 +681,15 @@ impl TaggedPriorityPeer {
 impl Abr for TaggedPriorityPeer {}
 impl Peer for TaggedPriorityPeer {
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
-        let mut rem = self.remaining.lock_sync();
-        if *rem == 0 {
-            return Poll::Pending;
-        }
-        let take = (*rem).min(FLOOD_BATCH_SIZE);
-        *rem -= take;
+        let (take, more) = {
+            let mut rem = self.remaining.lock_sync();
+            if *rem == 0 {
+                return Poll::Pending;
+            }
+            let take = (*rem).min(FLOOD_BATCH_SIZE);
+            *rem -= take;
+            (take, *rem > 0)
+        };
         let cmds: Vec<FetchCmd> = (0..take)
             .map(|_| {
                 let tag = self.tag;
@@ -686,14 +698,17 @@ impl Peer for TaggedPriorityPeer {
                 FetchCmd::get(self.url.clone())
                     .writer(Box::new(|_chunk: &[u8]| Ok(())))
                     .on_complete(Box::new(
-                        move |_bytes, _err: Option<&kithara_net::NetError>| {
+                        move |_bytes,
+                              _headers: Option<&kithara_net::Headers>,
+                              _err: Option<&kithara_net::NetError>| {
                             let order = counter.fetch_add(1, Ordering::SeqCst);
                             log.lock_sync().push((tag, order));
                         },
                     ))
+                    .build()
             })
             .collect();
-        if *rem > 0 {
+        if more {
             cx.waker().wake_by_ref();
         }
         Poll::Ready(Some(cmds))
@@ -923,7 +938,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
         peer_priority_from_handle(&handle, &timeline),
         RequestPriority::Low
     );
-    let low_resp = handle.execute(FetchCmd::get(url.clone())).await;
+    let low_resp = handle.execute(FetchCmd::get(url.clone()).build()).await;
     assert!(low_resp.is_ok(), "execute must succeed while Low");
 
     timeline.set_playing(true);
@@ -931,7 +946,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
         peer_priority_from_handle(&handle, &timeline),
         RequestPriority::High
     );
-    let high_resp = handle.execute(FetchCmd::get(url)).await;
+    let high_resp = handle.execute(FetchCmd::get(url).build()).await;
     assert!(high_resp.is_ok(), "execute must succeed while High");
 }
 

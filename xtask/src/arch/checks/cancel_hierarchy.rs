@@ -1,28 +1,3 @@
-//! Forbid hard-coded `CancellationToken::new()` outside the marked
-//! owner / bridge sites.
-//!
-//! The cancel hierarchy contract — see `crates/kithara-play/README.md`
-//! "Cancel Hierarchy" — requires that production code derive every
-//! `CancellationToken` either as a child of an upstream master (via
-//! `.child_token()`) or take the master in via a config
-//! field. Hard-coded `CancellationToken::new()` outside designated
-//! owner / bridge sites is a hierarchy escape: those tokens never see
-//! a parent shutdown pulse and the resulting "subsystem cancel" is an
-//! orphan.
-//!
-//! Allowed sites carry an inline marker comment on the same line:
-//! `// kithara:cancel:owner` (consumer-crate or `PlayerImpl::new`
-//! fallback) or `// kithara:cancel:bridge` (FFI bridge that
-//! intentionally outlives the player).
-//!
-//! Detection scans every `.rs` file in scope, parses with syn, finds
-//! mod / fn / impl items annotated `#[cfg(test)]` (or any cfg
-//! containing `test`) and excludes their line ranges. Lines outside
-//! those ranges that contain `CancellationToken::new()` without a
-//! marker comment are reported as violations. Crates whose
-//! production *is* test scaffolding (test-utils, test-macros) are
-//! exempt at the crate level.
-
 use std::{collections::BTreeSet, fs};
 
 use anyhow::Result;

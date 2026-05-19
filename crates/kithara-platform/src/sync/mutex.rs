@@ -1,8 +1,3 @@
-//! Platform-optimal [`Mutex`] and [`MutexGuard`].
-//!
-//! * **Native** — [`parking_lot::Mutex`] (no poisoning, smaller footprint).
-//! * **WASM** — [`wasm_safe_thread::Mutex`] (safe on the main thread).
-
 use std::ops::{Deref, DerefMut};
 
 #[cfg(not(target_arch = "wasm32"))]

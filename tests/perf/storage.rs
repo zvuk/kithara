@@ -1,7 +1,3 @@
-//! Performance tests for storage operations.
-//!
-//! Run with: `cargo test --test storage --features perf --release`
-
 #![cfg(feature = "perf")]
 
 use std::io::Write;
@@ -19,7 +15,9 @@ fn create_test_storage(size: usize) -> (MmapResource, NamedTempFile) {
     file.flush().unwrap();
 
     let path = file.path().to_path_buf();
-    let opts = MmapOptions::new(path).with_mode(OpenMode::ReadWrite);
+    let opts = MmapOptions::for_path(path)
+        .mode(OpenMode::ReadWrite)
+        .build();
     let storage: MmapResource = Resource::open(CancellationToken::new(), opts).unwrap();
     (storage, file)
 }

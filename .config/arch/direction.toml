@@ -6,7 +6,7 @@
 [[layer]]
 index = 0
 name = "leaves"
-crates = ["kithara-drm", "kithara-hang-detector", "kithara-workspace-hack"]
+crates = ["kithara-drm", "kithara-workspace-hack"]
 
 [[layer]]
 index = 1
@@ -57,7 +57,7 @@ crates = ["kithara", "kithara-queue", "kithara-wasm"]
 [[layer]]
 index = 9
 name = "apps"
-crates = ["kithara-app", "kithara-examples", "kithara-ffi"]
+crates = ["kithara-app", "kithara-ffi"]
 
 # Transitional edges that must shrink to zero. Format: "from -> to" = "reason".
 [exemptions]

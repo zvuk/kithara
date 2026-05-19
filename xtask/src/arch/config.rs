@@ -1,8 +1,3 @@
-//! Loaders for `.config/arch/*.toml`.
-//!
-//! Each check has its own typed config section. Missing files default to empty,
-//! which lets checks degrade gracefully when only some configs are present.
-
 use std::{collections::BTreeMap, fs, path::Path};
 
 use anyhow::{Context, Result};
@@ -463,7 +458,6 @@ fn default_no_lib_statics_exempt_crates() -> Vec<String> {
         "xtask",
         "kithara-test-utils",
         "kithara-test-macros",
-        "kithara-hang-detector-macros",
         "kithara-wasm-macros",
         "kithara-probe-macros",
     ]
@@ -495,7 +489,6 @@ fn default_cancel_hierarchy_exempt_crates() -> Vec<String> {
     [
         "kithara-test-utils",
         "kithara-test-macros",
-        "kithara-hang-detector-macros",
         "kithara-wasm-macros",
         "kithara-probe-macros",
         "xtask",

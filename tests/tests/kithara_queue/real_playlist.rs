@@ -1,19 +1,3 @@
-//! Real-network integration tests driving `Queue` against
-//! `AppConfig::DEFAULT_TRACKS` through an offline audio backend.
-//!
-//! Both tests in this file hit the live silvercomet.top / zvq.me
-//! endpoints and run the **exact production pipeline** (`Queue` →
-//! `PlayerImpl` → `SessionState<OfflineBackend>` → firewheel). They are
-//! marked `#[ignore]` because they require the network; run with
-//! `--ignored --nocapture --test-threads=1`.
-//!
-//! DRM tracks currently fail on load (zvq.me stage server returns 403
-//! "User not registered"). The tests document that regression instead
-//! of hiding it — per-track smoke (`track_plays_end_to_end`) isolates
-//! it to specific tracks, and the playlist scenario
-//! (`queue_playlist_behavior`) surfaces it as a structured per-track
-//! failure report.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{sync::Arc, time::Duration};
@@ -22,12 +6,11 @@ use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{TestTempDir, Xorshift64, kithara, offline::OfflineSession};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{TestTempDir, Xorshift64, kithara};
 use tokio::{
     sync::OnceCell,
     time::{sleep, timeout},
@@ -74,16 +57,21 @@ mod test_statics {
 async fn shared_test_ctx() -> &'static TestCtx {
     test_statics::TEST_CTX
         .get_or_init(|| async {
-            let net = NetOptions::default().with_is_insecure(true);
-            let downloader =
-                Downloader::new(DownloaderConfig::default().with_client(HttpClient::new(net)));
+            let net = NetOptions::builder().is_insecure(true).build();
+            let downloader = Downloader::new(
+                DownloaderConfig::builder()
+                    .client(HttpClient::new(net))
+                    .build(),
+            );
             let flush_hub = FlushHub::new(
                 tokio_util::sync::CancellationToken::new(),
                 FlushPolicy::default(),
             );
             let config = AppConfig::new(downloader, flush_hub);
             let player = Arc::new(PlayerImpl::new(
-                PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+                PlayerConfig::builder()
+                    .session(OfflineSession::arc_auto())
+                    .build(),
             ));
             let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
@@ -219,7 +207,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 /// random → position consistency. Isolates track-specific regressions
 /// (DRM 403, MP3 seek-near-end hang, position drift).
 #[kithara::test(tokio)]
-#[ignore]
+#[ignore = "requires silvercomet.top real network — run with --include-ignored"]
 #[case::silvercomet_mp3_symphonia(
     "https://stream.silvercomet.top/track.mp3",
     42,
@@ -526,6 +514,9 @@ async fn track_plays_end_to_end(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let ctx = shared_test_ctx().await;
     let source = build_track_source(url, ctx, backend, abr);
     let mut rx = ctx.queue.subscribe();
@@ -614,7 +605,7 @@ where
 /// so DRM regressions surface as a list instead of killing the whole
 /// test at the first bad entry.
 #[kithara::test(tokio)]
-#[ignore]
+#[ignore = "requires AppConfig::DEFAULT_TRACKS real-network URLs (incl. silvercomet + DRM) — run with --include-ignored"]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -622,6 +613,9 @@ where
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let ctx = shared_test_ctx().await;
     let urls: Vec<&'static str> = AppConfig::DEFAULT_TRACKS.to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");

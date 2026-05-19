@@ -1,23 +1,3 @@
-//! A type should have one canonical public path inside a crate.
-//!
-//! Two patterns are flagged:
-//!
-//! - **R1 — explicit duplicate**: the same target (`crate::path::T`) appears
-//!   in `pub use` re-exports across two or more files in one crate. Pick one
-//!   canonical mountpoint and drop the other.
-//! - **R2 — associated-type leak**: a `pub use` re-export of a type that is
-//!   already publicly reachable as `<PublicType as PublicTrait>::Assoc =
-//!   ThatType` somewhere in the same crate. The associated type already
-//!   surfaces the type through the public trait — the explicit re-export is
-//!   a redundant second canonical name.
-//!
-//! Per-crate analysis. Cross-crate facade re-exports (e.g. `pub use
-//! kithara_file::*` in the umbrella crate) are intentional and out of scope.
-//! Detection is AST-only and does not perform full module resolution; it
-//! relies on local-name lookups inside one crate's source tree, which
-//! captures the common cases (a type's local name is unique) without false
-//! positives from foreign-crate look-alikes.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;

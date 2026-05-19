@@ -14,7 +14,7 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-pub use cmd::{FetchCmd, OnCompleteFn, WriterFn, reject_html_response};
+pub use cmd::{FetchCmd, OnCompleteFn, OnResponseFn, WriterFn, reject_html_response};
 pub use config::DownloaderConfig;
 pub use downloader::Downloader;
 pub use kithara_events::{RequestMethod, RequestPriority};

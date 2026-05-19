@@ -1,14 +1,6 @@
-//! Local codec/container/media-info types for the encoding pipeline.
-//!
-//! These mirror `kithara_stream::{AudioCodec, ContainerFormat, MediaInfo}` but
-//! live here so `kithara-encode` does not depend on `kithara-stream`. The
-//! crate is test-only infrastructure (no production consumer in the workspace
-//! depends on it), so a dedicated copy is acceptable and avoids a dependency
-//! cycle when `kithara-test-utils` later participates in the probe runtime.
-
 use std::borrow::Cow;
 
-use derive_setters::Setters;
+use bon::Builder;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerFormat {
@@ -38,8 +30,8 @@ pub enum AudioCodec {
     Adpcm,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct MediaInfo {
     pub channels: Option<u16>,
@@ -52,13 +44,10 @@ pub struct MediaInfo {
 impl MediaInfo {
     #[must_use]
     pub fn new(codec: Option<AudioCodec>, container: Option<ContainerFormat>) -> Self {
-        Self {
-            codec,
-            container,
-            channels: None,
-            sample_rate: None,
-            variant_index: None,
-        }
+        Self::builder()
+            .maybe_codec(codec)
+            .maybe_container(container)
+            .build()
     }
 
     #[must_use]

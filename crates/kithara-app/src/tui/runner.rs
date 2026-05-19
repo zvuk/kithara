@@ -72,9 +72,6 @@ pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig
 fn run_ui_loop(controller: &Arc<StateController>, palette: &tui::TuiPalette) -> RunnerResult {
     let dashboard = Dashboard::new(*palette);
 
-    // Drain raw queue events so the user sees a live log of engine
-    // activity. Mirrored event-driven state changes are owned by the
-    // StateController; this subscriber only logs.
     let mut event_rx = controller.queue().subscribe();
 
     let mut state = controller.snapshot();
@@ -381,9 +378,6 @@ fn cycle_quality(controller: &StateController, dir: i32) {
     if snapshot.abr_variants.is_empty() {
         return;
     }
-    // Position `-1` represents the synthetic "Auto" slot that sits
-    // before all variants; cycling left/right traverses Auto + every
-    // variant exactly once and clamps at the ends.
     let current_pos: isize = if snapshot.abr_mode_is_auto {
         -1
     } else {

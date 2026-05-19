@@ -1,8 +1,3 @@
-//! WASM stress tests for the HLS audio pipeline.
-//!
-//! Runs in a dedicated Web Worker via `wasm-bindgen-test-runner` + headless Chrome.
-//! Requires the fixture server to be running (see `just wasm-test`).
-
 use std::sync::{
     OnceLock,
     atomic::{AtomicBool, Ordering},
@@ -13,13 +8,13 @@ use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
 use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_platform::time::{Duration, Instant};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, SAW_PERIOD, TestServerHelper,
     fixture_protocol::{DataMode, InitMode},
     phase_distance, phase_from_f32,
 };
+use kithara_platform::time::{Duration, Instant};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use tracing::{info, warn};
 use url::Url;
 mod kithara {
@@ -123,16 +118,19 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
 
-    let hls_config = HlsConfig::new(url)
-        .with_events(bus)
-        .with_store(StoreOptions::default().with_is_ephemeral(true))
+    let hls_config = HlsConfig::for_url(url)
+        .events(bus)
+        .store(StoreOptions::default_builder().is_ephemeral(true).build())
         .with_abr_options(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()
-        });
+        })
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config).await.unwrap();
     audio.preload();
     audio

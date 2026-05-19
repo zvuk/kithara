@@ -1,5 +1,3 @@
-//! Audio pipeline traits.
-
 use std::{
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,

@@ -9,11 +9,11 @@ use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource};
 use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
+use kithara_integration_tests::{TestTempDir, cancel_token, temp_dir};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -53,10 +53,9 @@ fn open_mmap_at(
     initial_len: Option<u64>,
     cancel: CancellationToken,
 ) -> MmapResource {
-    let mut opts = MmapOptions::new(path);
-    if let Some(len) = initial_len {
-        opts = opts.with_initial_len(len);
-    }
+    let opts = MmapOptions::for_path(path)
+        .maybe_initial_len(initial_len)
+        .build();
     Resource::open(cancel, opts).expect("open should succeed")
 }
 

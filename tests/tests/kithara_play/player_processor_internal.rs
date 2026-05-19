@@ -1,8 +1,3 @@
-//! Tests for `PlayerNodeProcessor` — the realtime audio processor that
-//! manages tracks in the arena and renders mixed audio. Drives load /
-//! unload / fade-in / handover scenarios with `TestPcmReader`-backed
-//! resources.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![allow(
     clippy::cast_possible_truncation,

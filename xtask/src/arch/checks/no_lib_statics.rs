@@ -1,27 +1,3 @@
-//! Hidden globals in library crates.
-//!
-//! `static mut`, `lazy_static!`, `OnceLock<…>`, `OnceCell<…>` declared at
-//! item level inside a library crate are hidden process-wide singletons —
-//! they couple every consumer of the crate to the same instance, defeat
-//! testability (no isolation between unit tests), and make ownership of
-//! state implicit. Per AGENTS.md: "Minimal magic and hidden dependencies".
-//!
-//! The pattern that should replace them is: build the singleton at the top
-//! of the application (`main`, FFI entrypoint, app crate) and pass it down
-//! through config structs or constructor arguments. Library crates accept
-//! the dependency, they do not own it.
-//!
-//! Detection finds, at file scope (top-level or inside any `mod`):
-//!   - `static FOO: T = …;`
-//!   - `static mut FOO: T = …;`
-//!   - `static FOO: OnceLock<T> = OnceLock::new();`  (any `OnceLock<…>` /
-//!     `OnceCell<…>` / `LazyLock<…>` / `Lazy<…>` typed const-or-static)
-//!   - `lazy_static! { … }` macro invocations
-//!
-//! Exemptions: app/binary crates (`kithara-app`, `kithara-ffi`,
-//! `kithara-wasm`, `xtask`), test/macro support crates, and the `main.rs`
-//! entry of any crate. Per-crate exemptions are configurable.
-
 use std::collections::BTreeSet;
 
 use anyhow::Result;

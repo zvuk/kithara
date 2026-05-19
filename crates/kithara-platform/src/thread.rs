@@ -1,9 +1,3 @@
-//! Thread-like primitives for sync code.
-//!
-//! Delegates to platform-optimal backends:
-//! * **Native** — `std::thread` (OS threads).
-//! * **WASM** — `wasm_safe_thread` (Web Workers).
-
 pub use std::time::Duration;
 use std::{
     hash::{DefaultHasher, Hash, Hasher},

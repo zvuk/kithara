@@ -4,12 +4,6 @@
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
 
-//! Stress tests that require exclusive CPU access.
-//!
-//! These tests use `recv_outcome_blocking` (blocking audio reads after seek)
-//! and are sensitive to CPU contention. They run one at a time via nextest
-//! `threads-required = "num-cpus"` override.
-
 mod common;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,6 +16,7 @@ mod kithara_hls {
     mod abr_auto_switch;
     mod abr_mode_switch;
     mod abr_switch_playback;
+    mod idle_behavior;
     mod live_stress_real_stream;
     mod red_flaky_small_cache_hot_refetch;
     mod red_leak_native_drm_seek_resume;

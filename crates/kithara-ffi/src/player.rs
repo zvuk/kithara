@@ -1,12 +1,3 @@
-//! FFI wrapper for the audio player.
-//!
-//! `AudioPlayer` owns a [`kithara_queue::Queue`] under the hood. All queue
-//! bookkeeping (stable `TrackId`s, auto-respawn of consumed resources,
-//! crossfade-aware select, auto-advance on item EOF) lives in the Queue.
-//! The FFI layer is a thin adapter: index-based Swift API maps onto
-//! `TrackId`-based Queue calls through a `TrackId -> AudioPlayerItem` map
-//! that preserves Swift-side identity.
-
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
@@ -68,7 +59,7 @@ pub(crate) type ItemRegistry = HashMap<TrackId, Arc<AudioPlayerItem>>;
 /// validate TLS.
 fn default_net_options() -> NetOptions {
     const INSECURE: bool = cfg!(feature = "dev");
-    NetOptions::default().with_is_insecure(INSECURE)
+    NetOptions::builder().is_insecure(INSECURE).build()
 }
 
 /// FFI-facing audio player.
@@ -155,14 +146,10 @@ impl PeakBitrate {
 fn build_processor_rule(rule: FfiKeyRule) -> KeyProcessorRule {
     let salt = rule.salt.unwrap_or_default();
     let proc = build_processor_closure(rule.processor, salt);
-    let mut built = KeyProcessorRule::new(&rule.domains, proc);
-    if let Some(h) = rule.headers {
-        built = built.with_headers(h);
-    }
-    if let Some(q) = rule.query_params {
-        built = built.with_query_params(q);
-    }
-    built
+    KeyProcessorRule::for_domains(&rule.domains, proc)
+        .maybe_headers(rule.headers)
+        .maybe_query_params(rule.query_params)
+        .build()
 }
 
 /// Convert the FFI-level [`crate::types::FfiKeyOptions`] into the
@@ -187,7 +174,7 @@ fn build_initial_key_state(
         }
         registry.add(build_processor_rule(r));
     }
-    let key_options = KeyOptions::new().with_key_registry(registry);
+    let key_options = KeyOptions::builder().key_registry(registry).build();
     (key_options, player_headers)
 }
 
@@ -198,16 +185,18 @@ impl AudioPlayer {
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
         let cancel = CancellationToken::new(); // kithara:cancel:owner
-        let mut player_config = PlayerConfig::default()
-            .with_eq_layout(generate_log_spaced_bands(config.eq_band_count as usize));
-        player_config.cancel = Some(cancel.clone());
+        let player_config = PlayerConfig::builder()
+            .eq_layout(generate_log_spaced_bands(config.eq_band_count as usize))
+            .cancel(cancel.clone())
+            .build();
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::default().with_player(player);
         let net = default_net_options();
         let downloader = Downloader::new(
-            DownloaderConfig::default()
-                .with_client(HttpClient::new(net))
-                .with_runtime(crate::FFI_RUNTIME.clone()),
+            DownloaderConfig::builder()
+                .client(HttpClient::new(net))
+                .runtime(crate::FFI_RUNTIME.clone())
+                .build(),
         );
         let (key_options, player_headers) = build_initial_key_state(config.key_options);
         Arc::new(Self {
@@ -606,7 +595,7 @@ impl AudioPlayer {
         let mut opts = self.key_options.lock_sync();
         let mut registry = opts.key_registry.take().unwrap_or_default();
         registry.add(processor_rule);
-        *opts = KeyOptions::new().with_key_registry(registry);
+        *opts = KeyOptions::builder().key_registry(registry).build();
     }
 
     /// Player-wide auth header. Stores `auth_token` under
@@ -676,41 +665,25 @@ impl AudioPlayer {
     /// (`VariantsDiscovered` fires synchronously during stream open — a
     /// late subscriber would miss it).
     fn build_source_for_item(&self, item: &Arc<AudioPlayerItem>) -> Result<TrackSource, FfiError> {
-        let mut config =
-            ResourceConfig::new(item.url()).map_err(|e| FfiError::InvalidArgument {
+        let scoped = self.queue.bus().scoped();
+        let abr_mode = item.abr_mode().map(|mode| match mode {
+            FfiAbrMode::Auto => AbrMode::Auto(None),
+            FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
+        });
+        let mut config = ResourceConfig::for_src(item.url())
+            .map_err(|e| FfiError::InvalidArgument {
                 reason: e.to_string(),
-            })?;
+            })?
+            .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
+            .maybe_headers(self.merged_headers_for_item(item).map(Into::into))
+            .events(scoped.clone())
+            .downloader(self.downloader.clone())
+            .keys(self.key_options.lock_sync().clone())
+            .initial_abr_mode(abr_mode.unwrap_or_default())
+            .build();
 
         config::configure_resource(&mut config, &self.store);
-
-        let bitrate = item.preferred_peak_bitrate();
-        if bitrate > 0.0 {
-            config = config.with_preferred_peak_bitrate(bitrate);
-        }
-
-        let merged_headers = self.merged_headers_for_item(item);
-        if let Some(headers) = merged_headers {
-            config = config.with_headers(headers.into());
-        }
-
-        let scoped = self.queue.bus().scoped();
-        config.bus = Some(scoped.clone());
         *item.bus.lock_sync() = Some(scoped);
-
-        config = config.with_downloader(self.downloader.clone());
-
-        let key_options = self.key_options.lock_sync().clone();
-        if key_options.key_registry.is_some() {
-            config = config.with_keys(key_options);
-        }
-
-        if let Some(mode) = item.abr_mode() {
-            let abr_mode = match mode {
-                FfiAbrMode::Auto => AbrMode::Auto(None),
-                FfiAbrMode::Manual { variant_index } => AbrMode::Manual(variant_index as usize),
-            };
-            config = config.with_initial_abr_mode(abr_mode);
-        }
 
         Ok(TrackSource::Config(Box::new(config)))
     }
@@ -808,17 +781,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn eq_set_without_engine_returns_error() {
+    #[case::set_gain((|p: &AudioPlayer| p.set_eq_gain(0, 3.0).is_err()) as fn(&AudioPlayer) -> bool)]
+    #[case::reset((|p: &AudioPlayer| p.reset_eq().is_err()) as fn(&AudioPlayer) -> bool)]
+    fn eq_mutation_without_engine_returns_error(#[case] op_errs: fn(&AudioPlayer) -> bool) {
         let player = AudioPlayer::new(FfiPlayerConfig::default());
-        let result = player.set_eq_gain(0, 3.0);
-        assert!(result.is_err());
-    }
-
-    #[kithara::test]
-    fn eq_reset_without_engine_returns_error() {
-        let player = AudioPlayer::new(FfiPlayerConfig::default());
-        let result = player.reset_eq();
-        assert!(result.is_err());
+        assert!(op_errs(&player));
     }
 
     #[kithara::test]

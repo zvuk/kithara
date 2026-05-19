@@ -1,15 +1,3 @@
-//! Number of `impl Trait for X` blocks targeting one local type.
-//!
-//! Many distinct trait impls on a single type signal a god-type playing
-//! several roles. The companion shape is "one type, one role", with role
-//! composition done via a wrapper or an embedded struct rather than by
-//! piling more `impl Trait` blocks on the same type.
-//!
-//! Detection is per-file: only types defined in the current file are
-//! considered, and only `impl Trait for X` (not inherent `impl X`) blocks
-//! count. Cross-file impls of foreign types belong elsewhere (extension-
-//! trait pattern) and are out of scope here.
-
 use std::collections::BTreeMap;
 
 use anyhow::Result;

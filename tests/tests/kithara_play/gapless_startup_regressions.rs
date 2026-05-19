@@ -5,15 +5,15 @@ use std::{num::NonZeroU32, path::Path};
 use kithara_assets::StoreOptions;
 use kithara_decode::{GaplessMode, SilenceTrimParams};
 use kithara_encode::codec::AudioCodec;
-use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_play::{PlayerConfig, Resource, ResourceConfig};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{
         DelayRule, GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
     temp_dir,
 };
+use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_play::{PlayerConfig, Resource, ResourceConfig};
 
 use super::offline_player_harness::OfflinePlayerHarness;
 use crate::gapless_common::{
@@ -44,7 +44,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 ) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_gapless_mode(gapless_mode),
+        PlayerConfig::builder().gapless_mode(gapless_mode).build(),
         GAPLESS_SAMPLE_RATE,
     );
     let resource =
@@ -124,10 +124,11 @@ async fn create_delayed_gapless_hls_resource(
         .expect("create delayed gapless HLS fixture");
 
     let store = StoreOptions::new(cache_dir);
-    let mut config = ResourceConfig::new(created.master_url().as_str())
+    let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .with_store(store);
-    player.prepare_config(&mut config);
+        .store(store)
+        .build();
+    config = player.prepare_config(config);
 
     Resource::new(config)
         .await

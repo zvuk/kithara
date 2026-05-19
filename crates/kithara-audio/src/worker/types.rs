@@ -1,5 +1,3 @@
-//! Types for the shared audio worker.
-
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use crate::runtime::ServiceClass;

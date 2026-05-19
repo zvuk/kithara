@@ -1,21 +1,3 @@
-//! End-to-end auto-advance tests: real `Queue` + offline render + PCM check.
-//!
-//! Each test inserts two distinguishable PCM tracks (different constant
-//! signal value), drives the system through `Queue::tick()` (the same
-//! call kithara-app and the FFI use), captures the rendered output, and
-//! asserts the second track's signature is present after the first one
-//! ends. Catches regressions where the queue notices the protocol-level
-//!  events, but the audio thread never actually promotes the next track.
-//!
-//! Bypasses the network loader via `Queue::insert_loaded_for_test`; the
-//! real `Resource::new` URL fetch path is covered by `real_playlist.rs`.
-//!
-//! Cases:
-//! - `cf_zero_queue_tick_advances_to_second_track_audio` — cf=0 path
-//!   (arena handover at EOF).
-//! - `cf_nonzero_queue_tick_crossfades_to_second_track_audio` — cf>0
-//!   path (queue commits on `HandoverRequested`).
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::sync::Arc;
@@ -91,7 +73,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
     const TRACK_B_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_crossfade_duration(0.0),
+        PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(
@@ -156,7 +138,9 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
     const TRACK_B_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECS),
+        PlayerConfig::builder()
+            .crossfade_duration(CROSSFADE_SECS)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(
@@ -212,7 +196,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
 
 /// Sanity guard: if `Queue::tick` regresses to skipping
 /// `process_notifications`, this test must fail. We confirm the
-/// fix-under-test by asserting both PrefetchRequested and HandoverRequested
+/// fix-under-test by asserting both `PrefetchRequested` and `HandoverRequested`
 /// reach the bus during a cf>0 cycle — purely event-level, but pinned to
 /// the real `Queue::tick` path.
 #[kithara::test(tokio)]
@@ -224,7 +208,9 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     const CROSSFADE_SECS: f32 = 0.2;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECS),
+        PlayerConfig::builder()
+            .crossfade_duration(CROSSFADE_SECS)
+            .build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(
@@ -294,7 +280,7 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
     const LOUD_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_crossfade_duration(0.0),
+        PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(
@@ -357,7 +343,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_B_VALUE: f32 = 0.80;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_crossfade_duration(0.0),
+        PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(
@@ -423,7 +409,7 @@ async fn queue_pauses_player_when_last_track_ends() {
     const TRACK_SECS: f64 = 0.4;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_crossfade_duration(0.0),
+        PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(
@@ -480,7 +466,7 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
     const TRACK_VALUE: f32 = 0.30;
 
     let harness = OfflinePlayerHarness::with_sample_rate(
-        PlayerConfig::default().with_crossfade_duration(0.0),
+        PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
     let queue = Queue::new(

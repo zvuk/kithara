@@ -1,22 +1,7 @@
-//! Shared test defaults — single source of truth for constants used across
-//! stress tests, integration tests, and multi-instance tests.
-//!
-//! Two namespaces:
-//!
-//! * [`SawWav`] — audio defaults (`sample_rate`, `channels`, `segment_size`)
-//!   plus helpers for derived values (segment duration, WAV blob size).
-//! * [`Consts`] — scalar constants that were duplicated across modules
-//!   (segment counts, read timeouts, MP3 fixture sizes). Consumers use
-//!   `Consts::FOO` so there is one editable source of truth.
-//!
-//! Packing constants into structs eliminates per-file `#[cfg]` gates and
-//! provides a discoverable location for test configuration.
-
 use std::sync::Arc;
 
-use kithara_integration_tests::audio_fixture::EmbeddedAudio;
+use kithara_integration_tests::{audio_fixture::EmbeddedAudio, wav::create_test_wav};
 use kithara_platform::time::Duration;
-use kithara_test_utils::wav::create_test_wav;
 
 /// Default audio parameters for generated WAV test fixtures.
 ///

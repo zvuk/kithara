@@ -1,9 +1,3 @@
-//! Foreign observer traits for push-based property updates.
-//!
-//! Each observer has a single `on_event()` method receiving a typed enum
-//! variant. This keeps the FFI surface minimal — Swift needs only one
-//! callback bridge class per observer instead of one per property.
-
 use crate::types::{FfiItemEvent, FfiPlayerEvent};
 
 /// Receives player-level state changes from Rust.

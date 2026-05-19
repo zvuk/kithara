@@ -1,10 +1,3 @@
-//! Regression test: ABR variant switch during normal playback must not hang.
-//!
-//! Reproduces the production crash where HLS ABR switch causes
-//! `[HangDetector] run_shared_worker_loop no progress for 10s`.
-//!
-//! Uses real fMP4/AAC assets (same as production app) with disk cache.
-
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ChunkOutcome, ReadOutcome},
@@ -14,13 +7,13 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, Stream},
 };
-use kithara_integration_tests::offline::{OfflinePlayer, resource_from_reader};
-use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, PcmPattern},
+    offline::{OfflinePlayer, resource_from_reader},
     temp_dir,
 };
+use kithara_platform::time::{Duration, Instant, sleep};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -75,18 +68,16 @@ async fn open_packaged_hls_audio(
     abr: AbrMode,
     bus: Option<EventBus>,
 ) -> Audio<Stream<Hls>> {
-    let mut hls_config = HlsConfig::new(url.clone())
-        .with_store(store)
-        .with_initial_abr_mode(abr)
-        .with_download_batch_size(1);
-    if let Some(bus) = bus.clone() {
-        hls_config = hls_config.with_events(bus);
-    }
+    let hls_config = HlsConfig::for_url(url.clone())
+        .store(store)
+        .initial_abr_mode(abr)
+        .download_batch_size(1)
+        .maybe_events(bus.clone())
+        .build();
 
-    let mut config = AudioConfig::<Hls>::new(hls_config);
-    if let Some(bus) = bus {
-        config = config.with_events(bus);
-    }
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .maybe_events(bus)
+        .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -134,12 +125,13 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let url = server.asset("hls/master.m3u8");
 
     let cancel = CancellationToken::new();
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -352,6 +344,9 @@ async fn stream_continues_after_seek(
     #[case] abr_auto: bool,
     #[case] backend: DecoderBackend,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
 
@@ -361,12 +356,15 @@ async fn stream_continues_after_seek(
     } else {
         AbrMode::Manual(0)
     };
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(abr_mode);
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(abr_mode)
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config).with_decoder_backend(backend);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -439,12 +437,13 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let url = server.asset("hls/master.m3u8");
 
     let cancel = CancellationToken::new();
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -493,13 +492,15 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     let url = server.asset(path);
 
     let cancel = CancellationToken::new();
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let config =
-        AudioConfig::<Hls>::new(hls_config).with_decoder_backend(DecoderBackend::Symphonia);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .decoder_backend(DecoderBackend::Symphonia)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create audio");
@@ -559,8 +560,12 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("track.mp3");
 
-    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let file_config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .hint(("mp3").to_string())
+        .build();
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create audio");
@@ -640,11 +645,12 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     let _ = audio.preload();
@@ -732,5 +738,138 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     assert!(
         resume_chunks >= 4,
         "playback must continue after seek (got {resume_chunks} chunks)"
+    );
+}
+
+/// Phase P.0 regression: production bug repro from app.log (2026-05-15).
+///
+/// Scenario in prod (app.log:103-104):
+/// `commit_variant_switch from=0 to=3 cross_codec=true reason=UpSwitch`
+/// fires on the FIRST boundary crossing. Decoder produces some samples
+/// then stalls; `decode_next_chunk` hangs ~10s later. User experience:
+/// "пропал звук, слайдер двигался, потом крэш".
+///
+/// `abr_switch_real_assets_does_not_hang` and `runtime_cross_codec_manual_switch_no_hang`
+/// already cover the cross-codec path but their assertions accept
+/// `total_samples > 0` / `> 1000` — a single post-init buffer satisfies
+/// them, masking a stall. Sustained playback requires a much higher bar.
+///
+/// Deterministic structure: open Auto(0)=AAC, read >=200 ms of audio to
+/// confirm AAC decoder warmed, then trigger Manual(3)=FLAC. The Manual
+/// path runs through the same `commit_variant_switch` cross-codec branch
+/// as Auto — deterministic timing avoids the Auto-only flakiness where
+/// the bandwidth estimator may or may not commit the switch within the
+/// test window.
+///
+/// Real assets: `assets/hls/master.m3u8` carries variants 0-2 AAC
+/// (mp4a.40.2) and variant 3 FLAC (fLaC) — 37 segments × 4s each =
+/// 148 s of audio. Reading 15 s post-switch must produce at least
+/// `15 × 44_100 × 2 × 0.5 = 661_500` samples (50 % of nominal rate).
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(60)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestTempDir) {
+    let server = TestServerHelper::new().await;
+    let url = server.asset("hls/master.m3u8");
+
+    let cancel = CancellationToken::new();
+    let bus = EventBus::new(256);
+    let mut hls_rx = bus.subscribe();
+
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
+
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    let mut audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+    let _ = audio.preload();
+
+    // Phase 1 — AAC warmup. Read until we have at least 200 ms of audio
+    // (44_100 × 2 × 0.2 = 17_640 frames) so AAC decoder is fully primed.
+    let mut buf = vec![0f32; 4096];
+    let mut pre_samples = 0u64;
+    let warmup_deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < warmup_deadline && pre_samples < 17_640 {
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => pre_samples += count.get() as u64,
+            Ok(ReadOutcome::Pending { .. }) => sleep(Duration::from_millis(20)).await,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error during AAC warmup: {e}"),
+        }
+    }
+    assert!(
+        pre_samples >= 17_640,
+        "AAC warmup must produce ≥17_640 frames before the cross-codec flip; \
+         got {pre_samples}"
+    );
+
+    // Phase 2 — trigger cross-codec Manual switch to FLAC.
+    let handle = audio
+        .abr_handle()
+        .expect("HLS stream must expose AbrHandle");
+    handle
+        .set_mode(AbrMode::Manual(3))
+        .expect("Manual(3) (FLAC) target must be valid");
+
+    // Phase 3 — sustained post-switch playback. Read for 15 s; collect
+    // VariantApplied events alongside.
+    let post_deadline = Instant::now() + Duration::from_secs(15);
+    let mut post_samples = 0u64;
+    let mut applied_targets: Vec<usize> = Vec::new();
+    let mut last_progress = Instant::now();
+    let mut max_stall_ms = 0u128;
+    while Instant::now() < post_deadline {
+        while let Ok(ev) = hls_rx.try_recv() {
+            if let Event::Abr(AbrEvent::VariantApplied { to, .. }) = ev {
+                applied_targets.push(to);
+            }
+        }
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                let frames = count.get() as u64;
+                post_samples += frames;
+                if frames > 0 {
+                    last_progress = Instant::now();
+                }
+            }
+            Ok(ReadOutcome::Pending { .. }) => sleep(Duration::from_millis(20)).await,
+            Ok(ReadOutcome::Eof { .. }) => break,
+            Err(e) => panic!("decode error post-switch: {e}"),
+        }
+        let stalled = Instant::now().duration_since(last_progress).as_millis();
+        if stalled > max_stall_ms {
+            max_stall_ms = stalled;
+        }
+    }
+
+    info!(
+        ?applied_targets,
+        pre_samples, post_samples, max_stall_ms, "Phase P.0: cross-codec switch sustained playback"
+    );
+
+    assert!(
+        applied_targets.contains(&3),
+        "Manual(3) must surface VariantApplied{{to:3}} (FLAC) — \
+         applied_targets={applied_targets:?}"
+    );
+    assert!(
+        post_samples >= 660_000,
+        "sustained FLAC playback after cross-codec flip must produce \
+         ≥660_000 frames in 15 s (≈50 % nominal 44.1 kHz × 15 s × 2 ch); \
+         got {post_samples}. Prod symptom: decoder stalls after the switch."
+    );
+    assert!(
+        max_stall_ms < 5_000,
+        "decoder must not stall longer than 5 s after the cross-codec flip; \
+         longest stall window was {max_stall_ms} ms"
     );
 }

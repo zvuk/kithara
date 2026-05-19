@@ -1,5 +1,3 @@
-//! Audio pipeline struct and public API.
-
 use std::{
     io::{Error as IoError, Read, Seek, SeekFrom},
     marker::PhantomData,
@@ -21,7 +19,8 @@ use kithara_platform::{
     thread::park_timeout,
     tokio::{sync::Notify, task::spawn_blocking},
 };
-use kithara_stream::{MediaInfo, Stream, StreamContext, StreamType, Timeline};
+use kithara_stream::{MediaInfo, Stream, StreamType, Timeline};
+use kithara_test_utils::kithara;
 use portable_atomic::AtomicF32;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
@@ -84,7 +83,7 @@ enum RecvOutcome {
 /// use kithara_stream::Stream;
 ///
 /// let config = AudioConfig::<Hls>::new(hls_config)
-///     .with_hint("mp3");
+///     .hint("mp3");
 /// let audio = Audio::<Stream<Hls>>::new(config).await?;
 ///
 /// // Get audio format
@@ -190,9 +189,26 @@ impl<S> Audio<S> {
 
     /// Backoff duration between receive attempts.
     const RECV_BACKOFF: Duration = Duration::from_micros(100);
+    /// Runtime ABR handle (cloned from the stream's source at
+    /// construction). `Some` for adaptive sources (HLS), `None` for
+    /// file/non-adaptive sources.
+    #[must_use]
+    pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.abr_handle.clone()
+    }
+
     fn close_channel_and_mark_eof(&mut self) -> Option<PcmChunk> {
         self.consumer_phase = ConsumerPhase::Failed;
         None
+    }
+
+    /// Current variant's metadata. Pulled live from the ABR peer on
+    /// every call — no caching — so the UI never sees a stale label
+    /// after an ABR switch. `None` for non-adaptive sources or peers
+    /// that have not yet registered variants.
+    #[must_use]
+    pub fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
+        self.abr_handle.as_ref()?.current_variant()
     }
 
     /// Get total duration of the audio stream.
@@ -279,13 +295,6 @@ impl<S> Audio<S> {
         &self.metadata
     }
 
-    /// Get reference to PCM receiver for direct channel access.
-    #[must_use]
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) fn pcm_rx(&mut self) -> &mut crate::runtime::Inlet<Fetch<PcmChunk>> {
-        &mut self.pcm_rx
-    }
-
     /// Get current playback position.
     ///
     /// Calculated from samples read since last seek plus the seek base.
@@ -360,7 +369,7 @@ impl<S> Audio<S> {
     /// reported a failure (`ConsumerPhase::Failed`) before any frames
     /// could be flushed.
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         if buf.is_empty() {
             return Ok(ReadOutcome::Pending {
@@ -496,7 +505,7 @@ impl<S> Audio<S> {
         self.recv_outcome_blocking()
     }
 
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     fn recv_outcome_blocking(&mut self) -> RecvOutcome {
         loop {
             if let Some(fetch) = self.pcm_rx.try_pop() {
@@ -532,7 +541,7 @@ impl<S> Audio<S> {
         }
     }
 
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
         if self.consumer_phase.is_terminal() {
             return None;
@@ -575,7 +584,7 @@ impl<S> Audio<S> {
     /// this layer — the worker thread surfaces errors lazily via
     /// `FetchKind::Failure`, which becomes `Err` from a subsequent
     /// `read()` / `next_chunk()`).
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let epoch = self.timeline.initiate_seek(position);
         self.timeline.mark_pending_seek_epoch(epoch);
@@ -731,7 +740,6 @@ where
 
         let shared_stream = SharedStream::new(stream);
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
-        let stream_ctx = shared_stream.build_stream_context();
 
         let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
         let decoder = Self::create_initial_decoder(
@@ -741,7 +749,6 @@ where
             pool.clone(),
             byte_pool.clone(),
             decoder_backend,
-            Arc::clone(&stream_ctx),
         )
         .await?;
 
@@ -769,7 +776,6 @@ where
         let emit = Self::create_emit(&bus);
         let decoder_factory = Self::create_decoder_factory(
             decoder_backend,
-            &stream_ctx,
             &epoch,
             &byte_len_handle,
             pool,
@@ -849,13 +855,11 @@ where
 
     fn create_decoder_factory(
         decoder_backend: kithara_decode::DecoderBackend,
-        stream_ctx: &Arc<dyn StreamContext>,
         epoch: &Arc<AtomicU64>,
         byte_len_handle: &Arc<AtomicU64>,
         pool: &PcmPool,
         byte_pool: &kithara_bufpool::BytePool,
     ) -> crate::pipeline::source::DecoderFactory<T> {
-        let factory_stream_ctx = Arc::clone(stream_ctx);
         let factory_epoch = Arc::clone(epoch);
         let factory_byte_len = Arc::clone(byte_len_handle);
         let factory_pool = pool.clone();
@@ -865,15 +869,15 @@ where
                 .len()
                 .map_or(0, |len| len.saturating_sub(base_offset));
             factory_byte_len.store(byte_len, Ordering::Release);
-            let config = kithara_decode::DecoderConfig::default()
-                .with_backend(decoder_backend)
-                .with_byte_len_handle(Arc::clone(&factory_byte_len))
-                .with_pcm_pool(factory_pool.clone())
-                .with_byte_pool(factory_byte_pool.clone())
-                .with_stream_ctx(Arc::clone(&factory_stream_ctx))
-                .with_epoch(factory_epoch.load(Ordering::Acquire))
-                .with_segment_layout(stream.as_segment_layout())
-                .with_hooks(stream.take_reader_hooks());
+            let config = kithara_decode::DecoderConfig::builder()
+                .backend(decoder_backend)
+                .byte_len_handle(Arc::clone(&factory_byte_len))
+                .pcm_pool(factory_pool.clone())
+                .byte_pool(factory_byte_pool.clone())
+                .epoch(factory_epoch.load(Ordering::Acquire))
+                .maybe_segment_layout(stream.as_segment_layout())
+                .maybe_hooks(stream.take_reader_hooks())
+                .build();
             let source = OffsetReader::new(stream.clone(), base_offset);
             match DecoderFactory::create_from_media_info(source, info, &config) {
                 Ok(d) => {
@@ -902,21 +906,18 @@ where
         pcm_pool: PcmPool,
         byte_pool: kithara_bufpool::BytePool,
         decoder_backend: kithara_decode::DecoderBackend,
-        stream_ctx: Arc<dyn StreamContext>,
     ) -> Result<Box<dyn kithara_decode::Decoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
-        let mut decoder_config = kithara_decode::DecoderConfig::default()
-            .with_backend(decoder_backend)
-            .with_byte_len_handle(byte_len_handle)
-            .with_pcm_pool(pcm_pool)
-            .with_byte_pool(byte_pool)
-            .with_stream_ctx(stream_ctx)
-            .with_segment_layout(shared_stream.as_segment_layout())
-            .with_hooks(shared_stream.take_reader_hooks());
-        if let Some(h) = hint.clone() {
-            decoder_config = decoder_config.with_hint(h);
-        }
+        let decoder_config = kithara_decode::DecoderConfig::builder()
+            .backend(decoder_backend)
+            .byte_len_handle(byte_len_handle)
+            .pcm_pool(pcm_pool)
+            .byte_pool(byte_pool)
+            .maybe_segment_layout(shared_stream.as_segment_layout())
+            .maybe_hooks(shared_stream.take_reader_hooks())
+            .maybe_hint(hint.clone())
+            .build();
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;
         let decoder = spawn_blocking(move || {
@@ -1252,7 +1253,7 @@ mod tests {
         }
     }
 
-    #[cfg(all(not(feature = "disable-hang-detector"), not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
     #[should_panic(expected = "recv_outcome_blocking")]
     fn blocking_recv_without_preload_panics_when_no_chunk_arrives() {

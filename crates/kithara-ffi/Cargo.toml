@@ -1,6 +1,6 @@
 [package]
 name = "kithara-ffi"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -35,7 +35,7 @@ kithara-queue = { workspace = true }
 kithara-test-macros = { workspace = true }
 # Optional direct dep so the `test` feature can enable `test-utils` on
 # kithara-play (needed for `init_offline_backend` / offline module).
-kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "test-utils"] }
+kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "probe"] }
 bytes = { workspace = true }
 rand = { workspace = true }
 unimock = { workspace = true }
@@ -59,7 +59,8 @@ default = ["backend-uniffi"]
 backend-uniffi = ["dep:uniffi"]
 apple = ["kithara/apple"]
 android = ["kithara/android"]
-test-utils = []
+probe = []
+mock = []
 # Dev-only conveniences enabled in xcframework builds for demo/staging.
 # Currently: accepts TLS certs with invalid hostname / CA / expiry.
 # Not for production use.
@@ -68,12 +69,12 @@ dev = []
 # Exposes JNI entrypoints that render through the offline firewheel
 # backend and write WAV output, bypassing cpal/AAudio. Never ship in a
 # release AAR.
-test = ["kithara/test-utils", "dep:kithara-play", "dep:tokio", "dep:cpal"]
+test = ["kithara/probe", "dep:kithara-play", "dep:tokio", "dep:cpal"]
 
 [dev-dependencies]
 futures = { workspace = true }
-kithara = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(target_os = "android")'.dependencies]

@@ -4,7 +4,7 @@
 
 [package]
 name = "kithara-workspace-hack"
-version = "0.1.0"
+version = "0.0.1-alpha1"
 edition = "2021"
 description = "workspace-hack package, managed by hakari"
 license = "MIT OR Apache-2.0"
@@ -18,14 +18,13 @@ publish = false
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
-crossbeam-utils = { version = "0.8" }
 firewheel = { version = "0.10", default-features = false, features = ["all_nodes", "cpal", "musical_transport", "pool", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.15", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.16", features = ["hotpath", "hotpath-alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
@@ -38,15 +37,16 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
-ringbuf = { version = "0.4", features = ["portable-atomic"] }
+ringbuf = { version = "0.5", features = ["portable-atomic"] }
 rustfft = { version = "6" }
+serde = { version = "1", features = ["derive"] }
 serde_core = { version = "1", features = ["alloc"] }
 serde_json = { version = "1", features = ["alloc", "unbounded_depth"] }
 smallvec = { version = "1", default-features = false, features = ["const_generics"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "test-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 tracing-core = { version = "0.1" }
 
@@ -54,14 +54,13 @@ tracing-core = { version = "0.1" }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
-crossbeam-utils = { version = "0.8" }
 firewheel = { version = "0.10", default-features = false, features = ["all_nodes", "cpal", "musical_transport", "pool", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
 foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.15", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.16", features = ["hotpath", "hotpath-alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
@@ -74,15 +73,16 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
-ringbuf = { version = "0.4", features = ["portable-atomic"] }
+ringbuf = { version = "0.5", features = ["portable-atomic"] }
 rustfft = { version = "6" }
+serde = { version = "1", features = ["derive"] }
 serde_core = { version = "1", features = ["alloc"] }
 serde_json = { version = "1", features = ["alloc", "unbounded_depth"] }
 smallvec = { version = "1", default-features = false, features = ["const_generics"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "test-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 tracing-core = { version = "0.1" }
 
@@ -109,24 +109,24 @@ indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "stdio", "system", "termios", "time"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", features = ["alloc", "derive"] }
+serde = { version = "1", default-features = false, features = ["alloc"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "0.8", features = ["preserve_order"] }
+toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
-tower-http = { version = "0.6", features = ["cors", "follow-redirect", "fs", "set-header"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
-uuid = { version = "1", features = ["serde", "v4"] }
 winnow = { version = "1" }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
@@ -154,24 +154,24 @@ indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "stdio", "system", "termios", "time"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", features = ["alloc", "derive"] }
+serde = { version = "1", default-features = false, features = ["alloc"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "0.8", features = ["preserve_order"] }
+toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
-tower-http = { version = "0.6", features = ["cors", "follow-redirect", "fs", "set-header"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
-uuid = { version = "1", features = ["serde", "v4"] }
 winnow = { version = "1" }
 
 [target.x86_64-apple-darwin.dependencies]
@@ -194,21 +194,22 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", features = ["alloc", "derive"] }
+serde = { version = "1", default-features = false, features = ["alloc"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "0.8", features = ["preserve_order"] }
+toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
-tower-http = { version = "0.6", features = ["cors", "follow-redirect", "fs", "set-header"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
 
@@ -234,21 +235,22 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", features = ["alloc", "derive"] }
+serde = { version = "1", default-features = false, features = ["alloc"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "0.8", features = ["preserve_order"] }
+toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
-tower-http = { version = "0.6", features = ["cors", "follow-redirect", "fs", "set-header"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
 
@@ -272,21 +274,22 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", features = ["alloc", "derive"] }
+serde = { version = "1", default-features = false, features = ["alloc"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "0.8", features = ["preserve_order"] }
+toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
-tower-http = { version = "0.6", features = ["cors", "follow-redirect", "fs", "set-header"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
 
@@ -312,21 +315,22 @@ hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "ht
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+miniz_oxide = { version = "0.8", features = ["simd"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 rustix = { version = "1", features = ["fs", "stdio", "termios"] }
 semver = { version = "1", features = ["serde"] }
-serde = { version = "1", features = ["alloc", "derive"] }
+serde = { version = "1", default-features = false, features = ["alloc"] }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
+simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "0.8", features = ["preserve_order"] }
+toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
-tower-http = { version = "0.6", features = ["cors", "follow-redirect", "fs", "set-header"] }
 tracing = { version = "0.1", features = ["log"] }
 usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
 

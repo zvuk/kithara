@@ -1,6 +1,6 @@
 [package]
 name = "kithara-storage"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -12,21 +12,19 @@ workspace = true
 
 [features]
 default = []
-test-utils = []
+probe = []
+mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
-disable-hang-detector = [
-    "kithara-platform/disable-hang-detector",
-]
 
 [dependencies]
+bon = { workspace = true }
 delegate = { workspace = true }
-derivative = { workspace = true }
-derive_setters = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
 
 # range tracking + sync primitives (wasm32-compatible)
 rangemap = { workspace = true }
@@ -37,7 +35,7 @@ unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
 # mmap backend (not available on wasm32)
 mmap-io = { workspace = true }
 # crash-safe atomic writes (unique temp files)
@@ -47,6 +45,6 @@ tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 kithara-storage = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }

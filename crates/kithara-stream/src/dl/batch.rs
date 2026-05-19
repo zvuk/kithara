@@ -1,5 +1,3 @@
-//! Batch execution: epoch-aware grouping and fetch spawning.
-
 use std::sync::{Arc, atomic::Ordering};
 
 use kithara_abr::{AbrController, AbrPeerId};
@@ -191,6 +189,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let mut cmd = internal.cmd;
     let writer = cmd.writer.take();
     let on_complete_cb = cmd.on_complete.take();
+    let on_response_cb = cmd.on_response.take();
     let bus = internal.bus;
     let cancel = internal.cancel.clone();
     let epoch_cancel = cmd.cancel.clone();
@@ -214,6 +213,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
                 result,
                 writer,
                 on_complete_cb,
+                on_response_cb,
                 abr,
                 peer_id,
                 started,
@@ -365,6 +365,7 @@ struct DeliveryContext<'a> {
     bus: Option<EventBus>,
     epoch_cancel: Option<&'a CancellationToken>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,
+    on_response_cb: Option<super::cmd::OnResponseFn>,
     writer: Option<super::cmd::WriterFn>,
     target: ResponseTarget,
     result: Result<FetchResponse, NetError>,
@@ -379,6 +380,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
         result,
         mut writer,
         on_complete_cb,
+        on_response_cb,
         abr,
         peer_id,
         started,
@@ -394,13 +396,17 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
         ResponseTarget::Streaming => match result {
             Ok(resp) => {
                 if let Some(ref mut w) = writer {
+                    let headers = resp.headers.clone();
+                    if let Some(cb) = on_response_cb {
+                        cb(&headers);
+                    }
                     let write_result = resp.body.write_all(|chunk| w(chunk)).await;
                     let elapsed = started.elapsed();
                     match write_result {
                         Ok(total) => {
                             finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
                             if let Some(cb) = on_complete_cb {
-                                cb(total, None);
+                                cb(total, Some(&headers), None);
                             }
                         }
                         Err(ref e) => {
@@ -414,7 +420,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
                                 downloader_cancel,
                             );
                             if let Some(cb) = on_complete_cb {
-                                cb(0, Some(e));
+                                cb(0, Some(&headers), Some(e));
                             }
                         }
                     }
@@ -431,7 +437,7 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
                     downloader_cancel,
                 );
                 if let Some(cb) = on_complete_cb {
-                    cb(0, Some(e));
+                    cb(0, None, Some(e));
                 }
             }
         },
@@ -485,7 +491,7 @@ pub(super) fn deliver_cancelled(target: ResponseTarget, mut cmd: FetchCmd) {
         }
         ResponseTarget::Streaming => {
             if let Some(cb) = cmd.on_complete.take() {
-                cb(0, Some(&err));
+                cb(0, None, Some(&err));
             }
         }
     }

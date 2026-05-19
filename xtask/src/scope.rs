@@ -1,14 +1,3 @@
-//! `cargo xtask scope` — argument resolver for shell substitution.
-//!
-//! Translates user-friendly scope tokens (`kithara-queue`, `tests/tests`,
-//! `crates/kithara-abr/src`) into the flag set that a downstream tool
-//! (xtask lint / clippy / fmt / ast-grep) expects. Used by `justfile`
-//! recipes (`audit`, etc.) to keep bash thin while keeping the parsing
-//! logic in Rust (single source of truth, unit-tested).
-//!
-//! Output: one line on stdout, space-separated tokens, ready for shell
-//! command substitution. Exit code 2 on unknown scope.
-
 use anyhow::Result;
 use cargo_metadata::MetadataCommand;
 use clap::Args;

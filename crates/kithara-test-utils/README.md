@@ -4,92 +4,64 @@
 
 <div align="center">
 
-[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
 
 # kithara-test-utils
 
-Shared test utilities for the kithara workspace: deterministic fixtures, synthetic HLS, procedural audio URLs, and a small HTTP test server. This crate is test-only (`publish = false`); it is not part of the public playback API.
-
-## Test server
-
-The **unified test server** is a local HTTP service used by integration tests. It never talks to the real internet: everything is generated or read from the repository.
-
-### What it serves
-
-| Path prefix | Purpose |
-|-------------|---------|
-| `/assets/...` | Static files from the repo (regression assets). |
-| `/stream/...` | Synthetic HLS: master/media playlists, init segments, media segments, keys. The URL carries a **token** that selects the fixture spec. |
-| `/signal/...` | Procedural audio (saw, sine, sweep, silence, …) as `wav` or encoded formats (`mp3`, `flac`, `aac`, `m4a` on native). Also token-backed. |
-| `POST /token` | Registers a JSON spec and returns a UUID used inside `/stream` and `/signal` URLs. You rarely call this directly. |
-| `GET /health` | Simple readiness probe for runners. |
-
-**You do not hand-build tokens.** Helpers register the spec and give you normal `Url` values.
-
-### Native integration tests (usual case)
-
-Spawn the server **in the same process** on a random port and build fixtures with `TestServerHelper`:
-
-```rust
-use kithara_test_utils::{HlsFixtureBuilder, TestServerHelper};
-
-let helper = TestServerHelper::new().await;
-let hls = helper
-    .create_hls(
-        HlsFixtureBuilder::new()
-            .variant_count(2)
-            .segments_per_variant(6),
-    )
-    .await
-    .expect("create HLS fixture");
-
-let master = hls.master_url();
-// Use `master` with the player under test; use `hls.media_url(i)`, `hls.segment_url(v, s)`, etc.
-```
-
-For procedural audio, use `helper.sawtooth(&spec).await`, `helper.sine(&spec, freq_hz).await`, `helper.sweep(&spec, start_hz, end_hz, mode).await`, and similar methods on `TestServerHelper`. For static assets, use `helper.asset("relative/path")`.
-
-### Standalone process (WASM / debugging)
-
-Run the binary from the integration-tests crate:
-
-```bash
-cargo run -p kithara-integration-tests --bin test_server
-```
-
-By default it listens on **`127.0.0.1:3444`**. Set **`TEST_SERVER_PORT`** to use another port.
-
-Browser WASM tests typically use the same server; point the harness at **`TEST_SERVER_URL`** (default `http://127.0.0.1:3444`). See `tests/README.md` for the full WASM flow.
-
-### Picking a higher-level API
-
-| Use when | API |
-|----------|-----|
-| Quick canned multi-variant HLS | `hls_fixture::TestServer` |
-| Custom variants, delays, encryption | `hls_fixture::HlsTestServer` / `HlsTestServerConfig` |
-| ABR switching scenarios | `hls_fixture::AbrTestServer` |
-| Real fMP4 audio (preferred for new audio HLS tests) | `HlsFixtureBuilder::packaged_audio_*` or `PackagedTestServer` |
-| Legacy byte-exact compatibility | `TestServer`, `DataMode::AbrBinary`, `InitMode::TestInit` as needed |
-
-Under the hood these all go through the same `/stream` contract and `TestServerHelper` (native) or the standalone server (WASM).
+Cross-crate test-runtime support: `#[kithara::test]` macro re-exports, USDT probe helpers, hang-watchdog, and `unimock` glue. This crate is test-only (`publish = false`) and does **not** contain the integration-test fixtures themselves — those live in `kithara-integration-tests` (`tests/`) since the Phase 5 refactor.
 
 ## Modules
 
 <table>
-<tr><th>Module</th><th>Platform</th><th>Role</th></tr>
-<tr><td><code>fixtures</code></td><td>cross-platform</td><td>Shared <code>rstest</code> fixtures (<code>temp_dir</code>, cancel tokens, tracing)</td></tr>
-<tr><td><code>fixture_protocol</code></td><td>cross-platform</td><td>Types and pure generators for synthetic HLS payloads</td></tr>
-<tr><td><code>hls_fixture</code></td><td>cross-platform</td><td>Preset servers: <code>TestServer</code>, <code>HlsTestServer</code>, <code>AbrTestServer</code>, packaged helpers</td></tr>
-<tr><td><code>http_server</code></td><td>native</td><td><code>TestHttpServer</code> — Axum on a random localhost port</td></tr>
-<tr><td><code>memory_source</code></td><td>cross-platform</td><td>In-memory <code>Source</code> for read/seek tests</td></tr>
-<tr><td><code>rng</code></td><td>cross-platform</td><td>Deterministic <code>Xorshift64</code></td></tr>
-<tr><td><code>wav</code></td><td>cross-platform</td><td><code>create_test_wav</code>, <code>create_saw_wav</code></td></tr>
-<tr><td><code>test_server</code></td><td>native impl; WASM uses remote server</td><td><code>TestServerHelper</code>, <code>HlsFixtureBuilder</code>, <code>run_test_server</code>, route wiring</td></tr>
+<tr><th>Module</th><th>Feature</th><th>Role</th></tr>
+<tr><td><code>test</code></td><td>always on</td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
+<tr><td><code>hang</code></td><td><code>hang</code> (default)</td><td>Hang-watchdog primitives used by <code>#[kithara::test]</code>; <code>noop</code> fallback when the feature is off</td></tr>
+<tr><td><code>probe</code></td><td><code>probe</code></td><td>USDT probe runtime helpers consumed by code annotated with <code>#[kithara::probe(...)]</code>; <code>noop</code> fallback when disabled</td></tr>
+<tr><td><code>mock</code></td><td><code>mock</code></td><td><code>unimock</code> glue for trait-level mocks</td></tr>
+<tr><td><code>kithara</code></td><td>always on</td><td>Re-exports macros from <code>kithara-test-macros</code> so consumers can write <code>#[kithara::test]</code>, <code>#[kithara::probe]</code>, <code>#[kithara::mock]</code>, <code>#[kithara::fixture]</code>, <code>#[kithara::hang_watchdog]</code>, and the <code>Probe</code> derive</td></tr>
 </table>
 
-## Native encoded `/signal` formats
+## Usage
 
-Encoded outputs (`mp3`, `flac`, `aac`, `m4a`) use `ffmpeg-next` and need a system FFmpeg discoverable via `pkg-config` / `pkgconf` at build time.
+```rust
+use kithara_test_utils::kithara;
+
+#[kithara::test(tokio, timeout(std::time::Duration::from_secs(10)))]
+async fn smoke() {
+    // test body — protected by the hang watchdog (default-on)
+}
+```
+
+For trait mocks:
+
+```rust
+use kithara_test_utils::kithara;
+
+#[kithara::mock]
+trait Service {
+    fn get(&self) -> u64;
+}
+```
+
+## Features
+
+<table>
+<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>hang</code></td><td>yes</td><td>Real hang-watchdog implementation (otherwise no-op)</td></tr>
+<tr><td><code>mock</code></td><td>no</td><td>Pulls <code>unimock</code> into the dependency graph; enables real <code>kithara::mock</code> expansion</td></tr>
+<tr><td><code>probe</code></td><td>no</td><td>Pulls <code>usdt</code>; enables real USDT probe emission (otherwise no-op)</td></tr>
+</table>
+
+Consumer crates typically enable `mock` and `probe` in their `[dev-dependencies]` while keeping the default `hang` feature on.
+
+## Integration tests live elsewhere
+
+The integration-test domain (synthetic HLS servers, signal generators, `TestHttpServer`, `TestServerHelper`, `HlsFixtureBuilder`, `PackagedTestServer`, …) lives in `kithara-integration-tests` (`tests/`). To use it from another crate's tests, depend on `kithara-integration-tests` (it is `publish = false`) rather than re-implementing fixtures here.
+
+See `tests/README.md` for the integration-test suite layout, the standalone `test_server` binary, the WASM flow, and the available fixture builders.
+
+## Integration
+
+Consumed by every crate's `[dev-dependencies]`. The macros it re-exports work on native and `wasm32` targets transparently.

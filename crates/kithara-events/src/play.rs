@@ -1,12 +1,7 @@
 #![forbid(unsafe_code)]
 
-//! Player-level events and supporting types.
-//!
-//! Moved from `kithara-play` so that all event types live in one crate.
-
 use std::{cmp, hash, ops, sync::Arc};
 
-use derivative::Derivative;
 use kithara_platform::time::Duration;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
@@ -61,12 +56,19 @@ impl SlotId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Derivative, PartialEq)]
-#[derivative(Default)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MediaTime {
-    #[derivative(Default(value = "1"))]
     timescale: i32,
     value: i64,
+}
+
+impl Default for MediaTime {
+    fn default() -> Self {
+        Self {
+            timescale: 1,
+            value: 0,
+        }
+    }
 }
 
 impl MediaTime {

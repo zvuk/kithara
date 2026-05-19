@@ -1,17 +1,10 @@
-//! Realtime audio processor for the player node.
-//!
-//! [`PlayerNodeProcessor`] runs on the audio thread and manages multiple
-//! [`PlayerTrack`]s in a thunderdome arena. It receives commands from the
-//! main thread via a bounded channel and renders mixed audio into the
-//! Firewheel output buffers.
-
 use std::{
     collections::VecDeque,
+    fmt,
     num::NonZeroU32,
     sync::{Arc, atomic::Ordering},
 };
 
-use derivative::Derivative;
 use firewheel::{
     StreamInfo,
     event::ProcEvents,
@@ -37,12 +30,9 @@ use super::{
 };
 
 /// Commands sent from the main thread to the processor.
-#[derive(Derivative)]
-#[derivative(Debug)]
 pub enum PlayerCmd {
     /// Load a track into the processor arena.
     LoadTrack {
-        #[derivative(Debug = "ignore")]
         resource: Arc<Mutex<PlayerResource>>,
         item_id: Option<Arc<str>>,
         src: Arc<str>,
@@ -61,6 +51,32 @@ pub enum PlayerCmd {
     SetPrefetchDuration(f32),
     /// Update the playback rate for all active tracks.
     SetPlaybackRate(f32),
+}
+
+impl fmt::Debug for PlayerCmd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LoadTrack { item_id, src, .. } => f
+                .debug_struct("LoadTrack")
+                .field("item_id", item_id)
+                .field("src", src)
+                .finish_non_exhaustive(),
+            Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
+            Self::Transition(t) => f.debug_tuple("Transition").field(t).finish(),
+            Self::Seek {
+                seconds,
+                seek_epoch,
+            } => f
+                .debug_struct("Seek")
+                .field("seconds", seconds)
+                .field("seek_epoch", seek_epoch)
+                .finish(),
+            Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
+            Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
+            Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
+            Self::SetPlaybackRate(r) => f.debug_tuple("SetPlaybackRate").field(r).finish(),
+        }
+    }
 }
 
 /// The realtime audio processor for the player node.

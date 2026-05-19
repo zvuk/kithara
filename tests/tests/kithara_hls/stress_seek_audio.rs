@@ -1,30 +1,19 @@
-//! Stress test: 1000 random seek+read cycles on `Audio<Stream<Hls>>` (20 MB WAV over HLS).
-//!
-//! Generates a deterministic WAV with a saw-tooth pattern (period = `65_536` frames),
-//! serves it as HLS segments via [`HlsTestServer`], creates `Audio<Stream<Hls>>`,
-//! and performs 1000 random time-based seeks with three-level PCM verification:
-//!
-//! 1. **Integrity**: samples finite, in `[-1.0, 1.0]`, L == R
-//! 2. **Continuity**: consecutive frames follow the saw-tooth pattern
-//! 3. **Position**: decoded phase matches expected position (±50 frames tolerance)
-//!
-//! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
-//! No external network is required.
-
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
+    decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_platform::tokio::task::spawn_blocking;
-use kithara_test_utils::{
-    TestTempDir, Xorshift64, create_wav_exact_bytes, phase_distance, phase_from_f32,
+use kithara_integration_tests::{
+    TestTempDir, Xorshift64, create_wav_exact_bytes,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+    phase_distance, phase_from_f32,
     signal_pcm::signal,
 };
+use kithara_platform::tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -66,10 +55,20 @@ impl Consts {
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case::ephemeral(true)]
+#[case::symphonia_ephemeral(true, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_ephemeral(true, DecoderBackend::Apple)
+)]
 #[cfg(not(target_arch = "wasm32"))]
-#[case::mmap(false)]
-async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
+#[case::symphonia_mmap(false, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple_mmap(false, DecoderBackend::Apple)
+)]
+async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool, #[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
     let wav_data = create_wav_exact_bytes(
         signal::Sawtooth,
         Consts::D.sample_rate,
@@ -107,13 +106,17 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         store.is_ephemeral = true;
     }
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");

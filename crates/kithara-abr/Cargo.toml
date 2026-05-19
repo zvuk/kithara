@@ -1,6 +1,6 @@
 [package]
 name = "kithara-abr"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -8,8 +8,7 @@ repository.workspace = true
 description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming"
 
 [dependencies]
-derivative = { workspace = true }
-derive_setters = { workspace = true }
+bon = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-utils = { workspace = true }
@@ -20,18 +19,19 @@ tracing = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
 
 [features]
 # No-op shim retained so `#[kithara::probe]` macro expansions
-# (which emit `cfg(any(test, feature = "test-utils"))`) don't trigger
+# (which emit `cfg(any(test, feature = "probe"))`) don't trigger
 # `unexpected_cfgs` warnings on this crate. No production code is
 # gated by this feature; the canonical test escape hatch was removed
 # in plan async-juggling-plum.md.
-test-utils = []
+probe = []
+mock = []
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }
 proptest = { workspace = true }
 

@@ -1,5 +1,3 @@
-//! Per-shard storage for the sharded `Pool`.
-
 use super::reuse::Reuse;
 
 /// A single shard in the pool.

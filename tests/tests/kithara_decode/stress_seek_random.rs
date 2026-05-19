@@ -1,12 +1,3 @@
-//! Stress test: 1000 random seek+read cycles on synthetic WAV.
-//!
-//! Generates a deterministic WAV (10s, ~1.7 MB stereo 44.1 kHz, 16-bit),
-//! creates `Audio<Stream<File>>`, then performs 1000 random seeks
-//! each followed by a read, verifying data integrity at every step.
-//!
-//! Deterministic xorshift64 PRNG guarantees reproducibility.
-//! No network required.
-
 use std::{fs::File as FsFile, io::Write};
 
 use kithara::{
@@ -15,8 +6,8 @@ use kithara::{
     stream::Stream,
 };
 use kithara_assets::StoreOptions;
+use kithara_integration_tests::{TestTempDir, Xorshift64, wav::create_test_wav};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, Xorshift64, wav::create_test_wav};
 use tempfile::NamedTempFile;
 use tracing::info;
 
@@ -51,9 +42,12 @@ async fn stress_random_seek_read_synthetic_wav() {
     .expect("write WAV data");
 
     let cache = TestTempDir::new();
-    let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()))
-        .with_store(StoreOptions::new(cache.path()));
-    let config = AudioConfig::<File>::new(file_config).with_hint("wav");
+    let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
+        .store(StoreOptions::new(cache.path()))
+        .build();
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .hint("wav".to_string())
+        .build();
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create audio pipeline");

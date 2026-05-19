@@ -1,17 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Regression test for "seek past EOF" when actual segment sizes exceed metadata.
-//!
-//! Production scenario:
-//!   1. Metadata via HEAD reports total = X bytes
-//!   2. Actual segments on disk are slightly larger (e.g. HTTP auto-decompression)
-//!   3. `expected_total_length` is set to X (HEAD-based)
-//!   4. Symphonia/reader tries to seek to position > X
-//!   5. Reader rejects seek as "seek past EOF"
-//!
-//! This test simulates the mismatch by having the server return
-//! smaller Content-Length for HEAD than the actual GET body.
-
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
@@ -19,9 +7,12 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    TestTempDir, cancel_token,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+    temp_dir,
+};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 use crate::common::test_defaults::Consts as Shared;
@@ -72,10 +63,11 @@ async fn seek_beyond_head_total_within_actual_total(
 
     let url = server.url("/master.m3u8");
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 

@@ -1,14 +1,8 @@
-//! Explicit FSM types for audio track state management.
-//!
-//! Replaces the implicit state scattered across `StreamAudioSource` fields
-//! (`pending_format_change`, `pending_decode_started_epoch`, etc.) with a
-//! single `TrackState` enum that is the sole source of truth.
-
 use kithara_decode::{DecodeError, Decoder};
 use kithara_platform::time::Duration;
 use kithara_stream::{MediaInfo, SourcePhase, SourceSeekAnchor};
 
-use crate::pipeline::{fetch::Fetch, seek_location::SeekLocation};
+use crate::pipeline::fetch::Fetch;
 
 /// Explicit state machine for a single audio track in the worker thread.
 ///
@@ -246,49 +240,6 @@ impl TrackState {
             Self::Failed(_) => TrackPhaseTag::Failed,
         }
     }
-
-    /// Canonical "where to look for the next byte" for this state.
-    ///
-    /// Consolidates the three legacy byte-target fields
-    /// (`SeekMode::Direct.target_byte`, `ResumeState::anchor_offset`,
-    /// `RecreateState::offset`) into one view. Callers use this to drive
-    /// readiness, phase, and demand queries through `SeekLocation`
-    /// instead of re-implementing the dispatch for each state.
-    pub(crate) fn seek_location(&self) -> SeekLocation {
-        match self {
-            Self::Decoding | Self::SeekRequested(_) | Self::AtEof | Self::Failed(_) => {
-                SeekLocation::CurrentPosition
-            }
-            Self::ApplyingSeek(state) => apply_seek_location(state.mode),
-            Self::AwaitingResume(resume) => resume
-                .anchor_offset
-                .map_or(SeekLocation::CurrentPosition, SeekLocation::from_estimate),
-            Self::RecreatingDecoder(recreate) => {
-                SeekLocation::from_recreate_offset(recreate.offset)
-            }
-            Self::WaitingForSource { context, .. } => match context {
-                WaitContext::Playback | WaitContext::Seek(_) => SeekLocation::CurrentPosition,
-                WaitContext::ApplySeek(state) => apply_seek_location(state.mode),
-                WaitContext::Recreation(recreate) => {
-                    SeekLocation::from_recreate_offset(recreate.offset)
-                }
-                WaitContext::PostSeek(resume) => resume
-                    .anchor_offset
-                    .map_or(SeekLocation::CurrentPosition, SeekLocation::from_estimate),
-            },
-        }
-    }
-}
-
-/// Map a resolved `SeekMode` to its canonical `SeekLocation`.
-fn apply_seek_location(mode: SeekMode) -> SeekLocation {
-    match mode {
-        SeekMode::Anchor(anchor) => SeekLocation::from_anchor(anchor),
-        SeekMode::Direct {
-            target_byte: Some(byte),
-        } => SeekLocation::from_estimate(byte),
-        SeekMode::Direct { target_byte: None } => SeekLocation::CurrentPosition,
-    }
 }
 
 impl ConsumerPhase {
@@ -314,9 +265,6 @@ pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, atomic::AtomicBool};
-
-    use kithara_decode::{PcmSpec, mock::infinite_decoder_loose};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -495,147 +443,5 @@ mod tests {
         let state = TrackState::AtEof;
         assert!(!state.is_terminal());
         assert_eq!(state.phase_tag(), TrackPhaseTag::AtEof);
-    }
-
-    #[kithara::test]
-    fn seek_location_maps_each_state() {
-        let seek = SeekContext {
-            epoch: 1,
-            target: Duration::from_secs(5),
-        };
-        let req = SeekRequest {
-            seek,
-            ..Default::default()
-        };
-        let anchor = SourceSeekAnchor::new(4096, Duration::from_secs(10)).with_variant_index(1);
-
-        assert_eq!(
-            TrackState::Decoding.seek_location(),
-            SeekLocation::CurrentPosition,
-        );
-        assert_eq!(
-            TrackState::SeekRequested(req).seek_location(),
-            SeekLocation::CurrentPosition,
-        );
-        assert_eq!(
-            TrackState::AtEof.seek_location(),
-            SeekLocation::CurrentPosition,
-        );
-        assert_eq!(
-            TrackState::Failed(TrackFailure::SourceCancelled).seek_location(),
-            SeekLocation::CurrentPosition,
-        );
-
-        assert_eq!(
-            TrackState::ApplyingSeek(ApplySeekState {
-                mode: SeekMode::Anchor(anchor),
-                request: req,
-            })
-            .seek_location(),
-            SeekLocation::from_anchor(anchor),
-        );
-        assert_eq!(
-            TrackState::ApplyingSeek(ApplySeekState {
-                mode: SeekMode::Direct {
-                    target_byte: Some(8192)
-                },
-                request: req,
-            })
-            .seek_location(),
-            SeekLocation::from_estimate(8192),
-        );
-        assert_eq!(
-            TrackState::ApplyingSeek(ApplySeekState {
-                mode: SeekMode::Direct { target_byte: None },
-                request: req,
-            })
-            .seek_location(),
-            SeekLocation::CurrentPosition,
-        );
-
-        let recreate = RecreateState {
-            attempt: 0,
-            cause: RecreateCause::VariantSwitch,
-            media_info: MediaInfo::default(),
-            next: RecreateNext::Decode,
-            offset: 12_345,
-        };
-        assert_eq!(
-            TrackState::RecreatingDecoder(recreate.clone()).seek_location(),
-            SeekLocation::from_recreate_offset(12_345),
-        );
-
-        assert_eq!(
-            TrackState::AwaitingResume(ResumeState {
-                recover_attempts: 0,
-                seek,
-                skip: None,
-                anchor_offset: Some(55_555),
-            })
-            .seek_location(),
-            SeekLocation::from_estimate(55_555),
-        );
-        assert_eq!(
-            TrackState::AwaitingResume(ResumeState {
-                recover_attempts: 0,
-                seek,
-                skip: None,
-                anchor_offset: None,
-            })
-            .seek_location(),
-            SeekLocation::CurrentPosition,
-        );
-
-        assert_eq!(
-            TrackState::WaitingForSource {
-                context: WaitContext::Playback,
-                reason: WaitingReason::Waiting,
-            }
-            .seek_location(),
-            SeekLocation::CurrentPosition,
-        );
-        assert_eq!(
-            TrackState::WaitingForSource {
-                context: WaitContext::Seek(req),
-                reason: WaitingReason::Waiting,
-            }
-            .seek_location(),
-            SeekLocation::CurrentPosition,
-        );
-        assert_eq!(
-            TrackState::WaitingForSource {
-                context: WaitContext::ApplySeek(ApplySeekState {
-                    mode: SeekMode::Anchor(anchor),
-                    request: req,
-                }),
-                reason: WaitingReason::Waiting,
-            }
-            .seek_location(),
-            SeekLocation::from_anchor(anchor),
-        );
-        assert_eq!(
-            TrackState::WaitingForSource {
-                context: WaitContext::Recreation(recreate.clone()),
-                reason: WaitingReason::Waiting,
-            }
-            .seek_location(),
-            SeekLocation::from_recreate_offset(recreate.offset),
-        );
-    }
-
-    #[kithara::test]
-    fn decoder_session_construction() {
-        let media_info = MediaInfo::default()
-            .with_channels(2)
-            .with_sample_rate(44100);
-        let stop = Arc::new(AtomicBool::new(false));
-        let (decoder, _logs) = infinite_decoder_loose(PcmSpec::default(), stop);
-        let session = DecoderSession {
-            decoder,
-            base_offset: 1024,
-            media_info: Some(media_info),
-        };
-        assert_eq!(session.base_offset, 1024);
-        assert!(session.media_info.is_some());
     }
 }

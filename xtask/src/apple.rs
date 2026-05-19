@@ -53,7 +53,7 @@ pub(crate) enum AppleCommand {
     /// which suspends the app on entry; the printed PID can then be
     /// fed to `lldb` (or Zed's `CodeLLDB` "attach" debug config).
     Run {
-        /// Simulator name or UDID (defaults to a recent iPhone).
+        /// Simulator name or UUID (defaults to a recent iPhone).
         #[arg(long)]
         simulator: Option<String>,
         /// Xcode scheme to build (e.g. `KitharaDemo_iOS`).
@@ -201,8 +201,8 @@ fn run_app(
         run_build(profile)?;
     }
 
-    let udid = resolve_simulator_udid(&simulator)?;
-    boot_simulator(&udid)?;
+    let uuid = resolve_simulator_uuid(&simulator)?;
+    boot_simulator(&uuid)?;
     open_simulator_app();
 
     let configuration = match profile {
@@ -211,7 +211,7 @@ fn run_app(
     };
 
     println!("==> Building {scheme} ({configuration}) for simulator {simulator}");
-    let destination = format!("platform=iOS Simulator,id={udid}");
+    let destination = format!("platform=iOS Simulator,id={uuid}");
     let mut build = Command::new("xcodebuild");
     build
         .args([
@@ -240,7 +240,7 @@ fn run_app(
         .args([
             "simctl",
             "install",
-            &udid,
+            &uuid,
             app_path.to_str().context(".app path is not UTF-8")?,
         ])
         .status()
@@ -258,7 +258,7 @@ fn run_app(
         // code runs.
         launch.arg("--wait-for-debugger");
     }
-    launch.args([&udid, Consts::DEMO_BUNDLE_ID]);
+    launch.args([&uuid, Consts::DEMO_BUNDLE_ID]);
     let output = launch
         .output()
         .context("failed to run `xcrun simctl launch`")?;
@@ -278,17 +278,17 @@ fn run_app(
             println!("    Or in Zed: pick the `iOS demo: attach (debug)` configuration.");
         } else {
             println!("    Could not parse the PID from `simctl launch` output.");
-            println!("    Find it manually: xcrun simctl spawn {udid} ps -A | grep KitharaDemo");
+            println!("    Find it manually: xcrun simctl spawn {uuid} ps -A | grep KitharaDemo");
         }
     }
 
     Ok(())
 }
 
-fn resolve_simulator_udid(name_or_udid: &str) -> Result<String> {
-    // If the argument already looks like a UDID, accept it as-is.
-    if name_or_udid.len() == 36 && name_or_udid.chars().filter(|c| *c == '-').count() == 4 {
-        return Ok(name_or_udid.to_owned());
+fn resolve_simulator_uuid(name_or_uuid: &str) -> Result<String> {
+    // If the argument already looks like a UUID, accept it as-is.
+    if name_or_uuid.len() == 36 && name_or_uuid.chars().filter(|c| *c == '-').count() == 4 {
+        return Ok(name_or_uuid.to_owned());
     }
     let output = Command::new("xcrun")
         .args(["simctl", "list", "devices", "available"])
@@ -302,26 +302,26 @@ fn resolve_simulator_udid(name_or_udid: &str) -> Result<String> {
         // Lines look like:
         //     iPhone 17 Pro Max (D18BAAE9-CEF2-44F6-95C5-ADBE8A027C6C) (Shutdown)
         let trimmed = line.trim();
-        if !trimmed.starts_with(name_or_udid) {
+        if !trimmed.starts_with(name_or_uuid) {
             continue;
         }
         if let Some(open) = trimmed.find('(')
             && let Some(close) = trimmed[open + 1..].find(')')
         {
-            let udid = &trimmed[open + 1..open + 1 + close];
-            if udid.len() == 36 {
-                return Ok(udid.to_owned());
+            let uuid = &trimmed[open + 1..open + 1 + close];
+            if uuid.len() == 36 {
+                return Ok(uuid.to_owned());
             }
         }
     }
-    bail!("simulator '{name_or_udid}' not found in `xcrun simctl list`")
+    bail!("simulator '{name_or_uuid}' not found in `xcrun simctl list`")
 }
 
-fn boot_simulator(udid: &str) -> Result<()> {
+fn boot_simulator(uuid: &str) -> Result<()> {
     // `simctl boot` is a no-op (and exits 149 / "Unable to boot") when
     // the device is already booted; treat that as success.
     let status = Command::new("xcrun")
-        .args(["simctl", "boot", udid])
+        .args(["simctl", "boot", uuid])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()

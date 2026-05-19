@@ -1,29 +1,3 @@
-//! Red-test: when the user seeks near the end of an HLS track BEFORE
-//! the initial-loading fetches have completed, the player must actually
-//! jump to the target segment and start reading there — not wait for
-//! the prefix segments to drain through `MAX_CONCURRENT` slots.
-//!
-//! Production scenario captured in `kithara-app/app.log`: user opens
-//! a track, waits a fraction of a second, drags the playhead to the end.
-//! With the seek-bug present, `epoch_cancel.cancel()` is unreachable
-//! on the hot path, so stale prefix fetches keep all Downloader slots,
-//! the target segment never starts, and the reader keeps consuming
-//! prefix segments while the user waits.
-//!
-//! Reader-side decoder hooks (`HlsEvent::ReaderSeek`,
-//! `SegmentReadStart`, `SegmentReadComplete`) plus the existing
-//! `DownloaderEvent::*` lifecycle let us assert the contract directly,
-//! without timing budgets:
-//!
-//! - **A.** `ReaderSeek` fired and landed in the target segment region.
-//! - **B.** First `SegmentReadStart` after seek is at or near the target —
-//!   the reader did **not** rewind into the prefix.
-//! - **C.** Hard cap on post-seek prefix `RequestEnqueued` events:
-//!   only what was already in flight at seek time can complete; no
-//!   new prefix fetches are scheduled.
-//! - **D.** Target's `RequestStarted.wait_in_queue` is below the
-//!   slot-pressure threshold.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
@@ -36,14 +10,14 @@ use std::{
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, DownloaderEvent, Event, HlsEvent, RequestId, TrackId, TrackStatus};
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
+    offline::OfflineSession, temp_dir,
+};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
-    probe_capture, temp_dir,
-};
+use kithara_test_utils::probe::capture as probe_capture;
 use tokio::time::sleep;
 use url::Url;
 
@@ -118,7 +92,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(
         QueueConfig::default().with_player(Arc::clone(&player)),
@@ -132,8 +108,11 @@ fn build_queue_with_tick(
             }
         }
     });
-    let downloader =
-        Downloader::new(DownloaderConfig::default().with_max_concurrent(Consts::MAX_CONCURRENT));
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .max_concurrent(Consts::MAX_CONCURRENT)
+            .build(),
+    );
     let store = StoreOptions::new(temp_dir.path());
     (queue, player, downloader, store, tick_handle)
 }
@@ -190,6 +169,9 @@ struct PostSeekObservation {
     case::apple(DecoderBackend::Apple)
 )]
 async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let probe_recorder = probe_capture::install();
 
     let helper = TestServerHelper::new().await;
@@ -200,11 +182,13 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
     let mut rx = player.bus().subscribe();
 
-    let mut cfg = ResourceConfig::new(url.as_str()).expect("ResourceConfig::new");
-    cfg = cfg.with_downloader(downloader.clone());
-    cfg.store = store;
-    cfg.initial_abr_mode = AbrMode::Auto(None);
-    cfg.decoder_backend = backend;
+    let cfg = ResourceConfig::for_src(url.as_str())
+        .expect("ResourceConfig::for_src")
+        .downloader(downloader.clone())
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(None))
+        .decoder_backend(backend)
+        .build();
 
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
     queue.select(track_id, Transition::None).expect("select");

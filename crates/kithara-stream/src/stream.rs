@@ -1,10 +1,3 @@
-//! Audio stream types and traits.
-//!
-//! Provides `Stream<T>` - a generic audio stream parameterized by stream type.
-//!
-//! Marker types (`Hls`, `File`) are defined in their respective crates
-//! and implement `StreamType` trait.
-
 #![forbid(unsafe_code)]
 
 use std::{
@@ -19,6 +12,7 @@ use std::{
 
 use kithara_platform::{MaybeSend, MaybeSync, thread::yield_now, time::Duration, tokio::task};
 use kithara_storage::WaitOutcome;
+use kithara_test_utils::kithara;
 
 /// Real error from [`Stream::try_read`] — the underlying source
 /// surfaced an I/O failure.
@@ -118,7 +112,7 @@ impl fmt::Display for VariantChangeError {
 impl StdError for VariantChangeError {}
 
 use crate::{
-    MediaInfo, SourcePhase, SourceSeekAnchor, StreamContext, Timeline,
+    MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
     error::{SourceError, StreamError},
     source::{PendingReason, ReadOutcome, Source},
 };
@@ -141,14 +135,6 @@ pub trait StreamType: MaybeSend + 'static {
 
     /// Source implementing `Source`.
     type Source: Source;
-
-    /// Build a `StreamContext` from the source and shared byte position.
-    ///
-    /// Default returns `NullStreamContext` (no segment/variant info).
-    /// HLS overrides with `HlsStreamContext` carrying segment/variant atomics.
-    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(crate::NullStreamContext::new(timeline))
-    }
 
     /// Create the source from configuration.
     ///
@@ -192,7 +178,7 @@ impl<T: StreamType> Stream<T> {
 
     /// Get current read position.
     pub fn position(&self) -> u64 {
-        self.source.timeline().byte_position()
+        self.source.position()
     }
 
     /// Resolve a deterministic time-based seek anchor.
@@ -231,20 +217,29 @@ impl<T: StreamType> Stream<T> {
             pub fn media_info(&self) -> Option<MediaInfo>;
             /// Runtime ABR handle — `Some` for adaptive sources (HLS).
             pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            /// Current variant metadata — `Some` for adaptive sources (HLS).
+            pub fn current_variant(&self) -> Option<kithara_events::VariantInfo>;
             /// Get total length if known.
             pub fn len(&self) -> Option<u64>;
             /// Get current segment byte range (for segmented sources like HLS).
+            /// Transitional — removed in Plan 06.
             pub fn current_segment_range(&self) -> Option<Range<u64>>;
-            /// Get byte range of first segment with current format after ABR switch.
-            pub fn format_change_segment_range(&self) -> Option<Range<u64>>;
+            /// Header byte range for decoder recreate after a format change.
+            /// Transitional — removed in Plan 06.
+            ///
+            /// # Errors
+            ///
+            /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS
+            /// sources or HLS variants activated with `served_from > 0`
+            /// (init prefix unreachable via Stream reads).
+            pub fn format_change_segment_range(&self) -> crate::error::StreamResult<Range<u64>>;
             /// Clear variant fence, allowing reads from the next variant.
             pub fn clear_variant_fence(&mut self);
-            /// Switch layout to ABR target variant before decoder recreation.
-            pub fn commit_variant_layout(&mut self);
+            /// `true` while a cross-variant fence keeps `read_at` / `wait_range`
+            /// short-circuited to `Pending(VariantChange)` / `Interrupted`.
+            pub fn has_variant_change_pending(&self) -> bool;
             /// Set seek epoch for stale request invalidation.
             pub fn set_seek_epoch(&mut self, seek_epoch: u64);
-            /// Signal that the given byte range will be needed soon.
-            pub fn demand_range(&self, range: Range<u64>);
             /// Wake any blocked `wait_range()` calls.
             pub fn notify_waiting(&self);
             /// Create a lock-free callback for waking blocked `wait_range()`.
@@ -255,11 +250,35 @@ impl<T: StreamType> Stream<T> {
             pub fn take_reader_hooks(&mut self) -> Option<crate::SharedHooks>;
             /// Optional segment-layout handle for segment-aware decoders.
             pub fn as_segment_layout(&self) -> Option<Arc<dyn crate::SegmentLayout>>;
+            /// Absolute byte-position set — used by [`Stream::seek`] callers
+            /// and audio FSM landings. Forwards to the source's atomic cursor.
+            pub fn set_position(&self, pos: u64);
         }
     }
 }
 
 impl<T: StreamType> Stream<T> {
+    /// Maximum `wait_range` retries before returning
+    /// `Pending(NotReady)` to the caller. Each retry takes
+    /// `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
+    /// Prevents the hang detector from firing when data is
+    /// legitimately not yet available (e.g. encrypted HLS startup).
+    const MAX_WAIT_SPINS: u32 = 50;
+
+    /// `Seek` calls `wait_range(new_pos..new_pos+1)` to prime metadata
+    /// (so `source.len()` answers before the seek-past-EOF check). A
+    /// hard cap is required because a broken downloader would otherwise
+    /// hang the seek forever; on the happy path local metadata resolves
+    /// well under this budget. Matches the read path's total budget
+    /// (`WAIT_RANGE_TIMEOUT * MAX_WAIT_SPINS`).
+    const SEEK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// Short timeout keeps the audio worker responsive for round-robin
+    /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
+    /// lasts ~46ms. A 10ms budget gives the worker time to serve other
+    /// tracks and still refill the ringbuf before the audio callback drains it.
+    const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
+
     /// Typed read — returns a [`StreamReadOutcome`] discriminating
     /// progress (`Bytes` with [`NonZeroUsize`]) from non-progress
     /// (`Pending` with a typed [`PendingReason`]) and natural EOF.
@@ -267,26 +286,11 @@ impl<T: StreamType> Stream<T> {
     /// [`StreamReadError::Source`]. `impl Read for Stream` wraps this
     /// outcome for `std::io::Read` consumers.
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    #[kithara_hang_detector::hang_watchdog]
+    #[kithara::hang_watchdog]
     pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
-        /// Short timeout keeps the audio worker responsive for round-robin
-        /// between tracks. At 44100Hz stereo with 4096-sample chunks, one chunk
-        /// lasts ~46ms. A 10ms budget gives the worker time to serve other
-        /// tracks and still refill the ringbuf before the audio callback drains it.
-        const WAIT_RANGE_TIMEOUT: Duration = Duration::from_millis(10);
-
-        /// Maximum `wait_range` retries before returning
-        /// `Pending(NotReady)` to the caller. Each retry takes
-        /// `WAIT_RANGE_TIMEOUT` (10ms), so 50 iterations ≈ 500ms.
-        /// Prevents the hang detector from firing when data is
-        /// legitimately not yet available (e.g. encrypted HLS startup).
-        const MAX_WAIT_SPINS: u32 = 50;
-
-        let timeline = self.source.timeline();
-
         if buf.is_empty() {
             return Ok(StreamReadOutcome::Eof {
-                byte_position: timeline.byte_position(),
+                byte_position: self.source.position(),
             });
         }
 
@@ -295,10 +299,12 @@ impl<T: StreamType> Stream<T> {
         loop {
             let timeline = self.source.timeline();
             let read_epoch = timeline.seek_epoch();
-            let pos = timeline.byte_position();
+            let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
-            let wait_result = self.source.wait_range(range, Some(WAIT_RANGE_TIMEOUT));
+            let wait_result = self
+                .source
+                .wait_range(range, Some(Self::WAIT_RANGE_TIMEOUT));
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
@@ -306,7 +312,7 @@ impl<T: StreamType> Stream<T> {
                         return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
                     }
                     wait_spins += 1;
-                    if wait_spins >= MAX_WAIT_SPINS {
+                    if wait_spins >= Self::MAX_WAIT_SPINS {
                         return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
                     }
                     hang_tick!();
@@ -325,7 +331,7 @@ impl<T: StreamType> Stream<T> {
                 WaitOutcome::Interrupted => {
                     if !timeline.is_flushing() {
                         wait_spins += 1;
-                        if wait_spins >= MAX_WAIT_SPINS {
+                        if wait_spins >= Self::MAX_WAIT_SPINS {
                             return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
                         }
                         hang_tick!();
@@ -353,8 +359,8 @@ impl<T: StreamType> Stream<T> {
                     }
                     hang_reset!();
                     timeline.set_segment_position(pos);
-                    let new_pos = pos.saturating_add(count.get() as u64);
-                    timeline.set_byte_position(new_pos);
+                    self.source.advance(count.get() as u64);
+                    let new_pos = self.source.position();
                     return Ok(StreamReadOutcome::Bytes {
                         count,
                         byte_position: new_pos,
@@ -398,8 +404,7 @@ impl<T: StreamType> Read for Stream<T> {
 impl<T: StreamType> Seek for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let timeline = self.source.timeline();
-        let current = timeline.byte_position();
+        let current = self.source.position();
 
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => i128::from(p),
@@ -427,9 +432,13 @@ impl<T: StreamType> Seek for Stream<T> {
 
         let new_pos = u64::try_from(new_pos).unwrap_or(u64::MAX);
 
+        let wait_range = match self.source.format_change_segment_range() {
+            Ok(range) if range.start == new_pos => range,
+            _ => new_pos..new_pos.saturating_add(1),
+        };
         let _ = self
             .source
-            .wait_range(new_pos..new_pos.saturating_add(1), None);
+            .wait_range(wait_range, Some(Self::SEEK_WAIT_TIMEOUT));
 
         if let Some(len) = self.source.len()
             && new_pos > len
@@ -444,14 +453,20 @@ impl<T: StreamType> Seek for Stream<T> {
             ));
         }
 
-        timeline.set_byte_position(new_pos);
+        self.source.set_position(new_pos);
         Ok(new_pos)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
+    use std::{
+        collections::VecDeque,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+    };
 
     use kithara_storage::WaitOutcome;
     use kithara_test_utils::kithara;
@@ -476,6 +491,7 @@ mod tests {
     }
 
     struct ScriptSource {
+        position: Arc<AtomicU64>,
         anchor: Option<SourceSeekAnchor>,
         timeline: Timeline,
         data: Vec<u8>,
@@ -493,6 +509,7 @@ mod tests {
             Self {
                 timeline,
                 data,
+                position: Arc::new(AtomicU64::new(0)),
                 anchor: None,
                 reads: reads.into_iter().collect(),
                 waits: waits.into_iter().collect(),
@@ -501,12 +518,20 @@ mod tests {
     }
 
     impl Source for ScriptSource {
+        fn advance(&self, n: u64) {
+            self.position.fetch_add(n, Ordering::AcqRel);
+        }
+
         fn len(&self) -> Option<u64> {
             Some(self.data.len() as u64)
         }
 
         fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
             SourcePhase::Waiting
+        }
+
+        fn position(&self) -> u64 {
+            self.position.load(Ordering::Acquire)
         }
 
         fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
@@ -533,6 +558,10 @@ mod tests {
             _position: Duration,
         ) -> crate::StreamResult<Option<SourceSeekAnchor>> {
             Ok(self.anchor)
+        }
+
+        fn set_position(&self, pos: u64) {
+            self.position.store(pos, Ordering::Release);
         }
 
         fn timeline(&self) -> Timeline {
@@ -573,11 +602,16 @@ mod tests {
     }
 
     struct SeekDuringWaitSource {
+        position: Arc<AtomicU64>,
         timeline: Timeline,
         read_calls: usize,
     }
 
     impl Source for SeekDuringWaitSource {
+        fn advance(&self, n: u64) {
+            self.position.fetch_add(n, Ordering::AcqRel);
+        }
+
         fn len(&self) -> Option<u64> {
             Some(4)
         }
@@ -586,9 +620,17 @@ mod tests {
             SourcePhase::Ready
         }
 
+        fn position(&self) -> u64 {
+            self.position.load(Ordering::Acquire)
+        }
+
         fn read_at(&mut self, _offset: u64, _buf: &mut [u8]) -> crate::StreamResult<ReadOutcome> {
             self.read_calls += 1;
             Ok(bytes(4))
+        }
+
+        fn set_position(&self, pos: u64) {
+            self.position.store(pos, Ordering::Release);
         }
 
         fn timeline(&self) -> Timeline {
@@ -646,6 +688,7 @@ mod tests {
         let timeline = Timeline::new();
         let source = SeekDuringWaitSource {
             timeline: timeline.clone(),
+            position: Arc::new(AtomicU64::new(0)),
             read_calls: 0,
         };
         let mut stream = Stream::<SeekDuringWaitType> { source };
@@ -680,8 +723,8 @@ mod tests {
     #[kithara::test]
     fn seek_time_anchor_does_not_move_position() {
         let timeline = Timeline::new();
-        timeline.set_byte_position(11);
         let mut source = ScriptSource::new(timeline.clone(), [], [], b"ABCDE".to_vec());
+        source.set_position(11);
         source.anchor = Some(SourceSeekAnchor {
             byte_offset: 3,
             segment_start: Duration::from_secs(8),

@@ -50,32 +50,20 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn aac_priming_is_already_in_container_encoder_delay() {
-        assert_eq!(codec_priming_frames(AudioCodec::AacLc), 0);
-        assert_eq!(codec_priming_frames(AudioCodec::AacHe), 0);
-        assert_eq!(codec_priming_frames(AudioCodec::AacHeV2), 0);
-    }
-
-    #[kithara::test]
-    fn mp3_targets_lame_default() {
-        assert_eq!(codec_priming_frames(AudioCodec::Mp3), 1105);
-    }
-
-    #[kithara::test]
-    fn opus_uses_standard_preskip() {
-        assert_eq!(codec_priming_frames(AudioCodec::Opus), 312);
-    }
-
-    #[kithara::test]
-    fn lossless_and_unknown_codecs_have_no_priming() {
-        for codec in [
-            AudioCodec::Flac,
-            AudioCodec::Alac,
-            AudioCodec::Pcm,
-            AudioCodec::Adpcm,
-            AudioCodec::Vorbis,
-        ] {
-            assert_eq!(codec_priming_frames(codec), 0);
-        }
+    #[case::aac_lc_in_container(AudioCodec::AacLc, 0)]
+    #[case::aac_he_in_container(AudioCodec::AacHe, 0)]
+    #[case::aac_he_v2_in_container(AudioCodec::AacHeV2, 0)]
+    #[case::mp3_lame_default(AudioCodec::Mp3, 1105)]
+    #[case::opus_standard_preskip(AudioCodec::Opus, 312)]
+    #[case::flac_no_priming(AudioCodec::Flac, 0)]
+    #[case::alac_no_priming(AudioCodec::Alac, 0)]
+    #[case::pcm_no_priming(AudioCodec::Pcm, 0)]
+    #[case::adpcm_no_priming(AudioCodec::Adpcm, 0)]
+    #[case::vorbis_no_priming(AudioCodec::Vorbis, 0)]
+    fn codec_priming_matches_documented_defaults(
+        #[case] codec: AudioCodec,
+        #[case] expected_frames: u64,
+    ) {
+        assert_eq!(codec_priming_frames(codec), expected_frames);
     }
 }
