@@ -214,11 +214,11 @@ impl Demuxer for SymphoniaDemuxer {
                 }
                 Err(e) => return Err(DecodeError::Backend(Box::new(e))),
             };
-            if packet.track_id() != self.track_id {
+            if packet.track_id != self.track_id {
                 continue;
             }
-            let pts = self.ts_to_duration(packet.pts());
-            let duration = self.dur_to_duration(packet.dur());
+            let pts = self.ts_to_duration(packet.pts);
+            let duration = self.dur_to_duration(packet.dur);
             self.current_packet = Some(packet);
             let data: &[u8] = &self.current_packet.as_ref().expect("BUG: just stored").data;
             return Ok(DemuxOutcome::Frame(Frame {

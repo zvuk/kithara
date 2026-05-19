@@ -293,7 +293,7 @@ impl SeleniumHarness {
         }
 
         self.webdriver_server = Some(ChildGuard::spawn("webdriver", cmd)?);
-        wait_http_ready(&status_url, self.config.startup_timeout).await
+        wait_url_ready(&status_url, self.config.startup_timeout, "").await
     }
 
     async fn new_session(&self) -> Result<WasmPlayerSelenium, String> {

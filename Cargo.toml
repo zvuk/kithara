@@ -181,7 +181,7 @@ unimock = { version = "0.6", features = ["std"] }
 backtrace = "0.3"
 
 # async/runtime
-tokio = { version = "1.52.1", default-features = false, features = ["sync", "macros", "rt", "time"] }
+tokio = { version = "1.52.3", default-features = false, features = ["sync", "macros", "rt", "time"] }
 tokio_with_wasm = { version = "0.9", features = ["full"] }
 tokio-util = { version = "0.7.18", default-features = false }
 tokio-stream = "0.1.18"
@@ -199,7 +199,7 @@ async-stream = "0.3.6"
 crossbeam-queue = "0.3"
 
 # http/url
-reqwest = { version = "0.13.2", default-features = false }
+reqwest = { version = "0.13.3", default-features = false }
 url = "2.5.8"
 axum = "0.8.9"
 
@@ -211,12 +211,12 @@ fallible-iterator = "0.3"
 
 # decoding / mp4 parsing
 re_mp4 = "0.4.0"
-symphonia = { version = "0.6.0-alpha.1", features = ["all", "opt-simd"] }
+symphonia = { version = "0.6.0", features = ["all", "opt-simd"] }
 # Pulled in stand-alone for the Apple hardware backend so it can run a
 # streaming fMP4 container parser without requiring the full Symphonia
 # decoder suite.
-symphonia-format-isomp4 = "0.6.0-alpha.1"
-symphonia-core = "0.6.0-alpha.1"
+symphonia-format-isomp4 = "0.6.0"
+symphonia-core = "0.6.0"
 ffmpeg-next = "8.1.0"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
 ratatui = "0.30.0"
@@ -294,7 +294,7 @@ rustls-platform-verifier = "0.7.0"
 
 # async traits
 async-trait = "0.1.89"
-thirtyfour = "0.36.1"
+thirtyfour = "0.36.3"
 
 # delegation
 delegate = "0.13"
@@ -308,7 +308,7 @@ syn = { version = "2", features = ["full"] }
 # storage (range maps + mmap)
 rangemap = { version = "1.7.1", features = ["serde1"] }
 mmap-io = { version = "0.9", default-features = false }
-dashmap = "6.1.0"
+dashmap = "6.2.1"
 bon = "3.9"
 lru = "0.17"
 
@@ -324,7 +324,7 @@ stats_alloc = "0.1"
 assert_no_alloc = "1.1"
 
 # performance monitoring
-hotpath = "0.15.0"
+hotpath = "0.16.1"
 criterion = "0.8.2"
 
 # fast interleave/deinterleave

@@ -53,7 +53,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             .store(StoreOptions::new(temp_dir.path()))
             .initial_abr_mode(AbrMode::Auto(Some(0)))
             .build();
-        let config = AudioConfig::<Hls>::for_stream(hls_config);
+        let config = AudioConfig::<Hls>::for_stream(hls_config).build();
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
             .expect("audio creation");
@@ -68,9 +68,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
                 let outcome = audio.read(&mut buf);
                 let stop = matches!(
                     outcome,
-                    Ok(kithara::audio::ReadOutcome::Frames { count: 0, .. })
-                        | Ok(kithara::audio::ReadOutcome::Eof { .. })
-                        | Err(_)
+                    Ok(kithara::audio::ReadOutcome::Eof { .. }) | Err(_)
                 );
                 if stop {
                     break;
@@ -156,9 +154,7 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
             let outcome = audio.read(&mut buf);
             let stop = matches!(
                 outcome,
-                Ok(kithara::audio::ReadOutcome::Frames { count: 0, .. })
-                    | Ok(kithara::audio::ReadOutcome::Eof { .. })
-                    | Err(_)
+                Ok(kithara::audio::ReadOutcome::Eof { .. }) | Err(_)
             );
             if stop {
                 break;

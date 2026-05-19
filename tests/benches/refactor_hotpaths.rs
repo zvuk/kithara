@@ -35,8 +35,8 @@ use kithara::{
     },
 };
 use kithara_audio::{ResamplerParams, ResamplerProcessor};
+use kithara_integration_tests::TestHttpServer;
 use kithara_platform::tokio::runtime::{Builder, Runtime};
-use kithara_test_utils::TestHttpServer;
 use tempfile::TempDir;
 use url::Url;
 
@@ -237,8 +237,8 @@ fn bench_resampler_process(c: &mut Criterion) {
 
     group.bench_function("passthrough_process", |b| {
         let host_rate = Arc::new(AtomicU32::new(44_100));
-        let params =
-            ResamplerParams::new(Arc::clone(&host_rate), 44_100, 2).quality(ResamplerQuality::High);
+        let mut params = ResamplerParams::new(Arc::clone(&host_rate), 44_100, 2);
+        params.quality = ResamplerQuality::High;
         let mut processor = ResamplerProcessor::new(params);
         let chunk = make_chunk(44_100, 2, 4_096);
 
@@ -251,8 +251,8 @@ fn bench_resampler_process(c: &mut Criterion) {
 
     group.bench_function("rate_switch_process", |b| {
         let host_rate = Arc::new(AtomicU32::new(44_100));
-        let params =
-            ResamplerParams::new(Arc::clone(&host_rate), 48_000, 2).quality(ResamplerQuality::High);
+        let mut params = ResamplerParams::new(Arc::clone(&host_rate), 48_000, 2);
+        params.quality = ResamplerQuality::High;
         let mut processor = ResamplerProcessor::new(params);
         let chunk = make_chunk(48_000, 2, 8_192);
 

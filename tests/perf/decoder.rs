@@ -15,7 +15,11 @@ fn create_wav_decoder(frames: usize) -> Box<dyn Decoder> {
 
 #[hotpath::measure]
 fn decoder_next_chunk_measured(decoder: &mut Box<dyn Decoder>) -> Option<()> {
-    decoder.next_chunk().ok().flatten().map(|_| ())
+    decoder
+        .next_chunk()
+        .ok()
+        .and_then(|o| o.into_chunk())
+        .map(|_| ())
 }
 
 #[hotpath::measure]
@@ -30,7 +34,7 @@ fn decoder_chunk_process(decoder: &mut Box<dyn Decoder>) -> Option<usize> {
     decoder
         .next_chunk()
         .ok()
-        .flatten()
+        .and_then(|o| o.into_chunk())
         .map(|chunk| chunk.pcm.len())
 }
 
@@ -91,7 +95,10 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
             let start = Instant::now();
             let mut total_samples = 0;
             hotpath::measure_block!("decode_all_chunks", {
-                while let Ok(Some(chunk)) = decoder.next_chunk() {
+                while let Ok(outcome) = decoder.next_chunk() {
+                    let Some(chunk) = outcome.into_chunk() else {
+                        break;
+                    };
                     total_samples += chunk.pcm.len();
                 }
             });

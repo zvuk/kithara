@@ -24,7 +24,7 @@ foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.15", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.16", features = ["hotpath", "hotpath-alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
@@ -60,7 +60,7 @@ foldhash = { version = "0.2", default-features = false, features = ["std"] }
 futures-channel = { version = "0.3", default-features = false, features = ["sink", "std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
-hotpath = { version = "0.15", features = ["hotpath", "hotpath-alloc"] }
+hotpath = { version = "0.16", features = ["hotpath", "hotpath-alloc"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
