@@ -393,16 +393,19 @@ async fn poll_next_respects_max_concurrent() {
         }
 
         fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
-            let mut rem = self.remaining.lock_sync();
-            if *rem == 0 {
-                return Poll::Ready(None);
-            }
-            let batch_size = (*rem).min(FLOOD_BATCH_SIZE);
-            *rem -= batch_size;
+            let (batch_size, more) = {
+                let mut rem = self.remaining.lock_sync();
+                if *rem == 0 {
+                    return Poll::Ready(None);
+                }
+                let batch_size = (*rem).min(FLOOD_BATCH_SIZE);
+                *rem -= batch_size;
+                (batch_size, *rem > 0)
+            };
             let cmds: Vec<FetchCmd> = (0..batch_size)
                 .map(|_| FetchCmd::head(self.url.clone()).build())
                 .collect();
-            if *rem > 0 {
+            if more {
                 cx.waker().wake_by_ref();
             }
             Poll::Ready(Some(cmds))
@@ -641,12 +644,14 @@ enum PeerTag {
     Preload,
 }
 
+type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
+
 /// Peer that emits `total_cmds` GET commands and stamps each with its
 /// tag when the response arrives. `priority()` reads the shared
 /// Timeline so a mid-stream flip of `set_playing` is observable.
 struct TaggedPriorityPeer {
     completion_counter: Arc<AtomicUsize>,
-    completion_log: Arc<Mutex<Vec<(PeerTag, usize)>>>,
+    completion_log: CompletionLog,
     remaining: Mutex<usize>,
     tag: PeerTag,
     timeline: crate::Timeline,
@@ -660,7 +665,7 @@ impl TaggedPriorityPeer {
         url: Url,
         cmds: usize,
         completion_counter: &Arc<AtomicUsize>,
-        completion_log: &Arc<Mutex<Vec<(PeerTag, usize)>>>,
+        completion_log: &CompletionLog,
     ) -> Self {
         Self {
             tag,
@@ -676,12 +681,15 @@ impl TaggedPriorityPeer {
 impl Abr for TaggedPriorityPeer {}
 impl Peer for TaggedPriorityPeer {
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
-        let mut rem = self.remaining.lock_sync();
-        if *rem == 0 {
-            return Poll::Pending;
-        }
-        let take = (*rem).min(FLOOD_BATCH_SIZE);
-        *rem -= take;
+        let (take, more) = {
+            let mut rem = self.remaining.lock_sync();
+            if *rem == 0 {
+                return Poll::Pending;
+            }
+            let take = (*rem).min(FLOOD_BATCH_SIZE);
+            *rem -= take;
+            (take, *rem > 0)
+        };
         let cmds: Vec<FetchCmd> = (0..take)
             .map(|_| {
                 let tag = self.tag;
@@ -700,7 +708,7 @@ impl Peer for TaggedPriorityPeer {
                     .build()
             })
             .collect();
-        if *rem > 0 {
+        if more {
             cx.waker().wake_by_ref();
         }
         Poll::Ready(Some(cmds))

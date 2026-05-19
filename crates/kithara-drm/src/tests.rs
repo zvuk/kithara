@@ -114,6 +114,9 @@ mod registry {
 
     use crate::{DomainMatcher, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule};
 
+    type AttachField = fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule;
+    type ReadField = fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>;
+
     fn noop_processor() -> KeyProcessor {
         Arc::new(Ok)
     }
@@ -227,20 +230,20 @@ mod registry {
     #[case::headers(
         "X-Encrypted-Key",
         "seed123",
-        (|mut rule: KeyProcessorRule, kv: HashMap<String, String>| { rule.headers = Some(kv); rule }) as fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
-        (|rule: &KeyProcessorRule| rule.headers.as_ref()) as fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>
+        (|mut rule: KeyProcessorRule, kv: HashMap<String, String>| { rule.headers = Some(kv); rule }) as AttachField,
+        (|rule: &KeyProcessorRule| rule.headers.as_ref()) as ReadField
     )]
     #[case::query_params(
         "token",
         "xyz",
-        (|mut rule: KeyProcessorRule, kv: HashMap<String, String>| { rule.query_params = Some(kv); rule }) as fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
-        (|rule: &KeyProcessorRule| rule.query_params.as_ref()) as fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>
+        (|mut rule: KeyProcessorRule, kv: HashMap<String, String>| { rule.query_params = Some(kv); rule }) as AttachField,
+        (|rule: &KeyProcessorRule| rule.query_params.as_ref()) as ReadField
     )]
     fn registry_returns_per_rule_field(
         #[case] map_key: &str,
         #[case] map_val: &str,
-        #[case] attach: fn(KeyProcessorRule, HashMap<String, String>) -> KeyProcessorRule,
-        #[case] field: fn(&KeyProcessorRule) -> Option<&HashMap<String, String>>,
+        #[case] attach: AttachField,
+        #[case] field: ReadField,
     ) {
         let mut reg = KeyProcessorRegistry::new();
         let mut kv = HashMap::new();

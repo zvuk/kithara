@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![cfg(test)]
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{

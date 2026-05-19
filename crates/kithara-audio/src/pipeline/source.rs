@@ -2327,10 +2327,7 @@ mod playing_flag_tests {
             TrackPhaseTag::Failed,
         ];
         for tag in all {
-            match tag {
-                TrackPhaseTag::AtEof | TrackPhaseTag::Failed => {}
-                _ => {}
-            }
+            let _terminal = matches!(tag, TrackPhaseTag::AtEof | TrackPhaseTag::Failed);
         }
     }
 }

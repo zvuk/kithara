@@ -865,7 +865,7 @@ impl WasmPlayerSelenium {
     /// Returns `(worker_count, worker_titles)` — only dedicated workers
     /// (not service workers or shared workers).
     async fn count_web_workers(&self) -> Result<(usize, Vec<String>), String> {
-        let dev_tools = ChromeDevTools::new(self.driver.handle.clone());
+        let dev_tools = ChromeDevTools::new(self.driver.handle().clone());
         let result = dev_tools
             .execute_cdp("Target.getTargets")
             .await

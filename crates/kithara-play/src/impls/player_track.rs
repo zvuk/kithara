@@ -684,7 +684,9 @@ mod tests {
         }
 
         fn position(&self) -> Duration {
-            Duration::from_secs_f64(self.position_frames as f64 / f64::from(self.spec.sample_rate))
+            let frames =
+                u64::try_from(self.position_frames).expect("test mock position non-negative");
+            Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate))
         }
 
         fn read(

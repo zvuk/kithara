@@ -803,20 +803,22 @@ mod tests {
         let warmup = vec![0.0f32; 4096];
         let _ = eq.process(test_chunk(spec, warmup));
 
-        let num_frames = 44100;
+        let num_frames: u16 = 44100;
         let pcm: Vec<f32> = (0..num_frames)
-            .map(|i| (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin())
+            .map(|i| (2.0 * PI * 1000.0 * f32::from(i) / 44100.0).sin())
             .collect();
 
-        let input_rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
+        let input_rms: f32 =
+            (pcm.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
         let chunk = test_chunk(spec, pcm);
         let output = eq.process(chunk).unwrap();
         let out = &output.pcm[..];
 
         let steady = &out[4096..];
+        let steady_len = u16::try_from(steady.len()).expect("test fixture steady < u16::MAX");
         let output_rms: f32 =
-            (steady.iter().map(|s| s * s).sum::<f32>() / steady.len() as f32).sqrt();
+            (steady.iter().map(|s| s * s).sum::<f32>() / f32::from(steady_len)).sqrt();
         let gain = output_rms / input_rms;
 
         assert!(
@@ -1033,16 +1035,16 @@ mod tests {
         };
         let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
 
-        let warmup: Vec<f32> = (0..4096)
-            .map(|i| (2.0 * PI * 1000.0 * i as f32 / 44100.0).sin())
+        let warmup: Vec<f32> = (0u16..4096)
+            .map(|i| (2.0 * PI * 1000.0 * f32::from(i) / 44100.0).sin())
             .collect();
         let chunk = test_chunk(spec, warmup);
         let _ = eq.process(chunk);
 
         eq.set_gain(0, MAX_GAIN_DB);
 
-        let signal: Vec<f32> = (0..4096)
-            .map(|i| (2.0 * PI * 1000.0 * (i + 4096) as f32 / 44100.0).sin())
+        let signal: Vec<f32> = (0u16..4096)
+            .map(|i| (2.0 * PI * 1000.0 * f32::from(i + 4096) / 44100.0).sin())
             .collect();
         let chunk = test_chunk(spec, signal);
         let output = eq.process(chunk).unwrap();
@@ -1110,7 +1112,7 @@ mod tests {
                 eq.set_gain(band, gain);
             }
 
-            let pcm: Vec<f32> = (0..1024).map(|i| (i as f32 * 0.1).sin()).collect();
+            let pcm: Vec<f32> = (0u16..1024).map(|i| (f32::from(i) * 0.1).sin()).collect();
             let chunk = test_chunk(spec, pcm);
             let output = eq.process(chunk).unwrap();
             for (i, &s) in output.pcm.iter().enumerate() {
@@ -1161,7 +1163,7 @@ mod tests {
             eq.set_gain(1, -gain);
             eq.set_gain(2, gain);
 
-            let pcm: Vec<f32> = (0..512).map(|i| ((i as f32) * 0.3).sin()).collect();
+            let pcm: Vec<f32> = (0u16..512).map(|i| (f32::from(i) * 0.3).sin()).collect();
             let chunk = test_chunk(spec, pcm);
             let output = eq.process(chunk).unwrap();
             for &s in &output.pcm[..] {

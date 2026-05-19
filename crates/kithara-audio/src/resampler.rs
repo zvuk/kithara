@@ -970,7 +970,8 @@ mod tests {
             }
         }
 
-        let expected = (f64::from(total_input_frames) * 44100.0 / 48000.0) as usize;
+        let expected = usize::try_from(i64::from(total_input_frames) * 44100 / 48000)
+            .expect("test bounded result fits usize");
         let tolerance = 1024 * 2;
         assert!(
             total_output_frames + tolerance >= expected,

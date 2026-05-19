@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![cfg(test)]
 
 mod kithara {
     pub(crate) use kithara_test_macros::test;

@@ -42,11 +42,11 @@ fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path)) {
         .asset_root(Some(Consts::ASSET_ROOT))
         .build();
     let key = ResourceKey::new(Consts::KEY_NAME);
-    let res = store.acquire_resource(&key).unwrap();
-    res.write_at(0, b"hello-world!").unwrap();
-    res.commit(Some(12)).unwrap();
+    let res = store.acquire_resource(&key).expect("acquire");
+    res.write_at(0, b"hello-world!").expect("write_at");
+    res.commit(Some(12)).expect("commit");
     drop(res);
-    store.checkpoint().unwrap();
+    store.checkpoint().expect("checkpoint");
     mangle(dir);
 }
 
