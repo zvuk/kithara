@@ -24,15 +24,17 @@ let stream = client.stream(url, &NetOptions::default()).await?;
 
 ## Decorators
 
-<table>
-<tr><th>Decorator</th><th>Behavior</th></tr>
-<tr><td><code>TimeoutNet&lt;N&gt;</code></td><td>Wraps all methods with <code>tokio::time::timeout</code></td></tr>
-<tr><td><code>RetryNet&lt;N, P&gt;</code></td><td>Exponential backoff retry; retries on 5xx, 429, 408, timeouts; does not retry on other 4xx</td></tr>
-</table>
+`TimeoutNet<N>` wraps all methods with `tokio::time::timeout` and is exported in the public API. A retry decorator with exponential backoff (retries on 5xx, 429, 408, timeouts; does not retry on other 4xx) is also available, but only via the `NetExt` builder methods — the wrapper type itself is not part of the public surface.
 
-Decorators compose via `NetExt` extension trait:
+Decorators compose via the `NetExt` extension trait:
 ```rust
-HttpClient::new(opts).with_retry(policy, cancel).with_timeout(duration)
+use kithara_net::{HttpClient, Net, NetExt, NetOptions, RetryPolicy};
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+
+let client = HttpClient::new(NetOptions::default())
+    .with_retry(RetryPolicy::default(), CancellationToken::new())
+    .with_timeout(Duration::from_secs(30));
 ```
 
 ## Key Types
@@ -55,4 +57,4 @@ HttpClient::new(opts).with_retry(policy, cancel).with_timeout(duration)
 
 ## Integration
 
-Used by `kithara-file` and `kithara-hls` for all HTTP operations. `MockNet` (behind `test-utils` feature) enables deterministic testing without network access.
+Used by `kithara-file` and `kithara-hls` for all HTTP operations. `MockNet` (behind the `mock` feature) enables deterministic testing without network access.

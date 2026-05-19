@@ -15,9 +15,9 @@ First public alpha. Pre-release: public APIs may shift between alpha tags.
 - Player engine (`kithara-play`): AVPlayer-style API on top of Firewheel audio graph with multi-slot arena, crossfading, BPM sync, per-channel EQ, and DJ-ready architecture.
 - Queue layer (`kithara-queue`): AVQueuePlayer-analogue with queue, loader, navigation, and crossfade-aware track selection.
 - Adaptive bitrate (`kithara-abr`): protocol-agnostic ABR with pull-driven decisions, manual switch, and seed-based initial throughput estimation.
-- HLS VOD (`kithara-hls`): variant switching, cross-codec recreate, AES-128-CBC decryption, container-aware ABR commit (fMP4 same-codec recreate), HlsReaderHooks for `ReaderSeek` + `SegmentReadStart`.
-- Progressive file (`kithara-file`): gap-driven `FilePeer`, pull-driven loop, MP3/AAC/FLAC streaming over HTTP.
-- Decode (`kithara-decode`): `UniversalDecoder<D, C>` orchestrator over Demuxer + FrameCodec; Apple AudioToolbox native standalone (WAV/MP3/ALAC) via AudioFileServices; Android `MediaExtractor` standalone; Symphonia software backend; CBR batching with preserved `io::Error` chain; `Frame.packet_desc` for VBR.
+- HLS VOD (`kithara-hls`): variant switching, cross-codec recreate, AES-128-CBC decryption, container-aware ABR commit (fMP4 same-codec recreate), and reader-side publication of `HlsEvent::ReaderSeek` / `HlsEvent::SegmentReadStart` via the `kithara-stream` reader hooks.
+- Progressive file (`kithara-file`): pull-driven loop with an internal `FilePeer` registered against the shared `Downloader`; MP3/AAC/FLAC streaming over HTTP; local-file fast path that skips the downloader entirely.
+- Decode (`kithara-decode`): public `Decoder` trait plus internal `ComposedDecoder<D, C>` over the `Demuxer` and `FrameCodec` traits; Apple AudioToolbox native standalone (WAV/MP3/ALAC) via AudioFileServices; Android `MediaExtractor` standalone; Symphonia software backend; CBR batching with preserved `io::Error` chain; `Frame.packet_desc` for VBR.
 - DRM (`kithara-drm`): AES-128-CBC end-to-end with extensible `KeyProcessor`.
 - Events (`kithara-events`): unified `EventBus` with hierarchical `BusScope`, feature-gated by surface (`file`/`hls`/`audio`/`player`).
 - App (`kithara-app`): unified app crate with feature-gated `tui` (ratatui) and `gui` (iced) frontends; single binary `kithara` with `--mode auto|tui|gui`.
@@ -31,7 +31,7 @@ First public alpha. Pre-release: public APIs may shift between alpha tags.
 
 - Workspace-wide migration to `bon::Builder` for all `*Config` structs (`PlayerConfig`, `ResourceConfig`, `DownloaderConfig`, `NetOptions`, `StoreOptions`, `FetchCmd`, `KeyProcessorRule`, `MediaInfo`, `SourceSeekAnchor`, …).
 - Unified transport: `kithara_stream::dl::Downloader` is the global HTTP pool; `PeerHandle` is the per-track API; `Downloader::register(peer)` registers `Peer` implementations.
-- HLS rewrite per Plans 05+06: `HlsCoord` + `HlsTrack` with persistent queue, cancel-token epoch, interior mutability for production wiring.
+- HLS rewrite: internal `HlsCoord` orchestrator with persistent fetch queue, cancel-token epoch, and interior mutability for production wiring.
 - `kithara-stream`: non-`Optional` `SegmentLayout::init_segment_range`; `Stream::Read` retry signal — `wait_range` errors must contain `"budget exceeded"` to be treated as transient.
 - `kithara-test-utils` split into `hang` / `mock` / `probe` / `test` submodules with granular cargo features; `hang-detector` crate merged into `test-utils::hang`.
 - `kithara-test-macros` decomposed into `test` and `probe` submodules.
@@ -55,8 +55,7 @@ First public alpha. Pre-release: public APIs may shift between alpha tags.
 
 - `kithara-hang-detector` crate (merged into `kithara-test-utils::hang`).
 - `kithara-ui` and `kithara-tui` crates (collapsed into `kithara-app::gui` / `kithara-app::tui` modules behind feature flags).
-- `DownloadState` (replaced by `StreamIndex`).
-- `HlsSegmentView`, demand machinery, `ResourceConfig` chain shims, `commit_variant_layout`.
+- `DownloadState`, `HlsSegmentView`, `commit_variant_layout`, the file-side demand machinery, and `ResourceConfig` chain shims; semantic mapping is now owned by `HlsCoord`, byte availability by `AssetStore`.
 - White-box `test_helpers`; tests now use only the public API.
 
 [Unreleased]: https://github.com/zvuk/kithara/compare/v0.0.1-alpha1...HEAD

@@ -15,21 +15,23 @@ Protocol-agnostic adaptive bitrate (ABR) algorithm. Provides `AbrController` wit
 ## Usage
 
 ```rust
-use kithara_abr::{AbrController, AbrOptions, AbrMode, Variant};
-use kithara_platform::time::Instant;
+use std::sync::Arc;
 
-let opts = AbrOptions {
-    mode: AbrMode::Auto(Some(0)),
-    variants: vec![
-        Variant { variant_index: 0, bandwidth_bps: 500_000 },
-        Variant { variant_index: 1, bandwidth_bps: 1_000_000 },
-    ],
-    ..Default::default()
-};
-let controller = AbrController::new(opts);
-let decision = controller.decide(Instant::now());
-assert_eq!(decision.target_variant_index, 0);
+use kithara_abr::{Abr, AbrController, AbrHandle, AbrSettings};
+
+// Owned at the consumer-crate top (Queue / App / FFI player / PlayerImpl).
+let controller: Arc<AbrController> = AbrController::new(AbrSettings::default());
+
+// Each peer (HLS variant, file source) implements `Abr` and registers itself.
+let handle: AbrHandle = controller.register(&(peer as Arc<dyn Abr>));
+
+// Throughput samples flow back from the downloader.
+controller.record_bandwidth(peer_id, bytes, duration, source);
 ```
+
+`AbrController::new` returns `Arc<Self>`. The controller is registered with multiple peers via `register(peer)`; dropping the returned `AbrHandle` unregisters the peer automatically.
+
+ABR decisions are pull-driven — they fire from the peer's scheduler on each fetch, not on a separate timer.
 
 ## Decision Logic
 
@@ -65,14 +67,19 @@ Samples below 16,000 bytes are filtered as noise.
 ## Key Types
 
 <table>
-<tr><th>Type</th><th>Role</th></tr>
-<tr><td><code>AbrController&lt;E&gt;</code></td><td>Main controller with Auto/Manual modes</td></tr>
-<tr><td><code>AbrOptions</code></td><td>Full configuration: hysteresis ratios, buffer thresholds, mode, variants</td></tr>
-<tr><td><code>AbrDecision</code></td><td>Decision result: target variant index, reason, changed flag</td></tr>
-<tr><td><code>AbrReason</code></td><td>Why the decision was made (UpSwitch, DownSwitch, MinInterval, etc.)</td></tr>
-<tr><td><code>Variant</code></td><td>Variant descriptor: index + bandwidth in bps</td></tr>
-<tr><td><code>ThroughputSample</code></td><td>Measurement: bytes, duration, timestamp, source</td></tr>
-<tr><td><code>Estimator</code> (trait)</td><td>Pluggable estimation strategy</td></tr>
+<tr><th>Type</th><th>Kind</th><th>Role</th></tr>
+<tr><td><code>AbrController</code></td><td>struct (Arc)</td><td>Main controller; owns the estimator and per-peer registry; emits ABR events</td></tr>
+<tr><td><code>Abr</code></td><td>trait</td><td>Per-peer ABR capability surface (variants, progress, current variant, locks)</td></tr>
+<tr><td><code>AbrHandle</code></td><td>struct</td><td>Drop-driven unregister handle returned by <code>AbrController::register</code></td></tr>
+<tr><td><code>AbrState</code> / <code>AbrView</code></td><td>structs</td><td>Owned state of a peer's ABR context and the view passed to <code>evaluate()</code></td></tr>
+<tr><td><code>AbrSettings</code></td><td>struct</td><td>Configuration: hysteresis ratios, buffer thresholds, mode, initial-throughput seed, min-switch interval (defined in <code>kithara-events</code>, re-exported here)</td></tr>
+<tr><td><code>AbrMode</code></td><td>enum</td><td><code>Auto(Option&lt;variant_index&gt;)</code> or <code>Manual(variant_index)</code></td></tr>
+<tr><td><code>VariantInfo</code></td><td>struct</td><td>Variant descriptor — <code>bandwidth_bps</code>, codec, container, name, …</td></tr>
+<tr><td><code>AbrDecision</code></td><td>struct</td><td>Decision result — target variant index, reason, changed flag</td></tr>
+<tr><td><code>AbrReason</code></td><td>enum</td><td>Why the decision fired (UpSwitch, DownSwitch, MinInterval, NoEstimate, ManualOverride, …)</td></tr>
+<tr><td><code>BandwidthSource</code></td><td>enum</td><td>Whether a sample came from a primary fetch or an on-demand range</td></tr>
+<tr><td><code>AbrProgressSnapshot</code> / <code>VariantDuration</code> / <code>AbrPeerId</code></td><td>structs</td><td>Cross-crate vocabulary owned by <code>kithara-events</code></td></tr>
+<tr><td><code>Estimator</code> / <code>ThroughputEstimator</code></td><td>trait / struct</td><td>Pluggable throughput estimation strategy (default: dual-track EWMA)</td></tr>
 </table>
 
 ## Integration
@@ -83,28 +90,25 @@ Used by `kithara-hls` for variant selection. Fully independent of HLS specifics 
 
 ```
 src/
-├── abr.rs          — Abr trait (per-peer ABR capability surface)
+├── abr.rs           — Abr trait (per-peer ABR capability surface)
 ├── controller/
-│   ├── core.rs     — AbrController struct + AbrSettings + AbrPeerId
-│   │                 + lifecycle (new, with_estimator, register, unregister)
-│   │                 + peer-state callbacks (on_locked / on_unlocked /
-│   │                   on_mode_changed / on_max_bandwidth_cap_changed)
-│   ├── tick.rs     — record_bandwidth + tick (decision orchestration)
-│   ├── throttle.rs — EventThrottleCache + emit_throttled
+│   ├── core.rs      — AbrController struct + lifecycle (new, with_estimator,
+│   │                  register, unregister) + peer-state callbacks
+│   ├── tick.rs      — record_bandwidth + tick (decision orchestration)
+│   ├── throttle.rs  — EventThrottleCache + emit_throttled
 │   ├── incoherence.rs — schedule_incoherence_watch + check_incoherence
-│   └── peer.rs     — internal PeerEntry struct
-├── estimator.rs    — ThroughputEstimator + Estimator trait + private Ewma helper
-├── handle.rs       — AbrHandle (Drop-driven unregister; safe external API)
+│   └── peer.rs      — internal PeerEntry struct
+├── estimator.rs     — ThroughputEstimator + Estimator trait + private Ewma helper
+├── handle.rs        — AbrHandle (Drop-driven unregister; safe external API)
 ├── state/
-│   ├── core.rs     — AbrState struct + accessors + commands (apply,
-│   │                 set_mode / set_variants / lock / unlock / …)
-│   ├── decision.rs — pure `evaluate(state, view, now) -> AbrDecision`
-│   │                 (parallel compute + single tuple-match)
-│   ├── view.rs     — AbrView<'a> (decision inputs)
-│   └── error.rs    — AbrError
-├── types.rs        — re-exports of cross-crate vocabulary owned by kithara-events
-├── internal.rs     — feature-gated test/internal exports
-└── lib.rs          — module declarations + public re-exports
+│   ├── core.rs      — AbrState struct + accessors + commands (apply,
+│   │                  set_mode / set_variants / lock / unlock / …)
+│   ├── decision.rs  — pure `evaluate(state, view, now) -> AbrDecision`
+│   ├── view.rs      — AbrView<'a> (decision inputs)
+│   ├── error.rs     — AbrError
+│   └── tests.rs     — decision/lifecycle tests
+├── types.rs         — re-exports of cross-crate vocabulary owned by kithara-events
+└── lib.rs           — module declarations + public re-exports
 ```
 
 ## Architecture invariants
@@ -142,8 +146,8 @@ why and what NOT to do as a workaround.
 
 ## Benchmarking
 
-Run Criterion microbenchmarks for ABR estimator/decision hot paths:
+Criterion microbenchmarks for ABR estimator/decision hot paths live in `kithara-integration-tests`:
 
 ```bash
-cargo bench -p kithara-abr --bench abr_estimator
+cargo bench -p kithara-integration-tests --bench abr_estimator
 ```

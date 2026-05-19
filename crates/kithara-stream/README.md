@@ -10,7 +10,12 @@
 
 # kithara-stream
 
-Byte-stream orchestration bridging async producers (network, disk) to sync consumers (decoders). Provides sync `Source` trait, async `Downloader` trait, a generic `Backend` worker, and `Stream<T>` for sync `Read + Seek` access. Also defines canonical shared types: `AudioCodec`, `ContainerFormat`, `MediaInfo`.
+Byte-stream orchestration bridging async producers (network) to sync consumers (decoders). Exposes:
+
+- the sync `Source` trait that decoders read through;
+- the `Stream<T>` wrapper that gives `Source` a `Read + Seek` shape;
+- the pull-driven `Downloader` (struct) and `Peer` (trait) — the workspace's unified HTTP transport;
+- the canonical media vocabulary: `AudioCodec`, `ContainerFormat`, `MediaInfo`, used by every crate that talks about codecs or containers.
 
 ## Usage
 
@@ -18,85 +23,84 @@ Byte-stream orchestration bridging async producers (network, disk) to sync consu
 use kithara_stream::{Stream, StreamType};
 use kithara_file::File;
 
-// File and Hls implement StreamType
+// `File` and `Hls` implement `StreamType`.
 let stream = Stream::<File>::new(config).await?;
-// stream implements Read + Seek
+// `stream` implements `Read + Seek` via the underlying `Source`.
 ```
 
-## Async-to-sync bridge
+## Architecture
 
 ```mermaid
-sequenceDiagram
-    participant DL as Downloader (async)
-    participant W as Writer
-    participant SR as StorageResource
-    participant RS as RangeSet
-    participant CV as Condvar
-    participant R as Reader (sync)
+flowchart LR
+    Peer["Peer impl<br/>(HlsPeer / FilePeer)"]
+    DL["Downloader<br/>(shared HTTP pool)"]
+    FC["FetchCmd<br/>writer + on_complete"]
+    SR["StorageResource<br/>(kithara-storage)"]
+    Stream["Stream&lt;T&gt;<br/>(Read + Seek)"]
+    Source["Source impl<br/>wait_range / read_at"]
 
-    Note over DL,R: Async downloader and sync reader share StorageResource
-
-    DL->>W: poll next chunk from network
-    W->>SR: write_at(offset, bytes)
-    SR->>RS: insert(offset..offset+len)
-    SR->>CV: notify_all()
-
-    R->>SR: wait_range(pos..pos+len)
-    SR->>RS: check coverage
-    alt Range not ready
-        SR->>CV: wait(50ms timeout)
-        Note over SR,CV: Loop until ready, EOF, or cancelled
-        CV-->>SR: woken by notify_all
-        SR->>RS: re-check coverage
-    end
-    SR-->>R: WaitOutcome::Ready
-
-    R->>SR: read_at(pos, buf)
-    SR-->>R: bytes read
-
-    Note over DL,R: Backpressure via Progress atomics
-    DL->>DL: should_throttle()? (download_pos - read_pos > limit)
-    R->>R: set_read_pos(pos)
-    R-->>DL: Notify (reader advanced)
+    Peer -- "poll_next()" --> FC
+    FC --> DL
+    DL -- "writer(chunk)" --> SR
+    DL -- "on_complete()" --> Peer
+    Stream --> Source
+    Source -- "wait_range / read_at" --> SR
 ```
 
-- **tokio task** (`Backend`): spawns the `Downloader` which writes bytes to `StorageResource` asynchronously. Cancelled via `CancellationToken` on drop.
-- **sync reader** (`Stream<T>`): wraps `Source` with `Read + Seek`. Calls `wait_range` which blocks until the requested byte range is written by the downloader.
+- A protocol peer (`HlsPeer`, `FilePeer`) registers with the shared `Downloader` via `Downloader::register(peer)` and emits batches of `FetchCmd` from `Peer::poll_next()`.
+- Each `FetchCmd` carries closures: a per-chunk `writer` that lands bytes into `StorageResource`, and an `on_complete` that lets the peer advance its state.
+- The sync side reads through `Stream<T>`, which delegates to a `Source` implementation. `Source::wait_range` blocks (with a bounded retry budget) until the requested byte range is present in the underlying `StorageResource`.
 
-## Key Traits
+## Key Public Items
 
 <table>
-<tr><th>Trait</th><th>Role</th></tr>
-<tr><td><code>Source</code></td><td>Sync random-access interface: <code>wait_range</code>, <code>read_at</code>, <code>len</code>, <code>media_info</code></td></tr>
-<tr><td><code>Downloader</code></td><td>Async planner: <code>plan()</code> returns batches; <code>commit()</code> stores results; backpressure via <code>should_throttle()</code></td></tr>
-<tr><td><code>DownloaderIo</code></td><td>Pure I/O (network fetch), <code>Clone + Send</code>, stateless; runs multiple copies in parallel</td></tr>
-<tr><td><code>StreamType</code></td><td>Marker trait for protocol types (<code>File</code>, <code>Hls</code>); associated types: <code>Config</code>, <code>Source</code>, <code>Error</code>, <code>Events</code></td></tr>
+<tr><th>Item</th><th>Kind</th><th>Role</th></tr>
+<tr><td><code>Source</code></td><td>trait</td><td>Sync random-access surface for decoders. Drives <code>wait_range</code>, <code>read_at</code>, <code>position</code>, <code>len</code>, <code>media_info</code>, <code>timeline</code>, plus adaptive hooks (<code>current_variant</code>, <code>abr_handle</code>, <code>has_variant_change_pending</code>, …)</td></tr>
+<tr><td><code>SegmentLayout</code></td><td>trait</td><td>Optional segment-aware extension on top of <code>Source</code>: <code>init_segment_range</code>, <code>segment_after_byte</code>, <code>len</code></td></tr>
+<tr><td><code>Stream&lt;T&gt;</code></td><td>struct</td><td><code>Read + Seek</code> wrapper around any <code>T: StreamType</code></td></tr>
+<tr><td><code>StreamType</code></td><td>trait</td><td>Marker for protocol types (<code>File</code>, <code>Hls</code>) with associated <code>Config</code> and <code>Events</code></td></tr>
+<tr><td><code>dl::Downloader</code></td><td>struct</td><td>Shared HTTP pool; <code>register(peer)</code> attaches a peer; spawns one async fetch task per active <code>FetchCmd</code></td></tr>
+<tr><td><code>dl::Peer</code></td><td>trait</td><td>Pull-driven per-track API: <code>poll_next() -&gt; Poll&lt;Option&lt;Vec&lt;FetchCmd&gt;&gt;&gt;</code>, plus ABR-driven decisions</td></tr>
+<tr><td><code>dl::PeerHandle</code></td><td>struct</td><td>Handle returned by <code>Downloader::register(peer)</code> for canceling and inspecting a peer's state</td></tr>
+<tr><td><code>dl::FetchCmd</code></td><td>struct</td><td>HTTP GET/Head command with self-contained <code>writer</code> + <code>on_complete</code> closures and a <code>CancellationToken</code></td></tr>
+<tr><td><code>dl::DownloaderConfig</code></td><td>struct (bon-builder)</td><td>Pool sizing, retry, timeouts, cancel-token wiring</td></tr>
+<tr><td><code>DecoderHooks</code> / <code>SharedHooks</code></td><td>structs</td><td>Reader-side signal channels (<code>ReaderChunkSignal</code>, <code>ReaderSeekSignal</code>)</td></tr>
+<tr><td><code>Timeline</code> / <code>ChunkPosition</code></td><td>structs</td><td>Position bookkeeping consumed by the player and ABR</td></tr>
 </table>
 
-## Canonical Types
+## Canonical Media Types
 
 Defined here as the single source of truth and re-exported by other crates:
 
-- `AudioCodec` — codec identifier (AacLc, Mp3, Flac, Vorbis, Opus, etc.)
-- `ContainerFormat` — container identifier (Fmp4, MpegTs, Adts, Flac, Wav, Ogg, etc.)
+- `AudioCodec` — codec identifier (`AacLc`, `Mp3`, `Flac`, …)
+- `ContainerFormat` — container identifier (`Fmp4`, `MpegTs`, `Adts`, `Flac`, `Wav`, `Ogg`, …)
 - `MediaInfo` — format metadata: channels, codec, container, sample rate, variant index
+
+`audio_codec_supports_fmp4_packaging` is exported alongside as the canonical predicate for fMP4 codec compatibility.
 
 ## Async-to-Sync Bridge
 
-The fundamental design pattern:
+1. The `Downloader` is async; peers and `FetchCmd` callbacks run on the tokio runtime.
+2. `FetchCmd.writer(chunk)` writes bytes directly into the `StorageResource` shared with the sync reader.
+3. The sync reader inside `Stream<T>` calls `Source::wait_range(range)`, which polls the underlying storage with a bounded spin budget (`MAX_WAIT_SPINS × WAIT_RANGE_TIMEOUT`) before returning `Pending(NotReady)`.
+4. `Source::read_at(offset, buf)` performs the actual sync copy once the range is present.
+5. Cancellation flows top-down through the cancel-token hierarchy described in `crates/kithara-play/README.md`.
 
-1. **Downloader** (async) writes data to `StorageResource` via `Writer`.
-2. **Reader** (sync) calls `wait_range()`, which blocks until bytes are available.
-3. `StorageResource` is the synchronization point — no channels between reader and downloader.
-4. **Backpressure**: downloader pauses via `should_throttle()` when too far ahead of the reader.
-5. **On-demand**: reader can request specific ranges (for seeks) that bypass backpressure.
+## Features
 
-## Agent guardrails
+<table>
+<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>probe</code></td><td>no</td><td>USDT probe points for tracing</td></tr>
+<tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks of the public traits</td></tr>
+<tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation</td></tr>
+</table>
+
+## Agent Guardrails
 
 - Keep `kithara-stream` generic. Do not move HLS-, file-, or surface-specific policy into shared contracts.
-- Treat `wait_range`, `read_at`, backpressure, and on-demand behavior as contract surface. Fix the owned invariant instead of adding surface-specific hacks around them.
-- Shared media vocabulary stays here. Reuse `AudioCodec`, `ContainerFormat`, and `MediaInfo` rather than creating parallel cross-crate types.
+- Treat `wait_range`, `read_at`, and the pull-driven `Peer` contract as the surface of this crate. Fix the owned invariant instead of papering over it with surface-specific hacks.
+- Shared media vocabulary stays here. Reuse `AudioCodec`, `ContainerFormat`, and `MediaInfo` instead of creating parallel cross-crate types.
 
 ## Integration
 
-Central orchestration layer. Protocol crates (`kithara-file`, `kithara-hls`) implement `StreamType`. `kithara-decode` consumes `Stream<T>` for decoding. Other crates re-export `AudioCodec`, `ContainerFormat`, `MediaInfo` from here.
+Central orchestration layer. Protocol crates (`kithara-file`, `kithara-hls`) implement `StreamType` and `dl::Peer`. `kithara-decode` consumes `Stream<T>`. The `Downloader` is owned at the consumer-crate top (`kithara-play::PlayerImpl`, `kithara-queue::Queue`, etc.) so all peers share one HTTP pool. Other crates re-export `AudioCodec`, `ContainerFormat`, `MediaInfo` from here.

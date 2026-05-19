@@ -183,7 +183,7 @@ val item = KitharaPlayerItem(
 
 On Android, `libkithara_ffi.so` contains both decode paths:
 
-- `MediaCodec` hardware backend for the supported v1 matrix above.
+- `MediaCodec` hardware backend for AAC family / MP3 / FLAC over `MediaExtractor`.
 - Symphonia software fallback for every unsupported or rejected combination.
 
 ## Demo App
@@ -205,9 +205,10 @@ Builds the Rust core for all supported ABIs and packages it into a release AAR:
 just android aar
 ```
 
-Output: `android/lib/build/outputs/aar/lib-release.aar` with JNI slices for:
-- `arm64-v8a`
-- `x86_64`
+Outputs in `android/lib/build/outputs/aar/`:
+
+- `kithara.aar` — main library (JNI slices for `arm64-v8a` and `x86_64`)
+- `rust-tls.aar` — rustls platform-verifier; must be distributed alongside `kithara.aar`
 
 ## License
 

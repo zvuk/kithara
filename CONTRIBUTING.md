@@ -39,7 +39,7 @@ See [`AGENTS.md`](AGENTS.md) for the full coding rules and [.docs/plans/_templat
 
 ## Architecture
 
-12 modular crates — see the [root README](README.md#architecture) for the dependency graph. Each crate has its own `README.md`.
+See the [root README](README.md#architecture) for the workspace layout and dependency graph. Each crate has its own `README.md`.
 
 ## License
 

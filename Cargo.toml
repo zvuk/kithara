@@ -27,7 +27,6 @@ members = [
     "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
-    "examples",
     "xtask",
 ]
 default-members = [
@@ -52,7 +51,6 @@ default-members = [
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
     "tests",
-    "examples",
 ]
 
 [workspace.lints.rust]

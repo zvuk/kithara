@@ -21,7 +21,6 @@ platforms = [
 [traversal-excludes]
 workspace-members = [
     "kithara-integration-tests",
-    "kithara-examples",
     "kithara-ffi",
     "kithara-wasm",
 ]

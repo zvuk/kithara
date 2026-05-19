@@ -10,93 +10,82 @@
 
 # kithara-file
 
-Progressive file download and playback for single-file media (MP3, AAC, etc.). Implements `StreamType` for use with `Stream<File>`, providing HTTP download with disk caching, seeking, and progress events.
+Single-file media streaming (MP3, AAC, FLAC, ALAC, WAV …). Implements `kithara_stream::StreamType` for use with `Stream<File>`. Backed by a pull-driven peer registered with the shared `kithara_stream::dl::Downloader`, and a `kithara-assets` `AssetStore` for disk caching. Supports both remote HTTP sources and direct local-file playback.
 
 ## Usage
 
 ```rust
 use kithara_stream::Stream;
-use kithara_file::{File, FileConfig};
+use kithara_file::{File, FileConfig, FileSrc};
 
-let config = FileConfig::new(url);
+// Remote HTTP source
+let config = FileConfig::new(FileSrc::Remote(url));
 let stream = Stream::<File>::new(config).await?;
+
+// Local file source
+let local = FileConfig::new(FileSrc::Local(path));
+let stream = Stream::<File>::new(local).await?;
 ```
 
-## Download flow
+`FileConfig` is a [`bon`](https://crates.io/crates/bon) builder. `FileConfig::for_src(src)` returns the chained builder for non-default settings (event channel capacity, downloader, asset store, cancel token).
+
+## Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart LR
-    subgraph Network
-        HTTP["HTTP Server"]
+    Cfg["FileConfig<br/>(bon builder)"]
+    Cfg --> File["File<br/>(StreamType marker)"]
+    File --> Coord["FileCoord<br/>(internal)"]
+
+    subgraph Local["Local FileSrc::Local"]
+        AS1["AssetStore<br/>(absolute ResourceKey)"]
     end
 
-    subgraph "Async (tokio)"
-        HEAD["HEAD request<br/><i>Content-Length</i>"]
-        GET["GET stream<br/><i>byte stream</i>"]
-        Writer["Writer&lt;NetError&gt;<br/><i>byte pump</i>"]
-        RangeReq["GET Range<br/><i>gap filling</i>"]
+    subgraph Remote["Remote FileSrc::Remote"]
+        Peer["FilePeer<br/>(pull-driven, internal)"]
+        DL["dl::Downloader<br/>(shared HTTP pool)"]
+        AS2["AssetStore<br/>(asset_root_for_url)"]
     end
 
-    subgraph "Storage (shared)"
-        SR["StorageResource<br/><i>Mmap or Mem</i>"]
-        RS["RangeSet&lt;u64&gt;<br/><i>available ranges</i>"]
-    end
+    Coord --> Local
+    Coord --> Remote
+    Peer -- "FetchCmd batches" --> DL
+    DL -- "writer / on_complete" --> AS2
 
-    subgraph "Sync (worker thread)"
-        FS["FileSource<br/><i>Source impl</i>"]
-        Reader["Reader&lt;FileSource&gt;<br/><i>Read + Seek</i>"]
-        StreamW["Stream&lt;File&gt;"]
-    end
-
-    subgraph "Decode (worker thread)"
-        Decoder["Symphonia<br/><i>Decoder</i>"]
-        PCM["PcmChunk<br/><i>f32 interleaved</i>"]
-    end
-
-    subgraph "Consumer"
-        Audio["Audio&lt;Stream&lt;File&gt;&gt;<br/><i>PcmReader</i>"]
-    end
-
-    HTTP --> HEAD
-    HTTP --> GET
-    HTTP --> RangeReq
-    GET --> Writer
-    RangeReq --> Writer
-    Writer -- "write_at(offset, bytes)" --> SR
-    SR -- "updates" --> RS
-    FS -- "wait_range()" --> SR
-    FS -- "read_at()" --> SR
-    Reader --> FS
-    StreamW --> Reader
-    Decoder -- "Read + Seek" --> StreamW
-    Decoder --> PCM
-    PCM -- "ringbuf" --> Audio
-
-    style SR fill:#d4a574,color:#000
-    style RS fill:#d4a574,color:#000
+    Source["FileSource<br/>(impl kithara_stream::Source)"] --> Coord
+    Stream2["Stream&lt;File&gt;<br/>(Read + Seek)"] --> Source
 ```
 
-- **Backpressure**: downloader pauses when too far ahead of the reader (configurable `look_ahead_bytes`). Resumes when reader advances (notified via `tokio::Notify`).
-- **Lifecycle**: `FileSource` keeps the downloader `Backend`; dropping the source drops backend and cancels downloader automatically.
+- A remote `FileConfig` spawns an internal `FilePeer`, registers it with the shared `Downloader`, and emits `FetchCmd` batches from `Peer::poll_next()`.
+- Each fetch's `writer` closure writes bytes directly into the underlying `AssetStore`-managed `StorageResource`; `on_complete` lets the peer advance its state.
+- The reader side (`Stream<File>::Read + Seek`) goes through `FileSource::wait_range` / `read_at`, which block until the requested range is present in the resource.
 
-## Three-Phase Download
+## Public Items
 
 <table>
-<tr><th>Phase</th><th>Strategy</th></tr>
-<tr><td>Sequential</td><td>Stream from file start via <code>Writer</code>; fast path for complete downloads</td></tr>
-<tr><td>Gap Filling</td><td>HTTP Range requests for missing chunks; batches up to 4 gaps, each up to 2 MB</td></tr>
-<tr><td>Complete</td><td>All data downloaded; resource committed</td></tr>
+<tr><th>Item</th><th>Kind</th><th>Role</th></tr>
+<tr><td><code>File</code></td><td>struct (marker)</td><td>Zero-sized type implementing <code>StreamType</code></td></tr>
+<tr><td><code>FileConfig</code></td><td>struct (bon-builder)</td><td>Source, event-bus, downloader, asset store, cancel token</td></tr>
+<tr><td><code>FileSrc</code></td><td>enum</td><td><code>Local(PathBuf)</code> for direct disk playback, <code>Remote(Url)</code> for HTTP streaming</td></tr>
 </table>
 
-## Local File Handling
+`FileSource` is the `StreamType::Source` associated type; it is exported through `kithara_stream::Stream<File>` and is rarely constructed directly. `FilePeer`, `FileCoord`, and the rest of the orchestration types are internal.
 
-When configured with a local path, the crate opens the file via `AssetStore` with an absolute `ResourceKey`, skips all network activity, and creates a fully-cached `FileSource` with no background downloader.
+## Local Files
 
-## On-Demand Downloads
+When `FileSrc::Local(path)` is used, the crate opens the file via `AssetStore` with an absolute `ResourceKey`, skips all network activity, and produces a fully-cached `FileSource` with no peer / downloader.
 
-When the reader seeks beyond the current download position, it pushes a range request via a lock-free `SegQueue`. The downloader picks up these requests with higher priority than sequential downloading, enabling responsive seek behavior during streaming.
+## Remote Files
+
+For `FileSrc::Remote(url)`, downloading is pull-driven: the peer requests fetches as the reader advances, with backpressure controlled by the `Timeline` shared between `FileCoord` and the reader. Seek miss enqueues an explicit range fetch for the requested offset.
+
+## Features
+
+<table>
+<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation (also enables <code>kithara-net/perf</code>)</td></tr>
+</table>
 
 ## Integration
 
-Depends on `kithara-net` for HTTP and `kithara-assets` for caching. Composes with `kithara-audio` as `Audio<Stream<File>>` for full decode pipeline.
+Depends on `kithara-stream` (Peer/Downloader, Source, Timeline), `kithara-net` (HTTP), `kithara-assets` (disk cache via `AssetStore`), `kithara-storage` (`Resource`), `kithara-events` (`FileEvent` via the shared `EventBus`). Composes with `kithara-audio` as `Audio<Stream<File>>` inside the decode pipeline.

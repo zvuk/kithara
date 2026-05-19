@@ -57,7 +57,7 @@ crates = ["kithara", "kithara-queue", "kithara-wasm"]
 [[layer]]
 index = 9
 name = "apps"
-crates = ["kithara-app", "kithara-examples", "kithara-ffi"]
+crates = ["kithara-app", "kithara-ffi"]
 
 # Transitional edges that must shrink to zero. Format: "from -> to" = "reason".
 [exemptions]

@@ -4212,16 +4212,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kithara-examples"
-version = "0.0.1-alpha1"
-dependencies = [
- "kithara",
- "kithara-platform",
- "tokio",
- "url",
-]
-
-[[package]]
 name = "kithara-ffi"
 version = "0.0.1-alpha1"
 dependencies = [

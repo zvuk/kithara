@@ -584,8 +584,6 @@ schema_version = 1
 "crates/kithara-test-utils/src/test/real/signal_url.rs::SignalSpec" = 1
 
 [readme_presence]
-kithara-examples = 1
-kithara-ffi = 1
 kithara-fuzz = 1
 xtask = 1
 

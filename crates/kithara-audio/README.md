@@ -10,7 +10,7 @@
 
 # kithara-audio
 
-Audio pipeline with decoding, effects chain, and sample rate conversion. Runs a dedicated OS thread for blocking decode/process work and bridges it to the caller via `ringbuf` lock-free ring buffers. Provides `Audio<S>` as the main entry point; with `rodio` feature enabled, `Audio<S>` implements `rodio::Source` directly.
+Audio pipeline with decoding, effects chain, and sample rate conversion. Runs a shared OS thread (`AudioWorker`) for blocking decode/process work and bridges it to the caller via `ringbuf` lock-free ring buffers. `Audio<S>` is the main entry point; multiple tracks share one worker thread via `AudioWorkerHandle`.
 
 ## Usage
 
@@ -20,104 +20,71 @@ use kithara_decode::GaplessMode;
 use kithara_hls::{Hls, HlsConfig};
 use kithara_stream::Stream;
 
-let config = AudioConfig::<Hls>::new(hls_config)
-    .with_host_sample_rate(sample_rate)
-    .with_resampler_quality(ResamplerQuality::High)
-    .with_gapless_mode(GaplessMode::CodecPriming);
-let mut audio = Audio::<Stream<Hls>>::new(config).await?;
+let audio_config = AudioConfig::<Hls>::builder()
+    .stream_config(hls_config)
+    .host_sample_rate(sample_rate)
+    .resampler_quality(ResamplerQuality::High)
+    .gapless_mode(GaplessMode::CodecPriming)
+    .build();
 
-// Read interleaved PCM
-let mut buf = [0.0f32; 1024];
-while !audio.is_eof() {
-    let n = audio.read(&mut buf);
-    play(&buf[..n]);
-}
+let mut audio = Audio::<Stream<Hls>>::new(audio_config).await?;
 ```
+
+`AudioConfig` is a [`bon`](https://crates.io/crates/bon) builder; the fields shown above are the most common knobs. The exact builder method names match the field names on `AudioConfig`.
 
 ## Threading model
 
 ```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart TB
-    subgraph "Main / Consumer Thread"
-        App["Application Code"]
-        Resource["Resource / Audio&lt;S&gt;<br/><i>PcmReader interface</i>"]
-        App -- "read(buf)" --> Resource
+    subgraph "Consumer Thread"
+        App["Application code"]
+        AS["Audio&lt;S&gt;<br/>(impl PcmReader)"]
+        App -- "read(buf)" --> AS
     end
 
-    subgraph "Stream Backend Thread (kithara-stream)"
-        DLLoop["Backend::run_downloader<br/><i>orchestration loop</i>"]
-        NetTask["Network I/O<br/><i>reqwest + retry</i>"]
-        WriterTask["Writer&lt;E&gt;<br/><i>byte pump</i>"]
-        DLLoop -- "plan + fetch" --> NetTask
-        NetTask -- "bytes" --> WriterTask
+    subgraph "AudioWorker (shared OS thread)"
+        Sched["runtime::Scheduler"]
+        DN["DecoderNode<br/>(per-track impl Node)"]
+        Resampler
+        Effects["effects/<br/>(per-track AudioEffect chain)"]
+        Sched --> DN --> Effects --> Resampler
     end
 
-    subgraph "Decode Thread"
-        DecodeWorker["AudioWorker<br/><i>decode + effects</i>"]
+    subgraph "Downloader (tokio)"
+        DL["kithara-stream::dl::Downloader"]
     end
 
-    subgraph "Shared State (lock-based)"
-        StorageRes["StorageResource<br/><i>Mutex + Condvar</i>"]
-        SegIdx["DownloadState / SharedSegments<br/><i>Mutex + Condvar</i>"]
-        Progress["Progress<br/><i>AtomicU64 + Notify</i>"]
+    subgraph "Shared state"
+        SR["StorageResource<br/>(kithara-storage)"]
+        Bus["EventBus<br/>(kithara-events)"]
     end
 
-    subgraph "Channels"
-        PcmChan["ringbuf::HeapRb&lt;PcmChunk&gt;<br/><i>decode -> consumer</i>"]
-        EventChan["EventBus&lt;Event&gt;<br/><i>all -> consumer</i>"]
-    end
-
-    WriterTask -- "write_at()" --> StorageRes
-    DLLoop -- "commit()" --> SegIdx
-
-    DecodeWorker -- "wait_range() blocks" --> StorageRes
-    DecodeWorker -- "read_at()" --> StorageRes
-    DecodeWorker -- "PcmChunk" --> PcmChan
-    Resource -- "recv()" --> PcmChan
-
-    DecodeWorker -- "AudioEvent" --> EventChan
-    DLLoop -- "HlsEvent / FileEvent" --> EventChan
-    EventChan --> App
-
-    DLLoop -- "should_throttle()" --> Progress
-    DecodeWorker -- "set_read_pos()" --> Progress
-
-    style StorageRes fill:#d4a574,color:#000
-    style SegIdx fill:#d4a574,color:#000
-    style Progress fill:#d4a574,color:#000
-    style PcmChan fill:#5b8a5b,color:#fff
-    style CmdChan fill:#5b8a5b,color:#fff
-    style EventChan fill:#5b8a5b,color:#fff
+    DL -- "fetch + writer()" --> SR
+    DN -- "wait_range / read_at" --> SR
+    Resampler -- "PcmChunk" --> Ring["ringbuf::HeapRb&lt;PcmChunk&gt;"]
+    AS -- "try_pop()" --> Ring
+    DN -- "AudioEvent" --> Bus
+    Bus --> App
 ```
 
-- **Stream backend thread** (`kithara-stream`): runs `Backend::run_downloader` via `handle.block_on()` -- async orchestration loop that plans, fetches (reqwest), and writes bytes to `StorageResource` through `Writer<E>`.
-- **Decode thread** (shared `AudioWorker` OS thread): internal priority scheduler in `runtime/` that checks `is_ready()` before each track step, calls `Decoder::next_chunk`, applies effects (resampler), and sends processed chunks through a lock-free `ringbuf` ring buffer with backpressure. Multiple tracks share one worker thread via `AudioWorkerHandle`.
-- **Events**: published to a unified `EventBus` (ABR switch, progress, decode).
-- **Epoch-based invalidation**: after seek, stale in-flight chunks are filtered by epoch counter (`Arc<AtomicU64>`).
-
-`kithara-audio` owns the decode/effects worker; stream download orchestration remains in `kithara-stream` implementations (`File` / `Hls`).
+- **AudioWorker (shared OS thread)**: an internal priority scheduler in `runtime/` ticks each registered track. Each track is a single `Node` (`DecoderNode`) — effects run as direct operator calls inside the node, not as separate `Node`s with ring buffers between them.
+- **Downloader (tokio)**: lives in `kithara-stream::dl`. It owns the HTTP pool and writes bytes directly into the `StorageResource` the `DecoderNode` reads from. The downloader is not spawned by `kithara-audio`.
+- **Ring**: a lock-free `ringbuf::HeapRb<PcmChunk>` carries processed PCM from the worker to the consumer; backpressure is enforced by the ring's capacity and an `Outlet` overflow slot.
+- **Events**: every layer publishes into a unified `EventBus` (`AudioEvent`, `HlsEvent`, `FileEvent`, ABR events).
+- **Epoch-based seek invalidation**: each seek bumps an `AtomicU64` epoch; stale chunks tagged with an older epoch are dropped before reaching the ring.
 
 ## Pipeline Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart LR
-    ST["Stream&lt;T&gt;<br/><i>Read + Seek</i>"]
-    DF["DecoderFactory<br/><i>Box&lt;dyn Decoder&gt;</i>"]
-    SAS["StreamAudioSource<br/><i>format change, effects</i>"]
-    AW["AudioWorker<br/><i>blocking thread, commands</i>"]
-    KC["ringbuf<br/><i>lock-free, backpressure</i>"]
-    A["Audio&lt;S&gt;<br/><i>PcmReader, Iterator, rodio::Source</i>"]
+    ST["Stream&lt;T&gt;<br/>(Read + Seek)"]
+    DF["DecoderFactory<br/>Box&lt;dyn Decoder&gt;"]
+    Node["DecoderNode<br/>(impl Node, runtime/)"]
+    AW["AudioWorker<br/>(shared OS thread)"]
+    Ring["ringbuf<br/>(lock-free)"]
+    A["Audio&lt;S&gt;<br/>(impl PcmReader)"]
 
-    ST --> DF --> SAS --> AW --> KC --> A
-
-    style ST fill:#8b6b8b,color:#fff
-    style DF fill:#6b8cae,color:#fff
-    style SAS fill:#6b8cae,color:#fff
-    style AW fill:#6b8cae,color:#fff
-    style KC fill:#5b8a5b,color:#fff
-    style A fill:#4a6fa5,color:#fff
+    ST --> DF --> Node --> AW --> Ring --> A
 ```
 
 ## Resampler Quality Levels
@@ -133,11 +100,11 @@ flowchart LR
 
 ## Format Change Handling
 
-On ABR variant switch, `StreamAudioSource` detects the format change via `media_info()` polling, then:
+On an ABR variant switch, the `DecoderNode` detects the format change via `Source::media_info()` polling and then:
 
-1. Uses the variant fence to prevent cross-variant reads.
+1. Uses the variant fence on the source to prevent cross-variant reads.
 2. Seeks to the first segment of the new variant (where init data lives).
-3. Recreates the decoder via factory.
+3. Recreates the decoder via `DecoderFactory`.
 4. Resets the effects chain to avoid audio artifacts.
 
 ### Decoder recreate policy
@@ -163,6 +130,19 @@ On seek, epoch is incremented atomically. The worker tags each decoded chunk wit
 - Prefer explicit FSM or session objects for multi-step control flow. Avoid scattering new `pending_*` or shadow flags across worker, source, and consumer layers.
 - Audio should consume source contracts, not reconstruct HLS or file policy from protocol-specific heuristics.
 
+## Features
+
+<table>
+<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder path via <code>kithara-decode/symphonia</code></td></tr>
+<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder via <code>kithara-decode/apple</code></td></tr>
+<tr><td><code>android</code></td><td>no</td><td>Android <code>MediaExtractor</code>/<code>MediaCodec</code> via <code>kithara-decode/android</code></td></tr>
+<tr><td><code>probe</code></td><td>no</td><td>USDT probes for tracing</td></tr>
+<tr><td><code>mock</code></td><td>no</td><td><code>unimock</code> mocks of public traits</td></tr>
+<tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation</td></tr>
+<tr><td><code>memprof</code></td><td>no</td><td>Allocation tracking via <code>hotpath/hotpath-alloc</code></td></tr>
+</table>
+
 ## Integration
 
-Sits between `kithara-decode` (synchronous Symphonia wrapper) and the consumer (rodio, cpal, custom). Depends on `kithara-stream` for `Stream<T>` and `kithara-bufpool` for zero-allocation PCM buffers.
+Sits between `kithara-decode` and the consumer (`cpal` via Firewheel inside `kithara-play`, or custom PCM readers). Depends on `kithara-stream` for `Stream<T>` and `Source`, `kithara-bufpool` for zero-allocation PCM buffers, `kithara-decode` for the decoder factory, `kithara-events` for the `EventBus`, and `kithara-platform` for cross-platform sync types.

@@ -10,7 +10,7 @@
 
 # kithara-hls
 
-HLS (HTTP Live Streaming) VOD orchestration with adaptive bitrate, persistent caching, and encryption key management. Implements `StreamType` for use with `Stream<Hls>`, coordinating playlist parsing, segment fetching, ABR decisions, and disk cache.
+HLS (HTTP Live Streaming) VOD orchestration: playlist parsing, segment fetching, adaptive-bitrate decisions, cross-codec variant switching, AES-128-CBC decryption, and persistent caching. Implements `kithara_stream::StreamType` for use with `Stream<Hls>`.
 
 ## Usage
 
@@ -18,140 +18,90 @@ HLS (HTTP Live Streaming) VOD orchestration with adaptive bitrate, persistent ca
 use kithara_stream::Stream;
 use kithara_hls::{Hls, HlsConfig};
 
-let config = HlsConfig::new(url);
+let config = HlsConfig::new(master_playlist_url);
 let stream = Stream::<Hls>::new(config).await?;
+// `stream` implements Read + Seek; pass it into kithara-decode / kithara-audio.
 ```
 
-## Segment download flow
+`HlsConfig` is a [`bon`](https://crates.io/crates/bon) builder. Use `HlsConfig::new(url)` for the URL-only shortcut, or `HlsConfig::for_url(url)` to start a chained builder for non-default settings (`look_ahead_bytes`, key options, downloader, asset store, cancel token, event bus).
+
+## Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart LR
-    subgraph Network
-        MasterPL["Master<br/>Playlist"]
-        MediaPL["Media<br/>Playlist"]
-        SegSrv["Segment<br/>Server"]
-        KeySrv["Key<br/>Server"]
+    Cfg["HlsConfig<br/>(bon builder)"]
+    Cfg --> Hls["Hls (StreamType marker)"]
+    Hls --> Coord["HlsCoord<br/>(internal orchestrator)"]
+
+    subgraph Loading["loading/"]
+        PC["PlaylistCache"]
+        KM["KeyManager"]
+        AF["atomic_fetch"]
+        SE["size_estimation"]
     end
 
-    subgraph "Async (tokio)"
-        FM["FetchManager<br/><i>fetch + cache</i>"]
-        KM["KeyManager<br/><i>key resolution</i>"]
-        W["Writer<br/><i>byte pump</i>"]
-    end
+    Coord --> Peer["HlsPeer<br/>(impl dl::Peer)"]
+    Coord --> PC
+    Coord --> KM
+    Peer -- "FetchCmd batches" --> DL["kithara-stream::dl::Downloader"]
+    DL -- "writer / on_complete" --> AS["AssetStore<br/>(kithara-assets)"]
+    AS -- "AES-128-CBC<br/>(kithara-drm)" --> AS
 
-    subgraph "Downloader (worker thread)"
-        DL["HlsDownloader<br/><i>plan, commit</i>"]
-        ABR["AbrController<br/><i>variant select</i>"]
-    end
-
-    subgraph "Assets"
-        AB["AssetStore<br/><i>Disk or Mem</i>"]
-        Proc["ProcessingAssets<br/><i>AES decrypt</i>"]
-    end
-
-    subgraph "Sync (worker thread)"
-        HS["HlsSource<br/><i>Source impl</i>"]
-        SI["DownloadState<br/><i>virtual stream</i>"]
-        StreamH["Stream&lt;Hls&gt;"]
-    end
-
-    subgraph "Decode (worker thread)"
-        Dec["Symphonia<br/><i>Decoder</i>"]
-        PCM2["PcmChunk"]
-    end
-
-    subgraph "Consumer"
-        Audio2["Audio&lt;Stream&lt;Hls&gt;&gt;"]
-    end
-
-    MasterPL --> FM
-    MediaPL --> FM
-    SegSrv --> FM
-    KeySrv --> KM
-    KM --> FM
-    FM --> W
-    W --> AB
-    AB --> Proc
-    DL -- "plan()" --> FM
-    DL -- "commit()" --> SI
-    ABR -- "decide()" --> DL
-    DL -- "throughput sample" --> ABR
-    HS -- "wait on condvar" --> SI
-    HS -- "read_at()" --> AB
-    StreamH --> HS
-    Dec -- "Read + Seek" --> StreamH
-    Dec --> PCM2
-    PCM2 -- "ringbuf" --> Audio2
-
-    style SI fill:#d4a574,color:#000
-    style AB fill:#d4a574,color:#000
+    Source["HlsSource<br/>(impl Source)"] --> Coord
+    Stream2["Stream&lt;Hls&gt;<br/>(Read + Seek)"] --> Source
 ```
 
-- **ABR**: `AbrController` selects variant (quality) based on throughput estimation and buffer state. Emits `AbrEvent::VariantApplied` on quality switch.
-- **Virtual byte stream**: segments are indexed linearly. Reader sees a single contiguous byte stream via `DownloadState`.
-- **Backpressure**: downloader waits when too far ahead of reader position (`look_ahead_bytes`).
+The crate's public surface is `Hls`, `HlsConfig`, `HlsSource`, the playlist parser, and the cache/key helpers. `HlsCoord` and `HlsPeer` are the internal orchestration types and are not part of the contract.
 
-## Virtual Stream Layout
+## Public Items
 
-Segments are logically stitched into a contiguous byte stream:
+<table>
+<tr><th>Item</th><th>Kind</th><th>Role</th></tr>
+<tr><td><code>Hls</code></td><td>struct (marker)</td><td>Zero-sized type implementing <code>kithara_stream::StreamType</code> for HLS streams</td></tr>
+<tr><td><code>HlsConfig</code></td><td>struct (bon-builder)</td><td>HLS stream configuration — URL, ABR caps, key handling, downloader, asset store, cancel token, event bus</td></tr>
+<tr><td><code>KeyOptions</code></td><td>struct</td><td>DRM key-resolution options consumed by <code>HlsConfig</code></td></tr>
+<tr><td><code>HlsSource</code></td><td>struct</td><td><code>Source</code> implementation backed by <code>HlsCoord</code>; what <code>Stream&lt;Hls&gt;</code> wraps</td></tr>
+<tr><td><code>HlsError</code> / <code>HlsResult</code></td><td>enum / alias</td><td>Crate-level error type and result alias</td></tr>
+<tr><td><code>VariantIndex</code></td><td>type</td><td>Position of a variant in the master playlist</td></tr>
+<tr><td><code>KeyManager</code></td><td>struct</td><td>Coordinates AES-128 key fetches and caches resolved keys</td></tr>
+<tr><td><code>PlaylistCache</code></td><td>struct</td><td>In-memory cache of parsed playlists keyed by URL</td></tr>
+<tr><td><code>MasterPlaylist</code>, <code>MediaPlaylist</code>, <code>VariantStream</code>, <code>VariantId</code></td><td>types</td><td>Parsed playlist representations from <code>parsing</code></td></tr>
+<tr><td><code>parse_master_playlist</code>, <code>parse_media_playlist</code>, <code>variant_info_from_master</code></td><td>fns</td><td>Standalone playlist parsers usable without the rest of the stack</td></tr>
+<tr><td><code>PlaylistState</code>, <code>SegmentState</code>, <code>VariantSizeMap</code>, <code>VariantState</code></td><td>types</td><td>Runtime view into playlist and segment state for the player / ABR</td></tr>
+</table>
 
-```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
-flowchart LR
-    subgraph "Single variant"
-        I[Init] --> S0[Seg0] --> S1[Seg1] --> S2[Seg2] --> M1[...]
-    end
-```
+Re-exports: `AbrMode` from `kithara-abr`; `KeyProcessor`, `KeyProcessorRegistry`, `KeyProcessorRule` from `kithara-drm`.
 
-```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
-flowchart LR
-    subgraph "Mid-stream ABR switch (V0 → V1)"
-        V0S0["V0 Seg0"] --> V0S1["V0 Seg1"] --> F["⛔ fence"]
-        F --> V1I["V1 Init"] --> V1S2["V1 Seg2"] --> V1S3["V1 Seg3"] --> M2[...]
-    end
+## ABR and Variant Switching
 
-    style F fill:#c44,color:#fff
-```
+- The peer asks `AbrController` for a decision per fetch (pull-driven, no separate scheduler thread).
+- A cross-codec variant switch recreates the decoder; same-codec fMP4 switches refresh the init segment in place.
+- Throughput samples are fed to ABR after each completed segment.
+- Manual ABR (`AbrMode::Manual`) overrides automatic selection — the next fetch picks the requested variant immediately.
 
-`DownloadState` maintains a `BTreeMap<u64, LoadedSegment>` ordered by byte offset plus a `RangeSet<u64>` for loaded byte ranges. On ABR switch, `fence_at()` discards old variant segments.
+## Encryption (AES-128-CBC)
 
-## ABR Integration
+Encrypted segments parse `#EXT-X-KEY` from the media playlist; `KeyManager` resolves the key URL (with `KeyProcessorRule`-driven rewriting if configured) and the asset store decrypts on read. URIs in `#EXT-X-KEY` are resolved relative to the **segment** URL, not the media-playlist URL.
 
-1. `plan()` calls `make_abr_decision()` which queries `AbrController`.
-2. On variant change: emit `VariantApplied`, calculate new variant metadata via HEAD requests.
-3. `ensure_variant_ready()` handles mid-stream switches by fencing old segments.
-4. Throughput samples are fed to ABR after each segment download.
+## Caching
 
-## Caching and Offline Support
+Each segment is stored as its own `AssetResource` via `AssetStore` (`kithara-assets`). Encrypted segments are acquired with `acquire_resource_with_ctx(key, Some(DecryptContext))` so decryption is part of the resource lifecycle. The optional `#EXT-X-ALLOW-CACHE` tag is parsed into playlist metadata for compatibility; the current cache policy is not switched by this flag.
 
-- Leverages `AssetStore<DecryptContext>` (disk or ephemeral) for persistent segment storage.
-- `populate_cached_segments()` scans disk for committed segments on startup.
-- `#EXT-X-ALLOW-CACHE` is parsed into playlist metadata (`allow_cache`) for compatibility; current cache policy is not switched by this flag.
+## Seek and wait_range Contract
 
-## Seek and wait_range contract
+- `Source::wait_range(start..end)` returns `Ready` only when the requested bytes are readable in the current virtual layout owned by `HlsCoord`.
+- On a seek miss, the source enqueues an explicit on-demand segment fetch for the active variant and seek epoch.
+- On a mid-stream ABR switch, stale metadata offsets are discarded — the source wakes the sequential downloader rather than trusting old offsets.
+- `Eof` is returned only when the timeline is marked EOF and the requested range starts at or after the effective total bytes.
 
-- `wait_range(start..end)` returns `Ready` only when the requested bytes are readable in current virtual layout.
-- Coverage is checked at media-byte level for segment resources; partial segment files are not treated as ready until marked.
-- On seek miss, source enqueues an explicit on-demand segment request for the active variant and seek epoch.
-- On ABR mid-stream switch, metadata offsets are no longer trusted for old layout, so source wakes sequential downloader instead of forcing stale offset lookup.
-- `Eof` is returned only when timeline is marked EOF and requested range starts at/after effective total bytes.
+## Features
 
-## Byte availability is owned by AssetStore
-
-`StreamIndex` owns **semantic mapping only**: virtual byte offset → variant, segment index, init/media split. "Are those bytes actually present on disk / in memory?" is always a query on `AssetStore`, never a double-check through an ad-hoc `open_resource` + `resource.contains_range()`.
-
-The read path lives in `source/read.rs`. `range_ready_from_segments` first consults `StreamIndex::find_at_offset` for the mapping, then calls `AssetStore::contains_range(key, range)` once per sub-range (init + media) — the aggregate `AvailabilityIndex` answers hot cases without opening any resource, and falls back to `resource_state` for pre-existing committed files that have never been touched through the observer. `read_from_entry` and `read_media_segment_checked` use the same single-query guard before actually opening the resource and calling `read_at`.
-
-`LRU`-driven segment invalidation still flows through `on_invalidated → StreamIndex::remove_resource`, which clears the `SegmentSlot` entry. That causes `find_at_offset` to return `None` for the evicted segment and `range_ready_from_segments` to short-circuit to `false` before even hitting the backend — consistent with the previous contract.
-
-## Agent guardrails
-
-- Keep topology, committed layout, residency, and ABR state as separate buckets. Do not collapse them into one convenience state object.
-- Seek and `wait_range` must follow the current virtual or committed layout truth. Use explicit translation boundaries when metadata and committed offsets differ.
-- Segment shape and boundary semantics are part of the contract. Do not treat init-bearing versus media-only layout as incidental data.
+<table>
+<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>probe</code></td><td>no</td><td>USDT probe points for tracing</td></tr>
+<tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation (also enables <code>kithara-net/perf</code>)</td></tr>
+</table>
 
 ## Integration
 
-Depends on `kithara-net` for HTTP, `kithara-assets` for caching (disk or in-memory via `AssetStore`), and `kithara-abr` for ABR algorithm. Composes with `kithara-audio` as `Audio<Stream<Hls>>`. Emits `HlsEvent` via broadcast channel for monitoring.
+Depends on `kithara-stream` (Peer/Downloader, Source, `MediaInfo`), `kithara-net` (HTTP), `kithara-assets` (segment cache via `AssetStore`), `kithara-abr` (ABR algorithm), `kithara-drm` (AES-128), `kithara-events` (HLS events). Composes with `kithara-audio` as `Audio<Stream<Hls>>` inside the decode pipeline. Emits `HlsEvent` via the shared `EventBus`.

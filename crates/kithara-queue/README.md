@@ -24,7 +24,7 @@ underlying player / audio / hls / file events through a single stream.
 
 ## Public API
 
-- [`Queue::new(QueueConfig)`] / [`Queue::wrap(Arc<PlayerImpl>, QueueConfig)`]
+- [`Queue::new(QueueConfig)`]
 - CRUD: `append`, `insert(source, after)`, `remove`, `clear`,
   `set_tracks`
 - Query: `tracks`, `track(id)`, `current`, `current_index`, `len`,

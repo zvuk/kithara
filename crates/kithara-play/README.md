@@ -236,52 +236,22 @@ gantt
 
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
-<tr><td><code>default</code></td><td>yes</td><td>Enables <code>file</code>, <code>hls</code>, <code>backend-cpal</code></td></tr>
-<tr><td><code>file</code></td><td>yes</td><td>Progressive file pipeline (<code>kithara-file</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
-<tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
+<tr><td><code>default</code></td><td>yes</td><td>Enables <code>backend-cpal</code></td></tr>
 <tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL backend via <code>firewheel/cpal</code></td></tr>
-<tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend via <code>firewheel-web-audio</code></td></tr>
-<tr><td><code>backend-offline</code></td><td>no</td><td>Offline Firewheel backend for deterministic engine/player tests</td></tr>
-<tr><td><code>rodio</code></td><td>no</td><td><code>rodio</code> integration (<code>kithara-audio/rodio</code>)</td></tr>
+<tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend via <code>firewheel-web-audio</code> (wasm32 only)</td></tr>
 <tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM backend via <code>firewheel/wasm-bindgen</code></td></tr>
-<tr><td><code>test-utils</code></td><td>no</td><td>Mock trait generation via <code>unimock</code> plus offline test backend wiring</td></tr>
-<tr><td><code>internal</code></td><td>no</td><td>Internal-only exports for workspace testing/debug</td></tr>
+<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode path via <code>kithara-audio/apple</code></td></tr>
+<tr><td><code>probe</code></td><td>no</td><td>USDT probes for runtime tracing</td></tr>
+<tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks for trait testing</td></tr>
 </table>
 
-## Offline Backend (Testing)
+File and HLS pipelines are unconditional dependencies (not feature-gated) — `kithara-play` always links `kithara-file`, `kithara-hls`, `kithara-abr`, `kithara-assets`, `kithara-net`.
 
-`backend-offline` exists for deterministic native tests that need the full
-`EngineImpl + PlayerImpl + session_engine` stack without CPAL or real audio
-hardware. Use `EngineImpl::new_offline(...)` to create an engine and
-`engine.render_offline(frames)` to drive the graph manually.
+## Testing
 
-```rust
-use kithara_play::{Engine, EngineConfig, EngineImpl};
-use kithara_play::impls::offline_backend::OfflineConfig;
-use kithara_events::EventBus;
+The offline render backend used by deterministic engine/player tests lives in `kithara-integration-tests::offline` (since 2026-05-07), not in `kithara-play`. Native test crates depend on `kithara-integration-tests` to drive `EngineImpl + PlayerImpl` against a manual-render Firewheel graph; this crate exposes no `new_offline` / `render_offline` constructor.
 
-let engine = EngineImpl::new_offline(
-    EngineConfig::default(),
-    EventBus::default(),
-    OfflineConfig::default(),
-);
-engine.start()?;
-let pcm = engine.render_offline(512)?;
-```
-
-This is different from `internal::offline::OfflinePlayer`: `OfflinePlayer`
-is a single-node helper for focused render tests, while `new_offline(...)`
-exercises the full engine/session orchestration path.
-
-For integration-style tests, prefer the shared harness under
-`tests/tests/common/offline_player_harness.rs` so player-facing scenarios can
-inject an offline engine without duplicating setup.
-
-`backend-offline` is test-only infrastructure. Do not use it in production
-runtime selection or app-facing engine setup. The default runtime path
-(`EngineImpl::new(...)` with the default backend features) keeps using the
-normal session transport and should not change behavior because this testing
-backend is enabled.
+For pure trait-level testing, enable the `mock` feature to get `unimock`-generated mocks of the public traits.
 
 ## Cancel Hierarchy
 

@@ -51,8 +51,8 @@ let package = Package(
 For local development, clone the repo and use the `KITHARA_LOCAL_DEV` environment variable to build against the local XCFramework:
 
 ```bash
-cargo xtask xcframework                    # build XCFramework (release)
-cargo xtask xcframework --profile debug    # build XCFramework (debug)
+cargo xtask apple build                    # build XCFramework (release)
+cargo xtask apple build --profile debug    # build XCFramework (debug)
 KITHARA_LOCAL_DEV=1 swift build            # build Swift package with local binary
 ```
 
@@ -216,7 +216,7 @@ Open `apple/Package.swift` in Xcode, then open the playground from the Project n
 For local Rust changes, build a local XCFramework first:
 
 ```bash
-cargo xtask xcframework --profile debug
+cargo xtask apple build --profile debug
 cd apple
 KITHARA_LOCAL_DEV=1 open Package.swift
 ```
@@ -242,8 +242,11 @@ Features: URL input with Cmd+V, play/pause with auto-reload after track ends, se
 The XCFramework bundles the Rust core for all supported Apple platforms:
 
 ```bash
-cargo xtask xcframework                    # release (optimized)
-cargo xtask xcframework --profile debug    # debug (faster builds)
+just apple xcframework                       # release (optimized)
+just apple xcframework --profile debug       # debug (faster builds)
+# Equivalent direct xtask invocations:
+cargo xtask apple build
+cargo xtask apple build --profile debug
 ```
 
 Output: `apple/KitharaFFIInternal.xcframework` with slices for:

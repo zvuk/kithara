@@ -56,14 +56,6 @@ time::sleep(std::time::Duration::from_millis(10)).await;
 
 On native these delegate to `tokio` runtime primitives, on wasm they use `setTimeout`-based scheduling.
 
-## Feature Flags
-
-<table>
-<tr><th>Feature</th><th>Default</th><th>Enables</th></tr>
-<tr><td><code>disable-hang-detector</code></td><td>no</td><td>No-op hang watchdog in dependent crates</td></tr>
-<tr><td><code>internal</code></td><td>no</td><td>Internal-only exports for workspace debugging/testing</td></tr>
-</table>
-
 ## Integration
 
 Foundation crate used across the workspace (`kithara-storage`, `kithara-assets`, `kithara-stream`, `kithara-play`, `kithara-wasm`, and test infrastructure) to keep platform-specific branching isolated in one place.

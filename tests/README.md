@@ -4,7 +4,6 @@
 
 <div align="center">
 
-[![codecov](https://codecov.io/gh/zvuk/kithara/branch/main/graph/badge.svg)](https://codecov.io/gh/zvuk/kithara)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE-MIT)
 
 </div>
@@ -57,7 +56,7 @@ Additional flags:
 
 Tests that need HTTP media fixtures use the unified `test_server` with a cross-platform interface:
 
-- **Native**: in-process helper-backed URLs via `kithara-test-utils::TestServerHelper` and `kithara-test-utils::hls_fixture::*`
+- **Native**: in-process helper-backed URLs via `kithara_integration_tests::TestServerHelper` and `kithara_integration_tests::hls_server::*`
 - **WASM**: the same `test_server` binary on `http://127.0.0.1:3444`
 
 The helper contract is token-backed but transparent to tests:
@@ -78,14 +77,14 @@ Synthetic HLS lives under `/stream/*`; procedural encoded audio lives under `/si
 
 ### Synthetic HLS Protocol
 
-Shared synthetic HLS types live in `kithara-test-utils/src/fixture_protocol.rs`:
+Shared synthetic HLS types live in `tests/src/fixture_protocol.rs` (`kithara-integration-tests` crate):
 
 - `DataMode` (TestPattern, SawWav, PerVariantPcm, CustomData, blob-backed payloads)
 - `InitMode` (None, WavHeader, Custom, blob-backed init payloads)
 - `DelayRule` - declarative delay rules for synthetic segment serving
 - `EncryptionRequest` - AES-128 parameters for encrypted fixture scenarios
 
-Pure generation helpers such as `generate_segment`, `expected_byte_at_test_pattern`, and `create_wav_init_header` also live in `fixture_protocol.rs` so byte-level assertions stay deterministic across test helpers.
+Pure generation helpers such as `generate_segment`, `expected_byte_at_test_pattern`, and `create_wav_init_header` also live in `tests/src/fixture_protocol.rs` so byte-level assertions stay deterministic across test helpers.
 
 ## Agent guardrails
 
@@ -254,7 +253,6 @@ just bench               # build benches only (default mode)
 RUN_BENCHMARKS=1 BENCH_CANDIDATE_NAME=local just bench ci
 ```
 
-Note: `abr_estimator` is in the `kithara-abr` crate, not `kithara-integration-tests`.
 
 ## Fuzzing (`tests/fuzz`)
 

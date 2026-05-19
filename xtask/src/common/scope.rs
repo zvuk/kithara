@@ -19,7 +19,7 @@ pub(crate) enum Tool {
     Orphans,
 }
 
-const TOP_LEVEL_DIRS: &[&str] = &["tests", "xtask", "examples", "benches"];
+const TOP_LEVEL_DIRS: &[&str] = &["tests", "xtask", "benches"];
 
 #[derive(Debug)]
 enum ScopeToken {
