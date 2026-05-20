@@ -87,6 +87,11 @@ axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 
+# Seeded RNG for user-simulation e2e scenarios. Tests in
+# `tests/tests/kithara_queue/user_simulation/` need a deterministic
+# random stream so failures stay reproducible across CI re-runs.
+rand = { workspace = true }
+
 # Mocking
 unimock = { workspace = true }
 

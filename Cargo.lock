@@ -4352,6 +4352,7 @@ dependencies = [
  "memory-stats",
  "mmap-io",
  "num-traits",
+ "rand 0.10.1",
  "reqwest",
  "ringbuf 0.5.0",
  "rkyv",
