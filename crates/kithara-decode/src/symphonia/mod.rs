@@ -8,6 +8,8 @@
 //! MediaSource` bridge), `probe::{new_direct, probe_with_seek}`, and
 //! `echain` (error-chain inspection) — back both.
 
+#[cfg(feature = "fdk-aac")]
+pub(crate) mod aac_fdk;
 pub(crate) mod adapter;
 pub(crate) mod codec;
 pub(crate) mod config;

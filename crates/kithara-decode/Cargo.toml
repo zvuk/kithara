@@ -21,7 +21,8 @@ num-traits = { workspace = true }
 re_mp4 = { workspace = true }
 smallvec = { workspace = true }
 symphonia = { workspace = true, optional = true }
-symphonia-adapter-fdk-aac = { workspace = true, optional = true }
+symphonia-core = { workspace = true, optional = true }
+fdk-aac = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
@@ -33,7 +34,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspac
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation = { workspace = true, optional = true }
 core-foundation-sys = { workspace = true, optional = true }
-symphonia-core = { workspace = true, optional = true }
 symphonia-format-isomp4 = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -54,13 +54,15 @@ apple = [
     "dep:symphonia-core",
     "dep:symphonia-format-isomp4",
 ]
+# In-tree fdk-aac adapter needs symphonia-core macros (`codec_profile!`,
+# `support_audio_codec!`) which expand to `symphonia_core::*` paths.
 android = []
 # Enables the software (Symphonia) decoder path. When disabled, the
 # factory only uses the compiled hardware backend — no fallback.
 symphonia = ["dep:symphonia"]
 # Override Symphonia's LC-only AAC decoder with libfdk-aac (HE-AAC
 # v1/v2). Off by default — opt in per-target if needed.
-fdk-aac = ["symphonia", "dep:symphonia-adapter-fdk-aac"]
+fdk-aac = ["symphonia", "dep:symphonia-core", "dep:fdk-aac"]
 probe = []
 mock = []
 

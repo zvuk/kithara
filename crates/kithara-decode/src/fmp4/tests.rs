@@ -208,26 +208,41 @@ fn pull_one_chunk(
 /// pre-switch frame count" symptom).
 ///
 /// This test pins the CURRENT (broken) observable: a freshly opened
-/// `Fmp4SegmentDemuxer` always emits its first chunk at
-/// `decode_time = 0`. There is no API surface to resume at a non-zero
-/// time / segment / byte. When such an API is added (e.g.
-/// `Fmp4SegmentDemuxer::open_with_start(source, layout, ResumePoint)`),
-/// this assertion must be inverted to `chunk.meta.timestamp >= resume_point`.
+/// `Fmp4SegmentDemuxer` restarts at the layout's seg-0; there is no API
+/// to resume at a non-zero `decode_time`. ABR variant-switch
+/// `recreate_decoder` relies on this and consequently restarts playback
+/// at seg-0 of the new variant. When the resume API lands, invert this
+/// assertion to `chunk.meta.timestamp >= resume_point`.
+///
+/// Note on the exact timestamp: the fixture is AAC-LC @ 44.1 kHz. The
+/// in-tree fdk-aac adapter strips its algorithmic delay
+/// (`outputDelay ≈ 1024` frames for AAC-LC @ 44.1 kHz, see
+/// `crates/kithara-decode/src/symphonia/aac_fdk.rs`), so the first
+/// emitted PCM chunk's timestamp is the strip count expressed in time
+/// (~23.22 ms). The "open restarts at seg-0" contract is preserved —
+/// only the time-domain anchor is offset by the codec strip — so we
+/// assert the timestamp sits inside the first AAC frame's window,
+/// not strictly equal to zero.
 #[kithara::test]
 fn red_open_always_starts_at_layout_seg_0() {
     let (blob, segmented) = build_test_layout(3);
     let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let chunk = pull_one_chunk(&mut decoder).expect("BUG: at least one PCM chunk from seg-0");
-    assert_eq!(
-        chunk.meta.timestamp,
-        Duration::ZERO,
+    // First AAC frame at 44.1 kHz = 1024 / 44_100 ≈ 23.22 ms — the
+    // upper bound below; lower bound `ZERO` covers backends that do
+    // not strip codec delay (Apple AudioConverter, Symphonia native).
+    let max_strip_time = Duration::from_micros(24_000);
+    assert!(
+        chunk.meta.timestamp <= max_strip_time,
         "RED — Fmp4SegmentDemuxer::open hardcodes next_byte=0, so the \
-         first chunk always lands at decode_time=0. There is no API to \
-         resume at a non-zero decode_time. ABR variant-switch \
-         recreate_decoder relies on this and consequently restarts \
-         playback at seg-0 of the new variant. \
-         When the resume API lands, INVERT this assertion."
+         first chunk always lands inside seg-0 (timestamp ≤ one AAC \
+         frame's worth of codec-delay strip, ≈23.22 ms @ 44.1 kHz). \
+         There is no API to resume at a non-zero decode_time. ABR \
+         variant-switch recreate_decoder relies on this and \
+         consequently restarts playback at seg-0 of the new variant. \
+         When the resume API lands, INVERT this assertion. Got: {:?}",
+        chunk.meta.timestamp
     );
 }
 

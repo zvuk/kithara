@@ -39,7 +39,16 @@ impl Consts {
     const SEEK_BUDGET: Duration = Duration::from_secs(6);
     /// Minimum post-seek position advance we require to declare a
     /// landed seek as "playing again".
-    const MIN_POST_SEEK_ADVANCE_S: f64 = 0.5;
+    ///
+    /// Decision log: the AAC decoder strips its algorithmic delay
+    /// (`outputDelay`, ~40 ms for AAC-LC @ 44.1 kHz) at the head of the
+    /// PCM stream — the visible track length is correspondingly
+    /// shorter than the container duration. The closest seek offset
+    /// in [`Self::NEAR_END_OFFSETS_S`] is 0.5 s; with the strip eating
+    /// ~0.04 s of that residual budget, the largest reliable post-seek
+    /// advance for that offset is ~0.45 s. Using 0.4 leaves ~0.05 s of
+    /// margin so the iter does not spuriously hang at the EOF.
+    const MIN_POST_SEEK_ADVANCE_S: f64 = 0.4;
     /// Time given to the player to consume some PCM after the seek
     /// before we sample position.
     const POST_SEEK_RENDER_WALL: Duration = Duration::from_millis(1_500);

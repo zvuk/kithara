@@ -2,9 +2,12 @@
 //!
 //! Built once on first access. Starts from Symphonia's default codec set.
 //! When the `fdk-aac` feature is enabled, the AAC entry is overridden with
-//! [`symphonia_adapter_fdk_aac::AacDecoder`] to support HE-AAC v1/v2 — the
+//! [`crate::symphonia::aac_fdk::AacDecoder`] to support HE-AAC v1/v2 — the
 //! default `symphonia-codec-aac` is LC-only and rejects SBR/PS with
-//! `"aac too complex"`.
+//! `"aac too complex"`. Our in-tree adapter also strips fdk-aac's
+//! algorithmic delay (`stream_info.outputDelay`), which the upstream
+//! `symphonia-adapter-fdk-aac` 0.2.0 emits as ~36 ms of leading silence
+//! on every AAC track.
 
 use std::sync::OnceLock;
 
@@ -17,7 +20,7 @@ pub(crate) fn get_codecs() -> &'static CodecRegistry {
         let mut registry = CodecRegistry::new();
         symphonia::default::register_enabled_codecs(&mut registry);
         #[cfg(feature = "fdk-aac")]
-        registry.register_audio_decoder::<symphonia_adapter_fdk_aac::AacDecoder>();
+        registry.register_audio_decoder::<crate::symphonia::aac_fdk::AacDecoder>();
         registry
     })
 }

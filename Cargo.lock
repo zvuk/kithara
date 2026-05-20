@@ -4118,6 +4118,7 @@ dependencies = [
  "bon",
  "core-foundation 0.10.1",
  "core-foundation-sys",
+ "fdk-aac",
  "hotpath",
  "jni 0.22.4",
  "kithara-bufpool",
@@ -4133,7 +4134,6 @@ dependencies = [
  "re_mp4",
  "smallvec",
  "symphonia 0.6.0",
- "symphonia-adapter-fdk-aac",
  "symphonia-core 0.6.0",
  "symphonia-format-isomp4",
  "thiserror 2.0.18",
@@ -7855,17 +7855,6 @@ dependencies = [
  "symphonia-format-ogg",
  "symphonia-format-riff",
  "symphonia-metadata 0.6.0",
-]
-
-[[package]]
-name = "symphonia-adapter-fdk-aac"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9cc5d16c27e9cd23e028655c3740ec78e31eb6cb513f1837d36afed82b2dd44"
-dependencies = [
- "fdk-aac",
- "log",
- "symphonia-core 0.6.0",
 ]
 
 [[package]]
