@@ -5,7 +5,8 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
-    MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline, dl::PeerHandle,
+    AudioCodec, MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline,
+    dl::PeerHandle,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
@@ -61,6 +62,7 @@ impl FileSource {
         backend: Arc<AssetStore>,
         key: ResourceKey,
         cancel: CancellationToken,
+        cached_codec: Option<AudioCodec>,
     ) -> Self {
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
@@ -78,6 +80,9 @@ impl FileSource {
             },
             FilePhase::Complete,
         ));
+        if let Some(codec) = cached_codec {
+            let _ = inner.content_type_codec.set(codec);
+        }
         Self {
             coord,
             inner,

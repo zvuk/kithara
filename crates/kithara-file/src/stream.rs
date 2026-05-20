@@ -1,10 +1,10 @@
 use std::{path::PathBuf, sync::Arc};
 
-use kithara_assets::{AssetStoreBuilder, ResourceKey, asset_root_for_url};
+use kithara_assets::{AssetResource, AssetStoreBuilder, ResourceKey, asset_root_for_url};
 use kithara_events::EventBus;
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
-    SourceError as StreamSourceError, StreamType, Timeline,
+    AudioCodec, SourceError as StreamSourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig},
 };
 use tokio_util::sync::CancellationToken;
@@ -78,6 +78,8 @@ impl File {
         let total = len.unwrap_or(0);
         coord.set_download_pos(total);
 
+        let cached_codec = sniff_codec(&res);
+
         Ok(FileSource::local(
             res,
             coord,
@@ -85,6 +87,7 @@ impl File {
             store,
             key,
             cancel.child_token(),
+            cached_codec,
         ))
     }
 
@@ -141,6 +144,14 @@ impl File {
             let total = coord.total_bytes().unwrap_or(0);
             coord.set_download_pos(total);
 
+            // The HTTP `Content-Type` that originally drove
+            // `FilePeer::capture_content_metadata` is gone on cold
+            // restart — recover the codec by sniffing the first bytes
+            // of the cached resource so the decoder doesn't fall back
+            // to extension-based probing (which silently fails on
+            // path-extension-less URLs like `streamhq?id=N`).
+            let cached_codec = sniff_codec(&state.res);
+
             return Ok(FileSource::local(
                 state.res.clone(),
                 coord,
@@ -148,6 +159,7 @@ impl File {
                 Arc::clone(&state.backend),
                 state.key.clone(),
                 cancel.child_token(),
+                cached_codec,
             ));
         }
 
@@ -175,4 +187,15 @@ impl File {
         source.set_peer_handle(peer_handle);
         Ok(source)
     }
+}
+
+/// Probe the first bytes of a committed `AssetResource` and try to
+/// classify the codec by magic prefix. Returns `None` when the read
+/// itself fails or the prefix doesn't match a known signature — callers
+/// must treat both as "no hint available" and fall back to the regular
+/// probe path.
+fn sniff_codec(res: &AssetResource) -> Option<AudioCodec> {
+    let mut buf = [0u8; 16];
+    let read = res.read_at(0, &mut buf).ok()?;
+    AudioCodec::try_from(&buf[..read]).ok()
 }

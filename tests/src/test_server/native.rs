@@ -35,6 +35,16 @@ impl TestServerHelper {
         self.server.url(&format!("/assets/{trimmed}"))
     }
 
+    /// Build a URL for the static asset `name` exposed via a path with no
+    /// file extension — `/streamhq?name=...`. Mirrors the production
+    /// `cdn-edge.zvq.me/track/streamhq?id=*` shape so tests can pin that
+    /// the decoder doesn't rely on extension-based mime sniffing.
+    #[must_use]
+    pub fn streamhq(&self, name: &str) -> Url {
+        let trimmed = name.trim_start_matches('/');
+        self.server.url(&format!("/streamhq?name={trimmed}"))
+    }
+
     /// Base URL of this server.
     #[must_use]
     pub fn base_url(&self) -> &Url {
