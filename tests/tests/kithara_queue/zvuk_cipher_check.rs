@@ -1,8 +1,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use bytes::Bytes;
+use kithara_app::baked::build_baked_drm_registry;
 use kithara_drm::UniqueBinaryCipher;
 use kithara_integration_tests::kithara;
+use url::Url;
 
 /// Captured fixture: 16-byte plaintext key the zvq.me staging server
 /// returns when the request carries `X-Auth-Token` but no
@@ -41,5 +43,78 @@ fn stage_unique_cipher_matches_captured_keyserver_response() {
         "UniqueBinaryCipher::decrypt('BinaryCipherKey' + seed) must \
          reproduce the staging keyserver's plaintext response — a \
          drift here means stage DRM playback will silently emit garbage"
+    );
+}
+
+/// Hypothesis pin: prove that the current `build.rs`-baked DRM registry
+/// emits a seed format that does **not** match the captured stage
+/// fixture (`aaaaaaaaaaaaaaaa` — 16-char alphanumeric).
+///
+/// Pre-`a2224b2dd` `kithara-app/src/drm.rs` shipped
+/// `SEED_LEN = 16` with `Alphanumeric` alphabet — that's what the
+/// staging keyserver was captured against. The `a2224b2dd` overhaul
+/// collapsed every provider into a single `SEED_BYTES = 4` hex-only
+/// closure (iOS WAF for prod requires `randomString(of: 8)`),
+/// inadvertently breaking the stage flow: stage WAF / encryption
+/// pipeline rejects (or replies inconsistently to) the truncated
+/// 8-hex salt, so live decrypt drifts even though the cipher
+/// algorithm itself is fine (the test above passes).
+///
+/// This test fails on `a2224b2dd` head — it pins the wrong contract.
+/// Once `build.rs` reads `seed.length` + `seed.alphabet` per provider
+/// from `drm.toml`, the assertions below will hold and prove that
+/// stage requests carry the legacy 16-char alphanumeric salt while
+/// prod requests carry the iOS-compatible 8-char hex salt.
+#[kithara::test]
+fn baked_registry_emits_per_provider_seed_format() {
+    let registry = build_baked_drm_registry();
+
+    let stage_url =
+        Url::parse("https://ecs-stage-slicer-01.zvq.me/drm/track/0/key.bin").expect("stage url");
+    let stage_rule = registry
+        .find(&stage_url)
+        .expect("zvuk-stage rule must match *.zvq.me");
+    let stage_req = stage_rule.build_request();
+    let stage_seed = stage_req
+        .headers
+        .get("X-Encrypted-Key")
+        .cloned()
+        .expect("stage rule must inject X-Encrypted-Key header");
+
+    let prod_url =
+        Url::parse("https://cdn-hls-slicer.zvuk.com/drm/track/0/key.bin").expect("prod url");
+    let prod_rule = registry
+        .find(&prod_url)
+        .expect("zvuk-prod rule must match *.zvuk.com");
+    let prod_req = prod_rule.build_request();
+    let prod_seed = prod_req
+        .headers
+        .get("X-Encrypted-Key")
+        .cloned()
+        .expect("prod rule must inject X-Encrypted-Key header");
+
+    assert_eq!(
+        stage_seed.len(),
+        16,
+        "zvq.me staging server captured fixture uses 16-char alphanumeric \
+         salt (`aaaaaaaaaaaaaaaa`); current build.rs emits `{stage_seed}` \
+         ({} chars) which is the wrong format for stage WAF",
+        stage_seed.len()
+    );
+    assert!(
+        stage_seed.chars().all(|c| c.is_ascii_alphanumeric()),
+        "zvq.me stage salt must be alphanumeric (a-z A-Z 0-9), got `{stage_seed}`"
+    );
+
+    assert_eq!(
+        prod_seed.len(),
+        8,
+        "zvuk.com prod WAF requires `randomString(of: 8)` iOS format; \
+         current build.rs emits `{prod_seed}` ({} chars)",
+        prod_seed.len()
+    );
+    assert!(
+        prod_seed.chars().all(|c| c.is_ascii_hexdigit()),
+        "zvuk.com prod salt must be lowercase hex (0-9 a-f), got `{prod_seed}`"
     );
 }

@@ -77,6 +77,12 @@ struct DrmProvider {
     /// Env reference of the form `$KITHARA_...`; resolved at build
     /// time and wrapped with `obfstr!()`.
     cipher_env: Option<String>,
+    /// Per-provider X-Encrypted-Key salt shape. Defaults to the iOS
+    /// prod format (8-char lowercase hex). Override per provider when
+    /// the upstream WAF expects a different alphabet/length — zvq.me
+    /// staging is captured against a 16-char alphanumeric salt.
+    #[serde(default)]
+    seed: SeedSpec,
     /// Extra HTTP headers attached to every request matched by this
     /// provider (playlist, segments, key fetches). Values starting
     /// with `$` are env references and wrapped with `obfstr!()`;
@@ -85,6 +91,58 @@ struct DrmProvider {
     /// per-provider header.
     #[serde(default)]
     headers: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct SeedSpec {
+    /// Output salt length in characters.
+    length: usize,
+    /// `hex` (0-9 a-f) or `alphanumeric` (a-z A-Z 0-9).
+    alphabet: String,
+}
+
+impl Default for SeedSpec {
+    fn default() -> Self {
+        Self {
+            length: 8,
+            alphabet: "hex".into(),
+        }
+    }
+}
+
+impl SeedSpec {
+    fn emit_let_seed(&self, provider_name: &str) -> String {
+        match self.alphabet.to_ascii_lowercase().as_str() {
+            "hex" => {
+                assert!(
+                    self.length.is_multiple_of(2),
+                    "provider `{}` seed.length must be even for alphabet=hex (got {})",
+                    provider_name,
+                    self.length,
+                );
+                let bytes = self.length / 2;
+                format!(
+                    "            let mut seed_bytes = [0u8; {bytes}];\n\
+                     ::rand::rng().fill_bytes(&mut seed_bytes);\n\
+                     let seed: String = seed_bytes.iter().map(|b| format!(\"{{b:02x}}\")).collect();\n"
+                )
+            }
+            "alphanumeric" => {
+                let length = self.length;
+                format!(
+                    "            let seed: String = ::rand::rng()\n\
+                                 .sample_iter(::rand::distr::Alphanumeric)\n\
+                                 .take({length})\n\
+                                 .map(char::from)\n\
+                                 .collect();\n"
+                )
+            }
+            other => panic!(
+                "provider `{}` seed.alphabet `{other}` not supported (expected `hex` or `alphanumeric`)",
+                provider_name
+            ),
+        }
+    }
 }
 
 fn main() {
@@ -198,12 +256,13 @@ fn emit_tracks(code: &mut String, tracks: &[String]) {
 }
 
 fn emit_registry(code: &mut String, providers: &[DrmProvider], env_map: &HashMap<String, String>) {
-    // iOS `HLSAes128Service.AES128ResourceLoader` ships an 8-char
-    // lowercase-hex salt (`randomString(of: 8)` — UUID prefix, hex-only)
-    // and rebuilds it on EVERY key request. The zvuk WAF validates
-    // both the alphabet and the freshness, so we emit a per-rule
-    // `KeyRequestFactory` closure that re-rolls the salt on each call
-    // and constructs a `UniqueBinaryCipher` keyed on that exact salt.
+    // Each provider emits its own `KeyRequestFactory` closure that
+    // rebuilds the X-Encrypted-Key salt on EVERY key request, using
+    // the alphabet/length declared per-provider in `app.yaml`. iOS
+    // `HLSAes128Service.AES128ResourceLoader` ships an 8-char
+    // lowercase-hex salt for zvuk.com WAF, while zvq.me staging
+    // accepts a 16-char alphanumeric salt — both formats coexist via
+    // [`SeedSpec`].
     code.push_str(
         "#[must_use]\n\
          pub fn build_baked_drm_registry() -> ::kithara_drm::KeyProcessorRegistry {\n\
@@ -211,7 +270,6 @@ fn emit_registry(code: &mut String, providers: &[DrmProvider], env_map: &HashMap
          use ::kithara_drm::{KeyProcessorRegistry, KeyProcessorRule, KeyRequest, KeyRequestFactory, KeyProcessor, UniqueBinaryCipher};\n\
          use ::bytes::Bytes;\n\
          use ::rand::prelude::*;\n\
-         const SEED_BYTES: usize = 4;\n\
          let mut registry = KeyProcessorRegistry::new();\n",
     );
     for provider in providers {
@@ -251,15 +309,13 @@ fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, S
         )
         .expect("write to String never fails");
     }
+    let seed_let = p.seed.emit_let_seed(&p.name);
     writeln!(
         code,
         r#"    {{
         let cipher_key: Arc<str> = Arc::from(({cipher_expr}).to_string());
         let factory: KeyRequestFactory = Arc::new(move || {{
-            let mut seed_bytes = [0u8; SEED_BYTES];
-            ::rand::rng().fill_bytes(&mut seed_bytes);
-            let seed: String = seed_bytes.iter().map(|b| format!("{{b:02x}}")).collect();
-            let secret = format!("{{}}{{}}", cipher_key, seed);
+{seed_let}            let secret = format!("{{}}{{}}", cipher_key, seed);
             let cipher = UniqueBinaryCipher::new(&secret);
             let mut headers = HashMap::new();
             headers.insert("X-Encrypted-Key".to_string(), seed);

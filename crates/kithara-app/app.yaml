@@ -22,17 +22,25 @@ network:
 
 playlist:
   tracks:
-    # - https://stream.silvercomet.top/track.mp3
-    # - https://stream.silvercomet.top/hls/master.m3u8
+    - https://stream.silvercomet.top/track.mp3
+    - https://stream.silvercomet.top/hls/master.m3u8
     - https://stream.silvercomet.top/drm/master.m3u8
-    # - https://cdn-edge.zvq.me/track/streamhq?id=27390231
-    # - https://cdn-edge.zvq.me/track/streamhq?id=151585912
-    # - https://cdn-edge.zvq.me/track/streamhq?id=125475417
-    # - https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8
-    # - https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8
-    # - https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8
-    # - https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8
+    - https://cdn-edge.zvq.me/track/streamhq?id=27390231
+    - https://cdn-edge.zvq.me/track/streamhq?id=151585912
+    - https://cdn-edge.zvq.me/track/streamhq?id=125475417
+    - https://cdn-edge.zvq.me/track/streamhq?id=138535169
+    - https://cdn-edge.zvq.me/track/streamhq?id=130432502
+    - https://cdn-edge.zvq.me/track/streamhq?id=132017169
+    - https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8
+    - https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8
+    - https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8
+    - https://cdn-hls-slicer.zvuk.com/drm/track/173388194_1/master.m3u8
     - https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8
+    - https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8
+    - https://cdn-hls-slicer.zvuk.com/drm/track/50984034_1/master.m3u8
+    - https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8
+    - https://cdn-hls-slicer.zvuk.com/drm/track/171515249_1/master.m3u8
+    - https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8
 
 # DRM key-server providers. Domains use the same matcher rules as
 # `KeyProcessorRegistry`: bare host = exact match; `*.host` = subdomain
@@ -51,6 +59,12 @@ drm:
     - name: zvuk-prod
       domains: [zvuk.com, "*.zvuk.com"]
       cipher_env: $KITHARA_DRM_PROD_KEY
+      # iOS `HLSAes128Service.AES128ResourceLoader` ships
+      # `randomString(of: 8)` — 8-char lowercase hex. The zvuk.com WAF
+      # validates alphabet + length; deviation triggers HTTP 418.
+      seed:
+        length: 8
+        alphabet: hex
       headers:
         User-Agent: OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)
         X-Auth-Token: $KITHARA_DRM_PROD_AUTH_TOKEN
@@ -58,6 +72,13 @@ drm:
     - name: zvuk-stage
       domains: [zvq.me, "*.zvq.me"]
       cipher_key: $KITHARA_DRM_STAGE_KEY
+      # zvq.me staging keyserver is captured against a 16-char
+      # alphanumeric salt (legacy zvqengine format, `aaaaaaaaaaaaaaaa`
+      # in `tests/tests/kithara_queue/zvuk_cipher_check.rs`). Using the
+      # 8-char hex prod format here silently corrupts decrypt output.
+      seed:
+        length: 16
+        alphabet: alphanumeric
       headers:
         User-Agent: OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)
         X-Auth-Token: $KITHARA_DRM_STAGE_AUTH_TOKEN
