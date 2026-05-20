@@ -13,6 +13,7 @@ use kithara::{
 };
 use kithara_abr::Abr;
 use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::time::{Duration, sleep};
 use kithara_stream::dl::{Downloader, DownloaderConfig, FetchCmd, Peer};
 use tokio_util::sync::CancellationToken;
@@ -53,7 +54,14 @@ impl Peer for ImmortalPeer {
 async fn red_registry_never_unregisters_pending_peer() -> Result<(), Box<dyn StdError + Send + Sync>>
 {
     let cancel = CancellationToken::new();
-    let downloader = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .cancel(cancel.clone())
+        .build(),
+    );
 
     let peer: Arc<ImmortalPeer> = Arc::new(ImmortalPeer::new());
     let peer_dyn: Arc<dyn Peer> = peer.clone();
@@ -106,9 +114,12 @@ async fn red_hls_source_drop_leaks_peer(
     let url = server.url("/master.m3u8");
 
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .cancel(CancellationToken::new())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .cancel(CancellationToken::new())
+        .build(),
     );
 
     {

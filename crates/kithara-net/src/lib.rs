@@ -15,5 +15,5 @@ pub use crate::{
     error::{NetError, NetResult},
     timeout::TimeoutNet,
     traits::{ByteStream, Net, NetExt},
-    types::{Headers, NetOptions, RangeSpec, RetryPolicy},
+    types::{Compression, Headers, NetOptions, RangeSpec, RetryPolicy},
 };

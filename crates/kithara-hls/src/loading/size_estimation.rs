@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
+use kithara_net::RangeSpec;
 use kithara_stream::dl::{FetchCmd, FetchResponse, PeerHandle};
 use tracing::debug;
 use url::Url;
 
 use crate::{
+    config::SizeProbeMethod,
     parsing::MediaPlaylist,
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
 };
@@ -30,6 +32,12 @@ pub(crate) struct SizeEstimator {
     headers: Option<kithara_net::Headers>,
     peer: PeerHandle,
     media_playlists: Vec<MediaPlaylist>,
+    /// Max probe requests in flight at once. `0` is normalised to
+    /// `1`. Caps concurrency against upstreams that throttle or drop
+    /// TCP on burst (e.g. zvuk stage `/drm/`).
+    concurrency: usize,
+    /// Whether probes are real `HEAD`s or single-byte ranged `GET`s.
+    probe_method: SizeProbeMethod,
 }
 
 /// Result of [`SizeEstimator::estimate`]: a `size_maps` vector indexed by
@@ -49,16 +57,34 @@ impl SizeEstimator {
         playlist: Arc<PlaylistState>,
         media_playlists: Vec<MediaPlaylist>,
         headers: Option<kithara_net::Headers>,
+        concurrency: usize,
+        probe_method: SizeProbeMethod,
     ) -> Self {
         Self {
             playlist,
             headers,
             peer,
             media_playlists,
+            concurrency: concurrency.max(1),
+            probe_method,
         }
     }
 
     fn content_length(resp: &FetchResponse) -> u64 {
+        // Prefer the `Content-Range` total when present — for
+        // `Range: bytes=0-0` probes `Content-Length` is `1` and only
+        // `Content-Range: bytes 0-0/TOTAL` carries the resource
+        // size. Falls back to `Content-Length` for plain `HEAD`s.
+        if let Some(total) = resp
+            .headers
+            .get("content-range")
+            .or_else(|| resp.headers.get("Content-Range"))
+            .and_then(|h| h.split('/').nth(1))
+            .filter(|s| *s != "*")
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            return total;
+        }
         resp.headers
             .get("content-length")
             .or_else(|| resp.headers.get("Content-Length"))
@@ -100,10 +126,18 @@ impl SizeEstimator {
         VariantSizeMap::default()
     }
 
-    fn head_cmd(&self, url: Url) -> FetchCmd {
-        FetchCmd::head(url)
-            .maybe_headers(self.headers.clone())
-            .build()
+    /// Build the probe command for `url`. Strategy is driven by
+    /// [`Self::probe_method`].
+    fn probe_cmd(&self, url: Url) -> FetchCmd {
+        match self.probe_method {
+            SizeProbeMethod::Head => FetchCmd::head(url)
+                .maybe_headers(self.headers.clone())
+                .build(),
+            SizeProbeMethod::RangeGet => FetchCmd::get(url)
+                .range(RangeSpec::new(0, Some(0)))
+                .maybe_headers(self.headers.clone())
+                .build(),
+        }
     }
 
     /// Strategy 1: exact sizes from `#EXT-X-BYTERANGE` on every segment.
@@ -144,26 +178,45 @@ impl SizeEstimator {
         num_segments: usize,
     ) -> Option<VariantSizeMap> {
         let init_url = self.playlist.init_url(variant);
+        debug!(
+            variant,
+            init_url = ?init_url.as_ref().map(Url::as_str),
+            num_segments,
+            "size_estimation: try_head_requests start"
+        );
         let mut cmds: Vec<FetchCmd> = Vec::new();
         if let Some(ref url) = init_url {
-            cmds.push(self.head_cmd(url.clone()));
+            cmds.push(self.probe_cmd(url.clone()));
         }
         for i in 0..num_segments {
             if let Some(url) = self.playlist.segment_url(variant, i) {
-                cmds.push(self.head_cmd(url));
+                cmds.push(self.probe_cmd(url));
             }
         }
         if cmds.is_empty() {
             return None;
         }
 
-        let results = self.peer.batch(cmds).await;
+        let mut results: Vec<_> = Vec::with_capacity(cmds.len());
+        let mut remaining = cmds;
+        while !remaining.is_empty() {
+            let take = self.concurrency.min(remaining.len());
+            let chunk: Vec<FetchCmd> = remaining.drain(..take).collect();
+            results.extend(self.peer.batch(chunk).await);
+        }
         let mut iter = results.iter();
-        let init_size = init_url
-            .as_ref()
-            .and_then(|_| iter.next())
+        let init_response = init_url.as_ref().and_then(|_| iter.next());
+        let init_size = init_response
             .and_then(|r| r.as_ref().ok())
             .map_or(0, Self::content_length);
+        debug!(
+            variant,
+            has_init_url = init_url.is_some(),
+            init_response_ok = init_response.is_some_and(Result::is_ok),
+            init_response_err = ?init_response.and_then(|r| r.as_ref().err().map(ToString::to_string)),
+            init_size,
+            "size_estimation: try_head_requests init HEAD result"
+        );
 
         let mut offsets = Vec::with_capacity(num_segments);
         let mut segment_sizes = Vec::with_capacity(num_segments);

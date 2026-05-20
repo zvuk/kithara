@@ -94,8 +94,11 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         timestamp: Duration,
         source_bytes: u64,
     ) -> PcmChunk {
-        let chunk_secs = if self.spec.sample_rate > 0 {
-            f64::from(frames) / f64::from(self.spec.sample_rate)
+        let live_spec = self.codec.spec();
+        self.spec = live_spec;
+
+        let chunk_secs = if live_spec.sample_rate > 0 {
+            f64::from(frames) / f64::from(live_spec.sample_rate)
         } else {
             0.0
         };
@@ -104,7 +107,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
 
         if self.resync_frame_offset_to_pts {
             self.resync_frame_offset_to_pts = false;
-            self.frame_offset = frame_offset_for(timestamp, self.spec.sample_rate);
+            self.frame_offset = frame_offset_for(timestamp, live_spec.sample_rate);
         }
         let frame_offset = self.frame_offset;
         self.frame_offset = self.frame_offset.saturating_add(u64::from(frames));
@@ -118,7 +121,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             segment_index: self.demuxer.current_segment_index(),
             source_byte_offset: None,
             variant_index: self.demuxer.current_variant_index(),
-            spec: self.spec,
+            spec: live_spec,
             epoch: self.epoch,
         };
         PcmChunk::new(meta, buf)

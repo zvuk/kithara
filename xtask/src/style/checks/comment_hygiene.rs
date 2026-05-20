@@ -640,7 +640,7 @@ fn apply_category_fix(
     if targets.is_empty() {
         return None;
     }
-    targets.sort_by(|a, b| b.start.cmp(&a.start));
+    targets.sort_by_key(|r| std::cmp::Reverse(r.start));
     let mut buf = src.to_string();
     let mut last_start = usize::MAX;
     for r in targets {

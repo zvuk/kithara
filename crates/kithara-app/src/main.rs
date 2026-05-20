@@ -97,19 +97,20 @@ fn main() -> AppResult {
     let args = Args::parse();
     let mode = resolve_mode(args.mode);
 
-    let mut net = NetOptions::default();
-    net.is_insecure = args.insecure;
+    init_tracing_for_mode(mode)?;
+
+    let app_cancel = CancellationToken::new(); // kithara:cancel:owner
+    let net = NetOptions::builder()
+        .is_insecure(args.insecure || kithara_app::baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
+        .compression(kithara_app::baked::BAKED_COMPRESSION)
+        .build();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(net))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(net, app_cancel.child_token())).build(),
     );
-    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default()); // kithara:cancel:owner
+    let flush_hub = FlushHub::new(app_cancel.child_token(), FlushPolicy::default());
     let config = AppConfig::new(downloader, flush_hub)
         .with_tracks(args.tracks)
         .with_should_accept_invalid_certs(args.insecure);
-
-    init_tracing_for_mode(mode)?;
 
     let player_config = PlayerConfig::builder()
         .crossfade_duration(config.crossfade_seconds)

@@ -4,7 +4,9 @@ use std::{
     time::Duration,
 };
 
-use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, StreamSeekPastEof};
+use kithara_stream::{
+    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, StreamPending, StreamSeekPastEof,
+};
 use kithara_test_utils::kithara;
 use symphonia::core::{
     codecs::{
@@ -210,7 +212,17 @@ impl Demuxer for SymphoniaDemuxer {
                     return Ok(DemuxOutcome::Eof);
                 }
                 Err(SymphoniaError::IoError(e)) if e.kind() == ErrorKind::Interrupted => {
-                    return Ok(DemuxOutcome::Pending(PendingReason::SeekPending));
+                    let reason = e
+                        .get_ref()
+                        .and_then(|src| src.downcast_ref::<StreamPending>())
+                        .map(|p| p.reason)
+                        .or_else(|| {
+                            e.get_ref()
+                                .and_then(|src| src.downcast_ref::<PendingReason>())
+                                .copied()
+                        })
+                        .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
+                    return Ok(DemuxOutcome::Pending(reason));
                 }
                 Err(e) => return Err(DecodeError::Backend(Box::new(e))),
             };

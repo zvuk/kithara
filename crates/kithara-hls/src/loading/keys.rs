@@ -23,16 +23,17 @@ use crate::{HlsError, HlsResult};
 /// host is looked up in the registry to pick the matching rule.
 #[derive(Clone)]
 pub struct KeyManager {
-    /// In-memory store of decrypted keys for rule-matched URLs.
+    /// In-memory hot-path cache of decrypted keys for rule-matched URLs.
     ///
-    /// Rule-matched (DRM) key responses are seed-dependent: the server
-    /// returns `cipher.encrypt(real_key, session_seed)` where `seed` is
-    /// a fresh random value per `KeyManager` instance. Caching the
-    /// encrypted response on disk would poison the next session (new
-    /// seed can't decrypt the old response). The plaintext key is
-    /// deterministic per track/quality, so we cache it in-memory for
-    /// the lifetime of the stream — `get_cached_key` stays zero-I/O
-    /// on the segment hot path.
+    /// `get_cached_key` reads from here under a synchronous segment
+    /// fetch, so it must be zero-I/O. The plaintext key is also
+    /// persisted to the [`AssetStore`] by [`Self::get_raw_key`] under
+    /// the same `ResourceKey::from_url(key_url)` as plain HLS-AES keys
+    /// — re-opening the same track in a later session resolves through
+    /// disk cache without re-hitting the key endpoint. The cached
+    /// **plaintext** is deterministic per track/quality and safe to
+    /// persist; the on-the-wire response is encrypted with a fresh
+    /// per-session seed and never touches disk.
     decrypted_keys: Arc<Mutex<HashMap<Url, Bytes>>>,
     backend: AssetStore<DecryptContext>,
     /// Byte buffer pool for reading cached key bodies.
@@ -49,6 +50,13 @@ impl KeyManager {
 
     /// Start offset for sequence number in the 16-byte IV.
     const IV_SEQUENCE_OFFSET: usize = 8;
+
+    /// Asset-store / tracing tag for HLS-AES key resources — used for
+    /// plain and DRM (registry-matched, decrypted-on-read) keys alike.
+    /// They share a single `ResourceKey::from_url(key_url)` slot in
+    /// the asset store; emitting the same kind everywhere keeps
+    /// cache-hit / cache-miss telemetry grouped under one label.
+    pub(crate) const RESOURCE_KIND: &str = "key";
 
     #[must_use]
     pub fn new(
@@ -158,12 +166,12 @@ impl KeyManager {
     /// key URL's host, applies the rule's query params + headers to
     /// the request, and runs the rule's processor on the response.
     ///
-    /// Rule-matched (DRM) keys bypass the on-disk cache entirely and
-    /// live only in an in-process map keyed by the original URL. The
-    /// server response is encrypted with a session-local random seed,
-    /// so caching it on disk would poison the next session. Non-DRM
-    /// keys (plain AES-128 `key` files) go through `fetch_atomic_body`
-    /// like other small bodies.
+    /// Rule-matched (DRM) and plain AES-128 keys both persist to the
+    /// [`AssetStore`] under `ResourceKey::from_url(key_url)`. DRM keys
+    /// get decrypted via `rule.processor()` before the write-back so
+    /// the cached bytes are the **plaintext** AES-128 key — the
+    /// per-session seed on the wire never reaches disk. Non-DRM keys
+    /// share the same path through [`fetch_atomic_body`].
     ///
     /// # Errors
     /// Returns an error when the fetch or the processor fails.
@@ -189,7 +197,7 @@ impl KeyManager {
                 headers,
                 url,
                 rel_path.as_str(),
-                "key",
+                Self::RESOURCE_KIND,
             )
             .await;
         }
@@ -200,7 +208,26 @@ impl KeyManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(url)
         {
+            tracing::debug!(%url, "drm key: served from in-memory cache");
             return Ok(cached.clone());
+        }
+
+        let cache_key = ResourceKey::from_url(url);
+        let rel_path = rel_path_from_url(url);
+        if let Some(bytes) = super::atomic_fetch::try_read_cached(
+            &self.backend,
+            &self.byte_pool,
+            &cache_key,
+            url,
+            rel_path.as_str(),
+            Self::RESOURCE_KIND,
+        )? {
+            tracing::info!(%url, bytes = bytes.len(), "drm key: served from disk cache");
+            self.decrypted_keys
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(url.clone(), bytes.clone());
+            return Ok(bytes);
         }
 
         let rule = rule.expect("rule matched above");
@@ -211,14 +238,43 @@ impl KeyManager {
                 pairs.append_pair(k, v);
             }
         }
-        let headers = self.merged_headers(rule.headers.as_ref());
+        let request = rule.build_request();
+        let mut combined_headers: HashMap<String, String> =
+            rule.headers.clone().unwrap_or_default();
+        combined_headers.extend(request.headers);
+        let headers = self.merged_headers(Some(&combined_headers));
 
+        tracing::info!(%url, "drm key: fetching from network");
         let cmd = FetchCmd::get(fetch_url).maybe_headers(headers).build();
-        let resp = self.downloader.execute(cmd).await.map_err(HlsError::from)?;
-        let raw_key = resp.body.collect().await.map_err(HlsError::from)?;
+        let resp = self.downloader.execute(cmd).await.map_err(|e| {
+            tracing::warn!(%url, error = %e, "drm key: network fetch failed");
+            HlsError::from(e)
+        })?;
+        let raw_key = resp.body.collect().await.map_err(|e| {
+            tracing::warn!(%url, error = %e, "drm key: body collect failed");
+            HlsError::from(e)
+        })?;
 
-        let decrypted = rule.processor()(raw_key)
-            .map_err(|e| HlsError::KeyProcessing(format!("registry processor: {e}")))?;
+        let decrypted = (request.processor)(raw_key).map_err(|e| {
+            tracing::warn!(%url, error = %e, "drm key: registry processor (decrypt) failed");
+            HlsError::KeyProcessing(format!("registry processor: {e}"))
+        })?;
+        tracing::info!(
+            %url,
+            bytes = decrypted.len(),
+            "drm key: fetched + decrypted, caching to asset store"
+        );
+
+        let res = self.backend.acquire_resource(&cache_key)?.retain();
+        super::atomic_fetch::write_back_cache(
+            &res,
+            &decrypted,
+            &self.backend,
+            url,
+            rel_path.as_str(),
+            Self::RESOURCE_KIND,
+        );
+
         self.decrypted_keys
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

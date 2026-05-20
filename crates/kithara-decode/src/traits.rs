@@ -4,7 +4,9 @@ use std::{
     time::Duration,
 };
 
-use kithara_stream::{PendingReason, StreamReadError, VariantChangeError};
+use kithara_stream::{
+    NotReadyCause, PendingReason, StreamPending, StreamReadError, VariantChangeError,
+};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -148,6 +150,10 @@ pub trait DecoderInput: Read + Seek + Send + Sync {
                 Ok(NonZeroUsize::new(n).map_or(InputReadOutcome::Eof, InputReadOutcome::Bytes))
             }
             Err(e) => {
+                let stream_pending = e
+                    .get_ref()
+                    .and_then(|src| src.downcast_ref::<StreamPending>())
+                    .map(|p| p.reason);
                 let pending = e
                     .get_ref()
                     .and_then(|src| src.downcast_ref::<PendingReason>())
@@ -157,11 +163,17 @@ pub trait DecoderInput: Read + Seek + Send + Sync {
                     .and_then(|src| src.downcast_ref::<VariantChangeError>())
                     .is_some();
                 let interrupted = e.kind() == ErrorKind::Interrupted;
-                match (pending, variant, interrupted) {
-                    (Some(reason), _, _) => Ok(InputReadOutcome::Pending(reason)),
-                    (None, true, _) => Ok(InputReadOutcome::Pending(PendingReason::VariantChange)),
-                    (None, false, true) => Ok(InputReadOutcome::Pending(PendingReason::NotReady)),
-                    (None, false, false) => Err(StreamReadError::Source(e)),
+                match (stream_pending, pending, variant, interrupted) {
+                    (Some(reason), _, _, _) | (_, Some(reason), _, _) => {
+                        Ok(InputReadOutcome::Pending(reason))
+                    }
+                    (None, None, true, _) => {
+                        Ok(InputReadOutcome::Pending(PendingReason::VariantChange))
+                    }
+                    (None, None, false, true) => Ok(InputReadOutcome::Pending(
+                        PendingReason::NotReady(NotReadyCause::SourcePending),
+                    )),
+                    (None, None, false, false) => Err(StreamReadError::Source(e)),
                 }
             }
         }

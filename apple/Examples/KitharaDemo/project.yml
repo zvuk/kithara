@@ -16,6 +16,9 @@ targets:
     platform: [iOS, macOS]
     sources:
       - Sources
+      - path: ../../../.env
+        buildPhase: resources
+        optional: true
     dependencies:
       - package: Kithara
         product: Kithara

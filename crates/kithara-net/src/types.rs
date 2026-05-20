@@ -1,6 +1,25 @@
 use std::{cmp::min, collections::HashMap, time::Duration};
 
+use bitflags::bitflags;
 use bon::Builder;
+
+bitflags! {
+    /// HTTP `Accept-Encoding` algorithms the client advertises and is
+    /// willing to decode. Reqwest auto-adds the corresponding
+    /// `Accept-Encoding` header for every algorithm whose flag is set;
+    /// the rest are disabled via `ClientBuilder::no_*` so the wire
+    /// header stays in lockstep with this set.
+    ///
+    /// Subset selection matters when talking to anti-bot WAFs that
+    /// fingerprint clients by their exact `Accept-Encoding` value.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Compression: u8 {
+        const GZIP    = 1 << 0;
+        const DEFLATE = 1 << 1;
+        const BROTLI  = 1 << 2;
+        const ZSTD    = 1 << 3;
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Headers {
@@ -152,6 +171,13 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
+    /// `Accept-Encoding` algorithms the client offers and auto-decodes.
+    /// Defaults to all four (`gzip | deflate | brotli | zstd`); narrow it
+    /// when an upstream rejects the full set (anti-bot WAFs that
+    /// fingerprint on the exact `Accept-Encoding` string are a common
+    /// reason).
+    #[builder(default = Compression::all())]
+    pub compression: Compression,
 }
 
 impl Default for NetOptions {

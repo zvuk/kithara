@@ -36,6 +36,7 @@ use crate::{
 pub(crate) struct HlsCoordEnv {
     pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
     pub(crate) cancel: CancellationToken,
+    pub(crate) headers: Option<kithara_net::Headers>,
 }
 
 /// Thin router over a fixed `Vec<Arc<HlsVariant>>`. Every `Source`-side
@@ -50,6 +51,7 @@ pub(crate) struct HlsCoord {
     pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
     pub(crate) cancel: CancellationToken,
+    pub(crate) headers: Option<kithara_net::Headers>,
     pub(crate) timeline: Timeline,
     playlist_state: Arc<PlaylistState>,
     /// Last generation acknowledged by the reader. When `<
@@ -95,6 +97,7 @@ impl HlsCoord {
             playlist_state,
             cancel: env.cancel,
             asset_store: env.asset_store,
+            headers: env.headers,
             peer_wake: OnceLock::new(),
             variant_generation: AtomicU64::new(0),
             fence_at: AtomicU64::new(0),

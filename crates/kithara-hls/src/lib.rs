@@ -14,7 +14,7 @@ mod source;
 mod stream;
 mod variant;
 
-pub use config::{HlsConfig, KeyOptions};
+pub use config::{HlsConfig, KeyOptions, SizeProbeMethod};
 pub use error::{HlsError, HlsResult};
 pub use ids::VariantIndex;
 pub use kithara_abr::AbrMode;

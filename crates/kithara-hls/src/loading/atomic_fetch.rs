@@ -55,7 +55,7 @@ pub(crate) async fn fetch_atomic_body(
 
 /// Try to read the resource from the cache. Returns `Ok(Some(bytes))`
 /// on a cache hit, `Ok(None)` on miss.
-fn try_read_cached(
+pub(crate) fn try_read_cached(
     backend: &AssetStore<DecryptContext>,
     byte_pool: &BytePool,
     key: &ResourceKey,
@@ -87,7 +87,7 @@ fn try_read_cached(
 /// the cache, all fetch, first commits, later `write_all` calls
 /// fail because the resource is already committed. Harmless — the
 /// bytes are in memory from the network fetch.
-fn write_back_cache(
+pub(crate) fn write_back_cache(
     res: &kithara_assets::AssetResource<DecryptContext>,
     bytes: &Bytes,
     backend: &AssetStore<DecryptContext>,

@@ -1,13 +1,17 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
 use reqwest::Client;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
     error::{NetError, NetResult},
-    traits::Net,
-    types::{Headers, NetOptions, RangeSpec},
+    retry::{DefaultRetryPolicy, RetryNet},
+    traits::{Net, NetExt},
+    types::{Compression, Headers, NetOptions, RangeSpec},
 };
 
 /// HTTP 206 Partial Content status code.
@@ -39,11 +43,45 @@ fn truncate_error_body(mut body: String) -> String {
 /// build applies pool / TLS / read-timeout knobs; wasm32 takes the
 /// builder defaults because most options aren't supported there.
 #[cfg(not(target_arch = "wasm32"))]
+type ClientBuilderMod = fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<Compression> for Vec<ClientBuilderMod> {
+    fn from(c: Compression) -> Self {
+        [
+            (
+                Compression::GZIP,
+                reqwest::ClientBuilder::no_gzip as ClientBuilderMod,
+            ),
+            (Compression::DEFLATE, reqwest::ClientBuilder::no_deflate),
+            (Compression::BROTLI, reqwest::ClientBuilder::no_brotli),
+            (Compression::ZSTD, reqwest::ClientBuilder::no_zstd),
+        ]
+        .into_iter()
+        .filter(|(flag, _)| !c.contains(*flag))
+        .map(|(_, disable)| disable)
+        .collect()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
-    Client::builder()
+    // Short pool_idle_timeout matters for retries against upstreams
+    // that drop TCP without `close_notify` (rustls cannot mark the
+    // socket dead, so reqwest happily replays it on the next
+    // attempt and we re-hit the same failure). 5s is long enough to
+    // amortise TLS handshake across legitimate fast follow-ups but
+    // short enough that a retry after backoff always lands on a
+    // fresh connection.
+    let base = Client::builder()
+        .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
+        .pool_idle_timeout(Some(std::time::Duration::from_secs(5)))
         .danger_accept_invalid_certs(options.is_insecure)
-        .read_timeout(options.inactivity_timeout)
+        .read_timeout(options.inactivity_timeout);
+    Vec::<ClientBuilderMod>::from(options.compression)
+        .into_iter()
+        .fold(base, |b, disable| disable(b))
         .build()
 }
 
@@ -65,29 +103,16 @@ fn extract_headers(resp: &reqwest::Response) -> Headers {
     headers
 }
 
+/// Raw HTTP client (one `reqwest::Client`, no retry layer). Lives
+/// behind [`HttpClient`]'s [`RetryNet`] decorator — exposed only via
+/// the [`Net`] trait, never constructed by callers directly.
 #[derive(Clone)]
-pub struct HttpClient {
+struct RawHttp {
     inner: Client,
     options: NetOptions,
 }
 
-impl Default for HttpClient {
-    fn default() -> Self {
-        Self::new(NetOptions::default())
-    }
-}
-
-impl HttpClient {
-    /// # Panics
-    ///
-    /// Panics if the `reqwest::Client` builder fails to build.
-    #[must_use]
-    pub fn new(options: NetOptions) -> Self {
-        let inner = build_client(&options)
-            .expect("BUG: reqwest::Client::builder().build() with our defaults cannot fail");
-        Self { inner, options }
-    }
-
+impl RawHttp {
     fn apply_headers(
         mut req: reqwest::RequestBuilder,
         headers: Option<Headers>,
@@ -100,35 +125,6 @@ impl HttpClient {
         req
     }
 
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
-    pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
-        <Self as Net>::get_bytes(self, url, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure or network error.
-    pub async fn get_range(
-        &self,
-        url: Url,
-        range: RangeSpec,
-        headers: Option<Headers>,
-    ) -> NetResult<crate::ByteStream> {
-        <Self as Net>::get_range(self, url, range, headers).await
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`NetError`] on HTTP failure or network error.
-    pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
-        <Self as Net>::head(self, url, headers).await
-    }
-
-    /// Build the metadata request used by `Net::head`. On native this
-    /// is a real `HEAD`; on wasm32 we issue a zero-byte ranged `GET`
-    /// because most CORS configs block `HEAD`.
     #[cfg(not(target_arch = "wasm32"))]
     fn head_request(&self, url: Url) -> reqwest::RequestBuilder {
         self.inner.head(url)
@@ -139,12 +135,6 @@ impl HttpClient {
         self.inner.get(url).header("Range", "bytes=0-0")
     }
 
-    #[must_use]
-    pub fn options(&self) -> &NetOptions {
-        &self.options
-    }
-
-    /// Convert a reqwest Response to a [`ByteStream`](crate::ByteStream).
     fn response_to_stream(resp: reqwest::Response) -> crate::ByteStream {
         let headers = extract_headers(&resp);
         let stream = resp.bytes_stream().map_err(NetError::from);
@@ -164,7 +154,6 @@ impl HttpClient {
         } else {
             req
         };
-
         let resp = req.send().await.map_err(NetError::from)?;
         let status = resp.status();
 
@@ -180,12 +169,80 @@ impl HttpClient {
 
         Ok(resp)
     }
+}
+
+/// Production HTTP client used across the workspace. Wraps a raw
+/// `reqwest::Client` with the workspace's [`RetryNet`] decorator so
+/// every [`Net`] method (`head`/`get_bytes`/`get_range`/`stream`) honours
+/// `options.retry_policy` — retryable errors (TLS-close, timeout,
+/// 5xx, IO) are re-issued with exponential backoff; non-retryable
+/// errors (HTTP 4xx, cancellation) propagate immediately.
+#[derive(Clone)]
+pub struct HttpClient {
+    net: Arc<RetryNet<RawHttp, DefaultRetryPolicy>>,
+    options: NetOptions,
+}
+
+impl HttpClient {
+    /// Build a retry-decorated HTTP client rooted on `cancel`. The
+    /// `RetryNet` layer aborts pending retries when that token is
+    /// cancelled. Callers MUST pass a token that lives in the
+    /// consumer-crate's cancel tree — typically
+    /// `master_cancel.child_token()` derived at the consumer-crate top
+    /// (`App`, `Queue`, FFI player). The workspace cancel hierarchy
+    /// forbids orphan tokens in production code.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `reqwest::Client` builder fails to build.
+    #[must_use]
+    pub fn new(options: NetOptions, cancel: CancellationToken) -> Self {
+        let inner = build_client(&options)
+            .expect("BUG: reqwest::Client::builder().build() with our defaults cannot fail");
+        let raw = RawHttp {
+            inner,
+            options: options.clone(),
+        };
+        let net = Arc::new(raw.with_retry(options.retry_policy.clone(), cancel));
+        Self { net, options }
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
+    pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
+        self.net.get_bytes(url, headers).await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure or network error.
+    pub async fn get_range(
+        &self,
+        url: Url,
+        range: RangeSpec,
+        headers: Option<Headers>,
+    ) -> NetResult<crate::ByteStream> {
+        self.net.get_range(url, range, headers).await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure or network error.
+    pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers> {
+        self.net.head(url, headers).await
+    }
+
+    #[must_use]
+    pub fn options(&self) -> &NetOptions {
+        &self.options
+    }
 
     /// # Errors
     ///
     /// Returns [`NetError`] on HTTP failure or network error.
     pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream> {
-        <Self as Net>::stream(self, url, headers).await
+        self.net.stream(url, headers).await
     }
 }
 
@@ -200,6 +257,35 @@ impl std::fmt::Debug for HttpClient {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Net for HttpClient {
+    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
+        self.net.get_bytes(url, headers).await
+    }
+
+    async fn get_range(
+        &self,
+        url: Url,
+        range: RangeSpec,
+        headers: Option<Headers>,
+    ) -> Result<crate::ByteStream, NetError> {
+        self.net.get_range(url, range, headers).await
+    }
+
+    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
+        self.net.head(url, headers).await
+    }
+
+    async fn stream(
+        &self,
+        url: Url,
+        headers: Option<Headers>,
+    ) -> Result<crate::ByteStream, NetError> {
+        self.net.stream(url, headers).await
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+impl Net for RawHttp {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
@@ -253,6 +339,11 @@ impl Net for HttpClient {
             out.insert(name, v);
         }
 
+        // wasm32 `head_request` issues `GET Range: bytes=0-0`, so a
+        // 206 response carries `Content-Length: 1` (just the byte
+        // we asked for) plus `Content-Range: bytes 0-0/TOTAL`.
+        // Substitute the total when present so callers see the
+        // resource size rather than the slice length.
         if out.get("content-length").is_none() {
             let total_from_range = out
                 .get("content-range")
@@ -276,5 +367,113 @@ impl Net for HttpClient {
         let req = self.inner.get(url.clone());
         let resp = self.send_checked(req, headers, url, false).await?;
         Ok(Self::response_to_stream(resp))
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
+    use std::{
+        net::SocketAddr,
+        sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        },
+        time::Duration,
+    };
+
+    use axum::{Router, http::StatusCode, routing::get};
+    use tokio::net::TcpListener;
+
+    use super::*;
+    use crate::types::RetryPolicy;
+
+    /// Spawn an axum server that returns 503 for the first
+    /// `fail_count` requests against `/probe`, then 200 `"ok"` for
+    /// every subsequent request. Returns the bound URL and a counter
+    /// shared with the handler.
+    async fn server_failing_first_n(fail_count: u32) -> (Url, Arc<AtomicU32>) {
+        let counter = Arc::new(AtomicU32::new(0));
+        let counter_c = Arc::clone(&counter);
+        let app = Router::new().route(
+            "/probe",
+            get(move || {
+                let counter = Arc::clone(&counter_c);
+                async move {
+                    let seen = counter.fetch_add(1, Ordering::SeqCst);
+                    if seen < fail_count {
+                        (StatusCode::SERVICE_UNAVAILABLE, "busy")
+                    } else {
+                        (StatusCode::OK, "ok")
+                    }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr: SocketAddr = listener.local_addr().expect("local_addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service())
+                .await
+                .expect("serve");
+        });
+        let url = Url::parse(&format!("http://{addr}/probe")).expect("url");
+        (url, counter)
+    }
+
+    fn fast_options(max_retries: u32) -> NetOptions {
+        NetOptions::builder()
+            .retry_policy(RetryPolicy {
+                max_retries,
+                base_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(10),
+            })
+            .build()
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn http_client_retries_503_until_ok() {
+        let (url, counter) = server_failing_first_n(2).await;
+        let client = HttpClient::new(fast_options(3), CancellationToken::new());
+        let bytes = client
+            .get_bytes(url, None)
+            .await
+            .expect("get_bytes must succeed after retries");
+        assert_eq!(&bytes[..], b"ok");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            3,
+            "exactly 3 attempts: 2 failed (503) + 1 ok"
+        );
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn http_client_no_retry_propagates_5xx() {
+        let (url, counter) = server_failing_first_n(2).await;
+        let client = HttpClient::new(fast_options(0), CancellationToken::new());
+        let err = client
+            .get_bytes(url, None)
+            .await
+            .expect_err("max_retries=0 must propagate the 503");
+        assert!(
+            matches!(err, NetError::HttpError { status: 503, .. }),
+            "expected HttpError(503), got {err:?}"
+        );
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "max_retries=0 issues exactly one attempt"
+        );
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn http_client_head_retries_503_until_ok() {
+        let (url, counter) = server_failing_first_n(1).await;
+        let client = HttpClient::new(fast_options(2), CancellationToken::new());
+        client.head(url, None).await.expect("HEAD must retry");
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 }

@@ -268,7 +268,7 @@ fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
     res.write_at(0, b"partial-bytes").unwrap();
 
     let canonical = segment_path(dir.path());
-    let canonical_visible_with_bytes = canonical.metadata().map(|m| m.len() > 0).unwrap_or(false);
+    let canonical_visible_with_bytes = canonical.metadata().is_ok_and(|m| m.len() > 0);
     assert!(
         !canonical_visible_with_bytes,
         "segment must not be observable at its canonical path before commit; \
@@ -327,7 +327,7 @@ fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding
     res.write_at(0, payload).unwrap();
 
     let canonical = segment_path(dir.path());
-    let mid_write_size = canonical.metadata().map(|m| m.len()).unwrap_or(0);
+    let mid_write_size = canonical.metadata().map_or(0, |m| m.len());
     assert_eq!(
         mid_write_size, 0,
         "mid-write the canonical path must contain zero observable bytes (got {mid_write_size})"

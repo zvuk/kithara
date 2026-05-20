@@ -33,6 +33,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         asset_store: backend,
         seek_epoch: 0,
         look_ahead_bytes: None,
+        headers: None,
     }
 }
 

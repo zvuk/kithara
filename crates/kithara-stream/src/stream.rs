@@ -95,6 +95,46 @@ impl StdError for StreamReadError {
     }
 }
 
+/// Typed payload of an `io::Error` (kind [`ErrorKind::WouldBlock`])
+/// emitted by `impl Read for Stream` when the underlying source could
+/// not satisfy the read this call. `ErrorKind::Interrupted` is
+/// reserved for seek-pending — mixing the two would re-route
+/// `NotReady` reads through `kithara-decode::is_seek_pending_io` and
+/// abort the load as "Interrupted by seek". Carries the [`PendingReason`]
+/// verbatim plus a snapshot of source/timeline state at the wrap site,
+/// so callers downcasting from `io::Error` recover both *what* stalled
+/// and *why* without having to instrument their own decoder.
+#[derive(Debug, Clone, Copy)]
+pub struct StreamPending {
+    pub reason: PendingReason,
+    pub pos: u64,
+    pub want: usize,
+    pub len: Option<u64>,
+    pub phase: SourcePhase,
+    pub epoch: u64,
+    pub flushing: bool,
+    pub variant_fence: bool,
+}
+
+impl fmt::Display for StreamPending {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: pos={} want={} len={:?} phase={:?} epoch={} flushing={} variant_fence={}",
+            self.reason,
+            self.pos,
+            self.want,
+            self.len,
+            self.phase,
+            self.epoch,
+            self.flushing,
+            self.variant_fence,
+        )
+    }
+}
+
+impl StdError for StreamPending {}
+
 /// Non-retriable cross-variant boundary signal — the typed payload of
 /// the `io::Error` produced by `impl Read for Stream` when the
 /// underlying source fenced on a variant change. Decoders that go
@@ -114,7 +154,7 @@ impl StdError for VariantChangeError {}
 use crate::{
     MediaInfo, SourcePhase, SourceSeekAnchor, Timeline,
     error::{SourceError, StreamError},
-    source::{PendingReason, ReadOutcome, Source},
+    source::{NotReadyCause, PendingReason, ReadOutcome, Source},
 };
 
 /// Defines a stream type and how to create it.
@@ -313,7 +353,9 @@ impl<T: StreamType> Stream<T> {
                     }
                     wait_spins += 1;
                     if wait_spins >= Self::MAX_WAIT_SPINS {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
+                        return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
+                            NotReadyCause::WaitBudgetExhausted,
+                        )));
                     }
                     hang_tick!();
                     yield_now();
@@ -332,7 +374,9 @@ impl<T: StreamType> Stream<T> {
                     if !timeline.is_flushing() {
                         wait_spins += 1;
                         if wait_spins >= Self::MAX_WAIT_SPINS {
-                            return Ok(StreamReadOutcome::Pending(PendingReason::NotReady));
+                            return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
+                                NotReadyCause::WaitInterrupted,
+                            )));
                         }
                         hang_tick!();
                         yield_now();
@@ -388,15 +432,47 @@ impl<T: StreamType> Read for Stream<T> {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
             Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
             Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
-                Err(IoError::other(reason))
+                // `ErrorKind::Interrupted` is the in-band signal
+                // `kithara-decode::is_seek_pending_io` checks for —
+                // wrap the reason as the source for typed downcasts.
+                Err(IoError::new(ErrorKind::Interrupted, reason))
             }
-            Ok(StreamReadOutcome::Pending(PendingReason::NotReady | PendingReason::Retry)) => {
-                Err(IoError::new(ErrorKind::Interrupted, "data not ready"))
-            }
+            Ok(StreamReadOutcome::Pending(
+                reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
+            )) => Err(IoError::new(
+                ErrorKind::WouldBlock,
+                self.snapshot_pending(reason, buf.len()),
+            )),
             Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                 Err(IoError::other(VariantChangeError))
             }
             Err(StreamReadError::Source(e)) => Err(e),
+        }
+    }
+}
+
+impl<T: StreamType> Stream<T> {
+    /// Build a typed [`StreamPending`] payload for a
+    /// `Pending(NotReady|Retry)` surfaced through `impl Read`. Pulls
+    /// live source/timeline state at the moment of the wrap so the
+    /// resulting `io::Error` carries the real reason ("data not ready
+    /// (`wait_budget_exhausted`): pos=N len=M phase=… epoch=E flushing=…
+    /// `variant_fence`=…") instead of a bare "data not ready". Decoders
+    /// downcast on `StreamPending` to recover the typed [`PendingReason`].
+    fn snapshot_pending(&self, reason: PendingReason, want: usize) -> StreamPending {
+        let pos = self.source.position();
+        let len = self.source.len();
+        let phase = self.source.phase_at(pos..pos.saturating_add(want as u64));
+        let timeline = self.source.timeline();
+        StreamPending {
+            reason,
+            pos,
+            want,
+            len,
+            phase,
+            epoch: timeline.seek_epoch(),
+            flushing: timeline.is_flushing(),
+            variant_fence: self.source.has_variant_change_pending(),
         }
     }
 }

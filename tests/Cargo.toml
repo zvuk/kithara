@@ -144,6 +144,12 @@ perf = [
     "hotpath/hotpath",
     "kithara/perf",
 ]
+# Cross-decoder protocol/factory tests gate on the underlying
+# `kithara-decode` backends. Declare them locally so `--check-cfg`
+# does not flag `#[cfg(feature = "apple"/"symphonia")]` in
+# `tests/tests/kithara_decode/*`.
+apple = ["kithara/apple", "kithara-audio/apple"]
+symphonia = ["kithara/symphonia", "kithara-audio/symphonia"]
 # End-to-end tests that require real networks and real audio hardware.
 # Gated off by default so `just test` never compiles `suite_e2e`.
 e2e = []

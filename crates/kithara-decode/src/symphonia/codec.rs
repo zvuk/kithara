@@ -38,6 +38,12 @@ pub(crate) struct SymphoniaCodec {
     /// opened; left empty otherwise.
     track_info: DecoderTrackInfo,
     spec: PcmSpec,
+    /// One-shot guard for first-frame diagnostic log — compares the
+    /// declared [`PcmSpec`] (from container `TrackInfo`) against the
+    /// actual `decoded.spec()` returned by the codec. Catches SBR/PS
+    /// rate-doubling (HE-AAC v2: container declares core rate, decoder
+    /// outputs upsampled rate) without flooding the log.
+    logged_first_frame: bool,
 }
 
 impl SymphoniaCodec {
@@ -52,7 +58,7 @@ impl SymphoniaCodec {
     /// Returns [`DecodeError::Backend`] when the Symphonia codec
     /// registry cannot build a decoder for the supplied parameters.
     pub(crate) fn open_native(params: &AudioCodecParameters) -> DecodeResult<Self> {
-        let registry: &CodecRegistry = symphonia::default::get_codecs();
+        let registry: &CodecRegistry = crate::symphonia::registry::get_codecs();
         let opts = AudioDecoderOptions::default();
         let decoder = registry
             .make_audio_decoder(params, &opts)
@@ -73,6 +79,7 @@ impl SymphoniaCodec {
             decoder,
             spec,
             track_info: DecoderTrackInfo::default(),
+            logged_first_frame: false,
         })
     }
 
@@ -92,6 +99,15 @@ impl SymphoniaCodec {
         config: &SymphoniaConfig,
     ) -> DecodeResult<Self> {
         let (codec_id, profile) = map_codec(track.codec)?;
+        tracing::info!(
+            target: "kithara_decode::symphonia::codec",
+            codec = ?track.codec,
+            sample_rate = track.sample_rate,
+            channels = track.channels,
+            extra_data_len = track.extra_data.len(),
+            gapless_cfg = config.gapless,
+            "SymphoniaCodec::open_with_config — TrackInfo"
+        );
         let mut params = AudioCodecParameters::new();
         params
             .for_codec(codec_id)
@@ -104,7 +120,7 @@ impl SymphoniaCodec {
             params.with_extra_data(track.extra_data.clone().into_boxed_slice());
         }
 
-        let registry: &CodecRegistry = symphonia::default::get_codecs();
+        let registry: &CodecRegistry = crate::symphonia::registry::get_codecs();
         let mut opts = AudioDecoderOptions::default();
         opts.gapless = config.gapless;
         let track_gapless = track.gapless;
@@ -123,6 +139,7 @@ impl SymphoniaCodec {
                 gapless: track_gapless,
                 ..DecoderTrackInfo::default()
             },
+            logged_first_frame: false,
         })
     }
 
@@ -170,6 +187,40 @@ impl FrameCodec for SymphoniaCodec {
         };
 
         let num_samples = decoded.samples_interleaved();
+        let actual = decoded.spec();
+        let actual_rate = actual.rate();
+        let actual_channels =
+            u16::try_from(actual.channels().count()).unwrap_or(self.spec.channels);
+        if !self.logged_first_frame {
+            tracing::info!(
+                target: "kithara_decode::symphonia::codec",
+                declared_rate = self.spec.sample_rate,
+                declared_channels = self.spec.channels,
+                actual_rate,
+                actual_channels,
+                decoded_frames = decoded.frames(),
+                num_samples_interleaved = num_samples,
+                pts_ticks,
+                "SymphoniaCodec::decode_frame — first frame snapshot"
+            );
+            self.logged_first_frame = true;
+        }
+        if actual_rate != 0
+            && (self.spec.sample_rate != actual_rate || self.spec.channels != actual_channels)
+        {
+            tracing::debug!(
+                target: "kithara_decode::symphonia::codec",
+                old_rate = self.spec.sample_rate,
+                old_channels = self.spec.channels,
+                new_rate = actual_rate,
+                new_channels = actual_channels,
+                "SymphoniaCodec: live spec update from decoder output"
+            );
+            self.spec = PcmSpec {
+                channels: actual_channels,
+                sample_rate: actual_rate,
+            };
+        }
         if num_samples == 0 {
             out.clear();
             return Ok(0);

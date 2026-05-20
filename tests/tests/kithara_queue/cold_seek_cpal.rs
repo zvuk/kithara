@@ -14,6 +14,7 @@ use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -112,7 +113,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(net))
+            .client(HttpClient::new(net, CancellationToken::new()))
             .build(),
     );
 

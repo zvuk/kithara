@@ -26,7 +26,7 @@ fn locate_suite_light() -> PathBuf {
         let Some(name) = name.to_str() else { continue };
         if name.starts_with("suite_light-")
             && !name.contains('.')
-            && entry.file_type().map(|t| t.is_file()).unwrap_or(false)
+            && entry.file_type().is_ok_and(|t| t.is_file())
         {
             return entry.path();
         }

@@ -11,10 +11,12 @@ use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayer, temp_dir,
 };
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::common::test_defaults::Consts as Shared;
@@ -173,7 +175,13 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         let iter_label = format!("iter-{iter}");
         let temp = temp_dir();
         let store = StoreOptions::new(temp.path());
-        let downloader = Downloader::new(DownloaderConfig::default());
+        let downloader = Downloader::new(
+            DownloaderConfig::for_client(HttpClient::new(
+                NetOptions::default(),
+                CancellationToken::new(),
+            ))
+            .build(),
+        );
 
         let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
         let mut iteration_samples: Vec<f32> = Vec::new();

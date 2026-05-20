@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use kithara_app::{config::AppConfig, sources::build_source};
+use kithara_app::{baked, config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
@@ -15,6 +15,7 @@ use tokio::{
     sync::OnceCell,
     time::{sleep, timeout},
 };
+use tokio_util::sync::CancellationToken;
 
 /// Per-process singleton: one offline audio session, one Downloader,
 /// one Queue. `#[case]` tests inside this file share it, so init cost
@@ -60,7 +61,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
             let net = NetOptions::builder().is_insecure(true).build();
             let downloader = Downloader::new(
                 DownloaderConfig::builder()
-                    .client(HttpClient::new(net))
+                    .client(HttpClient::new(net, CancellationToken::new()))
                     .build(),
             );
             let flush_hub = FlushHub::new(
@@ -617,7 +618,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let ctx = shared_test_ctx().await;
-    let urls: Vec<&'static str> = AppConfig::DEFAULT_TRACKS.to_vec();
+    let urls: Vec<&'static str> = baked::BAKED_TRACKS.to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
 
     ctx.queue.set_crossfade_duration(2.0);

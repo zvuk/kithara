@@ -50,6 +50,14 @@ struct MockPeer;
 impl Abr for MockPeer {}
 impl Peer for MockPeer {}
 
+fn test_client() -> HttpClient {
+    HttpClient::new(NetOptions::default(), CancellationToken::new())
+}
+
+fn test_config() -> DownloaderConfig {
+    DownloaderConfig::for_client(test_client()).build()
+}
+
 fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
     let stream = stream_iter(chunks.into_iter().map(|c| Ok(Bytes::from_static(c))));
     BodyStream::from_raw(Box::pin(stream))
@@ -91,7 +99,7 @@ async fn body_stream_empty_collects_to_empty() {
 
 #[kithara::test(tokio)]
 async fn peer_handle_cancel_scoped_to_peer() {
-    let dl = Downloader::new(DownloaderConfig::builder().build());
+    let dl = Downloader::new(test_config());
     let peer_a = dl.register(Arc::new(MockPeer));
     let peer_b = dl.register(Arc::new(MockPeer));
 
@@ -105,7 +113,7 @@ async fn peer_handle_cancel_scoped_to_peer() {
 
 #[kithara::test(tokio)]
 async fn peer_handle_cancel_fires_on_last_clone_drop() {
-    let dl = Downloader::new(DownloaderConfig::default());
+    let dl = Downloader::new(test_config());
     let handle = dl.register(Arc::new(MockPeer));
     let cancel = handle.cancel();
     let clone = handle.clone();
@@ -130,9 +138,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
         .total_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build();
     let dl = Downloader::new(
-        DownloaderConfig::builder()
-            .client(HttpClient::new(net))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(net, CancellationToken::new())).build(),
     );
     let handle = dl.register(Arc::new(MockPeer));
 
@@ -163,7 +169,11 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
 #[kithara::test(tokio)]
 async fn peer_handle_downloader_cancel_cascades() {
     let cancel = CancellationToken::new();
-    let dl = Downloader::new(DownloaderConfig::builder().cancel(cancel.clone()).build());
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(test_client())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let handle = dl.register(Arc::new(MockPeer));
 
     cancel.cancel();
@@ -223,7 +233,7 @@ async fn max_concurrent_limits_inflight_connections() {
 
     let config = DownloaderConfig {
         max_concurrent: MAX_CONCURRENT,
-        ..DownloaderConfig::default()
+        ..test_config()
     };
     let dl = Downloader::new(config);
     let handle = dl.register(Arc::new(MockPeer));
@@ -301,7 +311,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
         tasks.push(tokio_spawn(async move {
             let config = DownloaderConfig {
                 max_concurrent: MAX_CONCURRENT_PER_DL,
-                ..DownloaderConfig::default()
+                ..test_config()
             };
             let dl = Downloader::new(config);
             let handle = dl.register(Arc::new(MockPeer));
@@ -414,7 +424,7 @@ async fn poll_next_respects_max_concurrent() {
 
     let config = DownloaderConfig {
         max_concurrent: MAX_CONCURRENT,
-        ..DownloaderConfig::default()
+        ..test_config()
     };
     let dl = Downloader::new(config);
     let peer = Arc::new(FloodPeer {
@@ -526,6 +536,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
         NetOptions::builder()
             .pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT)
             .build(),
+        CancellationToken::new(),
     );
 
     let mut total_ok = 0;
@@ -541,7 +552,7 @@ async fn shared_client_keepalive_bounds_socket_count() {
                 let config = DownloaderConfig {
                     max_concurrent: MAX_CONCURRENT,
                     client,
-                    ..DownloaderConfig::default()
+                    ..test_config()
                 };
                 let dl = Downloader::new(config);
                 let handle = dl.register(Arc::new(MockPeer));
@@ -608,7 +619,7 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     });
     let url = Url::parse(&format!("http://{addr}/slow")).expect("url");
 
-    let config = DownloaderConfig::builder()
+    let config = DownloaderConfig::for_client(test_client())
         .soft_timeout(Duration::from_millis(SOFT_TIMEOUT_MS))
         .build();
     let dl = Downloader::new(config);
@@ -754,7 +765,7 @@ async fn active_peer_completes_before_preload_under_contention() {
 
     let config = DownloaderConfig {
         max_concurrent: MAX_CONCURRENT,
-        ..DownloaderConfig::default()
+        ..test_config()
     };
     let dl = Downloader::new(config);
 
@@ -851,7 +862,7 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
 
     let config = DownloaderConfig {
         max_concurrent: MAX_CONCURRENT,
-        ..DownloaderConfig::default()
+        ..test_config()
     };
     let dl = Downloader::new(config);
 
@@ -925,7 +936,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
         }
     }
 
-    let dl = Downloader::new(DownloaderConfig::default());
+    let dl = Downloader::new(test_config());
     let timeline = crate::Timeline::new();
     let peer = Arc::new(FlippablePeer {
         timeline: timeline.clone(),

@@ -14,6 +14,7 @@ pub(crate) mod config;
 pub(crate) mod demuxer;
 pub(crate) mod echain;
 pub(crate) mod probe;
+pub(crate) mod registry;
 
 pub(crate) use codec::SymphoniaCodec;
 pub(crate) use config::SymphoniaConfig;

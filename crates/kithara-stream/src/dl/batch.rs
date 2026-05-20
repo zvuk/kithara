@@ -279,6 +279,14 @@ async fn establish(
         ..
     } = cmd;
 
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let names: Vec<&str> = headers
+            .as_ref()
+            .map(|h| h.iter().map(|(k, _)| k).collect())
+            .unwrap_or_default();
+        tracing::trace!(%url, ?method, ?range, header_names = ?names, "fetch: outgoing FetchCmd");
+    }
+
     if method == RequestMethod::Head {
         let resp_headers = tokio::select! {
             () = cancel.cancelled() => return Err(NetError::Cancelled),

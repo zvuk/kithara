@@ -13,6 +13,7 @@ use kithara_integration_tests::{
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
 
@@ -38,9 +39,12 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
 
     let cancel = CancellationToken::new();
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .cancel(cancel.child_token())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .cancel(cancel.child_token())
+        .build(),
     );
 
     let temp_a = temp_dir.path().join("stream_a");

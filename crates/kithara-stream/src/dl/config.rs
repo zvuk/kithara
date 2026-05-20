@@ -28,11 +28,7 @@ pub struct DownloaderConfig {
     /// HTTP client used for all fetches. Cloned by the Downloader to
     /// share the underlying `reqwest::Client` (and its connection pool)
     /// with the caller. Pass a single shared `HttpClient` to multiple
-    /// Downloaders to share keep-alive sockets across them; this is the
-    /// production path. The default builds a fresh client from
-    /// [`NetOptions::default()`](kithara_net::NetOptions) and is only
-    /// appropriate for standalone tests.
-    #[builder(default)]
+    /// Downloaders to share keep-alive sockets across them.
     pub client: HttpClient,
     /// Tokio runtime handle for the download loop.
     ///
@@ -44,8 +40,14 @@ pub struct DownloaderConfig {
     pub max_concurrent: usize,
 }
 
-impl Default for DownloaderConfig {
-    fn default() -> Self {
-        Self::builder().build()
+impl DownloaderConfig {
+    /// Start a builder with `client` already set. Mirrors the
+    /// `ResourceConfig::for_src` / `HlsConfig::for_url` pattern — the
+    /// one required field is pre-supplied so callers can chain only
+    /// the optional knobs they care about.
+    pub fn for_client(
+        client: HttpClient,
+    ) -> DownloaderConfigBuilder<downloader_config_builder::SetClient> {
+        Self::builder().client(client)
     }
 }

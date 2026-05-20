@@ -35,6 +35,7 @@ use kithara_integration_tests::{
 };
 use kithara_platform::time::{Duration, Instant, sleep};
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::{
@@ -1427,7 +1428,7 @@ async fn live_remote_resource_decodes_with_duration(
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(net))
+            .client(HttpClient::new(net, CancellationToken::new()))
             .build(),
     );
     let config = ResourceConfig::for_src(url)

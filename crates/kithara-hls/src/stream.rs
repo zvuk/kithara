@@ -55,8 +55,13 @@ impl StreamType for Hls {
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            let dl_config = DownloaderConfig::builder()
-                .cancel(cancel.child_token())
+            let dl_cancel = cancel.child_token();
+            let client = kithara_net::HttpClient::new(
+                kithara_net::NetOptions::default(),
+                dl_cancel.child_token(),
+            );
+            let dl_config = DownloaderConfig::for_client(client)
+                .cancel(dl_cancel)
                 .build();
             Downloader::new(dl_config)
         });
@@ -117,6 +122,8 @@ impl StreamType for Hls {
             Arc::clone(&playlist_state),
             media_playlists,
             config.headers.clone(),
+            config.head_estimation_concurrency,
+            config.size_probe_method,
         )
         .estimate()
         .await;
@@ -133,6 +140,7 @@ impl StreamType for Hls {
         let plan_ctx = PlanCtx {
             master_cancel: cancel.clone(),
             asset_store: Arc::clone(&asset_store),
+            headers: config.headers.clone(),
             prefetch_budget: config.download_batch_size.max(1),
             seek_epoch: timeline.seek_epoch(),
             look_ahead_bytes: Some(
@@ -164,6 +172,7 @@ impl StreamType for Hls {
             HlsCoordEnv {
                 cancel: cancel.clone(),
                 asset_store: Arc::clone(&asset_store),
+                headers: config.headers.clone(),
             },
             timeline,
             peer_handle.abr().clone(),

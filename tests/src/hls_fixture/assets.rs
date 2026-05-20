@@ -71,13 +71,12 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 
 /// Create test HTTP client with default options
 pub fn create_test_net() -> HttpClient {
-    let net_opts = NetOptions::default();
-    HttpClient::new(net_opts)
+    HttpClient::new(NetOptions::default(), CancellationToken::new())
 }
 
 /// Create a private test [`Downloader`] with a fresh cancel token.
 pub fn create_test_downloader() -> Downloader {
-    Downloader::new(DownloaderConfig::default())
+    Downloader::new(DownloaderConfig::for_client(create_test_net()).build())
 }
 
 /// Create a private test [`PeerHandle`] via `Downloader::register`.
@@ -87,7 +86,7 @@ fn create_test_peer_handle() -> PeerHandle {
     impl Peer for TestPeer {}
     let cancel = CancellationToken::new();
     let dl = Downloader::new(
-        DownloaderConfig::builder()
+        DownloaderConfig::for_client(create_test_net())
             .cancel(cancel.child_token())
             .build(),
     );

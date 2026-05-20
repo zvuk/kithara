@@ -88,19 +88,24 @@ impl AppleAudioFileDemuxer {
             gapless: None,
         };
 
-        let (cbr_batch_packets, buf_cap) = if asbd.mBytesPerPacket > 0 {
-            let packets = (CBR_BATCH_TARGET_BYTES / asbd.mBytesPerPacket).max(1);
-            let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
-            (
-                Some(packets),
-                usize::try_from(bytes).unwrap_or(CBR_BATCH_TARGET_BYTES as usize),
-            )
-        } else {
-            (
-                None,
-                usize::try_from(file.max_packet_size().max(4096)).unwrap_or(64 * 1024),
-            )
-        };
+        let (cbr_batch_packets, buf_cap) = CBR_BATCH_TARGET_BYTES
+            .checked_div(asbd.mBytesPerPacket)
+            .map_or_else(
+                || {
+                    (
+                        None,
+                        usize::try_from(file.max_packet_size().max(4096)).unwrap_or(64 * 1024),
+                    )
+                },
+                |packets| {
+                    let packets = packets.max(1);
+                    let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
+                    (
+                        Some(packets),
+                        usize::try_from(bytes).unwrap_or(CBR_BATCH_TARGET_BYTES as usize),
+                    )
+                },
+            );
 
         Ok(Self {
             file,

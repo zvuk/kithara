@@ -7,8 +7,12 @@ import Kithara
 /// `KitharaPlayer.setupHlsAes`), so the demo no longer pre-generates a
 /// seed — the closure builds the cipher on every decrypt from
 /// `cipherKey + salt` to match the server's encryption.
+///
+/// Variable name mirrors `KITHARA_DRM_KEY` baked at compile-time in
+/// `kithara-app` so a single workspace `.env` file works for both
+/// surfaces.
 func readZvukCipherKey() -> String {
-    readEnvValue("DRM_KEY") ?? "BinaryCipherKey"
+    readEnvValue("KITHARA_DRM_KEY") ?? "BinaryCipherKey"
 }
 
 /// Auth token for zvuk-style protected streams. Mirrors the

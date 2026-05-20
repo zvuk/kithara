@@ -10,8 +10,7 @@ fn enabled() -> bool {
             return false;
         }
         if std::env::var("KITHARA_AUDIT_COLOR")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("always"))
-            .unwrap_or(false)
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("always"))
         {
             return true;
         }

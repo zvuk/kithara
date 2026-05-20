@@ -105,9 +105,14 @@ impl File {
         let asset_root = asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
+            let cancel_for_dl = cancel.child_token();
+            let client = kithara_net::HttpClient::new(
+                kithara_net::NetOptions::default(),
+                cancel_for_dl.child_token(),
+            );
             Downloader::new(
-                DownloaderConfig::builder()
-                    .cancel(cancel.child_token())
+                DownloaderConfig::for_client(client)
+                    .cancel(cancel_for_dl)
                     .build(),
             )
         });

@@ -29,6 +29,7 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{TestHttpServer, TestTempDir};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     thread,
     time::{sleep, timeout},
@@ -174,15 +175,15 @@ async fn file_stream_closes_early_seek_still_works() {
     let (url, _call_count, _server) = setup_server(file_data).await;
 
     let dl = Downloader::new(
-        DownloaderConfig::builder()
-            .client(kithara_net::HttpClient::new(
-                kithara_net::NetOptions::builder()
-                    .inactivity_timeout(Duration::from_secs(1))
-                    .total_timeout(Duration::from_secs(1))
-                    .build(),
-            ))
-            .cancel(cancel_token.clone())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder()
+                .inactivity_timeout(Duration::from_secs(1))
+                .total_timeout(Duration::from_secs(1))
+                .build(),
+            CancellationToken::new(),
+        ))
+        .cancel(cancel_token.clone())
+        .build(),
     );
 
     let config = FileConfig::for_src(FileSrc::Remote(url))

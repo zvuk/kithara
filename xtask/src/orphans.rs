@@ -129,7 +129,7 @@ pub(crate) fn run(args: &OrphansArgs) -> Result<()> {
                 if deny {
                     cmd.arg("--deny");
                 }
-                let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
+                let ok = cmd.status().is_ok_and(|s| s.success());
                 if !ok {
                     f.lock().expect("orphans failed mutex poisoned").push(pkg);
                 }

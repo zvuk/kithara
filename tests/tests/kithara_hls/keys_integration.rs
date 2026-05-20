@@ -1,19 +1,22 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use kithara::{
     drm::{DecryptContext, aes128_cbc_process_chunk},
     hls::{HlsError, HlsResult, KeyProcessorRegistry, KeyProcessorRule},
 };
+use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_integration_tests::{hls_fixture::*, hls_server::*};
 use kithara_platform::time::Duration;
 use url::Url;
 
 fn registry_for_host(host: &str, processor: kithara::hls::KeyProcessor) -> KeyProcessorRegistry {
+    let factory: KeyRequestFactory =
+        Arc::new(move || KeyRequest::new(HashMap::new(), Arc::clone(&processor)));
     let mut reg = KeyProcessorRegistry::new();
-    reg.add(KeyProcessorRule::new([host], processor));
+    reg.add(KeyProcessorRule::new([host], factory));
     reg
 }
 

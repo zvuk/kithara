@@ -16,6 +16,7 @@ use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -108,7 +109,7 @@ fn fresh_downloader() -> Downloader {
     let net = NetOptions::builder().is_insecure(true).build();
     Downloader::new(
         DownloaderConfig::builder()
-            .client(HttpClient::new(net))
+            .client(HttpClient::new(net, CancellationToken::new()))
             .build(),
     )
 }

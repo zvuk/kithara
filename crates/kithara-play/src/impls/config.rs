@@ -13,7 +13,7 @@ use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecodeError, DecoderBackend};
 use kithara_events::EventBus;
 use kithara_file::{FileConfig, FileSrc};
-use kithara_hls::{HlsConfig, KeyOptions};
+use kithara_hls::{HlsConfig, KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use portable_atomic::AtomicF32;
@@ -150,6 +150,12 @@ pub struct ResourceConfig {
     /// Maximum peak bitrate for expensive networks (e.g., cellular).
     #[builder(default = 0.0)]
     pub preferred_peak_bitrate_for_expensive_networks: f64,
+    /// Method used by HLS size estimation to probe segment lengths.
+    /// Default is [`SizeProbeMethod::Head`]; switch to
+    /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
+    /// `HEAD` (zvuk stage `/drm/`).
+    #[builder(default)]
+    pub size_probe_method: SizeProbeMethod,
 }
 
 impl ResourceConfig {
@@ -198,10 +204,21 @@ impl ResourceConfig {
                     .or_else(|| self.store.flush_hub.clone()),
             )
             .build();
-        let downloader = self
-            .downloader
-            .clone()
-            .unwrap_or_else(|| Downloader::new(DownloaderConfig::default()));
+        let downloader = self.downloader.clone().unwrap_or_else(|| {
+            let dl_cancel = self
+                .cancel
+                .as_ref()
+                .map_or_else(CancellationToken::new, CancellationToken::child_token);
+            let client = kithara_net::HttpClient::new(
+                kithara_net::NetOptions::default(),
+                dl_cancel.child_token(),
+            );
+            Downloader::new(
+                DownloaderConfig::for_client(client)
+                    .cancel(dl_cancel)
+                    .build(),
+            )
+        });
         let file_config = FileConfig::for_src(file_src)
             .store(store)
             .downloader(downloader)
@@ -256,6 +273,7 @@ impl ResourceConfig {
             .maybe_base_url(self.hls_base_url)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
+            .size_probe_method(self.size_probe_method)
             .build();
         Ok(AudioConfig::<kithara_hls::Hls>::for_stream(hls_config)
             .maybe_cancel(self.cancel)

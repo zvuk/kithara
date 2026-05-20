@@ -15,8 +15,6 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
-clap = { version = "4", features = ["derive", "env"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 firewheel = { version = "0.10", default-features = false, features = ["all_nodes", "cpal", "musical_transport", "pool", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
@@ -25,6 +23,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hotpath = { version = "0.16", features = ["hotpath", "hotpath-alloc"] }
+indexmap = { version = "2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
@@ -37,7 +36,6 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
-ringbuf = { version = "0.5", features = ["portable-atomic"] }
 rustfft = { version = "6" }
 serde = { version = "1", features = ["derive"] }
 serde_core = { version = "1", features = ["alloc"] }
@@ -48,11 +46,10 @@ thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+toml_parser = { version = "1" }
 tracing-core = { version = "0.1" }
 
 [build-dependencies]
-clap = { version = "4", features = ["derive", "env"] }
-clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 cpal = { version = "0.17", default-features = false, features = ["wasm-bindgen"] }
 firewheel = { version = "0.10", default-features = false, features = ["all_nodes", "cpal", "musical_transport", "pool", "tracing", "wasm-bindgen"] }
 firewheel-cpal = { version = "0.10", default-features = false, features = ["tracing", "wasm-bindgen"] }
@@ -61,6 +58,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hotpath = { version = "0.16", features = ["hotpath", "hotpath-alloc"] }
+indexmap = { version = "2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
@@ -73,7 +71,6 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
-ringbuf = { version = "0.5", features = ["portable-atomic"] }
 rustfft = { version = "6" }
 serde = { version = "1", features = ["derive"] }
 serde_core = { version = "1", features = ["alloc"] }
@@ -84,6 +81,7 @@ thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+toml_parser = { version = "1" }
 tracing-core = { version = "0.1" }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
@@ -91,7 +89,9 @@ bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
-dof = { version = "0.3", default-features = false, features = ["des"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
+dof = { version = "0.4", default-features = false, features = ["des"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 form_urlencoded = { version = "1" }
 futures = { version = "0.3", features = ["thread-pool"] }
@@ -105,7 +105,6 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
-indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
@@ -123,11 +122,12 @@ smallvec = { version = "1", default-features = false, features = ["const_new", "
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "1.1", features = ["preserve_order"] }
+toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
-usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
+usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
 winnow = { version = "1" }
+zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bit-set = { version = "0.8" }
@@ -135,7 +135,9 @@ bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 cc = { version = "1", default-features = false, features = ["parallel"] }
-dof = { version = "0.3", default-features = false, features = ["des"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
+dof = { version = "0.4", default-features = false, features = ["des"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 form_urlencoded = { version = "1" }
 futures = { version = "0.3", features = ["thread-pool"] }
@@ -147,10 +149,9 @@ getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-f
 half = { version = "2", features = ["num-traits"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15", default-features = false, features = ["default-hasher"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath-macros = { version = "0.15", features = ["hotpath"] }
+hotpath-macros = { version = "0.16", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
-indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
@@ -168,17 +169,20 @@ smallvec = { version = "1", default-features = false, features = ["const_new", "
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "1.1", features = ["preserve_order"] }
+toml_datetime = { version = "1", features = ["serde"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
-usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
+usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
 winnow = { version = "1" }
+zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [target.x86_64-apple-darwin.dependencies]
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
@@ -191,7 +195,6 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
-indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -208,10 +211,10 @@ smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
-usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
+usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
+zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 bit-set = { version = "0.8" }
@@ -219,6 +222,8 @@ bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 cc = { version = "1", default-features = false, features = ["parallel"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
@@ -229,10 +234,9 @@ futures-io = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath-macros = { version = "0.15", features = ["hotpath"] }
+hotpath-macros = { version = "0.16", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
-indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -249,16 +253,18 @@ smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
-usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
+usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
+zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [target.aarch64-apple-darwin.dependencies]
 bit-set = { version = "0.8" }
 bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
@@ -271,7 +277,6 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
-indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -288,10 +293,10 @@ smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
-usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
+usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
+zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [target.aarch64-apple-darwin.build-dependencies]
 bit-set = { version = "0.8" }
@@ -299,6 +304,8 @@ bit-vec = { version = "0.8" }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "extern_crate_alloc", "min_const_generics"] }
 cc = { version = "1", default-features = false, features = ["parallel"] }
+clap = { version = "4", features = ["derive", "env"] }
+clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 errno = { version = "0.3" }
 form_urlencoded = { version = "1" }
@@ -309,10 +316,9 @@ futures-io = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
-hotpath-macros = { version = "0.15", features = ["hotpath"] }
+hotpath-macros = { version = "0.16", features = ["hotpath"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
-indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
@@ -329,9 +335,9 @@ smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false, features = ["full"] }
-toml = { version = "1.1", features = ["preserve_order"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", features = ["log"] }
-usdt-impl = { version = "0.5", default-features = false, features = ["asm", "des"] }
+usdt-impl = { version = "0.6", default-features = false, features = ["des"] }
+zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 ### END HAKARI SECTION

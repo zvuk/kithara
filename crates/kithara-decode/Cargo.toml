@@ -21,6 +21,7 @@ num-traits = { workspace = true }
 re_mp4 = { workspace = true }
 smallvec = { workspace = true }
 symphonia = { workspace = true, optional = true }
+symphonia-adapter-fdk-aac = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
@@ -40,10 +41,12 @@ jni = { workspace = true }
 ndk-context = { workspace = true }
 
 [features]
-# Default pulls in Symphonia so `cargo build` on any platform produces a
-# usable decoder. Consumers wanting an apple/android hardware-only build
-# set `default-features = false` and enable just the platform feature.
-default = ["symphonia"]
+# Default pulls in Symphonia + fdk-aac so `cargo build` on any platform
+# produces a usable decoder with HE-AAC v1/v2 support. Consumers wanting
+# an apple/android hardware-only build set `default-features = false`
+# and enable just the platform feature; consumers explicitly avoiding
+# libfdk-aac (LGPL + patent constraints) keep `["symphonia"]` only.
+default = ["symphonia", "fdk-aac"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 apple = [
     "dep:core-foundation",
@@ -55,6 +58,9 @@ android = []
 # Enables the software (Symphonia) decoder path. When disabled, the
 # factory only uses the compiled hardware backend — no fallback.
 symphonia = ["dep:symphonia"]
+# Override Symphonia's LC-only AAC decoder with libfdk-aac (HE-AAC
+# v1/v2). Off by default — opt in per-target if needed.
+fdk-aac = ["symphonia", "dep:symphonia-adapter-fdk-aac"]
 probe = []
 mock = []
 

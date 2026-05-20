@@ -54,6 +54,9 @@ struct PlaylistConfig {
 }
 
 impl PlaylistCache {
+    /// Asset-store / tracing tag for `.m3u8` playlist resources.
+    pub(crate) const RESOURCE_KIND: &str = "playlist";
+
     #[must_use]
     pub fn new(
         backend: AssetStore<DecryptContext>,
@@ -84,7 +87,7 @@ impl PlaylistCache {
             headers,
             url,
             basename,
-            "playlist",
+            Self::RESOURCE_KIND,
         )
         .await?;
         parse(&bytes)

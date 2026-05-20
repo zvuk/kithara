@@ -9,6 +9,7 @@ use kithara::{
     play::{PlayerConfig, PlayerImpl, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
+use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_events::TrackId;
 use kithara_platform::Mutex;
 use kithara_queue::{Queue, QueueConfig, QueueError, TrackSource};
@@ -141,12 +142,23 @@ impl PeakBitrate {
     }
 }
 
-/// Build a core-level [`KeyProcessorRule`] from an FFI rule. The rule's
-/// `salt` is baked into the closure passed to `kithara_drm::KeyProcessor`.
+/// Build a core-level [`KeyProcessorRule`] from an FFI rule. Wraps
+/// the rule's salt into a [`KeyRequestFactory`] so each fetch
+/// produces the salt + processor pair atomically. If the FFI caller
+/// pinned a salt via [`FfiKeyRule::salt`], we honour it (legacy
+/// behaviour — same salt every time); otherwise we synthesise an
+/// empty salt and leave per-request rotation to a higher layer.
 fn build_processor_rule(rule: FfiKeyRule) -> KeyProcessorRule {
-    let salt = rule.salt.unwrap_or_default();
-    let proc = build_processor_closure(rule.processor, salt);
-    KeyProcessorRule::for_domains(&rule.domains, proc)
+    let processor = rule.processor;
+    let salt_template = rule.salt.unwrap_or_default();
+    let factory: KeyRequestFactory = Arc::new(move || {
+        let salt = salt_template.clone();
+        let mut headers = HashMap::new();
+        headers.insert(SALT_HEADER.to_string(), salt.clone());
+        let proc = build_processor_closure(Arc::clone(&processor), salt);
+        KeyRequest::new(headers, proc)
+    });
+    KeyProcessorRule::for_domains(&rule.domains, factory)
         .maybe_headers(rule.headers)
         .maybe_query_params(rule.query_params)
         .build()
@@ -193,8 +205,7 @@ impl AudioPlayer {
         let queue_config = QueueConfig::default().with_player(player);
         let net = default_net_options();
         let downloader = Downloader::new(
-            DownloaderConfig::builder()
-                .client(HttpClient::new(net))
+            DownloaderConfig::for_client(HttpClient::new(net, cancel.child_token()))
                 .runtime(crate::FFI_RUNTIME.clone())
                 .build(),
         );

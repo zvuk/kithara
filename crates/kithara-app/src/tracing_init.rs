@@ -50,11 +50,18 @@ fn make_log_writer() -> CrlfWriter<io::Stderr> {
     CrlfWriter::new(io::stderr())
 }
 
+/// Default log file name for the kithara binary. Matches the legacy
+/// convention used in production / iOS demo logs; override at runtime
+/// via `KITHARA_LOG_FILE=<path>`.
+pub const DEFAULT_LOG_FILE: &str = "app.log";
+
 /// Initialize tracing subscriber for the application.
 ///
 /// Filter precedence: `RUST_LOG` env if set, otherwise the `directives`
-/// passed in. Output goes to `KITHARA_LOG_FILE` (or `kithara.log` by default).
-/// If `use_crlf_writer` is true and it falls back to stderr, it wraps with [`CrlfWriter`].
+/// passed in. Output goes to `KITHARA_LOG_FILE` (or [`DEFAULT_LOG_FILE`]
+/// by default — `app.log` next to the binary's working directory).
+/// If `use_crlf_writer` is true and it falls back to stderr, it wraps
+/// with [`CrlfWriter`].
 ///
 /// # Errors
 /// Returns an error if a tracing directive cannot be parsed or the log
@@ -82,7 +89,7 @@ pub fn init_tracing(
         .with_line_number(false)
         .with_file(false);
 
-    let path = std::env::var_os("KITHARA_LOG_FILE").unwrap_or_else(|| "kithara.log".into());
+    let path = std::env::var_os("KITHARA_LOG_FILE").unwrap_or_else(|| DEFAULT_LOG_FILE.into());
     if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
         builder
             .with_writer(Mutex::new(file))

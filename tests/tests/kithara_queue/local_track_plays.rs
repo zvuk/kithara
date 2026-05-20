@@ -10,10 +10,12 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::EncryptionRequest, kithara, offline::OfflineSession, temp_dir,
 };
+use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio::time::{sleep, timeout};
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 #[derive(Clone, Copy, Debug)]
@@ -194,7 +196,13 @@ fn build_queue_with_tick(
             }
         }
     });
-    let downloader = Downloader::new(DownloaderConfig::default());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .build(),
+    );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }

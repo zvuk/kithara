@@ -13,7 +13,7 @@ use std::{
 
 use kithara_assets::{AssetResource, AssetResourceState, AssetStore, AssetsError, ResourceKey};
 use kithara_drm::DecryptContext;
-use kithara_net::NetError;
+use kithara_net::{Headers, NetError};
 use kithara_platform::{
     Mutex, RwLock,
     thread::sleep,
@@ -178,6 +178,10 @@ enum PlannedFetch {
 pub(crate) struct PlanCtx {
     pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
     pub(crate) master_cancel: CancellationToken,
+    /// Per-resource HTTP headers applied to every init/segment fetch.
+    /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
+    /// tokens carried by the playlist load also reach segment GETs.
+    pub(crate) headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before
     /// `dispatch` pauses emitting `FetchCmd`s. Mirrors
     /// `HlsConfig::look_ahead_bytes`:
@@ -268,6 +272,11 @@ pub(crate) struct HlsVariant {
     /// Cached container format — see [`Self::codec`].
     container: Option<ContainerFormat>,
     cancel: RwLock<CancellationToken>,
+    /// HTTP headers applied to every `FetchCmd` this variant emits.
+    /// Snapshotted from `PlanCtx::headers` at construction; carries
+    /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
+    /// reach the same authenticated endpoint as the playlist load.
+    headers: Option<Headers>,
     /// Cumulative byte offsets for **media** segments only, seeded with
     /// `init.size` (the init prefix occupies `[0, init.size)` in
     /// variant-byte space). Recomputed on every commit — AES-128 CBC
@@ -442,6 +451,7 @@ impl HlsVariant {
         };
         FetchCmd::get(url)
             .cancel(cancel)
+            .maybe_headers(self.headers.clone())
             .writer(slot.writer())
             .on_complete(slot.into_on_complete())
             .build()
@@ -631,11 +641,11 @@ impl HlsVariant {
                     if !self.init.try_claim_for_download() {
                         continue;
                     }
-                    if Self::resource_already_committed(ctx, &self.init.resource_id) {
+                    if let Some(actual) = Self::committed_final_len(ctx, &self.init.resource_id) {
+                        self.apply_commit(PlannedFetch::Init, actual);
                         self.init.set_state(SegmentState::Loaded);
                         continue;
                     }
-                    debug!(target: "kithara_hls::dispatch", v = self.variant, "emit init");
                     out.push(self.build_init_cmd(ctx));
                 }
                 PlannedFetch::Segment(seg_idx) => {
@@ -645,11 +655,11 @@ impl HlsVariant {
                     if !entry.try_claim_for_download() {
                         continue;
                     }
-                    if Self::resource_already_committed(ctx, &entry.resource_id) {
+                    if let Some(actual) = Self::committed_final_len(ctx, &entry.resource_id) {
+                        self.apply_commit(PlannedFetch::Segment(seg_idx), actual);
                         entry.set_state(SegmentState::Loaded);
                         continue;
                     }
-                    debug!(target: "kithara_hls::dispatch", v = self.variant, seg = seg_idx, "emit seg");
                     out.push(self.emit_fetch_cmd(ctx, seg_idx));
                 }
             }
@@ -779,6 +789,7 @@ impl HlsVariant {
             queue: Mutex::new(VecDeque::new()),
             master_cancel: ctx.master_cancel.clone(),
             cancel: RwLock::new(ctx.master_cancel.child_token()),
+            headers: ctx.headers.clone(),
             position: Arc::new(AtomicU64::new(0)),
         };
         variant_ref.recompute_offsets();
@@ -1183,11 +1194,19 @@ impl HlsVariant {
     /// segment is readable; dispatching a fresh `acquire_resource` against
     /// a committed key would race the existing writer and fail with
     /// `cannot write to committed resource`.
-    fn resource_already_committed(ctx: &PlanCtx, key: &ResourceKey) -> bool {
-        matches!(
-            ctx.asset_store.resource_state(key),
-            Ok(AssetResourceState::Committed { .. })
-        )
+    ///
+    /// Returns the committed on-disk length when the resource is
+    /// `Committed` with a known `final_len`. The caller uses that length
+    /// to mirror what `FetchSlot::settle` would have done — apply the
+    /// post-processing size so `init_size` / per-segment sizes match the
+    /// actual bytes on disk (after PKCS7 unpad, container framing, etc).
+    /// Without that apply, the announced/estimated size and the on-disk
+    /// size disagree and `range_ready` deadlocks on a cache-hot resource.
+    fn committed_final_len(ctx: &PlanCtx, key: &ResourceKey) -> Option<u64> {
+        match ctx.asset_store.resource_state(key) {
+            Ok(AssetResourceState::Committed { final_len }) => final_len,
+            _ => None,
+        }
     }
 
     pub(crate) fn seek_time_anchor(
@@ -1365,6 +1384,13 @@ impl HlsVariant {
             if let Some(budget) = timeout
                 && started_at.elapsed() > budget
             {
+                debug!(
+                    target: "kithara_hls::wait",
+                    v = self.variant,
+                    range_start = range.start,
+                    range_end = range.end,
+                    "wait_range budget exceeded"
+                );
                 return Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()));
             }
             self.wake_peer();
@@ -1419,43 +1445,66 @@ impl FetchSlot {
     /// estimates are always upper bounds.
     fn settle(&self, bytes_written: u64, err: Option<&NetError>) {
         if self.cancel.is_cancelled() {
-            debug!(target: "kithara_hls::settle", "stale (cancelled)");
+            self.settle_cancelled(bytes_written);
             return;
         }
-        match err {
-            None => {
-                let commit_ok = self.resource.commit(Some(bytes_written)).is_ok();
-                debug!(target: "kithara_hls::settle", commit_ok, bytes_written, "success");
-                let next = if commit_ok {
-                    let actual = match self.resource.status() {
-                        ResourceStatus::Committed { final_len: Some(n) } => n,
-                        _ => bytes_written,
-                    };
-                    if let Some(v) = self.variant.upgrade() {
-                        v.apply_commit(self.planned, actual);
-                    }
-                    SegmentState::Loaded
-                } else {
-                    SegmentState::Missing
-                };
-                self.state.store(next as u8, Ordering::Release);
+        let next = err.map_or_else(
+            || self.settle_success(bytes_written),
+            |e| self.settle_failure(e),
+        );
+        self.state.store(next as u8, Ordering::Release);
+    }
+
+    fn settle_cancelled(&self, bytes_written: u64) {
+        let committed = matches!(self.resource.status(), ResourceStatus::Committed { .. });
+        debug!(target: "kithara_hls::settle", bytes_written, committed, "stale (cancelled)");
+        if !committed {
+            self.resource
+                .fail("fetch cancelled before completion".into());
+            self.state
+                .store(SegmentState::Missing as u8, Ordering::Release);
+        }
+    }
+
+    fn settle_success(&self, bytes_written: u64) -> SegmentState {
+        let commit_result = self.resource.commit(Some(bytes_written));
+        let commit_ok = commit_result.is_ok();
+        match &commit_result {
+            Ok(()) => debug!(target: "kithara_hls::settle", commit_ok, bytes_written, "success"),
+            Err(e) => debug!(
+                target: "kithara_hls::settle",
+                commit_ok,
+                bytes_written,
+                err = %e,
+                "success-but-commit-failed"
+            ),
+        }
+        if !commit_ok {
+            return SegmentState::Missing;
+        }
+        let actual = match self.resource.status() {
+            ResourceStatus::Committed { final_len: Some(n) } => n,
+            _ => bytes_written,
+        };
+        if let Some(v) = self.variant.upgrade() {
+            v.apply_commit(self.planned, actual);
+        }
+        SegmentState::Loaded
+    }
+
+    fn settle_failure(&self, e: &NetError) -> SegmentState {
+        let committed = matches!(self.resource.status(), ResourceStatus::Committed { .. });
+        debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
+        if committed {
+            if let ResourceStatus::Committed { final_len: Some(n) } = self.resource.status()
+                && let Some(v) = self.variant.upgrade()
+            {
+                v.apply_commit(self.planned, n);
             }
-            Some(e) => {
-                let committed = matches!(self.resource.status(), ResourceStatus::Committed { .. });
-                debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
-                let next = if committed {
-                    if let ResourceStatus::Committed { final_len: Some(n) } = self.resource.status()
-                        && let Some(v) = self.variant.upgrade()
-                    {
-                        v.apply_commit(self.planned, n);
-                    }
-                    SegmentState::Loaded
-                } else {
-                    self.resource.fail(e.to_string());
-                    SegmentState::Missing
-                };
-                self.state.store(next as u8, Ordering::Release);
-            }
+            SegmentState::Loaded
+        } else {
+            self.resource.fail(e.to_string());
+            SegmentState::Missing
         }
     }
 

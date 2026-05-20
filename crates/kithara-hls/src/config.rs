@@ -35,6 +35,28 @@ impl KeyOptions {
     }
 }
 
+/// Method used by [`crate::loading::size_estimation`] to probe segment
+/// sizes when `#EXT-X-BYTERANGE` is absent.
+///
+/// `Head` is the spec-correct default. Some WAFs (notably zvuk's stage
+/// `/drm/` path) drop `HEAD` bursts with a TCP close while still
+/// happily serving `GET`s, so callers can switch the probe to a
+/// single-byte ranged `GET` whose `Content-Range` header carries the
+/// resource total. Both methods produce the same `VariantSizeMap`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SizeProbeMethod {
+    /// Issue `HEAD` requests (RFC-correct, what almost every CDN
+    /// expects). The default.
+    #[default]
+    Head,
+    /// Issue `GET` requests with `Range: bytes=0-0`; reads the
+    /// resource total from the response's `Content-Range` header
+    /// (or from `Content-Length` for non-206 responses). One byte
+    /// of body per probe, but survives upstreams that reject `HEAD`.
+    RangeGet,
+}
+
 /// Configuration for HLS streaming.
 ///
 /// Used with `Stream::<Hls>::new(config)`.
@@ -79,6 +101,21 @@ pub struct HlsConfig {
     /// Capacity of the event bus channel (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
+    /// Max parallel HEAD requests fired by size estimation during
+    /// playlist load. Some upstreams (notably zvuk's stage `/drm/`
+    /// path) drop TCP connections when more than a handful of HEADs
+    /// arrive concurrently; capping here keeps cold-start estimation
+    /// reliable while still being fast for tracks with many segments.
+    /// Transient drops are retried by [`HttpClient`](kithara_net::HttpClient)
+    /// using its own `retry_policy`, so the cap can stay relatively
+    /// generous.
+    #[builder(default = 8)]
+    pub head_estimation_concurrency: usize,
+    /// Method used by size estimation to probe segment lengths. See
+    /// [`SizeProbeMethod`]. Switch to [`SizeProbeMethod::RangeGet`]
+    /// for upstreams that reject `HEAD` (zvuk stage `/drm/`).
+    #[builder(default)]
+    pub size_probe_method: SizeProbeMethod,
 }
 
 impl fmt::Debug for HlsConfig {
@@ -97,6 +134,11 @@ impl fmt::Debug for HlsConfig {
             .field("url", &self.url)
             .field("download_batch_size", &self.download_batch_size)
             .field("event_channel_capacity", &self.event_channel_capacity)
+            .field(
+                "head_estimation_concurrency",
+                &self.head_estimation_concurrency,
+            )
+            .field("size_probe_method", &self.size_probe_method)
             .finish_non_exhaustive()
     }
 }

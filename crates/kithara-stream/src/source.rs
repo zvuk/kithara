@@ -85,8 +85,10 @@ pub enum PendingReason {
     /// retry from the same byte offset.
     SeekPending,
     /// Data is not yet available at the requested range. Transient —
-    /// caller may retry after backoff.
-    NotReady,
+    /// caller may retry after backoff. The inner [`NotReadyCause`] tells
+    /// which point in the read pipeline failed to make progress (wait
+    /// budget exhausted, wait interrupted, source-side pending).
+    NotReady(NotReadyCause),
     /// Source crossed a variant boundary at this offset. Caller must
     /// recreate the decoder and call
     /// [`Source::clear_variant_fence`] before reads succeed. Zero bytes
@@ -98,14 +100,45 @@ pub enum PendingReason {
     Retry,
 }
 
-impl fmt::Display for PendingReason {
+/// Concrete cause for a [`PendingReason::NotReady`].
+///
+/// Carried as the typed payload of `NotReady` so the `io::Error` that
+/// `impl Read for Stream` produces names the real stall site without
+/// requiring decoder-side instrumentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NotReadyCause {
+    /// `wait_range` returned `WaitBudgetExceeded` for `MAX_WAIT_SPINS`
+    /// iterations — the source kept signalling "not yet" past the read
+    /// budget. Typical when a fetch is slower than the read deadline.
+    WaitBudgetExhausted,
+    /// `wait_range` returned `Interrupted` without an active flush, also
+    /// past the spin budget — the downloader woke us but range still
+    /// wasn't satisfied. Typical sign of a flapping ABR/eviction race.
+    WaitInterrupted,
+    /// `wait_range` reported ready but `read_at` then returned `Pending`
+    /// with a non-`Retry` reason — surfaced verbatim from the source.
+    SourcePending,
+}
+
+impl fmt::Display for NotReadyCause {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::SeekPending => "seek pending",
-            Self::NotReady => "data not ready",
-            Self::VariantChange => "variant change: decoder recreation required",
-            Self::Retry => "resource evicted, retry wait_range",
+            Self::WaitBudgetExhausted => "wait budget exhausted",
+            Self::WaitInterrupted => "wait interrupted, no flush",
+            Self::SourcePending => "source returned pending after wait ready",
         })
+    }
+}
+
+impl fmt::Display for PendingReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SeekPending => f.write_str("seek pending"),
+            Self::NotReady(cause) => write!(f, "data not ready ({cause})"),
+            Self::VariantChange => f.write_str("variant change: decoder recreation required"),
+            Self::Retry => f.write_str("resource evicted, retry wait_range"),
+        }
     }
 }
 

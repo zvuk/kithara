@@ -9,6 +9,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{thread::active_named_thread_count, time::sleep};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
 use tokio_util::sync::CancellationToken;
@@ -106,9 +107,12 @@ async fn red_leak_native_drm_seek_resume_thread_budget(
     let shared_worker = AudioWorkerHandle::new();
 
     let downloader = Downloader::new(
-        DownloaderConfig::builder()
-            .cancel(CancellationToken::new())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .cancel(CancellationToken::new())
+        .build(),
     );
 
     run_drm_seek_resume_cycle(&server, &temp_dir, &downloader, &shared_worker, 0).await;

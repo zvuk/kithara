@@ -11,7 +11,9 @@ use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
     PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
 };
+use kithara_net::{HttpClient, NetOptions};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -92,7 +94,13 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
 
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
-    let downloader = Downloader::new(DownloaderConfig::default());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .build(),
+    );
 
     let cfg = ResourceConfig::for_src(master.as_str())
         .expect("valid master URL")
