@@ -333,6 +333,106 @@ async fn read_returns_partial_when_eof_inside_buffer() {
     assert!(matches!(result2, BlockReadOutcome::Eof));
 }
 
+/// Reader that returns a typed decode `Err` on every read — models
+/// the in-the-wild scenario where the audio worker's PCM producer
+/// closed mid-stream after a transient decoder failure (e.g. failed
+/// seek leaves symphonia's atom reader cursor invalid, next
+/// `next_chunk` returns `isomp4: no atom pending read`).
+struct FailingReader {
+    bus: EventBus,
+    meta: TrackMetadata,
+    spec: PcmSpec,
+}
+
+impl FailingReader {
+    fn new() -> Self {
+        Self {
+            bus: EventBus::default(),
+            meta: TrackMetadata::default(),
+            spec: mock_spec(),
+        }
+    }
+}
+
+impl PcmReader for FailingReader {
+    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        Err(DecodeError::InvalidData(
+            "mock: decoder failed mid-stream".into(),
+        ))
+    }
+    fn read_planar<'a>(
+        &mut self,
+        _output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        Err(DecodeError::InvalidData(
+            "mock: decoder failed mid-stream".into(),
+        ))
+    }
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
+    }
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+    fn position(&self) -> Duration {
+        Duration::ZERO
+    }
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(169))
+    }
+    fn metadata(&self) -> &TrackMetadata {
+        &self.meta
+    }
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+}
+
+/// Contract test for the user-reported "preliminary EOF" bug.
+///
+/// Before the fix, any `Err` from the underlying audio reader set
+/// `eof_seen=true`, which made the next `read()` return `Partial(0)`
+/// or `Eof`. The Player then emitted `PlaybackStopped { Eof }` and
+/// the Queue auto-advanced — even though the track did NOT actually
+/// reach its natural end. After the fix, `Err` sets `failed=true`
+/// and `read()` returns the new `Failed` variant, so callers can
+/// distinguish "track aborted mid-stream" from "track played out".
+#[kithara::test(tokio)]
+async fn read_returns_failed_not_eof_on_decoder_error() {
+    let reader = FailingReader::new();
+    let resource = Resource::from_reader(reader, None);
+    let mut pr = PlayerResource::new(resource, Arc::from("failing.mp3"), &PcmPool::default());
+
+    let mut left = vec![0.0f32; 4096];
+    let mut right = vec![0.0f32; 4096];
+    let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+    let result = pr.read(&mut output, 0..4096);
+
+    match result {
+        BlockReadOutcome::Failed => {}
+        BlockReadOutcome::Eof | BlockReadOutcome::Partial(_) => panic!(
+            "decoder Err must NOT be conflated with natural EOF — got {result:?}; \
+             this is the false-EOF bug from app.log"
+        ),
+        BlockReadOutcome::Full => {
+            panic!("decoder Err must surface as Failed, not Full silence — got {result:?}")
+        }
+    }
+
+    assert!(
+        pr.is_failed(),
+        "PlayerResource::is_failed must be true after a decoder Err"
+    );
+    assert!(
+        pr.frames_until_eof().is_none(),
+        "frames_until_eof must NOT report an EOF after a decode failure \
+         (otherwise the Queue treats it as a natural-end signal)"
+    );
+}
+
 #[kithara::test(tokio)]
 async fn read_returns_eof_when_already_drained() {
     let reader = TestPcmReader::new(mock_spec(), 0.01);
@@ -347,6 +447,7 @@ async fn read_returns_eof_when_already_drained() {
         match pr.read(&mut output, 0..4096) {
             BlockReadOutcome::Full | BlockReadOutcome::Partial(_) => {}
             BlockReadOutcome::Eof => break,
+            BlockReadOutcome::Failed => panic!("unexpected Failed in EOF test"),
         }
     }
 

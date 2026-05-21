@@ -422,10 +422,19 @@ impl PlayerImpl {
     }
 
     /// Current media duration in seconds.
+    ///
+    /// Returns `None` while duration is unknown — the engine sets the
+    /// shared atomic from the demuxer once mvhd / fmt-equivalent metadata
+    /// is parsed. The atomic's default `0.0` conflates "unknown" with
+    /// "empty track"; callers that distinguish (e.g. `seek_seconds`'s
+    /// `target >= dur` check, queue auto-advance) need the `None` to
+    /// avoid false-EOF on a freshly-loaded track whose demuxer has not
+    /// yet seen the metadata box.
     pub fn duration_seconds(&self) -> Option<f64> {
         let slot_id = (*self.current_slot.lock_sync())?;
         let state = self.engine.slot_shared_state(slot_id)?;
-        Some(state.duration.load(Ordering::Relaxed))
+        let dur = state.duration.load(Ordering::Relaxed);
+        (dur > 0.0).then_some(dur)
     }
 
     /// Get a reference to the underlying engine.
@@ -1166,6 +1175,11 @@ fn player_event_from_notification(notification: PlayerNotification) -> Option<Pl
             src,
             item_id,
         } => Some(PlayerEvent::ItemDidPlayToEnd { src, item_id }),
+        PlayerNotification::PlaybackStopped {
+            reason: TrackPlaybackStopReason::Failed,
+            src,
+            item_id,
+        } => Some(PlayerEvent::ItemDidFail { src, item_id }),
         _ => None,
     }
 }

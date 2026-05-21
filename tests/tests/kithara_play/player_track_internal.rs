@@ -254,6 +254,7 @@ async fn read_outcome_partial_then_eof() {
                 }
             }
             TrackReadOutcome::Full { .. } => {}
+            TrackReadOutcome::Failed => panic!("unexpected Failed in this scenario"),
         }
 
         eof_stop_count += drain_eof_stop_notifications(&mut rx, saw_partial);

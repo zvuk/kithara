@@ -1041,9 +1041,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.start_recreating_decoder(
             RecreateCause::VariantSwitch,
             info,
-            RecreateNext::Seek(request),
+            RecreateNext::ApplySeek(request),
             recreate_offset,
-            request.attempt,
+            request.attempt.saturating_add(1),
         );
         false
     }
@@ -1077,12 +1077,14 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     /// Soft seek rejection: the seek attempt cannot be honoured
-    /// (target out-of-range, etc.) but the existing decoder is still
-    /// alive — the track keeps playing from its current position.
-    /// Emits `SeekRejected`, clears the pending epoch, and parks the
-    /// FSM back in `Decoding`. Used for caller-side errors
-    /// (`SeekOutOfRange`) where retry/recreate cannot help; the
-    /// previous code marked the track `Failed` for these and broke
+    /// (target out-of-range, decoder.seek failed after a fresh
+    /// recreate, etc.) but the existing decoder is still alive —
+    /// the track keeps playing from its current position. Emits
+    /// `SeekRejected`, clears the pending epoch, and parks the FSM
+    /// back in `Decoding`. Used for both caller-side errors
+    /// (`SeekOutOfRange`) and post-recreate seek failures, where a
+    /// further recreate-and-retry would form a loop. The previous
+    /// code marked the track `Failed` for these and broke
     /// auto-advance, seek-after-near-end, and stress reproducers.
     fn reject_seek(&mut self, request: SeekRequest, err: &DecodeError, context: &'static str) {
         warn!(
@@ -1136,6 +1138,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    #[kithara::probe(offset)]
     fn start_recreating_decoder(
         &mut self,
         cause: RecreateCause,
@@ -1764,12 +1767,12 @@ impl<T: StreamType> StreamAudioSource<T> {
                 TrackStep::StateChanged
             }
             Err(err) => {
-                self.fail_seek(
+                self.reject_seek(
                     request,
-                    err,
+                    &err,
                     "step_recreating_decoder: recreated decoder seek failed",
                 );
-                TrackStep::Failed
+                TrackStep::StateChanged
             }
         }
     }

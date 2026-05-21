@@ -357,6 +357,12 @@ pub enum FfiPlayerEvent {
     VolumeChanged { volume: f32 },
     MuteChanged { muted: bool },
     ItemDidPlayToEnd,
+    /// A track aborted mid-stream because the decoder / source
+    /// reported a non-recoverable error. Distinct from
+    /// [`Self::ItemDidPlayToEnd`]: the track did NOT reach its
+    /// natural end. UI clients should surface this as a track
+    /// failure (skip-and-flag), not treat it as completion.
+    ItemDidFail { item_id: Option<String> },
     /// Queue-level: the loading/playback status of an item changed.
     /// `item_id` matches `AudioPlayerItem::id()`.
     TrackStatusChanged { item_id: String, status: FfiTrackStatus },
@@ -425,6 +431,12 @@ pub enum FfiItemEvent {
     /// The item reached natural end-of-stream. Mirrors the iOS
     /// `AudioPlayerItemProtocol.rxDidReachEnd`.
     DidReachEnd,
+    /// The item aborted mid-stream because the decoder / source
+    /// reported a non-recoverable error. Distinct from
+    /// [`Self::DidReachEnd`]: the item did NOT play to its
+    /// natural end. UI clients should surface a failure marker
+    /// instead of treating this as completion.
+    DidFail,
     /// Playback stalled (the player is waiting for more data).
     /// Mirrors the iOS `AudioPlayerItemProtocol.rxDidStall`.
     DidStall,

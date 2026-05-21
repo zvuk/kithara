@@ -6,6 +6,12 @@ pub enum TrackPlaybackStopReason {
     Eof,
     /// Playback stopped because the track was explicitly stopped or interrupted.
     Stop,
+    /// Playback stopped because the underlying decoder / source reported
+    /// a non-recoverable error mid-stream. Distinct from `Eof`: the
+    /// track did NOT play to its natural end. Queue consumers must
+    /// treat this as a track-failed signal, NOT as an auto-advance
+    /// trigger.
+    Failed,
 }
 
 #[derive(Debug, Clone)]

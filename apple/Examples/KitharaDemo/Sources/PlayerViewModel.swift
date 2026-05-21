@@ -407,6 +407,15 @@ final class PlayerViewModel: ObservableObject {
             break
         case .timeControlStatusChanged, .itemDidPlayToEnd:
             break
+        case let .itemDidFail(itemId):
+            // Decoder/source error mid-stream. Distinct from natural
+            // EOF — surface via UI so the user can see that the
+            // track aborted, not played out. The queue still advances
+            // (Transition::None), but the user is informed.
+            let label = itemId.map(trackLabel) ?? "(unknown)"
+            print("[KitharaDemo] item failed mid-stream: \(label)")
+            errorMessage = "Track failed: \(label)"
+            status = .failed
         @unknown default:
             break
         }
@@ -488,6 +497,11 @@ final class PlayerViewModel: ObservableObject {
             }
         case .statusChanged, .loadedRangesChanged, .didReachEnd, .didStall:
             break
+        case .didFail:
+            print("[KitharaDemo] \(trackLabel(entryId)) aborted mid-stream")
+            if entryId == currentTrackId, errorMessage == nil {
+                errorMessage = "Track failed mid-stream"
+            }
         @unknown default:
             break
         }

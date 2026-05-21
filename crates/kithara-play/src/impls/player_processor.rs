@@ -361,7 +361,7 @@ impl PlayerNodeProcessor {
     fn initial_handover_offset(read_outcome: &TrackReadOutcome) -> Option<usize> {
         match read_outcome {
             TrackReadOutcome::Partial { frames, .. } => Some(*frames),
-            TrackReadOutcome::Eof => Some(0),
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(0),
             TrackReadOutcome::Full { .. } => None,
         }
     }
@@ -413,7 +413,7 @@ impl PlayerNodeProcessor {
         match read_outcome {
             TrackReadOutcome::Full { .. } => None,
             TrackReadOutcome::Partial { frames, .. } => Some(offset + *frames),
-            TrackReadOutcome::Eof => Some(offset),
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(offset),
         }
     }
 
@@ -426,7 +426,7 @@ impl PlayerNodeProcessor {
                 position, duration, ..
             } => Some((position, duration)),
             TrackReadOutcome::Partial { duration, .. } => Some((duration, duration)),
-            TrackReadOutcome::Eof => None,
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed => None,
         }
     }
 

@@ -317,6 +317,16 @@ pub enum PlayerEvent {
         src: Arc<str>,
         item_id: Option<Arc<str>>,
     },
+    /// A track aborted mid-stream because the underlying decoder /
+    /// source reported a non-recoverable error. Distinct from
+    /// [`ItemDidPlayToEnd`](Self::ItemDidPlayToEnd): the track did
+    /// NOT reach its natural end and queue consumers must treat this
+    /// as a track-failure signal (skip-and-flag) rather than a
+    /// normal auto-advance.
+    ItemDidFail {
+        src: Arc<str>,
+        item_id: Option<Arc<str>>,
+    },
     /// Leading track entered the prefetch window — arm the next slot.
     PrefetchRequested,
     /// Leading track entered the crossfade window — commit the armed slot.

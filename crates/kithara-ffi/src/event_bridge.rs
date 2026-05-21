@@ -104,14 +104,18 @@ impl EventBridge {
             }
             PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
             PlayerEvent::ItemDidPlayToEnd { .. } => FfiPlayerEvent::ItemDidPlayToEnd,
+            PlayerEvent::ItemDidFail { item_id, .. } => FfiPlayerEvent::ItemDidFail {
+                item_id: item_id.as_ref().map(ToString::to_string),
+            },
             _ => return None,
         })
     }
 
-    /// Forward player-level signals (`ItemDidPlayToEnd`,
+    /// Forward player-level signals (`ItemDidPlayToEnd`, `ItemDidFail`,
     /// `TimeControlStatusChanged → WaitingToPlay`) to the corresponding
     /// item-level observer, mapping them onto
-    /// [`FfiItemEvent::DidReachEnd`] / [`FfiItemEvent::DidStall`].
+    /// [`FfiItemEvent::DidReachEnd`] / [`FfiItemEvent::DidFail`] /
+    /// [`FfiItemEvent::DidStall`].
     fn route_player_event_to_item(
         items: &Arc<Mutex<ItemRegistry>>,
         queue: &Arc<Queue>,
@@ -119,7 +123,9 @@ impl EventBridge {
         event: &PlayerEvent,
     ) {
         let target = match event {
-            PlayerEvent::ItemDidPlayToEnd { .. } => *last_current.lock_sync(),
+            PlayerEvent::ItemDidPlayToEnd { .. } | PlayerEvent::ItemDidFail { .. } => {
+                *last_current.lock_sync()
+            }
             PlayerEvent::TimeControlStatusChanged {
                 status: kithara::play::TimeControlStatus::WaitingToPlay,
                 ..
@@ -135,6 +141,7 @@ impl EventBridge {
         };
         let ffi_event = match event {
             PlayerEvent::ItemDidPlayToEnd { .. } => FfiItemEvent::DidReachEnd,
+            PlayerEvent::ItemDidFail { .. } => FfiItemEvent::DidFail,
             PlayerEvent::TimeControlStatusChanged { .. } => FfiItemEvent::DidStall,
             _ => return,
         };
