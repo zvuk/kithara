@@ -22,7 +22,7 @@ use kithara_stream::{
     Timeline,
 };
 use kithara_test_utils::kithara;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::{
     pipeline::{
@@ -429,12 +429,12 @@ impl<T: StreamType> StreamAudioSource<T> {
     #[kithara::probe(target_offset)]
     fn apply_format_change(&mut self, new_info: &MediaInfo, target_offset: u64) -> bool {
         let current_pos = self.shared_stream.position();
-        debug!(
+        info!(
             current_pos,
             target_offset,
             chunks_decoded = self.chunks_decoded,
             total_samples = self.total_samples,
-            "Applying format change: old decoder finished, seeking to new segment start"
+            "[recreate-trace] apply_format_change: enter"
         );
 
         self.shared_stream.clear_variant_fence();
@@ -444,7 +444,20 @@ impl<T: StreamType> StreamAudioSource<T> {
             return false;
         }
 
-        self.recreate_decoder(new_info, target_offset)
+        let pos_after_seek = self.shared_stream.position();
+        info!(
+            target_offset,
+            pos_after_seek,
+            "[recreate-trace] apply_format_change: stream seeked, about to recreate decoder"
+        );
+
+        let recreated = self.recreate_decoder(new_info, target_offset);
+        let pos_after_recreate = self.shared_stream.position();
+        info!(
+            recreated,
+            pos_after_recreate, "[recreate-trace] apply_format_change: exit"
+        );
+        recreated
     }
 
     fn apply_seek_applied(
@@ -471,6 +484,19 @@ impl<T: StreamType> StreamAudioSource<T> {
         let position = request.seek.target;
         let stream_pos = self.shared_stream.position();
         let segment_range = self.shared_stream.current_segment_range();
+        info!(
+            ?position,
+            epoch,
+            attempt = request.attempt,
+            stream_pos,
+            ?segment_range,
+            committed_position = ?self.timeline.committed_position(),
+            variant = ?self
+                .shared_stream
+                .abr_handle()
+                .and_then(|h| h.current_variant_index()),
+            "[recreate-trace] apply_seek_from_decoder: enter"
+        );
 
         if let FormatChangeDetection::Applicable {
             target: new_info,
@@ -589,11 +615,20 @@ impl<T: StreamType> StreamAudioSource<T> {
         let position = request.seek.target;
         self.shared_stream.clear_variant_fence();
         self.update_decoder_len_for_seek();
-        trace!(
+        info!(
             ?position,
+            epoch,
+            attempt = request.attempt,
             anchor_start = ?anchor.segment_start,
-            target_offset = anchor.byte_offset,
-            "seek anchor path: starting exact decoder seek"
+            anchor_byte_offset = anchor.byte_offset,
+            anchor_variant = ?anchor.variant_index,
+            stream_pos = self.shared_stream.position(),
+            committed_position = ?self.timeline.committed_position(),
+            variant = ?self
+                .shared_stream
+                .abr_handle()
+                .and_then(|h| h.current_variant_index()),
+            "[recreate-trace] apply_time_anchor_seek: enter (anchor path)"
         );
         if let Err(err) = self.decoder_seek_safe(position) {
             return self.recover_from_decoder_seek_error(
@@ -704,6 +739,11 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn decoder_seek_safe(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        let pos_before = self.shared_stream.position();
+        info!(
+            ?position,
+            pos_before, "[recreate-trace] decoder_seek_safe: enter"
+        );
         let outcome = match catch_unwind(AssertUnwindSafe(|| self.session.decoder.seek(position))) {
             Ok(result) => result,
             Err(payload) => {
@@ -713,9 +753,25 @@ impl<T: StreamType> StreamAudioSource<T> {
                 )));
             }
         };
+        let pos_after_seek = self.shared_stream.position();
+        info!(
+            ?position,
+            pos_before,
+            pos_after_seek,
+            ?outcome,
+            "[recreate-trace] decoder_seek_safe: decoder returned"
+        );
         if let Ok(ref outcome) = outcome {
             self.commit_decoder_seek_outcome(outcome);
         }
+        let pos_after_commit = self.shared_stream.position();
+        info!(
+            pos_before,
+            pos_after_seek,
+            pos_after_commit,
+            stream_pos_changed = pos_after_commit != pos_before,
+            "[recreate-trace] decoder_seek_safe: exit"
+        );
         outcome
     }
 
@@ -1154,13 +1210,22 @@ impl<T: StreamType> StreamAudioSource<T> {
         offset: u64,
         attempt: u8,
     ) {
-        debug!(
+        let pending_seek_target = match &next {
+            RecreateNext::Seek(req) | RecreateNext::ApplySeek(req) => Some(req.seek.target),
+            RecreateNext::AnchorSeek { request, .. } => Some(request.seek.target),
+            RecreateNext::Decode => None,
+        };
+        info!(
             ?cause,
             codec = ?media_info.codec,
             container = ?media_info.container,
             target_offset = offset,
             attempt,
-            "start_recreating_decoder"
+            next = ?std::mem::discriminant(&next),
+            ?pending_seek_target,
+            committed_position = ?self.timeline.committed_position(),
+            stream_pos = self.shared_stream.position(),
+            "[recreate-trace] start_recreating_decoder"
         );
         self.update_state(TrackState::RecreatingDecoder(RecreateState {
             media_info,
@@ -1449,6 +1514,19 @@ impl<T: StreamType> StreamAudioSource<T> {
         };
         let epoch = request.seek.epoch;
         let position = request.seek.target;
+        info!(
+            ?position,
+            epoch,
+            attempt = request.attempt,
+            current_epoch = self.epoch.load(Ordering::Acquire),
+            timeline_seek_target = ?self.timeline.seek_target(),
+            stream_pos = self.shared_stream.position(),
+            variant = ?self
+                .shared_stream
+                .abr_handle()
+                .and_then(|h| h.current_variant_index()),
+            "[recreate-trace] apply_seek_from_timeline: enter (TIMELINE seek picked up)"
+        );
         if self.timeline.seek_target().is_none() {
             self.timeline.complete_seek(epoch);
             self.finalize_seek_pending(epoch);
@@ -1728,10 +1806,25 @@ impl<T: StreamType> StreamAudioSource<T> {
         if recreate.cause == RecreateCause::FormatBoundary
             && matches!(recreate.next, RecreateNext::Decode)
         {
+            info!(
+                offset = recreate.offset,
+                cause = ?recreate.cause,
+                next = ?recreate.next,
+                committed = ?self.timeline.committed_position(),
+                stream_pos = self.shared_stream.position(),
+                stream_len = ?self.shared_stream.len(),
+                "[recreate-trace] execute_recreation: FormatBoundary+Decode branch enter"
+            );
             if !self.apply_format_change(&recreate.media_info, recreate.offset) {
                 return Some(false);
             }
             let target_time = self.timeline.committed_position();
+            info!(
+                ?target_time,
+                stream_pos = self.shared_stream.position(),
+                stream_len = ?self.shared_stream.len(),
+                "[recreate-trace] execute_recreation: after apply_format_change, about to decoder_seek_safe"
+            );
             if !target_time.is_zero()
                 && let Err(e) = self.decoder_seek_safe(target_time)
             {
@@ -1742,6 +1835,11 @@ impl<T: StreamType> StreamAudioSource<T> {
                 );
                 return Some(false);
             }
+            info!(
+                ?target_time,
+                stream_pos_final = self.shared_stream.position(),
+                "[recreate-trace] execute_recreation: FormatBoundary+Decode branch exit"
+            );
             return Some(true);
         }
         self.shared_stream.clear_variant_fence();
@@ -1760,6 +1858,14 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn finish_apply_seek_after_recreate(&mut self, request: SeekRequest) -> TrackStep<PcmChunk> {
+        info!(
+            target = ?request.seek.target,
+            epoch = request.seek.epoch,
+            attempt = request.attempt,
+            committed_position = ?self.timeline.committed_position(),
+            stream_pos = self.shared_stream.position(),
+            "[recreate-trace] finish_apply_seek_after_recreate: enter"
+        );
         match self.decoder_seek_safe(request.seek.target) {
             Ok(_outcome) => {
                 self.shared_stream.commit_seek_landing(None);
