@@ -1140,27 +1140,21 @@ async fn wait_for_decode_past(
     false
 }
 
-/// PROD DRM multi-track near-end seek + ABR up-switch hang repro from
-/// `app.log` (line 1849: `[HangDetector] audio_worker_loop no progress
-/// for 10s`). Mirrors the exact manual flow the user described:
-///
-///   1. Append every prod DRM track from `app.yaml`.
-///   2. For each track in a short rotation:
-///      a. `select` it,
-///      b. seek ~near end of track,
-///      c. **wait until the decoder has actually produced audio
-///         past the seek target** (a `sleep` is not enough — the
-///         decoder may still be in `RecreatingDecoder`, which is
-///         the exact state the hang happens *from*),
-///      d. switch to the next track.
-///   3. After every track has been touched, settle on one and let
-///      ABR Auto trigger an `UpSwitch` (~3.5 s of decoded samples
-///      per `app.log`). The variant-switch recreate path enters
-///      `RecreatingDecoder` with `target_offset=0` and
-///      `audio_worker_loop` stalls — `HangDetector` panics.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
-#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
-async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
+/// PROD plain HLS playlist sourced from `app.yaml`. Same provider
+/// model as the DRM ladder (multi-variant ABR ladder, fMP4 init +
+/// segments, no AES-128 keyserver). Used to isolate the DRM-specific
+/// surface of the variant-switch recreate hang: if the hang fires
+/// here too, the bug lives in `HlsVariant`/recreate, not the PKCS7
+/// padding seam.
+const PROD_PLAIN_PLAYLIST: &[&str] = &[
+    "https://stream.silvercomet.top/hls/master.m3u8",
+    "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
+];
+
+/// Body of both `user_sim_prod_*_multi_track_select_seek_end_hang`
+/// tests. Extracted so the DRM and plain-HLS variants exercise the
+/// exact same flow on different URL sets.
+async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
@@ -1178,31 +1172,35 @@ async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
         }
     });
 
-    let mut track_ids = Vec::with_capacity(PROD_DRM_PLAYLIST.len());
-    for url in PROD_DRM_PLAYLIST {
+    let mut track_ids = Vec::with_capacity(urls.len());
+    for url in urls {
         track_ids.push(queue.append(prod_drm_spec(url, &prod)));
     }
 
     use super::harness::wait_for_loaded;
     wait_for_loaded(&queue, track_ids[0], Duration::from_secs(60))
         .await
-        .unwrap_or_else(|e| panic!("prod DRM[0] load fail: {e}"));
+        .unwrap_or_else(|e| panic!("{label}[0] load fail: {e}"));
     queue
         .select(track_ids[0], Transition::None)
-        .expect("select prod DRM[0]");
+        .unwrap_or_else(|e| panic!("{label}[0] select: {e}"));
 
-    // Rotate through every track twice — the user demonstrated
-    // catching the hang reliably after 5-8 of these select+seek
-    // cycles. Two full rotations of 7 tracks give the variant-switch
-    // recreate path 14 shots at the bug.
-    for rotation in 0..2u32 {
+    // Rotate through every track up to four times — DRM ladder ran
+    // 2 rotations × 7 tracks (= 14 cycles) and failed on the 5th
+    // attempt. For shorter playlists (e.g. the 2-track plain HLS
+    // companion) the rotation count compensates so both variants get
+    // a comparable number of shots at the bug.
+    let rotations: u32 = if track_ids.len() >= 7 { 2 } else { 4 };
+    for rotation in 0..rotations {
         for (idx, &track_id) in track_ids.iter().enumerate() {
             // Step 1: select (skip if we're already on this track from
-            // the initial `select_drm[0]` above).
+            // the initial select above).
             if !(rotation == 0 && idx == 0) {
                 queue
                     .select(track_id, Transition::None)
-                    .unwrap_or_else(|e| panic!("[rot={rotation} idx={idx}] select Err: {e}"));
+                    .unwrap_or_else(|e| {
+                        panic!("{label} [rot={rotation} idx={idx}] select Err: {e}")
+                    });
             }
             // Step 2: wait for handover + duration parsed (mvhd).
             let handover_ok = {
@@ -1222,7 +1220,7 @@ async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
             };
             assert!(
                 handover_ok,
-                "[rot={rotation} idx={idx}] track never became current with known duration"
+                "{label} [rot={rotation} idx={idx}] track never became current with known duration"
             );
             let duration = queue
                 .duration_seconds()
@@ -1231,7 +1229,7 @@ async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
             let target = (duration * 0.90).clamp(0.0, duration);
             let _ = queue
                 .seek(target)
-                .unwrap_or_else(|e| panic!("[rot={rotation} idx={idx}] seek Err: {e}"));
+                .unwrap_or_else(|e| panic!("{label} [rot={rotation} idx={idx}] seek Err: {e}"));
             // Step 4: wait until the decoder *actually* produced
             // audio past the seek target. This is the key change vs
             // a naive `sleep(d)`: the hang shows up only when the
@@ -1241,32 +1239,23 @@ async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
             let playing =
                 wait_for_decode_past(&queue, track_id, target + 0.5, Duration::from_secs(15)).await;
             // Step 5: if the track auto-advanced (because target was
-            // very close to natural EOF or the bug already fired the
-            // false-EOF path on a previous fix attempt), the rotation
-            // skips to the next entry — we're catching the hang here,
-            // not the EOF behaviour.
+            // very close to natural EOF or a previous fix attempt
+            // changed false-EOF behaviour), skip — we're catching the
+            // hang here, not the EOF behaviour.
             if !playing {
-                // Skip — but record that this iteration didn't get
-                // a true playback observation. If *every* iteration
-                // skips, that's a different bug surface (loader never
-                // reaches a playing state) and the next assert will
-                // catch it.
                 continue;
             }
             // Step 6: the user's "немного ждал" — once it's clearly
             // playing, give it a short additional window. This is
             // the moment ABR Auto's throughput estimator commits an
-            // UpSwitch (chunks=38, samples=152402 = ~3.5 s in app.log).
-            // If the hang fires from the variant switch, the audio
-            // worker's HangDetector panics out of band; test sees
-            // either a panic propagation or a stuck position.
+            // UpSwitch (~3.5 s of decoded samples in app.log).
             let pre_pos = queue.position_seconds().unwrap_or(0.0);
             sleep(Duration::from_secs(5)).await;
             let post_pos = queue.position_seconds().unwrap_or(0.0);
             let advance = post_pos - pre_pos;
             assert!(
                 advance >= 1.0 || queue.current().map(|e| e.id) != Some(track_id),
-                "[rot={rotation} idx={idx}] HANG after seek: position stuck at \
+                "{label} [rot={rotation} idx={idx}] HANG after seek: position stuck at \
                  {pre_pos:.2}s..{post_pos:.2}s (advanced {advance:.2}s in 5s) on \
                  track still current — the audio_worker stalled after \
                  the variant-switch recreate path"
@@ -1276,4 +1265,26 @@ async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
 
     tick.abort();
     let _ = tick.await;
+}
+
+/// PROD DRM multi-track near-end seek + ABR up-switch hang repro from
+/// `app.log` (line 1849: `[HangDetector] audio_worker_loop no progress
+/// for 10s`). Mirrors the user's manual GUI flow with prod DRM tracks
+/// from `app.yaml`. Codec-agnostic: app.log captured the same hang on
+/// AacLc and Flac variants on different runs.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
+    run_multi_track_select_seek_end_hang(PROD_DRM_PLAYLIST, "prod-drm").await;
+}
+
+/// Companion to the DRM variant on plain (non-encrypted) HLS tracks
+/// from `app.yaml`. Isolation pin: if this fails too, the bug lives
+/// in the generic variant-switch recreate path (`HlsVariant` /
+/// `step_recreating_decoder`), not in the DRM PKCS7 byte_shift seam.
+/// If this passes while the DRM variant fails, the bug is DRM-only.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+#[ignore = "requires plain HLS prod URLs reachable (stream.silvercomet.top + ecs-stage-slicer-01)"]
+async fn user_sim_prod_plain_hls_multi_track_select_seek_end_hang() {
+    run_multi_track_select_seek_end_hang(PROD_PLAIN_PLAYLIST, "prod-plain-hls").await;
 }
