@@ -1112,56 +1112,113 @@ const PROD_DRM_PLAYLIST: &[&str] = &[
     "https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8",
 ];
 
-/// Wait until the engine reports a position past `at_least` seconds
-/// for the current track — i.e. the decoder is actually producing
-/// audio chunks past the seek target, not just sitting in the
-/// `RecreatingDecoder` state. Used after a near-end seek so the next
-/// switch only fires once playback has *demonstrably resumed*.
+/// Default sample rate of `OfflineSession::new_manual()` — must
+/// match `tests/src/offline/backend.rs::DEFAULT_SAMPLE_RATE`. Used
+/// to convert "10 s of audio" into the frame count we need to render.
+const OFFLINE_SAMPLE_RATE: usize = 44_100;
+const STEREO_CHANNELS: usize = 2;
+const TEN_SECONDS_FRAMES: usize = OFFLINE_SAMPLE_RATE * 10;
+/// Per-`render()` request size. Matches the engine's typical block
+/// — keeps render-loop wall-clock cost in the same ballpark as the
+/// audio worker's tick.
+const RENDER_BLOCK_FRAMES: usize = 1024;
+/// Hard ceiling on render-loop iterations while waiting for the
+/// next track to take over (handover). At 1024 frames / iteration
+/// and 44.1 kHz this is ~4000 × 23ms = ~90 s, well above any
+/// realistic prod CDN warmup. Translates a true hang into a clear
+/// failure rather than letting the test run forever.
+const HANDOVER_BLOCK_LIMIT: usize = 4000;
+
+/// Drive the offline session forward by `target_frames` frames worth of
+/// audio, ticking the queue between blocks so async lifecycle (load
+/// dispatch, ABR commits, EOF detection) advances. Returns the captured
+/// interleaved PCM (`stereo × target_frames` samples).
 ///
-/// Requires the position to be observed **monotonically increasing
-/// across 3 consecutive samples** above `at_least`. A single
-/// `pos >= at_least` reading is not enough: on a `Queue::select`
-/// handover the cached position field can transiently report the
-/// previous track's position before the new track's worker has
-/// emitted its first decoded chunk. Two stable progressing samples
-/// on the same track id are what proves "decoder is actually playing".
-async fn wait_for_decode_past(
-    queue: &Arc<Queue>,
-    track_id: kithara_events::TrackId,
-    at_least: f64,
-    deadline: Duration,
-) -> bool {
-    let start = std::time::Instant::now();
-    let mut last_seen: Option<f64> = None;
-    let mut stable_count: u32 = 0;
-    const REQUIRED_STABLE: u32 = 3;
-    while start.elapsed() < deadline {
-        if queue.current().map(|e| e.id) != Some(track_id) {
-            // Track was auto-advanced — caller will pick this up via
-            // `current()`. Treat as "did not reach playing on this id".
-            return false;
+/// No `sleep` — wall-clock is driven entirely by `OfflineSession::render`
+/// (which blocks on the engine's render dispatcher) and `Queue::tick`
+/// (a single sync pass). If the audio worker is stalled the rendered
+/// PCM will be silence, which the caller catches via `assert_audio_live`.
+fn render_audio_frames(session: &OfflineSession, queue: &Queue, target_frames: usize) -> Vec<f32> {
+    let mut pcm = Vec::with_capacity(target_frames * STEREO_CHANNELS);
+    let mut empty_blocks = 0usize;
+    while pcm.len() / STEREO_CHANNELS < target_frames {
+        let block = session.render(RENDER_BLOCK_FRAMES);
+        let _ = queue.tick();
+        if block.is_empty() {
+            empty_blocks = empty_blocks.saturating_add(1);
+            assert!(
+                empty_blocks < HANDOVER_BLOCK_LIMIT,
+                "OfflineSession::render returned empty for {empty_blocks} consecutive blocks — \
+                 engine never started a stream (no player session or session worker dead)"
+            );
+            continue;
         }
-        if let Some(pos) = queue.position_seconds() {
-            if pos >= at_least {
-                let progressing = last_seen.is_none_or(|prev| pos > prev);
-                if progressing {
-                    stable_count = stable_count.saturating_add(1);
-                    if stable_count >= REQUIRED_STABLE {
-                        return true;
-                    }
-                } else {
-                    // Position regressed or stalled — stale handover read.
-                    stable_count = 0;
-                }
-                last_seen = Some(pos);
-            } else {
-                stable_count = 0;
-                last_seen = None;
-            }
-        }
-        sleep(Duration::from_millis(80)).await;
+        empty_blocks = 0;
+        pcm.extend_from_slice(&block);
     }
-    false
+    pcm
+}
+
+/// Tick the queue and pull empty render blocks until the named track
+/// becomes the current item with a known duration. No `sleep`: the
+/// render dispatcher provides the wall-clock cadence. Panics on
+/// exceeding `HANDOVER_BLOCK_LIMIT` so a true handover failure surfaces
+/// as a hard error instead of an infinite loop.
+fn wait_for_handover(
+    session: &OfflineSession,
+    queue: &Queue,
+    track_id: kithara_events::TrackId,
+    label: &str,
+) {
+    for attempt in 0..HANDOVER_BLOCK_LIMIT {
+        let _ = queue.tick();
+        let _ = session.render(RENDER_BLOCK_FRAMES);
+        if queue.current().map(|e| e.id) == Some(track_id)
+            && queue.duration_seconds().is_some_and(|d| d > 0.0)
+        {
+            return;
+        }
+        let _ = attempt;
+    }
+    panic!(
+        "{label}: track {track_id:?} never became current with known duration after \
+         {HANDOVER_BLOCK_LIMIT} render blocks"
+    );
+}
+
+/// Treat a stereo-interleaved PCM buffer as "live audio" if its RMS
+/// exceeds a small threshold AND a sizeable fraction of samples are
+/// non-trivial. A hung worker emits silence (zeros); a stalled-then-
+/// recovered worker emits a brief silent prefix followed by content.
+/// We require both metrics to be high so a buffer that's 90 % silence
+/// + 10 % click does NOT pass.
+fn assert_audio_live(samples: &[f32], label: &str) {
+    assert!(
+        !samples.is_empty(),
+        "{label}: received zero PCM samples — engine never produced audio"
+    );
+    let mut sum_sq = 0.0_f64;
+    let mut nonzero: u32 = 0;
+    for &s in samples {
+        let s_f = f64::from(s);
+        sum_sq += s_f * s_f;
+        if s.abs() > 1.0e-4 {
+            nonzero = nonzero.saturating_add(1);
+        }
+    }
+    // Cap at u32::MAX so `f64::from(...)` is lossless. A 10 s buffer
+    // at 44.1 kHz × stereo is ~882 k samples — far below u32::MAX.
+    let total_samples = u32::try_from(samples.len()).unwrap_or(u32::MAX);
+    let total = f64::from(total_samples);
+    let rms = (sum_sq / total).sqrt();
+    let nonzero_ratio = f64::from(nonzero) / total;
+    assert!(
+        rms >= 0.001 && nonzero_ratio >= 0.3,
+        "{label}: silence detected — rms={rms:.5} non_zero_ratio={nonzero_ratio:.3} over \
+         {} interleaved samples. The audio worker stalled (HangDetector either fired \
+         or the PCM ring is dry).",
+        samples.len()
+    );
 }
 
 /// PROD plain HLS playlist sourced from `app.yaml`. Same provider
@@ -1176,25 +1233,32 @@ const PROD_PLAIN_PLAYLIST: &[&str] = &[
 ];
 
 /// Body of both `user_sim_prod_*_multi_track_select_seek_end_hang`
-/// tests. Extracted so the DRM and plain-HLS variants exercise the
-/// exact same flow on different URL sets.
+/// tests. PCM-driven scenario, no `sleep`: the test thread renders the
+/// audio graph synchronously, so wall-clock advances only through real
+/// engine work. For every track we:
+///   1. select,
+///   2. render 10 s of audio and assert it's *live* (non-trivial RMS),
+///   3. seek near-end,
+///   4. render another 10 s and assert it's still live.
+///
+/// A stalled audio worker — whether it tripped the `HangDetector`
+/// (which `panic!`s and aborts the process) or just stopped producing
+/// PCM (PCM ring drains to silence) — fails the assertion. A position-
+/// progress heuristic is not enough: the cached `position_seconds()`
+/// can advance even when the actual audio is silence (the timeline
+/// commits the seek-landed position before any chunk is decoded).
+/// Reading PCM is the ground truth.
 async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
+    use kithara_play::SessionDispatcher;
+
     let prod = build_prod_ctx();
+    let session = Arc::new(OfflineSession::new_manual());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .session(OfflineSession::arc_auto())
+            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
-    let q_for_tick = Arc::clone(&queue);
-    let tick = tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if q_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
 
     let mut track_ids = Vec::with_capacity(urls.len());
     for url in urls {
@@ -1205,101 +1269,33 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     wait_for_loaded(&queue, track_ids[0], Duration::from_secs(60))
         .await
         .unwrap_or_else(|e| panic!("{label}[0] load fail: {e}"));
-    queue
-        .select(track_ids[0], Transition::None)
-        .unwrap_or_else(|e| panic!("{label}[0] select: {e}"));
 
-    // Rotate through every track up to four times — DRM ladder ran
-    // 2 rotations × 7 tracks (= 14 cycles) and failed on the 5th
-    // attempt. For shorter playlists (e.g. the 2-track plain HLS
-    // companion) the rotation count compensates so both variants get
-    // a comparable number of shots at the bug.
     let rotations: u32 = if track_ids.len() >= 7 { 2 } else { 4 };
     for rotation in 0..rotations {
         for (idx, &track_id) in track_ids.iter().enumerate() {
-            // Step 1: select (skip if we're already on this track from
-            // the initial select above).
-            if !(rotation == 0 && idx == 0) {
-                queue
-                    .select(track_id, Transition::None)
-                    .unwrap_or_else(|e| {
-                        panic!("{label} [rot={rotation} idx={idx}] select Err: {e}")
-                    });
-            }
-            // Step 2: wait for handover + duration parsed (mvhd).
-            let handover_ok = {
-                let deadline = std::time::Instant::now() + Duration::from_secs(20);
-                let mut ok = false;
-                while std::time::Instant::now() < deadline {
-                    if queue.current().map(|e| e.id) == Some(track_id)
-                        && let Some(d) = queue.duration_seconds()
-                        && d > 0.0
-                    {
-                        ok = true;
-                        break;
-                    }
-                    sleep(Duration::from_millis(50)).await;
-                }
-                ok
-            };
-            assert!(
-                handover_ok,
-                "{label} [rot={rotation} idx={idx}] track never became current with known duration"
-            );
+            let ctx = format!("{label} [rot={rotation} idx={idx}]");
+
+            queue
+                .select(track_id, Transition::None)
+                .unwrap_or_else(|e| panic!("{ctx} select Err: {e}"));
+
+            wait_for_handover(&session, &queue, track_id, &ctx);
+
+            let pcm_phase1 = render_audio_frames(&session, &queue, TEN_SECONDS_FRAMES);
+            assert_audio_live(&pcm_phase1, &format!("{ctx} phase1 (post-select)"));
+
             let duration = queue
                 .duration_seconds()
-                .expect("duration known by handover_ok");
-            // Step 3: seek to ~90 % of track ("примерно в конец").
+                .expect("duration known after wait_for_handover");
             let target = (duration * 0.90).clamp(0.0, duration);
-            let _ = queue
+            queue
                 .seek(target)
-                .unwrap_or_else(|e| panic!("{label} [rot={rotation} idx={idx}] seek Err: {e}"));
-            // Step 4: wait until the decoder *actually* produced
-            // audio past the seek target. This is the key change vs
-            // a naive `sleep(d)`: the hang shows up only when the
-            // decoder is past `RecreatingDecoder` and actively
-            // producing, so we must observe progress before we
-            // switch tracks.
-            let playing =
-                wait_for_decode_past(&queue, track_id, target + 0.5, Duration::from_secs(15)).await;
-            // Step 5: if the track auto-advanced (because target was
-            // very close to natural EOF or a previous fix attempt
-            // changed false-EOF behaviour), skip — we're catching the
-            // hang here, not the EOF behaviour.
-            if !playing {
-                continue;
-            }
-            // Step 6: the user's "немного ждал" — once it's clearly
-            // playing, give it a short additional window. This is
-            // the moment ABR Auto's throughput estimator commits an
-            // UpSwitch (~3.5 s of decoded samples in app.log).
-            //
-            // `pre_pos` is sanity-checked against the seek target: a
-            // value far above `target` would mean the position field
-            // is still reporting the previous track's tail from a
-            // handover race, not the new track's playback. In that
-            // case `wait_for_decode_past` already broke its contract,
-            // but we tolerate it here by skipping the assertion to
-            // avoid false-positive HANG reports.
-            let pre_pos = queue.position_seconds().unwrap_or(0.0);
-            if pre_pos > target + 30.0 {
-                continue;
-            }
-            sleep(Duration::from_secs(5)).await;
-            let post_pos = queue.position_seconds().unwrap_or(0.0);
-            let advance = post_pos - pre_pos;
-            assert!(
-                advance >= 1.0 || queue.current().map(|e| e.id) != Some(track_id),
-                "{label} [rot={rotation} idx={idx}] HANG after seek: position stuck at \
-                 {pre_pos:.2}s..{post_pos:.2}s (advanced {advance:.2}s in 5s) on \
-                 track still current — the audio_worker stalled after \
-                 the variant-switch recreate path"
-            );
+                .unwrap_or_else(|e| panic!("{ctx} seek Err: {e}"));
+
+            let pcm_phase2 = render_audio_frames(&session, &queue, TEN_SECONDS_FRAMES);
+            assert_audio_live(&pcm_phase2, &format!("{ctx} phase2 (post-near-end-seek)"));
         }
     }
-
-    tick.abort();
-    let _ = tick.await;
 }
 
 /// PROD DRM multi-track near-end seek + ABR up-switch hang repro from
