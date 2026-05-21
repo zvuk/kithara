@@ -44,6 +44,17 @@ struct PendingApply {
     target: usize,
 }
 
+/// `true` for `AbrReason` variants that originate from a throughput
+/// estimate — the ones that go stale across a position jump and must
+/// not survive a seek into the post-unlock boundary commit. Manual or
+/// first-pick reasons stay valid through a seek and are preserved.
+fn is_throughput_driven(reason: AbrReason) -> bool {
+    matches!(
+        reason,
+        AbrReason::UpSwitch | AbrReason::DownSwitch | AbrReason::UrgentDownSwitch
+    )
+}
+
 impl AbrState {
     const NO_BANDWIDTH_CAP: u64 = 0;
     const NO_SWITCH: u64 = 0;
@@ -144,8 +155,59 @@ impl AbrState {
         self.lock_count.load(Ordering::Acquire) > 0
     }
 
+    /// On the 0→1 lock transition, drop a throughput-driven pending
+    /// boundary-commit (`UpSwitch` / `DownSwitch` / urgent / buffer-low
+    /// variants). Seek is the canonical lock trigger (mirrored from
+    /// `Timeline::is_seek_pending`); a pre-seek up-switch chosen on
+    /// stale throughput would otherwise commit on the first boundary
+    /// after unlock, forcing decoder recreate before the new-variant
+    /// cache is warm (prod `app.log` `HangDetector` signature).
+    ///
+    /// `ManualOverride` and `Initial` pendings are preserved — they
+    /// encode user intent or first-pick that survive a position jump.
+    /// The
+    /// `peek_pending_decision_returns_none_during_seek` contract uses
+    /// `AlreadyOptimal`, also preserved.
     pub fn lock(&self) {
-        self.lock_count.fetch_add(1, Ordering::AcqRel);
+        let prev = self.lock_count.fetch_add(1, Ordering::AcqRel);
+        if prev == 0 {
+            let mut slot = self.pending.lock_sync();
+            if slot
+                .as_ref()
+                .is_some_and(|p| is_throughput_driven(p.reason))
+            {
+                *slot = None;
+            }
+        }
+    }
+
+    /// Drop a throughput-driven pending boundary-commit. Called when a
+    /// new seek epoch arrives (`HlsPeer::apply_seek_change`): a pending
+    /// up-switch chosen against pre-seek throughput becomes stale once
+    /// the reader jumps, and would otherwise commit on the first
+    /// boundary cross after the seek lands — forcing a decoder recreate
+    /// while the new-variant cache is still empty (the prod `app.log`
+    /// `HangDetector` signature). After the seek, `decide()`
+    /// re-evaluates against post-seek throughput before any new auto
+    /// switch is requested.
+    ///
+    /// `AbrReason::ManualOverride` and `AbrReason::Initial` are
+    /// preserved — they encode user-driven or first-pick intent that
+    /// is not invalidated by a position jump.
+    ///
+    /// Distinct from [`Self::lock`]: locking gates *publish* but
+    /// preserves the pending intent so it can resume on unlock (the
+    /// blender-fence contract codified in
+    /// `peek_pending_decision_returns_none_during_seek`). Invalidating
+    /// is destructive and happens only at semantic seek boundaries.
+    pub fn invalidate_pending(&self) {
+        let mut slot = self.pending.lock_sync();
+        if slot
+            .as_ref()
+            .is_some_and(|p| is_throughput_driven(p.reason))
+        {
+            *slot = None;
+        }
     }
 
     #[must_use]
@@ -217,7 +279,20 @@ impl AbrState {
     /// contract that a switch only commits at the next segment boundary
     /// — between two boundaries we keep the latest intent and discard
     /// stale ones.
+    ///
+    /// Throughput-driven writes (`UpSwitch`, `DownSwitch`, urgent /
+    /// no-estimate / buffer-low variants) are dropped silently while
+    /// ABR is locked: the controller may still call `decide()` while
+    /// the seek pipeline is reconfiguring, but an up-switch chosen on
+    /// pre-seek throughput must not survive into the post-unlock
+    /// boundary commit — it would force a decoder recreate before the
+    /// new-variant cache is warm (prod `app.log` `HangDetector`
+    /// signature). `ManualOverride` and `Initial` reasons bypass the
+    /// gate; they encode user intent or first-pick that is not stale.
     pub fn request_target(&self, target: usize, reason: AbrReason) {
+        if self.is_locked() && is_throughput_driven(reason) {
+            return;
+        }
         *self.pending.lock_sync() = Some(PendingApply { reason, target });
     }
 

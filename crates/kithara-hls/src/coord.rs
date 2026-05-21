@@ -319,10 +319,18 @@ impl HlsCoord {
     /// so collapse `byte_shift` / `served_from` / `served_until` back
     /// to the natural range — subsequent ABR commits at boundary will
     /// re-build the layering as usual.
+    ///
+    /// Also drops any unobserved throughput-driven boundary-commit
+    /// decision: a pending up-switch chosen against pre-seek throughput
+    /// is stale once the reader jumps and would otherwise commit on
+    /// the first boundary after the seek lands, forcing decoder recreate
+    /// before the new-variant cache is warm (prod `app.log`
+    /// `HangDetector` signature).
     pub(crate) fn reset_for_seek(&self) {
         if let Some(active) = self.active() {
             active.reset_to_full_range();
         }
+        self.abr.invalidate_pending();
     }
 
     /// Install the wake handle that `HlsPeer` listens on. Called once by

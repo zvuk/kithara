@@ -71,6 +71,17 @@ impl AbrHandle {
         self.inner.state.as_ref().map(|s| s.current_variant_index())
     }
 
+    /// Drop any unobserved boundary-commit decision — see
+    /// [`AbrState::invalidate_pending`]. Called by `kithara-hls` on a
+    /// new seek epoch so a pre-seek up-switch chosen against stale
+    /// throughput does not commit on the first post-seek boundary
+    /// (prod `app.log` `HangDetector` signature).
+    pub fn invalidate_pending(&self) {
+        if let Some(state) = self.inner.state.as_ref() {
+            state.invalidate_pending();
+        }
+    }
+
     #[must_use]
     pub fn is_locked(&self) -> bool {
         self.inner.state.as_ref().is_some_and(|s| s.is_locked())

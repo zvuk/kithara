@@ -1693,10 +1693,10 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     fn source_is_ready_for_apply_seek(&self, applying: ApplySeekState) -> bool {
         match applying.mode {
-            SeekMode::Anchor(anchor) => self.source_is_ready_for_boundary(anchor.byte_offset),
+            SeekMode::Anchor(anchor) => self.source_is_ready_for_seek_landing(anchor.byte_offset),
             SeekMode::Direct {
                 target_byte: Some(byte),
-            } => self.source_is_ready_for_boundary(byte),
+            } => self.source_is_ready_for_seek_landing(byte),
             SeekMode::Direct { target_byte: None } => self.source_is_ready(),
         }
     }
@@ -1706,18 +1706,57 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.source_ready_for_range(start..end)
     }
 
+    /// Readiness check for the byte range the decoder will read first
+    /// after a post-seek landing. Unlike [`source_is_ready_for_boundary`]
+    /// (which gates on a fixed 32 KB window — enough for fmp4 init box
+    /// probes), this gates on the **entire segment** containing the
+    /// landing byte. A FLAC fmp4 chunk segment is ~700 KB; landing on
+    /// its first byte with only 32 KB cached starves the decoder on the
+    /// very next read — `wait_range` budget exceeds, the audio worker's
+    /// `PassOutcome::Waiting` ticks the `HangDetector`, and prod app.log
+    /// captures the panic. For sources without a segment layout (raw
+    /// files), falls back to the boundary window.
+    fn source_is_ready_for_seek_landing(&self, byte: u64) -> bool {
+        let end = self.seek_landing_end(byte);
+        self.source_ready_for_range(byte..end)
+    }
+
     fn source_phase_for_boundary(&self, start: u64) -> SourcePhase {
         let end = self.boundary_end(start);
         self.shared_stream.phase_at(start..end)
     }
 
+    /// Companion to [`source_is_ready_for_seek_landing`] used by the
+    /// `WaitingForSource` branch — same byte range so the worker
+    /// blocks on the same window it later gates ready on.
+    fn source_phase_for_seek_landing(&self, byte: u64) -> SourcePhase {
+        let end = self.seek_landing_end(byte);
+        self.shared_stream.phase_at(byte..end)
+    }
+
+    /// Compute the upper bound of the byte range required for the
+    /// decoder to safely produce its first chunk after a seek landing
+    /// at `byte`: the end of the segment containing `byte` (segmented
+    /// sources) or the standard 32 KB look-ahead (raw sources). Always
+    /// clamped to `Source::len()` so we don't gate on phantom bytes
+    /// past EOF.
+    fn seek_landing_end(&self, byte: u64) -> u64 {
+        let segment_end = self
+            .shared_stream
+            .as_segment_layout()
+            .and_then(|layout| layout.segment_at_byte(byte))
+            .map(|seg| seg.byte_range.end);
+        let end = segment_end.unwrap_or_else(|| self.boundary_end(byte));
+        self.shared_stream.len().map_or(end, |len| end.min(len))
+    }
+
     fn source_phase_for_wait_context(&self, context: &WaitContext) -> SourcePhase {
         match context {
             WaitContext::ApplySeek(applying) => match applying.mode {
-                SeekMode::Anchor(anchor) => self.source_phase_for_boundary(anchor.byte_offset),
+                SeekMode::Anchor(anchor) => self.source_phase_for_seek_landing(anchor.byte_offset),
                 SeekMode::Direct {
                     target_byte: Some(byte),
-                } => self.source_phase_for_boundary(byte),
+                } => self.source_phase_for_seek_landing(byte),
                 SeekMode::Direct { target_byte: None } => self.shared_stream.phase(),
             },
             WaitContext::Recreation(recreate) => self.source_phase_for_boundary(recreate.offset),
