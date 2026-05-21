@@ -125,17 +125,41 @@ final class PlayerViewModel: ObservableObject {
         player.crossfadeDuration = Self.defaultCrossfadeSeconds
         crossfadeDuration = Self.defaultCrossfadeSeconds
 
-        // New runtime DRM flow: register a wildcard `"*"` HLS-AES
-        // decryptor that derives the cipher per-call from the
-        // player-supplied salt (the value mirrored into
-        // `X-Encrypted-Key` on every outgoing request).
-        let cipherKey = readZvukCipherKey()
-        player.setupHlsAes { encryptedKey, salt in
-            let cipher = Cipher(key: cipherKey + salt)
-            return cipher.decrypt(encryptedKey)
-        }
-        if let token = readZvukAuthToken() {
-            player.setupNetwork(authToken: token)
+        // Register a DRM rule per provider — prod (zvuk.com) and stage
+        // (zvq.me) use different cipher keys, different seed formats
+        // (8-char hex vs 16-char alphanumeric), and different header
+        // sets (X-SP-ZV is prod-only). Without this per-provider split
+        // the player either gets HTTP 418 from the zvuk.com WAF or
+        // hands the keyserver an invalid salt that decrypts to garbage
+        // bytes — visible to the user as "track never plays" rather
+        // than the false-EOF cascade we want to test. Mirrors the
+        // baked-at-compile-time registry built by
+        // `kithara_app::baked::build_baked_drm_registry()` from
+        // `crates/kithara-app/app.yaml`.
+        for provider in bundledDrmProviders() {
+            let salt = generateSalt(
+                alphabet: provider.seedAlphabet,
+                length: provider.seedLength
+            )
+            // The runtime decrypt closure builds the working cipher
+            // from `masterKey + salt` on every call. We pin the salt
+            // here because `setupHlsAes(rule:)` does not yet support
+            // per-request rotation — the zvuk.com WAF validates
+            // alphabet + length, not freshness, so a single salt of
+            // the correct format suffices for a session.
+            let cipherKey = provider.cipherKey
+            let processor = ClosureKeyProcessor { encryptedKey, _ in
+                let cipher = Cipher(key: cipherKey + salt)
+                return cipher.decrypt(encryptedKey)
+            }
+            let rule = KitharaPlayer.KeyRule(
+                processor: processor,
+                domains: provider.domains,
+                headers: provider.headers,
+                queryParams: nil,
+                salt: salt
+            )
+            player.setupHlsAes(rule: rule)
         }
 
         player.eventPublisher

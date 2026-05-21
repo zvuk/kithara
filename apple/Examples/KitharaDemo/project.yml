@@ -32,14 +32,24 @@ targets:
         SWIFT_VERSION: "6.0"
   KitharaDemoUITests:
     type: bundle.ui-testing
-    platform: iOS
+    platform: [iOS, macOS]
     sources:
       - UITests
-    dependencies:
-      - target: KitharaDemo_iOS
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo.uitests
         SWIFT_VERSION: "6.0"
-        TEST_TARGET_NAME: KitharaDemo_iOS
         GENERATE_INFOPLIST_FILE: YES
+    platforms:
+      iOS:
+        dependencies:
+          - target: KitharaDemo_iOS
+        settings:
+          base:
+            TEST_TARGET_NAME: KitharaDemo_iOS
+      macOS:
+        dependencies:
+          - target: KitharaDemo_macOS
+        settings:
+          base:
+            TEST_TARGET_NAME: KitharaDemo_macOS
