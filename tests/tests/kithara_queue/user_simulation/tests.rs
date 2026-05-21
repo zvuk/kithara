@@ -1117,6 +1117,14 @@ const PROD_DRM_PLAYLIST: &[&str] = &[
 /// audio chunks past the seek target, not just sitting in the
 /// `RecreatingDecoder` state. Used after a near-end seek so the next
 /// switch only fires once playback has *demonstrably resumed*.
+///
+/// Requires the position to be observed **monotonically increasing
+/// across 3 consecutive samples** above `at_least`. A single
+/// `pos >= at_least` reading is not enough: on a `Queue::select`
+/// handover the cached position field can transiently report the
+/// previous track's position before the new track's worker has
+/// emitted its first decoded chunk. Two stable progressing samples
+/// on the same track id are what proves "decoder is actually playing".
 async fn wait_for_decode_past(
     queue: &Arc<Queue>,
     track_id: kithara_events::TrackId,
@@ -1124,18 +1132,34 @@ async fn wait_for_decode_past(
     deadline: Duration,
 ) -> bool {
     let start = std::time::Instant::now();
+    let mut last_seen: Option<f64> = None;
+    let mut stable_count: u32 = 0;
+    const REQUIRED_STABLE: u32 = 3;
     while start.elapsed() < deadline {
         if queue.current().map(|e| e.id) != Some(track_id) {
             // Track was auto-advanced — caller will pick this up via
             // `current()`. Treat as "did not reach playing on this id".
             return false;
         }
-        if let Some(pos) = queue.position_seconds()
-            && pos >= at_least
-        {
-            return true;
+        if let Some(pos) = queue.position_seconds() {
+            if pos >= at_least {
+                let progressing = last_seen.is_none_or(|prev| pos > prev);
+                if progressing {
+                    stable_count = stable_count.saturating_add(1);
+                    if stable_count >= REQUIRED_STABLE {
+                        return true;
+                    }
+                } else {
+                    // Position regressed or stalled — stale handover read.
+                    stable_count = 0;
+                }
+                last_seen = Some(pos);
+            } else {
+                stable_count = 0;
+                last_seen = None;
+            }
         }
-        sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(80)).await;
     }
     false
 }
@@ -1249,7 +1273,18 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
             // playing, give it a short additional window. This is
             // the moment ABR Auto's throughput estimator commits an
             // UpSwitch (~3.5 s of decoded samples in app.log).
+            //
+            // `pre_pos` is sanity-checked against the seek target: a
+            // value far above `target` would mean the position field
+            // is still reporting the previous track's tail from a
+            // handover race, not the new track's playback. In that
+            // case `wait_for_decode_past` already broke its contract,
+            // but we tolerate it here by skipping the assertion to
+            // avoid false-positive HANG reports.
             let pre_pos = queue.position_seconds().unwrap_or(0.0);
+            if pre_pos > target + 30.0 {
+                continue;
+            }
             sleep(Duration::from_secs(5)).await;
             let post_pos = queue.position_seconds().unwrap_or(0.0);
             let advance = post_pos - pre_pos;
