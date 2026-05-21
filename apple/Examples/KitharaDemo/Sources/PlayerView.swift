@@ -142,6 +142,7 @@ struct PlayerView: View {
                 .background(Color.kitharaPanel)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .autocorrectionDisabled()
+                .accessibilityIdentifier("urlInput")
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
@@ -159,6 +160,7 @@ struct PlayerView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("addTrackButton")
             .disabled(viewModel.urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
@@ -176,6 +178,13 @@ struct PlayerView: View {
                     .foregroundStyle(Color.kitharaLight)
                     .lineLimit(1)
                     .accessibilityIdentifier("currentTrackName")
+                    // The visible name collapses to `master.m3u8`
+                    // for every HLS playlist, so XCUITests cannot
+                    // tell two HLS tracks apart by label alone. Fold
+                    // the canonical URL into `accessibilityValue` —
+                    // it does not affect VoiceOver output but is
+                    // queryable from a UI test as `element.value`.
+                    .accessibilityValue(viewModel.currentTrackUrl ?? "")
                 if let subtitle = viewModel.trackSubtitle {
                     Text(subtitle)
                         .font(.system(size: 11))
@@ -223,10 +232,13 @@ struct PlayerView: View {
                 Text(viewModel.formattedCurrentTime)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(Color.kitharaMuted)
+                    .accessibilityIdentifier("currentTimeLabel")
+                    .accessibilityValue(String(viewModel.currentTime))
                 Spacer()
                 Text(viewModel.formattedDuration)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(Color.kitharaMuted)
+                    .accessibilityIdentifier("durationLabel")
             }
         }
     }
@@ -427,15 +439,25 @@ struct PlayerView: View {
                 .background(Color.kitharaPanel)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
         } else {
-            List {
-                ForEach(Array(viewModel.playlist.enumerated()), id: \.element.id) { index, entry in
-                    playlistRow(entry: entry, index: index)
-                        .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
-                        .listRowBackground(Color.kitharaPanel)
-                        .listRowSeparator(.hidden)
+            // ScrollView + LazyVStack instead of SwiftUI `List` on
+            // macOS: `List` renders rows through NSTableView, whose
+            // child accessibility elements do not respect
+            // `.accessibilityIdentifier` on the Button — XCUITest
+            // queries (`app.buttons["trackRow_*"]`,
+            // `app.cells["trackRow_*"]`, even
+            // `app.descendants(.any)`) come back empty. ScrollView +
+            // explicit Button each carry their identifier into the
+            // AX tree directly, so the UI test can find each row.
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(viewModel.playlist.enumerated()), id: \.element.id) {
+                        index, entry in
+                        playlistRow(entry: entry, index: index)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 3)
+                    }
                 }
             }
-            .listStyle(.plain)
             .scrollIndicators(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Color.kitharaPanel)
@@ -504,7 +526,18 @@ struct PlayerView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("trackRow_\(index)")
+        .accessibilityIdentifier("trackRow_\(index)_\(entry.url)")
+        // Adding an accessibilityLabel that matches the identifier
+        // is a robust workaround for SwiftUI on macOS not surfacing
+        // the identifier on Buttons whose label is a complex HStack:
+        // XCUITest can then match the row by label even when the
+        // identifier query returns nothing.
+        // The URL is folded into both id and label so XCUITests can
+        // locate a *specific* track (e.g. a prod-DRM HE-AAC v2 URL
+        // for the false-EOF regression) instead of guessing at an
+        // index — track names collapse to `master.m3u8` for every
+        // HLS playlist so name alone is not unique.
+        .accessibilityLabel("trackRow_\(index)_\(entry.url)")
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
                 viewModel.removeTrack(entry.id)

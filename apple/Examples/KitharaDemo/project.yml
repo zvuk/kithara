@@ -11,9 +11,9 @@ packages:
     path: ../../../
 
 targets:
-  KitharaDemo:
+  KitharaDemo_iOS:
     type: application
-    platform: [iOS, macOS]
+    platform: iOS
     sources:
       - Sources
       - path: ../../../.env
@@ -30,26 +30,84 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo
         SWIFT_VERSION: "6.0"
-  KitharaDemoUITests:
+        PRODUCT_NAME: KitharaDemo
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+  KitharaDemo_macOS:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+      - path: ../../../.env
+        buildPhase: resources
+        optional: true
+    dependencies:
+      - package: Kithara
+        product: Kithara
+    info:
+      path: Sources/Info.plist
+      properties:
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo
+        SWIFT_VERSION: "6.0"
+        PRODUCT_NAME: KitharaDemo
+  KitharaDemoUITests_iOS:
     type: bundle.ui-testing
-    platform: [iOS, macOS]
+    platform: iOS
     sources:
       - UITests
+    dependencies:
+      - target: KitharaDemo_iOS
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo.uitests
         SWIFT_VERSION: "6.0"
         GENERATE_INFOPLIST_FILE: YES
-    platforms:
-      iOS:
-        dependencies:
-          - target: KitharaDemo_iOS
-        settings:
-          base:
-            TEST_TARGET_NAME: KitharaDemo_iOS
-      macOS:
-        dependencies:
-          - target: KitharaDemo_macOS
-        settings:
-          base:
-            TEST_TARGET_NAME: KitharaDemo_macOS
+        TEST_TARGET_NAME: KitharaDemo_iOS
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+  KitharaDemoUITests_macOS:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - UITests
+    dependencies:
+      - target: KitharaDemo_macOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo.uitests
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: KitharaDemo_macOS
+
+schemes:
+  KitharaDemo_iOS:
+    build:
+      targets:
+        KitharaDemo_iOS: [run, test]
+  KitharaDemoUITests_iOS:
+    build:
+      targets:
+        KitharaDemo_iOS: [run, test]
+        KitharaDemoUITests_iOS: [test]
+    test:
+      config: Debug
+      targets:
+        - KitharaDemoUITests_iOS
+  KitharaDemoUITests_macOS:
+    build:
+      targets:
+        KitharaDemo_macOS: [run, test]
+        KitharaDemoUITests_macOS: [test]
+    test:
+      config: Debug
+      targets:
+        - KitharaDemoUITests_macOS

@@ -2,34 +2,40 @@
 #![forbid(unsafe_code)]
 
 //! Reproduces the production rapid-scrub cascade from
-//! `app.log @ 09:43:50`: user taps a prod DRM track, drags the slider
-//! mid-track, plays a second, drags again. Each scrub lands in a
-//! byte range the scheduler has not fetched yet, decoder seek hits
-//! `SeekOutOfRange`, `decoder_next_chunk` then returns
-//! `isomp4: no atom pending read`, PCM channel closes, the player
-//! escalates `ItemDidFail`, and the queue silently advances.
+//! `app.log @ 09:43:50` and `app.log @ 11:50` deterministically:
+//! user taps a prod DRM track, drags the slider mid-track, the
+//! decoder seek hits `SeekOutOfRange` (or `SeekFailed("isomp4:
+//! invalid atom size")`), `decoder_next_chunk` then returns
+//! `isomp4: no atom pending read`, the PCM channel closes, the
+//! player escalates `ItemDidFail`, and the queue silently advances.
 //!
-//! Two design choices reproduce the bug locally where
-//! `cold_seek_middle::queue_seek_multi_variant_cold_far` (single
-//! seek, deep warmup) passes:
+//! Each scenario uses the same multi-variant HLS fixture
+//! (4 variants, AES-128, ABR=Auto, per-segment server-side delay
+//! comfortably above the audio worker's 10 ms `WAIT_RANGE_TIMEOUT`).
+//! The fixture itself is the "network jitter middleware" the
+//! `kithara-integration-tests` plan calls for — implemented via
+//! `DelayRule` so no test-only code leaks into production crates.
 //!
-//! 1. **Two sequential seeks** — 50 % then 90 % with 2 s of playback
-//!    between them. The first seek alone often lands because the
-//!    scheduler had time to walk ahead of the slider; the *second*
-//!    seek lands in a range that the post-first-seek prefetch has
-//!    not reached yet.
-//! 2. **Per-segment server-side delay** — every segment is delayed
-//!    by ~120 ms (realistic CDN RTT, well above the audio worker's
-//!    10 ms `WAIT_RANGE_TIMEOUT`). This is what
-//!    `kithara-integration-tests` calls "jitter middleware",
-//!    implemented through the fixture's `DelayRule` so no
-//!    test-only code leaks into production crates.
+//! Scenarios cover the three slider-drag shapes the production log
+//! shows surfaces of the bug:
 //!
-//! Asserts that neither scrub escalates `PlayerEvent::ItemDidFail`.
-//! Track may end up still buffering past the second target — that
-//! is acceptable (root recovery in progress). The forbidden outcome
-//! is the silent advance, which is caught by the companion
-//! `false_eof_rapid_scrub.rs` against the prod CDN.
+//! 1. **Single scrub into a cold mid-range** — matches the trace
+//!    for prod track `50984034_1` (pos=79.9 s / dur=194 s, ~41 %)
+//!    where a single seek into unbuffered bytes crashed the track.
+//! 2. **Single scrub near the end** — covers bug #7 from the plan
+//!    (seek to ~95 % of an unbuffered tail).
+//! 3. **Forward scrub then backward scrub** — covers bug #6 from
+//!    the plan (forward into cold, then back to a warmer region;
+//!    the second seek often crashes when the demuxer cursor never
+//!    cleanly recovered from the first).
+//! 4. **Two sequential forward scrubs (50 % then 90 %)** — the
+//!    original `app.log @ 09:43:50` reproducer; second scrub lands
+//!    in a different cold range than the post-first-seek prefetch
+//!    reached.
+//!
+//! Every assertion is on `PlayerEvent::ItemDidFail` against the
+//! scrubbed track src. The companion `false_eof_rapid_scrub.rs` runs
+//! the same shape against the prod CDN behind `#[ignore]`.
 
 use std::{sync::Arc, time::Duration};
 
@@ -53,7 +59,8 @@ use tokio_util::sync::CancellationToken;
 
 /// Track shape: 30 segments × 4 s = 120 s. Long enough that 50 % and
 /// 90 % targets land in distinct cold regions.
-const SEGMENT_COUNT: usize = 30;
+const SEGMENT_COUNT_U32: u32 = 30;
+const SEGMENT_COUNT: usize = SEGMENT_COUNT_U32 as usize;
 const SEGMENT_DURATION_S: f64 = 4.0;
 /// Per-segment delay applied to every fetch. Mirrors a realistic
 /// CDN RTT — comfortably above the audio worker's 10 ms
@@ -61,17 +68,16 @@ const SEGMENT_DURATION_S: f64 = 4.0;
 /// satisfy a sudden seek.
 const CDN_DELAY_MS: u64 = 120;
 
-/// Playback between the two scrubs. Long enough that the audio
+/// Playback between sequential scrubs. Long enough that the audio
 /// worker actually exits the post-first-seek `WaitingForSource`
 /// state and renders real PCM.
 const PLAY_BETWEEN_SCRUBS: Duration = Duration::from_secs(2);
 
-const FIRST_SCRUB_RATIO: f64 = 0.50;
-const SECOND_SCRUB_RATIO: f64 = 0.90;
-
 /// Total track duration derived from the fixture, used to compute
 /// scrub targets and to cap the per-seek observation budget.
-const TRACK_DURATION_S: f64 = SEGMENT_COUNT as f64 * SEGMENT_DURATION_S;
+// `u32 as f64` is precision-safe (`u32::MAX < 2^53`) and works in
+// const context, unlike `f64::from(u32)` which is not yet const.
+const TRACK_DURATION_S: f64 = SEGMENT_COUNT_U32 as f64 * SEGMENT_DURATION_S;
 
 const LOAD_BUDGET: Duration = Duration::from_secs(30);
 const SEEK_OBSERVE_BUDGET: Duration = Duration::from_secs(15);
@@ -111,7 +117,7 @@ async fn wait_for_status(
 enum ScrubOutcome {
     /// Position advanced past the seek target — root recovery worked.
     Landed { reached: f64 },
-    /// Engine surfaced ItemDidFail for the scrubbed track — the bug.
+    /// Engine surfaced `ItemDidFail` for the scrubbed track — the bug.
     ItemDidFail { src: String },
     /// Budget elapsed without either signal — still buffering /
     /// recovering. Not a regression but not landed either.
@@ -151,8 +157,7 @@ async fn observe_scrub_outcome(
                     src: src.to_string(),
                 };
             }
-            Ok(Ok(_)) => continue,
-            Ok(Err(RecvError::Lagged(_))) => continue,
+            Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
             Ok(Err(RecvError::Closed)) => {
                 return ScrubOutcome::BudgetElapsed {
                     last_position: queue.position_seconds(),
@@ -163,177 +168,269 @@ async fn observe_scrub_outcome(
     }
 }
 
-/// Multi-variant HLS + per-segment CDN delay + warmup + two
-/// sequential scrubs (50 % then 90 %) with 2 s playback between.
-/// Reproduces the prod cascade from `app.log @ 09:43:50` deterministically.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
-async fn rapid_scrub_into_cold_segment_does_not_fail(temp_dir: TestTempDir) {
-    // AES-128 key + IV matching `packaged_encrypted_builder` in
-    // `tests/src/hls_server.rs` — every kithara fixture uses these
-    // same constants so the integration helpers can verify
-    // decryption end-to-end.
-    const AES128_KEY: [u8; 16] = *b"0123456789abcdef";
-    const AES128_IV: [u8; 16] = [0u8; 16];
-    let key_hex: String = AES128_KEY.iter().map(|b| format!("{b:02x}")).collect();
-    let iv_hex: String = AES128_IV.iter().map(|b| format!("{b:02x}")).collect();
+struct Harness {
+    queue: Arc<Queue>,
+    rx: EventReceiver,
+    master_url: String,
+    tick: tokio::task::JoinHandle<()>,
+}
 
-    let helper = TestServerHelper::new().await;
-    // Mirror the prod zvuk DRM shape: 4 variants (slq / smq / shq /
-    // slossless analogue), AES-128 CBC encryption, ABR enabled and
-    // free to up-switch. Each variant pulls slightly different
-    // per-segment latency to spread the ABR controller's decisions
-    // — the slow variant has a much higher delay so the controller
-    // is tempted to upgrade, exactly as in `app.log` where the
-    // production trace shows repeated `commit_variant_switch
-    // reason=UpSwitch from_variant=0 to_variant=3` lines.
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(4)
-        .segments_per_variant(SEGMENT_COUNT)
-        .segment_duration_secs(SEGMENT_DURATION_S)
-        .variant_bandwidths(vec![300_000, 800_000, 1_800_000, 5_000_000])
-        // HE-AAC v2 — mirrors the prod zvuk DRM codec that the user
-        // ran into. AAC-LC fixtures recover cleanly from the same
-        // sequence; the SBR + Parametric Stereo metadata in HE-AAC
-        // v2 fmp4 atoms is what the audio pipeline appears to
-        // mis-handle on seek-into-cold-range.
-        .packaged_audio_aac_he_v2(44_100, 2)
-        .encryption(EncryptionRequest {
-            key_hex,
-            iv_hex: Some(iv_hex),
-        })
-        // Slow variant 0 (slq analogue) ~ 300 ms per segment so the
-        // ABR controller will eagerly upswitch mid-track.
-        .push_delay_rule(DelayRule {
-            variant: Some(0),
-            delay_ms: 300,
-            ..DelayRule::default()
-        })
-        // Other variants — realistic CDN RTT.
-        .push_delay_rule(DelayRule {
-            delay_ms: CDN_DELAY_MS,
-            ..DelayRule::default()
-        });
-    let created = helper
-        .create_hls(builder)
-        .await
-        .expect("create multi-variant HLS fixture");
-    let master = created.master_url();
-    let master_str = master.as_str().to_string();
+impl Harness {
+    async fn setup(temp_dir: &TestTempDir) -> Self {
+        // AES-128 key + IV matching `packaged_encrypted_builder` in
+        // `tests/src/hls_server.rs` — every kithara fixture uses these
+        // same constants so the integration helpers can verify
+        // decryption end-to-end.
+        const AES128_KEY: [u8; 16] = *b"0123456789abcdef";
+        const AES128_IV: [u8; 16] = [0u8; 16];
+        let key_hex: String = AES128_KEY.iter().map(|b| format!("{b:02x}")).collect();
+        let iv_hex: String = AES128_IV.iter().map(|b| format!("{b:02x}")).collect();
 
-    let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::default(),
-            CancellationToken::new(),
-        ))
-        .build(),
-    );
-    let store = StoreOptions::new(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .session(OfflineSession::arc_auto())
+        let helper = TestServerHelper::new().await;
+        // Mirror prod zvuk DRM shape: 4 variants (slq / smq / shq /
+        // slossless analogue), AES-128 CBC, ABR=Auto, per-segment
+        // delay above the audio worker's wait budget. Slow variant 0
+        // has higher delay so the ABR controller is tempted to
+        // upgrade — same as the prod trace where `commit_variant_switch
+        // reason=UpSwitch from_variant=0 to_variant=3` fires
+        // repeatedly mid-track.
+        let builder = HlsFixtureBuilder::new()
+            .variant_count(4)
+            .segments_per_variant(SEGMENT_COUNT)
+            .segment_duration_secs(SEGMENT_DURATION_S)
+            .variant_bandwidths(vec![300_000, 800_000, 1_800_000, 5_000_000])
+            // Codec choice mirrors prod (`aac2` = HE-AAC v2 with
+            // SBR + Parametric Stereo). The cascade does not
+            // reproduce on AAC-LC — Symphonia's fmp4 demuxer
+            // appears to handle plain mp4a fragments fine but
+            // mis-handles the moof layout that the HE-AAC v2
+            // fixtures (and prod zvuk DRM streams) generate, so
+            // the reproducer must use the same codec the bug
+            // surfaces on in production.
+            .packaged_audio_aac_he_v2(44_100, 2)
+            .encryption(EncryptionRequest {
+                key_hex,
+                iv_hex: Some(iv_hex),
+            })
+            .push_delay_rule(DelayRule {
+                variant: Some(0),
+                delay_ms: 300,
+                ..DelayRule::default()
+            })
+            .push_delay_rule(DelayRule {
+                delay_ms: CDN_DELAY_MS,
+                ..DelayRule::default()
+            });
+        let created = helper
+            .create_hls(builder)
+            .await
+            .expect("create multi-variant HLS fixture");
+        let master = created.master_url();
+        let master_url = master.as_str().to_string();
+
+        let downloader = Downloader::new(
+            DownloaderConfig::for_client(HttpClient::new(
+                NetOptions::default(),
+                CancellationToken::new(),
+            ))
             .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+        );
+        let store = StoreOptions::new(temp_dir.path());
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder()
+                .session(OfflineSession::arc_auto())
+                .build(),
+        ));
+        let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
+        let queue_for_tick = Arc::clone(&queue);
+        let tick = tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_millis(50)).await;
+                if queue_for_tick.tick().is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
 
-    let mut cfg = ResourceConfig::for_src(master.as_str())
-        .expect("valid URL")
-        .downloader(downloader.clone())
-        .store(store.clone())
-        .build();
-    cfg.initial_abr_mode = AbrMode::Auto(None);
-    let mut rx = queue.subscribe();
-    let id = queue.append(TrackSource::Config(Box::new(cfg)));
+        let mut cfg = ResourceConfig::for_src(master.as_str())
+            .expect("valid URL")
+            .downloader(downloader)
+            .store(store)
+            .build();
+        cfg.initial_abr_mode = AbrMode::Auto(None);
+        let mut rx = queue.subscribe();
+        let id = queue.append(TrackSource::Config(Box::new(cfg)));
 
-    wait_for_status(&mut rx, &queue, id, TrackStatus::Loaded, LOAD_BUDGET)
-        .await
-        .unwrap_or_else(|e| panic!("Loaded never arrived: {e}"));
-    queue.select(id, Transition::None).expect("select");
-    queue.play();
+        wait_for_status(&mut rx, &queue, id, TrackStatus::Loaded, LOAD_BUDGET)
+            .await
+            .unwrap_or_else(|e| panic!("Loaded never arrived: {e}"));
+        queue.select(id, Transition::None).expect("select");
+        queue.play();
 
-    // No wall-clock warmup — production trace from `app.log @
-    // 09:43:50` shows the scrub landed `stream_pos=64512` (only the
-    // init segment had been fetched). The user clicked the slider
-    // before any media bytes arrived. Drop straight into the first
-    // scrub so the test exercises the same cold-start race.
-
-    // First scrub: 50 % into the track.
-    let first_target = TRACK_DURATION_S * FIRST_SCRUB_RATIO;
-    queue.seek(first_target).expect("first seek accepted");
-    eprintln!("[rapid_scrub] first seek issued target={first_target:.2}s");
-
-    match observe_scrub_outcome(
-        &queue,
-        &mut rx,
-        &master_str,
-        first_target,
-        SEEK_OBSERVE_BUDGET,
-    )
-    .await
-    {
-        ScrubOutcome::Landed { reached } => {
-            eprintln!("[rapid_scrub] first scrub landed at {reached:.2}s");
-        }
-        ScrubOutcome::ItemDidFail { src } => {
-            tick_handle.abort();
-            panic!(
-                "FIRST SCRUB CRASHED: PlayerEvent::ItemDidFail fired for {src} after \
-                 seek to {first_target:.2}s. Reproduces app.log @ 09:43:50 cascade."
-            );
-        }
-        ScrubOutcome::BudgetElapsed { last_position } => {
-            eprintln!(
-                "[rapid_scrub] first scrub did not land within budget (last={last_position:?}) — \
-                 continuing to second scrub"
-            );
+        Self {
+            queue,
+            rx,
+            master_url,
+            tick,
         }
     }
 
-    // Playback between scrubs. Use sleep, not poll — we want any
-    // background recovery work to actually run.
+    /// Issue a seek and observe outcome — returns the outcome so
+    /// each scenario can pattern-match its own acceptance criteria.
+    async fn scrub(&mut self, target: f64, tag: &str) -> ScrubOutcome {
+        self.queue.seek(target).expect("seek accepted");
+        eprintln!("[{tag}] seek issued target={target:.2}s");
+        observe_scrub_outcome(
+            &self.queue,
+            &mut self.rx,
+            &self.master_url,
+            target,
+            SEEK_OBSERVE_BUDGET,
+        )
+        .await
+    }
+
+    /// Simulate a real slider drag: emit a burst of intermediate
+    /// seeks racing toward `final_target` over `drag_duration`. Each
+    /// intermediate seek lands in a cold range and starts a new
+    /// epoch before the previous one's `decoder.seek` could possibly
+    /// have completed — this is what causes the prod cascade where
+    /// a stale `decoder.seek` partially read an atom header, the
+    /// new epoch arrived mid-atom, and `next_chunk` then saw the
+    /// torn cursor as "isomp4: no atom pending read".
+    async fn drag(&mut self, final_target: f64, drag_duration: Duration, steps: usize, tag: &str) {
+        let start_pos = self.queue.position_seconds().unwrap_or(0.0);
+        let steps_u32 = u32::try_from(steps).unwrap_or(u32::MAX);
+        let step_delay = drag_duration / steps_u32;
+        for step in 1..=steps_u32 {
+            let frac = f64::from(step) / f64::from(steps_u32);
+            let target = start_pos + (final_target - start_pos) * frac;
+            self.queue.seek(target).expect("drag seek accepted");
+            eprintln!("[{tag}] drag step {step}/{steps_u32} → {target:.2}s");
+            sleep(step_delay).await;
+        }
+    }
+
+    fn shutdown(self) {
+        self.tick.abort();
+    }
+}
+
+fn assert_not_failed(outcome: ScrubOutcome, target: f64, tag: &str) {
+    match outcome {
+        ScrubOutcome::Landed { reached } => {
+            eprintln!("[{tag}] landed at {reached:.2}s — root recovery worked");
+        }
+        ScrubOutcome::BudgetElapsed { last_position } => {
+            eprintln!(
+                "[{tag}] inconclusive: budget elapsed, last position={last_position:?} — \
+                 still buffering, not a regression"
+            );
+        }
+        ScrubOutcome::ItemDidFail { src } => {
+            panic!(
+                "[{tag}] CRASHED: PlayerEvent::ItemDidFail fired for {src} after seek to \
+                 {target:.2}s. Decoder seek into cold byte range corrupted the demuxer \
+                 cursor — next_chunk surfaced `isomp4: no atom pending read`, pcm channel \
+                 closed, queue silently advanced. Mirrors prod app.log cascade."
+            );
+        }
+    }
+}
+
+/// Parametrised cold-range seek reproducer.
+///
+/// Cases:
+/// - `single_mid` — single clean scrub to ~40 % of an unbuffered
+///   track (prod `50984034_1`: pos=79.9 s / dur=194 s).
+/// - `near_end` — single clean scrub to 95 % (bug #7; covers the
+///   `171515249_1` shape from app.log).
+/// - `fwd_then_back` — forward to 80 % then backward to 20 %
+///   (bug #6: the demuxer cursor must survive a cold forward seek
+///   without poisoning the subsequent backward seek).
+/// - `rapid_50_then_90` — two sequential forward scrubs into
+///   distinct cold regions, the original `app.log @ 09:43:50`
+///   shape.
+/// - `drag_mid` / `drag_end` — burst of 8 seeks over 400 ms
+///   ending at 40 % / 95 %. Mirrors a real slider drag where each
+///   intermediate seek starts a fresh epoch before the previous
+///   `decoder.seek` could finish; this is the cascade shape that
+///   crashed three prod tracks in `app.log @ 11:50` and is harder
+///   to dodge with a passive scheduler warm-up.
+///
+/// `second_ratio = None` skips the second seek; otherwise the
+/// harness sleeps `PLAY_BETWEEN_SCRUBS` between the two so any
+/// post-first-seek recovery actually runs. Each case asserts no
+/// `PlayerEvent::ItemDidFail` after the final scrub.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[case::single_mid(0.40, None)]
+#[case::near_end(0.95, None)]
+#[case::fwd_then_back(0.80, Some(0.20))]
+#[case::rapid_50_then_90(0.50, Some(0.90))]
+async fn seek_into_cold_range_does_not_fail(
+    temp_dir: TestTempDir,
+    #[case] first_ratio: f64,
+    #[case] second_ratio: Option<f64>,
+) {
+    let mut harness = Harness::setup(&temp_dir).await;
+
+    let first_target = TRACK_DURATION_S * first_ratio;
+    let first_tag = if second_ratio.is_some() {
+        "first"
+    } else {
+        "only"
+    };
+    let first_outcome = harness.scrub(first_target, first_tag).await;
+
+    let Some(second_ratio) = second_ratio else {
+        harness.shutdown();
+        assert_not_failed(first_outcome, first_target, first_tag);
+        return;
+    };
+
+    if let ScrubOutcome::ItemDidFail { src } = first_outcome {
+        harness.shutdown();
+        panic!("[first] CRASHED before second scrub (src={src})");
+    }
+
     sleep(PLAY_BETWEEN_SCRUBS).await;
 
-    // Second scrub: 90 % into the track. Lands in a different cold
-    // range that the post-first-seek prefetch has not reached.
-    let second_target = TRACK_DURATION_S * SECOND_SCRUB_RATIO;
-    queue.seek(second_target).expect("second seek accepted");
-    eprintln!("[rapid_scrub] second seek issued target={second_target:.2}s");
+    let second_target = TRACK_DURATION_S * second_ratio;
+    let second_outcome = harness.scrub(second_target, "second").await;
+    harness.shutdown();
+    assert_not_failed(second_outcome, second_target, "second");
+}
+
+/// Slider-drag reproducer. 8 intermediate seeks fired over 400 ms,
+/// each starting a new epoch before the previous `decoder.seek`
+/// could finish. The final seek's position lands in a cold range
+/// the scheduler has not reached, while the demuxer is still
+/// mid-atom from one of the racing earlier seeks — the exact
+/// torn-cursor shape three prod tracks crashed on in `app.log
+/// @ 11:50`.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[case::drag_mid(0.40)]
+#[case::drag_end(0.95)]
+async fn seek_drag_into_cold_range_does_not_fail(temp_dir: TestTempDir, #[case] final_ratio: f64) {
+    const DRAG_DURATION: Duration = Duration::from_millis(400);
+    const DRAG_STEPS: usize = 8;
+
+    let mut harness = Harness::setup(&temp_dir).await;
+    let final_target = TRACK_DURATION_S * final_ratio;
+
+    harness
+        .drag(final_target, DRAG_DURATION, DRAG_STEPS, "drag")
+        .await;
 
     let outcome = observe_scrub_outcome(
-        &queue,
-        &mut rx,
-        &master_str,
-        second_target,
+        &harness.queue,
+        &mut harness.rx,
+        &harness.master_url,
+        final_target,
         SEEK_OBSERVE_BUDGET,
     )
     .await;
-    tick_handle.abort();
-
-    match outcome {
-        ScrubOutcome::Landed { reached } => {
-            eprintln!("[rapid_scrub] second scrub landed at {reached:.2}s — root recovery worked");
-        }
-        ScrubOutcome::BudgetElapsed { last_position } => {
-            eprintln!(
-                "[rapid_scrub] second scrub inconclusive: budget elapsed, last position={last_position:?}"
-            );
-        }
-        ScrubOutcome::ItemDidFail { src } => {
-            panic!(
-                "SECOND SCRUB CRASHED: PlayerEvent::ItemDidFail fired for {src} after \
-                 seek to {second_target:.2}s. Pipeline does not wait for the target byte range \
-                 to arrive before issuing decoder.seek — `wait_range budget exceeded` or \
-                 decoder `SeekOutOfRange` escalates straight to fail."
-            );
-        }
-    }
+    harness.shutdown();
+    assert_not_failed(outcome, final_target, "drag");
 }

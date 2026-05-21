@@ -180,6 +180,10 @@ final class PlayerViewModel: ObservableObject {
         playlist[safe: currentTrackIndex]?.name ?? "No Track"
     }
 
+    var currentTrackUrl: String? {
+        playlist[safe: currentTrackIndex]?.url
+    }
+
     var trackSubtitle: String? {
         playlist[safe: currentTrackIndex]?.subtitle
     }
