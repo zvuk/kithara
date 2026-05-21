@@ -164,6 +164,33 @@ pub(crate) fn long_play_then_switch_then_seek() -> Vec<Action> {
     ]
 }
 
+/// Auto-ABR up-switch repro: long warm-up so the bandwidth probe
+/// decides to UpSwitch, then a sequence of seeks across the track.
+/// User reports that **every** seek after Auto's up-switch returns
+/// `SeekOutOfRange` or false-EOF — Manual ABR (no switch) plays + seeks
+/// fine. So the post-switch decoder is desynced from the new variant's
+/// init segment. This scenario stresses that exact path on prod DRM.
+pub(crate) fn auto_abr_upswitch_then_seek_burst() -> Vec<Action> {
+    vec![
+        // Play long enough for the ABR throughput estimator to decide
+        // the connection can sustain the top variant. On the prod
+        // playlist this happens at ~4 s; we give it 15 s to be safe.
+        Action::PlayFor(Duration::from_secs(15)),
+        // Burst of seeks across the track — each one is the seek the
+        // user describes as "просто eof или hang". If any one of them
+        // breaks the contract (auto-advance, position never lands,
+        // track Failed), the harness panics.
+        Action::SeekRatio(0.50),
+        Action::PlayFor(Duration::from_secs(3)),
+        Action::SeekRatio(0.20),
+        Action::PlayFor(Duration::from_secs(3)),
+        Action::SeekRatio(0.80),
+        Action::PlayFor(Duration::from_secs(3)),
+        Action::SeekRatio(0.35),
+        Action::PlayFor(Duration::from_secs(3)),
+    ]
+}
+
 /// Aggressive seek storm — many seeks rapidly. Mimics a user
 /// dragging the slider; the loader has to cancel + restart fetches
 /// many times in quick succession.

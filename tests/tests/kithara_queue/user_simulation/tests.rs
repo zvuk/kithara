@@ -369,6 +369,96 @@ async fn user_sim_long_play_then_seek_forward(#[case] kind: TrackKind, #[case] a
     run_single(&helper, kind, abr, scenarios::long_play_then_seek_forward()).await;
 }
 
+/// Local repro for the "PastEof on fresh Loaded" race. The user's
+/// production bug fires on the very first seek after a track changes
+/// status to `Loaded`, before the demuxer has parsed the mvhd box.
+/// `Queue::duration_seconds()` returns `Some(0.0)` in that window, and
+/// `Player::seek_seconds` then evaluates `target_secs >= dur` as
+/// `0 >= 0 == true` → `SeekOutcome::PastEof` → false-EOF auto-advance.
+///
+/// This test loads a multi-variant HLS DRM track (matching the
+/// production playlist shape) and seeks the moment status flips to
+/// `Loaded`, exactly like the prod UI does.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[case::aac_drm(TrackKind::HlsAacLcDrmAbr4, 0.50)]
+#[case::aac_drm_low(TrackKind::HlsAacLcDrmAbr4, 0.20)]
+#[case::aac_drm_high(TrackKind::HlsAacLcDrmAbr4, 0.95)]
+#[case::aac_plain(TrackKind::HlsAacLcAbr4, 0.50)]
+#[case::mp3_streamhq(TrackKind::Mp3StreamHq, 0.50)]
+async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case] ratio: f64) {
+    let helper = TestServerHelper::new().await;
+    let spec = build_spec(
+        &helper,
+        kind,
+        AbrMode::Auto(None),
+        DecoderBackend::Symphonia,
+    )
+    .await;
+    let temp = temp_dir();
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .build(),
+    );
+    let store = StoreOptions::new(temp.path());
+    let cfg = kithara_play::ResourceConfig::for_src(spec.url.as_str())
+        .expect("valid track URL")
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder_backend(DecoderBackend::Symphonia)
+        .initial_abr_mode(AbrMode::Auto(None))
+        .build();
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
+    ));
+    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let q_for_tick = Arc::clone(&queue);
+    let tick = tokio::spawn(async move {
+        loop {
+            sleep(Duration::from_millis(50)).await;
+            if q_for_tick.tick().is_err() {
+                break;
+            }
+        }
+    });
+    let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
+
+    use super::harness::wait_for_loaded;
+    wait_for_loaded(&queue, track_id, Duration::from_secs(30))
+        .await
+        .unwrap_or_else(|e| panic!("load fail: {e}"));
+    queue
+        .select(track_id, Transition::None)
+        .expect("select track");
+
+    // IMMEDIATELY (no warmup) seek — exactly like the user's UI click
+    // right after the track turns "ready" in the playlist.
+    let dur_at_seek = queue.duration_seconds().unwrap_or(0.0);
+    let target = (dur_at_seek * ratio).clamp(0.0, dur_at_seek);
+    let outcome = queue
+        .seek(target)
+        .unwrap_or_else(|e| panic!("queue.seek Err: {e}"));
+    if let kithara_play::SeekOutcome::PastEof {
+        duration: reported_dur,
+        ..
+    } = outcome
+    {
+        panic!(
+            "FRESH-LOADED SEEK RACE BUG: Queue::seek returned PastEof for \
+             ratio={ratio:.2} target={target:.2}s reported_dur={reported_dur:?} \
+             queue.duration={dur_at_seek:.2}s — Loaded status fires before mvhd \
+             is parsed; seek target lands at 0 → PastEof → false-EOF auto-advance"
+        );
+    }
+
+    tick.abort();
+    let _ = tick.await;
+}
+
 /// Aggressive seek storm — many seeks in rapid succession, like a
 /// user dragging the slider. Loader has to cancel and restart fetches.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
@@ -380,6 +470,34 @@ async fn user_sim_long_play_then_seek_forward(#[case] kind: TrackKind, #[case] a
 async fn user_sim_seek_storm(#[case] kind: TrackKind, #[case] abr: AbrMode) {
     let helper = TestServerHelper::new().await;
     run_single(&helper, kind, abr, scenarios::seek_storm()).await;
+}
+
+/// **Auto-ABR up-switch + seek burst** — repro for the prod bug user
+/// reports in `app.log`: after `commit_variant_switch reason=UpSwitch`
+/// every subsequent seek returns `SeekOutOfRange` / false-EOF / hang.
+/// Manual ABR (no switch) plays + seeks fine.
+///
+/// Parametrised over Auto (the bug path) AND Manual (the pin — must
+/// always stay green). The Manual cases protect against accidentally
+/// breaking the working path while fixing the Auto one.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
+#[case::aac_abr_manual_top(TrackKind::HlsAacLcAbr4, AbrMode::Manual(3))]
+#[case::aac_abr_manual0(TrackKind::HlsAacLcAbr4, AbrMode::Manual(0))]
+#[case::mixed_codec_auto(TrackKind::HlsMixedCodecAbr4, AbrMode::Auto(None))]
+#[case::mixed_codec_manual_flac(TrackKind::HlsMixedCodecAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
+#[case::aac_drm_manual_top(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(3))]
+#[case::aac_drm_manual0(TrackKind::HlsAacLcDrmAbr4, AbrMode::Manual(0))]
+async fn user_sim_auto_abr_upswitch_then_seek_burst(#[case] kind: TrackKind, #[case] abr: AbrMode) {
+    let helper = TestServerHelper::new().await;
+    run_single(
+        &helper,
+        kind,
+        abr,
+        scenarios::auto_abr_upswitch_then_seek_burst(),
+    )
+    .await;
 }
 
 // ─── Multi-track (DRM ↔ non-DRM) scenarios ──────────────────────────────────
@@ -517,7 +635,7 @@ const PROD_DRM_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/18008255
 /// different track id, in case the bug is content-specific. URL
 /// shape sourced from `app.yaml` playlist.
 const PROD_DRM_TRACK_ALT: &str =
-    "https://cdn-hls-slicer.zvuk.com/drm/track/130432502_1/master.m3u8";
+    "https://cdn-hls-slicer.zvuk.com/drm/track/173388194_1/master.m3u8";
 
 /// Build a prod-DRM track via the same `kithara-app` source resolver
 /// the binary uses. The resolver picks up baked credentials and the
@@ -662,7 +780,7 @@ async fn apply_action_to_queue(queue: &Arc<Queue>, action: &Action) {
 /// dance the user runs manually with `cargo run -p kithara-app`.
 /// Requires baked production creds — gated by `#[ignore]`.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-#[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*)"]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
 async fn user_sim_prod_drm_scripted() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::scripted_forward_back_end()).await;
 }
@@ -671,7 +789,7 @@ async fn user_sim_prod_drm_scripted() {
 /// manual observation: long playback on a prod DRM track, then drag
 /// the playhead back, expect a hang or false-EOF.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-#[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*)"]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
 async fn user_sim_prod_drm_seek_after_long_play() {
     run_prod_drm_scenario(
         PROD_DRM_TRACK,
@@ -683,7 +801,7 @@ async fn user_sim_prod_drm_seek_after_long_play() {
 /// Same scenario on a second prod DRM track so the bug surfaces
 /// independently of one track's particular byte layout.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-#[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*)"]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
 async fn user_sim_prod_drm_seek_after_long_play_alt_track() {
     run_prod_drm_scenario(
         PROD_DRM_TRACK_ALT,
@@ -694,7 +812,7 @@ async fn user_sim_prod_drm_seek_after_long_play_alt_track() {
 
 /// PROD DRM near-end seek pin for Bug #7 on real HE-AAC v2 fragments.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
-#[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*)"]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
 async fn user_sim_prod_drm_seek_near_end() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::seek_near_end_repro()).await;
 }
@@ -704,7 +822,278 @@ async fn user_sim_prod_drm_seek_near_end() {
 /// the real prod URL pins that we'd catch the same on production
 /// when creds are available.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
-#[ignore = "requires zvuk prod creds baked at build (KITHARA_DRM_PROD_*)"]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
 async fn user_sim_prod_drm_random_seed_42() {
     run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::random_seed(42, 10)).await;
+}
+
+/// PROD DRM long play (30 s) then backward seek — mirrors the user's
+/// manual GUI procedure: settle into the track for a real stretch,
+/// then drag the slider back. Symptom user reports: position hangs
+/// or false-EOF auto-advance.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_long_play_then_seek_backward() {
+    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::long_play_then_seek_backward()).await;
+}
+
+/// PROD DRM long play (30 s) then forward seek into unbuffered tail.
+/// Bug #5 path with substantial accumulated state.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_long_play_then_seek_forward() {
+    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::long_play_then_seek_forward()).await;
+}
+
+/// PROD DRM seek storm — aggressive successive seeks, mimicking a
+/// user dragging the slider repeatedly. Loader has to cancel and
+/// restart fetches under the keyserver-signed flow.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_seek_storm() {
+    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::seek_storm()).await;
+}
+
+/// PROD DRM seek backward after natural EOF — pin for Bug #6 silent
+/// hang variant. Walks the track to natural end, then jumps back.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_seek_backward_after_natural_eof() {
+    run_prod_drm_scenario(
+        PROD_DRM_TRACK,
+        scenarios::seek_backward_after_natural_eof_repro(),
+    )
+    .await;
+}
+
+/// PROD DRM seeded fuzz, seed 1337 — second seed to surface
+/// trajectory-specific bugs that seed 42 might miss.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_random_seed_1337() {
+    run_prod_drm_scenario(PROD_DRM_TRACK, scenarios::random_seed(1337, 12)).await;
+}
+
+/// PROD DRM — Auto-ABR up-switch + seek burst. **THE** scenario for
+/// the user's manual repro: bug only happens with Auto ABR enabled,
+/// Manual works fine. Plays 15 s so the ABR throughput estimator
+/// commits an UpSwitch, then bursts 4 seeks across the track. Per
+/// the user's report each post-switch seek either reaches false-EOF
+/// or hangs. Harness panics on either symptom.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_auto_abr_upswitch_then_seek_burst() {
+    run_prod_drm_scenario(
+        PROD_DRM_TRACK,
+        scenarios::auto_abr_upswitch_then_seek_burst(),
+    )
+    .await;
+}
+
+/// Same scenario but on a second prod DRM track. Pins that the bug
+/// is not content-specific — same Auto ABR up-switch + seek pattern,
+/// different segments + different mvhd metadata.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_auto_abr_upswitch_then_seek_burst_alt() {
+    run_prod_drm_scenario(
+        PROD_DRM_TRACK_ALT,
+        scenarios::auto_abr_upswitch_then_seek_burst(),
+    )
+    .await;
+}
+
+/// PROD DRM — race repro: seek IMMEDIATELY after Loaded, without
+/// waiting for the demuxer to actually start producing samples.
+/// Mirrors the user's UI flow: click track in list, drag slider
+/// before audio kicks in. Every `seek anchor path: SeekOutOfRange`
+/// in `app.log` has `epoch=1` (fresh track, first seek) so the
+/// race must fire on the very first seek attempt.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_seek_immediately_after_loaded() {
+    run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, 0.95).await;
+}
+
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_seek_immediately_after_loaded_mid() {
+    run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, 0.50).await;
+}
+
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
+    run_prod_drm_scenario_no_warmup(PROD_DRM_TRACK, 0.20).await;
+}
+
+/// PROD DRM — the bare contract test the user actually performs in
+/// the GUI: track in queue, select it, IMMEDIATELY scrub the slider
+/// while the engine is still ramping up. No duration wait, no
+/// `wait_for_position_at_least`, no per-seek-landed wait. The track
+/// must NOT auto-advance. Doesn't matter which underlying bug fires
+/// (SeekOutOfRange + decoder corruption, recreate loop, byte_shift
+/// mismatch, EOF conflation with decode error, etc.) — the contract
+/// is "scrubbing a queued track stays on that track".
+///
+/// `wait_for_loaded` mirrors the GUI's "loading…" placeholder before
+/// the track resource is constructed; in `app` the slider is dead
+/// until that point. After `Loaded` we scrub with no further warmup.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
+async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
+    let prod = build_prod_ctx();
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
+    ));
+    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let q_for_tick = Arc::clone(&queue);
+    let tick = tokio::spawn(async move {
+        loop {
+            sleep(Duration::from_millis(50)).await;
+            if q_for_tick.tick().is_err() {
+                break;
+            }
+        }
+    });
+
+    let track0 = queue.append(prod_drm_spec(PROD_DRM_TRACK, &prod));
+    let track1 = queue.append(prod_drm_spec(PROD_DRM_TRACK_ALT, &prod));
+
+    use super::harness::wait_for_loaded;
+    wait_for_loaded(&queue, track0, Duration::from_secs(60))
+        .await
+        .unwrap_or_else(|e| panic!("prod DRM load fail: {e}"));
+    queue
+        .select(track0, Transition::None)
+        .expect("select prod DRM");
+
+    let check_not_advanced = |label: &str| {
+        let current = queue.current().map(|e| e.id);
+        if let Some(id) = current
+            && id != track0
+        {
+            panic!(
+                "AUTO-ADVANCE [{label}]: queue.current flipped to {id:?} \
+                 (track0={track0:?}, track1={track1:?})"
+            );
+        }
+    };
+
+    let scrub_targets = [5.0_f64, 30.0, 60.0, 15.0, 90.0, 45.0, 20.0, 75.0];
+    for target in scrub_targets {
+        let _ = queue.seek(target);
+        check_not_advanced(&format!("after seek({target:.2}s)"));
+        sleep(Duration::from_millis(120)).await;
+        check_not_advanced(&format!("post-seek({target:.2}s)+120ms"));
+    }
+
+    sleep(Duration::from_secs(5)).await;
+    check_not_advanced("after 5s settle");
+
+    tick.abort();
+    let _ = tick.await;
+}
+
+/// Like `run_prod_drm_scenario` but seeks AS SOON AS the queue reports
+/// `Loaded` — no `wait_for_position_at_least` before the seek. This is
+/// what catches the race: Queue knows duration from playlist but the
+/// decoder hasn't parsed the init segment's mvhd yet, so seek targets
+/// past the demuxer-known timestamp fail OutOfRange.
+async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
+    use kithara_play::SeekOutcome;
+    let prod = build_prod_ctx();
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
+    ));
+    let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
+    let q_for_tick = Arc::clone(&queue);
+    let tick = tokio::spawn(async move {
+        loop {
+            sleep(Duration::from_millis(50)).await;
+            if q_for_tick.tick().is_err() {
+                break;
+            }
+        }
+    });
+    let track_id = queue.append(prod_drm_spec(url, &prod));
+
+    use super::harness::wait_for_loaded;
+    wait_for_loaded(&queue, track_id, Duration::from_secs(60))
+        .await
+        .unwrap_or_else(|e| panic!("prod DRM load fail: {e}"));
+    queue
+        .select(track_id, Transition::None)
+        .expect("select prod DRM");
+
+    // Wait until duration is *known* (post-mvhd) — that's the contract
+    // moment after which a user-issued seek can reasonably target a
+    // ratio of the track. Before mvhd parsing `duration_seconds()`
+    // returns `None`, which is the deliberate "unknown" signal. Without
+    // this wait, the test would race the demuxer.
+    let dur_deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let duration = loop {
+        if let Some(d) = queue.duration_seconds() {
+            break d;
+        }
+        if std::time::Instant::now() >= dur_deadline {
+            panic!("duration never became known within 30 s after Loaded");
+        }
+        sleep(Duration::from_millis(50)).await;
+    };
+    let target = (duration * ratio).clamp(0.0, duration);
+    let outcome = queue
+        .seek(target)
+        .unwrap_or_else(|e| panic!("queue.seek Err: {e}"));
+    if let SeekOutcome::PastEof {
+        duration: reported_dur,
+        ..
+    } = outcome
+    {
+        panic!(
+            "PastEof for ratio={ratio:.2} target={target:.2}s \
+             reported_dur={reported_dur:?} queue.duration={duration:.2}s"
+        );
+    }
+    let started = std::time::Instant::now();
+    let budget = Duration::from_secs(15);
+    let mut landed = false;
+    while started.elapsed() < budget {
+        if let Some(pos) = queue.position_seconds()
+            && (pos - target).abs() <= 2.5
+        {
+            landed = true;
+            break;
+        }
+        // Also fail if the track flipped (auto-advance on false EOF)
+        if queue.current().map(|e| e.id) != Some(track_id) {
+            panic!(
+                "AUTO-ADVANCE: track flipped during seek (target={target:.2}s, pos={:?})",
+                queue.position_seconds()
+            );
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        landed,
+        "HANG: seek to {target:.2}s (ratio={ratio:.2}) never landed within {budget:?} \
+         (pos={:?}, dur={duration:.2}s) — user-reported bug",
+        queue.position_seconds()
+    );
+
+    // Brief play after to confirm we're not in a hung state.
+    sleep(Duration::from_secs(2)).await;
+    let post_seek_pos = queue.position_seconds().unwrap_or(0.0);
+    assert!(
+        post_seek_pos > target - 0.5,
+        "POST-SEEK HANG: position regressed after seek (target={target:.2}s, \
+         post-seek+2s={post_seek_pos:.2}s)"
+    );
+
+    tick.abort();
+    let _ = tick.await;
 }
