@@ -300,6 +300,14 @@ impl AacDecoder {
             channels,
         };
         self.buf = audio_buffer(channels, output_rate, samples_per_frame)?;
+        // Surface the post-SBR/PS output rate through `codec_params`
+        // too. Downstream consumers (UniversalDecoder, audio engine
+        // ringbuf, AVAudioEngine on Apple) configure their output
+        // device from `codec_params().sample_rate` — leaving it at the
+        // pre-SBR core rate (22.05 kHz for HE-AAC v2) while the
+        // decoder actually emits PCM at the effective rate
+        // (44.1 kHz) plays back at 2× speed.
+        self.codec_params.sample_rate = Some(output_rate);
         self.delay_remaining = info.outputDelay;
         self.metadata_validated = true;
         tracing::debug!(

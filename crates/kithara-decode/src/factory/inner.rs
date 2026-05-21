@@ -543,8 +543,10 @@ fn should_use_segment_aware(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> bool {
-    matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
-        && matches!(container, Some(ContainerFormat::Fmp4))
+    matches!(
+        codec,
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac
+    ) && matches!(container, Some(ContainerFormat::Fmp4))
         && config.segment_layout.is_some()
 }
 
@@ -562,7 +564,7 @@ fn create_fmp4_segment_symphonia(
         "fmp4_segment: dispatching to segment-aware Symphonia path"
     );
     match codec {
-        AudioCodec::AacLc | AudioCodec::Flac => {
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac => {
             let symphonia_config = SymphoniaConfig {
                 gapless: config.gapless,
                 ..Default::default()
