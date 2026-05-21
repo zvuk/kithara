@@ -87,6 +87,14 @@ final class PlayerViewModel: ObservableObject {
 
     static let defaultCrossfadeSeconds: Float = 5.0
 
+    /// Bundled playlist mirroring `crates/kithara-app/app.yaml`'s
+    /// `playlist.tracks`. Kept as a literal here so the iOS demo and
+    /// the kithara-app native binary play the same content; the
+    /// XCUITest harness in `UITests/` keys off this list to exercise
+    /// prod DRM tracks the same way the user's app.log captured. If
+    /// you edit `app.yaml`, edit this too — a follow-up xcodegen
+    /// pre-build phase will pull from a generated Swift constant
+    /// (`BakedTracks.swift`) instead of this literal.
     static let defaultTrackURLs: [String] = [
         "https://stream.silvercomet.top/track.mp3",
         "https://stream.silvercomet.top/hls/master.m3u8",
@@ -94,7 +102,19 @@ final class PlayerViewModel: ObservableObject {
         "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
         "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
         "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-        "https://ecs-stage-slicer-01.zvq.me/hls/track/95038745_1/master.m3u8",
+        "https://cdn-edge.zvq.me/track/streamhq?id=138535169",
+        "https://cdn-edge.zvq.me/track/streamhq?id=130432502",
+        "https://cdn-edge.zvq.me/track/streamhq?id=132017169",
+        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
+        "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
+        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/173388194_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/50984034_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/171515249_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8",
     ]
 
     init() {

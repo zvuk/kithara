@@ -3662,6 +3662,14 @@ public enum FfiItemEvent: Equatable, Hashable {
      */
     case didReachEnd
     /**
+     * The item aborted mid-stream because the decoder / source
+     * reported a non-recoverable error. Distinct from
+     * [`Self::DidReachEnd`]: the item did NOT play to its
+     * natural end. UI clients should surface a failure marker
+     * instead of treating this as completion.
+     */
+    case didFail
+    /**
      * Playback stalled (the player is waiting for more data).
      * Mirrors the iOS `AudioPlayerItemProtocol.rxDidStall`.
      */
@@ -3709,9 +3717,11 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
         
         case 7: return .didReachEnd
         
-        case 8: return .didStall
+        case 8: return .didFail
         
-        case 9: return .error(error: try FfiConverterString.read(from: &buf)
+        case 9: return .didStall
+        
+        case 10: return .error(error: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -3756,12 +3766,16 @@ public struct FfiConverterTypeFfiItemEvent: FfiConverterRustBuffer {
             writeInt(&buf, Int32(7))
         
         
-        case .didStall:
+        case .didFail:
             writeInt(&buf, Int32(8))
         
         
-        case let .error(error):
+        case .didStall:
             writeInt(&buf, Int32(9))
+        
+        
+        case let .error(error):
+            writeInt(&buf, Int32(10))
             FfiConverterString.write(error, into: &buf)
             
         }
@@ -3898,6 +3912,15 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     )
     case itemDidPlayToEnd
     /**
+     * A track aborted mid-stream because the decoder / source
+     * reported a non-recoverable error. Distinct from
+     * [`Self::ItemDidPlayToEnd`]: the track did NOT reach its
+     * natural end. UI clients should surface this as a track
+     * failure (skip-and-flag), not treat it as completion.
+     */
+    case itemDidFail(itemId: String?
+    )
+    /**
      * Queue-level: the loading/playback status of an item changed.
      * `item_id` matches `AudioPlayerItem::id()`.
      */
@@ -3971,15 +3994,18 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         
         case 11: return .itemDidPlayToEnd
         
-        case 12: return .trackStatusChanged(itemId: try FfiConverterString.read(from: &buf), status: try FfiConverterTypeFfiTrackStatus.read(from: &buf)
+        case 12: return .itemDidFail(itemId: try FfiConverterOptionString.read(from: &buf)
         )
         
-        case 13: return .queueEnded
-        
-        case 14: return .crossfadeStarted(durationSeconds: try FfiConverterFloat.read(from: &buf)
+        case 13: return .trackStatusChanged(itemId: try FfiConverterString.read(from: &buf), status: try FfiConverterTypeFfiTrackStatus.read(from: &buf)
         )
         
-        case 15: return .crossfadeDurationChanged(seconds: try FfiConverterFloat.read(from: &buf)
+        case 14: return .queueEnded
+        
+        case 15: return .crossfadeStarted(durationSeconds: try FfiConverterFloat.read(from: &buf)
+        )
+        
+        case 16: return .crossfadeDurationChanged(seconds: try FfiConverterFloat.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -4044,23 +4070,28 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
             writeInt(&buf, Int32(11))
         
         
-        case let .trackStatusChanged(itemId,status):
+        case let .itemDidFail(itemId):
             writeInt(&buf, Int32(12))
+            FfiConverterOptionString.write(itemId, into: &buf)
+            
+        
+        case let .trackStatusChanged(itemId,status):
+            writeInt(&buf, Int32(13))
             FfiConverterString.write(itemId, into: &buf)
             FfiConverterTypeFfiTrackStatus.write(status, into: &buf)
             
         
         case .queueEnded:
-            writeInt(&buf, Int32(13))
+            writeInt(&buf, Int32(14))
         
         
         case let .crossfadeStarted(durationSeconds):
-            writeInt(&buf, Int32(14))
+            writeInt(&buf, Int32(15))
             FfiConverterFloat.write(durationSeconds, into: &buf)
             
         
         case let .crossfadeDurationChanged(seconds):
-            writeInt(&buf, Int32(15))
+            writeInt(&buf, Int32(16))
             FfiConverterFloat.write(seconds, into: &buf)
             
         }

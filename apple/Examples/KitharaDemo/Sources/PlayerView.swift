@@ -175,6 +175,7 @@ struct PlayerView: View {
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Color.kitharaLight)
                     .lineLimit(1)
+                    .accessibilityIdentifier("currentTrackName")
                 if let subtitle = viewModel.trackSubtitle {
                     Text(subtitle)
                         .font(.system(size: 11))
@@ -210,10 +211,12 @@ struct PlayerView: View {
                     }
                 }
                 .tint(.kitharaGold)
+                .accessibilityIdentifier("seekSlider")
             } else {
                 Slider(value: .constant(0), in: 0...1)
                     .tint(.kitharaGold)
                     .disabled(true)
+                    .accessibilityIdentifier("seekSlider")
             }
 
             HStack {
@@ -453,6 +456,7 @@ struct PlayerView: View {
                 .frame(maxWidth: .infinity)
                 .background(Color.kitharaDanger.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityIdentifier("errorMessage")
         }
     }
 
@@ -478,6 +482,7 @@ struct PlayerView: View {
         } label: {
             HStack(spacing: 10) {
                 Text(String(format: "%02d", index + 1))
+                    .accessibilityHidden(true)
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(statusColor ?? (isCurrent ? Color.kitharaGold : .kitharaMuted))
 
@@ -499,6 +504,7 @@ struct PlayerView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("trackRow_\(index)")
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
                 viewModel.removeTrack(entry.id)
