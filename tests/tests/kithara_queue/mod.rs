@@ -5,6 +5,7 @@ mod offline_player_harness;
 mod auto_advance;
 mod cold_seek_middle;
 mod cpal_cold_seek_synthetic;
+mod false_eof_rapid_scrub;
 mod file_replay_from_warm_cache;
 mod hls_seek_cancels_stale_fetches;
 mod hls_seek_near_end_stress;
