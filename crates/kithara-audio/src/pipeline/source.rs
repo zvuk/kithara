@@ -996,7 +996,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                 "seek anchor path: exact decoder seek failed",
             ),
         };
-        warn!(?err, epoch, ?position, "{warn_msg}");
+        warn!(
+            ?err,
+            epoch,
+            ?position,
+            recreate_offset,
+            attempts = request.attempt.saturating_add(1),
+            "{warn_msg}"
+        );
 
         if matches!(err, DecodeError::SeekOutOfRange(_)) {
             self.reject_seek(request, &err, fail_ctx);

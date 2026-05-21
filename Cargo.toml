@@ -181,6 +181,7 @@ symphonia = { version = "0.6.0", features = ["all", "opt-simd"] }
 symphonia-format-isomp4 = "0.6.0"
 symphonia-core = "0.6.0"
 fdk-aac = "0.8.0"
+fdk-aac-sys = "0.5.0"
 ffmpeg-next = "8.1.0"
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
 ratatui = "0.30.0"

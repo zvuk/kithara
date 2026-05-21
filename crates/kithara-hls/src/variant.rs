@@ -28,7 +28,7 @@ use kithara_stream::{
 };
 use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 
 use crate::{
@@ -1384,11 +1384,13 @@ impl HlsVariant {
             if let Some(budget) = timeout
                 && started_at.elapsed() > budget
             {
-                debug!(
+                warn!(
                     target: "kithara_hls::wait",
                     v = self.variant,
                     range_start = range.start,
                     range_end = range.end,
+                    range_len = range.end.saturating_sub(range.start),
+                    budget_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
                     "wait_range budget exceeded"
                 );
                 return Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()));

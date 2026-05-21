@@ -11,7 +11,7 @@ use ffmpeg_next as ffmpeg;
 use super::{aac::AacFFmpegEncoder, flac::FlacFFmpegEncoder};
 use crate::{
     BytesEncodeRequest, EncodeError, EncodeResult, EncodedBytes, EncodedTrack, InnerEncoder,
-    PackagedEncodeRequest, codec::AudioCodec,
+    PackagedEncodeRequest, codec::AudioCodec, fdk::aac_he_v2::AacHeV2Encoder,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -29,6 +29,7 @@ impl InnerEncoder for FfmpegEncoder {
             .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
         match codec {
             AudioCodec::AacLc => AacFFmpegEncoder::encode(&request),
+            AudioCodec::AacHeV2 => AacHeV2Encoder::encode(&request),
             AudioCodec::Flac => FlacFFmpegEncoder::encode(&request),
             codec => Err(EncodeError::UnsupportedCodec(codec)),
         }
@@ -37,6 +38,7 @@ impl InnerEncoder for FfmpegEncoder {
     fn packaged_frame_samples(&self, codec: AudioCodec) -> EncodeResult<usize> {
         match codec {
             AudioCodec::AacLc => Ok(AacFFmpegEncoder::frame_samples()),
+            AudioCodec::AacHeV2 => Ok(AacHeV2Encoder::frame_samples()),
             AudioCodec::Flac => Ok(FlacFFmpegEncoder::frame_samples()),
             codec => Err(EncodeError::UnsupportedCodec(codec)),
         }

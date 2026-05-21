@@ -12,6 +12,9 @@ impl CodecDescriptor {
             AudioCodec::AacLc => Some(Self {
                 codec: AudioCodec::AacLc,
             }),
+            AudioCodec::AacHeV2 => Some(Self {
+                codec: AudioCodec::AacHeV2,
+            }),
             AudioCodec::Flac => Some(Self {
                 codec: AudioCodec::Flac,
             }),
@@ -28,6 +31,9 @@ impl CodecDescriptor {
     ) -> Vec<u8> {
         match self.codec {
             AudioCodec::AacLc => aac_lc_sample_entry(sample_rate, channels, bit_rate),
+            AudioCodec::AacHeV2 => {
+                aac_he_v2_sample_entry(sample_rate, channels, bit_rate, codec_config)
+            }
             AudioCodec::Flac => flac_sample_entry(sample_rate, channels, codec_config),
             _ => unreachable!("unsupported codec descriptor"),
         }
@@ -110,6 +116,49 @@ fn aac_audio_specific_config(sample_rate: u32, channels: u16) -> [u8; 2] {
         (audio_object_type << 3) | (sample_rate_index >> 1),
         ((sample_rate_index & 0x01) << 7) | (channel_config << 3),
     ]
+}
+
+/// HE-AAC v2 sample entry. Mirrors AAC-LC layout (`mp4a` fourcc +
+/// `esds` box), but the `AudioSpecificConfig` embedded in `esds`
+/// comes from the encoder's own `confBuf` rather than being
+/// computed from sample rate / channels: HE-AAC v2 ASC carries
+/// SBR and Parametric Stereo signalling that is not derivable
+/// from the container fields alone.
+fn aac_he_v2_sample_entry(
+    sample_rate: u32,
+    channels: u16,
+    bit_rate: u64,
+    audio_specific_config: &[u8],
+) -> Vec<u8> {
+    audio_sample_entry(*b"mp4a", sample_rate, channels, |buf| {
+        buf.push_bytes(&aac_esds_with_asc(bit_rate, audio_specific_config));
+    })
+}
+
+fn aac_esds_with_asc(bit_rate: u64, audio_specific_config: &[u8]) -> Vec<u8> {
+    let dec_specific = descriptor(0x05, audio_specific_config);
+
+    let mut decoder_config = Mp4Bytes::new();
+    decoder_config.push_u8(0x40);
+    decoder_config.push_u8(0x15);
+    decoder_config.push_u24(0);
+    decoder_config.push_u32(bit_rate.min(u64::from(u32::MAX)) as u32);
+    decoder_config.push_u32(bit_rate.min(u64::from(u32::MAX)) as u32);
+    decoder_config.push_bytes(&dec_specific);
+    let decoder_config = descriptor(0x04, &decoder_config.into_vec());
+
+    let sl_config = descriptor(0x06, &[0x02]);
+
+    let mut es = Mp4Bytes::new();
+    es.push_u16(1);
+    es.push_u8(0);
+    es.push_bytes(&decoder_config);
+    es.push_bytes(&sl_config);
+    let es_descriptor = descriptor(0x03, &es.into_vec());
+
+    full_box(*b"esds", 0, 0, |buf| {
+        buf.push_bytes(&es_descriptor);
+    })
 }
 
 fn flac_sample_entry(sample_rate: u32, channels: u16, codec_config: &[u8]) -> Vec<u8> {

@@ -105,5 +105,8 @@ fn rfc6381_for_codec_and_container(
 
 #[must_use]
 pub const fn audio_codec_supports_fmp4_packaging(codec: AudioCodec) -> bool {
-    matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
+    matches!(
+        codec,
+        AudioCodec::AacLc | AudioCodec::AacHeV2 | AudioCodec::Flac
+    )
 }
