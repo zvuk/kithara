@@ -18,17 +18,17 @@ struct KitharaPlayerTests {
         #expect(player.playingRate == 1.0)
     }
 
-    @Test("items starts empty")
+    @Test("items() starts empty")
     func itemsStartsEmpty() {
         let player = KitharaPlayer()
-        #expect(player.items.isEmpty)
+        #expect(player.items().isEmpty)
     }
 
     @Test("removeAllItems on empty queue does not crash")
     func removeAllItemsOnEmpty() {
         let player = KitharaPlayer()
         player.removeAllItems()
-        #expect(player.items.isEmpty)
+        #expect(player.items().isEmpty)
     }
 
     @Test("snapshot returns consistent state")

@@ -4,7 +4,7 @@ import Kithara
 
 struct PlaylistEntry: Identifiable, Equatable {
     /// Matches `KitharaPlayerItem.id` — stable across queue reorder.
-    let id: String
+    let id: TrackId
     let name: String
     let url: String
     let subtitle: String?
@@ -35,7 +35,7 @@ final class PlayerViewModel: ObservableObject {
     @Published var urlText = ""
     @Published var isSeeking = false
     @Published private(set) var playlist: [PlaylistEntry] = []
-    @Published private(set) var currentTrackId: String?
+    @Published private(set) var currentTrackId: TrackId?
     @Published var volume: Float = 1.0
     @Published var isMuted = false
     @Published var selectedRate: Float = 1.0
@@ -83,7 +83,7 @@ final class PlayerViewModel: ObservableObject {
     /// Variant discovery and item-level duration flow through here;
     /// queue lifecycle (status/error/current-item) flows through
     /// `player.eventPublisher` instead.
-    private var itemCancellables: [String: AnyCancellable] = [:]
+    private var itemCancellables: [TrackId: AnyCancellable] = [:]
 
     static let defaultCrossfadeSeconds: Float = 5.0
 
@@ -161,6 +161,21 @@ final class PlayerViewModel: ObservableObject {
             player.setupHlsAes(rule: rule)
         }
 
+        // Demo uses the unified `eventPublisher` for backward compat with
+        // the XCUITest harness in `UITests/`. The same data is also
+        // available through `AudioPlayerProtocol`'s discrete publishers:
+        //
+        //     player.currentItem.assign(to: &$currentTrack)
+        //     player.rate.map { $0 > 0 }.assign(to: &$isPlaying)
+        //     player.error.sink { [weak self] err in
+        //         self?.errorMessage = "\(err)"
+        //     }.store(in: &cancellables)
+        //
+        // Per-item discrete publishers live on `KitharaPlayerItem`:
+        // `loadedRanges`, `duration`, `bitrate`, `readyToPlay`,
+        // `didReachEnd`, `didStall`, `error`. For RxSwift consumers,
+        // import `KitharaRx` to get `rxCurrentAudioItem`, `rxRate`,
+        // `rxBitrate`, etc.
         player.eventPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
@@ -358,15 +373,15 @@ final class PlayerViewModel: ObservableObject {
         switchTo(index: prevIdx, transition: .crossfade)
     }
 
-    func selectTrack(_ trackId: String) {
+    func selectTrack(_ trackId: TrackId) {
         guard let idx = playlist.firstIndex(where: { $0.id == trackId }) else { return }
         if idx == currentTrackIndex { return }
         // Tap on a track in the list → immediate cut (AVQueuePlayer idiom).
         switchTo(index: idx, transition: .none)
     }
 
-    func removeTrack(_ trackId: String) {
-        guard let item = player.items.first(where: { $0.id == trackId }) else { return }
+    func removeTrack(_ trackId: TrackId) {
+        guard let item = player.items().first(where: { $0.id == trackId }) else { return }
         do {
             try player.remove(item)
         } catch {
@@ -405,8 +420,8 @@ final class PlayerViewModel: ObservableObject {
         switchTo(entryId: entry.id, transition: transition)
     }
 
-    private func switchTo(entryId: String, transition: Transition) {
-        guard let item = player.items.first(where: { $0.id == entryId }) else {
+    private func switchTo(entryId: TrackId, transition: Transition) {
+        guard let item = player.items().first(where: { $0.id == entryId }) else {
             errorMessage = "item \(entryId) not in queue"
             return
         }
@@ -468,7 +483,7 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    private func resetPerTrackUi(trackId: String?) {
+    private func resetPerTrackUi(trackId: TrackId?) {
         // Don't reset `currentTime`, `status`, or `isPlaying` — the
         // engine drives those via explicit events. Touching them here
         // races with the engine's own updates and causes UI flicker
@@ -485,7 +500,7 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    private func handleTrackStatus(itemId: String, status: TrackStatus) {
+    private func handleTrackStatus(itemId: TrackId, status: TrackStatus) {
         if let idx = playlist.firstIndex(where: { $0.id == itemId }) {
             playlist[idx].trackStatus = status
         }
@@ -511,7 +526,7 @@ final class PlayerViewModel: ObservableObject {
             }
     }
 
-    private func handleItemEvent(entryId: String, event: ItemEvent) {
+    private func handleItemEvent(entryId: TrackId, event: ItemEvent) {
         switch event {
         case let .durationChanged(seconds):
             if let idx = playlist.firstIndex(where: { $0.id == entryId }) {
@@ -554,7 +569,7 @@ final class PlayerViewModel: ObservableObject {
         }
     }
 
-    private func trackLabel(_ entryId: String) -> String {
+    private func trackLabel(_ entryId: TrackId) -> String {
         let name = playlist.first(where: { $0.id == entryId })?.name ?? "unknown"
         return "[\(name)]"
     }
