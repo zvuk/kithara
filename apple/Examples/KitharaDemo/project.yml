@@ -14,11 +14,31 @@ targets:
   KitharaDemo_iOS:
     type: application
     platform: iOS
+    preBuildScripts:
+      - name: Bake DRM secrets
+        script: |
+          set -eo pipefail
+          # Workspace `.env` lives at the repo root (../../../ from the
+          # demo). Source if present so `KITHARA_DRM_*` lands in the
+          # bake script's process env; the script also falls back to
+          # `$SRCROOT/.env` if WORKSPACE_ENV is set elsewhere.
+          WORKSPACE_ENV="$SRCROOT/../../../.env"
+          if [ -f "$WORKSPACE_ENV" ]; then
+            set -a
+            # shellcheck disable=SC1090
+            source "$WORKSPACE_ENV"
+            set +a
+          fi
+          unset SDKROOT
+          /usr/bin/xcrun --sdk macosx swift "$SRCROOT/scripts/bake-secrets.swift"
+        outputFiles:
+          - $(SRCROOT)/Sources/Generated/Secrets.swift
+        inputFiles:
+          - $(SRCROOT)/scripts/bake-secrets.swift
+          - $(SRCROOT)/../../../.env
+        basedOnDependencyAnalysis: false
     sources:
       - Sources
-      - path: ../../../.env
-        buildPhase: resources
-        optional: true
     dependencies:
       - package: Kithara
         product: Kithara
@@ -39,11 +59,27 @@ targets:
   KitharaDemo_macOS:
     type: application
     platform: macOS
+    preBuildScripts:
+      - name: Bake DRM secrets
+        script: |
+          set -eo pipefail
+          WORKSPACE_ENV="$SRCROOT/../../../.env"
+          if [ -f "$WORKSPACE_ENV" ]; then
+            set -a
+            # shellcheck disable=SC1090
+            source "$WORKSPACE_ENV"
+            set +a
+          fi
+          unset SDKROOT
+          /usr/bin/xcrun --sdk macosx swift "$SRCROOT/scripts/bake-secrets.swift"
+        outputFiles:
+          - $(SRCROOT)/Sources/Generated/Secrets.swift
+        inputFiles:
+          - $(SRCROOT)/scripts/bake-secrets.swift
+          - $(SRCROOT)/../../../.env
+        basedOnDependencyAnalysis: false
     sources:
       - Sources
-      - path: ../../../.env
-        buildPhase: resources
-        optional: true
     dependencies:
       - package: Kithara
         product: Kithara
@@ -56,6 +92,50 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo
         SWIFT_VERSION: "6.0"
         PRODUCT_NAME: KitharaDemo
+  KitharaDemoRx_iOS:
+    type: application
+    platform: iOS
+    preBuildScripts:
+      - name: Bake DRM secrets
+        script: |
+          set -eo pipefail
+          WORKSPACE_ENV="$SRCROOT/../../../.env"
+          if [ -f "$WORKSPACE_ENV" ]; then
+            set -a
+            # shellcheck disable=SC1090
+            source "$WORKSPACE_ENV"
+            set +a
+          fi
+          unset SDKROOT
+          /usr/bin/xcrun --sdk macosx swift "$SRCROOT/scripts/bake-secrets.swift"
+        outputFiles:
+          - $(SRCROOT)/Sources/Generated/Secrets.swift
+        inputFiles:
+          - $(SRCROOT)/scripts/bake-secrets.swift
+          - $(SRCROOT)/../../../.env
+        basedOnDependencyAnalysis: false
+    sources:
+      - Sources
+    dependencies:
+      - package: Kithara
+        product: Kithara
+      - package: Kithara
+        product: KitharaRx
+    info:
+      path: Sources/Info.plist
+      properties:
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kithara.demo.rx
+        SWIFT_VERSION: "6.0"
+        PRODUCT_NAME: KitharaDemoRx
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: KITHARA_RX
   KitharaDemoUITests_iOS:
     type: bundle.ui-testing
     platform: iOS
@@ -93,6 +173,10 @@ schemes:
     build:
       targets:
         KitharaDemo_iOS: [run, test]
+  KitharaDemoRx_iOS:
+    build:
+      targets:
+        KitharaDemoRx_iOS: [run, test]
   KitharaDemoUITests_iOS:
     build:
       targets:

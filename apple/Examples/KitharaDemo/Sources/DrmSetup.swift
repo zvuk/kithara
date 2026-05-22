@@ -1,30 +1,6 @@
 import Foundation
 import Kithara
 
-// MARK: - .env reader
-
-/// Read a value from the `.env` file bundled in the app resources.
-/// The same workspace `.env` powers `kithara-app`'s `build.rs` baking
-/// — both surfaces consume the same environment variables.
-func readEnvValue(_ key: String) -> String? {
-    guard let path = Bundle.main.path(forResource: ".env", ofType: nil)
-            ?? Bundle.main.path(forResource: "env", ofType: nil),
-          let contents = try? String(contentsOfFile: path, encoding: .utf8)
-    else {
-        return nil
-    }
-
-    for line in contents.components(separatedBy: .newlines) {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
-        let parts = trimmed.split(separator: "=", maxSplits: 1)
-        if parts.count == 2, String(parts[0]).trimmingCharacters(in: .whitespaces) == key {
-            return String(parts[1]).trimmingCharacters(in: .whitespaces)
-        }
-    }
-    return nil
-}
-
 // MARK: - DRM provider config (mirrors `crates/kithara-app/app.yaml`)
 
 /// Per-provider DRM configuration, mirrored from
@@ -34,8 +10,7 @@ func readEnvValue(_ key: String) -> String? {
 ///
 /// Without registering BOTH providers here, prod (zvuk.com) and stage
 /// (zvq.me) tracks fail with HTTP 418 (WAF rejecting wrong-format
-/// salt) or HTTP 401 (missing X-Auth-Token) and the player surfaces
-/// the failure long before any seek-cascade bug can be reproduced.
+/// salt) or HTTP 401 (missing X-Auth-Token).
 struct DrmProvider {
     /// Display name (matches `app.yaml`'s `name:` field).
     let name: String
@@ -63,23 +38,24 @@ struct DrmProvider {
     }
 }
 
-/// Build the prod + stage providers from the bundled `.env`. If a
-/// required env var is missing the provider is omitted — the player
-/// will surface a key-fetch failure when an item from that domain
-/// loads, which is the same behaviour `kithara-app` shows.
+/// Build the prod + stage providers from secrets baked into the
+/// binary by `scripts/bake-secrets.swift`. If a slot was empty at
+/// build time (missing `.env` entry / process env), the provider is
+/// omitted — the player will surface a key-fetch failure when an
+/// item from that domain loads, the same behaviour `kithara-app`
+/// (Rust binary) shows.
 func bundledDrmProviders() -> [DrmProvider] {
     var providers: [DrmProvider] = []
 
-    if let prodKey = readEnvValue("KITHARA_DRM_PROD_KEY") {
+    let prodKey = GeneratedSecrets.prodCipherKey
+    if !prodKey.isEmpty {
         var headers: [String: String] = [
             "User-Agent": "OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)"
         ]
-        if let auth = readEnvValue("KITHARA_DRM_PROD_AUTH_TOKEN") {
-            headers["X-Auth-Token"] = auth
-        }
-        if let spZv = readEnvValue("KITHARA_DRM_PROD_SP_ZV_TOKEN") {
-            headers["X-SP-ZV"] = spZv
-        }
+        let auth = GeneratedSecrets.prodAuthToken
+        if !auth.isEmpty { headers["X-Auth-Token"] = auth }
+        let spZv = GeneratedSecrets.prodSpZvToken
+        if !spZv.isEmpty { headers["X-SP-ZV"] = spZv }
         providers.append(
             DrmProvider(
                 name: "zvuk-prod",
@@ -92,13 +68,13 @@ func bundledDrmProviders() -> [DrmProvider] {
         )
     }
 
-    if let stageKey = readEnvValue("KITHARA_DRM_STAGE_KEY") {
+    let stageKey = GeneratedSecrets.stageCipherKey
+    if !stageKey.isEmpty {
         var headers: [String: String] = [
             "User-Agent": "OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)"
         ]
-        if let auth = readEnvValue("KITHARA_DRM_STAGE_AUTH_TOKEN") {
-            headers["X-Auth-Token"] = auth
-        }
+        let auth = GeneratedSecrets.stageAuthToken
+        if !auth.isEmpty { headers["X-Auth-Token"] = auth }
         providers.append(
             DrmProvider(
                 name: "zvuk-stage",
@@ -136,7 +112,7 @@ func generateSalt(alphabet: DrmProvider.SeedAlphabet, length: Int) -> String {
 // MARK: - KeyProcessor closure adapter
 
 /// Adapts a `(Data, String) -> Data` closure into a `KeyProcessor`
-/// so that per-provider decryptors built from the bundled cipher key
+/// so that per-provider decryptors built from the baked cipher key
 /// can be registered through `KitharaPlayer.setupHlsAes(rule:)`.
 final class ClosureKeyProcessor: KeyProcessor, @unchecked Sendable {
     private let decrypt: (Data, String) -> Data
