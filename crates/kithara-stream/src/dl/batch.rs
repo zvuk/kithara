@@ -1,5 +1,3 @@
-//! Batch execution: epoch-aware grouping and fetch spawning.
-
 use std::sync::{Arc, atomic::Ordering};
 
 use kithara_abr::{AbrController, AbrPeerId};
@@ -191,6 +189,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
     let mut cmd = internal.cmd;
     let writer = cmd.writer.take();
     let on_complete_cb = cmd.on_complete.take();
+    let on_response_cb = cmd.on_response.take();
     let bus = internal.bus;
     let cancel = internal.cancel.clone();
     let epoch_cancel = cmd.cancel.clone();
@@ -208,20 +207,23 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
             request_id,
         )
         .await;
-        deliver(DeliveryContext {
-            result,
-            writer,
-            on_complete_cb,
-            abr,
-            peer_id,
-            started,
+        deliver(
             request_id,
-            bus,
-            target: internal.response,
-            peer_cancel: &peer_cancel,
-            epoch_cancel: epoch_cancel.as_ref(),
-            downloader_cancel: &downloader_cancel,
-        })
+            DeliveryContext {
+                result,
+                writer,
+                on_complete_cb,
+                on_response_cb,
+                abr,
+                peer_id,
+                started,
+                bus,
+                target: internal.response,
+                peer_cancel: &peer_cancel,
+                epoch_cancel: epoch_cancel.as_ref(),
+                downloader_cancel: &downloader_cancel,
+            },
+        )
         .await;
         inflight.fetch_sub(1, Ordering::Relaxed);
         fetch_waker.wake();
@@ -231,6 +233,7 @@ fn spawn_fetch(inner: &DownloaderInner, internal: InternalCmd, peer_cancel: Canc
 /// Race `fut` against a `soft_timeout` timer. When the timer wins, publish
 /// [`DownloaderEvent::LoadSlow`] on `bus` (if any) and keep waiting for
 /// `fut` to complete. Does not abort the underlying request.
+#[kithara::probe(request_id)]
 async fn with_soft_timeout<F, T>(
     fut: F,
     soft: Duration,
@@ -257,6 +260,7 @@ where
 }
 
 /// Establish an HTTP connection and return a [`FetchResponse`].
+#[kithara::probe(request_id)]
 async fn establish(
     client: &HttpClient,
     chunk_timeout: Duration,
@@ -274,6 +278,14 @@ async fn establish(
         validator,
         ..
     } = cmd;
+
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let names: Vec<&str> = headers
+            .as_ref()
+            .map(|h| h.iter().map(|(k, _)| k).collect())
+            .unwrap_or_default();
+        tracing::trace!(%url, ?method, ?range, header_names = ?names, "fetch: outgoing FetchCmd");
+    }
 
     if method == RequestMethod::Head {
         let resp_headers = tokio::select! {
@@ -361,24 +373,25 @@ struct DeliveryContext<'a> {
     bus: Option<EventBus>,
     epoch_cancel: Option<&'a CancellationToken>,
     on_complete_cb: Option<super::cmd::OnCompleteFn>,
+    on_response_cb: Option<super::cmd::OnResponseFn>,
     writer: Option<super::cmd::WriterFn>,
-    request_id: RequestId,
     target: ResponseTarget,
     result: Result<FetchResponse, NetError>,
 }
 
 /// Route a fetch result to its target and publish the matching
 /// `DownloaderEvent` on `bus` (if any).
-async fn deliver(ctx: DeliveryContext<'_>) {
+#[kithara::probe(request_id)]
+async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
     let DeliveryContext {
         target,
         result,
         mut writer,
         on_complete_cb,
+        on_response_cb,
         abr,
         peer_id,
         started,
-        request_id,
         bus,
         peer_cancel,
         epoch_cancel,
@@ -391,13 +404,17 @@ async fn deliver(ctx: DeliveryContext<'_>) {
         ResponseTarget::Streaming => match result {
             Ok(resp) => {
                 if let Some(ref mut w) = writer {
+                    let headers = resp.headers.clone();
+                    if let Some(cb) = on_response_cb {
+                        cb(&headers);
+                    }
                     let write_result = resp.body.write_all(|chunk| w(chunk)).await;
                     let elapsed = started.elapsed();
                     match write_result {
                         Ok(total) => {
                             finish_request(bus.as_ref(), &abr, peer_id, request_id, total, elapsed);
                             if let Some(cb) = on_complete_cb {
-                                cb(total, None);
+                                cb(total, Some(&headers), None);
                             }
                         }
                         Err(ref e) => {
@@ -411,7 +428,7 @@ async fn deliver(ctx: DeliveryContext<'_>) {
                                 downloader_cancel,
                             );
                             if let Some(cb) = on_complete_cb {
-                                cb(0, Some(e));
+                                cb(0, Some(&headers), Some(e));
                             }
                         }
                     }
@@ -428,7 +445,7 @@ async fn deliver(ctx: DeliveryContext<'_>) {
                     downloader_cancel,
                 );
                 if let Some(cb) = on_complete_cb {
-                    cb(0, Some(e));
+                    cb(0, None, Some(e));
                 }
             }
         },
@@ -482,7 +499,7 @@ pub(super) fn deliver_cancelled(target: ResponseTarget, mut cmd: FetchCmd) {
         }
         ResponseTarget::Streaming => {
             if let Some(cb) = cmd.on_complete.take() {
-                cb(0, Some(&err));
+                cb(0, None, Some(&err));
             }
         }
     }

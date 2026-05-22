@@ -1,5 +1,3 @@
-//! HLS playlist parsing and data types.
-
 use std::str;
 
 use hls_m3u8::{
@@ -10,6 +8,7 @@ use hls_m3u8::{
 use kithara_abr::VariantInfo;
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat};
+use url::Url;
 
 use crate::HlsResult;
 
@@ -110,6 +109,8 @@ pub struct MediaPlaylist {
     pub detected_container: Option<ContainerFormat>,
     /// Optional initialization segment (for fMP4 streams).
     pub init_segment: Option<InitSegment>,
+    /// Absolute URL of the media playlist itself (the `.m3u8`).
+    pub url: Url,
     /// List of segments in the order they appear.
     pub segments: Vec<MediaSegment>,
 }
@@ -137,8 +138,25 @@ fn detect_container_from_uri(uri: &str) -> Option<ContainerFormat> {
     match ext.as_str() {
         "ts" | "m2ts" => Some(ContainerFormat::MpegTs),
         "mp4" | "m4s" | "m4a" | "m4v" => Some(ContainerFormat::Fmp4),
+        "wav" => Some(ContainerFormat::Wav),
         _ => None,
     }
+}
+
+/// Container inferred from a CODECS attribute string. HLS / RFC 6381
+/// have no standard fourcc for raw RIFF WAV, so the recognised tokens
+/// here are deliberately conservative — `wav` / `pcm` / `lpcm` cover
+/// internal byte-continuity fixtures that ship PCM payloads under
+/// arbitrary URI extensions.
+fn detect_container_from_codecs(codecs: &str) -> Option<ContainerFormat> {
+    let normalised = codecs.to_lowercase();
+    normalised
+        .split(',')
+        .map(|c| c.trim().trim_matches('"'))
+        .find_map(|token| match token {
+            "wav" | "pcm" | "lpcm" => Some(ContainerFormat::Wav),
+            _ => None,
+        })
 }
 
 /// Parses a master playlist (M3U8) into [`MasterPlaylist`].
@@ -174,7 +192,8 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                     .map(|codec| codec.trim_matches('"'))
                     .find_map(AudioCodec::from_hls_codec);
 
-                let container = detect_container_from_uri(&uri);
+                let container =
+                    detect_container_from_codecs(&c).or_else(|| detect_container_from_uri(&uri));
 
                 CodecInfo {
                     audio_codec,
@@ -196,11 +215,14 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
     Ok(MasterPlaylist { variants })
 }
 
-/// Parses a media playlist (M3U8) into [`MediaPlaylist`].
+/// Parses a media playlist (M3U8) into [`MediaPlaylist`]. `url` is the
+/// absolute URL the playlist was fetched from; it is stored on the
+/// returned [`MediaPlaylist`] so downstream consumers do not have to
+/// keep it in a side channel.
 ///
 /// # Errors
 /// Returns an error when UTF-8 decoding or playlist parsing fails.
-pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
+pub fn parse_media_playlist(url: Url, data: &[u8]) -> HlsResult<MediaPlaylist> {
     fn map_encryption_method(m: HlsEncryptionMethod) -> EncryptionMethod {
         match m {
             HlsEncryptionMethod::Aes128 => EncryptionMethod::Aes128,
@@ -294,26 +316,51 @@ pub fn parse_media_playlist(data: &[u8]) -> HlsResult<MediaPlaylist> {
     Ok(MediaPlaylist {
         detected_container,
         init_segment,
+        url,
         segments,
     })
 }
 
-/// Extract extended variant metadata from master playlist.
+/// Extract variant metadata from master playlist + parsed media playlists.
+///
+/// `media_playlists` must align with `master.variants` by index. Each
+/// produced [`VariantInfo`] carries duration shape derived from the
+/// matching media playlist's segments — `Segmented(per-segment)` when
+/// segments are present, otherwise `Unknown`.
 #[must_use]
-pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
+pub fn variant_info_from_master(
+    master: &MasterPlaylist,
+    media_playlists: &[MediaPlaylist],
+) -> Vec<VariantInfo> {
     master
         .variants
         .iter()
-        .map(|v| VariantInfo {
-            index: v.id.0,
-            bandwidth_bps: v.bandwidth,
-            name: v.name.clone(),
-            codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),
-            container: v
-                .codec
-                .as_ref()
-                .and_then(|c| c.container)
-                .map(|fmt| format!("{fmt:?}")),
+        .enumerate()
+        .map(|(idx, v)| {
+            let duration = media_playlists.get(idx).map_or(
+                kithara_events::VariantDuration::Unknown,
+                |playlist| {
+                    if playlist.segments.is_empty() {
+                        kithara_events::VariantDuration::Unknown
+                    } else {
+                        kithara_events::VariantDuration::Segmented(
+                            playlist.segments.iter().map(|s| s.duration).collect(),
+                        )
+                    }
+                },
+            );
+            VariantInfo {
+                duration,
+                variant_index: v.id.0,
+                bandwidth_bps: v.bandwidth,
+                name: v.name.clone(),
+                codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),
+                container: v
+                    .codec
+                    .as_ref()
+                    .and_then(|c| c.container)
+                    .map(|fmt| format!("{fmt:?}")),
+            }
         })
         .collect()
 }
@@ -403,7 +450,8 @@ audio_flac.m3u8";
     #[kithara::test]
     fn test_parse_simple_media_playlist() {
         let simple_media_playlist_data = fixtures::SIMPLE_MEDIA_PLAYLIST;
-        let result = parse_media_playlist(simple_media_playlist_data);
+        let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
+        let result = parse_media_playlist(url, simple_media_playlist_data);
         assert!(
             result.is_ok(),
             "Failed to parse media playlist: {:?}",
@@ -423,7 +471,8 @@ audio_flac.m3u8";
     #[kithara::test]
     fn test_parse_media_playlist_with_init_segment() {
         let media_playlist_with_init_data = fixtures::MEDIA_PLAYLIST_WITH_INIT;
-        let result = parse_media_playlist(media_playlist_with_init_data);
+        let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
+        let result = parse_media_playlist(url, media_playlist_with_init_data);
         assert!(
             result.is_ok(),
             "Failed to parse media playlist with init: {:?}",
@@ -584,7 +633,8 @@ audio_flac.m3u8";
     #[case(b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXTINF:4.0,\nseg2.ts", 2)]
     #[case(b"#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXTINF:4.0,\nseg2.ts\n#EXTINF:4.0,\nseg3.ts\n#EXT-X-ENDLIST", 3)]
     fn test_media_playlist_segment_count(#[case] data: &[u8], #[case] expected_segments: usize) {
-        let result = parse_media_playlist(data);
+        let url: Url = "http://example.com/v0.m3u8".parse().expect("test url");
+        let result = parse_media_playlist(url, data);
         assert!(
             result.is_ok(),
             "Failed to parse playlist: {:?}",

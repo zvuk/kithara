@@ -1,11 +1,3 @@
-//! Symphonia-specific error-chain inspection.
-//!
-//! `DecodeError::is_interrupted` / `is_variant_change` walk a boxed
-//! backend error's `source()` chain to classify it. Symphonia wraps its
-//! own `IoError` variant that hides the inner `io::Error` from a naive
-//! downcast — this helper peeks through that wrapper so the caller
-//! doesn't need to know about Symphonia types.
-
 use std::{error::Error as StdError, io};
 
 pub(crate) type SymphoniaError = symphonia::core::errors::Error;

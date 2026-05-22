@@ -1,5 +1,3 @@
-//! Probe-hint type and codec-from-hint mappings.
-
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::error::{DecodeError, DecodeResult};

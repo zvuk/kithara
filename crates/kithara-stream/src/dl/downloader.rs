@@ -1,5 +1,3 @@
-//! [`Downloader`] — unified download orchestrator implementation.
-
 use std::sync::{Arc, atomic::AtomicUsize};
 
 use futures::task::AtomicWaker;
@@ -7,6 +5,7 @@ use kithara_abr::{Abr, AbrController, AbrPeerId};
 use kithara_events::EventBus;
 use kithara_net::HttpClient;
 use kithara_platform::{Mutex, RwLock, time::Duration, tokio, tokio::sync::mpsc};
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -105,12 +104,12 @@ impl Downloader {
 
     /// Create a new downloader from configuration.
     ///
-    /// Constructs the internal `HttpClient` from the supplied network options
+    /// Adopts `config.client` (a clone of the caller's [`HttpClient`])
     /// and the shared [`AbrController`] from `config.abr_settings`.
     #[must_use]
     pub fn new(config: super::DownloaderConfig) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let chunk_timeout = config.net.inactivity_timeout;
+        let chunk_timeout = config.client.options().inactivity_timeout;
         let soft_timeout = config.soft_timeout;
         let runtime = config.runtime;
         let abr = AbrController::new(config.abr_settings);
@@ -120,7 +119,7 @@ impl Downloader {
                 soft_timeout,
                 runtime,
                 abr,
-                client: HttpClient::new(config.net),
+                client: config.client,
                 cancel: config.cancel,
                 max_concurrent: config.max_concurrent,
                 demand_throttle: config.demand_throttle,
@@ -203,7 +202,7 @@ impl Downloader {
     /// - `Stalled` — work exists (queued cmds or inflight > 0) but no
     ///   forward motion this tick. Tick the watchdog; N consecutive
     ///   stalls across the timeout window → panic.
-    #[kithara_hang_detector::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
+    #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
         let mut registry = Registry::new();
 

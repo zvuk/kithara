@@ -1,5 +1,3 @@
-//! Detected source type from input analysis.
-
 use std::path::PathBuf;
 
 use kithara_decode::DecodeError;
@@ -11,13 +9,10 @@ use crate::impls::config::ResourceSrc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceType {
     /// Remote progressive file (MP3, AAC, FLAC, WAV, etc.)
-    #[cfg(feature = "file")]
     RemoteFile(Url),
     /// Local file on disk.
-    #[cfg(feature = "file")]
     LocalFile(PathBuf),
     /// HLS stream (URL ending with `.m3u8`).
-    #[cfg(feature = "hls")]
     HlsStream(Url),
 }
 
@@ -30,31 +25,18 @@ impl SourceType {
     ///
     /// # Errors
     ///
-    /// Returns `DecodeError` if no suitable feature is enabled for the given source.
+    /// Returns `DecodeError` if detection fails (currently never — kept for
+    /// API symmetry with future format probes).
     pub fn detect(src: &ResourceSrc) -> Result<Self, DecodeError> {
         match src {
-            #[cfg(feature = "file")]
             ResourceSrc::Path(path) => Ok(Self::LocalFile(path.clone())),
-
             ResourceSrc::Url(url) => {
-                #[cfg(feature = "hls")]
                 if url.path().ends_with(".m3u8") {
-                    return Ok(Self::HlsStream(url.clone()));
+                    Ok(Self::HlsStream(url.clone()))
+                } else {
+                    Ok(Self::RemoteFile(url.clone()))
                 }
-
-                #[cfg(feature = "file")]
-                return Ok(Self::RemoteFile(url.clone()));
-
-                #[cfg(not(feature = "file"))]
-                Err(DecodeError::InvalidData(
-                    "no suitable feature enabled for this URL (enable `file` or `hls`)".to_string(),
-                ))
             }
-
-            #[cfg(not(feature = "file"))]
-            ResourceSrc::Path(_) => Err(DecodeError::InvalidData(
-                "local file support requires the `file` feature".to_string(),
-            )),
         }
     }
 }
@@ -67,17 +49,13 @@ mod tests {
 
     fn source_tag(source: &SourceType) -> &'static str {
         match source {
-            #[cfg(feature = "file")]
             SourceType::LocalFile(_) => "local",
-            #[cfg(feature = "file")]
             SourceType::RemoteFile(_) => "remote",
-            #[cfg(feature = "hls")]
             SourceType::HlsStream(_) => "hls",
         }
     }
 
     #[kithara::test]
-    #[cfg(feature = "file")]
     #[case(ResourceSrc::Path(PathBuf::from("/tmp/song.mp3")), "local")]
     #[case(
         ResourceSrc::Url(Url::parse("https://example.com/song.mp3").expect("BUG: valid URL")),
@@ -89,7 +67,6 @@ mod tests {
     }
 
     #[kithara::test]
-    #[cfg(feature = "hls")]
     #[case("https://example.com/playlist.m3u8")]
     #[case("https://example.com/live/index.m3u8")]
     fn detect_hls_url(#[case] url: &str) {
@@ -102,12 +79,9 @@ mod tests {
     fn detect_invalid_relative_path() {
         let src = ResourceSrc::Path(PathBuf::from("relative/path.mp3"));
         let result = SourceType::detect(&src);
-        #[cfg(feature = "file")]
         assert_eq!(
             source_tag(&result.expect("BUG: relative path must map to local")),
             "local"
         );
-        #[cfg(not(feature = "file"))]
-        assert!(result.is_err());
     }
 }

@@ -1,39 +1,16 @@
-//! Gapless auto-advance with PCM shape verification.
-//!
-//! Drives a per-instance offline session (`EngineImpl::new_offline`)
-//! through the production `PlayerImpl` chain, with the audio thread
-//! living on the offline session worker. The harness's
-//! `render(BLOCK_FRAMES)` returns the rendered stereo block
-//! synchronously, so assertions can pin both event ordering (frame-
-//! exact) and waveform continuity at the join.
-//!
-//! Two scenarios:
-//! - cf=0 — the audio thread must hand item-2 in within the same
-//!   render block where item-1 hits EOF; we tolerate at most one
-//!   block of silence at the join.
-//! - cf=1.0 — both 440 Hz and 880 Hz must be audible in the overlap
-//!   window between item-2 activation and item-1's natural EOF.
-//!
-//! Event-ordering note: `PlayerEvent::ItemDidPlayToEnd` is a unitless
-//! variant — the queue layer (`kithara_queue::Queue`) is the one that
-//! carries per-item identity via `QueueEvent::CurrentTrackChanged` for
-//! FFI clients. For the player-slot path exercised here we
-//! disambiguate item-1 vs item-2 EOF by occurrence index, which is
-//! deterministic given the autoplay/preload ordering.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::num::NonZeroU32;
 
 use kithara_assets::StoreOptions;
 use kithara_decode::{GaplessMode, SilenceTrimParams};
-use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig};
-use kithara_test_utils::{
+use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
     temp_dir,
 };
+use kithara_platform::time::{Duration, Instant, sleep};
+use kithara_play::{PlayerConfig, PlayerEvent, Resource, ResourceConfig};
 
 use super::offline_player_harness::OfflinePlayerHarness;
 use crate::gapless_common::{
@@ -57,12 +34,14 @@ const SILENCE_THRESHOLD: f32 = 1.0e-3;
 async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let expected_visible_frames = crate::gapless_common::generated_aac_elst_visible_frames();
-    let player_config = PlayerConfig::default()
-        .with_crossfade_duration(0.0)
-        .with_gapless_mode(GaplessMode::SilenceTrim(SilenceTrimParams {
-            trim_trailing: true,
-            ..SilenceTrimParams::default()
-        }));
+    let gapless_params = SilenceTrimParams {
+        trim_trailing: true,
+        ..SilenceTrimParams::default()
+    };
+    let player_config = PlayerConfig::builder()
+        .crossfade_duration(0.0)
+        .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
+        .build();
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE);
     let first = create_gapless_hls_resource(
         harness.player(),
@@ -129,12 +108,14 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTem
 )]
 async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let player_config = PlayerConfig::default()
-        .with_crossfade_duration(1.0)
-        .with_gapless_mode(GaplessMode::SilenceTrim(SilenceTrimParams {
-            trim_trailing: true,
-            ..SilenceTrimParams::default()
-        }));
+    let gapless_params = SilenceTrimParams {
+        trim_trailing: true,
+        ..SilenceTrimParams::default()
+    };
+    let player_config = PlayerConfig::builder()
+        .crossfade_duration(1.0)
+        .gapless_mode(GaplessMode::SilenceTrim(gapless_params))
+        .build();
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, GAPLESS_SAMPLE_RATE);
     let first = create_gapless_hls_resource(
         harness.player(),
@@ -277,10 +258,11 @@ async fn create_gapless_hls_resource(
         .expect("create seamless queue HLS fixture");
 
     let store = StoreOptions::new(cache_dir);
-    let mut config = ResourceConfig::new(created.master_url().as_str())
+    let mut config = ResourceConfig::for_src(created.master_url().as_str())
         .expect("valid HLS master URL")
-        .with_store(store);
-    player.prepare_config(&mut config);
+        .store(store)
+        .build();
+    config = player.prepare_config(config);
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for seamless queue fixture");

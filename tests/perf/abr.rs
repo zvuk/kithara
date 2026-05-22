@@ -1,30 +1,22 @@
-//! Performance tests for ABR (Adaptive Bitrate) controller.
-//!
-//! Run with: `cargo test --test abr --features perf --release`
-//!
-//! NOTE: The legacy `push_sample` / `decide` / `ThroughputSample` API has
-//! been removed as part of the ABR refactor — the shared `AbrController`
-//! now drives decisions internally via `record_bandwidth` and the Peer
-//! trait. These perf scenarios have been stubbed out; reimplement them
-//! against `AbrController::record_bandwidth` and the new `AbrState` when
-//! perf coverage is restored.
-
 #![cfg(feature = "perf")]
 
 use hotpath::HotpathGuardBuilder;
-use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrVariant};
-use kithara_events::VariantDuration;
+use kithara_abr::{AbrController, AbrMode, AbrSettings};
+use kithara_events::{VariantDuration, VariantInfo};
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
-fn create_variants(bitrates: &[u64]) -> Vec<AbrVariant> {
+fn create_variants(bitrates: &[u64]) -> Vec<VariantInfo> {
     bitrates
         .iter()
         .enumerate()
-        .map(|(idx, &bandwidth_bps)| AbrVariant {
+        .map(|(idx, &bandwidth_bps)| VariantInfo {
             variant_index: idx,
-            bandwidth_bps,
+            bandwidth_bps: Some(bandwidth_bps),
             duration: VariantDuration::Total(Duration::ZERO),
+            name: None,
+            codecs: None,
+            container: None,
         })
         .collect()
 }

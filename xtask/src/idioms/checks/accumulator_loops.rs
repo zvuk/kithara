@@ -1,24 +1,3 @@
-//! Imperative accumulator loops are usually clearer (and let rustc emit
-//! tighter code) when expressed as iterator chains.
-//!
-//! Recognised patterns (each as a single-statement loop body, or a tight
-//! `if`-shaped form for `count`):
-//!
-//! - **A1 — push**: `for x in xs { v.push(...) }` →
-//!   `xs.iter().map(...).collect::<Vec<_>>()`
-//! - **A2 — sum/accumulate**: `for x in xs { s += f(x) }` →
-//!   `xs.iter().map(f).sum()` (or `.fold(init, |acc, x| acc + f(x))`)
-//! - **A3 — conditional count**: `for x in xs { if pred(x) { n += 1 } }` →
-//!   `xs.iter().filter(|x| pred(x)).count()`
-//! - **A4 — extend / `flat_map`**: `for x in xs { v.extend(f(x)) }` →
-//!   `xs.iter().flat_map(f).collect::<Vec<_>>()`
-//!
-//! Loops containing `break` / `continue` / `return` are skipped by default —
-//! the iterator-chain form would change control-flow semantics. Multi-stmt
-//! bodies (other than the A3 `if`-shape) are skipped: detecting whether a
-//! `fold` is the right replacement requires more semantic context than the
-//! AST exposes.
-
 use anyhow::Result;
 use syn::{
     BinOp, Block, Expr, ExprBinary, ExprBreak, ExprContinue, ExprForLoop, ExprIf, ExprMethodCall,

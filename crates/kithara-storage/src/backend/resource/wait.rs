@@ -1,14 +1,12 @@
 #![forbid(unsafe_code)]
 
-//! `Resource<D>::wait_range_inner` — the blocking-wait body for
-//! [`ResourceExt::wait_range`](crate::ResourceExt::wait_range).
-
 use std::ops::Range;
 
 use kithara_platform::{
     thread::yield_now,
     time::{Duration as PlatformDuration, Instant},
 };
+use kithara_test_utils::kithara;
 use tracing::debug;
 
 use crate::{
@@ -19,6 +17,7 @@ use crate::{
 
 impl<D: DriverIo> Resource<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::hang_watchdog]
     pub(super) fn wait_range_inner(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         const WAIT_SPIN_TIMEOUT_MS: u64 = 50;
 
@@ -34,6 +33,7 @@ impl<D: DriverIo> Resource<D> {
         }
 
         loop {
+            hang_tick!();
             if self.inner.driver.try_fast_check(&range) {
                 return Ok(WaitOutcome::Ready);
             }

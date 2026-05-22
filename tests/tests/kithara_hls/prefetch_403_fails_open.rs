@@ -1,21 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Regression test for the silent-hang chain when DRM-key prefetch fails.
-//!
-//! When the key server returns HTTP 403 during `Hls::create`, the prefetch
-//! must propagate the error to the caller instead of swallowing it as a
-//! warning. The previous code resolved `Stream::<Hls>::new` with `Ok`,
-//! pushing the symptom into a downstream `wait_range` hang that
-//! `HangDetector` panicked on after 5 seconds — see the original
-//! reproduction in `app.log` (track ids 95038745 / 176000094).
-//!
-//! Acceptance:
-//! - `Stream::<Hls>::new` returns `Err` (any source error variant) when the
-//!   encrypted variant's key endpoint serves 403.
-//! - The whole open completes in well under 1 second; we wrap the call in
-//!   a 1-second `tokio::time::timeout` so a regression manifests as a
-//!   timeout panic rather than a 5-second hang.
-
 use std::{error::Error, time::Duration};
 
 use kithara::{
@@ -23,7 +7,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{
+use kithara_integration_tests::{
     PackagedTestServer, TestTempDir,
     fixture_protocol::{HlsRouteKind, HttpErrorRule},
     temp_dir,
@@ -48,9 +32,10 @@ async fn prefetch_403_returns_err_quickly(
     .await;
 
     let url = server.url("/master-encrypted.m3u8");
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new());
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(CancellationToken::new())
+        .build();
 
     let started = std::time::Instant::now();
     let result = tokio::time::timeout(Duration::from_secs(1), Stream::<Hls>::new(config))

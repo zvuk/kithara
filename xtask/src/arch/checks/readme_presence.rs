@@ -1,5 +1,3 @@
-//! Each workspace member has a sufficiently long `README.md`.
-
 use std::fs;
 
 use anyhow::Result;

@@ -1,8 +1,3 @@
-//! Real-network reproduction of the cold-cache mid-track HLS seek hang
-//! against silvercomet's HLS, using a real cpal backend. Used only by
-//! `just test-e2e`. The synthetic-fixture sibling lives in
-//! `cpal_cold_seek_synthetic.rs` (suite_heavy).
-
 #![forbid(unsafe_code)]
 
 use std::{
@@ -13,12 +8,13 @@ use std::{
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_net::NetOptions;
+use kithara_integration_tests::{kithara, temp_dir};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{kithara, temp_dir};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -105,14 +101,21 @@ async fn wait_for_position_at_least(
     kithara_queue::cold_seek_cpal::cpal_cold_seek_silvercomet_hls \
     -- --ignored --nocapture --test-threads=1"]
 async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     install_tracing();
 
     const URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
-    let net = NetOptions::default().with_is_insecure(true);
-    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
+    let net = NetOptions::builder().is_insecure(true).build();
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .client(HttpClient::new(net, CancellationToken::new()))
+            .build(),
+    );
 
     let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
@@ -127,10 +130,12 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         }
     });
 
-    let mut cfg = ResourceConfig::new(URL).expect("valid silvercomet URL");
-    cfg = cfg.with_downloader(downloader.clone());
-    cfg.store = store;
-    cfg.decoder_backend = backend;
+    let cfg = ResourceConfig::for_src(URL)
+        .expect("valid silvercomet URL")
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder_backend(backend)
+        .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();

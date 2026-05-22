@@ -1,16 +1,12 @@
-//! Concrete Player implementation managing an items queue.
-//!
-//! `PlayerImpl` tracks a list of [`Resource`] items and exposes play/pause/seek.
-//! Owns an [`EngineImpl`] and sends commands to the active slot's processor
-//! via the slot's command channel.
-
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_abr::{AbrController, AbrMode, AbrSettings};
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
@@ -61,75 +57,62 @@ struct PendingNext {
 }
 
 /// Configuration for the player.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Default, Debug)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
 pub struct PlayerConfig {
     /// How resources created for this player trim leading/trailing PCM.
+    #[builder(default)]
     pub gapless_mode: GaplessMode,
     /// Shared ABR controller. When `None`, a default one is created.
-    #[derivative(Debug = "ignore")]
     pub abr: Option<Arc<AbrController>>,
     /// Root event bus for this player.
-    ///
-    /// When set, all player/engine/resource events are published here.
-    /// Resources receive a `bus.scoped()` child via `prepare_config()`.
-    /// When `None`, a default root bus is created.
-    #[setters(skip)]
     pub bus: Option<EventBus>,
-    /// Master cancel token for this player. Consumer crates (`Queue` /
-    /// `App` / FFI) construct one and propagate it here so subsystem
-    /// shutdown is driven by a single pulse. When `None`,
-    /// [`PlayerImpl::new`] creates an internal master as the canonical
-    /// fallback. Per-track children are derived in
-    /// [`PlayerImpl::prepare_config`].
-    #[derivative(Debug = "ignore")]
+    /// Master cancel token for this player.
     pub cancel: Option<CancellationToken>,
     /// PCM buffer pool for audio-thread scratch buffers.
-    ///
-    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
-    /// PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
     /// Pre-built audio session dispatcher.
-    ///
-    /// Forwarded to [`EngineConfig::session`]. `None` → engine binds to
-    /// the process-wide cpal session. Integration tests pass an offline
-    /// dispatcher here to drive playback without real hardware.
-    #[derivative(Debug = "ignore")]
     pub session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout. Default: 10-band log-spaced.
-    #[derivative(Default(value = "generate_log_spaced_bands(10)"))]
+    #[builder(default = generate_log_spaced_bands(10))]
     pub eq_layout: Vec<EqBandConfig>,
-    /// Built-in linear (`next = current + 1`) auto-advance handler that
-    /// reacts to the audio-thread prefetch / handover triggers via
-    /// [`PlayerImpl::arm_next`] and [`PlayerImpl::commit_next`].
-    ///
-    /// Default: `true`. Standalone callers (tests, demos) get gapless
-    /// auto-advance for free. Higher-level orchestrators
-    /// (`kithara_queue::Queue`) disable this and drive auto-advance
-    /// themselves through the public arm / commit API.
-    #[derivative(Default(value = "true"))]
+    /// Built-in auto-advance handler. Default: `true`.
+    #[builder(default = true)]
     pub auto_advance_enabled: bool,
     /// Crossfade duration in seconds. Default: 1.0.
-    #[derivative(Default(value = "1.0"))]
+    #[builder(default = 1.0)]
     pub crossfade_duration: f32,
     /// Default playback rate (1.0 = normal). Default: 1.0.
-    #[derivative(Default(value = "1.0"))]
+    #[builder(default = 1.0)]
     pub default_rate: f32,
-    /// Secondary lead time before EOF at which the next queued item is
-    /// loaded into the processor; independent of crossfade.
-    ///
-    /// Effective preload trigger threshold =
-    /// `max(prefetch_duration, crossfade_duration) + block_seconds`.
-    /// The crossfade activation moment is unaffected. Set greater than
-    /// `crossfade_duration` (especially when `crossfade_duration = 0`) so
-    /// network probe + initial decode of the next track can finish before
-    /// the audio thread runs out of PCM on the current track. Default: 3.5.
-    #[derivative(Default(value = "3.5"))]
+    /// Secondary lead time before EOF at which the next queued item is loaded.
+    #[builder(default = 3.5)]
     pub prefetch_duration: f32,
     /// Maximum concurrent slots in the engine. Default: 4.
-    #[derivative(Default(value = "4"))]
+    #[builder(default = 4)]
     pub max_slots: usize,
+}
+
+impl fmt::Debug for PlayerConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlayerConfig")
+            .field("gapless_mode", &self.gapless_mode)
+            .field("eq_layout", &self.eq_layout)
+            .field("auto_advance_enabled", &self.auto_advance_enabled)
+            .field("crossfade_duration", &self.crossfade_duration)
+            .field("default_rate", &self.default_rate)
+            .field("prefetch_duration", &self.prefetch_duration)
+            .field("max_slots", &self.max_slots)
+            .field("pcm_pool", &self.pcm_pool)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for PlayerConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 /// Concrete Player implementation managing items queue.
@@ -157,6 +140,13 @@ pub struct PlayerImpl {
     /// Engine drops last — worker shutdown happens after all tracks unregister.
     engine: EngineImpl,
     bus: EventBus,
+    /// Live `AbrHandle` of the resource currently in the processor.
+    /// Populated by [`Self::enqueue_to_processor`] just before moving
+    /// the resource out of `items`, and replaced on every subsequent
+    /// load. Lets callers query the active variant after playback has
+    /// started — `items[idx]` is `None` then, so the queue-state lookup
+    /// can't answer.
+    current_abr_handle: Mutex<Option<kithara_abr::AbrHandle>>,
     current_slot: Mutex<Option<SlotId>>,
     /// Items drop before engine — Audio tracks unregister from worker
     /// while it is still alive.
@@ -368,17 +358,13 @@ impl PlayerImpl {
 
     /// ABR handle of the currently loaded item, if any.
     ///
-    /// Returns `Some` while an adaptive (HLS) resource is active; `None`
-    /// otherwise. In the production-port wiring this is sourced from the
-    /// currently mounted `Resource::abr()` rather than a cached field; the
-    /// queue layer threads runtime ABR through this accessor.
+    /// ABR handle of the resource currently running in the processor.
+    /// Reads the stash populated by [`Self::enqueue_to_processor`] —
+    /// stays valid for the whole life of the track, including after
+    /// `items[idx]` has been emptied by the load handoff.
     #[must_use]
     pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        let idx = self.current_index.load(Ordering::Relaxed);
-        let items = self.items.lock_sync();
-        let handle = items.get(idx)?.as_ref()?.resource.abr_handle();
-        drop(items);
-        handle
+        self.current_abr_handle.lock_sync().clone()
     }
 
     /// Current item index in the queue.
@@ -436,10 +422,19 @@ impl PlayerImpl {
     }
 
     /// Current media duration in seconds.
+    ///
+    /// Returns `None` while duration is unknown — the engine sets the
+    /// shared atomic from the demuxer once mvhd / fmt-equivalent metadata
+    /// is parsed. The atomic's default `0.0` conflates "unknown" with
+    /// "empty track"; callers that distinguish (e.g. `seek_seconds`'s
+    /// `target >= dur` check, queue auto-advance) need the `None` to
+    /// avoid false-EOF on a freshly-loaded track whose demuxer has not
+    /// yet seen the metadata box.
     pub fn duration_seconds(&self) -> Option<f64> {
         let slot_id = (*self.current_slot.lock_sync())?;
         let state = self.engine.slot_shared_state(slot_id)?;
-        Some(state.duration.load(Ordering::Relaxed))
+        let dur = state.duration.load(Ordering::Relaxed);
+        (dur > 0.0).then_some(dur)
     }
 
     /// Get a reference to the underlying engine.
@@ -455,6 +450,8 @@ impl PlayerImpl {
 
         let queued = items[index].take()?;
         let QueuedResource { item_id, resource } = queued;
+
+        *self.current_abr_handle.lock_sync() = resource.abr_handle();
 
         let current_rate = self.playback_rate_shared.load(Ordering::Relaxed);
         resource.set_playback_rate(current_rate);
@@ -647,6 +644,7 @@ impl PlayerImpl {
             default_rate: AtomicF32::new(config.default_rate),
             bus,
             items: Mutex::new(Vec::new()),
+            current_abr_handle: Mutex::new(None),
             muted: AtomicBool::new(false),
             pcm_pool: resolved_pool,
             playback_rate_shared: Arc::new(AtomicF32::new(config.default_rate)),
@@ -727,17 +725,22 @@ impl PlayerImpl {
     /// the player's decode thread and resampler is pre-initialised with
     /// the correct ratio. Callers that want a shared HTTP pool /
     /// tokio runtime must build their own [`Downloader`] (with an
-    /// explicit runtime handle if needed) and pass it via
-    /// [`ResourceConfig::with_downloader`].
-    pub fn prepare_config(&self, config: &mut super::config::ResourceConfig) {
-        config.worker = Some(self.engine.worker().clone());
-        config.host_sample_rate = std::num::NonZeroU32::new(self.engine.master_sample_rate());
-        config.gapless_mode = self.config.gapless_mode;
-        if config.bus.is_none() {
-            config.bus = Some(self.bus.scoped());
-        }
-        if config.cancel.is_none() {
-            config.cancel = Some(self.cancel.child_token());
+    /// explicit runtime handle if needed) and attach it via
+    /// [`ResourceConfig::for_src`] before passing the config in.
+    #[must_use]
+    pub fn prepare_config(
+        &self,
+        config: super::config::ResourceConfig,
+    ) -> super::config::ResourceConfig {
+        let bus = config.bus.or_else(|| Some(self.bus.scoped()));
+        let cancel = config.cancel.or_else(|| Some(self.cancel.child_token()));
+        super::config::ResourceConfig {
+            worker: Some(self.engine.worker().clone()),
+            host_sample_rate: std::num::NonZeroU32::new(self.engine.master_sample_rate()),
+            gapless_mode: self.config.gapless_mode,
+            bus,
+            cancel,
+            ..config
         }
     }
 
@@ -1172,6 +1175,11 @@ fn player_event_from_notification(notification: PlayerNotification) -> Option<Pl
             src,
             item_id,
         } => Some(PlayerEvent::ItemDidPlayToEnd { src, item_id }),
+        PlayerNotification::PlaybackStopped {
+            reason: TrackPlaybackStopReason::Failed,
+            src,
+            item_id,
+        } => Some(PlayerEvent::ItemDidFail { src, item_id }),
         _ => None,
     }
 }
@@ -1227,7 +1235,7 @@ mod tests {
         let mut config = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
             .expect("BUG: valid resource config");
 
-        player.prepare_config(&mut config);
+        config = player.prepare_config(config);
 
         assert_eq!(config.gapless_mode, GaplessMode::Disabled);
         assert!(
@@ -1242,7 +1250,7 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
             .expect("BUG: valid resource config");
-        player.prepare_config(&mut rc);
+        rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child_token();
@@ -1264,7 +1272,7 @@ mod tests {
         });
         let mut rc = crate::impls::config::ResourceConfig::new("https://example.com/song.mp3")
             .expect("BUG: valid resource config");
-        player.prepare_config(&mut rc);
+        rc = player.prepare_config(rc);
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child_token();
@@ -1390,12 +1398,13 @@ mod tests {
 
     #[kithara::test]
     fn player_config_builder() {
-        let config = PlayerConfig::default()
-            .with_max_slots(8)
-            .with_default_rate(0.5)
-            .with_crossfade_duration(2.5)
-            .with_prefetch_duration(7.0)
-            .with_eq_layout(generate_log_spaced_bands(5));
+        let config = PlayerConfig::builder()
+            .max_slots(8)
+            .default_rate(0.5)
+            .crossfade_duration(2.5)
+            .prefetch_duration(7.0)
+            .eq_layout(generate_log_spaced_bands(5))
+            .build();
         assert_eq!(config.max_slots, 8);
         assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
         assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);

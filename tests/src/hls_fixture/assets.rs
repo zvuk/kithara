@@ -1,8 +1,3 @@
-//! Test asset store helpers
-//!
-//! Provides `TestAssets` and helper functions for creating test assets.
-//! On native: disk-backed with temp directory. On WASM: ephemeral (in-memory).
-
 use std::sync::Arc;
 
 use kithara::{
@@ -12,8 +7,9 @@ use kithara::{
     net::{HttpClient, NetOptions},
 };
 use kithara_stream::dl::{Downloader, DownloaderConfig, Peer, PeerHandle};
-use kithara_test_utils::TestTempDir;
 use tokio_util::sync::CancellationToken;
+
+use crate::TestTempDir;
 
 /// Wrapper for test assets with temp directory lifetime management
 pub struct TestAssets {
@@ -75,13 +71,12 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 
 /// Create test HTTP client with default options
 pub fn create_test_net() -> HttpClient {
-    let net_opts = NetOptions::default();
-    HttpClient::new(net_opts)
+    HttpClient::new(NetOptions::default(), CancellationToken::new())
 }
 
 /// Create a private test [`Downloader`] with a fresh cancel token.
 pub fn create_test_downloader() -> Downloader {
-    Downloader::new(DownloaderConfig::default())
+    Downloader::new(DownloaderConfig::for_client(create_test_net()).build())
 }
 
 /// Create a private test [`PeerHandle`] via `Downloader::register`.
@@ -90,7 +85,11 @@ fn create_test_peer_handle() -> PeerHandle {
     impl kithara::abr::Abr for TestPeer {}
     impl Peer for TestPeer {}
     let cancel = CancellationToken::new();
-    let dl = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
+    let dl = Downloader::new(
+        DownloaderConfig::for_client(create_test_net())
+            .cancel(cancel.child_token())
+            .build(),
+    );
     dl.register(Arc::new(TestPeer))
 }
 

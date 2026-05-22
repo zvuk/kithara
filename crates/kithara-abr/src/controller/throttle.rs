@@ -1,5 +1,3 @@
-//! Event-throttling cache + helpers for `record_bandwidth` / `tick`.
-
 use kithara_events::{AbrEvent, EventBus};
 use kithara_platform::time::{Duration, Instant};
 use num_traits::ToPrimitive;

@@ -1,5 +1,3 @@
-//! Audio worker traits and effect utilities.
-
 use kithara_decode::PcmChunk;
 use kithara_stream::Timeline;
 

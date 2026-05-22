@@ -1,5 +1,3 @@
-//! `PooledOwned` — `'static`-friendly RAII guard that holds `Arc<Pool>`.
-
 use std::{
     fmt,
     ops::{Deref, DerefMut},

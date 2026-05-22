@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Decryption context for `ProcessingAssets`.
-
 /// AES-128-CBC decryption context.
 ///
 /// Passed as the `Ctx` type parameter to `ProcessingAssets<A, DecryptContext>`.

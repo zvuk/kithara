@@ -1,5 +1,3 @@
-//! Format-reader construction helpers — direct reader and probe paths.
-
 use std::{
     io::{Read, Seek},
     sync::{

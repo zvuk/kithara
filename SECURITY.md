@@ -2,9 +2,11 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-|---------|--------------------|
-| 0.1.x   | :white_check_mark: |
+| Version       | Supported          |
+|---------------|--------------------|
+| 0.0.1-alpha\* | :white_check_mark: |
+
+Pre-1.0 versioning: alpha tags do not provide API stability guarantees. Security fixes land on the latest alpha; older alphas are not patched.
 
 ## Reporting a Vulnerability
 

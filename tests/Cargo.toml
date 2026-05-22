@@ -15,22 +15,22 @@ ignored = ["serial_test"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara = { workspace = true, features = ["full", "test-utils"] }
-kithara-audio = { workspace = true, features = ["test-utils", "symphonia"] }
-kithara-abr = { workspace = true }
+kithara = { workspace = true, features = ["full", "probe"] }
+kithara-audio = { workspace = true, features = ["probe", "symphonia"] }
+kithara-abr = { workspace = true, features = ["probe"] }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
-kithara-hls = { workspace = true, features = ["test-utils"] }
-kithara-queue = { workspace = true, features = ["test-utils"] }
+kithara-hls = { workspace = true, features = ["probe"] }
+kithara-queue = { workspace = true, features = ["probe"] }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 rkyv = { workspace = true }
-kithara-net = { workspace = true, features = ["test-utils"] }
+kithara-net = { workspace = true, features = ["mock", "probe"] }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
-kithara-stream = { workspace = true, features = ["test-utils"] }
+kithara-stream = { workspace = true, features = ["probe"] }
 # Async runtime
 tokio-util = { workspace = true }
 
@@ -56,6 +56,10 @@ serde_json = { workspace = true }
 # Crypto (for HLS encryption tests)
 aes = { workspace = true }
 cbc = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
 
 # Misc
 futures = { workspace = true }
@@ -66,7 +70,7 @@ async-trait = { workspace = true }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true }
-kithara-decode = { workspace = true, features = ["test-utils", "symphonia"] }
+kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
 kithara-encode = { workspace = true }
 kithara-file = { workspace = true }
 kithara-play = { workspace = true, features = ["backend-cpal"] }
@@ -82,6 +86,11 @@ reqwest = { workspace = true, features = ["rustls", "stream"] }
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
+
+# Seeded RNG for user-simulation e2e scenarios. Tests in
+# `tests/tests/kithara_queue/user_simulation/` need a deterministic
+# random stream so failures stay reproducible across CI re-runs.
+rand = { workspace = true }
 
 # Mocking
 unimock = { workspace = true }
@@ -140,6 +149,12 @@ perf = [
     "hotpath/hotpath",
     "kithara/perf",
 ]
+# Cross-decoder protocol/factory tests gate on the underlying
+# `kithara-decode` backends. Declare them locally so `--check-cfg`
+# does not flag `#[cfg(feature = "apple"/"symphonia")]` in
+# `tests/tests/kithara_decode/*`.
+apple = ["kithara/apple", "kithara-audio/apple"]
+symphonia = ["kithara/symphonia", "kithara-audio/symphonia"]
 # End-to-end tests that require real networks and real audio hardware.
 # Gated off by default so `just test` never compiles `suite_e2e`.
 e2e = []

@@ -1,5 +1,3 @@
-//! FFI-compatible type conversions between `kithara-play` and platform bindings.
-
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 use kithara_events::TrackStatus as TS;
 use kithara_platform::time::Duration;
@@ -203,6 +201,17 @@ impl std::fmt::Debug for FfiKeyRule {
 pub struct FfiItemConfig {
     pub abr_mode: Option<FfiAbrMode>,
     pub headers: Option<std::collections::HashMap<String, String>>,
+    /// Audio source. Accepts a network URL (`https://example.com/song.mp3`,
+    /// `https://…/master.m3u8`) **or** an absolute local file path
+    /// (`/Users/…/song.flac`). Parsed via
+    /// [`kithara::play::ResourceConfig::for_src`] at insert time, so the
+    /// same string flows untouched into the player core. The item's
+    /// [`crate::item::AudioPlayerItem::audio_id`] is a monotonic
+    /// [`kithara_events::TrackId`] reserved at construction (process-wide
+    /// counter) — independent of this string. The secondary handle
+    /// [`crate::item::AudioPlayerItem::uuid_i64`] is a `UUIDv5` over
+    /// `url + audio_id` and is distinct for every fresh insertion of the
+    /// same URL.
     pub url: String,
     /// Caller-declared live-stream flag. `true` means the source is a
     /// live HLS feed (radio / broadcast); the player skips end-of-stream
@@ -350,7 +359,7 @@ impl From<TimeRange> for FfiTimeRange {
 pub enum FfiPlayerEvent {
     TimeChanged { seconds: f64 },
     RateChanged { rate: f32 },
-    CurrentItemChanged { item_id: Option<String> },
+    CurrentItemChanged { item_id: Option<kithara_events::TrackId> },
     StatusChanged { status: FfiPlayerStatus },
     TimeControlStatusChanged { status: FfiTimeControlStatus },
     Error { error: String },
@@ -359,9 +368,15 @@ pub enum FfiPlayerEvent {
     VolumeChanged { volume: f32 },
     MuteChanged { muted: bool },
     ItemDidPlayToEnd,
+    /// A track aborted mid-stream because the decoder / source
+    /// reported a non-recoverable error. Distinct from
+    /// [`Self::ItemDidPlayToEnd`]: the track did NOT reach its
+    /// natural end. UI clients should surface this as a track
+    /// failure (skip-and-flag), not treat it as completion.
+    ItemDidFail { item_id: Option<kithara_events::TrackId> },
     /// Queue-level: the loading/playback status of an item changed.
-    /// `item_id` matches `AudioPlayerItem::id()`.
-    TrackStatusChanged { item_id: String, status: FfiTrackStatus },
+    /// `item_id` matches `AudioPlayerItem::audio_id()`.
+    TrackStatusChanged { item_id: kithara_events::TrackId, status: FfiTrackStatus },
     /// Queue reached the end with `RepeatMode::Off` active.
     QueueEnded,
     /// A crossfade between tracks just started. `duration_seconds` is
@@ -427,6 +442,12 @@ pub enum FfiItemEvent {
     /// The item reached natural end-of-stream. Mirrors the iOS
     /// `AudioPlayerItemProtocol.rxDidReachEnd`.
     DidReachEnd,
+    /// The item aborted mid-stream because the decoder / source
+    /// reported a non-recoverable error. Distinct from
+    /// [`Self::DidReachEnd`]: the item did NOT play to its
+    /// natural end. UI clients should surface a failure marker
+    /// instead of treating this as completion.
+    DidFail,
     /// Playback stalled (the player is waiting for more data).
     /// Mirrors the iOS `AudioPlayerItemProtocol.rxDidStall`.
     DidStall,
@@ -498,19 +519,12 @@ mod tests {
     }
 
     #[kithara::test]
-    fn seconds_to_duration_nan() {
-        assert!(seconds_to_duration(f64::NAN).is_err());
-    }
-
-    #[kithara::test]
-    fn seconds_to_duration_infinity() {
-        assert!(seconds_to_duration(f64::INFINITY).is_err());
-        assert!(seconds_to_duration(f64::NEG_INFINITY).is_err());
-    }
-
-    #[kithara::test]
-    fn seconds_to_duration_negative() {
-        assert!(seconds_to_duration(-1.0).is_err());
+    #[case::nan(f64::NAN)]
+    #[case::positive_infinity(f64::INFINITY)]
+    #[case::negative_infinity(f64::NEG_INFINITY)]
+    #[case::negative(-1.0)]
+    fn seconds_to_duration_rejects_non_finite_or_negative(#[case] input: f64) {
+        assert!(seconds_to_duration(input).is_err());
     }
 
     #[kithara::test]
@@ -548,24 +562,18 @@ mod tests {
     }
 
     #[kithara::test]
-    fn play_error_not_ready() {
-        let ffi: FfiError = PlayError::NotReady.into();
-        assert!(matches!(ffi, FfiError::NotReady));
-    }
-
-    #[kithara::test]
-    fn play_error_item_failed() {
-        let ffi: FfiError = PlayError::ItemFailed {
-            reason: "bad codec".into(),
-        }
-        .into();
-        assert!(matches!(ffi, FfiError::ItemFailed { .. }));
-    }
-
-    #[kithara::test]
-    fn play_error_internal_fallback() {
-        let ffi: FfiError = PlayError::ArenaFull.into();
-        assert!(matches!(ffi, FfiError::Internal { .. }));
+    #[case::not_ready(PlayError::NotReady, (|f: &FfiError| matches!(f, FfiError::NotReady)) as fn(&FfiError) -> bool)]
+    #[case::item_failed(
+        PlayError::ItemFailed { reason: "bad codec".into() },
+        (|f: &FfiError| matches!(f, FfiError::ItemFailed { .. })) as fn(&FfiError) -> bool
+    )]
+    #[case::internal_fallback(PlayError::ArenaFull, (|f: &FfiError| matches!(f, FfiError::Internal { .. })) as fn(&FfiError) -> bool)]
+    fn play_error_maps_to_expected_ffi_variant(
+        #[case] input: PlayError,
+        #[case] matches_variant: fn(&FfiError) -> bool,
+    ) {
+        let ffi: FfiError = input.into();
+        assert!(matches_variant(&ffi));
     }
 
     #[kithara::test]

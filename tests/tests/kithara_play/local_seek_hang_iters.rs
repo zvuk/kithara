@@ -1,15 +1,3 @@
-//! Local mirror of `silvercomet_3tracks_seek_middle_hang_10x` against the
-//! in-process `TestServerHelper` HLS fixture (packaged AAC, sawtooth signal).
-//!
-//! Same shape: per iteration, build a `Resource`, hand it to `OfflinePlayer`
-//! through `load_and_fadein`, render a warmup window, render a measurement
-//! window, seek +30 s, render another window. Both windows must satisfy the
-//! silence-fraction and RMS floors that catch the post-seek hang.
-//!
-//! No `#[ignore]` — runs in every `just test`. Detects regressions of the
-//! post-seek HLS recreate path that previously surfaced only against
-//! silvercomet's live CDN.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
@@ -20,12 +8,15 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_decode::DecoderBackend;
-use kithara_integration_tests::offline::OfflinePlayer;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayer, temp_dir,
+};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
-use kithara_test_utils::{HlsFixtureBuilder, TestServerHelper, temp_dir};
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::common::test_defaults::Consts as Shared;
@@ -121,14 +112,14 @@ async fn build_resource(
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
-    let mut cfg = ResourceConfig::new(url.as_str())
-        .unwrap_or_else(|e| panic!("ResourceConfig::new({url}): {e}"));
-    cfg = cfg
-        .with_downloader(downloader.clone())
-        .with_name(format!("{iter_label}|{url}"));
-    cfg.store = store;
-    cfg.decoder_backend = backend;
-    cfg.initial_abr_mode = abr;
+    let cfg = ResourceConfig::for_src(url.as_str())
+        .unwrap_or_else(|e| panic!("ResourceConfig::for_src({url}): {e}"))
+        .downloader(downloader.clone())
+        .name(format!("{iter_label}|{url}"))
+        .store(store)
+        .decoder_backend(backend)
+        .initial_abr_mode(abr)
+        .build();
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
@@ -160,6 +151,9 @@ async fn build_resource(
     case::android(DecoderBackend::Android, AbrMode::Auto(None))
 )]
 async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] abr: AbrMode) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
         .variant_count(3)
@@ -181,7 +175,13 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         let iter_label = format!("iter-{iter}");
         let temp = temp_dir();
         let store = StoreOptions::new(temp.path());
-        let downloader = Downloader::new(DownloaderConfig::default());
+        let downloader = Downloader::new(
+            DownloaderConfig::for_client(HttpClient::new(
+                NetOptions::default(),
+                CancellationToken::new(),
+            ))
+            .build(),
+        );
 
         let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
         let mut iteration_samples: Vec<f32> = Vec::new();

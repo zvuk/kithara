@@ -1,6 +1,5 @@
-use kithara_encode::{
-    BytesEncodeRequest, BytesEncodeTarget, EncoderFactory, test_pcm::SawtoothPcmFixture,
-};
+use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
+use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
 use kithara_test_utils::kithara;
 
 #[kithara::test]

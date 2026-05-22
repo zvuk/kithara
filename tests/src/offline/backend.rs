@@ -1,11 +1,3 @@
-//! Offline firewheel `AudioBackend` impl used by integration tests.
-//!
-//! Drives the firewheel audio graph without a real audio device. Tests
-//! call [`OfflineBackend::render`] (directly or via [`OfflineSession`])
-//! to step the graph synchronously.
-//!
-//! [`OfflineSession`]: super::session::OfflineSession
-
 use std::{num::NonZeroU32, time::Duration};
 
 use firewheel::{

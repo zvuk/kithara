@@ -5,7 +5,7 @@ use std::{hint::black_box, thread, time::Duration};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use kithara_bufpool::{ByteBudget, BytePool, PcmPool, Pool};
 
-fn run_threaded_get_put(pool: BytePool, threads: usize, iters_per_thread: usize) {
+fn run_threaded_get_put(pool: &BytePool, threads: usize, iters_per_thread: usize) {
     let handles: Vec<_> = (0..threads)
         .map(|_| {
             let pool_clone = pool.clone();
@@ -48,7 +48,7 @@ fn bench_get_put_multi_thread(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(8));
 
     group.bench_function("multi_thread_contention_u8", |b| {
-        b.iter(|| run_threaded_get_put(pool.clone(), 8, 256));
+        b.iter(|| run_threaded_get_put(&pool, 8, 256));
     });
 
     group.finish();

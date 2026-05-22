@@ -1,10 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Thin [`ResourceExt`] impl for [`Resource<D>`]: each method forwards
-//! to the corresponding `*_inner` inherent method on the resource. The
-//! actual bodies live in `super::state` so this file stays
-//! responsibility-free aside from the trait wiring.
-
 use std::{ops::Range, path::Path};
 
 use super::state::Resource;

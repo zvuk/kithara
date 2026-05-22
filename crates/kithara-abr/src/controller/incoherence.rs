@@ -1,6 +1,3 @@
-//! Incoherence watcher — fires `AbrEvent::Incoherence` if the reader has
-//! not advanced within `incoherence_deadline` after a variant switch.
-
 use kithara_events::AbrEvent;
 use kithara_platform::{
     time::{Duration, Instant},
@@ -56,7 +53,7 @@ impl AbrController {
         Some(IncoherenceCtx { progress, entry })
     }
 
-    pub(super) fn schedule_incoherence_watch(
+    pub(crate) fn schedule_incoherence_watch(
         &self,
         peer_id: AbrPeerId,
         reader_pt: Duration,

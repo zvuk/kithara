@@ -1,0 +1,33 @@
+id: style.no-stale-file-header-doc
+message: |
+  Inner doc comment (`//!`) in a private module file. The file is reached
+  from the crate root only through `mod foo;` (no `pub mod`), so this
+  block never appears in `cargo doc` output — it's just narrative that
+  rots silently. The intent (what this module is for, who calls it,
+  what invariants it holds) belongs in code names, the owning crate
+  `README.md`, or — for genuine internal docs — be promoted to
+  `pub mod` first so it actually lands in rustdoc.
+
+  Delete it. The autofix replaces the inner-doc line with nothing;
+  trailing blank lines normalize on the next `cargo fmt --all`.
+
+  Suppress with `// ast-grep-ignore: style.no-stale-file-header-doc`
+  on the offending line if you have a real reason (e.g. the file is
+  exempted via the include list and the markdown rendering is wired
+  somewhere else).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/**/*.rs
+  - xtask/**/*.rs
+ignores:
+  - "**/lib.rs"
+  - "**/main.rs"
+  - "**/mod.rs"
+  - "**/build.rs"
+  - "**/tests/**/fixtures/**"
+rule:
+  kind: line_comment
+  regex: "^//!"
+fix: ""

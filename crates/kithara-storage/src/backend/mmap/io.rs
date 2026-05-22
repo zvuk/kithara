@@ -1,8 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! [`DriverIo`] impl for [`MmapDriver`]: read/write/commit/reactivate
-//! plus the lock-free fast-path queue (`try_fast_check`/`notify_write`).
-
 use std::{
     fs::{self, OpenOptions},
     ops::Range,

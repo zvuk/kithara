@@ -1,38 +1,35 @@
-//! Canonical bandwidth profiles vs. expected `AbrState::decide` output.
-//!
-//! The projection §12 Tier 4 names four scenarios — flat, drop, recover,
-//! oscillate. Here we drive each deterministically through
-//! `AbrState::decide/apply` and lock in the coarse-grained expected
-//! final variant.
-
 use std::time::Duration as StdDuration;
 
 use kithara_abr::{AbrMode, AbrSettings, AbrState, AbrView};
-use kithara_events::{AbrVariant, VariantDuration};
+use kithara_events::{VariantDuration, VariantInfo};
 use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::kithara;
 
-fn variants() -> Vec<AbrVariant> {
+fn variants() -> Vec<VariantInfo> {
     [300_000u64, 900_000, 3_000_000]
         .iter()
         .enumerate()
-        .map(|(i, bps)| AbrVariant {
+        .map(|(i, bps)| VariantInfo {
             variant_index: i,
-            bandwidth_bps: *bps,
+            bandwidth_bps: Some(*bps),
             duration: VariantDuration::Unknown,
+            name: None,
+            codecs: None,
+            container: None,
         })
         .collect()
 }
 
 fn fast_settings() -> AbrSettings {
-    AbrSettings::default()
-        .with_warmup_min_bytes(0)
-        .with_min_switch_interval(Duration::ZERO)
-        .with_min_buffer_for_up_switch(Duration::ZERO)
+    AbrSettings::builder()
+        .initial_throughput_bps(2_000_000)
+        .min_switch_interval(Duration::ZERO)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build()
 }
 
 fn run_profile(profile: &[u64]) -> usize {
-    let state = AbrState::new(variants(), AbrMode::Auto(Some(0)));
+    let state = AbrState::new(AbrMode::Auto(Some(0)));
     let settings = fast_settings();
     let variants = variants();
     let base = Instant::now();
@@ -53,29 +50,26 @@ fn run_profile(profile: &[u64]) -> usize {
     state.current_variant_index()
 }
 
-#[kithara::test]
-fn flat_low_bandwidth_holds_bottom_variant() {
-    let profile: Vec<u64> = (0..20).map(|_| 150_000).collect();
-    assert_eq!(run_profile(&profile), 0);
+fn flat(bps: u64, n: usize) -> Vec<u64> {
+    (0..n).map(|_| bps).collect()
 }
 
 #[kithara::test]
-fn flat_high_bandwidth_reaches_top_variant() {
-    let profile: Vec<u64> = (0..20).map(|_| 20_000_000).collect();
-    assert_eq!(run_profile(&profile), 2);
-}
-
-#[kithara::test]
-fn drop_after_peak_down_switches() {
-    let mut profile: Vec<u64> = (0..15).map(|_| 20_000_000).collect();
-    profile.extend((0..15).map(|_| 200_000));
-    assert_eq!(run_profile(&profile), 0);
-}
-
-#[kithara::test]
-fn recover_after_drop_up_switches_again() {
-    let mut profile: Vec<u64> = (0..10).map(|_| 20_000_000).collect();
-    profile.extend((0..10).map(|_| 200_000));
-    profile.extend((0..20).map(|_| 20_000_000));
-    assert_eq!(run_profile(&profile), 2);
+#[case::flat_low_bandwidth_holds_bottom_variant(flat(150_000, 20), 0)]
+#[case::flat_high_bandwidth_reaches_top_variant(flat(20_000_000, 20), 2)]
+#[case::drop_after_peak_down_switches(
+    { let mut p = flat(20_000_000, 15); p.extend(flat(200_000, 15)); p },
+    0
+)]
+#[case::recover_after_drop_up_switches_again(
+    {
+        let mut p = flat(20_000_000, 10);
+        p.extend(flat(200_000, 10));
+        p.extend(flat(20_000_000, 20));
+        p
+    },
+    2
+)]
+fn bandwidth_profile_drives_variant(#[case] profile: Vec<u64>, #[case] expected: usize) {
+    assert_eq!(run_profile(&profile), expected);
 }

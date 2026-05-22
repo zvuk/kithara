@@ -1,21 +1,11 @@
-//! `Fmp4SegmentDemuxer` — segment-aware [`Demuxer`] for HLS fMP4 streams.
-//!
-//! Bypasses Symphonia's whole-stream `IsoMp4Reader` to avoid the prefix
-//! walk that broke HLS seeks (see `kithara-decode` crate README §2). Each
-//! HLS segment is fetched independently through a [`crate::traits::BoxedSource`]
-//! cursor, demuxed in memory via [`super::parsing`], and frames are
-//! emitted one at a time. Segment layout (init range, decode-time → segment
-//! mapping) comes from a [`SegmentLayout`] handle — the same one HLS /
-//! file fmp4 expose for layout queries — so the demuxer never re-parses
-//! MOOF chains or walks the playlist.
-
 use std::{sync::Arc, time::Duration};
 
 use kithara_stream::SegmentLayout;
+use kithara_test_utils::kithara;
 
 use super::{
     parsing::{CodecConfig, Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
-    source_io::{FillStatus, SegmentReadState, fill_segment_buffer},
+    source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
@@ -26,6 +16,8 @@ use crate::{
 struct SegmentCursor {
     frames: Option<DecodedFrames>,
     read: SegmentReadState,
+    segment_index: u32,
+    variant_index: usize,
 }
 
 struct DecodedFrames {
@@ -56,6 +48,8 @@ impl Fmp4SegmentDemuxer {
         self.cursor = Some(SegmentCursor {
             read: SegmentReadState::new(desc.byte_range),
             frames: None,
+            segment_index: desc.segment_index,
+            variant_index: desc.variant_index,
         });
         EnsureCursor::Ready
     }
@@ -68,7 +62,12 @@ impl Fmp4SegmentDemuxer {
         if cursor.frames.is_some() {
             return Ok(FillStatus::Ready);
         }
-        let status = fill_segment_buffer(&mut self.source, &mut cursor.read)?;
+        let segments = self.segments.as_ref();
+        let status = fill_segment_buffer(
+            &mut self.source,
+            &mut cursor.read,
+            LiveRange::Segment(segments, cursor.segment_index),
+        )?;
         if matches!(status, FillStatus::Ready) {
             let frames = parse_segment_frames(&self.init, &cursor.read.buffer)?;
             cursor.frames = Some(DecodedFrames {
@@ -99,11 +98,18 @@ impl Fmp4SegmentDemuxer {
         mut source: BoxedSource,
         segments: Arc<dyn SegmentLayout>,
     ) -> DecodeResult<Self> {
-        let init_range = segments.init_segment_range().ok_or_else(|| {
-            DecodeError::InvalidData("HLS init segment range not announced".into())
-        })?;
+        let init_range = segments.init_segment_range();
+        if init_range.is_empty() {
+            return Err(DecodeError::InvalidData(
+                "HLS init segment range not announced".into(),
+            ));
+        }
         let mut init_state = SegmentReadState::new(init_range);
-        if let FillStatus::Pending(_) = fill_segment_buffer(&mut source, &mut init_state)? {
+        if let FillStatus::Pending(_) = fill_segment_buffer(
+            &mut source,
+            &mut init_state,
+            LiveRange::Init(segments.as_ref()),
+        )? {
             return Err(DecodeError::Interrupted);
         }
         let init = parse_init(&init_state.buffer)?;
@@ -127,10 +133,19 @@ enum EnsureCursor {
 }
 
 impl Demuxer for Fmp4SegmentDemuxer {
+    fn current_segment_index(&self) -> Option<u32> {
+        self.cursor.as_ref().map(|c| c.segment_index)
+    }
+
+    fn current_variant_index(&self) -> Option<usize> {
+        self.cursor.as_ref().map(|c| c.variant_index)
+    }
+
     fn duration(&self) -> Option<Duration> {
         self.duration
     }
 
+    #[kithara::probe]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         loop {
             match self.ensure_cursor() {
@@ -173,6 +188,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
                 data,
                 pts,
                 duration: dur,
+                packet_desc: &[],
             }));
         }
     }
@@ -192,7 +208,11 @@ impl Demuxer for Fmp4SegmentDemuxer {
         self.next_byte = desc.byte_range.end;
         let landed_byte = desc.byte_range.start;
         let landed_at = desc.decode_time;
+        let segment_index = desc.segment_index;
+        let variant_index = desc.variant_index;
         self.cursor = Some(SegmentCursor {
+            segment_index,
+            variant_index,
             read: SegmentReadState::new(desc.byte_range),
             frames: None,
         });

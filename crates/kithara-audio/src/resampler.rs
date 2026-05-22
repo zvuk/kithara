@@ -1,7 +1,3 @@
-//! `ResamplerProcessor`: wraps rubato for sample rate conversion.
-//!
-//! Reacts to dynamic `host_sample_rate` changes via `Arc<AtomicU32>`.
-
 use std::{
     iter,
     num::NonZeroUsize,
@@ -12,7 +8,7 @@ use std::{
 };
 
 use audioadapter_buffers::direct::SequentialSliceOfVecs;
-use derive_setters::Setters;
+use bon::Builder;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
@@ -154,8 +150,8 @@ impl ResamplerKind {
 /// Configuration parameters for the resampler effect.
 ///
 /// Contains all values needed to construct a [`ResamplerProcessor`].
-#[derive(Setters)]
-#[setters(prefix = "with_")]
+#[derive(Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct ResamplerParams {
     /// Shared atomic for dynamic host sample rate tracking.
@@ -164,31 +160,30 @@ pub struct ResamplerParams {
     ///
     /// Affects the resampling ratio: `ratio = host_rate / (source_rate × playback_rate)`.
     /// At rate=2.0, audio plays at double speed with pitch shift (vinyl effect).
+    #[builder(default = Arc::new(AtomicF32::new(1.0)))]
     pub playback_rate: Arc<AtomicF32>,
     /// Shared PCM pool for output buffers.
     pub pool: Option<PcmPool>,
     /// Quality preset controlling resampling algorithm.
+    #[builder(default)]
     pub quality: ResamplerQuality,
     /// Initial source sample rate.
     pub source_sample_rate: u32,
     /// Number of audio channels.
     pub channels: usize,
     /// Number of input frames per resampler processing block.
+    #[builder(default = ResamplerProcessor::DEFAULT_CHUNK_SIZE)]
     pub chunk_size: usize,
 }
 
 impl ResamplerParams {
     /// Create resampler params with required runtime values and default settings.
     pub fn new(host_sample_rate: Arc<AtomicU32>, source_sample_rate: u32, channels: usize) -> Self {
-        Self {
-            channels,
-            host_sample_rate,
-            source_sample_rate,
-            chunk_size: ResamplerProcessor::DEFAULT_CHUNK_SIZE,
-            playback_rate: Arc::new(AtomicF32::new(1.0)),
-            pool: None,
-            quality: ResamplerQuality::default(),
-        }
+        Self::builder()
+            .host_sample_rate(host_sample_rate)
+            .source_sample_rate(source_sample_rate)
+            .channels(channels)
+            .build()
     }
 }
 
@@ -452,13 +447,8 @@ impl ResamplerProcessor {
     }
 
     /// Turn the accumulated planar output into an interleaved `PcmChunk`.
-    fn finalize_resample_chunk(&self, input_frames: usize) -> Option<PcmChunk> {
+    fn finalize_resample_chunk(&self, _input_frames: usize) -> Option<PcmChunk> {
         if self.temp_output_all[0].is_empty() {
-            trace!(
-                buffered = self.input_buffer[0].len(),
-                needed = input_frames,
-                "Accumulating data"
-            );
             return None;
         }
 
@@ -580,14 +570,6 @@ impl ResamplerProcessor {
     }
 
     fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
-        debug!(
-            new_ratio,
-            source_rate = self.source_rate,
-            target_rate,
-            quality = ?self.quality,
-            "Resampler activated"
-        );
-
         match Self::create_resampler(
             self.quality,
             new_ratio,
@@ -620,11 +602,6 @@ impl ResamplerProcessor {
         let channels = self.channels;
 
         if self.input_buffer[0].len() < input_frames {
-            trace!(
-                buffered = self.input_buffer[0].len(),
-                needed = input_frames,
-                "Accumulating data"
-            );
             return None;
         }
 
@@ -756,13 +733,6 @@ impl ResamplerProcessor {
 
     /// React to a changed channel count in incoming chunks (ABR switch).
     fn handle_channel_change(&mut self, chunk_channels: usize, chunk_rate: u32) {
-        debug!(
-            old_channels = self.channels,
-            new_channels = chunk_channels,
-            old_rate = self.source_rate,
-            new_rate = chunk_rate,
-            "Channel count changed, recreating resampler"
-        );
         self.channels = chunk_channels;
         self.source_rate = chunk_rate;
         self.input_buffer = smallvec_new_vecs(chunk_channels);
@@ -777,11 +747,6 @@ impl ResamplerProcessor {
 
     /// React to a changed source sample rate while channel count is stable.
     fn handle_source_rate_change(&mut self, chunk_rate: u32) {
-        debug!(
-            old_rate = self.source_rate,
-            new_rate = chunk_rate,
-            "Source sample rate changed, updating ratio dynamically"
-        );
         self.source_rate = chunk_rate;
         for buf in &mut self.input_buffer {
             buf.clear();
@@ -790,12 +755,6 @@ impl ResamplerProcessor {
 
     /// Passthrough path: take the chunk, stamp the current output spec, return it.
     fn passthrough_chunk(&self, mut chunk: PcmChunk) -> PcmChunk {
-        trace!(
-            source_rate = self.source_rate,
-            target_rate = self.output_spec.sample_rate,
-            chunk_samples = chunk.pcm.len(),
-            "Resampler passthrough (no resampling)"
-        );
         chunk.meta.spec = self.output_spec;
         chunk
     }
@@ -812,19 +771,10 @@ impl AudioEffect for ResamplerProcessor {
         let chunk_channels = chunk.spec().channels as usize;
 
         self.apply_source_spec_changes(chunk_channels, chunk_rate);
-
         self.update_resampler_if_needed();
-
         if self.is_passthrough() {
             return Some(self.passthrough_chunk(chunk));
         }
-
-        trace!(
-            source_rate = self.source_rate,
-            target_rate = self.output_spec.sample_rate,
-            input_frames = chunk.frames(),
-            "Resampling"
-        );
         self.resample(&chunk)
     }
 
@@ -867,7 +817,12 @@ mod tests {
         channels: usize,
         rate: Arc<AtomicF32>,
     ) -> ResamplerParams {
-        ResamplerParams::new(host_sr, source_rate, channels).with_playback_rate(rate)
+        ResamplerParams::builder()
+            .host_sample_rate(host_sr)
+            .source_sample_rate(source_rate)
+            .channels(channels)
+            .playback_rate(rate)
+            .build()
     }
 
     fn params_with_quality(
@@ -876,7 +831,12 @@ mod tests {
         channels: usize,
         quality: ResamplerQuality,
     ) -> ResamplerParams {
-        ResamplerParams::new(host_sr, source_rate, channels).with_quality(quality)
+        ResamplerParams::builder()
+            .host_sample_rate(host_sr)
+            .source_sample_rate(source_rate)
+            .channels(channels)
+            .quality(quality)
+            .build()
     }
 
     #[kithara::test]
@@ -939,37 +899,27 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_accumulates_small_chunks() {
+    #[case::small(100, false)]
+    #[case::large(16384, true)]
+    fn test_chunk_size_threshold(#[case] interleaved_len: usize, #[case] produces_output: bool) {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
-        let small_chunk = test_chunk(
+        let chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 48000,
             },
-            vec![0.1; 100],
+            vec![0.1; interleaved_len],
         );
 
-        let result = processor.process(small_chunk);
-        assert!(result.is_none());
-        assert_eq!(processor.input_buffer[0].len(), 50);
-    }
-
-    #[kithara::test]
-    fn test_processes_large_chunks() {
-        let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
-
-        let large_chunk = test_chunk(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 48000,
-            },
-            vec![0.1; 16384],
-        );
-
-        let result = processor.process(large_chunk);
-        assert!(result.is_some());
-        assert!(!result.unwrap().pcm.is_empty());
+        let result = processor.process(chunk);
+        if produces_output {
+            assert!(result.is_some());
+            assert!(!result.unwrap().pcm.is_empty());
+        } else {
+            assert!(result.is_none());
+            assert_eq!(processor.input_buffer[0].len(), interleaved_len / 2);
+        }
     }
 
     #[kithara::test]
@@ -1020,7 +970,8 @@ mod tests {
             }
         }
 
-        let expected = (f64::from(total_input_frames) * 44100.0 / 48000.0) as usize;
+        let expected = usize::try_from(i64::from(total_input_frames) * 44100 / 48000)
+            .expect("test bounded result fits usize");
         let tolerance = 1024 * 2;
         assert!(
             total_output_frames + tolerance >= expected,
@@ -1051,8 +1002,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_playback_rate_2x_halves_output() {
-        let rate = Arc::new(AtomicF32::new(2.0));
+    #[case::rate_2x_halves(2.0, true, 5000)]
+    #[case::rate_half_doubles(0.5, false, 12000)]
+    fn test_playback_rate_scales_output(
+        #[case] rate_value: f32,
+        #[case] expect_less_than: bool,
+        #[case] threshold: usize,
+    ) {
+        let rate = Arc::new(AtomicF32::new(rate_value));
         let mut processor =
             ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
         assert!(!processor.is_passthrough());
@@ -1066,29 +1023,17 @@ mod tests {
         let result = processor.process(chunk);
         assert!(result.is_some());
         let output_frames = result.unwrap().frames();
-        assert!(output_frames < 5000, "Expected ~4096, got {output_frames}");
-    }
-
-    #[kithara::test]
-    fn test_playback_rate_half_doubles_output() {
-        let rate = Arc::new(AtomicF32::new(0.5));
-        let mut processor =
-            ResamplerProcessor::new(params_with_rate(make_host_rate(44100), 44100, 2, rate));
-        assert!(!processor.is_passthrough());
-        let chunk = test_chunk(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 44100,
-            },
-            vec![0.1; 16384],
-        );
-        let result = processor.process(chunk);
-        assert!(result.is_some());
-        let output_frames = result.unwrap().frames();
-        assert!(
-            output_frames > 12000,
-            "Expected ~16384, got {output_frames}"
-        );
+        if expect_less_than {
+            assert!(
+                output_frames < threshold,
+                "Expected < {threshold}, got {output_frames}"
+            );
+        } else {
+            assert!(
+                output_frames > threshold,
+                "Expected > {threshold}, got {output_frames}"
+            );
+        }
     }
 
     #[kithara::test]

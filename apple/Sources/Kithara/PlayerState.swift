@@ -55,6 +55,27 @@ public enum KitharaError: Error, Sendable {
     case `internal`(String)
 }
 
+// MARK: - Player Error (async event stream)
+
+/// Error surfaced on the player / item error publishers
+/// (``KitharaPlayer/error`` and ``KitharaPlayerItem/error``).
+///
+/// Distinct from ``KitharaError`` — that one is thrown synchronously
+/// from imperative APIs (`insert`, `remove`, `selectItem`). `PlayerError`
+/// is what reactive Combine subscribers see when a problem is observed
+/// during playback or item loading.
+public enum PlayerError: Error, Sendable, Equatable {
+    /// An item failed mid-load or mid-playback. The reason is the
+    /// native-side error string.
+    case itemFailed(String)
+    /// A player-wide error was reported (decoder / pipeline). The
+    /// reason is the native-side error string.
+    case playerError(String)
+    /// Playback stalled (waiting for more data). Emitted by item-level
+    /// stalls; surface this in UIs that want to show a buffering chip.
+    case stalled
+}
+
 // MARK: - ABR
 
 /// HLS variant descriptor.
@@ -93,8 +114,14 @@ public typealias ItemEvent = FfiItemEvent
 
 /// Loading/playback status of a track inside the queue.
 ///
-/// Surfaced through ``PlayerEvent/trackStatusChanged(itemId:status:)``.
+/// Surfaced through `PlayerEvent.trackStatusChanged(itemId:status:)`.
 public typealias TrackStatus = FfiTrackStatus
+
+/// Strongly-typed monotonic identifier shared between the player and
+/// the queue. Mirrors the iOS `AudioPlayerItemProtocol.audioId: TrackId`
+/// contract. Conceptually a `UInt64`; passed straight through from
+/// Rust without conversion.
+public typealias TrackId = KitharaFFI.TrackId
 
 // MARK: - Transition
 
@@ -135,6 +162,8 @@ public typealias SeekCallback = KitharaFFI.SeekCallback
 // MARK: - Internal conversions
 
 extension PlayerStatus {
+    /// Convert an FFI status from a ``PlayerEvent`` payload into the
+    /// Swift-side enum.
     public init(ffi: FfiPlayerStatus) {
         switch ffi {
         case .readyToPlay: self = .readyToPlay
@@ -145,6 +174,8 @@ extension PlayerStatus {
 }
 
 extension ItemStatus {
+    /// Convert an FFI item status from an ``ItemEvent`` payload into
+    /// the Swift-side enum.
     public init(ffi: FfiItemStatus) {
         switch ffi {
         case .readyToPlay: self = .readyToPlay
@@ -155,6 +186,8 @@ extension ItemStatus {
 }
 
 extension TimeControlStatus {
+    /// Convert an FFI time-control status from a ``PlayerEvent``
+    /// payload into the Swift-side enum.
     public init(ffi: FfiTimeControlStatus) {
         switch ffi {
         case .paused: self = .paused
@@ -165,6 +198,9 @@ extension TimeControlStatus {
 }
 
 extension KitharaError {
+    /// Convert an FFI error from a throwing player call into the
+    /// Swift-side enum so consumers can pattern-match without
+    /// importing `KitharaFFI`.
     public init(ffi: FfiError) {
         switch ffi {
         case .NotReady:

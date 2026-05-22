@@ -221,10 +221,16 @@ mod tests {
 
     #[cfg(feature = "file")]
     #[kithara::test(tokio)]
-    async fn root_sees_child_events() {
+    #[case::root_sees_child(true)]
+    #[case::child_sees_own(false)]
+    async fn child_publish_is_visible_to_subscriber(#[case] subscribe_from_root: bool) {
         let root = EventBus::new(16);
         let child = root.scoped();
-        let mut rx = root.subscribe();
+        let mut rx = if subscribe_from_root {
+            root.subscribe()
+        } else {
+            child.subscribe()
+        };
 
         child.publish(FileEvent::EndOfStream);
         let event = rx.recv().await.unwrap();
@@ -242,18 +248,6 @@ mod tests {
         child_b.publish(FileEvent::EndOfStream);
 
         assert!(rx_a.try_recv().is_err());
-    }
-
-    #[cfg(feature = "file")]
-    #[kithara::test(tokio)]
-    async fn child_sees_own_events() {
-        let root = EventBus::new(16);
-        let child = root.scoped();
-        let mut rx = child.subscribe();
-
-        child.publish(FileEvent::EndOfStream);
-        let event = rx.recv().await.unwrap();
-        assert_file_event(&event, &FileEvent::EndOfStream);
     }
 
     #[cfg(feature = "file")]

@@ -7,7 +7,7 @@ mod timeout;
 mod traits;
 mod types;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
 pub use crate::{
@@ -15,5 +15,5 @@ pub use crate::{
     error::{NetError, NetResult},
     timeout::TimeoutNet,
     traits::{ByteStream, Net, NetExt},
-    types::{Headers, NetOptions, RangeSpec, RetryPolicy},
+    types::{Compression, Headers, NetOptions, RangeSpec, RetryPolicy},
 };

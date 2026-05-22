@@ -9,8 +9,6 @@
 
 #![forbid(unsafe_code)]
 
-mod context;
-mod demand;
 pub mod dl;
 mod error;
 mod hooks;
@@ -20,20 +18,19 @@ mod source;
 mod stream;
 mod timeline;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
-pub use context::{NullStreamContext, StreamContext};
-pub use demand::DemandSlot;
 pub use error::{SourceError, StreamError, StreamResult};
 pub use hooks::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use media_rfc6381::audio_codec_supports_fmp4_packaging;
 pub use source::{
-    PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout, Source, SourcePhase,
-    SourceSeekAnchor,
+    NotReadyCause, PendingReason, ReadOutcome, SegmentDescriptor, SegmentLayout, Source,
+    SourcePhase, SourceSeekAnchor,
 };
 pub use stream::{
-    Stream, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType, VariantChangeError,
+    Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,
+    VariantChangeError,
 };
 pub use timeline::{ChunkPosition, Timeline};

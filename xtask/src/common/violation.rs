@@ -1,5 +1,3 @@
-//! Common types for emitted check results.
-
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]

@@ -1,11 +1,3 @@
-//! Block-range computation: expand a bare item span into a slice that owns
-//! its leading and trailing trivia (doc-comments, outer line comments,
-//! trailing comma, trailing line comment).
-//!
-//! The full contract — what counts as "leading", how blank lines act as
-//! boundaries, and when a scope is rejected for autofix — lives in the
-//! `README.md` next to this module.
-
 use std::ops::Range;
 
 /// Byte ranges describing one item plus its attached trivia.

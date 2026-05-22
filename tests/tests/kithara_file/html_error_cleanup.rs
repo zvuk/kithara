@@ -1,19 +1,4 @@
 #![forbid(unsafe_code)]
-//! `kithara-file` html-response cleanup invariants.
-//!
-//! Repro path for the user-reported leak: a remote track URL behind a
-//! corporate firewall returns `text/html` (captive-portal / VPN error page).
-//! The `Stream<File>` stays alive in the app (held by the player queue),
-//! so the pre-allocated 64 KB mmap created by
-//! `FileStreamState::create → AssetStore::acquire_resource` survives inside
-//! `FileInner.res` until the app shuts down.
-//!
-//! Invariant under test: after the download task fails with an
-//! `InvalidContent` (html) error, the cache file for the failing URL must
-//! NOT remain on disk — even while `Stream<File>` is still live. Expected
-//! to be RED on main: `run_full_download`'s err path currently only calls
-//! `state.res.fail(...)`, which marks the resource Failed but leaves the
-//! mmap file intact.
 
 use std::{
     net::SocketAddr,
@@ -37,11 +22,11 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestTempDir, temp_dir};
 use kithara_platform::{
     time::Instant,
     tokio::time::{sleep, timeout},
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio::{net::TcpListener, task};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -153,10 +138,11 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
     let cancel = CancellationToken::new();
-    let config = FileConfig::new(url.into())
-        .with_events(bus.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel.clone());
+    let config = FileConfig::for_src(url.into())
+        .events(bus.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel.clone())
+        .build();
 
     let stream = Stream::<File>::new(config).await.unwrap();
 
@@ -192,10 +178,11 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
     let cancel = CancellationToken::new();
-    let config = FileConfig::new(url.into())
-        .with_events(bus.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel.clone());
+    let config = FileConfig::for_src(url.into())
+        .events(bus.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel.clone())
+        .build();
 
     let stream = Stream::<File>::new(config).await.unwrap();
     let _ = wait_for_download_terminal(&mut rx, Duration::from_secs(5)).await;

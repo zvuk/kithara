@@ -1,9 +1,3 @@
-//! Sequential crossfade configuration and state tracking.
-//!
-//! Maps the rich [`CrossfadeCurve`] enum to firewheel's limited [`FadeCurve`],
-//! and bundles duration + curve into [`CrossfadeSettings`] for the processor.
-
-use derivative::Derivative;
 use firewheel::dsp::fade::FadeCurve;
 
 use crate::traits::dj::crossfade::CrossfadeCurve;
@@ -25,12 +19,19 @@ pub(crate) fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
 }
 
 /// Crossfade configuration for the player processor.
-#[derive(Clone, Debug, Derivative)]
-#[derivative(Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct CrossfadeSettings {
     pub curve: CrossfadeCurve,
-    #[derivative(Default(value = "DEFAULT_CROSSFADE_DURATION"))]
     pub duration: f32,
+}
+
+impl Default for CrossfadeSettings {
+    fn default() -> Self {
+        Self {
+            curve: CrossfadeCurve::default(),
+            duration: DEFAULT_CROSSFADE_DURATION,
+        }
+    }
 }
 
 impl CrossfadeSettings {

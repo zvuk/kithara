@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! AES-128-CBC chunk decryption for `ProcessingAssets`.
-
 use aes::Aes128;
 use cbc::{
     Decryptor,

@@ -1,10 +1,3 @@
-//! File-side `DecoderHooks` implementation.
-//!
-//! Emits `FileEvent::ReadProgress` once per chunk and
-//! `FileEvent::ReaderSeek` once per `Decoder::seek`. Mirrors the
-//! HLS hooks but without segment-level bookkeeping (file streams are
-//! a single byte sequence).
-
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -16,7 +9,6 @@ use kithara_stream::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal};
 use crate::coord::FileCoord;
 
 pub(crate) struct FileReaderHooks {
-    byte_cursor: Arc<AtomicU64>,
     coord: Arc<FileCoord>,
     seek_epoch_handle: Arc<AtomicU64>,
     bus: EventBus,
@@ -31,13 +23,11 @@ impl FileReaderHooks {
     pub(crate) fn new(
         bus: EventBus,
         coord: Arc<FileCoord>,
-        byte_cursor: Arc<AtomicU64>,
         seek_epoch_handle: Arc<AtomicU64>,
     ) -> Self {
-        let last_cursor = byte_cursor.load(Ordering::Relaxed);
+        let last_cursor = coord.position();
         Self {
             bus,
-            byte_cursor,
             coord,
             last_cursor,
             seek_epoch_handle,
@@ -68,7 +58,7 @@ impl DecoderHooks for FileReaderHooks {
         if !matches!(signal, ReaderChunkSignal::Chunk) {
             return;
         }
-        let cursor = self.byte_cursor.load(Ordering::Relaxed);
+        let cursor = self.coord.position();
         self.publish_initial_seek(cursor);
         self.last_cursor = cursor;
         self.bus.publish(FileEvent::ReadProgress {

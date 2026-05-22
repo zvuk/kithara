@@ -12,21 +12,23 @@ import KitharaFFI
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
 /// try player.insert(item)
 /// ```
-public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
-    /// Stable per-item identifier (UUIDv4 string). Mirrors the iOS
-    /// `AudioPlayerItemProtocol.audioId` — synonym retained for
-    /// `Identifiable` conformance.
-    public nonisolated var id: String { audioId }
+public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
+    /// Monotonic identifier shared with the queue. Mirrors iOS
+    /// `AudioPlayerItemProtocol.audioId: TrackId`. Also used as
+    /// `Identifiable.id` so `ForEach`/`List` keying works out of the
+    /// box.
+    public nonisolated var id: TrackId { audioId }
 
     /// Stable per-item identifier as required by `AudioPlayerItemProtocol`.
-    public nonisolated let audioId: String
+    public nonisolated let audioId: TrackId
 
-    /// Numeric form of ``audioId``, derived from the first 16 hex
-    /// digits of the UUID. Stable for a given UUID; not unique against
-    /// arbitrary collisions.
+    /// Secondary handle derived from `url + audioId` (UUIDv5 → first
+    /// 64 bits). Distinct from ``audioId`` for two items with the same
+    /// URL but different queue insertions. Mirrors iOS
+    /// `AudioPlayerItemProtocol.uuid: Int64`.
     public nonisolated var uuid: Int64 { _inner.uuidI64() }
 
-    /// The source URL.
+    /// The source URL — `file://…` for absolute local paths.
     public nonisolated let url: URL
 
     /// Caller-declared live-stream flag, mirrored from the construction
@@ -44,6 +46,99 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
     /// Single stream of all item events from Rust.
     public nonisolated var eventPublisher: AnyPublisher<ItemEvent, Never> {
         _eventSubject.eraseToAnyPublisher()
+    }
+
+    // MARK: - Discrete publishers (AudioPlayerItemProtocol)
+
+    /// Buffered byte ranges. Each emission is the full set. Combine
+    /// equivalent of iOS `rxLoadedRanges`.
+    public nonisolated var loadedRanges: AnyPublisher<[ItemLoadedRange], Never> {
+        _eventSubject
+            .compactMap { event -> [ItemLoadedRange]? in
+                if case let .loadedRangesChanged(ranges) = event {
+                    return ranges.map(ItemLoadedRange.init(ffi:))
+                }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Duration publisher (seconds). Combine equivalent of an iOS
+    /// `rxDuration` (not in their current protocol but useful here).
+    public nonisolated var duration: AnyPublisher<Double?, Never> {
+        _eventSubject
+            .compactMap { event -> Double?? in
+                if case let .durationChanged(seconds) = event {
+                    return .some(seconds)
+                }
+                return nil
+            }
+            .map { $0 }
+            .eraseToAnyPublisher()
+    }
+
+    /// Bitrate publisher (bits/sec, latest applied variant). Combine
+    /// equivalent of iOS `rxBitrate`.
+    public nonisolated var bitrate: AnyPublisher<Int32, Never> {
+        _eventSubject
+            .compactMap { event -> Int32? in
+                if case let .variantApplied(variant) = event {
+                    let bps = variant.bandwidthBps
+                    return Int32(clamping: bps)
+                }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Fires once the metadata layer reports `ReadyToPlay`. Combine
+    /// equivalent of iOS `rxReadyToPlay`.
+    public nonisolated var readyToPlay: AnyPublisher<Void, Never> {
+        _eventSubject
+            .compactMap { event -> Void? in
+                if case let .statusChanged(status) = event, status == .readyToPlay {
+                    return ()
+                }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Fires when the item plays out to its natural end. Combine
+    /// equivalent of iOS `rxDidReachEnd`.
+    public nonisolated var didReachEnd: AnyPublisher<Void, Never> {
+        _eventSubject
+            .compactMap { event -> Void? in
+                if case .didReachEnd = event { return () }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Fires when playback stalls. Combine equivalent of iOS
+    /// `rxDidStall`.
+    public nonisolated var didStall: AnyPublisher<Void, Never> {
+        _eventSubject
+            .compactMap { event -> Void? in
+                if case .didStall = event { return () }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Error publisher. Maps `ItemEvent.error` / `ItemEvent.didFail`
+    /// onto ``PlayerError``. Combine equivalent of iOS `rxError`.
+    public nonisolated var error: AnyPublisher<Error, Never> {
+        _eventSubject
+            .compactMap { event -> PlayerError? in
+                switch event {
+                case let .error(message): return .itemFailed(message)
+                case .didFail: return .itemFailed("item did fail")
+                default: return nil
+                }
+            }
+            .map { $0 as Error }
+            .eraseToAnyPublisher()
     }
 
     // MARK: - Bitrate preferences
@@ -93,9 +188,9 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
             abrMode: ffiAbrMode,
             headers: additionalHeaders,
             url: url,
+            isLiveStream: isLiveStream,
             preferredPeakBitrate: preferredPeakBitrate,
-            preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks,
-            isLiveStream: isLiveStream
+            preferredPeakBitrateExpensive: preferredPeakBitrateForExpensiveNetworks
         )
         self._inner = AudioPlayerItem(config: config)
         self.audioId = _inner.audioId()
@@ -111,6 +206,9 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
         self.audioId = inner.audioId()
         let urlString = inner.url()
         self.url = URL(string: urlString) ?? URL(fileURLWithPath: urlString)
+
+        let observer = ItemObserverBridge(subject: _eventSubject)
+        inner.setObserver(observer: observer)
     }
 
     // MARK: - Load / playability
@@ -138,6 +236,13 @@ public final class KitharaPlayerItem: Identifiable, @unchecked Sendable {
         }
         return _inner.isPlayable(progress: progress, ranges: ffiRanges)
     }
+
+    /// `and:`-labelled overload mirroring the iOS
+    /// `AudioPlayerItemProtocol.isPlayable(progress:and:)` signature.
+    /// Delegates to ``isPlayable(progress:ranges:)``.
+    public func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool {
+        isPlayable(progress: progress, ranges: ranges)
+    }
 }
 
 // MARK: - Public value types
@@ -157,9 +262,12 @@ public struct ItemLoadResult: Sendable, Equatable {
 
 /// Buffered range expressed as `[start, start + duration)` seconds.
 public struct ItemLoadedRange: Sendable, Equatable {
+    /// Range start in seconds from the item's timeline origin.
     public let start: Double
+    /// Range length in seconds.
     public let duration: Double
 
+    /// Construct a range from its start + length in seconds.
     public init(start: Double, duration: Double) {
         self.start = start
         self.duration = duration

@@ -1,11 +1,4 @@
 #![cfg(not(target_arch = "wasm32"))]
-//! Test: File with early stream close + seek via on-demand Range request.
-//!
-//! Scenario:
-//! 1. HTTP server advertises Content-Length via HEAD but only sends partial data
-//! 2. Sequential stream closes at 512KB of 1MB file
-//! 3. Seek to 700KB triggers on-demand Range request
-//! 4. Data is fetched and read correctly
 
 use std::{
     fs, io,
@@ -35,12 +28,13 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
+use kithara_integration_tests::{TestHttpServer, TestTempDir};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     thread,
     time::{sleep, timeout},
     tokio::task::spawn_blocking,
 };
-use kithara_test_utils::{TestHttpServer, TestTempDir};
 use tokio_util::sync::CancellationToken;
 
 struct Consts;
@@ -100,33 +94,33 @@ async fn handle_request(
         range_header
     );
 
-    if let Some(range_str) = range_header {
-        if let Some(range_part) = range_str.strip_prefix("bytes=") {
-            let parts: Vec<&str> = range_part.split('-').collect();
-            let start = parts[0].parse::<usize>().unwrap_or(0);
-            let end = parts
-                .get(1)
-                .filter(|s| !s.is_empty())
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(Consts::TOTAL_SIZE - 1);
+    if let Some(range_str) = range_header
+        && let Some(range_part) = range_str.strip_prefix("bytes=")
+    {
+        let parts: Vec<&str> = range_part.split('-').collect();
+        let start = parts[0].parse::<usize>().unwrap_or(0);
+        let end = parts
+            .get(1)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(Consts::TOTAL_SIZE - 1);
 
-            let end = (end + 1).min(Consts::TOTAL_SIZE);
-            tracing::info!("Server: serving range [{}, {})", start, end);
+        let end = (end + 1).min(Consts::TOTAL_SIZE);
+        tracing::info!("Server: serving range [{}, {})", start, end);
 
-            let chunk = Bytes::from(state.file_data[start..end].to_vec());
-            let content_range = format!("bytes {}-{}/{}", start, end - 1, Consts::TOTAL_SIZE);
+        let chunk = Bytes::from(state.file_data[start..end].to_vec());
+        let content_range = format!("bytes {}-{}/{}", start, end - 1, Consts::TOTAL_SIZE);
 
-            return (
-                StatusCode::PARTIAL_CONTENT,
-                [
-                    (header::CONTENT_LENGTH, (end - start).to_string()),
-                    (header::CONTENT_RANGE, content_range),
-                    (header::CONTENT_TYPE, "audio/mpeg".to_string()),
-                ],
-                chunk,
-            )
-                .into_response();
-        }
+        return (
+            StatusCode::PARTIAL_CONTENT,
+            [
+                (header::CONTENT_LENGTH, (end - start).to_string()),
+                (header::CONTENT_RANGE, content_range),
+                (header::CONTENT_TYPE, "audio/mpeg".to_string()),
+            ],
+            chunk,
+        )
+            .into_response();
     }
 
     tracing::warn!(
@@ -181,20 +175,23 @@ async fn file_stream_closes_early_seek_still_works() {
     let (url, _call_count, _server) = setup_server(file_data).await;
 
     let dl = Downloader::new(
-        DownloaderConfig::default()
-            .with_net(
-                kithara_net::NetOptions::default()
-                    .with_inactivity_timeout(Duration::from_secs(1))
-                    .with_total_timeout(Duration::from_secs(1)),
-            )
-            .with_cancel(cancel_token.clone()),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder()
+                .inactivity_timeout(Duration::from_secs(1))
+                .total_timeout(Duration::from_secs(1))
+                .build(),
+            CancellationToken::new(),
+        ))
+        .cancel(cancel_token.clone())
+        .build(),
     );
 
-    let config = FileConfig::new(FileSrc::Remote(url))
-        .with_store(StoreOptions::new(clean_temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_look_ahead_bytes(256_000)
-        .with_downloader(dl);
+    let config = FileConfig::for_src(FileSrc::Remote(url))
+        .store(StoreOptions::new(clean_temp_dir.path()))
+        .cancel(cancel_token)
+        .look_ahead_bytes(256_000)
+        .downloader(dl)
+        .build();
 
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
@@ -263,10 +260,11 @@ async fn partial_cache_resume_works() {
     let (url, _call_count, _server) = setup_server(file_data).await;
 
     let cancel1 = CancellationToken::new();
-    let config1 = FileConfig::new(FileSrc::Remote(url.clone()))
-        .with_store(StoreOptions::new(cache_dir.path()))
-        .with_cancel(cancel1.clone())
-        .with_look_ahead_bytes(256_000);
+    let config1 = FileConfig::for_src(FileSrc::Remote(url.clone()))
+        .store(StoreOptions::new(cache_dir.path()))
+        .cancel(cancel1.clone())
+        .look_ahead_bytes(256_000)
+        .build();
 
     let stream1 = Stream::<File>::new(config1).await.unwrap();
 
@@ -290,10 +288,11 @@ async fn partial_cache_resume_works() {
     tracing::info!("Phase 1 complete, stream dropped");
 
     let cancel2 = CancellationToken::new();
-    let config2 = FileConfig::new(FileSrc::Remote(url))
-        .with_store(StoreOptions::new(cache_dir.path()))
-        .with_cancel(cancel2.clone())
-        .with_look_ahead_bytes(256_000);
+    let config2 = FileConfig::for_src(FileSrc::Remote(url))
+        .store(StoreOptions::new(cache_dir.path()))
+        .cancel(cancel2.clone())
+        .look_ahead_bytes(256_000)
+        .build();
 
     let stream2 = Stream::<File>::new(config2).await.unwrap();
 

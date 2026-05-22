@@ -1,5 +1,3 @@
-//! The core scheduler loop.
-
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
@@ -137,10 +135,17 @@ pub(crate) struct Scheduler<N, O> {
 }
 
 impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
-    const EMPTY_TIMEOUT: Duration = Duration::from_millis(100);
-    const IDLE_TIMEOUT: Duration = Duration::from_millis(10);
+    /// Park budget used after `PassOutcome::Idle` — every slot is
+    /// terminal (or no slots at all), no work expected soon, so we
+    /// park longer to keep CPU idle.
+    const IDLE_TIMEOUT: Duration = Duration::from_millis(100);
     /// Threshold for warning about slow `tick` calls.
     const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
+    /// Park budget used after `PassOutcome::Waiting` /
+    /// `PassOutcome::Backpressured` — at least one slot is alive and
+    /// likely to make progress shortly (source becomes ready,
+    /// consumer drains the PCM ring), so re-check more aggressively.
+    const WAITING_TIMEOUT: Duration = Duration::from_millis(10);
 
     /// Spawn a new scheduler thread and return a handle.
     ///
@@ -230,7 +235,8 @@ fn cancel_and_drain<N: Node>(
 fn report_outcome<O: SchedulerObserver>(observer: &mut O, outcome: PassOutcome) {
     match outcome {
         PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress),
-        PassOutcome::Waiting => {}
+        PassOutcome::Waiting => observer.on_event(SchedulerEvent::Waiting),
+        PassOutcome::Backpressured => observer.on_event(SchedulerEvent::Backpressured),
         PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle),
     }
 }
@@ -238,11 +244,11 @@ fn report_outcome<O: SchedulerObserver>(observer: &mut O, outcome: PassOutcome) 
 fn park_after_outcome<N: Node, O: SchedulerObserver>(wake: &SchedulerWake, outcome: PassOutcome) {
     match outcome {
         PassOutcome::Produced => yield_now(),
-        PassOutcome::Waiting => {
-            wake.wait_timeout(Scheduler::<N, O>::IDLE_TIMEOUT);
+        PassOutcome::Waiting | PassOutcome::Backpressured => {
+            wake.wait_timeout(Scheduler::<N, O>::WAITING_TIMEOUT);
         }
         PassOutcome::Idle => {
-            wake.wait_timeout(Scheduler::<N, O>::EMPTY_TIMEOUT);
+            wake.wait_timeout(Scheduler::<N, O>::IDLE_TIMEOUT);
         }
     }
 }
@@ -299,6 +305,9 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
         best = match (best, result) {
             (TickResult::Progress, _) | (_, TickResult::Progress) => TickResult::Progress,
             (TickResult::Waiting, _) | (_, TickResult::Waiting) => TickResult::Waiting,
+            (TickResult::Backpressured, _) | (_, TickResult::Backpressured) => {
+                TickResult::Backpressured
+            }
             _ => TickResult::Done,
         };
     }
@@ -306,6 +315,7 @@ fn step_all_slots<N: Node, O: SchedulerObserver>(
     match best {
         TickResult::Progress => PassOutcome::Produced,
         TickResult::Waiting => PassOutcome::Waiting,
+        TickResult::Backpressured => PassOutcome::Backpressured,
         TickResult::Done => PassOutcome::Idle,
     }
 }

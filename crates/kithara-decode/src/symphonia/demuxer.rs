@@ -1,18 +1,13 @@
-//! `SymphoniaDemuxer` — generic [`Demuxer`] over `symphonia`'s
-//! [`FormatReader`].
-//!
-//! Wraps `Box<dyn FormatReader>` for any container Symphonia handles
-//! (MP3, FLAC, OGG, WAV, AIFF, ADTS, MKV, MP4 / fMP4 file). The demuxer
-//! pumps packets out of the audio track and exposes them as
-//! [`DemuxOutcome::Frame`] values consumable by any [`FrameCodec`].
-
 use std::{
     io::{ErrorKind, Read, Seek},
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 
-use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, StreamSeekPastEof};
+use kithara_stream::{
+    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, StreamPending, StreamSeekPastEof,
+};
+use kithara_test_utils::kithara;
 use symphonia::core::{
     codecs::{
         CodecParameters,
@@ -57,6 +52,7 @@ pub(crate) struct SymphoniaDemuxer {
     /// Replaced (and the previous packet dropped) on every successful
     /// `next_frame` call.
     current_packet: Option<symphonia::core::packet::Packet>,
+    segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
     /// Time base used to translate packet timestamps into wall-clock
     /// [`std::time::Duration`].
     time_base: Option<TimeBase>,
@@ -91,9 +87,10 @@ impl SymphoniaDemuxer {
     /// Returns a [`crate::DecodeError`] when the reader exposes no
     /// audio track or the audio track's codec parameters are missing
     /// fields the demuxer needs (sample rate, channel count).
-    pub(crate) fn from_reader(
+    pub(crate) fn from_reader_with_layout(
         format_reader: Box<dyn FormatReader>,
         byte_pos_handle: Option<Arc<AtomicU64>>,
+        segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
     ) -> DecodeResult<Self> {
         let track = format_reader
             .default_track(TrackType::Audio)
@@ -113,6 +110,7 @@ impl SymphoniaDemuxer {
             native_params,
             time_base,
             byte_pos_handle,
+            segment_layout,
             current_packet: None,
         })
     }
@@ -145,6 +143,7 @@ impl SymphoniaDemuxer {
         hint: Option<String>,
         container: Option<ContainerFormat>,
         byte_len_handle: Option<Arc<AtomicU64>>,
+        segment_layout: Option<Arc<dyn kithara_stream::SegmentLayout>>,
     ) -> DecodeResult<(Self, Arc<AtomicU64>)>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -161,7 +160,11 @@ impl SymphoniaDemuxer {
             probe_with_seek(source, &config, format_opts, false)?
         };
         let len_handle = bootstrap.byte_len_handle.clone();
-        let demuxer = Self::from_reader(bootstrap.format_reader, Some(bootstrap.byte_pos_handle))?;
+        let demuxer = Self::from_reader_with_layout(
+            bootstrap.format_reader,
+            Some(bootstrap.byte_pos_handle),
+            segment_layout,
+        )?;
         Ok((demuxer, len_handle))
     }
 
@@ -177,10 +180,27 @@ impl SymphoniaDemuxer {
 }
 
 impl Demuxer for SymphoniaDemuxer {
+    fn current_segment_index(&self) -> Option<u32> {
+        let byte = self.current_byte()?;
+        self.segment_layout
+            .as_ref()?
+            .segment_at_byte(byte.saturating_sub(1))
+            .map(|d| d.segment_index)
+    }
+
+    fn current_variant_index(&self) -> Option<usize> {
+        let byte = self.current_byte()?;
+        self.segment_layout
+            .as_ref()?
+            .segment_at_byte(byte.saturating_sub(1))
+            .map(|d| d.variant_index)
+    }
+
     fn duration(&self) -> Option<Duration> {
         self.track_info.duration
     }
 
+    #[kithara::probe]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         self.current_packet = None;
         loop {
@@ -191,22 +211,40 @@ impl Demuxer for SymphoniaDemuxer {
                 Err(SymphoniaError::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => {
                     return Ok(DemuxOutcome::Eof);
                 }
-                Err(SymphoniaError::IoError(e)) if e.kind() == ErrorKind::Interrupted => {
-                    return Ok(DemuxOutcome::Pending(PendingReason::SeekPending));
+                Err(SymphoniaError::IoError(e))
+                    if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock =>
+                {
+                    // `Interrupted` carries the seek-pending signal;
+                    // `WouldBlock` carries `NotReady` / `Retry` via the
+                    // [`StreamPending`] payload (HLS source wraps it
+                    // there to keep `Interrupted` reserved for seek so
+                    // `is_seek_pending_io` stays unambiguous).
+                    let reason = e
+                        .get_ref()
+                        .and_then(|src| src.downcast_ref::<StreamPending>())
+                        .map(|p| p.reason)
+                        .or_else(|| {
+                            e.get_ref()
+                                .and_then(|src| src.downcast_ref::<PendingReason>())
+                                .copied()
+                        })
+                        .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
+                    return Ok(DemuxOutcome::Pending(reason));
                 }
                 Err(e) => return Err(DecodeError::Backend(Box::new(e))),
             };
-            if packet.track_id() != self.track_id {
+            if packet.track_id != self.track_id {
                 continue;
             }
-            let pts = self.ts_to_duration(packet.pts());
-            let duration = self.dur_to_duration(packet.dur());
+            let pts = self.ts_to_duration(packet.pts);
+            let duration = self.dur_to_duration(packet.dur);
             self.current_packet = Some(packet);
             let data: &[u8] = &self.current_packet.as_ref().expect("BUG: just stored").data;
             return Ok(DemuxOutcome::Frame(Frame {
                 data,
                 duration,
                 pts,
+                packet_desc: &[],
             }));
         }
     }

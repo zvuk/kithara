@@ -1,11 +1,3 @@
-//! Flag for/while/loop blocks whose body is a fat aggregator.
-//!
-//! Heuristic: body has more statements than the per-kind threshold
-//! (for/while=6, unconditional loop=4 by default) AND contains at
-//! least one nested control-flow statement (if/match/inner loop).
-//! Suggest extracting the body into a named function and reducing
-//! the loop body to a sequence of calls.
-
 use anyhow::Result;
 use syn::{Block, Expr, ExprForLoop, ExprLoop, ExprWhile, Stmt, visit::Visit};
 

@@ -16,7 +16,7 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
     hls::{Hls, HlsConfig},
-    net::NetOptions,
+    net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},
     stream::{
         AudioCodec, ContainerFormat, MediaInfo, Stream,
@@ -26,15 +26,16 @@ use kithara::{
 use kithara_decode::DecoderBackend;
 use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::{
-    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+    HlsFixtureBuilder, TestHttpServer, TestServerHelper, TestTempDir, create_wav_exact_bytes,
+    fixture_protocol::PackagedSignal,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
     offline::resource_from_reader,
+    signal_pcm::signal,
+    temp_dir,
 };
 use kithara_platform::time::{Duration, Instant, sleep};
-use kithara_test_utils::{
-    HlsFixtureBuilder, TestHttpServer, TestServerHelper, TestTempDir, create_wav_exact_bytes,
-    fixture_protocol::PackagedSignal, signal_pcm::signal, temp_dir,
-};
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::{
@@ -181,15 +182,13 @@ fn resource_config(
     hint: Option<&str>,
     worker: Option<AudioWorkerHandle>,
 ) -> ResourceConfig {
-    let mut cfg = ResourceConfig::new(url.as_str()).unwrap().with_store(store);
-    if let Some(h) = hint {
-        cfg = cfg.with_hint(h);
-    }
-    if let Some(w) = worker {
-        cfg = cfg.with_worker(w);
-    }
-    cfg.decoder_backend = backend;
-    cfg
+    ResourceConfig::for_src(url.as_str())
+        .unwrap()
+        .store(store)
+        .maybe_hint(hint.map(str::to_owned))
+        .maybe_worker(worker)
+        .decoder_backend(backend)
+        .build()
 }
 
 /// Open a resource with [`resource_config`] options; panics on error.
@@ -242,11 +241,12 @@ async fn warm_hls_worker(
     backend: DecoderBackend,
 ) -> f64 {
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let hls_config = HlsConfig::new(url.clone()).with_store(store);
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_media_info(wav_info)
-        .with_worker(worker)
-        .with_decoder_backend(backend);
+    let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .worker(worker)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
@@ -301,11 +301,12 @@ async fn warm_hls_worker_without_seek(
     backend: DecoderBackend,
 ) -> f64 {
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let hls_config = HlsConfig::new(url.clone()).with_store(store);
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_media_info(wav_info)
-        .with_worker(worker)
-        .with_decoder_backend(backend);
+    let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .worker(worker)
+        .decoder_backend(backend)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
@@ -333,7 +334,7 @@ async fn warm_hls_worker_without_seek(
 }
 
 async fn read_hls_stream_some(url: &url::Url, store: StoreOptions) -> usize {
-    let config = HlsConfig::new(url.clone()).with_store(store);
+    let config = HlsConfig::for_url(url.clone()).store(store).build();
     let mut stream = Stream::<Hls>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS stream should open for {}: {err}", url));
@@ -376,8 +377,10 @@ async fn open_packaged_hls_audio(
     _codec: AudioCodec,
     backend: DecoderBackend,
 ) -> Audio<Stream<Hls>> {
-    let config = AudioConfig::<Hls>::new(HlsConfig::new(url.clone()).with_store(store))
-        .with_decoder_backend(backend);
+    let config =
+        AudioConfig::<Hls>::for_stream(HlsConfig::for_url(url.clone()).store(store).build())
+            .decoder_backend(backend)
+            .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
@@ -457,6 +460,9 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestHttpServer::new(test_app()).await;
     let store = store_options(&temp_dir, true);
     let ok_url = server.url("/ok.mp3");
@@ -531,6 +537,9 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestHttpServer::new(test_app()).await;
     let store = store_options(&temp_dir, ephemeral);
     let ok_url = server.url("/ok.mp3");
@@ -589,6 +598,9 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let player = PlayerImpl::new(PlayerConfig::default());
@@ -654,6 +666,9 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let worker = AudioWorkerHandle::new();
@@ -760,6 +775,9 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     #[case] teardown: WarmupTeardown,
     #[case] backend: DecoderBackend,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server_a = open_audio_hls_server().await;
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
@@ -866,6 +884,9 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     use kithara_integration_tests::offline::OfflinePlayer;
 
     let (_server, url) = create_packaged_single_variant_fixture(codec).await;
@@ -985,6 +1006,9 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let hls_server = open_audio_hls_server().await;
     let file_server = TestHttpServer::new(test_app()).await;
     let player = PlayerImpl::new(PlayerConfig::default());
@@ -1072,9 +1096,10 @@ async fn stress_offline_crossfade_no_gaps() {
         let p = local_mp3.clone();
         async move {
             let file_cfg = FileConfig::new(FileSrc::Local(p));
-            let audio_cfg = AudioConfig::<FileSource>::new(file_cfg)
-                .with_hint("mp3")
-                .with_worker(w);
+            let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
+                .hint("mp3".to_string())
+                .worker(w)
+                .build();
             let audio = Audio::<Stream<FileSource>>::new(audio_cfg)
                 .await
                 .expect("create local MP3 audio");
@@ -1086,10 +1111,11 @@ async fn stress_offline_crossfade_no_gaps() {
         let u = hls_url.clone();
         async move {
             let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-            let cfg = HlsConfig::new(u).with_store(s);
-            let audio_config = AudioConfig::<Hls>::new(cfg)
-                .with_media_info(wav_info)
-                .with_worker(w);
+            let cfg = HlsConfig::for_url(u).store(s).build();
+            let audio_config = AudioConfig::<Hls>::for_stream(cfg)
+                .media_info(wav_info)
+                .worker(w)
+                .build();
             let audio = Audio::<Stream<Hls>>::new(audio_config)
                 .await
                 .expect("HLS audio");
@@ -1220,6 +1246,9 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = TestHttpServer::new(test_app()).await;
     let url = server.url(path);
     let store = store_options(&temp_dir, true);
@@ -1389,16 +1418,25 @@ async fn live_remote_resource_decodes_with_duration(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let store = store_options(&temp_dir, true);
-    let net = NetOptions::default()
-        .with_inactivity_timeout(Duration::from_secs(25))
-        .with_total_timeout(Duration::from_secs(25));
-    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
-    let mut config = ResourceConfig::new(url)
+    let net = NetOptions::builder()
+        .inactivity_timeout(Duration::from_secs(25))
+        .total_timeout(Duration::from_secs(25))
+        .build();
+    let downloader = Downloader::new(
+        DownloaderConfig::builder()
+            .client(HttpClient::new(net, CancellationToken::new()))
+            .build(),
+    );
+    let config = ResourceConfig::for_src(url)
         .expect("valid URL")
-        .with_store(store)
-        .with_downloader(downloader);
-    config.decoder_backend = backend;
+        .store(store)
+        .downloader(downloader)
+        .decoder_backend(backend)
+        .build();
 
     let mut resource = Resource::new(config)
         .await
@@ -1501,14 +1539,20 @@ async fn player_mp3_duration_matches_app_flow(
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let store = store_options(&temp_dir, true);
 
     let player = PlayerImpl::new(PlayerConfig::default());
     player.reserve_slots(1);
 
-    let mut config = ResourceConfig::new(url).unwrap().with_store(store);
-    config.decoder_backend = backend;
-    player.prepare_config(&mut config);
+    let mut config = ResourceConfig::for_src(url)
+        .unwrap()
+        .store(store)
+        .decoder_backend(backend)
+        .build();
+    config = player.prepare_config(config);
 
     let resource = Resource::new(config)
         .await
@@ -1586,10 +1630,11 @@ async fn local_resource_decodes_with_duration(
         }
     };
     let store = store_options(&temp_dir, true);
-    let mut config = ResourceConfig::new(url.as_str())
+    let config = ResourceConfig::for_src(url.as_str())
         .expect("valid URL")
-        .with_store(store);
-    config.decoder_backend = backend;
+        .store(store)
+        .decoder_backend(backend)
+        .build();
 
     let mut resource = Resource::new(config)
         .await

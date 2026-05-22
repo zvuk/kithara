@@ -1,18 +1,3 @@
-//! FFI wrapper for audio player items.
-//!
-//! `AudioPlayerItem` is a handle, analogous to `AVPlayerItem`. It holds
-//! caller-supplied per-item preferences ([`FfiItemConfig`] — URL,
-//! headers, bitrate caps, ABR mode). Resource loading is owned by
-//! [`crate::player::AudioPlayer`] via `kithara_queue::Queue`:
-//!
-//! 1. `AudioPlayerItem::new(config)` — creates the handle; preferences
-//!    are frozen at construction.
-//! 2. `AudioPlayer::insert(item)` — registers the URL with the Queue,
-//!    which assigns a [`TrackId`] (stored in the item) and starts the
-//!    background load.
-//! 3. Per-item events flow through [`set_observer`] — the bridge
-//!    subscribes to the scoped event bus attached by `insert`.
-
 use std::{collections::HashMap, sync::Arc};
 
 use kithara_events::TrackId;
@@ -39,7 +24,19 @@ pub(crate) struct ItemState {
     pub duration_sec: f64,
 }
 
-/// FFI-facing audio player item with UUID identity.
+/// FFI-facing audio player item.
+///
+/// Carries two identifiers, per iOS `AudioPlayerItemProtocol`:
+/// - [`Self::audio_id`] — monotonic [`TrackId`] (`u64`) reserved at
+///   construction via [`TrackId::allocate`]. The queue consumes the
+///   same value via
+///   [`kithara_queue::Queue::insert_with_id`] / `append_with_id`, so
+///   there is exactly one address space across the FFI ↔ core
+///   boundary. This is `audioId: TrackId` on iOS.
+/// - [`Self::uuid_i64`] — `i64` derived from a per-item `UUIDv5` over
+///   `url + audio_id`. Stable for the item's lifetime and distinct
+///   for every fresh insertion of the same URL. This is
+///   `uuid: Int64` on iOS.
 #[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
 pub struct AudioPlayerItem {
     pub(crate) state: Arc<Mutex<ItemState>>,
@@ -47,37 +44,47 @@ pub struct AudioPlayerItem {
     /// events (Hls/File/Audio) published during `Resource::new` are
     /// captured even when [`set_observer`] is called later.
     pub(crate) bus: Mutex<Option<kithara_events::EventBus>>,
-    /// Queue-assigned id — set by `AudioPlayer::insert` once the Queue
-    /// accepts the source. `None` before insert, `None` again after
-    /// `remove`.
-    pub(crate) track_id: Mutex<Option<TrackId>>,
+    /// Inserted-into-queue flag — flipped by `AudioPlayer::insert` so
+    /// [`Self::load`] can tell "still detached" from "loaded enough to
+    /// answer playable". Pre-insert / post-remove value is `false`.
+    pub(crate) inserted: Mutex<bool>,
     config: FfiItemConfig,
     event_bridge: Mutex<Option<ItemEventBridge>>,
     observer: Mutex<Option<Arc<dyn ItemObserver>>>,
-    id: Uuid,
+    /// Process-wide monotonic id allocated at construction. Surfaces
+    /// through [`Self::audio_id`] and consumed by the queue.
+    id: TrackId,
+    /// `UUIDv5` over `format!("{url}:{audio_id}")`. Two items with the
+    /// same URL but different monotonic [`Self::id`] get different
+    /// uuids, so the queue can distinguish independent insertions.
+    /// Computed once in [`Self::new`] for `O(1)` accessor cost.
+    uuid: Uuid,
 }
-
-/// Number of leading hex digits taken from the UUID to derive
-/// [`AudioPlayerItem::uuid_i64`]. Must be 16 (i.e. 64 bits).
-const UUID_HEX_PREFIX_LEN: usize = 16;
 
 /// Methods exported across the FFI boundary.
 #[cfg_attr(feature = "backend-uniffi", uniffi::export)]
 impl AudioPlayerItem {
-    /// Create a new item with frozen preferences. Loading starts
-    /// automatically when the item is inserted into an
+    /// Create a new item with frozen preferences. Reserves a fresh
+    /// [`TrackId`] from the process-wide counter so `audioId` is stable
+    /// from this point on, and derives a `UUIDv5` over
+    /// `format!("{url}:{audio_id}")` for the secondary `uuid` handle.
+    /// Loading starts automatically when the item is inserted into an
     /// [`crate::player::AudioPlayer`].
     #[must_use]
     #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
     pub fn new(config: FfiItemConfig) -> Arc<Self> {
         let live = config.is_live_stream;
+        let id = TrackId::allocate();
+        let key = format!("{}:{}", config.url, id.as_u64());
+        let uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes());
         Arc::new(Self {
             config,
-            id: Uuid::new_v4(),
+            id,
+            uuid,
             event_bridge: Mutex::new(None),
             observer: Mutex::new(None),
             bus: Mutex::new(None),
-            track_id: Mutex::new(None),
+            inserted: Mutex::new(false),
             state: Arc::new(Mutex::new(ItemState {
                 is_live_stream: live,
                 ..ItemState::default()
@@ -85,10 +92,12 @@ impl AudioPlayerItem {
         })
     }
 
-    /// Stable per-item identifier (`UUIDv4` string). Mirrors the iOS
-    /// `AudioPlayerItemProtocol.audioId`.
-    pub fn audio_id(&self) -> String {
-        self.id.to_string()
+    /// Monotonic per-item identifier reserved at construction. Mirrors
+    /// the iOS `AudioPlayerItemProtocol.audioId: TrackId`. Same value
+    /// the queue uses internally — see [`Self::new`] for the
+    /// allocation contract.
+    pub fn audio_id(&self) -> TrackId {
+        self.id
     }
 
     /// Cached item duration in seconds. Defaults to `0.0` until the
@@ -141,7 +150,7 @@ impl AudioPlayerItem {
         )
     )]
     pub fn load(&self, callback: Arc<dyn ItemLoadCallback>) {
-        let inserted = self.track_id.lock_sync().is_some();
+        let inserted = *self.inserted.lock_sync();
         let snapshot = *self.state.lock_sync();
         let result = if inserted {
             FfiItemLoadResult {
@@ -170,23 +179,25 @@ impl AudioPlayerItem {
         self.restart_bridge();
     }
 
+    /// Audio source string — either a network URL or an absolute local
+    /// path, as supplied via [`FfiItemConfig::url`]. The Swift wrapper
+    /// surfaces this as a `URL` (`file://…` for local paths) so the iOS
+    /// `AudioPlayerItemProtocol.url` contract holds for both cases.
     pub fn url(&self) -> String {
         self.config.url.clone()
     }
 
-    /// 64-bit numeric form of [`Self::audio_id`]. Derived from the
-    /// first 16 hex digits of the UUID — stable for the same UUID, but
-    /// **not** cryptographically unique. Treat as an opaque numeric
-    /// handle.
+    /// Signed-integer view of the per-item `UUIDv5` (`url + audioId`).
+    /// Maps to `AudioPlayerItemProtocol.uuid: Int64` on iOS. Distinct
+    /// from [`Self::audio_id`]: two items with the same URL but
+    /// different monotonic ids produce different `uuid_i64`s, so the
+    /// queue can distinguish independent insertions even when the
+    /// caller has not reset state in between.
     pub fn uuid_i64(&self) -> i64 {
-        let hex: String = self
-            .audio_id()
-            .chars()
-            .filter(char::is_ascii_hexdigit)
-            .take(UUID_HEX_PREFIX_LEN)
-            .collect();
-        let raw = u64::from_str_radix(&hex, 16).unwrap_or(0);
-        raw as i64
+        let bytes = self.uuid.as_bytes();
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&bytes[0..8]);
+        i64::from_be_bytes(buf)
     }
 }
 
@@ -194,6 +205,13 @@ impl AudioPlayerItem {
 impl AudioPlayerItem {
     pub(crate) fn abr_mode(&self) -> Option<FfiAbrMode> {
         self.config.abr_mode
+    }
+
+    /// Strongly-typed view of [`Self::audio_id`] for queue calls that
+    /// take a [`TrackId`]. The value is identical — just the wrapper
+    /// type — so there is no conversion loss across the boundary.
+    pub(crate) fn track_id(&self) -> TrackId {
+        self.id
     }
 
     pub(crate) fn headers(&self) -> Option<HashMap<String, String>> {
@@ -236,10 +254,44 @@ mod tests {
     }
 
     #[kithara::test]
-    fn new_item_has_unique_audio_id() {
+    fn audio_id_is_monotonic_across_new_items() {
         let a = item_for("https://example.com/a.mp3");
         let b = item_for("https://example.com/b.mp3");
+        assert!(a.audio_id() < b.audio_id());
+    }
+
+    #[kithara::test]
+    fn audio_id_is_distinct_for_two_items_of_same_url() {
+        let a = item_for("https://example.com/track.mp3");
+        let b = item_for("https://example.com/track.mp3");
         assert_ne!(a.audio_id(), b.audio_id());
+    }
+
+    #[kithara::test]
+    fn uuid_is_distinct_for_two_items_of_same_url() {
+        let a = item_for("https://example.com/track.mp3");
+        let b = item_for("https://example.com/track.mp3");
+        assert_ne!(a.uuid_i64(), b.uuid_i64());
+    }
+
+    #[kithara::test]
+    fn uuid_i64_matches_uuid_v5_of_url_and_audio_id() {
+        let url = "https://example.com/song.mp3";
+        let item = item_for(url);
+        let key = format!("{}:{}", url, item.audio_id());
+        let expected = Uuid::new_v5(&Uuid::NAMESPACE_URL, key.as_bytes());
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&expected.as_bytes()[0..8]);
+        assert_eq!(item.uuid_i64(), i64::from_be_bytes(buf));
+    }
+
+    #[kithara::test]
+    fn audio_id_and_uuid_work_for_local_path() {
+        let path = "/Users/me/Music/song.flac";
+        let a = item_for(path);
+        let b = item_for(path);
+        assert_ne!(a.audio_id(), b.audio_id());
+        assert_ne!(a.uuid_i64(), b.uuid_i64());
     }
 
     #[kithara::test]
@@ -259,9 +311,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn track_id_initially_none() {
+    fn inserted_flag_initially_false() {
         let item = item_for("https://example.com/a.mp3");
-        assert!(item.track_id.lock_sync().is_none());
+        assert!(!*item.inserted.lock_sync());
     }
 
     #[kithara::test]
@@ -285,13 +337,6 @@ mod tests {
         let first = item.uuid_i64();
         let second = item.uuid_i64();
         assert_eq!(first, second);
-    }
-
-    #[kithara::test]
-    fn uuid_i64_differs_across_items() {
-        let a = item_for("https://example.com/a.mp3");
-        let b = item_for("https://example.com/b.mp3");
-        assert_ne!(a.uuid_i64(), b.uuid_i64());
     }
 
     #[kithara::test]

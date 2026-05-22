@@ -80,30 +80,23 @@ mod tests {
     }
 
     #[kithara::test]
-    fn threshold_60_db_maps_to_1e_minus_3() {
+    #[case::db_40(40.0, 1.0e-2, 1e-8)]
+    #[case::db_60(60.0, 1.0e-3, 1e-9)]
+    #[case::db_80(80.0, 1.0e-4, 1e-10)]
+    fn threshold_db_maps_to_amplitude(
+        #[case] threshold_db: f32,
+        #[case] expected_amplitude: f32,
+        #[case] eps: f32,
+    ) {
         let params = SilenceTrimParams {
-            threshold_db: 60.0,
+            threshold_db,
             ..Default::default()
         };
-        assert!(approx(params.threshold_amplitude(), 1.0e-3, 1e-9));
-    }
-
-    #[kithara::test]
-    fn threshold_80_db_maps_to_1e_minus_4() {
-        let params = SilenceTrimParams {
-            threshold_db: 80.0,
-            ..Default::default()
-        };
-        assert!(approx(params.threshold_amplitude(), 1.0e-4, 1e-10));
-    }
-
-    #[kithara::test]
-    fn threshold_40_db_maps_to_1e_minus_2() {
-        let params = SilenceTrimParams {
-            threshold_db: 40.0,
-            ..Default::default()
-        };
-        assert!(approx(params.threshold_amplitude(), 1.0e-2, 1e-8));
+        assert!(approx(
+            params.threshold_amplitude(),
+            expected_amplitude,
+            eps
+        ));
     }
 
     #[kithara::test]

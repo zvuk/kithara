@@ -128,16 +128,14 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn track_source_from_str() {
-        let src: TrackSource = "https://example.com/song.mp3".into();
-        assert_eq!(src.uri(), Some("https://example.com/song.mp3"));
-    }
-
-    #[kithara::test]
-    fn track_source_from_string() {
-        let s = "https://example.com/track.m3u8".to_string();
-        let src: TrackSource = s.into();
-        assert_eq!(src.uri(), Some("https://example.com/track.m3u8"));
+    #[case::from_str("https://example.com/song.mp3")]
+    #[case::from_string("https://example.com/track.m3u8")]
+    fn track_source_from_string_kind(#[case] url: &str) {
+        let owned = url.to_string();
+        let from_owned: TrackSource = owned.into();
+        assert_eq!(from_owned.uri(), Some(url));
+        let from_ref: TrackSource = url.into();
+        assert_eq!(from_ref.uri(), Some(url));
     }
 
     #[kithara::test]

@@ -1,10 +1,3 @@
-//! Cross-test reader helpers for driving `Audio<Stream<_>>` to EOF or to a
-//! minimum sample count.
-//!
-//! These replace per-file copies in `multi_instance/*` and future stress
-//! suites — the logic is identical up to the underlying `StreamType`, so we
-//! generalize instead of duplicating.
-
 use kithara::{
     audio::{Audio, ReadOutcome},
     stream::{Stream, StreamType},

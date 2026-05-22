@@ -1,22 +1,3 @@
-//! Flag duplicate ownership across nested struct fields.
-//!
-//! When `Outer` already owns (or holds an `Arc`/`Rc`/`Box` to) a config
-//! struct, a separate field whose name AND peeled type match a field
-//! reachable through the nested config is a duplicate-ownership smell.
-//! The right access shape is `self.some_conf.some_other_conf.value`.
-//!
-//! Detection is structural, not nominal: we match on
-//! `(field_name, peeled_type_signature)` so `Outer.flush_hub: u32` and
-//! `Inner.flush_hub: String` are not flagged together.
-//!
-//! Wrapper types (`Arc<T>`, `Rc<T>`, `Box<T>`, `RefCell<T>`, `Cell<T>`,
-//! `Mutex<T>`, `RwLock<T>`, `&T`, `&mut T`) are peeled recursively so
-//! `Arc<Foo>` ≡ `Foo`.
-//!
-//! Sibling to the existing `redundant_accessors` check: that flags
-//! getter *methods* that just return `self.field`, this flags *fields*
-//! that duplicate state already reachable through another field.
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::Result;

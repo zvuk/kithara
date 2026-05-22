@@ -10,7 +10,7 @@ use clap::Parser;
 use kithara::{
     assets::{FlushHub, FlushPolicy},
     audio::generate_log_spaced_bands,
-    net::NetOptions,
+    net::{HttpClient, NetOptions},
     play::{PlayerConfig, PlayerImpl},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -19,8 +19,8 @@ use kithara_app::gui;
 #[cfg(feature = "gui")]
 use kithara_app::gui::GuiFrontend;
 #[cfg(feature = "tui")]
-use kithara_app::tui::{TuiFrontend, init_tracing as init_tui_tracing};
-use kithara_app::{config::AppConfig, frontend::Frontend};
+use kithara_app::tui::TuiFrontend;
+use kithara_app::{config::AppConfig, frontend::Frontend, tracing_init::init_tracing};
 use kithara_queue::{Queue, QueueConfig};
 use tokio_util::sync::CancellationToken;
 
@@ -82,18 +82,13 @@ fn suppress_macos_system_logs() {
 #[cfg(not(target_os = "macos"))]
 fn suppress_macos_system_logs() {}
 
-#[cfg(feature = "tui")]
 fn init_tracing_for_mode(mode: Mode) -> AppResult<()> {
     let log_directives: &[&str] = match mode {
         Mode::Tui => &["off"],
         _ => &["info"],
     };
-    init_tui_tracing(log_directives, mode == Mode::Tui)
-}
-
-#[cfg(not(feature = "tui"))]
-fn init_tracing_for_mode(_mode: Mode) -> AppResult<()> {
-    gui::init_tracing()
+    init_tracing(log_directives, mode == Mode::Tui)?;
+    Ok(())
 }
 
 fn main() -> AppResult {
@@ -102,19 +97,25 @@ fn main() -> AppResult {
     let args = Args::parse();
     let mode = resolve_mode(args.mode);
 
-    let mut net = NetOptions::default();
-    net.is_insecure = args.insecure;
-    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
-    let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default()); // kithara:cancel:owner
+    init_tracing_for_mode(mode)?;
+
+    let app_cancel = CancellationToken::new(); // kithara:cancel:owner
+    let net = NetOptions::builder()
+        .is_insecure(args.insecure || kithara_app::baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
+        .compression(kithara_app::baked::BAKED_COMPRESSION)
+        .build();
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(net, app_cancel.child_token())).build(),
+    );
+    let flush_hub = FlushHub::new(app_cancel.child_token(), FlushPolicy::default());
     let config = AppConfig::new(downloader, flush_hub)
         .with_tracks(args.tracks)
         .with_should_accept_invalid_certs(args.insecure);
 
-    init_tracing_for_mode(mode)?;
-
-    let player_config = PlayerConfig::default()
-        .with_crossfade_duration(config.crossfade_seconds)
-        .with_eq_layout(generate_log_spaced_bands(config.eq_band_count));
+    let player_config = PlayerConfig::builder()
+        .crossfade_duration(config.crossfade_seconds)
+        .eq_layout(generate_log_spaced_bands(config.eq_band_count))
+        .build();
     let player = Arc::new(PlayerImpl::new(player_config));
     let queue_config = QueueConfig::default().with_player(player);
 

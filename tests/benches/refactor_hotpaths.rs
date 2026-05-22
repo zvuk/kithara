@@ -28,16 +28,17 @@ use kithara::{
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
-    net::NetOptions,
+    net::{HttpClient, NetOptions},
     stream::{
         Stream,
         dl::{Downloader, DownloaderConfig},
     },
 };
 use kithara_audio::{ResamplerParams, ResamplerProcessor};
+use kithara_integration_tests::TestHttpServer;
 use kithara_platform::tokio::runtime::{Builder, Runtime};
-use kithara_test_utils::TestHttpServer;
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 struct Consts;
@@ -48,10 +49,6 @@ impl Consts {
     const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;
     const HLS_READ_TARGET_BYTES: usize = 196_608;
     const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
-
-    const fn hls_total_bytes() -> usize {
-        Self::HLS_SEGMENT_COUNT * Self::HLS_SEGMENT_SIZE
-    }
 }
 
 fn make_runtime() -> Runtime {
@@ -237,8 +234,8 @@ fn bench_resampler_process(c: &mut Criterion) {
 
     group.bench_function("passthrough_process", |b| {
         let host_rate = Arc::new(AtomicU32::new(44_100));
-        let params = ResamplerParams::new(Arc::clone(&host_rate), 44_100, 2)
-            .with_quality(ResamplerQuality::High);
+        let mut params = ResamplerParams::new(Arc::clone(&host_rate), 44_100, 2);
+        params.quality = ResamplerQuality::High;
         let mut processor = ResamplerProcessor::new(params);
         let chunk = make_chunk(44_100, 2, 4_096);
 
@@ -251,8 +248,8 @@ fn bench_resampler_process(c: &mut Criterion) {
 
     group.bench_function("rate_switch_process", |b| {
         let host_rate = Arc::new(AtomicU32::new(44_100));
-        let params = ResamplerParams::new(Arc::clone(&host_rate), 48_000, 2)
-            .with_quality(ResamplerQuality::High);
+        let mut params = ResamplerParams::new(Arc::clone(&host_rate), 48_000, 2);
+        params.quality = ResamplerQuality::High;
         let mut processor = ResamplerProcessor::new(params);
         let chunk = make_chunk(48_000, 2, 8_192);
 
@@ -287,7 +284,9 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
             |(_temp_dir, file_path)| {
                 rt.block_on(async move {
                     let file_config = FileConfig::new(file_path.into());
-                    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+                    let config = AudioConfig::<File>::for_stream(file_config)
+                        .hint(("mp3").to_string())
+                        .build();
                     let mut audio = Audio::<Stream<File>>::new(config)
                         .await
                         .unwrap_or_else(|e| panic!("audio init failed: {e}"));
@@ -333,17 +332,24 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
             |temp_dir| {
                 let url = master_url.clone();
                 rt.block_on(async move {
-                    let net = NetOptions::default().with_pool_max_idle_per_host(8);
-                    let downloader = Downloader::new(DownloaderConfig::default().with_net(net));
-                    let store = StoreOptions::new(temp_dir.path())
-                        .with_is_ephemeral(true)
-                        .with_max_bytes(200_000);
-                    let config = HlsConfig::new(url)
-                        .with_store(store)
-                        .with_initial_abr_mode(AbrMode::Auto(Some(1)))
-                        .with_downloader(downloader)
-                        .with_download_batch_size(3)
-                        .with_look_ahead_bytes(96_000);
+                    let net = NetOptions::builder().pool_max_idle_per_host(8).build();
+                    let downloader = Downloader::new(
+                        DownloaderConfig::builder()
+                            .client(HttpClient::new(net, CancellationToken::new()))
+                            .build(),
+                    );
+                    let store = StoreOptions::builder()
+                        .cache_dir(temp_dir.path().into())
+                        .is_ephemeral(true)
+                        .max_bytes(200_000)
+                        .build();
+                    let config = HlsConfig::for_url(url)
+                        .store(store)
+                        .initial_abr_mode(AbrMode::Auto(Some(1)))
+                        .downloader(downloader)
+                        .download_batch_size(3)
+                        .look_ahead_bytes(96_000)
+                        .build();
 
                     let mut stream = Stream::<Hls>::new(config)
                         .await

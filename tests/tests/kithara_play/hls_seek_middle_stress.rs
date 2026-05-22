@@ -1,32 +1,3 @@
-//! Stress wrapper for the slow-connection seek scenario.
-//!
-//! User reports a 1/N flake in `kithara-app`: after the timeout fixes
-//! landed, seeks against a slow link mostly succeed but occasionally
-//! still hang. Single-shot tests (`hls_seek_middle_no_queue.rs`) cannot
-//! reproduce this — the race is rare. This file repeats the same
-//! sequence inside one player session, varying the seek target on each
-//! pass so accumulated decoder/timeline state surfaces the residual
-//! bug.
-//!
-//! Layout:
-//! - One `PackagedTestServer` (3-variant AAC fMP4) with a per-segment
-//!   delay applied to the segment that contains the next seek target.
-//! - One `Resource` and `OfflinePlayer` reused across all iterations
-//!   so timeline / consumer-phase state accumulates.
-//! - For each iteration: warmup-render, seek to a target inside a
-//!   delayed segment, render until position advances ≥ 1 s past the
-//!   target, then move on. A single failure in any iteration fails
-//!   the whole stress run with the iteration index reported.
-//!
-//! Two parametrised cases:
-//! - `quick(1)` — sanity sentinel; matches the existing single-shot
-//!   contract. Lives in `suite_light`.
-//! - `stress(20)` — the user-reported flake reproducer (~80 % catch
-//!   rate at 5 % per-iteration failure). Mirrored into
-//!   `tests/tests/kithara_play_stress/hls_seek_middle_stress_long.rs`
-//!   under `suite_stress` so it runs under the CPU-isolated stress
-//!   profile and does not bloat the default `just test` window.
-
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};
@@ -37,9 +8,12 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_decode::DecoderBackend;
-use kithara_integration_tests::offline::OfflinePlayer;
-use kithara_test_utils::{PackagedTestServer, fixture_protocol::DelayRule, temp_dir};
+use kithara_integration_tests::{
+    PackagedTestServer, fixture_protocol::DelayRule, offline::OfflinePlayer, temp_dir,
+};
+use kithara_net::{HttpClient, NetOptions};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -120,6 +94,9 @@ async fn hls_seek_middle_repeated_seeks_stress(
     #[case] iterations: u32,
     #[case] backend: DecoderBackend,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let server = PackagedTestServer::with_delay_rules(vec![DelayRule {
         variant: None,
         segment_eq: None,
@@ -131,12 +108,21 @@ async fn hls_seek_middle_repeated_seeks_stress(
 
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
-    let downloader = Downloader::new(DownloaderConfig::default());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .build(),
+    );
 
-    let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
-    cfg = cfg.with_downloader(downloader.clone()).with_name("t0");
-    cfg.store = store;
-    cfg.decoder_backend = backend;
+    let cfg = ResourceConfig::for_src(master.as_str())
+        .expect("valid master URL")
+        .downloader(downloader.clone())
+        .name("t0".to_string())
+        .store(store)
+        .decoder_backend(backend)
+        .build();
 
     let resource = Resource::new(cfg)
         .await

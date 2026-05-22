@@ -1,11 +1,6 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
-//! Eviction integration tests.
-//!
-//! Each `AssetStore` is scoped to a single `asset_root`, so eviction between assets
-//! requires creating multiple `AssetStore` instances with the same `root_dir`.
-
 use std::{fs, path::Path};
 
 use kithara::{
@@ -13,8 +8,8 @@ use kithara::{
     storage::ResourceExt,
 };
 use kithara_assets::index::schema::{ArchivedPinsIndexFile, PinsIndexFile};
+use kithara_integration_tests::temp_dir;
 use kithara_platform::{thread, time::Duration};
-use kithara_test_utils::temp_dir;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
@@ -23,7 +18,7 @@ fn exists_asset_dir(root: &Path, asset_root: &str) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn asset_store_with_root(
-    temp_dir: &kithara_test_utils::TestTempDir,
+    temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
     max_assets: Option<usize>,
 ) -> AssetStore {
@@ -48,7 +43,7 @@ fn asset_store_with_root(
 fn eviction_max_assets_skips_pinned_assets(
     #[case] max_assets: usize,
     #[case] create_count: usize,
-    temp_dir: kithara_test_utils::TestTempDir,
+    temp_dir: kithara_integration_tests::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
 
@@ -122,7 +117,7 @@ fn eviction_max_assets_skips_pinned_assets(
 #[case(3)]
 fn eviction_ignores_missing_index(
     #[case] asset_count: usize,
-    temp_dir: kithara_test_utils::TestTempDir,
+    temp_dir: kithara_integration_tests::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
 
@@ -153,7 +148,7 @@ fn eviction_ignores_missing_index(
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
+fn eviction_with_zero_byte_assets(temp_dir: kithara_integration_tests::TestTempDir) {
     let dir = temp_dir.path().to_path_buf();
 
     for i in 0..3 {
@@ -191,7 +186,7 @@ fn eviction_respects_max_assets_limit(
     #[case] max_assets: usize,
     #[case] create_count: usize,
     #[case] pinned_count: usize,
-    temp_dir: kithara_test_utils::TestTempDir,
+    temp_dir: kithara_integration_tests::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
 

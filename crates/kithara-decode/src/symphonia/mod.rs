@@ -8,16 +8,16 @@
 //! MediaSource` bridge), `probe::{new_direct, probe_with_seek}`, and
 //! `echain` (error-chain inspection) — back both.
 
+#[cfg(feature = "fdk-aac")]
+pub(crate) mod aac_fdk;
 pub(crate) mod adapter;
 pub(crate) mod codec;
 pub(crate) mod config;
 pub(crate) mod demuxer;
 pub(crate) mod echain;
 pub(crate) mod probe;
+pub(crate) mod registry;
 
 pub(crate) use codec::SymphoniaCodec;
 pub(crate) use config::SymphoniaConfig;
 pub(crate) use demuxer::SymphoniaDemuxer;
-
-#[cfg(test)]
-mod tests;

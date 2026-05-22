@@ -1,13 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Events emitted during HLS playback.
-//!
-//! Reader-side: factual download lifecycle (HTTP request lifecycle,
-//! bandwidth, body errors) lives in [`crate::DownloaderEvent`]. This
-//! module owns reader/source-level facts (segment boundary crossings,
-//! byte progress, stale-epoch diagnostics) plus HLS-specific errors
-//! (playlist/decryption/codec).
-
 use crate::SeekEpoch;
 
 /// Errors specific to the HLS stream layer (non-network, non-downloader).

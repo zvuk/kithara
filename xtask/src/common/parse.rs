@@ -1,5 +1,3 @@
-//! `syn` parsing helpers shared by checks.
-
 use std::{collections::BTreeMap, path::Path};
 
 use anyhow::Result;

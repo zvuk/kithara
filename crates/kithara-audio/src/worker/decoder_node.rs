@@ -1,5 +1,3 @@
-//! Decoder node for the audio worker.
-
 use std::sync::Arc;
 
 use kithara_decode::PcmChunk;
@@ -118,7 +116,7 @@ impl Node for DecoderNode {
         self.sync_seek_epoch();
 
         if !self.outlet.flush() {
-            return TickResult::Waiting;
+            return TickResult::Backpressured;
         }
 
         if self.runtime.chunks_sent >= self.preload_chunks && !self.runtime.preloaded {
@@ -143,7 +141,7 @@ impl Node for DecoderNode {
                 TickResult::Waiting
             }
 
-            TrackStep::Eof if self.runtime.eof_sent => TickResult::Waiting,
+            TrackStep::Eof if self.runtime.eof_sent => TickResult::Backpressured,
 
             TrackStep::Eof => {
                 let epoch = self.source.timeline().seek_epoch();
@@ -235,7 +233,7 @@ mod tests {
 
         let mut node = test_node(source, outlet, notify);
 
-        assert_eq!(node.tick(), TickResult::Waiting);
+        assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(!node.runtime.eof_sent);
 
         let _ = node.outlet.take_pending();
@@ -341,7 +339,7 @@ mod tests {
         assert_eq!(node.runtime.chunks_sent, 1);
         assert!(!node.runtime.preloaded);
 
-        assert_eq!(node.tick(), TickResult::Waiting);
+        assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(!node.runtime.preloaded);
 
         let _ = inlet.try_pop();

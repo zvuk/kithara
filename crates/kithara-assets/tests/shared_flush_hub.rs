@@ -1,10 +1,3 @@
-//! Integration tests for the multi-store shared [`FlushHub`].
-//!
-//! These pin the contract that motivates `S5`: a single `FlushHub` can
-//! coordinate flushes across many `AssetStore` instances, and dropping
-//! a store transparently removes its indexes from the hub registry via
-//! `Weak`-based GC.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara_assets::{AssetStoreBuilder, FlushHub, FlushPolicy, ResourceKey};

@@ -1,7 +1,3 @@
-//! Flag groups of integer-typed const items that are structurally a
-//! poor-man's enum. Recommend `enum`/`bitflags!`/`#[repr(T)] enum`
-//! based on the value shape (sequential / power-of-2 / sparse).
-
 use std::collections::HashMap;
 
 use anyhow::Result;

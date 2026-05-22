@@ -1,13 +1,18 @@
 //! Apple `AudioToolbox` codec surface.
 //!
-//! `AppleCodec` (`FrameCodec` impl over `AudioConverter`) consumes already-demuxed
-//! frames; container parsing is the demuxer's job. HW-acceleration preserved for
-//! AAC-LC / FLAC fMP4. Non-fmp4 file decoding (MP3, raw FLAC, WAV) flows through
-//! the Symphonia software path.
+//! Two pipelines share `AudioConverter` for PCM output:
+//! - fMP4 AAC-LC / FLAC over HLS: container parsed by
+//!   `crate::fmp4::Fmp4SegmentDemuxer`, frames decoded by [`AppleCodec`].
+//! - Standalone WAV / MP3 / ALAC: container parsed via `AudioFileServices`
+//!   ([`audio_file::AppleAudioFile`]), frames decoded by [`AppleCodec`].
+//!   No Symphonia required.
 
+pub(crate) mod audio_file;
+pub(crate) mod audio_file_demuxer;
 pub(crate) mod codec;
 pub(crate) mod consts;
 pub(crate) mod converter;
 pub(crate) mod ffi;
 
+pub(crate) use audio_file_demuxer::AppleAudioFileDemuxer;
 pub(crate) use codec::AppleCodec;

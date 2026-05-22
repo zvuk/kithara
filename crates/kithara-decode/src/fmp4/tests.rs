@@ -1,5 +1,3 @@
-//! End-to-end test of the segment-aware decoder pipeline.
-
 use std::{
     io::{Cursor, Seek, SeekFrom},
     ops::Range,
@@ -58,8 +56,8 @@ struct FakeSegmented {
 }
 
 impl SegmentLayout for FakeSegmented {
-    fn init_segment_range(&self) -> Option<Range<u64>> {
-        Some(self.init_range.clone())
+    fn init_segment_range(&self) -> Range<u64> {
+        self.init_range.clone()
     }
 
     fn len(&self) -> Option<u64> {
@@ -153,15 +151,7 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
     let demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
-    let decoder = ComposedDecoder::new(
-        demuxer,
-        codec,
-        PcmPool::default().clone(),
-        0,
-        None,
-        None,
-        None,
-    );
+    let decoder = ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
     (decoder, reads, record)
 }
 
@@ -185,6 +175,106 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
     assert!(chunk.frames() > 0);
     assert!(chunk.spec().sample_rate >= 8_000);
     assert!(chunk.spec().channels >= 1);
+}
+
+/// Helper used by the RED scaffolds below: pull one PCM chunk from the
+/// decoder, returning `None` on EOF or after exhausting the retry budget.
+fn pull_one_chunk(
+    decoder: &mut ComposedDecoder<Fmp4SegmentDemuxer, SymphoniaCodec>,
+) -> Option<crate::types::PcmChunk> {
+    for _ in 0..16 {
+        match decoder.next_chunk().ok()? {
+            DecoderChunkOutcome::Chunk(chunk) => return Some(chunk),
+            DecoderChunkOutcome::Pending(_) => continue,
+            DecoderChunkOutcome::Eof => return None,
+        }
+    }
+    None
+}
+
+/// RED scaffold for ABR variant-switch sub-problem #3
+/// (see `project_hls_abr_variant_switch_init_range_bug`).
+///
+/// `Fmp4SegmentDemuxer::open` hardcodes `next_byte = 0`. Production
+/// calls `apply_format_change` with `target_offset` equal to the
+/// init-range start in the NEW variant's byte map (which is 0 because
+/// `set_layout_variant` already swapped the active byte map). The
+/// factory then builds the demuxer with `OffsetReader::base_offset = 0`,
+/// and the demuxer's first `next_frame` queries
+/// `segment_after_byte(0)` which always returns the layout's seg-0.
+///
+/// Result: regardless of where the previous decoder left off, the new
+/// decoder restarts at the new variant's seg-0 (T1's "drift = full
+/// pre-switch frame count" symptom).
+///
+/// This test pins the CURRENT (broken) observable: a freshly opened
+/// `Fmp4SegmentDemuxer` restarts at the layout's seg-0; there is no API
+/// to resume at a non-zero `decode_time`. ABR variant-switch
+/// `recreate_decoder` relies on this and consequently restarts playback
+/// at seg-0 of the new variant. When the resume API lands, invert this
+/// assertion to `chunk.meta.timestamp >= resume_point`.
+///
+/// Note on the exact timestamp: the fixture is AAC-LC @ 44.1 kHz. The
+/// in-tree fdk-aac adapter strips its algorithmic delay
+/// (`outputDelay ≈ 1024` frames for AAC-LC @ 44.1 kHz, see
+/// `crates/kithara-decode/src/symphonia/aac_fdk.rs`), so the first
+/// emitted PCM chunk's timestamp is the strip count expressed in time
+/// (~23.22 ms). The "open restarts at seg-0" contract is preserved —
+/// only the time-domain anchor is offset by the codec strip — so we
+/// assert the timestamp sits inside the first AAC frame's window,
+/// not strictly equal to zero.
+#[kithara::test]
+fn red_open_always_starts_at_layout_seg_0() {
+    let (blob, segmented) = build_test_layout(3);
+    let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
+
+    let chunk = pull_one_chunk(&mut decoder).expect("BUG: at least one PCM chunk from seg-0");
+    // First AAC frame at 44.1 kHz = 1024 / 44_100 ≈ 23.22 ms — the
+    // upper bound below; lower bound `ZERO` covers backends that do
+    // not strip codec delay (Apple AudioConverter, Symphonia native).
+    let max_strip_time = Duration::from_micros(24_000);
+    assert!(
+        chunk.meta.timestamp <= max_strip_time,
+        "RED — Fmp4SegmentDemuxer::open hardcodes next_byte=0, so the \
+         first chunk always lands inside seg-0 (timestamp ≤ one AAC \
+         frame's worth of codec-delay strip, ≈23.22 ms @ 44.1 kHz). \
+         There is no API to resume at a non-zero decode_time. ABR \
+         variant-switch recreate_decoder relies on this and \
+         consequently restarts playback at seg-0 of the new variant. \
+         When the resume API lands, INVERT this assertion. Got: {:?}",
+        chunk.meta.timestamp
+    );
+}
+
+/// RED scaffold for ABR variant-switch sub-problem #4
+/// (cursor freshness): `SegmentCursor::read.byte_range` is frozen at
+/// `ensure_cursor` / `seek` time from `descriptor.byte_range`. If the
+/// underlying `SegmentLayout` updates the descriptor between
+/// `ensure_cursor` and `fill_segment_buffer` (HEAD-estimated size →
+/// actual committed size, or pre-DRM → post-DRM), the cursor still
+/// allocates and seeks against the OLD range. `parse_segment_frames`
+/// then panics with "sample byte range past segment end" because the
+/// fragment's moof-described samples don't fit the smaller buffer.
+///
+/// Contract under test:
+///   - Either `fill_segment_buffer` must re-query the layout each
+///     iteration and grow the buffer if the descriptor's range
+///     extended.
+///   - Or `ensure_cursor` must capture a layout-version cookie and
+///     refuse to fill against a stale descriptor.
+///
+/// Today neither holds: the cursor commits to whatever
+/// `segment_after_byte` returned at first call. This scaffold is
+/// `#[ignore]`-marked because reproducing the parse-side panic
+/// requires bespoke moof bytes — left as a TODO for the fix author.
+/// The point of the scaffold is to make the missing contract
+/// explicit so the fix has somewhere to land its regression test.
+#[kithara::test]
+#[ignore = "RED scaffold — needs crafted moof fixture to demonstrate \
+            the parse_segment_frames panic. Add when implementing \
+            the cursor-freshness contract."]
+fn red_cursor_byte_range_freezes_when_layout_size_grows() {
+    panic!("RED scaffold — see doc comment");
 }
 
 #[kithara::test]

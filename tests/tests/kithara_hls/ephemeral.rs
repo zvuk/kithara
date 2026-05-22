@@ -1,12 +1,3 @@
-//! Integration tests: verify `with_is_ephemeral(true)` routes data through `MemDriver`
-//! ring buffer (in-memory) instead of `MmapDriver` (disk).
-//!
-//! Two levels of verification:
-//! 1. **Structural**: `AssetStoreBuilder::ephemeral(true)` creates resources with
-//!    `path() == None` (`MemResource`), while disk creates `path() == Some(_)` (`MmapResource`).
-//! 2. **Pipeline**: `Audio<Stream<Hls>>` with `ephemeral: true` produces valid audio
-//!    and leaves the temp directory empty (no files created on disk).
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
@@ -24,15 +15,15 @@ use kithara::{
     storage::ResourceExt,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::TestTempDir;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_integration_tests::create_wav_exact_bytes;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::signal_pcm::signal;
 use kithara_platform::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_test_utils::TestTempDir;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_test_utils::create_wav_exact_bytes;
-use kithara_test_utils::signal_pcm::signal;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_util::sync::CancellationToken;
 #[cfg(not(target_arch = "wasm32"))]
@@ -130,13 +121,21 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()).with_is_ephemeral(true))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls_config = HlsConfig::for_url(url)
+        .store(
+            StoreOptions::builder()
+                .cache_dir(temp_dir.path().into())
+                .is_ephemeral(true)
+                .build(),
+        )
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");

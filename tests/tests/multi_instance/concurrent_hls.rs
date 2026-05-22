@@ -1,8 +1,3 @@
-//! Concurrent HLS instance tests.
-//!
-//! Verifies that N `Audio<Stream<Hls>>` instances can run concurrently and
-//! each reads PCM data to EOF, under manual-variant and auto-ABR modes.
-
 use std::{path::Path, sync::Arc};
 
 use kithara::{
@@ -11,9 +6,11 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    TestTempDir,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::TestTempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -53,13 +50,16 @@ async fn create_hls_audio(
     let url = server.url("/master.m3u8");
     let cancel = CancellationToken::new();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(cache_dir))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(abr);
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(cache_dir))
+        .cancel(cancel)
+        .initial_abr_mode(abr)
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
 
     Audio::<Stream<Hls>>::new(config)
         .await

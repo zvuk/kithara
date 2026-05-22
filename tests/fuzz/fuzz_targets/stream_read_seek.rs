@@ -4,15 +4,17 @@ use std::{
     collections::VecDeque,
     io::{Read, Seek, SeekFrom},
     ops::Range,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use arbitrary::{Arbitrary, Unstructured};
 use kithara_platform::{time::Duration, tokio::runtime::Builder};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NullStreamContext, ReadOutcome, Source, SourcePhase, Stream, StreamContext, StreamResult,
-    StreamType, Timeline,
+    ReadOutcome, Source, SourcePhase, Stream, StreamResult, StreamType, Timeline,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -99,6 +101,7 @@ impl<'a> Arbitrary<'a> for Input {
 #[derive(Default)]
 struct ScriptSource {
     timeline: Timeline,
+    position: Arc<AtomicU64>,
     data: Vec<u8>,
     reads: VecDeque<ReadOutcome>,
     waits: VecDeque<WaitOutcome>,
@@ -107,6 +110,18 @@ struct ScriptSource {
 impl Source for ScriptSource {
     fn timeline(&self) -> Timeline {
         self.timeline.clone()
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn advance(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
     }
 
     fn wait_range(
@@ -153,10 +168,6 @@ impl StreamType for DummyType {
     async fn create(config: Self::Config) -> Result<Self::Source, kithara_stream::SourceError> {
         Ok(config)
     }
-
-    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(timeline))
-    }
 }
 
 fuzz_target!(|input: Input| {
@@ -180,6 +191,7 @@ fuzz_target!(|input: Input| {
     let _ = timeline.clone();
     let source = ScriptSource {
         timeline,
+        position: Arc::new(AtomicU64::new(0)),
         data: input.data,
         reads: reads.collect(),
         waits: waits.collect(),

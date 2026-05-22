@@ -1,17 +1,3 @@
-//! In-memory fMP4 init / segment parser.
-//!
-//! Two entry points:
-//! - [`parse_init`] consumes a `ftyp+moov` init blob and returns a
-//!   reusable [`Fmp4InitInfo`] (codec, timescale, codec-specific config
-//!   bytes).
-//! - [`parse_segment_frames`] consumes a `(styp|moof)+mdat` media
-//!   segment and yields per-frame `(decode_time, duration, byte_range)`
-//!   tuples bound to the segment buffer.
-//!
-//! The segment parser is hand-rolled rather than `Mp4::read_bytes`
-//! because HLS media segments don't carry `ftyp+moov` and `re_mp4`
-//! refuses to parse them.
-
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
 use kithara_stream::AudioCodec;
@@ -94,7 +80,24 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
         StsdBoxContent::Mp4a(mp4a) => {
             let sample_rate = u32::from(mp4a.samplerate.value());
             let channels = mp4a.channelcount;
-            let asc = build_aac_asc(mp4a)?;
+            // Raw `esds` `DecoderSpecificInfo` payload, taken
+            // verbatim from the init segment. `re_mp4` exposes the
+            // descriptor as three parsed fields (profile, freq_index,
+            // chan_conf) and discards the rest; reconstructing an
+            // AudioSpecificConfig from those produces a 2-byte blob,
+            // which is enough for AAC-LC implicit signalling but
+            // truncates HE-AAC v1/v2 explicit-AOT-29 signalling
+            // (extension AOT + extension sample-rate index + PS bits
+            // live in bytes 3+). fdk-aac rejects the truncated config
+            // with "unexpected end of bitstream" and HE-AAC v2 prod
+            // tracks never load. The raw path keeps the full ASC
+            // intact for every codec sharing the mp4a/esds layout;
+            // on a malformed init we surface the parse error instead
+            // of silently falling back to the 2-byte reconstruction
+            // — a silent fallback would degrade HE-AAC v2 to the
+            // cascade this commit is fixing with no log signal
+            // (AGENTS.md "No fallback chains").
+            let asc = extract_aac_asc_raw(bytes)?;
             (
                 AudioCodec::AacLc,
                 sample_rate,
@@ -134,34 +137,195 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
     })
 }
 
-/// Reconstruct the canonical 2-byte (AAC-LC) or 5-byte (HE-AAC)
-/// `AudioSpecificConfig` from `re_mp4`'s parsed descriptor fields.
+/// Locate the `mp4a` sample entry inside the init bytes and pull the
+/// raw `DecoderSpecificInfo` (descriptor tag 0x05) bytes out of its
+/// `esds` box.
 ///
-/// `re_mp4` throws away the raw `esds` bytes during parse, so we rebuild
-/// the ASC layout described in ISO 14496-3 §1.6.2.1.
-fn build_aac_asc(mp4a: &re_mp4::Mp4aBox) -> DecodeResult<Vec<u8>> {
-    let esds = mp4a
-        .esds
-        .as_ref()
-        .ok_or_else(|| DecodeError::InvalidData("mp4a missing esds".into()))?;
-    let dec = &esds.es_desc.dec_config.dec_specific;
-    let profile = dec.profile;
-    let freq_index = dec.freq_index;
-    let chan_conf = dec.chan_conf;
+/// `re_mp4` exposes the descriptor only as three parsed fields
+/// (profile / `freq_index` / `chan_conf`) and discards the rest, so
+/// for HE-AAC v1/v2 with explicit AOT-29 signalling — which encodes
+/// extension-AOT, extension sample-rate index, and (for PS) a PS
+/// presence flag in bytes 3+ — a reconstruction from those three
+/// fields drops everything past byte 2 and ends with fdk-aac
+/// rejecting the config as "unexpected end of bitstream". This path
+/// walks the boxes manually, finds the `esds` payload, decodes the
+/// MPEG-4 `SLConfigDescriptor` / `ESDescriptor` / `DecoderConfigDescriptor`
+/// / `DecoderSpecificInfo` descriptor chain by tag, and returns the
+/// DSI body verbatim.
+fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
+    const FOURCC_MP4A: u32 = 0x6d70_3461;
+    const FOURCC_ESDS: u32 = 0x6573_6473;
+    const TAG_ES_DESCRIPTOR: u8 = 0x03;
+    const TAG_DECODER_CONFIG: u8 = 0x04;
+    const TAG_DECODER_SPECIFIC: u8 = 0x05;
 
-    if profile == 0 {
-        return Err(DecodeError::InvalidData("invalid AAC profile=0".into()));
+    let mut cursor = Cursor::new(bytes);
+    let total = bytes.len() as u64;
+
+    descend_into(&mut cursor, total, BoxType::MoovBox)?;
+    let moov_end = cursor.position() + read_box_size(&mut cursor)? - 8;
+    descend_into(&mut cursor, moov_end, BoxType::TrakBox)?;
+    let trak_end = cursor.position() + read_box_size(&mut cursor)? - 8;
+    descend_into(&mut cursor, trak_end, BoxType::MdiaBox)?;
+    let mdia_end = cursor.position() + read_box_size(&mut cursor)? - 8;
+    descend_into(&mut cursor, mdia_end, BoxType::MinfBox)?;
+    let minf_end = cursor.position() + read_box_size(&mut cursor)? - 8;
+    descend_into(&mut cursor, minf_end, BoxType::StblBox)?;
+    let stbl_end = cursor.position() + read_box_size(&mut cursor)? - 8;
+    descend_into(&mut cursor, stbl_end, BoxType::StsdBox)?;
+    let stsd_size = read_box_size(&mut cursor)?;
+    let stsd_end = cursor.position() + stsd_size - 8;
+
+    // Skip stsd full-box header (version+flags) and entry_count.
+    cursor
+        .seek(SeekFrom::Current(8))
+        .map_err(|e| DecodeError::InvalidData(format!("seek past stsd header: {e}")))?;
+
+    let entry_start = cursor.position();
+    let (entry_type, entry_size) = read_header(&mut cursor)?;
+    if u32::from(entry_type) != FOURCC_MP4A {
+        return Err(DecodeError::InvalidData(format!(
+            "expected mp4a sample entry, found {:?}",
+            FourCC::from(entry_type).value
+        )));
+    }
+    let entry_end = entry_start + entry_size;
+    let _ = stsd_end;
+
+    // SampleEntry (8 bytes reserved + dataReferenceIndex) + AudioSampleEntry
+    // body (8 reserved, 2 channelcount, 2 samplesize, 2 pre_defined,
+    // 2 reserved, 4 samplerate) = 28 bytes before child boxes.
+    cursor
+        .seek(SeekFrom::Current(28))
+        .map_err(|e| DecodeError::InvalidData(format!("seek past mp4a header: {e}")))?;
+
+    // Scan child boxes of mp4a for esds.
+    while cursor.position() < entry_end {
+        let child_start = cursor.position();
+        let (child_type, child_size) = read_header(&mut cursor)?;
+        if u32::from(child_type) == FOURCC_ESDS {
+            // Skip full-box version (1) + flags (3).
+            cursor
+                .seek(SeekFrom::Current(4))
+                .map_err(|e| DecodeError::InvalidData(format!("seek past esds header: {e}")))?;
+            return read_esds_decoder_specific_info(
+                &mut cursor,
+                child_start + child_size,
+                TAG_ES_DESCRIPTOR,
+                TAG_DECODER_CONFIG,
+                TAG_DECODER_SPECIFIC,
+            );
+        }
+        cursor
+            .seek(SeekFrom::Start(child_start + child_size))
+            .map_err(|e| DecodeError::InvalidData(format!("skip mp4a child: {e}")))?;
+    }
+    Err(DecodeError::InvalidData("esds box not found".into()))
+}
+
+/// Walk the descriptor chain `ES_Descriptor` → `DecoderConfigDescriptor`
+/// → `DecoderSpecificInfo` inside an `esds` payload and return the
+/// DSI body bytes. Each descriptor uses ISO/IEC 14496-1 tag+length
+/// framing: a single-byte tag followed by an expandable-size big-endian
+/// 7-bit-per-byte length (up to 4 bytes).
+fn read_esds_decoder_specific_info(
+    cursor: &mut Cursor<&[u8]>,
+    esds_end: u64,
+    tag_es: u8,
+    tag_dec_config: u8,
+    tag_dsi: u8,
+) -> DecodeResult<Vec<u8>> {
+    // ES_Descriptor: tag 0x03, then size, then ES_ID(2) + flags(1) +
+    // optional fields gated by the flag byte (dependsOn 0x80, URL 0x40,
+    // OCR 0x20) and a streamPriority byte we always skip past.
+    let (es_tag, es_size) = read_descriptor_header(cursor)?;
+    if es_tag != tag_es {
+        return Err(DecodeError::InvalidData(format!(
+            "expected ES_Descriptor (0x03), got 0x{es_tag:02x}"
+        )));
+    }
+    let es_body_end = cursor.position() + u64::from(es_size);
+    let mut header = [0u8; 3];
+    cursor
+        .read_exact(&mut header)
+        .map_err(|e| DecodeError::InvalidData(format!("read ES_Descriptor header: {e}")))?;
+    let flags = header[2];
+    if flags & 0x80 != 0 {
+        cursor
+            .seek(SeekFrom::Current(2))
+            .map_err(|e| DecodeError::InvalidData(format!("skip dependsOn_ES_ID: {e}")))?;
+    }
+    if flags & 0x40 != 0 {
+        let mut url_len = [0u8; 1];
+        cursor
+            .read_exact(&mut url_len)
+            .map_err(|e| DecodeError::InvalidData(format!("read URL_length: {e}")))?;
+        cursor
+            .seek(SeekFrom::Current(i64::from(url_len[0])))
+            .map_err(|e| DecodeError::InvalidData(format!("skip URL: {e}")))?;
+    }
+    if flags & 0x20 != 0 {
+        cursor
+            .seek(SeekFrom::Current(2))
+            .map_err(|e| DecodeError::InvalidData(format!("skip OCR_ES_ID: {e}")))?;
     }
 
-    if profile <= 31 && freq_index <= 14 {
-        let byte0 = (profile << 3) | (freq_index >> 1);
-        let byte1 = ((freq_index & 0x01) << 7) | (chan_conf << 3);
-        return Ok(vec![byte0, byte1]);
+    // DecoderConfigDescriptor: tag 0x04, size, then 13 bytes (object_type
+    // + stream_type/flags + bufferSizeDB(3) + maxBitrate(4) + avgBitrate(4))
+    // before the embedded DecSpecificInfo descriptor.
+    let _ = es_body_end;
+    let (dc_tag, dc_size) = read_descriptor_header(cursor)?;
+    if dc_tag != tag_dec_config {
+        return Err(DecodeError::InvalidData(format!(
+            "expected DecoderConfigDescriptor (0x04), got 0x{dc_tag:02x}"
+        )));
     }
+    let dc_end = cursor.position() + u64::from(dc_size);
+    cursor
+        .seek(SeekFrom::Current(13))
+        .map_err(|e| DecodeError::InvalidData(format!("skip DCD body: {e}")))?;
 
-    Err(DecodeError::InvalidData(format!(
-        "extended AAC profile not supported yet (profile={profile}, freq_index={freq_index})"
-    )))
+    // DecoderSpecificInfo: tag 0x05, size, then raw ASC bytes.
+    let (dsi_tag, dsi_size) = read_descriptor_header(cursor)?;
+    if dsi_tag != tag_dsi {
+        return Err(DecodeError::InvalidData(format!(
+            "expected DecoderSpecificInfo (0x05), got 0x{dsi_tag:02x}"
+        )));
+    }
+    if cursor.position() + u64::from(dsi_size) > dc_end.min(esds_end) {
+        return Err(DecodeError::InvalidData(
+            "DSI extends past parent descriptor".into(),
+        ));
+    }
+    let mut payload = vec![0u8; dsi_size as usize];
+    cursor
+        .read_exact(&mut payload)
+        .map_err(|e| DecodeError::InvalidData(format!("read DSI body: {e}")))?;
+    Ok(payload)
+}
+
+/// MPEG-4 descriptor header: 1-byte tag + variable-length size (each
+/// size byte's MSB is a continuation flag, low 7 bits feed the running
+/// size value). Capped at 4 size bytes per the spec.
+fn read_descriptor_header(cursor: &mut Cursor<&[u8]>) -> DecodeResult<(u8, u32)> {
+    let mut tag = [0u8; 1];
+    cursor
+        .read_exact(&mut tag)
+        .map_err(|e| DecodeError::InvalidData(format!("read descriptor tag: {e}")))?;
+    let mut size: u32 = 0;
+    for _ in 0..4 {
+        let mut b = [0u8; 1];
+        cursor
+            .read_exact(&mut b)
+            .map_err(|e| DecodeError::InvalidData(format!("read descriptor size byte: {e}")))?;
+        size = (size << 7) | u32::from(b[0] & 0x7F);
+        if b[0] & 0x80 == 0 {
+            return Ok((tag[0], size));
+        }
+    }
+    Err(DecodeError::InvalidData(
+        "descriptor size length exceeds 4 bytes".into(),
+    ))
 }
 
 /// Locate `fLaC` sample entry inside the init bytes and read its

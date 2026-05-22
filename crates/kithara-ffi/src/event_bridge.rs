@@ -1,14 +1,3 @@
-//! Bridge between the Queue event stream and FFI observer callbacks.
-//!
-//! Subscribes to [`Queue::subscribe`] (a unified stream carrying player,
-//! audio, hls, file and queue events), translates them into typed
-//! [`FfiPlayerEvent`] variants dispatched via a single
-//! [`PlayerObserver::on_event`] call. A secondary **OS thread** drives
-//! `Queue::tick()` (which pumps `PlayerImpl::tick` and drains engine
-//! events for auto-advance) and polls `position_seconds` /
-//! `duration_seconds` for periodic time updates — avoiding blocking
-//! `Mutex::lock_sync()` inside async.
-
 use std::sync::Arc;
 
 use kithara::play::PlayerEvent;
@@ -115,14 +104,21 @@ impl EventBridge {
             }
             PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
             PlayerEvent::ItemDidPlayToEnd { .. } => FfiPlayerEvent::ItemDidPlayToEnd,
+            PlayerEvent::ItemDidFail { item_id, .. } => FfiPlayerEvent::ItemDidFail {
+                item_id: item_id
+                    .as_ref()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(kithara_events::TrackId::from),
+            },
             _ => return None,
         })
     }
 
-    /// Forward player-level signals (`ItemDidPlayToEnd`,
+    /// Forward player-level signals (`ItemDidPlayToEnd`, `ItemDidFail`,
     /// `TimeControlStatusChanged → WaitingToPlay`) to the corresponding
     /// item-level observer, mapping them onto
-    /// [`FfiItemEvent::DidReachEnd`] / [`FfiItemEvent::DidStall`].
+    /// [`FfiItemEvent::DidReachEnd`] / [`FfiItemEvent::DidFail`] /
+    /// [`FfiItemEvent::DidStall`].
     fn route_player_event_to_item(
         items: &Arc<Mutex<ItemRegistry>>,
         queue: &Arc<Queue>,
@@ -130,7 +126,9 @@ impl EventBridge {
         event: &PlayerEvent,
     ) {
         let target = match event {
-            PlayerEvent::ItemDidPlayToEnd { .. } => *last_current.lock_sync(),
+            PlayerEvent::ItemDidPlayToEnd { .. } | PlayerEvent::ItemDidFail { .. } => {
+                *last_current.lock_sync()
+            }
             PlayerEvent::TimeControlStatusChanged {
                 status: kithara::play::TimeControlStatus::WaitingToPlay,
                 ..
@@ -146,6 +144,7 @@ impl EventBridge {
         };
         let ffi_event = match event {
             PlayerEvent::ItemDidPlayToEnd { .. } => FfiItemEvent::DidReachEnd,
+            PlayerEvent::ItemDidFail { .. } => FfiItemEvent::DidFail,
             PlayerEvent::TimeControlStatusChanged { .. } => FfiItemEvent::DidStall,
             _ => return,
         };

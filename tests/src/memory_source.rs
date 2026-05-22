@@ -1,8 +1,15 @@
-//! In-memory Source implementation for testing.
-
-use std::{io::Error as IoError, num::NonZeroUsize, ops::Range};
+use std::{
+    io::Error as IoError,
+    num::NonZeroUsize,
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use futures::executor::block_on;
+use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -21,6 +28,7 @@ pub struct MemorySourceError;
 /// (e.g. for testing `SeekFrom::End` error paths).
 pub struct MemorySource {
     timeline: Timeline,
+    position: Arc<AtomicU64>,
     data: Vec<u8>,
     report_len: bool,
 }
@@ -31,6 +39,7 @@ impl MemorySource {
         Self {
             data,
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             report_len: true,
         }
     }
@@ -41,6 +50,7 @@ impl MemorySource {
         Self {
             data,
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             report_len: false,
         }
     }
@@ -61,6 +71,18 @@ impl Source for MemorySource {
         } else {
             SourcePhase::Ready
         }
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn advance(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
@@ -103,7 +125,7 @@ pub struct MemStream;
 
 impl StreamType for MemStream {
     type Config = MemStreamConfig;
-    type Events = ();
+    type Events = EventBus;
     type Source = MemorySource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
@@ -111,11 +133,16 @@ impl StreamType for MemStream {
             .source
             .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
+
+    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
+        config.event_bus.clone()
+    }
 }
 
 #[derive(Default)]
 pub struct MemStreamConfig {
     pub source: Option<MemorySource>,
+    pub event_bus: Option<EventBus>,
 }
 
 /// `StreamType` using `MemorySource` with unknown length.
@@ -123,7 +150,7 @@ pub struct UnknownLenStream;
 
 impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
-    type Events = ();
+    type Events = EventBus;
     type Source = MemorySource;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
@@ -131,11 +158,16 @@ impl StreamType for UnknownLenStream {
             .source
             .ok_or_else(|| SourceError::other(IoError::other("no source")))
     }
+
+    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
+        config.event_bus.clone()
+    }
 }
 
 #[derive(Default)]
 pub struct UnknownLenStreamConfig {
     pub source: Option<MemorySource>,
+    pub event_bus: Option<EventBus>,
 }
 
 /// Create a `Stream` from a `MemorySource`.
@@ -143,6 +175,7 @@ pub struct UnknownLenStreamConfig {
 pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
     let config = MemStreamConfig {
         source: Some(source),
+        event_bus: None,
     };
     block_on(Stream::new(config)).unwrap()
 }
@@ -152,6 +185,7 @@ pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
 pub fn unknown_len_stream(source: MemorySource) -> Stream<UnknownLenStream> {
     let config = UnknownLenStreamConfig {
         source: Some(source),
+        event_bus: None,
     };
     block_on(Stream::new(config)).unwrap()
 }

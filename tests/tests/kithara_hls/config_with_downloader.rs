@@ -1,10 +1,3 @@
-//! Integration test: [`HlsConfig::with_downloader`] lets two HLS streams
-//! share a single `kithara_stream::dl::Downloader`.
-//!
-//! Protects the phase-02 migration API contract: `Downloader` is the
-//! sole `HttpClient` owner, and callers can pass the same instance to
-//! multiple HLS streams via `HlsConfig::with_downloader(dl.clone())`.
-
 use std::{io::Read, time::Duration};
 
 use kithara::{
@@ -15,9 +8,13 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist};
+use kithara_integration_tests::{
+    TestTempDir,
+    hls_server::abr::{AbrTestServer, master_playlist},
+    temp_dir,
+};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 #[kithara::test(
@@ -41,21 +38,30 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     .await;
 
     let cancel = CancellationToken::new();
-    let downloader = Downloader::new(DownloaderConfig::default().with_cancel(cancel.child_token()));
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .cancel(cancel.child_token())
+        .build(),
+    );
 
     let temp_a = temp_dir.path().join("stream_a");
     let temp_b = temp_dir.path().join("stream_b");
 
-    let config_a = HlsConfig::new(server_a.url("/master.m3u8"))
-        .with_cancel(cancel.clone())
-        .with_store(StoreOptions::new(&temp_a))
-        .with_initial_abr_mode(AbrMode::Manual(0))
-        .with_downloader(downloader.clone());
-    let config_b = HlsConfig::new(server_b.url("/master.m3u8"))
-        .with_cancel(cancel.clone())
-        .with_store(StoreOptions::new(&temp_b))
-        .with_initial_abr_mode(AbrMode::Manual(0))
-        .with_downloader(downloader.clone());
+    let config_a = HlsConfig::for_url(server_a.url("/master.m3u8"))
+        .cancel(cancel.clone())
+        .store(StoreOptions::new(&temp_a))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .downloader(downloader.clone())
+        .build();
+    let config_b = HlsConfig::for_url(server_b.url("/master.m3u8"))
+        .cancel(cancel.clone())
+        .store(StoreOptions::new(&temp_b))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .downloader(downloader.clone())
+        .build();
 
     let mut stream_a = Stream::<Hls>::new(config_a).await.unwrap();
     let mut stream_b = Stream::<Hls>::new(config_b).await.unwrap();

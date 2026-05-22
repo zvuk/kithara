@@ -1,12 +1,3 @@
-//! Reusable HLS stream builders to reduce test setup boilerplate.
-//!
-//! Most HLS tests follow the same pattern:
-//! 1. Create `TestServer`
-//! 2. Build `HlsConfig` with `StoreOptions` + `CancellationToken` + `AbrMode`
-//! 3. Create `Stream<Hls>`
-//!
-//! This module provides [`HlsStreamBuilder`] to condense those steps.
-
 use std::path::Path;
 
 use kithara::{
@@ -14,8 +5,9 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::hls_fixture::TestServer;
 use tokio_util::sync::CancellationToken;
+
+use crate::hls_server::TestServer;
 
 /// Builder for creating `Stream<Hls>` in integration tests.
 ///
@@ -104,18 +96,17 @@ impl HlsStreamBuilder {
             None => temp_path.to_path_buf(),
         };
 
-        let mut store_opts = StoreOptions::new(&store_path);
-        if let Some(max) = self.max_assets {
-            store_opts = store_opts.with_max_assets(max);
-        }
-        if let Some(max) = self.max_bytes {
-            store_opts = store_opts.with_max_bytes(max);
-        }
+        let store_opts = StoreOptions::builder()
+            .cache_dir(store_path)
+            .maybe_max_assets(self.max_assets)
+            .maybe_max_bytes(self.max_bytes)
+            .build();
 
-        let config = HlsConfig::new(url)
-            .with_store(store_opts)
-            .with_cancel(cancel_token)
-            .with_initial_abr_mode(self.initial_abr_mode);
+        let config = HlsConfig::for_url(url)
+            .store(store_opts)
+            .cancel(cancel_token)
+            .initial_abr_mode(self.initial_abr_mode)
+            .build();
 
         Stream::<Hls>::new(config)
             .await

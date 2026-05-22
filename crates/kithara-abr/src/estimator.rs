@@ -54,6 +54,11 @@ pub trait Estimator: Send + Sync {
     /// Absorb a raw bandwidth sample. `duration` is the elapsed wall-clock
     /// time spent on the fetch (not the media duration of the payload).
     fn push_sample(&self, bytes: u64, duration: Duration, source: BandwidthSource);
+
+    /// Seed an initial throughput estimate before any real samples land.
+    /// Treated as a transient prior — real EWMA samples replace it via
+    /// the `min(fast, slow)` consensus once they accumulate weight.
+    fn seed_initial_bps(&self, bps: u64);
 }
 
 /// Default EWMA-based throughput estimator shared across peers.
@@ -132,6 +137,11 @@ impl Estimator for ThroughputEstimator {
         inner.fast_ewma.add_sample(weight_secs, bps);
         inner.slow_ewma.add_sample(weight_secs, bps);
         inner.bytes_sampled = inner.bytes_sampled.saturating_add(bytes);
+    }
+
+    fn seed_initial_bps(&self, bps: u64) {
+        let mut inner = self.inner.lock_sync();
+        inner.initial_bps = bps.to_f64().unwrap_or(0.0);
     }
 }
 

@@ -1,10 +1,3 @@
-//! Tracing subscriber init exposed across FFI.
-//!
-//! Writes formatted events to stderr — Xcode console captures stderr on
-//! Apple targets, desktop hosts see it directly. Android consumers may
-//! still layer the platform-native `tracing-android` adapter on top via
-//! `nativeInit` for `logcat` integration.
-
 use std::{io::stderr, sync::Once};
 
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};

@@ -1,11 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Shared lazy-init helper for disk-backed pin/lru indexes.
-//!
-//! Both `PinsIndex` and `LruIndex` materialise their on-disk file
-//! lazily on the first flush. The same race-tolerant init pattern is
-//! used in both, factored here to avoid drift.
-
 use std::{path::Path, sync::OnceLock};
 
 use kithara_storage::{Atomic, MmapOptions, MmapResource, OpenMode, Resource, StorageError};
@@ -26,7 +20,9 @@ pub(super) const INITIAL_LEN: u64 = 4096;
 pub(super) fn open_existing(path: &Path, cancel: &CancellationToken) -> AssetsResult<MmapResource> {
     let res: MmapResource = Resource::open(
         cancel.clone(),
-        MmapOptions::new(path.to_path_buf()).with_mode(OpenMode::ReadWrite),
+        MmapOptions::for_path(path.to_path_buf())
+            .mode(OpenMode::ReadWrite)
+            .build(),
     )?;
     Ok(res)
 }
@@ -40,9 +36,10 @@ pub(super) fn open_for_write(
 ) -> AssetsResult<MmapResource> {
     let res: MmapResource = Resource::open(
         cancel.clone(),
-        MmapOptions::new(path.to_path_buf())
-            .with_initial_len(INITIAL_LEN)
-            .with_mode(OpenMode::ReadWrite),
+        MmapOptions::for_path(path.to_path_buf())
+            .initial_len(INITIAL_LEN)
+            .mode(OpenMode::ReadWrite)
+            .build(),
     )?;
     Ok(res)
 }

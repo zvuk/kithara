@@ -1,14 +1,3 @@
-//! Local mirror of `track_plays_end_to_end` from `real_playlist.rs`.
-//!
-//! Runs the full Queue → `PlayerImpl` → `OfflineBackend` pipeline against
-//! `TestServerHelper` fixtures (raw MP3, packaged AAC HLS, packaged
-//! AAC HLS+AES128) instead of silvercomet/zvuk live URLs. Shape of the
-//! scenario is identical: load → play with monotonic progress → 3
-//! random seeks with hang detection → position-consistency window.
-//!
-//! No `#[ignore]` — runs in every `just test` so seek/loader/HLS-DRM
-//! regressions surface without the e2e gate.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
@@ -17,15 +6,16 @@ use std::{sync::Arc, time::Duration};
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
+    fixture_protocol::EncryptionRequest, kithara, offline::OfflineSession, temp_dir,
+};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
-    fixture_protocol::EncryptionRequest, kithara, temp_dir,
-};
 use tokio::time::{sleep, timeout};
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 #[derive(Clone, Copy, Debug)]
@@ -192,7 +182,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
@@ -204,7 +196,13 @@ fn build_queue_with_tick(
             }
         }
     });
-    let downloader = Downloader::new(DownloaderConfig::default());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .build(),
+    );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
@@ -263,6 +261,9 @@ async fn local_track_plays_end_to_end(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let url = build_fixture_url(kind, &helper).await;
     let label = format!("{kind:?}/{backend:?}");
@@ -270,11 +271,13 @@ async fn local_track_plays_end_to_end(
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let mut cfg = ResourceConfig::new(url.as_str()).expect("valid fixture URL");
-    cfg = cfg.with_downloader(downloader.clone());
-    cfg.store = store;
-    cfg.decoder_backend = backend;
-    cfg.initial_abr_mode = abr;
+    let cfg = ResourceConfig::for_src(url.as_str())
+        .expect("valid fixture URL")
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder_backend(backend)
+        .initial_abr_mode(abr)
+        .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let track_id = queue.append(source);
@@ -374,6 +377,9 @@ where
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let kinds = [
         LocalSource::Mp3,
@@ -396,11 +402,13 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     let ids: Vec<TrackId> = urls
         .iter()
         .map(|u| {
-            let mut cfg = ResourceConfig::new(u.as_str()).expect("valid fixture URL");
-            cfg = cfg.with_downloader(downloader.clone());
-            cfg.store = store.clone();
-            cfg.decoder_backend = backend;
-            cfg.initial_abr_mode = AbrMode::Auto(None);
+            let cfg = ResourceConfig::for_src(u.as_str())
+                .expect("valid fixture URL")
+                .downloader(downloader.clone())
+                .store(store.clone())
+                .decoder_backend(backend)
+                .initial_abr_mode(AbrMode::Auto(None))
+                .build();
             queue.append(TrackSource::Config(Box::new(cfg)))
         })
         .collect();

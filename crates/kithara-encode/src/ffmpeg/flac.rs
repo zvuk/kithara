@@ -19,7 +19,7 @@ use super::{
 };
 use crate::{
     BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult,
-    codec::{AudioCodec, ContainerFormat},
+    codec::{AudioCodec, ContainerFormat, MediaInfo},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
@@ -72,13 +72,13 @@ impl FlacFFmpegEncoder {
         send_eof_to_encoder(&mut encoder.encoder)?;
         encoder.receive_and_collect_packets();
 
-        let media_info = request
-            .media_info
-            .clone()
-            .with_codec(AudioCodec::Flac)
-            .with_container(ContainerFormat::Fmp4)
-            .with_sample_rate(request.pcm.sample_rate())
-            .with_channels(request.pcm.channels());
+        let media_info = MediaInfo {
+            codec: Some(AudioCodec::Flac),
+            container: Some(ContainerFormat::Fmp4),
+            sample_rate: Some(request.pcm.sample_rate()),
+            channels: Some(request.pcm.channels()),
+            ..request.media_info.clone()
+        };
 
         let (codec_config, access_units) = encoder.into_track_parts();
 

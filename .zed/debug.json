@@ -45,10 +45,21 @@
     "args": ["--mode", "gui"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "env": {
-      "RUST_LOG": "kithara_audio=trace,kithara_hls=trace,kithara_stream=trace",
+      "RUST_LOG": "kithara_audio=debug,kithara_decode=info,kithara_hls=debug,kithara_assets=debug,kithara_stream=debug,kithara_queue=debug,kithara_play=info",
       "RUST_BACKTRACE": "1",
       "KITHARA_LOG_FILE": "$ZED_WORKTREE_ROOT/app.log",
     },
     "sourceLanguages": ["rust"],
+  },
+  {
+    "label": "iOS demo",
+    "adapter": "CodeLLDB",
+    "request": "attach",
+    "build": {
+      "command": "cargo",
+      "args": ["run", "-p", "xtask", "--", "apple", "run", "--debug"],
+    },
+    "program": "KitharaDemo",
+    "sourceLanguages": ["swift"],
   },
 ]

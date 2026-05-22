@@ -1,19 +1,11 @@
-//! Factory implementation — split out of mod.rs because lib.rs / mod.rs
-//! files must stay declaration-only (see `style.no-items-in-lib-or-mod-rs`).
-//!
-//! See the `factory` module-level docs in `mod.rs` for usage.
-
 use std::{
     io::{Read, Seek},
     sync::{Arc, atomic::AtomicU64},
 };
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
-use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, SegmentLayout, SharedHooks, StreamContext,
-};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SegmentLayout, SharedHooks};
 
 use super::probe::{ProbeHint, container_from_extension, probe_codec, resolve_codec_container};
 use crate::{
@@ -42,9 +34,26 @@ use crate::{
 pub enum DecoderBackend {
     /// Apple `AudioToolbox` (macOS/iOS, requires the `apple` feature).
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    #[cfg_attr(
+        all(
+            not(feature = "symphonia"),
+            feature = "apple",
+            any(target_os = "macos", target_os = "ios")
+        ),
+        default
+    )]
     Apple,
     /// Android `MediaCodec` (Android, requires the `android` feature).
     #[cfg(all(feature = "android", target_os = "android"))]
+    #[cfg_attr(
+        all(
+            not(feature = "symphonia"),
+            feature = "android",
+            target_os = "android",
+            not(all(feature = "apple", any(target_os = "macos", target_os = "ios")))
+        ),
+        default
+    )]
     Android,
     /// Symphonia software decoder (cross-platform, requires the
     /// `symphonia` feature).
@@ -77,12 +86,12 @@ impl std::fmt::Display for DecoderBackend {
 /// `BytePool::default()`. Don't construct fresh `PcmPool::new` / `BytePool::new`
 /// inside library components — that fragments the heap into many small
 /// per-component pools and defeats recycling.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Default)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct DecoderConfig {
     /// Which decoder backend to use. See [`DecoderBackend`].
+    #[builder(default)]
     pub backend: DecoderBackend,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
@@ -90,64 +99,26 @@ pub struct DecoderConfig {
     /// back to `BytePool::default()`.
     pub byte_pool: Option<BytePool>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
-    ///
-    /// Used when the container format is not specified, as a hint for auto-detection.
     pub hint: Option<String>,
     /// Reader-side observer hooks. Forwarded into [`ComposedDecoder`]
-    /// directly; emitting them is opt-in and zero-overhead when `None`.
-    /// `Some(_)` wires the chunk/seek signals into the supplied
-    /// [`SharedHooks`] sink (mock sources, tests, telemetry).
-    ///
-    /// [`ComposedDecoder`]: crate::composed::ComposedDecoder
-    #[setters(skip)]
+    /// directly.
     pub hooks: Option<SharedHooks>,
     /// PCM buffer pool, propagated from the host. `None` falls back to
     /// `PcmPool::default()`.
     pub pcm_pool: Option<PcmPool>,
-    /// Optional segment-layout handle over the underlying source. When
-    /// present, fMP4 AAC / FLAC streams dispatch through the
-    /// segment-by-segment demuxer (`Fmp4SegmentDemuxer`) instead of the
-    /// whole-stream container parser, side-stepping prefix walks during
-    /// forward seek.
-    #[setters(skip)]
+    /// Optional segment-layout handle over the underlying source.
     pub segment_layout: Option<Arc<dyn SegmentLayout>>,
-    /// Stream context for segment/variant metadata.
-    pub stream_ctx: Option<Arc<dyn StreamContext>>,
     /// Enable gapless trim wiring through the per-backend codec.
-    ///
-    /// `true` (default) flips the matching `*Config::gapless` for the
-    /// selected backend (Apple / Symphonia / Android) so the codec
-    /// emits priming and padding-trimmed PCM for codecs whose encoder
-    /// reports those numbers (FLAC, Opus, Vorbis via Symphonia; AAC
-    /// via Apple `kAudioConverterPrimeInfo`). Container-level priming
-    /// (MP4 `iTunSMPB` for AAC) is captured separately via the
-    /// `*Codec::probe_track_info` helpers — wired in a follow-up
-    /// alongside the [`crate::DecoderTrackInfo`] propagation through
-    /// the `Decoder` trait.
-    #[derivative(Default(value = "true"))]
+    #[builder(default = true)]
     pub gapless: bool,
     /// Epoch counter for decoder recreation tracking.
+    #[builder(default)]
     pub epoch: u64,
 }
 
-impl DecoderConfig {
-    /// Set [`Self::hooks`] from an `Option`. Same `Option` rationale as
-    /// [`Self::with_segment_layout`].
-    #[must_use]
-    pub fn with_hooks(mut self, hooks: Option<SharedHooks>) -> Self {
-        self.hooks = hooks;
-        self
-    }
-
-    /// Set [`Self::segment_layout`] from an `Option`. Distinct from
-    /// the derived `with_*` setters because `derive_setters` with
-    /// `strip_option` would force callers to unwrap the `Option`
-    /// themselves. Stream sources surface segment layout as
-    /// `Option<...>` already, so this signature avoids the dance.
-    #[must_use]
-    pub fn with_segment_layout(mut self, layout: Option<Arc<dyn SegmentLayout>>) -> Self {
-        self.segment_layout = layout;
-        self
+impl Default for DecoderConfig {
+    fn default() -> Self {
+        Self::builder().build()
     }
 }
 
@@ -260,11 +231,11 @@ fn create_apple(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
-    #[cfg(feature = "symphonia")]
+    use crate::apple::AppleCodec;
+
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        use crate::apple::AppleCodec;
         if AppleCodec::supports(codec) {
             tracing::debug!(
                 ?codec,
@@ -275,15 +246,83 @@ fn create_apple(
                 AppleCodec::open_with_config(track, gapless)
             });
         }
+        #[cfg(feature = "symphonia")]
         return create_fmp4_segment_symphonia(source, codec, layout, config);
+        #[cfg(not(feature = "symphonia"))]
+        {
+            let _ = layout;
+            return Err(DecodeError::UnsupportedCodec(codec));
+        }
     }
+
+    if apple_standalone_supports(codec, container) {
+        tracing::debug!(
+            ?codec,
+            ?container,
+            "apple-standalone: routing via AudioFileServices"
+        );
+        return build_apple_standalone_decoder(source, codec, container, config);
+    }
+
     #[cfg(feature = "symphonia")]
     return create_symphonia(source, codec, container, config);
     #[cfg(not(feature = "symphonia"))]
     {
-        let _ = (source, codec, container, config);
+        let _ = (source, container, config);
         Err(DecodeError::UnsupportedCodec(codec))
     }
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn apple_standalone_supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
+    matches!(
+        (codec, container),
+        (AudioCodec::Pcm, Some(ContainerFormat::Wav))
+            | (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))
+            | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
+            | (AudioCodec::Alac, Some(ContainerFormat::Caf))
+    )
+}
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+fn build_apple_standalone_decoder(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    use crate::{
+        apple::{AppleAudioFileDemuxer, AppleCodec},
+        composed::ComposedDecoder,
+        demuxer::Demuxer,
+    };
+    let demuxer = match (codec, container) {
+        (AudioCodec::Pcm, Some(ContainerFormat::Wav)) => AppleAudioFileDemuxer::open_wav(source)?,
+        (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio)) => {
+            AppleAudioFileDemuxer::open_mp3(source)?
+        }
+        (AudioCodec::Alac, Some(ContainerFormat::Mp4)) => {
+            AppleAudioFileDemuxer::open_alac_m4a(source)?
+        }
+        (AudioCodec::Alac, Some(ContainerFormat::Caf)) => {
+            AppleAudioFileDemuxer::open_alac_caf(source)?
+        }
+        _ => return Err(DecodeError::UnsupportedCodec(codec)),
+    };
+    let codec_impl = AppleCodec::open_with_config(demuxer.track_info(), config.gapless)?;
+    let pool = config
+        .pcm_pool
+        .clone()
+        .unwrap_or_else(|| PcmPool::default().clone());
+    let decoder = ComposedDecoder::new(
+        demuxer,
+        codec_impl,
+        pool,
+        config.epoch,
+        config.byte_len_handle.clone(),
+        config.hooks.clone(),
+    );
+    Ok(Box::new(decoder))
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]
@@ -293,11 +332,11 @@ fn create_android(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
-    #[cfg(feature = "symphonia")]
+    use crate::android::AndroidCodec;
+
     if should_use_segment_aware(codec, container, config)
         && let Some(layout) = config.segment_layout.clone()
     {
-        use crate::android::AndroidCodec;
         if AndroidCodec::supports(codec) {
             tracing::debug!(
                 ?codec,
@@ -308,9 +347,81 @@ fn create_android(
                 AndroidCodec::open_with_config(track, gapless)
             });
         }
+        #[cfg(feature = "symphonia")]
         return create_fmp4_segment_symphonia(source, codec, layout, config);
+        #[cfg(not(feature = "symphonia"))]
+        {
+            let _ = layout;
+            return Err(DecodeError::UnsupportedCodec(codec));
+        }
     }
-    create_symphonia(source, codec, container, config)
+
+    if android_standalone_supports(codec, container) {
+        tracing::debug!(
+            ?codec,
+            ?container,
+            "android-standalone: routing via AMediaExtractor"
+        );
+        return build_android_standalone_decoder(source, codec, container, config);
+    }
+
+    #[cfg(feature = "symphonia")]
+    return create_symphonia(source, codec, container, config);
+    #[cfg(not(feature = "symphonia"))]
+    {
+        let _ = (source, container, config);
+        Err(DecodeError::UnsupportedCodec(codec))
+    }
+}
+
+#[cfg(all(feature = "android", target_os = "android"))]
+fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
+    matches!(
+        (codec, container),
+        (AudioCodec::Pcm, Some(ContainerFormat::Wav))
+            | (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))
+            | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
+    )
+}
+
+#[cfg(all(feature = "android", target_os = "android"))]
+fn build_android_standalone_decoder(
+    source: BoxedSource,
+    codec: AudioCodec,
+    container: Option<ContainerFormat>,
+    config: &DecoderConfig,
+) -> DecodeResult<Box<dyn Decoder>> {
+    use crate::{
+        android::{AndroidCodec, AndroidMediaExtractorDemuxer},
+        composed::ComposedDecoder,
+        demuxer::Demuxer,
+    };
+    let demuxer = match (codec, container) {
+        (AudioCodec::Pcm, Some(ContainerFormat::Wav)) => {
+            AndroidMediaExtractorDemuxer::open_wav(source)?
+        }
+        (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio)) => {
+            AndroidMediaExtractorDemuxer::open_mp3(source)?
+        }
+        (AudioCodec::Alac, Some(ContainerFormat::Mp4)) => {
+            AndroidMediaExtractorDemuxer::open_alac_m4a(source)?
+        }
+        _ => return Err(DecodeError::UnsupportedCodec(codec)),
+    };
+    let codec_impl = AndroidCodec::open_with_config(demuxer.track_info(), config.gapless)?;
+    let pool = config
+        .pcm_pool
+        .clone()
+        .unwrap_or_else(|| PcmPool::default().clone());
+    let decoder = ComposedDecoder::new(
+        demuxer,
+        codec_impl,
+        pool,
+        config.epoch,
+        config.byte_len_handle.clone(),
+        config.hooks.clone(),
+    );
+    Ok(Box::new(decoder))
 }
 
 #[cfg(feature = "symphonia")]
@@ -394,6 +505,7 @@ fn create_file_symphonia_universal(
         config.hint.clone(),
         container,
         config.byte_len_handle.clone(),
+        config.segment_layout.clone(),
     )?;
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
@@ -417,7 +529,6 @@ fn create_file_symphonia_universal(
         pool,
         config.epoch,
         config.byte_len_handle.clone(),
-        config.stream_ctx.clone(),
         config.hooks.clone(),
     );
     Ok(Box::new(decoder))
@@ -427,14 +538,15 @@ fn create_file_symphonia_universal(
 /// surfaced `SegmentedSource` (HLS) through `Fmp4SegmentDecoder`. File
 /// sources without segment metadata fall through to the legacy
 /// `IsoMp4Reader` path.
-#[cfg(feature = "symphonia")]
 fn should_use_segment_aware(
     codec: AudioCodec,
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> bool {
-    matches!(codec, AudioCodec::AacLc | AudioCodec::Flac)
-        && matches!(container, Some(ContainerFormat::Fmp4))
+    matches!(
+        codec,
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac
+    ) && matches!(container, Some(ContainerFormat::Fmp4))
         && config.segment_layout.is_some()
 }
 
@@ -452,7 +564,7 @@ fn create_fmp4_segment_symphonia(
         "fmp4_segment: dispatching to segment-aware Symphonia path"
     );
     match codec {
-        AudioCodec::AacLc | AudioCodec::Flac => {
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Flac => {
             let symphonia_config = SymphoniaConfig {
                 gapless: config.gapless,
                 ..Default::default()
@@ -469,7 +581,6 @@ fn create_fmp4_segment_symphonia(
 /// [`Fmp4SegmentDemuxer`] open + pool-resolution + [`ComposedDecoder`]
 /// boilerplate so apple/android/symphonia call-sites collapse into a
 /// single closure that opens the codec from `TrackInfo`.
-#[cfg(feature = "symphonia")]
 fn build_fmp4_segment_decoder<C, F>(
     source: BoxedSource,
     layout: Arc<dyn SegmentLayout>,
@@ -494,7 +605,6 @@ where
         pool,
         config.epoch,
         config.byte_len_handle.clone(),
-        config.stream_ctx.clone(),
         config.hooks.clone(),
     );
     Ok(Box::new(decoder))

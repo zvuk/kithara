@@ -1,10 +1,3 @@
-//! Apply a set of byte-range edits to a source string, validating that
-//! they do not overlap.
-//!
-//! Used by autofix passes that compute new content for a handful of
-//! disjoint regions (e.g. swapping struct-field block ranges) and need a
-//! single string back.
-
 use std::{fmt, ops::Range};
 
 #[derive(Debug, Eq, PartialEq)]

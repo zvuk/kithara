@@ -26,7 +26,4 @@
 mod inner;
 mod probe;
 
-#[cfg(test)]
-mod tests;
-
 pub use inner::{DecoderBackend, DecoderConfig, DecoderFactory};

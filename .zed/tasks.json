@@ -19,4 +19,14 @@
     "command": "cargo run -p kithara-app --bin kithara --release -- --mode gui",
     "use_new_terminal": true,
   },
+  {
+    "label": "ios: run on simulator",
+    "command": "cargo run -p xtask -- apple run",
+    "use_new_terminal": true,
+  },
+  {
+    "label": "android: run on emulator",
+    "command": "cargo run -p xtask -- android run",
+    "use_new_terminal": true,
+  },
 ]

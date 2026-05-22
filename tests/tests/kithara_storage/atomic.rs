@@ -6,10 +6,10 @@ use kithara::{
     bufpool::BytePool,
     storage::{ResourceExt, StorageError},
 };
+use kithara_integration_tests::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread;
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]

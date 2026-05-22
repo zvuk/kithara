@@ -83,7 +83,12 @@ fn test_resampler_passthrough_allocation_free() {
         pool.pre_warm(32, |v| v.resize(8192, 0.0));
 
         let host_rate = Arc::new(AtomicU32::new(44100));
-        let params = ResamplerParams::new(host_rate, 44100, 2).with_pool(Some(pool.clone()));
+        let params = ResamplerParams::builder()
+            .host_sample_rate(host_rate)
+            .source_sample_rate(44100)
+            .channels(2)
+            .pool(pool.clone())
+            .build();
         let processor = ResamplerProcessor::new(params);
 
         let chunk = make_chunk(&pool, 4096, 2);
@@ -91,7 +96,12 @@ fn test_resampler_passthrough_allocation_free() {
         let warmup_chunk = make_chunk(&pool, 4096, 2);
         let mut warmup_proc = {
             let host_rate = Arc::new(AtomicU32::new(44100));
-            let params = ResamplerParams::new(host_rate, 44100, 2).with_pool(Some(pool.clone()));
+            let params = ResamplerParams::builder()
+                .host_sample_rate(host_rate)
+                .source_sample_rate(44100)
+                .channels(2)
+                .pool(pool.clone())
+                .build();
             ResamplerProcessor::new(params)
         };
         let _ = warmup_proc.process(warmup_chunk);

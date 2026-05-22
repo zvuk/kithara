@@ -1,15 +1,7 @@
-//! Stress test verifying timeline integrity under rapid seeks.
-//!
-//! Generates a 10-second WAV, creates a decoder, then performs 200 random
-//! seek+decode cycles. After each seek, verifies that `PcmMeta` fields are
-//! self-consistent: `frame_offset` approximates the seek target,
-//! `timestamp` matches `frame_offset / sample_rate`, and monotonicity holds
-//! for consecutive chunks within a read burst.
-
 use std::{io::Cursor, time::Duration};
 
 use kithara::decode::{DecoderConfig, DecoderFactory};
-use kithara_test_utils::{Xorshift64, wav::create_test_wav};
+use kithara_integration_tests::{Xorshift64, wav::create_test_wav};
 
 use crate::common::test_defaults::SawWav;
 

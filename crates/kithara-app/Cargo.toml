@@ -1,6 +1,6 @@
 [package]
 name = "kithara-app"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license = "MIT OR Apache-2.0"
 publish = false
@@ -27,11 +27,10 @@ kithara-queue = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
+bon = { workspace = true }
 crossterm = { workspace = true, optional = true }
-derivative = { workspace = true }
-derive_setters = { workspace = true }
 iced = { workspace = true, optional = true }
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
@@ -46,8 +45,14 @@ url = { workspace = true }
 kithara = { workspace = true, features = ["apple"] }
 
 [dev-dependencies]
+kithara-net = { workspace = true }
 kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+futures = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_yml = { workspace = true }
 
 [[bin]]
 name = "kithara"

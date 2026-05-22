@@ -11,9 +11,6 @@ use super::{
 };
 
 mod cursors {
-    //! `Read + Seek` adapters used by the mp4 scanner unit tests to assert
-    //! that the scanner does not pull large box payloads (`mdat`, cover art)
-    //! into memory and does not seek to `SeekFrom::End`.
 
     use std::io::{Cursor, Read, Seek, SeekFrom};
 

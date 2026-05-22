@@ -1,9 +1,3 @@
-//! ANSI styling helpers with automatic TTY fallback.
-//!
-//! When stdout is a tty, helpers wrap text in ANSI escape codes; when
-//! piped or redirected they return the input unchanged so logs and CI
-//! captures stay clean.
-
 use std::{
     io::{IsTerminal, stdout},
     sync::OnceLock,
@@ -16,8 +10,7 @@ fn enabled() -> bool {
             return false;
         }
         if std::env::var("KITHARA_AUDIT_COLOR")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("always"))
-            .unwrap_or(false)
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("always"))
         {
             return true;
         }

@@ -1,10 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Per-resource byte availability index.
-//!
-//! `Availability` is a single resource's snapshot of which byte ranges
-//! have been written and whether it has been committed.
-
 use std::{
     collections::BTreeMap,
     ops::Range,
@@ -591,9 +586,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
             CancellationToken::new(),
-            MmapOptions::new(dir.path().join("availability.bin"))
-                .with_initial_len(4096)
-                .with_mode(OpenMode::ReadWrite),
+            MmapOptions::for_path(dir.path().join("availability.bin"))
+                .initial_len(4096)
+                .mode(OpenMode::ReadWrite)
+                .build(),
         )
         .unwrap();
         let atomic = Atomic::new(res);
@@ -619,7 +615,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
             CancellationToken::new(),
-            MmapOptions::new(dir.path().join("availability.bin")).with_mode(OpenMode::ReadWrite),
+            MmapOptions::for_path(dir.path().join("availability.bin"))
+                .mode(OpenMode::ReadWrite)
+                .build(),
         )
         .unwrap();
         let atomic = Atomic::new(res);
@@ -634,9 +632,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let res: MmapResource = Resource::open(
             CancellationToken::new(),
-            MmapOptions::new(dir.path().join("availability.bin"))
-                .with_initial_len(4096)
-                .with_mode(OpenMode::ReadWrite),
+            MmapOptions::for_path(dir.path().join("availability.bin"))
+                .initial_len(4096)
+                .mode(OpenMode::ReadWrite)
+                .build(),
         )
         .unwrap();
         let atomic = Atomic::new(res);

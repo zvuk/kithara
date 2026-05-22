@@ -1,12 +1,3 @@
-//! Stress test: random seek+read cycles on HLS stream.
-//!
-//! Spawns a local HLS server via [`HlsTestServer`], creates `Stream<Hls>`,
-//! performs random byte-level seeks each followed by a read, verifying exact
-//! byte content at every position. Parametrized via rstest cases (small/medium/large).
-//!
-//! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
-//! No external network required.
-
 use std::{
     io::{ErrorKind, Read, Seek, SeekFrom},
     sync::Arc,
@@ -17,15 +8,15 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::{
-    EncryptionConfig, HlsTestServer, HlsTestServerConfig,
+use kithara_integration_tests::{
+    TestTempDir, Xorshift64,
+    hls_server::{EncryptionConfig, HlsTestServer, HlsTestServerConfig},
 };
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
     tokio::task::spawn_blocking,
 };
-use kithara_test_utils::{TestTempDir, Xorshift64};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -123,10 +114,11 @@ async fn stress_random_seek_read_hls(
     let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.expect("create HLS stream");
 

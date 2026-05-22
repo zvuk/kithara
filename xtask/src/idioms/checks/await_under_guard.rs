@@ -1,32 +1,3 @@
-//! `.await` while a synchronous `MutexGuard` / `RwLockReadGuard` /
-//! `RwLockWriteGuard` is still alive — one of the most pernicious
-//! deadlock shapes in async Rust.
-//!
-//! Detection (single-block scope tracking, conservative):
-//!
-//! 1. Visit each `ExprBlock`.
-//! 2. Walk statements in order. On `let <ident> = receiver.<method>()`
-//!    where `<method>` is `lock`, `lock_sync`, `read`, `write`,
-//!    `upgradable_read` (or `lock_async().await` for async-aware
-//!    locks — these are explicitly designed to span `.await` and are
-//!    skipped), record an active guard binding for the rest of the
-//!    block.
-//! 3. If a subsequent expression contains `.await`, flag the await
-//!    site for every still-active guard.
-//! 4. Explicit `drop(<ident>)` / `mem::drop(<ident>)` releases the
-//!    guard before the await.
-//! 5. On exit from the block scope, drop every guard registered there.
-//!
-//! Limitations: pattern bindings (`let (a, b) = ...`) aren't tracked;
-//! conditional drops inside `if`/`match` aren't followed across
-//! branches; closures inside iterator chains are visited but the
-//! closure's enclosing guards stay active (closures captured by move
-//! could re-enter the lock).
-//!
-//! Suppress with `// xtask-lint-ignore: await_under_guard` when the
-//! lock is genuinely async-aware or when manual analysis confirms the
-//! awaited future never re-enters the lock.
-
 use anyhow::Result;
 use syn::{
     Expr, ExprAwait, ExprBlock, ExprCall, ExprMethodCall, ExprPath, Local, Pat, PatIdent, Path,

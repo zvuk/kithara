@@ -1,10 +1,3 @@
-//! Number of methods (`fn` items) in a single trait definition.
-//!
-//! Per AGENTS.md: "prefer several smaller traits with clearer ownership"
-//! over one fat trait. A trait with many methods makes implementations
-//! large, makes mocks/test-doubles painful, and signals weak interface
-//! cohesion (the trait is doing several jobs at once).
-
 use std::collections::BTreeMap;
 
 use anyhow::Result;

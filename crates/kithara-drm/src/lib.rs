@@ -27,4 +27,5 @@ pub use decrypt::aes128_cbc_process_chunk;
 pub use error::DrmError;
 pub use registry::{
     DomainMatcher, KeyProcessResult, KeyProcessor, KeyProcessorRegistry, KeyProcessorRule,
+    KeyRequest, KeyRequestFactory,
 };

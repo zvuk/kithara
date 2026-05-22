@@ -1,19 +1,3 @@
-//! Aggressive lifecycle stress test: rapid seeks and seek-to-zero integrity.
-//!
-//! Designed to catch bugs where:
-//! - `read()` returns 0 after seek (player stalls, never resumes)
-//! - Seek to position 0 after heavy seek activity yields no data
-//!   (first segments not loaded / evicted)
-//!
-//! Setup: 40 segments × 3 ABR variants (ascending, descending, phase-shifted).
-//! V0 segments delayed after segment 3 to trigger ABR downgrade.
-//!
-//! Phases:
-//! 1. **Warmup**: read until ABR switch from V0→V1
-//! 2. **Stress**: 2000 random seeks - verify `read()` always produces data
-//! 3. **Reset**: seek to 0 → read the entire track beginning to end,
-//!    verify saw-tooth continuity on every frame
-
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara::{
@@ -23,17 +7,14 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    abr_fast,
-    hls_fixture::{HlsTestServer, HlsTestServerConfig},
-};
-use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
-use kithara_test_utils::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, detect_direction,
+    SignalDirection as Direction, TestTempDir, Xorshift64, abr_fast, detect_direction,
     fixture_protocol::DelayRule,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
 };
+use kithara_platform::{thread, time::Instant, tokio::task::spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -192,14 +173,17 @@ async fn stress_seek_lifecycle_with_zero_reset(
         store.is_ephemeral = true;
     }
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
     let _ = &abr_fast;
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio pipeline");
@@ -360,7 +344,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
         let mut read_attempts = 0u64;
         let max_read_attempts = 100_000u64;
 
-        #[allow(unused_assignments)]
+        #[expect(unused_assignments)]
         let mut final_saw_eof = false;
         loop {
             let (n, retries, saw_eof) = read_with_retry(&mut audio, &mut buf);

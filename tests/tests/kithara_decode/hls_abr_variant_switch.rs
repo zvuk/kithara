@@ -1,15 +1,3 @@
-//! Integration test for HLS ABR variant switch with decode pipeline.
-//!
-//! This test reproduces a bug where byte reading skips/glitches during ABR variant switch.
-//! The bug manifests when:
-//! 1. ABR switches from variant A to variant B
-//! 2. Pipeline pre-loads segments from variant B (e.g., segments 4, 5, 6)
-//! 3. Reader seeks backward to load earlier segment (e.g., segment 3)
-//! 4. Segment index gets corrupted, causing byte skips/glitches
-//!
-//! This test verifies that Stream<Hls> reads continuous bytes without skips during ABR
-//! variant switches.
-
 use std::{
     error::Error,
     io::{Read as _, Seek as _, SeekFrom},
@@ -23,9 +11,12 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist};
+use kithara_integration_tests::{
+    TestTempDir,
+    hls_server::abr::{AbrTestServer, master_playlist},
+    temp_dir,
+};
 use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -67,11 +58,12 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    let config = HlsConfig::new(url.clone())
-        .with_cancel(cancel_token.clone())
-        .with_events(bus)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let config = HlsConfig::for_url(url.clone())
+        .cancel(cancel_token.clone())
+        .events(bus)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     info!("Opening HLS stream with ABR enabled");
 
@@ -173,10 +165,11 @@ async fn test_basic_multi_segment_reading(
     let url = server.url("/master.m3u8");
     let cancel_token = CancellationToken::new();
 
-    let config = HlsConfig::new(url)
-        .with_cancel(cancel_token.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .cancel(cancel_token.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await?;
 
@@ -242,11 +235,12 @@ async fn test_abr_variant_switch_with_seek_backward(
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    let config = HlsConfig::new(url)
-        .with_cancel(cancel_token.clone())
-        .with_events(bus)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let config = HlsConfig::for_url(url)
+        .cancel(cancel_token.clone())
+        .events(bus)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     println!("\nCreating HLS stream with ABR");
     let mut stream = Stream::<Hls>::new(config).await?;

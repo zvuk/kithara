@@ -1,8 +1,7 @@
 use iced::Task;
 use kithara::abr::AbrMode;
 use kithara_queue::{TrackId, Transition};
-use num_traits::cast::AsPrimitive;
-use tracing::error;
+use tracing::{error, info};
 
 use super::{
     app::Kithara,
@@ -10,245 +9,206 @@ use super::{
 };
 
 fn track_id_at(state: &Kithara, index: usize) -> Option<TrackId> {
-    state.tracks_snapshot.get(index).map(|e| e.id)
+    state.ui_state.tracks.get(index).map(|e| e.id)
 }
 
-fn track_name_at(state: &Kithara, index: usize) -> String {
-    state
-        .tracks_snapshot
-        .get(index)
-        .map(|e| e.name.clone())
-        .unwrap_or_default()
+pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
+    match message {
+        Message::TogglePlayPause => handle_toggle_play_pause(state),
+        Message::Next => handle_next(state),
+        Message::Prev => handle_prev(state),
+        Message::SeekChanged(pos) => handle_seek_changed(state, pos),
+        Message::SeekReleased => handle_seek_released(state),
+        Message::VolumeChanged(vol) => handle_volume_changed(state, vol),
+        Message::EqBandChanged(band, db) => handle_eq_band_changed(state, band, db),
+        Message::PlayRateChanged(rate) => handle_play_rate_changed(state, rate),
+        Message::CrossfadeChanged(secs) => handle_crossfade_changed(state, secs),
+        Message::UrlChanged(text) => handle_url_changed(state, text),
+        Message::AddUrl => handle_add_url(state),
+        Message::ToggleMute => handle_toggle_mute(state),
+        Message::EqResetAll => handle_eq_reset_all(state),
+        Message::SelectTrack(idx) => handle_select_track(state, idx),
+        Message::DeleteTrack => handle_delete_track(state),
+        Message::TabSelected(tab) => handle_tab_selected(state, tab),
+        Message::SetAbrMode(variant) => handle_set_abr_mode(state, variant),
+        Message::Tick => handle_tick(state),
+    }
+
+    state.ui_state = state.controller.snapshot();
+    Task::none()
 }
 
-fn handle_next(state: &mut Kithara) {
-    if state.queue.advance_to_next(Transition::Crossfade).is_some() {
-        if let Some(idx) = state.queue.current_index() {
-            state.current_track_index = Some(idx);
-            state.track_name = track_name_at(state, idx);
-        }
-        state.variant_label.clear();
-        state.abr_mode_is_auto = true;
-        state.selected_variant = None;
+fn handle_toggle_play_pause(state: &Kithara) {
+    if state.ui_state.playing {
+        state.controller.queue().pause();
+    } else {
+        state.controller.queue().play();
     }
 }
 
-fn handle_prev(state: &mut Kithara) {
-    if state
-        .queue
-        .return_to_previous(Transition::Crossfade)
-        .is_some()
-    {
-        if let Some(idx) = state.queue.current_index() {
-            state.current_track_index = Some(idx);
-            state.track_name = track_name_at(state, idx);
-        }
-        state.variant_label.clear();
+fn handle_next(state: &Kithara) {
+    let _ = state
+        .controller
+        .queue()
+        .advance_to_next(Transition::Crossfade);
+}
+
+fn handle_prev(state: &Kithara) {
+    let _ = state
+        .controller
+        .queue()
+        .return_to_previous(Transition::Crossfade);
+}
+
+fn handle_seek_changed(state: &Kithara, pos: f64) {
+    state.controller.mutate(|st| {
+        st.is_seeking = true;
+        st.seek_position = pos;
+    });
+}
+
+fn handle_seek_released(state: &Kithara) {
+    let target = state.controller.mutate(|st| {
+        st.is_seeking = false;
+        st.seek_position
+    });
+    if let Err(e) = state.controller.queue().seek(target) {
+        error!("seek failed: {e:?}");
     }
+}
+
+fn handle_volume_changed(state: &mut Kithara, vol: f32) {
+    state.controller.queue().set_volume(vol);
+    state.controller.mutate(|st| st.volume = vol);
+    if vol > 0.0 {
+        state.previous_volume = vol;
+    }
+}
+
+fn handle_eq_band_changed(state: &Kithara, band: usize, db: f32) {
+    if band >= state.ui_state.eq_bands.len() {
+        return;
+    }
+    match state.controller.queue().set_eq_gain(band, db) {
+        Ok(()) => {
+            state.controller.mutate(|st| {
+                if let Some(slot) = st.eq_bands.get_mut(band) {
+                    *slot = db;
+                }
+            });
+        }
+        Err(e) => error!("set EQ gain band={band} db={db:.1} failed: {e:?}"),
+    }
+}
+
+fn handle_play_rate_changed(state: &Kithara, rate: f32) {
+    state.controller.queue().set_default_rate(rate);
+    if state.ui_state.playing {
+        state.controller.queue().play();
+    }
+    state.controller.mutate(|st| st.selected_rate = rate);
+}
+
+fn handle_crossfade_changed(state: &Kithara, secs: f32) {
+    state.controller.queue().set_crossfade_duration(secs);
+    state.controller.mutate(|st| st.crossfade = secs);
+}
+
+fn handle_url_changed(state: &mut Kithara, text: String) {
+    state.url_text = text;
+}
+
+fn handle_add_url(state: &mut Kithara) {
+    let url = state.url_text.trim();
+    if url.is_empty() {
+        return;
+    }
+    state.controller.queue().append(url);
+    state.url_text.clear();
+}
+
+fn handle_toggle_mute(state: &mut Kithara) {
+    if state.ui_state.volume > 0.0 {
+        state.previous_volume = state.ui_state.volume;
+        handle_volume_changed(state, 0.0);
+    } else {
+        let target = if state.previous_volume > 0.0 {
+            state.previous_volume
+        } else {
+            0.5
+        };
+        handle_volume_changed(state, target);
+    }
+}
+
+fn handle_eq_reset_all(state: &Kithara) {
+    let band_count = state.ui_state.eq_bands.len();
+    for band in 0..band_count {
+        if let Err(e) = state.controller.queue().set_eq_gain(band, 0.0) {
+            error!("reset EQ band={band} failed: {e:?}");
+        }
+    }
+    state.controller.mutate(|st| {
+        for slot in &mut st.eq_bands {
+            *slot = 0.0;
+        }
+    });
 }
 
 fn handle_select_track(state: &mut Kithara, idx: usize) {
     if state.selected_track_index != Some(idx) {
         state.selected_track_index = Some(idx);
-    } else if let Some(id) = track_id_at(state, idx) {
-        if let Err(e) = state.queue.select(id, Transition::None) {
-            error!(index = idx, error = %e, "select failed");
-        }
-        state.current_track_index = Some(idx);
-        state.track_name = track_name_at(state, idx);
-        state.variant_label.clear();
-        state.abr_mode_is_auto = true;
-        state.selected_variant = None;
+        return;
+    }
+    if let Some(id) = track_id_at(state, idx)
+        && let Err(e) = state.controller.queue().select(id, Transition::None)
+    {
+        error!(index = idx, error = %e, "select failed");
     }
 }
 
 fn handle_delete_track(state: &mut Kithara) {
-    let target_idx = state.selected_track_index.or(state.current_track_index);
-    if let Some(idx) = target_idx
+    let target = state
+        .selected_track_index
+        .or(state.ui_state.current_track_index);
+    if let Some(idx) = target
         && let Some(id) = track_id_at(state, idx)
     {
-        match state.queue.remove(id) {
-            Ok(()) => {
-                state.selected_track_index = None;
-            }
+        match state.controller.queue().remove(id) {
+            Ok(()) => state.selected_track_index = None,
             Err(e) => error!(index = idx, error = %e, "remove failed"),
         }
     }
 }
 
-fn handle_set_abr_mode(state: &mut Kithara, variant: Option<usize>) {
-    state.abr_mode_is_auto = variant.is_none();
-    state.selected_variant = variant;
-    if let Some(handle) = state.queue.current_abr_handle() {
+fn handle_tab_selected(state: &mut Kithara, tab: Tab) {
+    state.active_tab = tab;
+}
+
+fn handle_set_abr_mode(state: &Kithara, variant: Option<usize>) {
+    let handle = state.controller.queue().current_abr_handle();
+    info!(
+        ?variant,
+        handle_present = handle.is_some(),
+        "GUI: SetAbrMode received"
+    );
+    if let Some(handle) = handle {
         let mode = variant.map_or(AbrMode::Auto(None), AbrMode::Manual);
-        if let Err(err) = handle.set_mode(mode) {
-            error!(?err, ?variant, "SetAbrMode rejected by ABR state");
+        match handle.set_mode(mode) {
+            Ok(()) => info!(?variant, ?mode, "GUI: set_mode accepted"),
+            Err(err) => error!(?err, ?variant, "SetAbrMode rejected by ABR state"),
         }
+    } else {
+        error!(?variant, "GUI: no current AbrHandle — set_mode skipped");
     }
+    state.controller.mutate(|st| {
+        st.abr_mode_is_auto = variant.is_none();
+        st.selected_variant = variant;
+    });
 }
 
 fn handle_tick(state: &mut Kithara) {
-    let _ = state.queue.tick();
+    let _ = state.controller.queue().tick();
+    state.controller.refresh_continuous();
     state.blink_counter = state.blink_counter.wrapping_add(1);
-
-    state.tracks_snapshot = state.queue.tracks();
-
-    if let Ok(label) = state.shared_variant_label.lock()
-        && *label != state.variant_label
-    {
-        state.variant_label.clone_from(&label);
-    }
-    if let Ok(sv) = state.shared_abr_variants.lock()
-        && *sv != state.abr_variants
-    {
-        state.abr_variants.clone_from(&sv);
-    }
-
-    state.playing = state.queue.is_playing();
-    if let Some(idx) = state.queue.current_index() {
-        state.current_track_index = Some(idx);
-        state.track_name = track_name_at(state, idx);
-    }
-    state.duration = state.queue.duration_seconds().unwrap_or(0.0).as_();
-    if !state.is_seeking {
-        state.position = state.queue.position_seconds().unwrap_or(0.0).as_();
-    }
-}
-
-/// Handle all messages (Elm `update` function). Each Message variant
-/// dispatches to a small handler so the central match stays a flat switch
-/// with no per-arm logic — keeps cognitive complexity bounded as new
-/// messages are added.
-///
-/// `message: Message` is by value because that is iced's `Application::update`
-/// signature contract; the silencer is feature-gated so it only narrows the
-/// GUI build where the iced trait actually applies.
-#[cfg_attr(
-    feature = "gui",
-    expect(
-        clippy::needless_pass_by_value,
-        reason = "iced Application::update requires owned Message"
-    )
-)]
-pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
-    match message {
-        Message::TogglePlayPause => handle_toggle_play_pause(state),
-        Message::Next => {
-            handle_next(state);
-            Task::none()
-        }
-        Message::Prev => {
-            handle_prev(state);
-            Task::none()
-        }
-        Message::SeekChanged(pos) => handle_seek_changed(state, pos),
-        Message::SeekReleased => handle_seek_released(state),
-        Message::VolumeChanged(vol) => handle_volume_changed(state, vol),
-        Message::EqBandChanged(band, db) => handle_eq_band_changed(state, band, db),
-        Message::EqBandReset(band) => handle_eq_band_reset(state, band),
-        Message::PlayRateChanged(rate) => handle_play_rate_changed(state, rate),
-        Message::CrossfadeChanged(secs) => handle_crossfade_changed(state, secs),
-        Message::SelectTrack(idx) => {
-            handle_select_track(state, idx);
-            Task::none()
-        }
-        Message::DeleteTrack => {
-            handle_delete_track(state);
-            Task::none()
-        }
-        Message::TabSelected(tab) => handle_tab_selected(state, tab),
-        Message::SetAbrMode(variant) => {
-            handle_set_abr_mode(state, variant);
-            Task::none()
-        }
-        Message::Tick => {
-            handle_tick(state);
-            Task::none()
-        }
-        Message::ToggleShuffle => handle_toggle_shuffle(state),
-        Message::ToggleRepeat => handle_toggle_repeat(state),
-    }
-}
-
-fn handle_toggle_play_pause(state: &mut Kithara) -> Task<Message> {
-    if state.playing {
-        state.queue.pause();
-    } else {
-        state.queue.play();
-    }
-    state.playing = !state.playing;
-    Task::none()
-}
-
-fn handle_seek_changed(state: &mut Kithara, pos: f32) -> Task<Message> {
-    state.is_seeking = true;
-    state.seek_position = pos;
-    Task::none()
-}
-
-fn handle_seek_released(state: &mut Kithara) -> Task<Message> {
-    state.is_seeking = false;
-    if let Err(e) = state.queue.seek(f64::from(state.seek_position)) {
-        error!("seek failed: {e:?}");
-    }
-    Task::none()
-}
-
-fn handle_volume_changed(state: &mut Kithara, vol: f32) -> Task<Message> {
-    state.volume = vol;
-    state.queue.set_volume(vol);
-    Task::none()
-}
-
-fn handle_eq_band_changed(state: &mut Kithara, band: usize, db: f32) -> Task<Message> {
-    if band < state.eq_bands.len() {
-        state.eq_bands[band] = db;
-        match state.queue.set_eq_gain(band, db) {
-            Ok(()) => tracing::info!("EQ band={band} gain={db:.1} dB — OK"),
-            Err(e) => error!("set EQ gain band={band} db={db:.1} failed: {e:?}"),
-        }
-    }
-    Task::none()
-}
-
-fn handle_eq_band_reset(state: &mut Kithara, band: usize) -> Task<Message> {
-    if band < state.eq_bands.len() {
-        state.eq_bands[band] = 0.0;
-        if let Err(e) = state.queue.set_eq_gain(band, 0.0) {
-            error!("reset EQ band={band} failed: {e:?}");
-        }
-    }
-    Task::none()
-}
-
-fn handle_play_rate_changed(state: &mut Kithara, rate: f32) -> Task<Message> {
-    state.selected_rate = rate;
-    state.queue.set_default_rate(rate);
-    if state.playing {
-        state.queue.play();
-    }
-    Task::none()
-}
-
-fn handle_crossfade_changed(state: &mut Kithara, secs: f32) -> Task<Message> {
-    state.crossfade = secs;
-    state.queue.set_crossfade_duration(secs);
-    Task::none()
-}
-
-fn handle_tab_selected(state: &mut Kithara, tab: Tab) -> Task<Message> {
-    state.active_tab = tab;
-    Task::none()
-}
-
-fn handle_toggle_shuffle(state: &mut Kithara) -> Task<Message> {
-    let new = !state.queue.is_shuffle_enabled();
-    state.queue.set_shuffle(new);
-    state.shuffle_enabled = new;
-    Task::none()
-}
-
-fn handle_toggle_repeat(state: &mut Kithara) -> Task<Message> {
-    state.repeat_enabled = !state.repeat_enabled;
-    Task::none()
 }

@@ -1,8 +1,12 @@
-//! On-demand signal generator.
-//!
-//! `SignalPcm<S>` is the PCM-first core that creates interleaved samples.
-
-use std::{io::Error as IoError, num::NonZeroUsize, ops::Range};
+use std::{
+    io::Error as IoError,
+    num::NonZeroUsize,
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use futures::executor::block_on;
 use kithara_platform::time::Duration;
@@ -11,7 +15,8 @@ use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, ReadOutcome, Source, SourceError, SourcePhase, Stream,
     StreamResult, StreamType, Timeline,
 };
-use kithara_test_utils::{
+
+use crate::{
     signal_pcm::{SignalPcm, signal},
     wav::WavHeader,
 };
@@ -20,6 +25,7 @@ use kithara_test_utils::{
 pub struct SignalSource<S: signal::SignalFn> {
     pcm: SignalPcm<S>,
     timeline: Timeline,
+    position: Arc<AtomicU64>,
     header: WavHeader,
 }
 
@@ -33,6 +39,7 @@ impl<S: signal::SignalFn> SignalSource<S> {
     pub fn new(pcm: SignalPcm<S>) -> Self {
         Self {
             timeline: Timeline::new(),
+            position: Arc::new(AtomicU64::new(0)),
             header: create_header_from_signal(&pcm),
             pcm,
         }
@@ -63,11 +70,12 @@ impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
 
     fn media_info(&self) -> Option<MediaInfo> {
         Some(
-            MediaInfo::default()
-                .with_channels(self.pcm.channels())
-                .with_codec(AudioCodec::Pcm)
-                .with_container(ContainerFormat::Wav)
-                .with_sample_rate(self.pcm.sample_rate()),
+            MediaInfo::builder()
+                .channels(self.pcm.channels())
+                .codec(AudioCodec::Pcm)
+                .container(ContainerFormat::Wav)
+                .sample_rate(self.pcm.sample_rate())
+                .build(),
         )
     }
 
@@ -77,6 +85,18 @@ impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
         } else {
             SourcePhase::Ready
         }
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn advance(&self, n: u64) {
+        self.position.fetch_add(n, Ordering::AcqRel);
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
@@ -171,12 +191,10 @@ pub fn signal_stream<S: signal::SignalFn + Sync>(
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::{
-        kithara,
-        signal_pcm::{Finite, Infinite},
-    };
+    use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::signal_pcm::{Finite, Infinite};
 
     #[kithara::test]
     fn finite_eof() {

@@ -1,24 +1,3 @@
-//! Real-network integration test: silvercomet HLS/MP3/DRM seek hang detection.
-//!
-//! For each of 10 iterations, walks three live silvercomet streams (MP3,
-//! HLS, DRM-HLS), plays each for 3 s wall, seeks to the middle of the
-//! track, plays another 3 s, and asserts:
-//!
-//! 1. `render_offline_window` observes no long silence run — the player
-//!    never parks the render thread waiting for decoded chunks.
-//! 2. `OfflinePlayer::position` advances by ≥1.5 s over each 3 s wall
-//!    window — the `Audio::seek` FSM eventually surfaces chunks at the
-//!    new epoch.
-//!
-//! Rendered interleaved stereo f32 samples are captured and written to
-//! `/tmp/kithara_silvercomet_seek_iter_<N>.wav` (IEEE float PCM) for
-//! post-mortem inspection. Each iteration uses a fresh temp cache
-//! directory so no downloaded segment survives between runs.
-//!
-//! `#[ignore]` — requires live network to silvercomet.top and ~3 minutes
-//! wall clock. Run with:
-//! `cargo nextest run -p kithara-integration-tests kithara_play::silvercomet_seek_hang --run-ignored only --no-capture`
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
@@ -27,17 +6,17 @@ use std::{fs::File, io::Write, path::Path};
 use kithara::{
     assets::StoreOptions,
     events::AbrMode,
-    net::NetOptions,
+    net::{HttpClient, NetOptions},
     play::{Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_decode::DecoderBackend;
-use kithara_integration_tests::offline::OfflinePlayer;
+use kithara_integration_tests::{offline::OfflinePlayer, temp_dir};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
-use kithara_test_utils::temp_dir;
+use tokio_util::sync::CancellationToken;
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -127,8 +106,12 @@ fn blocks_for_seconds(secs: f64) -> u32 {
 }
 
 fn fresh_downloader() -> Downloader {
-    let net = NetOptions::default().with_is_insecure(true);
-    Downloader::new(DownloaderConfig::default().with_net(net))
+    let net = NetOptions::builder().is_insecure(true).build();
+    Downloader::new(
+        DownloaderConfig::builder()
+            .client(HttpClient::new(net, CancellationToken::new()))
+            .build(),
+    )
 }
 
 async fn build_resource(
@@ -139,14 +122,14 @@ async fn build_resource(
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
-    let mut cfg =
-        ResourceConfig::new(url).unwrap_or_else(|e| panic!("ResourceConfig::new({url}): {e}"));
-    cfg = cfg
-        .with_downloader(downloader.clone())
-        .with_name(format!("{iter_label}|{url}"));
-    cfg.store = store;
-    cfg.decoder_backend = backend;
-    cfg.initial_abr_mode = abr;
+    let cfg = ResourceConfig::for_src(url)
+        .unwrap_or_else(|e| panic!("ResourceConfig::for_src({url}): {e}"))
+        .downloader(downloader.clone())
+        .name(format!("{iter_label}|{url}"))
+        .store(store)
+        .decoder_backend(backend)
+        .initial_abr_mode(abr)
+        .build();
     let mut resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
@@ -234,6 +217,9 @@ async fn silvercomet_3tracks_seek_middle_hang_10x(
     #[case] backend: DecoderBackend,
     #[case] abr: AbrMode,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let trace_log = std::fs::OpenOptions::new()
         .create(true)
         .write(true)

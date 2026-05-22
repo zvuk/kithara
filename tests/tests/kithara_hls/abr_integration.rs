@@ -1,19 +1,22 @@
 #![forbid(unsafe_code)]
 
 use kithara::hls::{MasterPlaylist, parse_master_playlist};
-use kithara_abr::{AbrController, AbrMode, AbrSettings, AbrVariant};
-use kithara_events::VariantDuration;
+use kithara_abr::{AbrController, AbrMode, AbrSettings};
+use kithara_events::{VariantDuration, VariantInfo};
 use kithara_platform::time::Duration;
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
-fn variants_from_master(master: &MasterPlaylist) -> Vec<AbrVariant> {
+fn variants_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
     master
         .variants
         .iter()
-        .map(|v| AbrVariant {
+        .map(|v| VariantInfo {
             variant_index: v.id.0,
-            bandwidth_bps: v.bandwidth.unwrap_or(0),
+            bandwidth_bps: Some(v.bandwidth.unwrap_or(0)),
             duration: VariantDuration::Total(Duration::ZERO),
+            name: None,
+            codecs: None,
+            container: None,
         })
         .collect()
 }
@@ -44,7 +47,7 @@ fn parsed_master_playlist(test_master_playlist_data: &str) -> MasterPlaylist {
 }
 
 #[kithara::fixture]
-fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<AbrVariant> {
+fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<VariantInfo> {
     variants_from_master(&parsed_master_playlist)
 }
 
@@ -59,10 +62,9 @@ fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<
 #[case(3)]
 fn test_manual_selector_different_indices(
     #[case] selector_index: usize,
-    variants_from_parsed_playlist: Vec<AbrVariant>,
+    variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
-    let controller = AbrController::new(AbrSettings::default());
-    let _ = controller.settings().warmup_min_bytes;
+    let _ = AbrController::new(AbrSettings::default());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
     let _ = AbrMode::Manual(selector_index);
 }
@@ -70,10 +72,14 @@ fn test_manual_selector_different_indices(
 #[kithara::test]
 fn test_abr_controller_no_selector(
     abr_settings_default: AbrSettings,
-    variants_from_parsed_playlist: Vec<AbrVariant>,
+    variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
     let controller = AbrController::new(abr_settings_default);
-    assert!(controller.current_bandwidth_estimate_bps().is_none());
+    // Default settings now seed `initial_throughput_bps = Some(2 Mbps)` so
+    // ABR can pick a sensible variant on the first tick instead of starting
+    // at LQ. `is_some()` keeps the assertion future-proof against the exact
+    // seed value.
+    assert!(controller.current_bandwidth_estimate_bps().is_some());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
 }
 
@@ -86,10 +92,12 @@ fn test_abr_controller_no_selector(
 fn test_abr_decision_with_different_conditions(
     #[case] _buffer_secs: f64,
     #[case] _time_since_last_switch_secs: f64,
-    variants_from_parsed_playlist: Vec<AbrVariant>,
+    variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
     let controller = AbrController::new(AbrSettings::default());
-    assert!(controller.current_bandwidth_estimate_bps().is_none());
+    // Default settings seed an initial throughput hint — see
+    // `test_abr_controller_no_selector` for the rationale.
+    assert!(controller.current_bandwidth_estimate_bps().is_some());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
 }
 
@@ -99,9 +107,9 @@ fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
 
     assert_eq!(variants.len(), 3);
 
-    assert_eq!(variants[0].bandwidth_bps, 2000000);
-    assert_eq!(variants[1].bandwidth_bps, 1000000);
-    assert_eq!(variants[2].bandwidth_bps, 500000);
+    assert_eq!(variants[0].bandwidth_bps, Some(2000000));
+    assert_eq!(variants[1].bandwidth_bps, Some(1000000));
+    assert_eq!(variants[2].bandwidth_bps, Some(500000));
 
     assert_eq!(variants[0].variant_index, 0);
     assert_eq!(variants[1].variant_index, 1);
@@ -111,6 +119,9 @@ fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
 #[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
 fn test_abr_controller_async_usage() {
     let controller = AbrController::new(AbrSettings::default());
-    assert!(controller.current_bandwidth_estimate_bps().is_none());
+    // Default settings seed an initial throughput estimate (see
+    // `test_abr_controller_no_selector`) — `is_some()` keeps the
+    // assertion stable against the exact seed value.
+    assert!(controller.current_bandwidth_estimate_bps().is_some());
     let _ = AbrMode::Manual(0);
 }

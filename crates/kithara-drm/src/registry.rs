@@ -1,8 +1,7 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
+use bon::Builder;
 use bytes::Bytes;
-use derivative::Derivative;
-use derive_setters::Setters;
 use url::Url;
 
 /// Result of processing a key through a [`KeyProcessor`].
@@ -10,6 +9,37 @@ pub type KeyProcessResult = Result<Bytes, crate::DrmError>;
 
 /// Callback that transforms raw key bytes fetched from the server.
 pub type KeyProcessor = Arc<dyn Fn(Bytes) -> KeyProcessResult + Send + Sync>;
+
+/// Factory that produces a fresh [`KeyRequest`] for every key fetch.
+/// Called by [`KeyProcessorRegistry`] consumers on each request so
+/// per-request material (the X-Encrypted-Key salt and the cipher
+/// keyed on it) never gets reused across keys.
+pub type KeyRequestFactory = Arc<dyn Fn() -> KeyRequest + Send + Sync>;
+
+/// Per-request state for a single key fetch: the headers to send
+/// (typically a freshly-generated `X-Encrypted-Key` salt) and the
+/// matching processor that will decrypt the response body with the
+/// same salt. Built by [`KeyRequestFactory`].
+#[non_exhaustive]
+pub struct KeyRequest {
+    /// Headers added to the outgoing key request. Merged on top of
+    /// [`KeyProcessorRule::headers`] (per-request entries win on key
+    /// collision).
+    pub headers: HashMap<String, String>,
+    /// Processor that decrypts the response body using state derived
+    /// from this request's headers (e.g. the salt embedded above).
+    pub processor: KeyProcessor,
+}
+
+impl KeyRequest {
+    /// Construct a fresh request pair. Required because the struct
+    /// is `#[non_exhaustive]` (so future fields can be added without
+    /// breaking external factories).
+    #[must_use]
+    pub fn new(headers: HashMap<String, String>, processor: KeyProcessor) -> Self {
+        Self { headers, processor }
+    }
+}
 
 /// Pattern for matching key-URL domains.
 #[derive(Clone, Debug)]
@@ -58,55 +88,84 @@ impl DomainMatcher {
     }
 }
 
-/// A rule binding domain patterns to a key processor + per-provider
-/// request shape (headers, query params).
+/// A rule binding domain patterns to a key-request factory +
+/// per-provider request shape (static base headers, query params).
 ///
-/// Build with [`KeyProcessorRule::new`] + `.with_headers(...)` /
-/// `.with_query_params(...)` setters.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Debug)]
-#[setters(prefix = "with_", strip_option)]
+/// The factory produces a fresh [`KeyRequest`] (per-request salt +
+/// matching processor) on every key fetch — see [`KeyRequestFactory`].
+/// `headers` is the rule's static base shape (UA, X-App-*, X-Auth-Token,
+/// Referer); per-request headers (X-Encrypted-Key) come from the factory.
+///
+/// Build with [`KeyProcessorRule::for_domains`] then chain
+/// bon-generated `headers(...)` / `query_params(...)` setters and
+/// `.build()`.
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct KeyProcessorRule {
-    /// Headers appended to key requests that match this rule.
+    /// Static headers (UA, auth, X-App-*) merged on top of base
+    /// downloader headers for every fetch this rule matches. The
+    /// per-request `X-Encrypted-Key` salt is **not** part of this
+    /// map — it comes from [`Self::key_request_factory`] on each
+    /// individual key request.
     pub headers: Option<HashMap<String, String>>,
     /// Query parameters appended to key URLs that match this rule.
     pub query_params: Option<HashMap<String, String>>,
-    #[setters(skip)]
-    #[derivative(Debug(format_with = "fmt_processor"))]
-    processor: KeyProcessor,
-    #[setters(skip)]
+    key_request_factory: KeyRequestFactory,
     matchers: Vec<DomainMatcher>,
 }
 
-fn fmt_processor(_: &KeyProcessor, f: &mut fmt::Formatter) -> fmt::Result {
-    f.write_str("<fn>")
+impl fmt::Debug for KeyProcessorRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyProcessorRule")
+            .field("headers", &self.headers)
+            .field("query_params", &self.query_params)
+            .field("key_request_factory", &"<fn>")
+            .field("matchers", &self.matchers)
+            .finish()
+    }
 }
 
 impl KeyProcessorRule {
-    /// Create a rule bound to `patterns` (parsed via
-    /// [`DomainMatcher::parse`]) with the given `processor`. Headers
-    /// and query params default to `None`.
+    /// Rule bound to `patterns` (parsed via [`DomainMatcher::parse`])
+    /// and the given `factory`. Headers and query params default to
+    /// `None`; for those use [`KeyProcessorRule::for_domains`].
     #[must_use]
-    pub fn new<P, I>(patterns: I, processor: KeyProcessor) -> Self
+    pub fn new<P, I>(patterns: I, factory: KeyRequestFactory) -> Self
     where
         P: AsRef<str>,
         I: IntoIterator<Item = P>,
     {
-        Self {
-            processor,
-            matchers: patterns
+        Self::for_domains(patterns, factory).build()
+    }
+
+    /// Chainable counterpart to [`KeyProcessorRule::new`]: returns a
+    /// builder with `factory` and `matchers` already set so callers
+    /// can attach `.headers(...)` / `.query_params(...)` then `.build()`.
+    pub fn for_domains<P, I>(
+        patterns: I,
+        factory: KeyRequestFactory,
+    ) -> KeyProcessorRuleBuilder<
+        key_processor_rule_builder::SetMatchers<key_processor_rule_builder::SetKeyRequestFactory>,
+    >
+    where
+        P: AsRef<str>,
+        I: IntoIterator<Item = P>,
+    {
+        Self::builder().key_request_factory(factory).matchers(
+            patterns
                 .into_iter()
                 .map(|p| DomainMatcher::parse(p.as_ref()))
                 .collect(),
-            headers: None,
-            query_params: None,
-        }
+        )
     }
 
+    /// Produce a fresh [`KeyRequest`] for one key fetch. Caller must
+    /// invoke this once per outgoing request — never cache or reuse
+    /// the returned headers / processor across fetches.
     #[must_use]
-    pub fn processor(&self) -> &KeyProcessor {
-        &self.processor
+    pub fn build_request(&self) -> KeyRequest {
+        (self.key_request_factory)()
     }
 }
 

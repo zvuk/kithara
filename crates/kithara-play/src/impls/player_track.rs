@@ -1,8 +1,3 @@
-//! Per-track state with `MixDSP` fade control.
-//!
-//! Each track loaded into the processor gets a [`PlayerTrack`] that wraps
-//! the shared [`PlayerResource`] and manages its fade/state lifecycle.
-
 use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
 #[rustfmt::skip]
@@ -91,6 +86,12 @@ pub enum TrackReadOutcome {
     },
     /// No frames were written because the track is already finished.
     Eof,
+    /// The underlying decoder / source reported a non-recoverable error
+    /// mid-stream. Distinct from `Eof`: track did NOT reach natural
+    /// end. Upstream surfaces this as a track-failed signal (a
+    /// `PlaybackStopped { Failed }` notification) so callers don't
+    /// confuse it with an auto-advance trigger.
+    Failed,
 }
 
 /// Per-track state in the processor arena.
@@ -307,6 +308,29 @@ impl PlayerTrack {
         self.state_dirty = false;
     }
 
+    /// Handle a mid-stream decode failure. Distinct from natural EOF:
+    /// no `handover_requested` (the queue layer decides whether to
+    /// advance based on the `Failed` reason), and the stop reason is
+    /// `Failed`, not `Eof`. Without this split, transient decoder
+    /// errors get conflated with natural EOF and the queue auto-
+    /// advances as if the track played out — observed in the GUI as
+    /// "track shows pos=91s of 169s and skips to next".
+    fn handle_failed_end(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.state == TrackState::Finished {
+            return;
+        }
+        self.set_state(TrackState::Finished);
+        notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::PlaybackStopped {
+                src: Arc::clone(&self.src),
+                item_id: self.item_id.clone(),
+                reason: TrackPlaybackStopReason::Failed,
+            })
+            .ok();
+        self.state_dirty = false;
+    }
+
     /// Emit notification when state changes.
     fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
         if !self.state_dirty {
@@ -407,6 +431,10 @@ impl PlayerTrack {
                     TrackReadOutcome::Partial { frames, duration }
                 }
                 ReadOutcome::Eof => TrackReadOutcome::Eof,
+                ReadOutcome::Failed => {
+                    drop(guard);
+                    TrackReadOutcome::Failed
+                }
             }
         };
 
@@ -493,6 +521,10 @@ impl PlayerTrack {
             TrackReadOutcome::Eof => {
                 self.handle_natural_end(notification_tx);
                 TrackReadOutcome::Eof
+            }
+            TrackReadOutcome::Failed => {
+                self.handle_failed_end(notification_tx);
+                TrackReadOutcome::Failed
             }
         }
     }
@@ -652,7 +684,7 @@ mod tests {
         )
     }
 
-    /// PcmReader fixture that reports a 10s duration but actually serves
+    /// `PcmReader` fixture that reports a 10s duration but actually serves
     /// a much shorter buffer. Used to verify that the gapless trigger
     /// logic relies on observed-EOF, not on a possibly-stale duration.
     struct MisreportedDurationReader {
@@ -689,7 +721,9 @@ mod tests {
         }
 
         fn position(&self) -> Duration {
-            Duration::from_secs_f64(self.position_frames as f64 / f64::from(self.spec.sample_rate))
+            let frames =
+                u64::try_from(self.position_frames).expect("test mock position non-negative");
+            Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate))
         }
 
         fn read(

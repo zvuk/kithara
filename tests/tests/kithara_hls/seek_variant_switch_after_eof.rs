@@ -1,19 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Regression test for seek deadlock when ABR variant switch coincides with seek after EOF.
-//!
-//! Production scenario:
-//!   1. All segments for variant 0 are cached (read to EOF)
-//!   2. ABR switches variant 0 → variant 1
-//!   3. Seek to middle of stream triggers on-demand request for variant 1 segment
-//!   4. `handle_midstream_switch()` drains ALL `segment_requests` — including the
-//!      current-epoch on-demand request
-//!   5. Program hangs — request never served
-//!
-//! Fix: `handle_midstream_switch()` now notifies condvar after draining, and
-//! `wait_range` clears `on_demand_pending` when `had_midstream_switch` is true,
-//! allowing the reader to re-push its request.
-
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara::{
@@ -22,11 +8,12 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+    TestTempDir, cancel_token,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
     hls_test_helpers::pin_abr_variant,
+    temp_dir,
 };
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -55,10 +42,11 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
 
     let url = server.url("/master.m3u8");
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
@@ -72,7 +60,8 @@ async fn seek_after_variant_switch_at_eof_must_not_deadlock(
         }
         info!("All variant 0 data read to EOF");
 
-        pin_abr_variant(&stream.source().coord().abr_state, 1);
+        let abr = stream.abr_handle().expect("HLS source exposes AbrHandle");
+        pin_abr_variant(&abr, 1);
         info!("ABR variant switched 0 → 1");
 
         let seek_pos = 200_000u64;

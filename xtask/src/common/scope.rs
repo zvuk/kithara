@@ -1,14 +1,3 @@
-//! File-system / package scope filter for lint subcommands.
-//!
-//! Used by all xtask lint namespaces (`arch`, `style`, `idioms`) to
-//! restrict which files / packages a check inspects. When empty, scope
-//! matches everything under `<workspace>/crates/` (legacy default).
-//!
-//! When non-empty, the scope is built from clap flags `--crate <name>`
-//! (repeatable) and `--path <workspace-relative-path>` (repeatable). Paths
-//! can point anywhere under the workspace (`tests/`, `xtask/`,
-//! `examples/`, …), not only under `crates/`.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
@@ -30,7 +19,7 @@ pub(crate) enum Tool {
     Orphans,
 }
 
-const TOP_LEVEL_DIRS: &[&str] = &["tests", "xtask", "examples", "benches"];
+const TOP_LEVEL_DIRS: &[&str] = &["tests", "xtask", "benches"];
 
 #[derive(Debug)]
 enum ScopeToken {

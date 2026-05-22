@@ -6,6 +6,18 @@
 #[cfg(feature = "backend-uniffi")]
 uniffi::setup_scaffolding!();
 
+#[cfg(feature = "backend-uniffi")]
+use kithara_events::TrackId;
+
+// Expose `kithara_events::TrackId` (a `u64` newtype) to UniFFI as a
+// transparent `u64`. Keeps `audioId: TrackId` strongly typed on the
+// Swift / Kotlin side instead of leaking a raw integer; conversion
+// uses the `From<u64>` / `From<TrackId>` impls in `kithara-events`.
+// `remote` bypasses Rust's orphan rule — `TrackId` lives in a
+// different crate.
+#[cfg(feature = "backend-uniffi")]
+uniffi::custom_type!(TrackId, u64, { remote });
+
 #[cfg(target_os = "android")]
 pub(crate) mod android;
 #[cfg(all(target_os = "android", feature = "test"))]

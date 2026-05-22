@@ -1,98 +1,98 @@
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
-use derivative::Derivative;
-use derive_setters::Setters;
-use kithara::{assets::FlushHub, stream::dl::Downloader};
+use bon::Builder;
+use kithara::{assets::FlushHub, hls::SizeProbeMethod, stream::dl::Downloader};
 use kithara_drm::KeyProcessorRegistry;
 
-use crate::{drm, theme::Palette};
+use crate::{baked, theme::Palette};
 
 /// Application configuration passed to frontends.
 ///
-/// Downloader is the only mandatory field; every other knob has a
-/// sensible default, so callers typically do
-/// `AppConfig::new(dl).with_tracks(cli_tracks)` and override anything
-/// else via the generated `with_*` setters.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Debug)]
-#[setters(prefix = "with_")]
+/// Downloader and flush hub are the only mandatory fields; every
+/// other knob defaults to the value baked at compile time from
+/// `app.toml`. Callers typically do
+/// `AppConfig::new(dl, hub).with_tracks(cli_tracks)` and override
+/// anything else via the generated `with_*` setters.
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AppConfig {
-    /// Shared `AssetStore` flush coordinator for every track. Built
-    /// once in `main` so all tracks coalesce their on-disk index
-    /// flushes through a single hub — analogous to [`Self::downloader`]
-    /// and the audio worker.
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
+    /// Shared `AssetStore` flush coordinator for every track.
     pub flush_hub: Arc<FlushHub>,
-    /// Shared HTTP downloader for every track. Built once in `main` so
-    /// the whole app reuses one HTTP pool and runtime context.
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
+    /// Shared HTTP downloader for every track.
     pub downloader: Downloader,
-    /// DRM key processing registry. Populated via
-    /// [`drm::make_key_registry`](crate::drm::make_key_registry) or
-    /// built directly by the embedding app. Carries the
-    /// domain-scoped rules — processor + headers (incl. auth) +
-    /// query params — that HLS applies to key fetches.
+    /// DRM key processing registry.
+    #[builder(default = baked::build_baked_drm_registry())]
     pub key_registry: KeyProcessorRegistry,
     /// Color palette for the UI.
+    #[builder(default)]
     pub palette: Palette,
     /// Log filter directives.
+    #[builder(default)]
     pub log_directives: Vec<String>,
     /// Audio file URLs or paths to play.
-    #[setters(skip)]
+    #[builder(default = default_tracks())]
     pub tracks: Vec<String>,
-    /// Accept invalid TLS certificates (self-signed, expired). Test servers only.
+    /// Accept invalid TLS certificates. Test servers only.
+    #[builder(default = baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)]
     pub should_accept_invalid_certs: bool,
     /// Crossfade duration in seconds.
+    #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
     /// Number of EQ bands for the UI.
+    #[builder(default = baked::BAKED_EQ_BAND_COUNT)]
     pub eq_band_count: usize,
+    /// HLS size-estimation probe strategy (see
+    /// [`kithara::hls::SizeProbeMethod`]).
+    #[builder(default = baked::BAKED_SIZE_PROBE_METHOD)]
+    pub size_probe_method: SizeProbeMethod,
+}
+
+fn default_tracks() -> Vec<String> {
+    baked::BAKED_TRACKS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+impl fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("key_registry", &self.key_registry)
+            .field("palette", &self.palette)
+            .field("log_directives", &self.log_directives)
+            .field("tracks", &self.tracks)
+            .field(
+                "should_accept_invalid_certs",
+                &self.should_accept_invalid_certs,
+            )
+            .field("crossfade_seconds", &self.crossfade_seconds)
+            .field("eq_band_count", &self.eq_band_count)
+            .field("size_probe_method", &self.size_probe_method)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AppConfig {
-    /// Default crossfade duration in seconds.
-    pub const DEFAULT_CROSSFADE_SECONDS: f32 = 5.0;
-    /// Default number of EQ bands.
-    pub const DEFAULT_EQ_BANDS: usize = 3;
-
-    pub const DEFAULT_TRACKS: &[&str] = &[
-        "https://stream.silvercomet.top/track.mp3",
-        "https://stream.silvercomet.top/hls/master.m3u8",
-        "https://stream.silvercomet.top/drm/master.m3u8",
-        "https://cdn-edge.zvq.me/track/streamhq?id=27390231",
-        "https://cdn-edge.zvq.me/track/streamhq?id=151585912",
-        "https://cdn-edge.zvq.me/track/streamhq?id=125475417",
-        "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8",
-        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
-        "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
-        "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
-    ];
-
     /// Create a default config around the given downloader and shared
-    /// flush hub. Tracks default to [`Self::DEFAULT_TRACKS`]; override
-    /// via [`Self::with_tracks`].
+    /// flush hub. Every other field defaults to its `app.toml` baked
+    /// value; override via the generated `with_*` setters.
     #[must_use]
     pub fn new(downloader: Downloader, flush_hub: Arc<FlushHub>) -> Self {
-        Self {
-            downloader,
-            flush_hub,
-            tracks: Self::DEFAULT_TRACKS
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            key_registry: drm::default_zvq_key_registry(),
-            crossfade_seconds: Self::DEFAULT_CROSSFADE_SECONDS,
-            eq_band_count: Self::DEFAULT_EQ_BANDS,
-            log_directives: Vec::new(),
-            palette: Palette::default(),
-            should_accept_invalid_certs: true,
-        }
+        Self::builder()
+            .downloader(downloader)
+            .flush_hub(flush_hub)
+            .build()
     }
 
-    /// Override the default track list. Empty input is ignored so CLI
-    /// users who don't pass any tracks keep the built-in demo set.
+    /// Fluent alias to set `should_accept_invalid_certs`.
+    #[must_use]
+    pub fn with_should_accept_invalid_certs(mut self, value: bool) -> Self {
+        self.should_accept_invalid_certs = value;
+        self
+    }
+
+    /// Override the default track list. Empty input is ignored.
     #[must_use]
     pub fn with_tracks(mut self, tracks: Vec<String>) -> Self {
         if !tracks.is_empty() {

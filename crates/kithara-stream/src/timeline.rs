@@ -64,10 +64,14 @@ bitflags! {
 
 /// Shared playback timeline used across stream layers.
 ///
-/// Stores canonical byte position and committed playback position.
+/// Stores canonical committed playback position. The byte cursor lives
+/// on the [`Source`](crate::Source) — sources own per-variant or
+/// per-file atomic cursors and expose them through
+/// [`Source::position`](crate::Source::position) /
+/// [`Source::advance`](crate::Source::advance) /
+/// [`Source::set_position`](crate::Source::set_position).
 #[derive(Clone, Debug)]
 pub struct Timeline {
-    byte_position: Arc<AtomicU64>,
     /// Frame end (exclusive) of the last consumed slice — the consumer's
     /// playhead in frame space. Single source of truth for "where is the
     /// consumer in the stream"; both `committed_position_ns` (UI) and
@@ -117,7 +121,6 @@ impl Timeline {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            byte_position: Arc::new(AtomicU64::new(0)),
             committed_position_ns: Arc::new(AtomicU64::new(0)),
             committed_frame_end: Arc::new(AtomicU64::new(0)),
             last_sample_rate: Arc::new(AtomicU64::new(0)),
@@ -157,18 +160,6 @@ impl Timeline {
             pos.source_byte_offset
                 .map(|off| off.saturating_add(pos.source_bytes)),
         );
-    }
-
-    #[must_use]
-    pub fn byte_position(&self) -> u64 {
-        self.byte_position.load(Ordering::Acquire)
-    }
-
-    /// Cheap clone of the shared atomic byte cursor — for hooks that
-    /// need to read it without holding a Timeline.
-    #[must_use]
-    pub fn byte_position_handle(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.byte_position)
     }
 
     /// Clear seek-pending flag after the decoder successfully applied the seek.
@@ -400,11 +391,6 @@ impl Timeline {
     #[must_use]
     pub fn segment_position(&self) -> u64 {
         self.segment_position.load(Ordering::Acquire)
-    }
-
-    #[kithara::probe(position)]
-    pub fn set_byte_position(&self, position: u64) {
-        self.byte_position.store(position, Ordering::Release);
     }
 
     /// # Panics

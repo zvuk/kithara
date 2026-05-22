@@ -1,6 +1,3 @@
-//! Read-only API + navigation passthroughs (`subscribe`, `len`, `current`,
-//! `tracks`, `repeat_mode`, …). No state mutation lives here.
-
 use kithara_events::{EventReceiver, TrackId};
 
 use super::Queue;
@@ -35,6 +32,15 @@ impl Queue {
     pub fn current_index(&self) -> Option<usize> {
         let idx = self.player.current_index();
         if idx < self.len() { Some(idx) } else { None }
+    }
+
+    /// Live variant metadata of the currently playing adaptive item.
+    /// Pulled from the player's stashed ABR handle on every call so a
+    /// renderer can poll for the up-to-date label after every frame
+    /// without depending on event delivery.
+    #[must_use]
+    pub fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
+        self.current_abr_handle()?.current_variant()
     }
 
     /// Whether the queue is empty.

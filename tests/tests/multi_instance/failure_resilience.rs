@@ -1,9 +1,3 @@
-//! Failure resilience tests.
-//!
-//! Verifies that when some instances are cancelled mid-stream (simulating
-//! a network failure), other instances continue to read PCM data to EOF
-//! without being affected.
-
 use std::{path::Path, sync::Arc};
 
 use kithara::{
@@ -12,14 +6,16 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::hls_fixture::{HlsTestServer, HlsTestServerConfig};
+use kithara_integration_tests::{
+    TestTempDir,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread;
 use kithara_platform::{
     time::{Duration, sleep},
     tokio::task::{JoinHandle, spawn, spawn_blocking},
 };
-use kithara_test_utils::TestTempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -111,13 +107,16 @@ async fn create_hls_audio(
 ) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8");
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(cache_dir))
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(cache_dir))
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .media_info(wav_info)
+        .build();
 
     Audio::<Stream<Hls>>::new(config)
         .await

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::hls::{HlsError, HlsResult, VariantId};
-use kithara_integration_tests::hls_fixture::*;
+use kithara_integration_tests::{hls_fixture::*, hls_server::*};
 use kithara_platform::time::Duration;
 use url::Url;
 

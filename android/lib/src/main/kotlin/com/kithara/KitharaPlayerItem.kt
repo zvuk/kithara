@@ -11,8 +11,11 @@ import com.kithara.ffi.ItemLoadCallback
 import com.kithara.ffi.ItemObserver
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
@@ -81,6 +84,7 @@ class KitharaPlayerItem(
 
     private val observer = ItemObserverBridge(this)
     private val stateFlow = MutableStateFlow(ItemState())
+    private val eventsFlow = MutableSharedFlow<KitharaItemEvent>(extraBufferCapacity = 16)
 
     init {
         inner.setObserver(observer)
@@ -88,6 +92,9 @@ class KitharaPlayerItem(
 
     /** Full item state as a single observable snapshot. */
     val state: StateFlow<ItemState> = stateFlow.asStateFlow()
+
+    /** One-shot item events. */
+    val events: SharedFlow<KitharaItemEvent> = eventsFlow.asSharedFlow()
 
     val status: ItemStatus
         get() = state.value.status
@@ -146,8 +153,10 @@ class KitharaPlayerItem(
 
     private fun handleEvent(event: FfiItemEvent) {
         when (event) {
-            is FfiItemEvent.DurationChanged ->
+            is FfiItemEvent.DurationChanged -> {
                 updateState { it.copy(duration = event.seconds) }
+                eventsFlow.tryEmit(KitharaItemEvent.DurationChanged(event.seconds))
+            }
 
             is FfiItemEvent.LoadedRangesChanged ->
                 updateState {
@@ -161,17 +170,27 @@ class KitharaPlayerItem(
             is FfiItemEvent.StatusChanged ->
                 updateState { it.copy(status = event.status.toItemStatus()) }
 
-            is FfiItemEvent.DidReachEnd,
-            is FfiItemEvent.DidStall,
-            is FfiItemEvent.VariantsDiscovered,
-            is FfiItemEvent.VariantSelected,
-            is FfiItemEvent.VariantApplied -> Unit
+            is FfiItemEvent.VariantsDiscovered -> {
+                val mapped = event.variants.map { KitharaVariant(it.index, it.bandwidthBps.toLong(), it.name) }
+                eventsFlow.tryEmit(KitharaItemEvent.VariantsDiscovered(mapped))
+            }
 
-            is FfiItemEvent.Error ->
+            is FfiItemEvent.VariantSelected ->
+                eventsFlow.tryEmit(KitharaItemEvent.VariantSelected(KitharaVariant(event.variant.index, event.variant.bandwidthBps.toLong(), event.variant.name)))
+
+            is FfiItemEvent.VariantApplied ->
+                eventsFlow.tryEmit(KitharaItemEvent.VariantApplied(KitharaVariant(event.variant.index, event.variant.bandwidthBps.toLong(), event.variant.name)))
+
+            is FfiItemEvent.DidReachEnd,
+            is FfiItemEvent.DidStall -> Unit
+
+            is FfiItemEvent.Error -> {
                 updateState { it.copy(
                     error = KitharaError.ItemFailed(event.error),
                     status = ItemStatus.Failed,
                 ) }
+                eventsFlow.tryEmit(KitharaItemEvent.Error(event.error))
+            }
         }
     }
 

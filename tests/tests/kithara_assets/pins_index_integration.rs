@@ -12,8 +12,7 @@ use kithara::{
     assets::{AssetStore, AssetStoreBuilder, DiskAssetStore, EvictConfig},
     bufpool::BytePool,
 };
-use kithara_integration_tests::asset_fixture::PinsIndex;
-use kithara_test_utils::temp_dir;
+use kithara_integration_tests::{asset_fixture::PinsIndex, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 fn pins_path(root: &Path) -> PathBuf {
@@ -21,7 +20,7 @@ fn pins_path(root: &Path) -> PathBuf {
 }
 
 #[kithara::fixture]
-fn asset_store_no_limits(temp_dir: kithara_test_utils::TestTempDir) -> AssetStore {
+fn asset_store_no_limits(temp_dir: kithara_integration_tests::TestTempDir) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
         .asset_root(Some("test-asset"))
@@ -33,7 +32,7 @@ fn asset_store_no_limits(temp_dir: kithara_test_utils::TestTempDir) -> AssetStor
 }
 
 #[kithara::fixture]
-fn disk_asset_store(temp_dir: kithara_test_utils::TestTempDir) -> DiskAssetStore {
+fn disk_asset_store(temp_dir: kithara_integration_tests::TestTempDir) -> DiskAssetStore {
     DiskAssetStore::new(
         temp_dir.path(),
         "test-asset",
@@ -50,7 +49,7 @@ fn disk_asset_store(temp_dir: kithara_test_utils::TestTempDir) -> DiskAssetStore
 #[case::missing_file(None)]
 #[case::corrupted_file(Some(&b"{ this is not valid json"[..]))]
 fn pins_index_bad_state_returns_default(
-    temp_dir: kithara_test_utils::TestTempDir,
+    temp_dir: kithara_integration_tests::TestTempDir,
     disk_asset_store: DiskAssetStore,
     #[case] prewrite_contents: Option<&[u8]>,
 ) {
@@ -84,7 +83,7 @@ fn pins_index_bad_state_returns_default(
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 fn pins_index_roundtrip_store_then_load(
-    temp_dir: kithara_test_utils::TestTempDir,
+    temp_dir: kithara_integration_tests::TestTempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let _dir = temp_dir.path();
@@ -114,7 +113,7 @@ fn pins_index_roundtrip_store_then_load(
 #[case(vec!["asset-1", "asset-2", "asset-3", "asset-4", "asset-5"])]
 fn pins_index_store_load_with_different_sets(
     #[case] asset_names: Vec<&str>,
-    _temp_dir: kithara_test_utils::TestTempDir,
+    _temp_dir: kithara_integration_tests::TestTempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let base = disk_asset_store;
@@ -138,7 +137,7 @@ fn pins_index_store_load_with_different_sets(
 #[case(5)]
 fn pins_index_concurrent_updates_handled_correctly(
     #[case] asset_count: usize,
-    temp_dir: kithara_test_utils::TestTempDir,
+    temp_dir: kithara_integration_tests::TestTempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let _dir = temp_dir.path();
@@ -170,7 +169,7 @@ fn pins_index_concurrent_updates_handled_correctly(
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 fn pins_index_empty_set_stores_and_loads_correctly(
-    _temp_dir: kithara_test_utils::TestTempDir,
+    _temp_dir: kithara_integration_tests::TestTempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let base = disk_asset_store;
@@ -192,7 +191,7 @@ fn pins_index_empty_set_stores_and_loads_correctly(
     timeout(Duration::from_secs(5)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-fn pins_index_persists_across_store_instances(temp_dir: kithara_test_utils::TestTempDir) {
+fn pins_index_persists_across_store_instances(temp_dir: kithara_integration_tests::TestTempDir) {
     let dir = temp_dir.path();
     let cancel = CancellationToken::new();
 

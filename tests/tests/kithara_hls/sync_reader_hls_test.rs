@@ -1,14 +1,3 @@
-//! Test: Stream<Hls> reads all bytes.
-//!
-//! CRITICAL TEST: Verifies that Stream<Hls> reads ALL bytes from HLS source.
-//!
-//! This test isolates HLS streaming layer.
-//!
-//! Expected behavior:
-//! - HLS should load all 3 segments (variant 0 has 3 segments in playlist)
-//! - Stream should read ALL bytes from all 3 segments
-//! - Total bytes = 3 segments * ~200KB each = ~600KB
-
 use std::{io::Read, time::Duration};
 
 use kithara::{
@@ -16,9 +5,12 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::abr::{AbrTestServer, master_playlist};
+use kithara_integration_tests::{
+    TestTempDir,
+    hls_server::abr::{AbrTestServer, master_playlist},
+    temp_dir,
+};
 use kithara_platform::{time::sleep, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 #[kithara::test(
@@ -38,10 +30,11 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     let url = server.url("/master.m3u8");
     let cancel_token = CancellationToken::new();
 
-    let config = HlsConfig::new(url.clone())
-        .with_cancel(cancel_token.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let config = HlsConfig::for_url(url.clone())
+        .cancel(cancel_token.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 

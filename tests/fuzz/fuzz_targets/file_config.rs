@@ -40,7 +40,9 @@ fuzz_target!(|input: Input| {
     };
 
     let name = String::from_utf8_lossy(&input.name);
-    let cfg = FileConfig::new(src).with_name(name.as_ref());
+    let cfg = FileConfig::for_src(src)
+        .name(name.as_ref().to_string())
+        .build();
 
     if let Some(stored) = cfg.name.as_ref() {
         assert!(stored.len() <= name.len());

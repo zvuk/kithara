@@ -1,20 +1,3 @@
-//! Flag struct fields that are initialised with the same expression at
-//! *every* call site. The field is effectively a constant — code reading the
-//! struct elsewhere keeps re-deriving a value the construction sites all
-//! agreed on. Either inline the value, drop the field, or redesign so the
-//! field actually varies.
-//!
-//! Detection (workspace-wide):
-//!
-//! - Look at every struct with named fields.
-//! - Skip fields that don't appear in every fully-specified literal site
-//!   (sites with `..base` are ignored — we can't see their values).
-//! - For each field, collect normalised token strings of the assigned
-//!   expression at every site. If they're all identical and there are
-//!   ≥`min_call_sites` sites, flag.
-//! - `pub` (cross-crate) structs are skipped — external callers may build
-//!   them in ways the index can't observe.
-
 use anyhow::Result;
 
 use super::{

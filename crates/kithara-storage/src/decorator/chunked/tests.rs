@@ -1,9 +1,5 @@
 #![forbid(unsafe_code)]
-#![cfg(test)]
 #![cfg(not(target_arch = "wasm32"))]
-
-//! Unit tests for the chunked-atomic decorator. Lives in its own file
-//! per the workspace `lib.rs` / `mod.rs` discipline rule.
 
 use std::{
     fs,

@@ -1,13 +1,3 @@
-//! Integration test: ABR auto-switch must happen during HLS playback.
-//!
-//! Two WAV variants: V0 (high bandwidth, delayed after segment 3) and V1 (low
-//! bandwidth, instant). ABR starts on V0 and must down-switch to V1 when V0
-//! throughput drops below the declared bandwidth.
-//!
-//! This test catches the bug where `record_throughput` discarded
-//! `content_duration` for fast downloads, keeping `buffer_level_secs` at
-//! zero and blocking ABR decisions that need a minimum buffer level.
-
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -21,19 +11,16 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    abr_fast,
-    hls_fixture::{HlsTestServer, HlsTestServerConfig},
+    TestTempDir, abr_fast,
+    fixture_protocol::DelayRule,
+    hls_server::{HlsTestServer, HlsTestServerConfig},
+    signal_pcm::{Finite, SignalPcm, signal},
+    temp_dir,
+    wav::create_wav_header,
 };
 use kithara_platform::{
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
-};
-use kithara_test_utils::{
-    TestTempDir,
-    fixture_protocol::DelayRule,
-    signal_pcm::{Finite, SignalPcm, signal},
-    temp_dir,
-    wav::create_wav_header,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -97,6 +84,7 @@ async fn abr_auto_switch_during_playback(
         custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+        codecs: Some("wav".to_string()),
         delay_rules: vec![DelayRule {
             variant: Some(0),
             segment_gte: Some(3),
@@ -133,16 +121,18 @@ async fn abr_auto_switch_during_playback(
         }
     });
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel)
-        .with_events(bus.clone())
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_events(bus)
-        .with_media_info(wav_info);
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .events(bus)
+        .media_info(wav_info)
+        .build();
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
         .expect("create Audio<Stream<Hls>>");

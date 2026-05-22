@@ -1,10 +1,3 @@
-//! RT-safe wrapper around [`Resource`] for audio-thread access.
-//!
-//! [`PlayerResource`] adds internal PCM scratch buffers so that the audio
-//! callback can read planar PCM data without allocating. Access from the
-//! audio thread is always via `Arc<kithara_platform::Mutex<PlayerResource>>`
-//! with `try_lock()`.
-
 use std::{num::NonZeroU32, ops::Range, sync::Arc, time::Duration};
 
 use kithara_audio::ServiceClass;
@@ -25,6 +18,7 @@ pub struct PlayerResource {
     resource: Resource,
     channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
     eof_seen: bool,
+    failed: bool,
     write_len: usize,
     write_pos: usize,
 }
@@ -42,6 +36,12 @@ pub enum ReadOutcome {
     Partial(usize),
     /// The resource was already drained and nothing was written.
     Eof,
+    /// The underlying decoder/source reported a non-recoverable error
+    /// mid-stream. Distinct from [`Eof`](Self::Eof): the track did NOT
+    /// reach its natural end — surface this as a track-failed signal
+    /// upstream instead of letting the queue auto-advance as if the
+    /// track played out.
+    Failed,
 }
 
 impl PlayerResource {
@@ -79,6 +79,7 @@ impl PlayerResource {
             write_len: 0,
             write_pos: 0,
             eof_seen: false,
+            failed: false,
         }
     }
 
@@ -113,8 +114,7 @@ impl PlayerResource {
                 }
                 Err(err) => {
                     warn!(src = %self.src, error = %err, "PlayerResource: decode error");
-                    self.eof_seen = true;
-                    eof_reached = true;
+                    self.failed = true;
                     0
                 }
             };
@@ -151,6 +151,14 @@ impl PlayerResource {
     pub fn read(&mut self, output: &mut [&mut [f32]], range: Range<usize>) -> ReadOutcome {
         let frames_to_read = range.end - range.start;
         let mut eof_reached = self.fill_scratch(frames_to_read);
+
+        if self.write_len == 0 && self.failed && !self.eof_seen {
+            let range_len = range.len();
+            for ch in output.iter_mut() {
+                ch[..range_len].fill(0.0);
+            }
+            return ReadOutcome::Failed;
+        }
 
         if self.write_len > 0 {
             let frames_to_write = frames_to_read.min(self.write_len);
@@ -198,6 +206,14 @@ impl PlayerResource {
         }
     }
 
+    /// Returns true if the underlying source reported a non-recoverable
+    /// decode error and the scratch is drained. Used by callers to
+    /// surface track-failed signals separately from natural EOF.
+    #[must_use]
+    pub fn is_failed(&self) -> bool {
+        self.failed && self.write_len == 0 && !self.eof_seen
+    }
+
     /// Seek to the given position in seconds.
     ///
     /// Clears the internal scratch buffers on success.
@@ -208,6 +224,7 @@ impl PlayerResource {
                 self.write_len = 0;
                 self.write_pos = 0;
                 self.eof_seen = false;
+                self.failed = false;
             }
             Err(err) => {
                 warn!("failed to seek: {err}");

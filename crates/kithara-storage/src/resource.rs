@@ -1,14 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Unified storage resource trait and shared types.
-//!
-//! `ResourceExt` is a sync trait covering both streaming (incremental write) and
-//! atomic (whole-file) use-cases.
-//!
-//! Concrete implementations via [`Resource<D>`](crate::Resource):
-//! - [`MmapResource`](crate::MmapResource) — mmap-backed (filesystem).
-//! - [`MemResource`](crate::MemResource) — in-memory `Vec<u8>` (WASM).
-
 use std::{ops::Range, path::Path};
 
 use rangemap::RangeSet;

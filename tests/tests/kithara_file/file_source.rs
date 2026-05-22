@@ -13,8 +13,8 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestHttpServer, TestTempDir, temp_dir};
 use kithara_platform::tokio::task::spawn_blocking;
-use kithara_test_utils::{TestHttpServer, TestTempDir, temp_dir};
 
 struct Consts;
 impl Consts {
@@ -28,29 +28,29 @@ impl Consts {
     reason = "axum handler signature requires owned Request"
 )]
 fn serve_with_range(data: &'static [u8], req: Request) -> Response {
-    if let Some(range_header) = req.headers().get("range").and_then(|v| v.to_str().ok()) {
-        if let Some(range_str) = range_header.strip_prefix("bytes=") {
-            let parts: Vec<&str> = range_str.split('-').collect();
-            if parts.len() == 2 {
-                let start: usize = parts[0].parse().unwrap_or(0);
-                let end: usize = if parts[1].is_empty() {
-                    data.len() - 1
-                } else {
-                    parts[1].parse().unwrap_or(data.len() - 1)
-                };
-                let end = end.min(data.len() - 1);
-                if start <= end && start < data.len() {
-                    let slice = &data[start..=end];
-                    return Response::builder()
-                        .status(206)
-                        .header(
-                            "Content-Range",
-                            format!("bytes {}-{}/{}", start, end, data.len()),
-                        )
-                        .header("Content-Length", slice.len().to_string())
-                        .body(Body::from(Bytes::from_static(slice)))
-                        .unwrap();
-                }
+    if let Some(range_header) = req.headers().get("range").and_then(|v| v.to_str().ok())
+        && let Some(range_str) = range_header.strip_prefix("bytes=")
+    {
+        let parts: Vec<&str> = range_str.split('-').collect();
+        if parts.len() == 2 {
+            let start: usize = parts[0].parse().unwrap_or(0);
+            let end: usize = if parts[1].is_empty() {
+                data.len() - 1
+            } else {
+                parts[1].parse().unwrap_or(data.len() - 1)
+            };
+            let end = end.min(data.len() - 1);
+            if start <= end && start < data.len() {
+                let slice = &data[start..=end];
+                return Response::builder()
+                    .status(206)
+                    .header(
+                        "Content-Range",
+                        format!("bytes {}-{}/{}", start, end, data.len()),
+                    )
+                    .header("Content-Length", slice.len().to_string())
+                    .body(Body::from(Bytes::from_static(slice)))
+                    .unwrap();
             }
         }
     }
@@ -103,7 +103,9 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
-    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     let expected_len = expected.len();
@@ -145,7 +147,9 @@ async fn stream_file_seek_reads_expected_bytes(
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
-    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {
@@ -180,7 +184,9 @@ async fn stream_file_seek_past_eof_fails(
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
-    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {
@@ -204,7 +210,9 @@ async fn stream_file_multiple_seeks_work(
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
-    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     spawn_blocking(move || {

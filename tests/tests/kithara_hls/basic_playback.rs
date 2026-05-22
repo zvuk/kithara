@@ -8,11 +8,12 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::{HlsStreamBuilder, TestServer};
+use kithara_integration_tests::{
+    TestTempDir, cancel_token, hls_fixture::HlsStreamBuilder, hls_server::TestServer, temp_dir,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::tokio::task::spawn_blocking;
 use kithara_platform::{time::sleep, tokio::task::spawn};
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
@@ -43,10 +44,11 @@ async fn test_basic_hls_playback(
     let mut events_rx = bus.subscribe();
 
     info!("Opening HLS source...");
-    let config = HlsConfig::new(test_stream_url.clone())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_events(bus);
+    let config = HlsConfig::for_url(test_stream_url.clone())
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .events(bus)
+        .build();
 
     let stream = Stream::<Hls>::new(config).await?;
     info!("HLS source opened successfully");
@@ -84,10 +86,11 @@ async fn test_hls_session_creation(
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
-    let config = HlsConfig::new(test_stream_url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_events(bus);
+    let config = HlsConfig::for_url(test_stream_url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel_token)
+        .events(bus)
+        .build();
 
     let _stream = Stream::<Hls>::new(config).await?;
 
@@ -158,9 +161,10 @@ async fn test_hls_invalid_url_handling(
     let url_result = Url::parse(invalid_url);
 
     if let Ok(url) = url_result {
-        let config = HlsConfig::new(url)
-            .with_store(StoreOptions::new(temp_dir.path()))
-            .with_cancel(cancel_token);
+        let config = HlsConfig::for_url(url)
+            .store(StoreOptions::new(temp_dir.path()))
+            .cancel(cancel_token)
+            .build();
 
         let result = Stream::<Hls>::new(config).await;
         assert!(

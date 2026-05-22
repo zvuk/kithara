@@ -1,35 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Shared flush coordinator for `AssetStore` on-disk indexes.
-//!
-//! `FlushHub` aggregates `Flushable` sources (`PinsInner`, `LruInner`,
-//! `AvailabilityInner`) and serves two roles:
-//!
-//! - **Sync flush coordinator**: [`FlushHub::flush_now`] iterates the
-//!   registry, invokes `Flushable::flush` on every source whose
-//!   `dirty` flag is set, and clears the flag on success. Mutators
-//!   call this directly when no background worker is attached
-//!   (default).
-//!
-//! - **Background coalescer (opt-in)**: [`FlushHub::start_worker`]
-//!   spawns a dedicated `kithara-flush-hub` thread (via
-//!   [`kithara_platform::thread::spawn_named`]) that wakes on
-//!   [`FlushHub::signal`] notifications, debounces a configurable
-//!   window (`FlushPolicy::debounce`), and then flushes dirty sources
-//!   under the same `flush_lock` as `flush_now` — so worker and
-//!   `flush_now` never race. A long sustained burst that would
-//!   otherwise stay debounced is force-flushed every
-//!   `FlushPolicy::force_every_n_ops` operations.
-//!
-//! Mutators always go through [`signal_or_flush_sync`]: with a worker
-//! they `signal()` and return immediately; without one they call
-//! `flush_now()`. The hub is **mandatory** in every disk-backed index,
-//! so the path is always the same regardless of worker presence.
-//!
-//! Indexes register a `Weak<dyn Flushable>` so the hub does not extend
-//! their lifetime; dropped indexes are GC'd from the registry on the
-//! next flush cycle.
-
 use std::{
     num::NonZeroUsize,
     sync::{

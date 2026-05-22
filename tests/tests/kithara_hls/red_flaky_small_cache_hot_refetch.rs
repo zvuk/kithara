@@ -1,45 +1,3 @@
-//! RED test: hot re-download loop behind the reader on tiny LRU cache.
-//!
-//! Reproduces the flake seen on
-//! `kithara-integration-tests::suite_stress
-//!   kithara_hls::live_stress_real_stream::live_ephemeral_small_cache_playback_hls`.
-//!
-//! Observed pattern (from `.docs/test-run-rc2-fix1.log`):
-//!   * 37 segments commit in rapid succession (variant 0).
-//!   * LRU (cap=4) evicts segments the reader has NOT yet read because
-//!     the reader is stuck inside segment 0 at byte ~`31_744` waiting for
-//!     segment 0 to be `range_ready`.
-//!   * `rewind_to_first_missing_segment` clamps by `reader_segment_floor()`,
-//!     which returns 0 because the reader's `byte_position` never advanced
-//!     past that segment — so the clamp has NO effect on a reader that
-//!     never got to read its first segment.
-//!   * The scheduler keeps rewinding the cursor to segment 0 and
-//!     re-fetching 0..N. Each re-fetch evicts the segment the reader
-//!     actually needs. Endless ping-pong → `wait_range` budget exceeded
-//!     AND the 30 s nextest slow-timeout fires.
-//!
-//! Scenario of this RED test
-//! Mirrors the real flake with one ratchet: `cache_capacity = 1` instead
-//! of 4, so the LRU is guaranteed to evict before the reader reaches its
-//! first chunk. The reader is also rate-limited (30 ms per chunk) so the
-//! downloader races ahead and triggers the tail-state refetch logic.
-//!
-//! The test checks two things against a 12 s drain budget:
-//!   1. The reader must not stall — no `wait_range` budget exceeded.
-//!   2. The reader must make forward progress — at least `MIN_PROGRESS`
-//!      chunks in the budget window. A hot-refetch loop collapses forward
-//!      progress to zero because every fetch evicts the reader's live
-//!      segment.
-//!
-//! Why this matches the production flake
-//! Both failures share one root cause: `reader_segment_floor()` is too
-//! weak a clamp when the reader has not yet made a successful `read_at`
-//! (e.g. its segment was evicted before `byte_position` advanced). The
-//! cache-capacity-1 ratchet in this test is deterministic; at production
-//! cap=4 the same window opens only under CPU contention (e.g. the full
-//! stress suite running in parallel), matching the observed
-//! "TRY 1 FAIL / TRY 2 PASS" signature.
-
 #![forbid(unsafe_code)]
 
 use std::{num::NonZeroUsize, time::Duration};
@@ -50,8 +8,8 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
 use kithara_platform::time::{Instant, sleep};
-use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use tracing::info;
 
 struct Consts;
@@ -74,13 +32,16 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader(temp_dir: TestTempDir) 
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let store = StoreOptions::new(temp_dir.path())
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(1).expect("nonzero"));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_dir.path().into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(1).expect("nonzero"))
+        .build();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(store)
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
 
     let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
         .await

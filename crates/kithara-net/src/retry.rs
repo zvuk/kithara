@@ -153,8 +153,8 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
+    use ::tokio::time::timeout;
     use futures::stream;
-    use tokio::time::timeout;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;

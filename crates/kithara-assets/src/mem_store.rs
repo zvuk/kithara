@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! In-memory asset store backend.
-
 use std::{
     io::{Error as IoError, ErrorKind},
     path::Path,

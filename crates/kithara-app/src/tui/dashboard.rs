@@ -1,14 +1,24 @@
-use kithara_platform::time::Duration;
-use kithara_queue::{Queue, TrackEntry, TrackStatus};
+use kithara_queue::TrackStatus;
+use num_traits::ToPrimitive;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::Style,
-    text::Line,
-    widgets::{Clear, Paragraph},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{BarChart, Block, Borders, Clear, Paragraph},
 };
 
-use crate::theme::tui::TuiPalette;
+use crate::{state::UiState, theme::tui::TuiPalette};
+
+/// Tabs surfaced by the TUI dashboard. Mirrors the iOS reference
+/// (Playlist / EQ / Settings); the older `Browser` tab was a
+/// debug-only file picker and has been removed for parity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Playlist,
+    Equalizer,
+    Settings,
+}
 
 /// Saturating-clamp a `usize` count into `u16` for terminal-cell measurements.
 /// ratatui's layout API is bounded by `u16`; a count past `u16::MAX` already
@@ -20,20 +30,15 @@ fn count_to_u16(count: usize) -> u16 {
 
 /// TUI dashboard widget for the Kithara player.
 ///
-/// Renders playlist, progress bar, volume, and status information
-/// using ratatui inline viewport.
+/// Renders playlist, EQ, settings, transport, and progress information
+/// using ratatui inline viewport. Stateless w.r.t. player data — every
+/// render reads from the [`UiState`] snapshot supplied by the caller.
 pub struct Dashboard {
-    crossfade_progress: Option<f32>,
-    last_note: Option<String>,
-    total_ms: Option<u64>,
+    pub active_tab: Tab,
+    pub selected_eq_band: usize,
+    pub selected_setting_row: usize,
     colors: TuiPalette,
-    tracks: Vec<TrackEntry>,
-    playing: bool,
-    volume: f32,
     frame_count: u64,
-    position_ms: u64,
-    current_index: usize,
-    item_count: usize,
 }
 
 impl Dashboard {
@@ -50,6 +55,10 @@ impl Dashboard {
     const BLINK_PERIOD: u64 = 2;
     const ELLIPSIS_LEN: usize = 3;
 
+    /// EQ band gain bounds (matches the iOS reference: −24 … +6 dB).
+    pub const EQ_GAIN_MAX: f32 = 6.0;
+    pub const EQ_GAIN_MIN: f32 = -24.0;
+
     const MIN_PROGRESS_BAR_WIDTH: usize = 4;
 
     const MS_PER_SECOND: u64 = 1000;
@@ -60,40 +69,42 @@ impl Dashboard {
     const PROGRESS_BAR_OVERHEAD: usize = 14;
     const SECONDS_PER_MINUTE: u64 = 60;
 
+    /// Number of rows rendered inside the Settings tab body.
+    pub const SETTINGS_ROW_COUNT: usize = 2;
+
     #[must_use]
     pub fn new(palette: TuiPalette) -> Self {
         Self {
             colors: palette,
-            crossfade_progress: None,
-            current_index: 0,
             frame_count: 0,
-            item_count: 0,
-            last_note: None,
-            playing: false,
-            tracks: Vec::new(),
-            position_ms: 0,
-            total_ms: None,
-            volume: 1.0,
+            active_tab: Tab::Playlist,
+            selected_eq_band: 0,
+            selected_setting_row: 0,
         }
     }
 
     #[must_use]
-    pub fn height(&self) -> u16 {
-        count_to_u16(self.tracks.len()).saturating_add(1)
+    pub fn height(&self, state: &UiState) -> u16 {
+        let content_lines = match self.active_tab {
+            Tab::Playlist => count_to_u16(state.tracks.len()).max(1),
+            Tab::Equalizer => 10,
+            Tab::Settings => 6,
+        };
+        content_lines.saturating_add(2)
     }
 
-    fn progress_bar(&self, width: usize) -> String {
+    fn progress_bar(width: usize, state: &UiState) -> String {
         if width == 0 {
             return String::new();
         }
-        let Some(total_ms) = self.total_ms else {
-            return "▱".repeat(width);
-        };
+        let total_ms = seconds_to_ms(state.duration);
+        let position_ms = seconds_to_ms(state.position);
+
         if total_ms == 0 {
             return "▱".repeat(width);
         }
         let width_u64 = u64::try_from(width).unwrap_or(u64::MAX);
-        let filled_u64 = self.position_ms.min(total_ms).saturating_mul(width_u64) / total_ms;
+        let filled_u64 = position_ms.min(total_ms).saturating_mul(width_u64) / total_ms;
         let filled = usize::try_from(filled_u64).unwrap_or(width).min(width);
         format!(
             "{}{}",
@@ -102,24 +113,31 @@ impl Dashboard {
         )
     }
 
-    pub fn refresh_tracks(&mut self, queue: &Queue) {
-        self.tracks = queue.tracks();
-    }
-
-    pub fn render(&mut self, frame: &mut Frame) {
+    pub fn render(&mut self, frame: &mut Frame, state: &UiState) {
         self.frame_count = self.frame_count.wrapping_add(1);
         let area = frame.area();
         frame.render_widget(Clear, area);
 
-        let playlist_lines = count_to_u16(self.tracks.len());
-        let chunks = Layout::vertical([Constraint::Length(playlist_lines), Constraint::Length(1)])
-            .split(area);
+        let content_height = self.height(state).saturating_sub(2);
+        let chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(content_height),
+            Constraint::Length(1),
+        ])
+        .split(area);
 
-        self.render_playlist(frame, chunks[0]);
-        self.render_bar(frame, chunks[1]);
+        self.render_tabs(frame, chunks[0]);
+
+        match self.active_tab {
+            Tab::Playlist => self.render_playlist(frame, chunks[1], state),
+            Tab::Equalizer => self.render_eq(frame, chunks[1], state),
+            Tab::Settings => self.render_settings(frame, chunks[1], state),
+        }
+
+        self.render_bar(frame, chunks[2], state);
     }
 
-    fn render_bar(&self, frame: &mut Frame, area: Rect) {
+    fn render_bar(&self, frame: &mut Frame, area: Rect, state: &UiState) {
         let c = &self.colors;
         let chunks = Layout::horizontal([
             Constraint::Percentage(Self::BAR_COL_TRACK_PCT),
@@ -134,34 +152,46 @@ impl Dashboard {
         let progress_bar_width = usize::from(chunks[1].width)
             .saturating_sub(Self::PROGRESS_BAR_OVERHEAD)
             .max(Self::MIN_PROGRESS_BAR_WIDTH);
-        let icon = if self.playing { '▶' } else { '⏸' };
-        let active_track = self
+        let icon = if state.playing { '▶' } else { '⏸' };
+        let active_track = state
             .tracks
-            .get(self.current_index)
+            .get(state.current_track_index.unwrap_or(0))
             .map_or("", |e| e.name.as_str());
-        let queue_current = self.current_index.saturating_add(1).max(1);
-        let queue_total = self.item_count.max(1);
+        let queue_current = state
+            .current_track_index
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(1);
+        let queue_total = state.tracks.len().max(1);
+
+        let position_ms = seconds_to_ms(state.position);
+        let total_ms = seconds_to_ms(state.duration);
+
         let segments = [
-            format!("▌ #{} ♫{}", queue_current, active_track),
+            format!("▌ #{queue_current} ♫{active_track}"),
             format!(
                 "{icon}{}/{} {}",
-                format_ms(self.position_ms),
-                self.total_ms.map_or_else(|| "--:--".to_string(), format_ms),
-                self.progress_bar(progress_bar_width)
+                format_ms(position_ms),
+                if total_ms == 0 {
+                    "--:--".to_string()
+                } else {
+                    format_ms(total_ms)
+                },
+                Self::progress_bar(progress_bar_width, state)
             ),
             format!(
                 "q {}/{} {}",
                 queue_current.min(queue_total),
                 queue_total,
-                if self.playing { "play" } else { "pause" }
+                if state.playing { "play" } else { "pause" }
             ),
-            self.crossfade_progress.map_or_else(
+            state.crossfade_progress.map_or_else(
                 || "xf -".to_string(),
                 |progress| format!("xf {:>3.0}%", progress * Self::PERCENT_SCALE),
             ),
-            format!("🔉{:>3.0}%", self.volume * Self::PERCENT_SCALE),
+            format!("🔉{:>3.0}%", state.volume * Self::PERCENT_SCALE),
             clamp_text(
-                self.last_note.as_deref().unwrap_or("-"),
+                state.status_note.as_deref().unwrap_or("-"),
                 Self::NOTE_MAX_CHARS,
             ),
         ];
@@ -174,11 +204,37 @@ impl Dashboard {
         }
     }
 
-    fn render_playlist(&self, frame: &mut Frame, area: Rect) {
+    fn render_eq(&self, frame: &mut Frame, area: Rect, state: &UiState) {
+        let mut bars = Vec::new();
+        for (i, &gain) in state.eq_bands.iter().enumerate() {
+            let clamped = gain.clamp(Self::EQ_GAIN_MIN, Self::EQ_GAIN_MAX);
+            let val = clamp_f32_to_u64((clamped - Self::EQ_GAIN_MIN).max(0.0));
+            let style = if i == self.selected_eq_band {
+                Style::default().fg(self.colors.accent)
+            } else {
+                Style::default().fg(self.colors.text)
+            };
+            let bar = ratatui::widgets::Bar::default()
+                .value(val)
+                .text_value(format!("{gain:+.1}"))
+                .style(style);
+            bars.push(bar);
+        }
+
+        let chart = BarChart::default()
+            .data(ratatui::widgets::BarGroup::default().bars(&bars))
+            .bar_width(5)
+            .bar_gap(1)
+            .block(Block::default().borders(Borders::ALL).title("Equalizer"));
+
+        frame.render_widget(chart, area);
+    }
+
+    fn render_playlist(&self, frame: &mut Frame, area: Rect, state: &UiState) {
         let c = &self.colors;
-        for (i, entry) in self.tracks.iter().enumerate() {
+        for (i, entry) in state.tracks.iter().enumerate() {
             let track_name = &entry.name;
-            let is_active = i == self.current_index;
+            let is_active = Some(i) == state.current_track_index;
             let is_failed = matches!(entry.status, TrackStatus::Failed(_));
             let is_slow = matches!(entry.status, TrackStatus::Slow);
             let number = i + 1;
@@ -209,39 +265,85 @@ impl Dashboard {
         }
     }
 
-    pub fn set_crossfade_progress(&mut self, progress: Option<f32>) {
-        self.crossfade_progress = progress.map(|value| value.clamp(0.0, 1.0));
+    fn render_settings(&self, frame: &mut Frame, area: Rect, state: &UiState) {
+        let block = Block::default().borders(Borders::ALL).title("Settings");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let layout = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Min(0),
+        ])
+        .split(inner);
+
+        let row_style = |idx: usize| -> Style {
+            if idx == self.selected_setting_row {
+                Style::default()
+                    .fg(self.colors.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(self.colors.text)
+            }
+        };
+
+        let quality_label = if state.abr_mode_is_auto {
+            "Auto".to_string()
+        } else if let Some(idx) = state.selected_variant {
+            state
+                .abr_variants
+                .iter()
+                .find_map(|(i, l)| (*i == idx).then(|| l.clone()))
+                .unwrap_or_else(|| format!("variant {idx}"))
+        } else {
+            "Auto".to_string()
+        };
+        let quality_line = Paragraph::new(Line::from(vec![
+            Span::raw("Quality  "),
+            Span::styled(quality_label, Style::default().fg(self.colors.accent)),
+            Span::raw("   (←/→ to switch)"),
+        ]))
+        .style(row_style(0));
+        frame.render_widget(quality_line, layout[0]);
+
+        let crossfade_line = Paragraph::new(Line::from(vec![
+            Span::raw("Crossfade  "),
+            Span::styled(
+                format!("{:.1}s", state.crossfade),
+                Style::default().fg(self.colors.accent),
+            ),
+            Span::raw("   (←/→ to adjust)"),
+        ]))
+        .style(row_style(1));
+        frame.render_widget(crossfade_line, layout[1]);
     }
 
-    pub fn set_note<S: Into<String>>(&mut self, note: S) {
-        self.last_note = Some(note.into());
-    }
+    fn render_tabs(&self, frame: &mut Frame, area: Rect) {
+        let tabs = [Tab::Playlist, Tab::Equalizer, Tab::Settings];
+        let mut spans = Vec::new();
 
-    pub fn set_playing(&mut self, playing: bool) {
-        self.playing = playing;
-    }
+        for tab in tabs {
+            let label = match tab {
+                Tab::Playlist => "Playlist",
+                Tab::Equalizer => "EQ",
+                Tab::Settings => "Settings",
+            };
 
-    pub fn set_position(&mut self, position: Duration) {
-        self.position_ms = u64::try_from(position.as_millis()).unwrap_or(u64::MAX);
-    }
+            let is_active = self.active_tab == tab;
+            let style = if is_active {
+                Style::default()
+                    .fg(self.colors.bg)
+                    .bg(self.colors.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(self.colors.text).bg(self.colors.bg)
+            };
 
-    pub fn set_queue(&mut self, current_index: usize, item_count: usize) {
-        self.current_index = current_index;
-        self.item_count = item_count;
-    }
+            spans.push(Span::styled(format!(" [ {label} ] "), style));
+        }
 
-    pub fn set_total(&mut self, total: Option<Duration>) {
-        self.total_ms =
-            total.map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
-    }
-
-    pub fn set_volume(&mut self, volume: f32) {
-        self.volume = volume.clamp(0.0, 1.0);
-    }
-
-    #[must_use]
-    pub fn track_count(&self) -> usize {
-        self.tracks.len()
+        let paragraph = Paragraph::new(Line::from(spans));
+        frame.render_widget(paragraph, area);
     }
 }
 
@@ -279,4 +381,25 @@ fn format_ms(ms: u64) -> String {
     let minutes = total_seconds / Dashboard::SECONDS_PER_MINUTE;
     let seconds = total_seconds % Dashboard::SECONDS_PER_MINUTE;
     format!("{minutes:02}:{seconds:02}")
+}
+
+/// Convert a seconds value to milliseconds, saturating at [`u64::MAX`]
+/// and clamping negatives / `NaN` to zero. Routed through `to_u64` to
+/// keep the conversion free of raw `as` casts.
+fn seconds_to_ms(seconds: f64) -> u64 {
+    let ms = seconds.max(0.0) * 1000.0;
+    if !ms.is_finite() {
+        return 0;
+    }
+    ms.to_u64().unwrap_or(u64::MAX)
+}
+
+/// Saturating cast for non-negative `f32` gain values. `NaN` and
+/// out-of-range collapse to zero / `u64::MAX` via `num_traits::to_u64`,
+/// which keeps the conversion free of raw `as` casts.
+fn clamp_f32_to_u64(value: f32) -> u64 {
+    if !value.is_finite() || value <= 0.0 {
+        return 0;
+    }
+    value.to_u64().unwrap_or(u64::MAX)
 }

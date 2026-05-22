@@ -1,4 +1,8 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
@@ -8,7 +12,22 @@ use crate::{
     util::{check_rust_target, check_tool},
 };
 
-#[derive(Clone, Copy, Debug, clap::Subcommand)]
+/// Module constants for `cargo xtask android run`. Grouped per the
+/// `style.multiple-private-module-consts` lint.
+struct Consts;
+impl Consts {
+    /// AVD picked when `--avd` is omitted. Kept here so `cargo xtask
+    /// android run` works out of the box on the team's typical setup;
+    /// the developer overrides it on the CLI when running a different
+    /// image.
+    const DEFAULT_AVD: &'static str = "Pixel_6";
+    /// Application id of the demo APK.
+    const DEMO_PACKAGE: &'static str = "com.kithara.example";
+    /// Activity component the demo APK surfaces.
+    const DEMO_ACTIVITY: &'static str = "com.kithara.example.MainActivity";
+}
+
+#[derive(Clone, Debug, clap::Subcommand)]
 pub(crate) enum AndroidCommand {
     /// Build Android shared libraries and Kotlin bindings.
     Build {
@@ -16,11 +35,36 @@ pub(crate) enum AndroidCommand {
         #[arg(long, default_value_t = crate::BuildProfile::Debug)]
         profile: BuildProfile,
     },
+    /// Boot an emulator (if needed), install the demo APK, and launch it.
+    ///
+    /// Pass `--debug` to start the activity with `am start -D`, which
+    /// suspends the process at launch — Zed (or any JDWP-aware
+    /// debugger) can then attach via `adb forward jdwp:<pid>`.
+    Run {
+        /// Build profile for the underlying Rust JNI libs.
+        #[arg(long, default_value_t = crate::BuildProfile::Debug)]
+        profile: BuildProfile,
+        /// AVD name to boot (must already exist in `avdmanager`).
+        #[arg(long)]
+        avd: Option<String>,
+        /// Suspend the process on launch so a debugger can attach.
+        #[arg(long)]
+        debug: bool,
+        /// Skip the JNI/Kotlin rebuild (use the cached `android/lib/build`).
+        #[arg(long)]
+        skip_build: bool,
+    },
 }
 
 pub(crate) fn run(cmd: AndroidCommand) -> Result<()> {
     match cmd {
         AndroidCommand::Build { profile } => run_build(profile),
+        AndroidCommand::Run {
+            profile,
+            avd,
+            debug,
+            skip_build,
+        } => run_app(profile, avd.as_deref(), debug, skip_build),
     }
 }
 
@@ -135,4 +179,192 @@ pub(crate) fn run_build(profile: BuildProfile) -> Result<()> {
     println!("==> Kotlin bindings: {}", kotlin_dir.display());
 
     Ok(())
+}
+
+fn run_app(profile: BuildProfile, avd: Option<&str>, debug: bool, skip_build: bool) -> Result<()> {
+    let sdk_root = android_sdk_root()?;
+    let adb = sdk_root.join("platform-tools/adb");
+    let emulator = sdk_root.join("emulator/emulator");
+    if !adb.exists() {
+        bail!("adb not found at {}", adb.display());
+    }
+
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to read cargo metadata")?;
+    let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
+    let android_root = workspace_root.join("android");
+    let gradlew = android_root.join("gradlew");
+    if !gradlew.exists() {
+        bail!("gradlew not found at {}", gradlew.display());
+    }
+
+    if !skip_build {
+        run_build(profile)?;
+    }
+
+    ensure_emulator_running(&adb, &emulator, avd.unwrap_or(Consts::DEFAULT_AVD))?;
+
+    println!("==> Installing demo APK via gradle");
+    let gradle_task = match profile {
+        BuildProfile::Release => ":example:installRelease",
+        BuildProfile::Debug => ":example:installDebug",
+    };
+    let status = Command::new(&gradlew)
+        .arg(gradle_task)
+        .current_dir(&android_root)
+        .status()
+        .with_context(|| format!("failed to run {} {}", gradlew.display(), gradle_task))?;
+    if !status.success() {
+        bail!("gradle install task failed: {gradle_task}");
+    }
+
+    println!(
+        "==> Launching {}/{}",
+        Consts::DEMO_PACKAGE,
+        Consts::DEMO_ACTIVITY
+    );
+    let mut cmd = Command::new(&adb);
+    cmd.args(["shell", "am", "start"]);
+    if debug {
+        // `-D` suspends the launched process so a JDWP-aware debugger
+        // (Android Studio, Zed via kotlin-debug-adapter) can attach.
+        cmd.arg("-D");
+    }
+    cmd.args([
+        "-n",
+        &format!("{}/{}", Consts::DEMO_PACKAGE, Consts::DEMO_ACTIVITY),
+        "-a",
+        "android.intent.action.MAIN",
+        "-c",
+        "android.intent.category.LAUNCHER",
+    ]);
+    let status = cmd
+        .status()
+        .context("failed to invoke `adb shell am start`")?;
+    if !status.success() {
+        bail!("adb shell am start failed");
+    }
+
+    if debug {
+        print_jdwp_attach_hint(&adb);
+    }
+
+    Ok(())
+}
+
+fn android_sdk_root() -> Result<PathBuf> {
+    if let Ok(value) = env::var("ANDROID_HOME") {
+        return Ok(PathBuf::from(value));
+    }
+    if let Ok(value) = env::var("ANDROID_SDK_ROOT") {
+        return Ok(PathBuf::from(value));
+    }
+    if let Ok(home) = env::var("HOME") {
+        let candidate = PathBuf::from(home).join("Library/Android/sdk");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    bail!("ANDROID_HOME / ANDROID_SDK_ROOT not set and ~/Library/Android/sdk does not exist")
+}
+
+/// Make sure at least one device is online; if none is, boot the AVD in
+/// the background and wait for it to finish booting.
+fn ensure_emulator_running(adb: &Path, emulator: &Path, avd_name: &str) -> Result<()> {
+    if has_online_device(adb)? {
+        println!("==> Using already-connected device");
+        return Ok(());
+    }
+
+    if !emulator.exists() {
+        bail!(
+            "no device connected and emulator binary missing at {}",
+            emulator.display()
+        );
+    }
+
+    println!("==> Booting AVD '{avd_name}' in the background");
+    Command::new(emulator)
+        .args(["-avd", avd_name])
+        .spawn()
+        .with_context(|| format!("failed to spawn emulator -avd {avd_name}"))?;
+
+    println!("==> Waiting for device to come online");
+    let status = Command::new(adb)
+        .arg("wait-for-device")
+        .status()
+        .context("failed to invoke `adb wait-for-device`")?;
+    if !status.success() {
+        bail!("adb wait-for-device failed");
+    }
+
+    // `wait-for-device` returns as soon as adb sees the device, which
+    // is well before the system finishes booting; poll
+    // `sys.boot_completed` so the install step doesn't race the
+    // package manager.
+    wait_for_boot_complete(adb)?;
+    Ok(())
+}
+
+fn has_online_device(adb: &Path) -> Result<bool> {
+    let output = Command::new(adb)
+        .arg("devices")
+        .output()
+        .context("failed to run `adb devices`")?;
+    if !output.status.success() {
+        bail!("adb devices failed");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .skip(1)
+        .any(|line| line.ends_with("\tdevice")))
+}
+
+fn wait_for_boot_complete(adb: &Path) -> Result<()> {
+    use std::{thread, time::Duration};
+
+    const MAX_ATTEMPTS: u32 = 120;
+    const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+    for _ in 0..MAX_ATTEMPTS {
+        let output = Command::new(adb)
+            .args(["shell", "getprop", "sys.boot_completed"])
+            .output();
+        if let Ok(output) = output
+            && output.status.success()
+        {
+            let value = String::from_utf8_lossy(&output.stdout);
+            if value.trim() == "1" {
+                println!("==> Device boot complete");
+                return Ok(());
+            }
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+    bail!("device did not finish booting within {MAX_ATTEMPTS} seconds");
+}
+
+/// Print attach instructions after `am start -D`. Failures here are
+/// non-fatal: the app is already running suspended.
+fn print_jdwp_attach_hint(adb: &Path) {
+    let pid = Command::new(adb).arg("jdwp").output().ok().and_then(|out| {
+        String::from_utf8(out.stdout)
+            .ok()?
+            .lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty())
+            .map(str::to_owned)
+    });
+
+    println!();
+    println!("==> App is suspended waiting for a debugger.");
+    if let Some(pid) = pid {
+        println!("    Forward the JDWP socket:    adb forward tcp:8700 jdwp:{pid}");
+    } else {
+        println!("    Discover JDWP pids:         adb jdwp");
+        println!("    Forward the JDWP socket:    adb forward tcp:8700 jdwp:<pid>");
+    }
+    println!("    Then attach your debugger to localhost:8700.");
 }

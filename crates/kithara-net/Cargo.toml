@@ -1,6 +1,6 @@
 [package]
 name = "kithara-net"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -11,12 +11,13 @@ description = "HTTP networking with retry, timeout, and streaming support"
 workspace = true
 
 [features]
-test-utils = []
+probe = []
+mock = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
-derivative = { workspace = true }
-derive_setters = { workspace = true }
+bitflags = { workspace = true }
+bon = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 bytes = { workspace = true }
@@ -24,15 +25,24 @@ futures = { workspace = true }
 reqwest = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
 async-trait = { workspace = true }
 unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
-reqwest = { workspace = true, features = ["rustls", "stream"] }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
+reqwest = { workspace = true, features = [
+    "brotli",
+    "cookies",
+    "deflate",
+    "gzip",
+    "rustls",
+    "stream",
+    "zstd",
+] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 reqwest = { workspace = true, features = ["stream"] }
@@ -40,8 +50,10 @@ gloo-timers = { workspace = true }
 
 [dev-dependencies]
 kithara-net = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 futures = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

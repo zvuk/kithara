@@ -1,61 +1,3 @@
-//! RED test: nextest reports `LEAK` for
-//! `env_guard::no_proxy_env_keeps_explicit_proxy_override` when the
-//! workspace-wide suite runs under contention (`just test`).
-//!
-//! Symptom (from the user's report):
-//! ```
-//! LEAK [0.271s] (821/1800) env_guard::no_proxy_env_keeps_explicit_proxy_override
-//! ```
-//!
-//! What LEAK means in nextest
-//! Each test runs in its own subprocess (invocation of the test binary with
-//! `--exact`).  After the test body completes, nextest waits up to
-//! `leak-timeout` (default **100 ms**) for the subprocess to close stdout,
-//! stderr, and exit.  If it doesn't, nextest flags `LEAK` — the test still
-//! passes but its subprocess held resources past the grace window.
-//!
-//! Hypothesis
-//! The `#[kithara::test(native, env(...), timeout(Duration::from_secs(5)))]`
-//! macro expands into a sync `#[test]` fn whose tail is:
-//!
-//!   1. Inside the body: `_kithara_env_guard` acquired — takes
-//!      `kithara_platform::env_mutation_lock()` (a global `std::sync::Mutex<()>`
-//!      shared by **every** `env(...)` test in the process) and saves
-//!      previous values for up to 7 vars (`NO_PROXY`, `HTTP_PROXY`,
-//!      `HTTPS_PROXY`, `ALL_PROXY`, `http_proxy`, `https_proxy`, `all_proxy`).
-//!
-//!   2. `wrap_with_timeout` (sync branch,
-//!      `crates/kithara-test-macros/src/lib.rs:422-459`) spawns a fresh
-//!      `std::thread::spawn(...)` to run the body and uses an mpsc channel
-//!      with `recv_timeout`.  Happy path incurs one thread create + join.
-//!
-//!   3. On Drop, `_kithara_env_guard` replays all saved env vars (another
-//!      round of `set_var` / `remove_var` under the lock) and releases the
-//!      mutex.
-//!
-//!   4. The `#[test]` fn returns, the test harness finalizes, the
-//!      subprocess exits.
-//!
-//! Steps 2 + 3 + 4 are the tail latency nextest measures.  Under
-//! workspace-wide load (8+ contenders on `env_mutation_lock`, many subprocess
-//! spawns competing for kernel resources), this tail can exceed 100 ms —
-//! which is what triggers LEAK.
-//!
-//! What this RED test measures
-//! We launch the real test binary
-//! `env_guard::no_proxy_env_keeps_explicit_proxy_override` as a subprocess
-//! and measure the **wall-clock gap between our parent reading EOF on its
-//! stdout and the child actually reporting `Exited`** — exactly what nextest
-//! uses to decide LEAK.  We assert that gap stays under the 100 ms grace
-//! window, both in isolation and under sustained contention on the
-//! `env_mutation_lock`.
-//!
-//! In isolation, today, the test passes — the tail is ~10 ms.  Under the
-//! workspace-wide load profile (reproduced here by `N` background threads
-//! hammering the env lock inside our own parent process while the child
-//! runs) the tail can blow past 100 ms.  That is the signature of the
-//! observed LEAK.
-
 #![forbid(unsafe_code)]
 
 use std::{
@@ -84,7 +26,7 @@ fn locate_suite_light() -> PathBuf {
         let Some(name) = name.to_str() else { continue };
         if name.starts_with("suite_light-")
             && !name.contains('.')
-            && entry.file_type().map(|t| t.is_file()).unwrap_or(false)
+            && entry.file_type().is_ok_and(|t| t.is_file())
         {
             return entry.path();
         }

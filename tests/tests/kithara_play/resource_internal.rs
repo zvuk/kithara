@@ -1,8 +1,3 @@
-//! Smoke tests for `Resource::from_reader` — public constructor that
-//! wraps any `PcmReader`. Drives the basic read / read_planar / spec /
-//! position / duration / seek / subscribe / metadata surface against
-//! the in-memory `TestPcmReader` mock.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![allow(
     clippy::cast_possible_truncation,

@@ -1,8 +1,3 @@
-//! Stress test: rapid seeking during/after ABR switch with real Symphonia decoder.
-//!
-//! Uses production HLS stream (requires network).
-//! Expected: FAILS — seek after ABR switch causes deadlock or audio death.
-
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -14,13 +9,12 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::abr_fast;
+use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, temp_dir};
 use kithara_platform::{
     thread,
     time::{Duration, Instant},
     tokio::task::{spawn, spawn_blocking},
 };
-use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use tracing::info;
 
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
@@ -47,10 +41,11 @@ async fn stress_seek_during_abr_switch_real_decoder(
     let url = server.asset(path);
     info!(label, path, "Opening real stream");
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
 
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -177,9 +172,10 @@ async fn seek_sequence_from_log_real_stream(
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await

@@ -1,16 +1,3 @@
-//! Fields in `Foo { ... }` literal expressions should follow:
-//!
-//! 1. Shorthand fields (`field_a` without `: value`) come first.
-//! 2. Explicit fields (`field_b: value`) come after.
-//! 3. Within each bucket, relative order is unconstrained — clippy's
-//!    `inconsistent_struct_constructor` already enforces "match struct
-//!    definition order" for all-shorthand inits, and we let the developer
-//!    pick the most readable layout otherwise.
-//! 4. The optional `..base` rest comes last (Rust syntax already enforces this).
-//!
-//! Tuple-struct expressions (`Foo(a, b)`) and explicit-position struct exprs
-//! (`Foo { 0: a, 1: b }`) are skipped — they have no name to sort by.
-
 use std::{cmp::Ordering, collections::HashSet, ops::Range};
 
 use anyhow::Result;

@@ -1,18 +1,3 @@
-//! `Demuxer` trait — container-side half of the unified decoder architecture.
-//!
-//! A `Demuxer` consumes raw bytes from a `Source`-backed transport and
-//! yields per-frame slices with PTS / duration. It does NOT touch PCM —
-//! that is the [`FrameCodec`] half. Splitting the two lets us pair any
-//! container parser (HLS-fmp4, file-mp4, ADTS, OGG, …) with any codec
-//! backend (Symphonia software, Apple/Android hardware, …) through
-//! `ComposedDecoder<D, C>`.
-//!
-//! Implementations live in their platform-specific modules:
-//! - [`crate::symphonia::SymphoniaDemuxer`] for MP3 / WAV / OGG / native FLAC / file-fmp4.
-//! - [`crate::fmp4::Fmp4SegmentDemuxer`] for HLS fMP4 (segment-aware).
-//!
-//! [`FrameCodec`]: crate::codec::FrameCodec
-
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, PendingReason};
 
@@ -24,6 +9,18 @@ use crate::error::DecodeResult;
 /// and emit raw codec frames with timing metadata. The codec layer
 /// ([`crate::codec::FrameCodec`]) consumes those frames into PCM.
 pub(crate) trait Demuxer: Send {
+    /// Segment index of the frame from the last `next_frame`.
+    /// `None` for non-segmented sources.
+    fn current_segment_index(&self) -> Option<u32> {
+        None
+    }
+
+    /// Variant index of the frame from the last `next_frame`.
+    /// `None` for non-segmented sources.
+    fn current_variant_index(&self) -> Option<usize> {
+        None
+    }
+
     /// Total duration if the container can compute one (HLS playlist
     /// total, mp4 `mvhd`, …); `None` for live or unbounded streams.
     fn duration(&self) -> Option<Duration>;
@@ -91,6 +88,12 @@ pub(crate) struct Frame<'a> {
     /// Raw frame bytes — slice into the demuxer's owned buffer (mp4
     /// segment, Symphonia `Packet`, etc.). Zero-copy: never cloned.
     pub data: &'a [u8],
+    /// Opaque per-packet metadata for codecs that need it for VBR
+    /// decoding. Apple-native MP3 / ALAC paths pass a serialized
+    /// `AudioStreamPacketDescription` here; the codec interprets the
+    /// bytes. Demuxers without VBR descriptors leave this empty.
+    /// Borrow lifetime mirrors `data`.
+    pub packet_desc: &'a [u8],
     /// Frame duration.
     pub duration: Duration,
     /// Presentation time of this frame.

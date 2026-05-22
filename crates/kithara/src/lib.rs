@@ -82,10 +82,10 @@ pub mod storage {
 }
 
 pub use kithara_test_macros::mock;
-#[cfg(feature = "test-utils")]
+#[cfg(feature = "probe")]
 pub use kithara_test_macros::{fixture, test};
 
-#[cfg(feature = "test-utils")]
+#[cfg(feature = "mock")]
 pub mod mock {
     pub use kithara_audio::mock::*;
     pub use kithara_decode::mock::*;

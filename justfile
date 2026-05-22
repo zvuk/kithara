@@ -514,8 +514,6 @@ mutants TARGET="" *ARGS:
         --exclude 'crates/kithara-app/**' \
         --exclude 'crates/kithara-wasm/**' \
         --exclude 'crates/kithara-wasm-macros/**' \
-        --exclude 'crates/kithara-hang-detector/**' \
-        --exclude 'crates/kithara-hang-detector-macros/**' \
         --exclude 'xtask/**' \
         --exclude-re 'src/.*test.*\.rs' \
         -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
@@ -692,7 +690,8 @@ android MODE="build" *ARGS:
 #   just apple demo                     # XCFramework + run KitharaDemo
 #   just apple xcode                    # XCFramework + open xcodeproj
 #   just apple ios SCHEME [DESTINATION] # build for iOS Simulator
-#   just apple release                  # XCFramework + zip + checksum
+#   just apple doc                      # combined Kithara+KitharaRx .doccarchive
+#   just apple release                  # XCFramework + strip + zip + checksum
 apple MODE="xcframework" *ARGS:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -717,13 +716,30 @@ apple MODE="xcframework" *ARGS:
         KITHARA_LOCAL_DEV=1 xcodebuild -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme "$scheme" -destination "$destination" build
         ;;
+      doc)
+        mkdir -p docs-build
+        KITHARA_LOCAL_DEV=1 swift package --allow-writing-to-directory ./docs-build \
+            generate-documentation \
+            --target Kithara --target KitharaRx \
+            --enable-experimental-combined-documentation \
+            --output-path ./docs-build/Kithara.doccarchive
+        ;;
       release)
         just apple xcframework
+        # Strip debug symbols from each slice's static lib so the
+        # resulting zip fits under release-hosting limits (gitlab caps
+        # LFS objects at 1 GB; github releases tolerate 2 GB but tiny
+        # is still nicer). `-S` drops debug info, `-x` drops local
+        # symbols — global symbols required for linking stay intact.
+        for f in apple/KitharaFFIInternal.xcframework/*/libkithara_ffi.a; do
+            strip -S -x "$f"
+        done
         cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
-        swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip
+        swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip \
+            | tee /tmp/KitharaFFIInternal.xcframework.zip.sha256
         ;;
       *)
-        echo "unknown apple mode: {{MODE}} (use xcframework|demo|xcode|ios|release)"
+        echo "unknown apple mode: {{MODE}} (use xcframework|demo|xcode|ios|doc|release)"
         exit 2
         ;;
     esac

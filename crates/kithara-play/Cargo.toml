@@ -1,6 +1,6 @@
 [package]
 name = "kithara-play"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -17,13 +17,14 @@ kithara-decode = { workspace = true }
 kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
-kithara-file = { workspace = true, optional = true }
-kithara-hls = { workspace = true, optional = true }
+kithara-file = { workspace = true }
+kithara-hls = { workspace = true }
 kithara-abr = { workspace = true }
-kithara-assets = { workspace = true, optional = true }
-kithara-net = { workspace = true, optional = true }
+kithara-assets = { workspace = true }
+kithara-net = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true }
 num-traits = { workspace = true }
 
 # Audio engine
@@ -35,8 +36,7 @@ tokio-util = { workspace = true }
 ringbuf = { workspace = true }
 
 # Utilities
-derivative = { workspace = true }
-derive_setters = { workspace = true }
+bon = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
@@ -46,28 +46,27 @@ smallvec = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bevy_platform = { workspace = true }
 firewheel-web-audio = { workspace = true, optional = true }
 
 [features]
-default = ["file", "hls", "backend-cpal"]
-file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
-hls = ["dep:kithara-hls", "dep:kithara-assets", "dep:kithara-net"]
+default = ["backend-cpal"]
 backend-cpal = ["firewheel/cpal"]
 backend-web-audio = ["dep:firewheel-web-audio"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
-test-utils = []
+probe = []
+mock = []
 
 [dev-dependencies]
-kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "test-utils"] }
-kithara-audio = { workspace = true, features = ["test-utils"] }
-kithara-test-utils = { workspace = true, features = ["test-utils"] }
+kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
+kithara-audio = { workspace = true, features = ["probe"] }
+kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

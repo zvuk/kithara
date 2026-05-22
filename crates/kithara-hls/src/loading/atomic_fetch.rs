@@ -1,12 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Shared helper for fetching small atomic bodies (playlists, DRM keys)
-//! through the disk cache + unified downloader pipeline.
-//!
-//! Both [`crate::playlist_cache::PlaylistCache`] and [`crate::keys::KeyManager`]
-//! call into this helper so the resource lookup, network fallback, and
-//! cache write-back logic is not duplicated.
-
 use bytes::Bytes;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_bufpool::BytePool;
@@ -62,7 +55,7 @@ pub(crate) async fn fetch_atomic_body(
 
 /// Try to read the resource from the cache. Returns `Ok(Some(bytes))`
 /// on a cache hit, `Ok(None)` on miss.
-fn try_read_cached(
+pub(crate) fn try_read_cached(
     backend: &AssetStore<DecryptContext>,
     byte_pool: &BytePool,
     key: &ResourceKey,
@@ -94,7 +87,7 @@ fn try_read_cached(
 /// the cache, all fetch, first commits, later `write_all` calls
 /// fail because the resource is already committed. Harmless — the
 /// bytes are in memory from the network fetch.
-fn write_back_cache(
+pub(crate) fn write_back_cache(
     res: &kithara_assets::AssetResource<DecryptContext>,
     bytes: &Bytes,
     backend: &AssetStore<DecryptContext>,
@@ -128,8 +121,9 @@ async fn download_atomic_bytes(
     headers: Option<Headers>,
 ) -> HlsResult<Bytes> {
     let cmd = FetchCmd::get(url)
-        .headers(headers)
-        .with_validator(reject_html_response);
+        .maybe_headers(headers)
+        .validator(reject_html_response)
+        .build();
     let resp = downloader.execute(cmd).await.map_err(HlsError::from)?;
     resp.body.collect().await.map_err(HlsError::from)
 }

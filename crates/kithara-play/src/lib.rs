@@ -16,16 +16,13 @@ mod metadata;
 mod time;
 mod types;
 
-#[cfg(any(test, feature = "test-utils"))]
-pub mod test_helpers;
-
 pub mod impls;
 pub mod traits;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_support;
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
 pub use error::PlayError;
@@ -46,7 +43,6 @@ pub use impls::{
     source_type::SourceType,
 };
 pub use kithara_audio::{AudioWorkerHandle, SeekOutcome, ServiceClass};
-#[cfg(any(feature = "file", feature = "hls"))]
 pub use kithara_net::Headers;
 pub use metadata::{Artwork, Metadata};
 pub use time::MediaTime;

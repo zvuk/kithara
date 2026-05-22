@@ -1,38 +1,3 @@
-//! Cumulative branch density per public entry point.
-//!
-//! `branch_chains` and `guard_cascade` flag long sequences inside a single
-//! block. They miss a class of equally branch-heavy code: a public
-//! method whose body is "clean" but which calls helpers that each carry
-//! their own ifs and matches. The CPU's branch predictor sees the
-//! cumulative count along whatever execution path runs, not the syntactic
-//! structure of one source file. Extracting `if`s into a helper does not
-//! reduce the number of conditional jumps observed at runtime —
-//! deceptive when the helper is `#[inline]` and inlined back, and still
-//! wasteful when it isn't (`ICache` misses on the call hop count too).
-//!
-//! This check counts branches **transitively** from each public entry
-//! point. For every `pub fn` (or `pub(crate)` item that escapes the
-//! module via re-export), we walk the call graph by name match,
-//! accumulating two metrics:
-//!
-//! - **`longest_path_branches`** — the worst-case number of conditional
-//!   jumps a single execution path can hit, as the sum of branches in
-//!   every function on the deepest reached chain.
-//! - **`total_branches`** — the sum of branches across every reachable
-//!   function. Catches public APIs whose call graph is broad rather
-//!   than deep (many helpers, each with a few branches each).
-//!
-//! Both metrics use the same per-function branch counter: each `if`,
-//! `else if`, `if let`, `let-else`, every additional `match` arm beyond
-//! the first, every loop back-edge (`loop`/`while`/`for`), every `?`,
-//! and every short-circuit `&&`/`||` adds one.
-//!
-//! Call resolution is best-effort by name (last path segment for
-//! `foo::bar::baz()`, method name for `x.method()`). Cross-crate calls,
-//! trait dynamic dispatch, and macro expansions count as "external" and
-//! terminate the walk; they will be undercounted, never overcounted.
-//! Cycles are broken by visited-tracking per starting entry.
-
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;

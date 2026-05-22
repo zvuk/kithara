@@ -1,6 +1,3 @@
-//! Runtime tick: position cache, crossfade arming, engine event drain
-//! (`ItemDidPlayToEnd` / `CurrentItemChanged`), and `seek`.
-
 use std::sync::PoisonError;
 
 use kithara_events::{Event, PlayerEvent, QueueEvent};
@@ -128,11 +125,24 @@ impl Queue {
             Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => {
                 self.handle_item_did_play_to_end(src);
             }
+            Event::Player(PlayerEvent::ItemDidFail { src, .. }) => {
+                self.handle_item_did_fail(src);
+            }
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 self.handle_current_item_changed();
             }
             _ => {}
         }
+    }
+
+    fn handle_item_did_fail(&self, src: &std::sync::Arc<str>) {
+        let pos = self.player.position_seconds().unwrap_or(0.0);
+        let dur = self.player.duration_seconds().unwrap_or(0.0);
+        debug!(%src, pos, dur, "ItemDidFail received — track aborted mid-stream");
+        if self.consume_armed_advance(pos, dur) {
+            return;
+        }
+        let _ = self.advance_to_next(Transition::None);
     }
 
     /// Seek within the currently-playing track.
@@ -252,7 +262,7 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(
-            should_arm_crossfade(PlaybackTime { pos, dur }, crossfade, current_id, armed_for,),
+            should_arm_crossfade(PlaybackTime { dur, pos }, crossfade, current_id, armed_for,),
             expected
         );
     }

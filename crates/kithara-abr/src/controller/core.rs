@@ -7,13 +7,13 @@ use std::{
     },
 };
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
     Mutex, RwLock,
     time::{Duration, Instant},
 };
+use kithara_test_utils::kithara;
 
 use super::{peer::PeerEntry, throttle::EventThrottleCache};
 use crate::{
@@ -34,56 +34,60 @@ impl AbrPeerId {
     }
 }
 
+impl kithara_test_utils::probe::IntoProbeArg for AbrPeerId {
+    fn into_probe_arg(self) -> u64 {
+        self.0.get()
+    }
+}
+
 /// ABR controller settings.
-#[derive(Clone, Debug, Derivative, PartialEq, Setters)]
-#[derivative(Default)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Debug, PartialEq, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
-    #[derivative(Default(value = "Duration::from_secs(1)"))]
+    #[builder(default = Duration::from_secs(1))]
     pub bandwidth_emit_min_interval: Duration,
     /// Minimum absolute delta between `BufferAhead` emits.
-    #[derivative(Default(value = "Duration::from_millis(500)"))]
+    #[builder(default = Duration::from_millis(500))]
     pub buffer_emit_min_delta: Duration,
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
-    #[derivative(Default(value = "Duration::from_millis(500)"))]
+    #[builder(default = Duration::from_millis(500))]
     pub buffer_emit_min_interval: Duration,
     /// Deadline for the incoherence watcher spawned after a variant switch.
-    #[derivative(Default(value = "Duration::from_secs(5)"))]
+    #[builder(default = Duration::from_secs(5))]
     pub incoherence_deadline: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
-    #[derivative(Default(value = "Duration::from_secs(10)"))]
+    #[builder(default = Duration::from_secs(10))]
     pub min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
-    #[derivative(Default(value = "Duration::from_secs(30)"))]
+    #[builder(default = Duration::from_secs(30))]
     pub min_switch_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
-    #[derivative(Default(value = "Duration::from_secs(5)"))]
+    #[builder(default = Duration::from_secs(5))]
     pub urgent_downswitch_buffer: Duration,
-    /// Global data-saver cap. Per-peer overrides live in `AbrState`.
+    /// Seed throughput estimate (bps) applied at controller construction.
+    pub initial_throughput_bps: Option<u64>,
+    /// Global data-saver cap.
     pub max_bandwidth_bps: Option<u64>,
     /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
-    #[derivative(Default(value = "0.10"))]
+    #[builder(default = 0.10)]
     pub bandwidth_emit_min_delta_ratio: f64,
     /// Hysteresis ratio for down-switch.
-    #[derivative(Default(value = "0.8"))]
+    #[builder(default = 0.8)]
     pub down_hysteresis_ratio: f64,
-    /// Safety factor applied to the throughput estimate before comparing to
-    /// candidate variants (e.g. `1.5` uses ~66% of the raw estimate).
-    #[derivative(Default(value = "1.5"))]
+    /// Safety factor applied to the throughput estimate before comparing.
+    #[builder(default = 1.5)]
     pub throughput_safety_factor: f64,
-    /// Hysteresis ratio for up-switch (adjusted throughput must exceed
-    /// candidate bandwidth by this factor).
-    #[derivative(Default(value = "1.3"))]
+    /// Hysteresis ratio for up-switch.
+    #[builder(default = 1.3)]
     pub up_hysteresis_ratio: f64,
-    /// Minimum download duration (ms) to record a bandwidth sample — fetches
-    /// faster than this are ignored.
-    #[derivative(Default(value = "10"))]
-    pub min_throughput_record_ms: u128,
-    /// Number of bytes that must be downloaded before ABR will switch.
-    #[derivative(Default(value = "128 * 1024"))]
-    pub warmup_min_bytes: u64,
+}
+
+impl Default for AbrSettings {
+    fn default() -> Self {
+        Self::builder().initial_throughput_bps(2_000_000).build()
+    }
 }
 
 /// Shared per-player ABR controller.
@@ -143,6 +147,7 @@ impl AbrController {
         self.tick(peer_id, Instant::now());
     }
 
+    #[kithara::probe(peer_id, mode)]
     pub(crate) fn on_mode_changed(&self, peer_id: AbrPeerId, mode: AbrMode) {
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(bus) = entry.bus()
@@ -161,7 +166,7 @@ impl AbrController {
         self.tick(peer_id, Instant::now());
     }
 
-    pub(super) fn peer_entry(&self, id: AbrPeerId) -> Option<Arc<PeerEntry>> {
+    pub(crate) fn peer_entry(&self, id: AbrPeerId) -> Option<Arc<PeerEntry>> {
         self.peers.lock_sync().get(&id).cloned()
     }
 
@@ -176,7 +181,6 @@ impl AbrController {
             peer_weak,
             bus: Arc::clone(&bus),
             variants_registered_published: AtomicBool::new(false),
-            warmup_completed: AtomicBool::new(false),
             bytes_downloaded: AtomicU64::new(0),
             incoherence_cancel: Mutex::new(None),
             last_variant_switch: Mutex::new(None),
@@ -185,6 +189,12 @@ impl AbrController {
         });
         self.peers.lock_sync().insert(id, entry);
         AbrHandle::new(Arc::clone(self), id, state, bus)
+    }
+
+    fn seed_estimator(settings: &AbrSettings, estimator: &Arc<dyn Estimator>) {
+        if let Some(bps) = settings.initial_throughput_bps {
+            estimator.seed_initial_bps(bps);
+        }
     }
 
     /// Settings snapshot.
@@ -206,6 +216,7 @@ impl AbrController {
     /// inject a mock.
     #[must_use]
     pub fn with_estimator(settings: AbrSettings, estimator: Arc<dyn Estimator>) -> Arc<Self> {
+        Self::seed_estimator(&settings, &estimator);
         Arc::new_cyclic(|weak| Self {
             settings,
             estimator,

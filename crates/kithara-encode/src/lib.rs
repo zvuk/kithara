@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 //! # Kithara Encode
 //!
 //! Audio encoding library with a thin facade and FFmpeg-backed implementations.
@@ -19,10 +17,11 @@
 pub mod codec;
 mod error;
 mod factory;
-pub mod test_pcm;
 mod traits;
 mod types;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod fdk;
 #[cfg(not(target_arch = "wasm32"))]
 mod ffmpeg;
 

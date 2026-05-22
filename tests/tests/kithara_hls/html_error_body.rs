@@ -6,8 +6,8 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestTempDir, temp_dir};
 use kithara_platform::time::Duration;
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -37,9 +37,10 @@ async fn html_body_rejected_before_caching(temp_dir: TestTempDir) {
     let port = start_html_stub_server().await;
     let url = Url::parse(&format!("http://127.0.0.1:{port}/master.m3u8")).unwrap();
 
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new());
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(CancellationToken::new())
+        .build();
 
     let result = Stream::<Hls>::new(config).await;
     let err = match result {

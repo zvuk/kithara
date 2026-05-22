@@ -1,12 +1,3 @@
-//! Cold-cache mid-track HLS seek through the full Queue → `PlayerImpl`
-//! pipeline against the synthetic `TestServerHelper` HLS fixture.
-//!
-//! Same shape as `cold_seek_cpal::cpal_cold_seek_silvercomet_hls` but
-//! against an in-process fixture and the offline session backend, so it
-//! runs in every `just test` (no real network, no real audio device).
-//! `cpal_cold_seek_silvercomet_hls` keeps the live-CDN + cpal repro
-//! variant under `#[ignore]`/e2e for hang investigations.
-
 #![forbid(unsafe_code)]
 
 use std::{
@@ -16,14 +7,16 @@ use std::{
 
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, fixture_protocol::DelayRule, kithara,
+    offline::OfflineSession, temp_dir,
+};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{
-    HlsFixtureBuilder, TestServerHelper, fixture_protocol::DelayRule, kithara, temp_dir,
-};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 async fn wait_for_loader_done(
     queue: &Queue,
@@ -79,6 +72,9 @@ async fn wait_for_position_at_least(
 )]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let builder = HlsFixtureBuilder::new()
         .variant_count(3)
@@ -98,10 +94,18 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
 
     let temp = temp_dir();
     let store = StoreOptions::new(temp.path());
-    let downloader = Downloader::new(DownloaderConfig::default());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .build(),
+    );
 
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
 
@@ -115,10 +119,12 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
         }
     });
 
-    let mut cfg = ResourceConfig::new(master.as_str()).expect("valid master URL");
-    cfg = cfg.with_downloader(downloader.clone());
-    cfg.store = store;
-    cfg.decoder_backend = backend;
+    let cfg = ResourceConfig::for_src(master.as_str())
+        .expect("valid master URL")
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder_backend(backend)
+        .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let id = queue.append(source);

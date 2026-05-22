@@ -1,15 +1,3 @@
-//! `pub` structs that expose many `pub` fields.
-//!
-//! A struct with several public mutable fields signals two design issues:
-//! (1) no invariants — any combination of values is "valid"; (2) callers
-//! mutate state directly, so behavioural changes have to be added at every
-//! call site instead of one place.
-//!
-//! Detection: only `pub` (strict, not `pub(crate)`) struct definitions are
-//! considered, and only their `pub` (strict) fields are counted. The check
-//! is meant for cross-crate API surface; encapsulation inside one crate
-//! (`pub(crate)` fields on `pub(crate)` structs) is not flagged here.
-
 use std::collections::BTreeMap;
 
 use anyhow::Result;

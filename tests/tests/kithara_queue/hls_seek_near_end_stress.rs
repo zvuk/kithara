@@ -1,23 +1,3 @@
-//! Reproducer for the user-reported "seek to end of an HLS track hangs,
-//! then logs `seek failed`" bug from `kithara-app`.
-//!
-//! User scenario verbatim: "просто открыл плеер и после этого выбрал hls
-//! и перемотал почти в конец трека". So each iteration constructs a
-//! **fresh** Queue + Player + Track and issues a single near-end seek
-//! after a minimal warmup — there is no carry-over decoder/timeline
-//! state from a previous run.
-//!
-//! What we pin:
-//! - The seek lands at `target ± 1 s` (offline pacing tolerance) and
-//!   playback advances at least `MIN_POST_SEEK_ADVANCE_S` afterwards,
-//!   OR
-//! - The seek raises a hard typed error within `SEEK_BUDGET` (the bug
-//!   user reports is a >10 s hang followed by a delayed `seek failed`,
-//!   so a fast typed error is preferable but still tracked).
-//!
-//! Failures are bucketed (hang vs error) and reported with the
-//! iteration index so the trace log on disk can be inspected.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
@@ -26,12 +6,15 @@ use std::{sync::Arc, time::Duration};
 use kithara_assets::StoreOptions;
 use kithara_decode::DecoderBackend;
 use kithara_events::{AbrMode, TrackId, TrackStatus};
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, offline::OfflineSession, temp_dir,
+};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, temp_dir};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 struct Consts;
@@ -56,7 +39,16 @@ impl Consts {
     const SEEK_BUDGET: Duration = Duration::from_secs(6);
     /// Minimum post-seek position advance we require to declare a
     /// landed seek as "playing again".
-    const MIN_POST_SEEK_ADVANCE_S: f64 = 0.5;
+    ///
+    /// Decision log: the AAC decoder strips its algorithmic delay
+    /// (`outputDelay`, ~40 ms for AAC-LC @ 44.1 kHz) at the head of the
+    /// PCM stream — the visible track length is correspondingly
+    /// shorter than the container duration. The closest seek offset
+    /// in [`Self::NEAR_END_OFFSETS_S`] is 0.5 s; with the strip eating
+    /// ~0.04 s of that residual budget, the largest reliable post-seek
+    /// advance for that offset is ~0.45 s. Using 0.4 leaves ~0.05 s of
+    /// margin so the iter does not spuriously hang at the EOF.
+    const MIN_POST_SEEK_ADVANCE_S: f64 = 0.4;
     /// Time given to the player to consume some PCM after the seek
     /// before we sample position.
     const POST_SEEK_RENDER_WALL: Duration = Duration::from_millis(1_500);
@@ -113,7 +105,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
@@ -125,7 +119,13 @@ fn build_queue_with_tick(
             }
         }
     });
-    let downloader = Downloader::new(DownloaderConfig::default());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .build(),
+    );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
@@ -190,21 +190,23 @@ async fn run_one_attempt(
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let mut cfg = match ResourceConfig::new(url.as_str()) {
-        Ok(cfg) => cfg,
+    let builder = match ResourceConfig::for_src(url.as_str()) {
+        Ok(b) => b,
         Err(e) => {
             tick_handle.abort();
             return IterOutcome::Errored {
                 iter,
                 target: f64::NAN,
-                error: format!("ResourceConfig::new failed: {e}"),
+                error: format!("ResourceConfig::for_src failed: {e}"),
             };
         }
     };
-    cfg = cfg.with_downloader(downloader.clone());
-    cfg.store = store;
-    cfg.initial_abr_mode = AbrMode::Auto(None);
-    cfg.decoder_backend = backend;
+    let cfg = builder
+        .downloader(downloader.clone())
+        .store(store)
+        .initial_abr_mode(AbrMode::Auto(None))
+        .decoder_backend(backend)
+        .build();
     let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
 
     if let Err(e) = queue.select(track_id, Transition::None) {
@@ -353,6 +355,9 @@ async fn hls_seek_near_end_fresh_player_stress(
     #[case] backend: DecoderBackend,
     #[case] include_sidx: bool,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
     let helper = TestServerHelper::new().await;
     let url = build_hls(&helper, include_sidx).await;
 

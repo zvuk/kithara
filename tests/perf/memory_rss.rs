@@ -2,13 +2,6 @@
     clippy::cast_precision_loss,
     reason = "RSS values in MB, f64 precision is sufficient"
 )]
-//! RSS memory profiling tests for HLS playback pipeline.
-//!
-//! Measures resident set size (RSS) while running the full pipeline:
-//! HTTP → HLS parsing → segment download → asset store → stream → decode →
-//! resampler → PCM buffers.
-//!
-//! Run with: `cargo test --test memory_rss -- --test-threads=1 --nocapture`
 
 use std::time::Duration;
 
@@ -19,8 +12,8 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
 use kithara_platform::{time::Instant, tokio::task::spawn_blocking};
-use kithara_test_utils::{TestServerHelper, TestTempDir, temp_dir};
 use memory_stats::memory_stats;
 use tracing::info;
 
@@ -56,10 +49,11 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         let server = TestServerHelper::new().await;
         let url = server.asset("hls/master.m3u8");
 
-        let hls_config = HlsConfig::new(url)
-            .with_store(StoreOptions::new(temp_dir.path()))
-            .with_initial_abr_mode(AbrMode::Auto(Some(0)));
-        let config = AudioConfig::<Hls>::new(hls_config);
+        let hls_config = HlsConfig::for_url(url)
+            .store(StoreOptions::new(temp_dir.path()))
+            .initial_abr_mode(AbrMode::Auto(Some(0)))
+            .build();
+        let config = AudioConfig::<Hls>::for_stream(hls_config).build();
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
             .expect("audio creation");
@@ -74,9 +68,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
                 let outcome = audio.read(&mut buf);
                 let stop = matches!(
                     outcome,
-                    Ok(kithara::audio::ReadOutcome::Frames { count: 0, .. })
-                        | Ok(kithara::audio::ReadOutcome::Eof { .. })
-                        | Err(_)
+                    Ok(kithara::audio::ReadOutcome::Eof { .. }) | Err(_)
                 );
                 if stop {
                     break;
@@ -143,9 +135,10 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_initial_abr_mode(AbrMode::Auto(Some(0)));
+    let hls_config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .initial_abr_mode(AbrMode::Auto(Some(0)))
+        .build();
     let config = AudioConfig::<Hls>::new(hls_config);
     let mut audio = Audio::<Stream<Hls>>::new(config)
         .await
@@ -161,9 +154,7 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
             let outcome = audio.read(&mut buf);
             let stop = matches!(
                 outcome,
-                Ok(kithara::audio::ReadOutcome::Frames { count: 0, .. })
-                    | Ok(kithara::audio::ReadOutcome::Eof { .. })
-                    | Err(_)
+                Ok(kithara::audio::ReadOutcome::Eof { .. }) | Err(_)
             );
             if stop {
                 break;

@@ -17,16 +17,16 @@ arbitrary = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
-kithara-hls = { workspace = true, features = ["test-utils"] }
+kithara-hls = { workspace = true, features = ["probe"] }
 kithara-platform = { workspace = true }
-kithara-play = { workspace = true, features = ["backend-cpal", "hls"] }
+kithara-play = { workspace = true, features = ["backend-cpal"] }
 kithara-storage = { workspace = true }
 kithara-stream = { workspace = true }
 hls_m3u8 = { workspace = true }
 tokio-util = { workspace = true }
 tempfile = { workspace = true }
 url = { workspace = true }
-kithara-workspace-hack = { version = "0.1", path = "../../crates/kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../../crates/kithara-workspace-hack" }
 
 [[bin]]
 name = "aes_decrypt"

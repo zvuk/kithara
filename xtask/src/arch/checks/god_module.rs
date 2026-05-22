@@ -1,18 +1,3 @@
-//! Number of `pub`/`pub(crate)` items declared in one module file.
-//!
-//! High pub-surface per module signals that one file is exposing too many
-//! independent abstractions. The companion shape that should drive a split
-//! is "many small modules with single-purpose APIs", not "one fat module".
-//!
-//! Counted item kinds: struct, enum, trait, fn, type alias, const, static,
-//! `macro_rules`. Inline `mod foo { ... }` blocks declared inside the file
-//! emit *separate* counts (their items belong to the inner module, not the
-//! outer one), but only the file-level scope produces a violation key
-//! when its own count exceeds the threshold.
-//!
-//! Per-crate overrides (`[god_module.overrides]`) let app/test/macro crates
-//! relax the default threshold without having to baseline each file.
-
 use std::path::Path;
 
 use anyhow::Result;

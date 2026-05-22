@@ -32,9 +32,14 @@ mod kithara_encode {
 }
 
 mod kithara_decode {
+    #[cfg(not(target_arch = "wasm32"))]
+    mod aac_priming_regression;
     mod decoder_seek_tests;
     mod decoder_tests;
+    mod factory_tests;
+    mod protocol_tests;
     mod symphonia_seek_stale_duration;
+    mod symphonia_tests;
     mod timeline_tests;
 }
 

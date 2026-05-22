@@ -1,9 +1,3 @@
-//! Flags files with many `#[cfg(...)]` attributes on top-level items.
-//!
-//! High cfg density signals that the file should be split into
-//! platform/feature-specific modules with a single `#[cfg]` gate on the
-//! `mod` declaration instead of sprinkling gates across every item.
-
 use std::fs;
 
 use anyhow::Result;

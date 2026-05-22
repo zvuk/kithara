@@ -1,8 +1,3 @@
-//! Each canonical type has exactly one definition, in its declared owner crate.
-//!
-//! Migrated from legacy `arch.rs::check_canonical_types`, with the addition of
-//! owner-crate enforcement (configured via `canonical-types.toml`).
-
 use std::fs;
 
 use anyhow::{Context as _, Result};

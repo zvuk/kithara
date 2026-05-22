@@ -1,37 +1,3 @@
-//! Pin: **once the user picks track B while track A is still loading,
-//! track A must never become the playing track**.
-//!
-//! Reproduces the user-reported "barge-in" bug from `kithara-app`:
-//! "I click track1, nothing happens. I click another track2, that one
-//! plays. After a short pause, track1 barges in." The architectural
-//! cause sits in `Queue::spawn_apply_after_load` (queue.rs:700):
-//! `replace_item(index, resource)` runs **unconditionally** for every
-//! finished load, planting the slow track's resource in its queue slot
-//! even when the user has already moved on. The next auto-advance then
-//! plays that slot, surprising the user.
-//!
-//! Layout:
-//! - `fast` HLS fixture, **1 segment × 2 s**, low per-segment delay.
-//! - `slow` HLS fixture, longer (≥ 12 s), high per-segment delay so its
-//!   loader finishes after `fast` is already playing.
-//! - Append `fast` first (index 0), `slow` second (index 1). Picking
-//!   `fast` lands the player on index 0; when `fast` ends naturally,
-//!   AVQueuePlayer-style auto-advance will move to index 1 (`slow`).
-//!
-//! Sequence per iteration:
-//! 1. `select(slow_id, Transition::None)` — slow goes Pending,
-//!    `pending_select := Some(slow)`, loader spawned.
-//! 2. ~50 ms gap so the slow loader is genuinely Loading.
-//! 3. `select(fast_id, Transition::None)` — `pending_select` overwritten
-//!    to `Some(fast)`. Both loaders now run in parallel.
-//! 4. Wait for both to settle. `fast` lands as current and plays.
-//! 5. Wait long enough for `fast` to end naturally (~3 s).
-//! 6. **Bug surfaces** as `current()` flipping to `slow_id` via
-//!    auto-advance even though the user never asked to play slow.
-//!
-//! Stress: parametrised over `iterations` so a 30-pass run pins the
-//! 1/N flake user reports in `kithara-app`.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
@@ -39,15 +5,16 @@ use std::{sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;
 use kithara_events::{AbrMode, EventReceiver, TrackId, TrackStatus};
-use kithara_integration_tests::offline::OfflineSession;
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
+    offline::OfflineSession, temp_dir,
+};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl, ResourceConfig};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
 use kithara_stream::dl::{Downloader, DownloaderConfig};
-use kithara_test_utils::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
-    temp_dir,
-};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 struct Consts;
@@ -121,7 +88,9 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::default().with_session(OfflineSession::arc_auto()),
+        PlayerConfig::builder()
+            .session(OfflineSession::arc_auto())
+            .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::default().with_player(player)));
     let queue_for_tick = Arc::clone(&queue);
@@ -133,7 +102,13 @@ fn build_queue_with_tick(
             }
         }
     });
-    let downloader = Downloader::new(DownloaderConfig::default());
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            CancellationToken::new(),
+        ))
+        .build(),
+    );
     let store = StoreOptions::new(temp_dir.path());
     (queue, downloader, store, tick_handle)
 }
@@ -223,11 +198,12 @@ async fn track_switch_race_does_not_let_slow_track_barge_in(#[case] iterations: 
         let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
         let mk_cfg = |url: &Url| {
-            let mut cfg = ResourceConfig::new(url.as_str()).expect("valid fixture URL");
-            cfg = cfg.with_downloader(downloader.clone());
-            cfg.store = store.clone();
-            cfg.initial_abr_mode = AbrMode::Auto(None);
-            cfg
+            ResourceConfig::for_src(url.as_str())
+                .expect("valid fixture URL")
+                .downloader(downloader.clone())
+                .store(store.clone())
+                .initial_abr_mode(AbrMode::Auto(None))
+                .build()
         };
 
         let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(&fast_url))));

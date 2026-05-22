@@ -1,8 +1,3 @@
-//! `ComposedDecoder<D, C>` — single `Decoder` impl that pairs a
-//! [`Demuxer`] with a [`FrameCodec`]. Used by every backend (Apple
-//! `AudioToolbox`, Android `MediaCodec`, Symphonia, fMP4 segments)
-//! through composition rather than per-backend decoder types.
-
 use std::{
     sync::{
         Arc,
@@ -12,7 +7,8 @@ use std::{
 };
 
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_stream::{ReaderChunkSignal, ReaderSeekSignal, SharedHooks, StreamContext};
+use kithara_stream::{ReaderChunkSignal, ReaderSeekSignal, SharedHooks};
+use kithara_test_utils::kithara;
 
 use crate::{
     codec::FrameCodec,
@@ -40,7 +36,6 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     /// first frame past the target is consumed. Lets `seek(target)`
     /// land precisely at `target` instead of at the granule boundary.
     pending_seek_target: Option<Duration>,
-    stream_ctx: Option<Arc<dyn StreamContext>>,
     pool: PcmPool,
     spec: PcmSpec,
     /// Set on every seek; the next emitted chunk re-anchors
@@ -67,7 +62,6 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         pool: PcmPool,
         epoch: u64,
         byte_len_handle: Option<Arc<AtomicU64>>,
-        stream_ctx: Option<Arc<dyn StreamContext>>,
         hooks: Option<SharedHooks>,
     ) -> Self {
         let spec = codec.spec();
@@ -80,11 +74,10 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             pool,
             epoch,
             byte_len_handle,
-            stream_ctx,
             hooks,
             frame_offset: 0,
             pending_seek_target: None,
-            resync_frame_offset_to_pts: false,
+            resync_frame_offset_to_pts: true,
         }
     }
 
@@ -93,6 +86,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
     /// `&Frame<'_>`) so the caller can release the demuxer borrow before
     /// invoking this — needed because `Frame<'_>` borrows into the
     /// demuxer state and would conflict with `&mut self` here.
+    #[kithara::probe(timestamp, frames)]
     fn build_chunk(
         &mut self,
         buf: PcmBuf,
@@ -100,8 +94,11 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         timestamp: Duration,
         source_bytes: u64,
     ) -> PcmChunk {
-        let chunk_secs = if self.spec.sample_rate > 0 {
-            f64::from(frames) / f64::from(self.spec.sample_rate)
+        let live_spec = self.codec.spec();
+        self.spec = live_spec;
+
+        let chunk_secs = if live_spec.sample_rate > 0 {
+            f64::from(frames) / f64::from(live_spec.sample_rate)
         } else {
             0.0
         };
@@ -110,7 +107,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
 
         if self.resync_frame_offset_to_pts {
             self.resync_frame_offset_to_pts = false;
-            self.frame_offset = frame_offset_for(timestamp, self.spec.sample_rate);
+            self.frame_offset = frame_offset_for(timestamp, live_spec.sample_rate);
         }
         let frame_offset = self.frame_offset;
         self.frame_offset = self.frame_offset.saturating_add(u64::from(frames));
@@ -121,10 +118,10 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             frames,
             frame_offset,
             source_bytes,
-            segment_index: self.stream_ctx.as_ref().and_then(|ctx| ctx.segment_index()),
+            segment_index: self.demuxer.current_segment_index(),
             source_byte_offset: None,
-            variant_index: self.stream_ctx.as_ref().and_then(|ctx| ctx.variant_index()),
-            spec: self.spec,
+            variant_index: self.demuxer.current_variant_index(),
+            spec: live_spec,
             epoch: self.epoch,
         };
         PcmChunk::new(meta, buf)
@@ -159,8 +156,10 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         }
     }
 
+    #[kithara::hang_watchdog]
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
+            hang_tick!();
             let frame = match self.demuxer.next_frame()? {
                 DemuxOutcome::Frame(frame) => frame,
                 DemuxOutcome::Pending(reason) => {
@@ -168,6 +167,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 }
                 DemuxOutcome::Eof => return Ok(DecoderChunkOutcome::Eof),
             };
+            hang_reset!();
             if let Some(target) = self.pending_seek_target {
                 let frame_end = frame.pts.saturating_add(frame.duration);
                 if frame_end <= target {
@@ -176,7 +176,9 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 self.pending_seek_target = None;
             }
             let mut buf = self.pool.get();
-            let frames = self.codec.decode_frame(frame.data, frame.pts, &mut buf)?;
+            let frames =
+                self.codec
+                    .decode_frame(frame.data, frame.pts, frame.packet_desc, &mut buf)?;
             if frames == 0 {
                 continue;
             }
@@ -257,11 +259,6 @@ fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
 
 #[cfg(all(test, feature = "symphonia"))]
 mod smoke_tests {
-    //! White-box smoke tests for `ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec>`
-    //! on a real MP3 fixture. Validates that the unified composition path emits
-    //! non-empty `PcmChunk` values and round-trips a seek to start. Migrated from
-    //! `tests/universal_smoke.rs` after the public types were demoted to
-    //! `pub(crate)`.
 
     use std::io::Cursor;
 
@@ -298,7 +295,8 @@ mod smoke_tests {
                 MetadataOptions::default(),
             )
             .expect("BUG: MP3 probe should succeed");
-        SymphoniaDemuxer::from_reader(format_reader, None).expect("BUG: MP3 demuxer should build")
+        SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
+            .expect("BUG: MP3 demuxer should build")
     }
 
     #[kithara::test]
@@ -316,15 +314,8 @@ mod smoke_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
-        let mut decoder = ComposedDecoder::new(
-            demuxer,
-            codec,
-            PcmPool::default().clone(),
-            0,
-            None,
-            None,
-            None,
-        );
+        let mut decoder =
+            ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
 
         let mut got_chunk = false;
         for _ in 0..16 {
@@ -352,15 +343,8 @@ mod smoke_tests {
         let track_info = demuxer.track_info().clone();
         let codec = SymphoniaCodec::open_with_config(&track_info, &SymphoniaConfig::default())
             .expect("BUG: MP3 codec should open");
-        let mut decoder = ComposedDecoder::new(
-            demuxer,
-            codec,
-            PcmPool::default().clone(),
-            0,
-            None,
-            None,
-            None,
-        );
+        let mut decoder =
+            ComposedDecoder::new(demuxer, codec, PcmPool::default().clone(), 0, None, None);
 
         for _ in 0..4 {
             let _ = decoder
@@ -387,11 +371,6 @@ mod smoke_tests {
 
 #[cfg(test)]
 mod test_stub_codec {
-    //! Shared `FrameCodec` stub for `universal.rs` test modules.
-    //! Writes `frames_per_call * channels` zero samples on every
-    //! `decode_frame` call. Hook-tests parameterise with
-    //! `frames_per_call = 1`; pool-budget tests use a larger value
-    //! to fill realistic per-frame buffers.
 
     use kithara_bufpool::PcmBuf;
     use kithara_platform::time::Duration;
@@ -417,6 +396,7 @@ mod test_stub_codec {
             &mut self,
             _bytes: &[u8],
             _pts: Duration,
+            _packet_desc: &[u8],
             out: &mut PcmBuf,
         ) -> DecodeResult<u32> {
             let samples = self.frames_per_call as usize * self.spec.channels as usize;
@@ -441,10 +421,6 @@ mod test_stub_codec {
 
 #[cfg(test)]
 mod hook_tests {
-    //! Hook-emission tests for `ComposedDecoder`. Validate that the folded-in
-    //! `Option<SharedHooks>` field forwards `next_chunk` / `seek` outcomes to
-    //! the registered observer. Migrated from the former `HookedDecoder`
-    //! decorator, which has been deleted in favour of native hook support.
 
     use std::sync::{Arc, Mutex};
 
@@ -543,6 +519,7 @@ mod hook_tests {
                         pts,
                         duration,
                         data: &self.held,
+                        packet_desc: &[],
                     }))
                 }
                 Some(StubOutcome::Pending(reason)) => Ok(DemuxOutcome::Pending(reason)),
@@ -590,82 +567,59 @@ mod hook_tests {
             PcmPool::default().clone(),
             0,
             None,
-            None,
             Some(hooks),
         )
     }
 
     #[kithara::test]
-    fn next_chunk_emits_chunk_signal() {
+    #[case::chunk_signal(
+        StubOutcome::Frame {
+            data: vec![0u8; 4],
+            pts: Duration::ZERO,
+            duration: Duration::from_millis(20),
+        },
+        "chunk"
+    )]
+    #[case::pending_signal(StubOutcome::Pending(PendingReason::SeekPending), "pending")]
+    fn next_chunk_emits_signal(#[case] outcome: StubOutcome, #[case] expected_signal: &str) {
         let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer::with_outcomes(
-            vec![StubOutcome::Frame {
-                data: vec![0u8; 4],
-                pts: Duration::ZERO,
-                duration: Duration::from_millis(20),
-            }],
-            Vec::new(),
-        );
+        let demuxer = StubDemuxer::with_outcomes(vec![outcome], Vec::new());
         let mut decoder = build(demuxer, Arc::clone(&log));
         let _ = decoder.next_chunk().unwrap();
-        assert_eq!(log.lock().unwrap().chunks, vec!["chunk"]);
+        assert_eq!(log.lock().unwrap().chunks, vec![expected_signal]);
     }
 
     #[kithara::test]
-    fn next_chunk_emits_pending_signal() {
+    #[case::landed(
+        DemuxSeekOutcome::Landed {
+            landed_at: Duration::from_secs(1),
+            landed_byte: Some(123),
+        },
+        Duration::from_secs(1),
+        "landed"
+    )]
+    #[case::past_eof(
+        DemuxSeekOutcome::PastEof {
+            duration: Duration::from_secs(10),
+        },
+        Duration::from_secs(15),
+        "past_eof"
+    )]
+    fn seek_emits_signal(
+        #[case] outcome: DemuxSeekOutcome,
+        #[case] target: Duration,
+        #[case] expected_signal: &str,
+    ) {
         let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer::with_outcomes(
-            vec![StubOutcome::Pending(PendingReason::SeekPending)],
-            Vec::new(),
-        );
+        let demuxer = StubDemuxer::with_outcomes(Vec::new(), vec![outcome]);
         let mut decoder = build(demuxer, Arc::clone(&log));
-        let _ = decoder.next_chunk().unwrap();
-        assert_eq!(log.lock().unwrap().chunks, vec!["pending"]);
-    }
-
-    #[kithara::test]
-    fn seek_emits_landed_signal() {
-        let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer::with_outcomes(
-            Vec::new(),
-            vec![DemuxSeekOutcome::Landed {
-                landed_at: Duration::from_secs(1),
-                landed_byte: Some(123),
-            }],
-        );
-        let mut decoder = build(demuxer, Arc::clone(&log));
-        let _ = decoder.seek(Duration::from_secs(1)).unwrap();
-        assert_eq!(log.lock().unwrap().seeks, vec!["landed"]);
-    }
-
-    #[kithara::test]
-    fn seek_emits_past_eof_signal() {
-        let log = Arc::new(Mutex::new(CallLog::default()));
-        let demuxer = StubDemuxer::with_outcomes(
-            Vec::new(),
-            vec![DemuxSeekOutcome::PastEof {
-                duration: Duration::from_secs(10),
-            }],
-        );
-        let mut decoder = build(demuxer, Arc::clone(&log));
-        let _ = decoder.seek(Duration::from_secs(15)).unwrap();
-        assert_eq!(log.lock().unwrap().seeks, vec!["past_eof"]);
+        let _ = decoder.seek(target).unwrap();
+        assert_eq!(log.lock().unwrap().seeks, vec![expected_signal]);
     }
 }
 
 #[cfg(test)]
 mod pool_budget_tests {
-    //! Pool-budget regression tests for the zero-alloc codec path.
-    //!
-    //! Construct a `PcmPool` with a small fixed buffer count, pre-warm it
-    //! with the chunk size we expect, run N decode iterations through a
-    //! stub `FrameCodec`, and assert that `alloc_misses` stays at the
-    //! pre-warm count — i.e. no extra allocations beyond the warm-up.
-    //! The contract: once warm, the hot path recycles buffers; codecs must
-    //! never spawn fresh `Vec<f32>` allocations per frame.
-    //!
-    //! Backend-specific equivalents (Apple/Android FFI cookie code paths)
-    //! live next to those codecs.
 
     use kithara_bufpool::PcmPool;
     use kithara_platform::time::Duration;
@@ -693,7 +647,7 @@ mod pool_budget_tests {
         for _ in 0..200 {
             let mut buf = pool.get();
             let frames = codec
-                .decode_frame(&[], Duration::ZERO, &mut buf)
+                .decode_frame(&[], Duration::ZERO, &[], &mut buf)
                 .expect("BUG: decode_frame");
             assert_eq!(frames, 1024);
         }

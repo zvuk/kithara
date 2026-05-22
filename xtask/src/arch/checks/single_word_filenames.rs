@@ -1,9 +1,3 @@
-//! Filenames under `crates/*/src/` should be a single word.
-//!
-//! Rationale: short names compose well with the module path. `kithara-file::stream`
-//! beats `kithara-file::stream_type::File`. Existing multi-word names lock into
-//! the baseline; new files must conform unless explicitly exempted.
-
 use anyhow::Result;
 
 use super::{Check, Context};

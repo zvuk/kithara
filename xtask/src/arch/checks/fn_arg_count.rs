@@ -1,15 +1,3 @@
-//! Function-argument count.
-//!
-//! Functions with many parameters either: (a) lack a typed value object
-//! grouping related inputs, (b) violate single-responsibility (the function
-//! is doing several jobs and pulling parameters for each), or (c) chain
-//! flag bools that should be a typed enum or builder. Either way, the call
-//! site becomes hard to read.
-//!
-//! Detection counts all signature inputs except `self`. Threshold is
-//! intentionally tighter than clippy's `too_many_arguments` default (7),
-//! so this check is a *map* of the existing codebase, not an enforced gate.
-
 use anyhow::Result;
 use syn::{FnArg, ImplItem, Item, ItemImpl, Signature};
 

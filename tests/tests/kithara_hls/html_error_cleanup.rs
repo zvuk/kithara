@@ -1,20 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Failed-fetch cleanup invariants.
-//!
-//! When a CDN returns `text/html` for a playlist or a DRM key, the HLS
-//! engine must NOT leave orphan files or a retry-storm behind. These tests
-//! pin two invariants:
-//!
-//! 1. **No empty cache files** — `atomic_fetch::fetch_atomic_body` pre-allocates
-//!    a `DEFAULT_INITIAL_SIZE` mmap file via `backend.acquire_resource(key)`
-//!    before the network fetch. On `reject_html_response` failure the file
-//!    must be removed, not parked in the cache directory until process exit.
-//!
-//! 2. **Bounded retry count** — a dead endpoint must not keep producing
-//!    network requests. The HLS engine either backs off, drops the track,
-//!    or demotes its priority so the Downloader is not saturated.
-
 use std::{
     net::SocketAddr,
     sync::{
@@ -35,11 +20,11 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_integration_tests::{TestTempDir, temp_dir};
 use kithara_platform::{
     time::{Duration, Instant},
     tokio::time::sleep,
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio::{net::TcpListener, task};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -177,9 +162,10 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
     let url = Url::parse(&format!("http://{addr}/master.m3u8")).unwrap();
 
     let cancel = CancellationToken::new();
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel.clone());
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel.clone())
+        .build();
 
     let result = Stream::<Hls>::new(config).await;
     assert!(result.is_err(), "{fail_msg}");
@@ -217,9 +203,10 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     let url = Url::parse(&format!("http://{addr}/master.m3u8")).unwrap();
 
     let cancel = CancellationToken::new();
-    let config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel.clone());
+    let config = HlsConfig::for_url(url)
+        .store(StoreOptions::new(temp_dir.path()))
+        .cancel(cancel.clone())
+        .build();
 
     let _ = Stream::<Hls>::new(config).await;
 

@@ -1,53 +1,3 @@
-//! RED test: nextest LEAK on `live_ephemeral_small_cache_seek_stress_*`.
-//!
-//! Hypothesis
-//! On the `*_hw`/`*_sw` variants the test body returns quickly but the
-//! process is marked `LEAK [~0.6s]` by nextest, meaning the test process
-//! still has live tasks / threads past nextest's leak-timeout (~100 ms).
-//!
-//! The two cases in the original report share the `with_is_ephemeral(true)`
-//! + `with_cache_capacity(NonZeroUsize::new(4))` + seek-stress path but
-//! differ in decoder (HW vs SW/DRM). A common upstream cause in the
-//! asset/stream layer is therefore more plausible than decoder-specific
-//! leaks.
-//!
-//! Candidates, in order of likelihood:
-//!
-//! 1. `CachedAssets::cache_entry` evicts via `on_invalidated` callback
-//!    (see `crates/kithara-assets/src/cache.rs:286`), which in turn runs
-//!    `AvailabilityIndex::remove` (see `store.rs:435`) and the user's
-//!    callback. If eviction fires while a writer / reader still holds
-//!    a strong `Arc` to the evicted `ProcessedResource`, that resource
-//!    outlives the LRU entry. On stream drop the resource handle may
-//!    keep a `CancellationToken` child, a waker forwarder, or a
-//!    decoder-side `tokio::spawn` alive past the top-level cancel.
-//!
-//! 2. The `HlsPeer` waker-forwarding task documented in
-//!    `red_leak_pattern.rs` is the best-known leak in this tree; the
-//!    fix landed but the seek-stress variant may still hit a different
-//!    variant-switch race where `filling_layout_gap` is left true on
-//!    the dropped peer.
-//!
-//! 3. On every seek under a 4-slot LRU, a fresh `acquire_resource_with_ctx`
-//!    races with the previous segment's writer. `ProcessedResource::reactivate`
-//!    was recently fixed (38d51adfb) to clear the `processed` flag, but
-//!    seek-stress exercises many reactivate cycles per test — if any
-//!    spawn occurs inside that path and isn't joined, it lingers.
-//!
-//! Strategy of this RED
-//! This file contains a native-only, packaged-fixture leak probe:
-//!
-//! * start `TestServer`, build `Stream<Hls>` with the *same* store
-//!   options as the stress test (ephemeral + 4-slot LRU);
-//! * do a warmup read, issue N seeks that force LRU churn, then drop
-//!   the stream and all handles;
-//! * snapshot OS thread count before stream creation (baseline) and
-//!   again ~300 ms after drop;
-//! * assert the growth is < 2 threads.
-//!
-//! This mirrors the nextest LEAK-detection semantics but is observable
-//! inside a single test process.
-
 #![forbid(unsafe_code)]
 
 use std::{
@@ -61,12 +11,11 @@ use kithara::{
     hls::{AbrMode, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_integration_tests::hls_fixture::TestServer;
+use kithara_integration_tests::{TestTempDir, hls_server::TestServer, temp_dir};
 use kithara_platform::{
     time::{Duration, sleep},
     tokio::task::spawn_blocking,
 };
-use kithara_test_utils::{TestTempDir, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 use crate::common::test_defaults::Consts as Shared;
@@ -84,13 +33,16 @@ async fn build_small_cache_stream(
     cancel: CancellationToken,
 ) -> Stream<Hls> {
     let url = server.url("/master.m3u8");
-    let store = StoreOptions::new(temp_path)
-        .with_is_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
-    let config = HlsConfig::new(url)
-        .with_store(store)
-        .with_cancel(cancel)
-        .with_initial_abr_mode(AbrMode::Manual(0));
+    let store = StoreOptions::builder()
+        .cache_dir(temp_path.into())
+        .is_ephemeral(true)
+        .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
+        .build();
+    let config = HlsConfig::for_url(url)
+        .store(store)
+        .cancel(cancel)
+        .initial_abr_mode(AbrMode::Manual(0))
+        .build();
     Stream::<Hls>::new(config)
         .await
         .expect("HLS stream creation")

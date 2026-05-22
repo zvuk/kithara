@@ -1,12 +1,3 @@
-//! Workspace-wide struct index: definitions, inherent-impl method counts,
-//! struct-literal call sites with field expressions, and destructuring
-//! consumers (functions whose first statement is `let X { ... } = arg;`).
-//!
-//! Shared by `args_wrapper_struct`, `field_always_constant`, and
-//! `field_always_equals_other_field`. Each check builds its own index — cheap
-//! for our workspace size, simpler than threading a shared cache through
-//! `Context`.
-
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,

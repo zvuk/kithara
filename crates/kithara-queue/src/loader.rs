@@ -51,13 +51,12 @@ impl Loader {
     /// Both paths finish with `PlayerImpl::prepare_config` so worker /
     /// sample-rate / runtime / default bus are injected.
     pub(crate) fn build_config(&self, source: TrackSource) -> Result<ResourceConfig, QueueError> {
-        let mut config = match source {
+        let config = match source {
             TrackSource::Uri(url) => ResourceConfig::new(&url)
                 .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?,
             TrackSource::Config(boxed) => *boxed,
         };
-        self.player.prepare_config(&mut config);
-        Ok(config)
+        Ok(self.player.prepare_config(config))
     }
 
     /// Load a [`Resource`] for the given track. Caller is responsible for
@@ -129,8 +128,6 @@ mod tests {
         time::Duration,
     };
 
-    use derivative::Derivative;
-    use derive_setters::Setters;
     use kithara_events::{EventBus, QueueEvent};
     use kithara_play::PlayerConfig;
     use kithara_test_utils::kithara;
@@ -149,12 +146,22 @@ mod tests {
 
     /// Builder for test [`Loader`] fixtures. Defaults cover most tests;
     /// override via setters when a specific concurrency cap matters.
-    #[derive(Derivative, Setters)]
-    #[derivative(Default)]
-    #[setters(prefix = "with_")]
-    struct LoaderBuilder {
-        #[derivative(Default(value = "CAP_3"))]
+    struct LoaderFixtureSpec {
         cap: NonZeroUsize,
+    }
+
+    impl Default for LoaderFixtureSpec {
+        fn default() -> Self {
+            Self { cap: CAP_3 }
+        }
+    }
+
+    impl LoaderFixtureSpec {
+        #[must_use]
+        fn with_cap(mut self, cap: NonZeroUsize) -> Self {
+            self.cap = cap;
+            self
+        }
     }
 
     /// Test fixture: the [`Loader`] under test, the shared
@@ -166,7 +173,7 @@ mod tests {
         bus: EventBus,
     }
 
-    impl LoaderBuilder {
+    impl LoaderFixtureSpec {
         fn build(self) -> LoaderFixture {
             let player = Arc::new(PlayerImpl::new(PlayerConfig::default()));
             let bus = player.bus().clone();
@@ -182,11 +189,11 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn build_config_preserves_caller_supplied_config() {
-        let loader = LoaderBuilder::default().build().loader;
-        let Ok(given) = ResourceConfig::new("https://example.com/a.mp3") else {
+        let loader = LoaderFixtureSpec::default().build().loader;
+        let Ok(builder) = ResourceConfig::for_src("https://example.com/a.mp3") else {
             panic!("valid url");
         };
-        let given = given.with_preferred_peak_bitrate(321.0);
+        let given = builder.preferred_peak_bitrate(321.0).build();
         let Ok(returned) = loader.build_config(TrackSource::Config(Box::new(given))) else {
             panic!("build_config should succeed");
         };
@@ -198,7 +205,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn build_config_invalid_uri_errors() {
-        let loader = LoaderBuilder::default().build().loader;
+        let loader = LoaderFixtureSpec::default().build().loader;
         let Err(err) = loader.build_config(TrackSource::Uri("not-a-url".into())) else {
             panic!("should reject relative path");
         };
@@ -207,7 +214,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn load_invalid_uri_returns_invalid_url_error() {
-        let loader = LoaderBuilder::default().build().loader;
+        let loader = LoaderFixtureSpec::default().build().loader;
         let Err(err) = loader
             .load(TrackId(0), TrackSource::Uri("not-a-url".into()))
             .await
@@ -220,7 +227,7 @@ mod tests {
     #[kithara::test(tokio, multi_thread)]
     async fn semaphore_caps_concurrent_loads() {
         let cap = NonZeroUsize::new(2).expect("BUG: 2 > 0 is mathematically guaranteed");
-        let loader = LoaderBuilder::default().with_cap(cap).build().loader;
+        let loader = LoaderFixtureSpec::default().with_cap(cap).build().loader;
 
         let in_flight = Arc::new(AtomicUsize::new(0));
         let max_seen = Arc::new(AtomicUsize::new(0));
@@ -253,7 +260,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_load_bad_url_emits_failed_status() {
-        let fx = LoaderBuilder::default().build();
+        let fx = LoaderFixtureSpec::default().build();
         fx.tracks.lock().push(TrackEntry {
             id: TrackId(42),
             url: None,

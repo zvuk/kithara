@@ -4,7 +4,6 @@
 
 <div align="center">
 
-[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
 [![Swift 6.0](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
 [![Platforms](https://img.shields.io/badge/Platforms-iOS%2016%2B%20%7C%20macOS%2013%2B-blue.svg)]()
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE-MIT)
@@ -21,7 +20,7 @@ Built on top of the Rust core via UniFFI-generated bindings and distributed as a
 
 Add Kithara as a Swift Package Manager dependency:
 
-**Xcode**: File → Add Package Dependencies → enter `https://github.com/zvuk/kithara` → select "Up to Next Major Version" from `0.1.0`.
+**Xcode**: File → Add Package Dependencies → enter `https://github.com/zvuk/kithara` → pick the latest tag from the [Releases page](https://github.com/zvuk/kithara/releases).
 
 **Package.swift**:
 
@@ -33,7 +32,8 @@ let package = Package(
     name: "MyApp",
     platforms: [.iOS(.v16), .macOS(.v13)],
     dependencies: [
-        .package(url: "https://github.com/zvuk/kithara", from: "0.1.0"),
+        // Replace X.Y.Z with the latest tag from https://github.com/zvuk/kithara/releases
+        .package(url: "https://github.com/zvuk/kithara", from: "X.Y.Z"),
     ],
     targets: [
         .executableTarget(
@@ -51,8 +51,8 @@ let package = Package(
 For local development, clone the repo and use the `KITHARA_LOCAL_DEV` environment variable to build against the local XCFramework:
 
 ```bash
-cargo xtask xcframework                    # build XCFramework (release)
-cargo xtask xcframework --profile debug    # build XCFramework (debug)
+cargo xtask apple build                    # build XCFramework (release)
+cargo xtask apple build --profile debug    # build XCFramework (debug)
 KITHARA_LOCAL_DEV=1 swift build            # build Swift package with local binary
 ```
 
@@ -216,7 +216,7 @@ Open `apple/Package.swift` in Xcode, then open the playground from the Project n
 For local Rust changes, build a local XCFramework first:
 
 ```bash
-cargo xtask xcframework --profile debug
+cargo xtask apple build --profile debug
 cd apple
 KITHARA_LOCAL_DEV=1 open Package.swift
 ```
@@ -242,8 +242,11 @@ Features: URL input with Cmd+V, play/pause with auto-reload after track ends, se
 The XCFramework bundles the Rust core for all supported Apple platforms:
 
 ```bash
-cargo xtask xcframework                    # release (optimized)
-cargo xtask xcframework --profile debug    # debug (faster builds)
+just apple xcframework                       # release (optimized)
+just apple xcframework --profile debug       # debug (faster builds)
+# Equivalent direct xtask invocations:
+cargo xtask apple build
+cargo xtask apple build --profile debug
 ```
 
 Output: `apple/KitharaFFIInternal.xcframework` with slices for:

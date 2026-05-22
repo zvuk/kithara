@@ -1,9 +1,3 @@
-//! Worker-based WASM player.
-//!
-//! `Player` is a normal Rust struct with methods. The `#[wasm_export]` proc
-//! macro on the impl block generates `#[wasm_bindgen]` free functions
-//! (`player_play`, `player_seek`, etc.) for every method marked `#[export]`.
-
 use std::sync::{
     LazyLock,
     atomic::{AtomicU32, Ordering},

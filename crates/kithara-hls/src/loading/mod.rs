@@ -2,26 +2,23 @@
 
 //! HLS loading subsystem.
 //!
-//! Single-responsibility types for fetching and caching the inputs the
-//! HLS pipeline needs from the network:
+//! Single-responsibility helpers that pre-load everything `HlsVariant`
+//! needs **before** it starts dispatching segment fetches:
 //!
 //! - [`PlaylistCache`] — master/media playlist fetch + parse + dedup
-//! - [`SegmentLoader`] — init/media segment download + DRM context
-//!   resolution + in-flight dedup
-//! - [`KeyManager`] — DRM key fetch + processor invocation
+//! - [`KeyManager`] — DRM key fetch + processor invocation + sync
+//!   [`DecryptContext`](kithara_drm::DecryptContext) derivation
 //! - [`atomic_fetch::fetch_atomic_body`] — shared cache→download
-//!   helper used by [`PlaylistCache`] and [`KeyManager`]
+//!   helper used by both
 //!
-//! All four types take their dependencies (`Downloader`, `AssetStore`,
-//! `Headers`, `KeyOptions`) directly. There is no god-object façade
-//! aggregating them.
+//! Segment and init downloads are driven by [`HlsVariant::dispatch`](
+//! crate::variant::HlsVariant) directly through
+//! [`PlanCtx::asset_store`](crate::variant::PlanCtx) — there is no
+//! separate `SegmentLoader` orchestrator.
 
 pub(crate) mod atomic_fetch;
 pub(crate) mod keys;
 pub(crate) mod playlist_cache;
-pub(crate) mod segment_loader;
 pub(crate) mod size_estimation;
 pub use keys::KeyManager;
 pub use playlist_cache::PlaylistCache;
-pub use segment_loader::SegmentLoader;
-pub(crate) use segment_loader::SegmentMeta;

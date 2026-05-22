@@ -1,65 +1,53 @@
-//! Public `FileSource` and its `Source` trait implementation.
-//!
-//! `FileSource` is the synchronous Read+Seek-style interface used by the
-//! decoder thread. The async download tasks in [`super::download`] mutate the
-//! shared `FileInner` lock-free (atomics + `OnceLock`); this file only reads
-//! from it.
-
 use std::{num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::EventBus;
-use kithara_net::Headers;
-use kithara_platform::{time::Duration, tokio::task};
+use kithara_platform::time::Duration;
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
-    MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline, dl::PeerHandle,
+    AudioCodec, MediaInfo, ReadOutcome, SegmentDescriptor, SourcePhase, StreamError, Timeline,
+    dl::PeerHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace};
+use tracing::trace;
 use url::Url;
 
 use super::{
-    download::{run_full_download, run_range_watcher},
-    inner::{FileAssetCtx, FileInner, FilePhase, FileSourceCtx, FileStreamState},
+    inner::{FileAssetCtx, FileInner, FilePhase, FileSourceCtx},
     segments::FileSegmentIndex,
 };
 use crate::{coord::FileCoord, error::SourceError as FileSourceError};
 
-/// File source: sync Read+Seek access backed by async downloads via
-/// [`PeerHandle`].
+/// Sync `Source` impl over a shared [`FileInner`].
 ///
-/// Created via [`File::create()`](crate::File). Downloads are driven
-/// by spawned async tasks that call [`PeerHandle::execute`].
+/// All async work — HTTP fetch, body streaming, finalization — is owned
+/// by the Downloader through [`FilePeer`](super::FilePeer); `FileSource`
+/// just exposes the cached bytes synchronously to the audio worker.
 #[derive(Clone)]
 pub struct FileSource {
     /// Shared coordination — held next to `inner` so the hot read paths
     /// don't have to dereference the inner Arc.
     coord: Arc<FileCoord>,
     inner: Arc<FileInner>,
+    /// Peer registration handle returned by `Downloader::register`.
+    /// Held here (mirroring `HlsSource::set_peer_handle`) so the peer
+    /// stays registered for the source's lifetime — dropping the last
+    /// handle would trigger `PeerInner::drop` and cancel in-flight
+    /// fetches. `None` on the `local()` fast path (no Downloader at all).
+    peer_handle: Option<PeerHandle>,
 }
 
 impl FileSource {
-    /// Try to populate the lazy fragmented-mp4 segment index from the
-    /// fully cached file bytes. No-op when the file is still
-    /// downloading or the index is already set.
-    fn ensure_segment_index(&self) -> Option<&FileSegmentIndex> {
-        if let Some(idx) = self.inner.segment_index.get() {
-            return Some(idx);
+    /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
+    /// inner is created up in `stream.rs::Stream<File>::open` and shared
+    /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
+    /// loop, so this constructor does nothing async.
+    pub(crate) fn from_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
+        Self {
+            coord,
+            inner,
+            peer_handle: None,
         }
-        let total = self.inner.asset.res.len()?;
-        if total == 0 {
-            return None;
-        }
-        if !self.inner.asset.res.contains_range(0..total) {
-            return None;
-        }
-        let total_usize = usize::try_from(total).ok()?;
-        let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
-        self.inner.asset.res.read_at(0, &mut buf).ok()?;
-        let index = FileSegmentIndex::try_build(&buf)?;
-        let _ = self.inner.segment_index.set(index);
-        self.inner.segment_index.get()
     }
 
     /// Create a source for a local/cached file (no downloads needed).
@@ -74,6 +62,7 @@ impl FileSource {
         backend: Arc<AssetStore>,
         key: ResourceKey,
         cancel: CancellationToken,
+        cached_codec: Option<AudioCodec>,
     ) -> Self {
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
@@ -91,70 +80,36 @@ impl FileSource {
             },
             FilePhase::Complete,
         ));
-        Self { coord, inner }
+        if let Some(codec) = cached_codec {
+            let _ = inner.content_type_codec.set(codec);
+        }
+        Self {
+            coord,
+            inner,
+            peer_handle: None,
+        }
     }
 
-    /// Create a source for a remote file and spawn download tasks.
-    ///
-    /// Spawns two async tasks:
-    /// 1. Full-file download (streaming GET)
-    /// 2. Range-request watcher (handles on-demand seeks)
-    ///
-    /// Both tasks use the provided [`PeerHandle`] for HTTP requests.
-    pub(crate) fn remote(
-        state: &FileStreamState,
-        coord: Arc<FileCoord>,
-        cancel: CancellationToken,
-        url: Url,
-        headers: Option<Headers>,
-        look_ahead_bytes: Option<u64>,
-        peer: PeerHandle,
-    ) -> Self {
-        let inner = Arc::new(FileInner::new(
-            FileSourceCtx {
-                coord: Arc::clone(&coord),
-                cancel: cancel.clone(),
-                bus: state.bus.clone(),
-            },
-            FileAssetCtx {
-                headers,
-                url,
-                backend: Arc::clone(&state.backend),
-                res: state.res.clone(),
-                key: state.key.clone(),
-            },
-            FilePhase::Init,
-        ));
-
-        let dl_inner = Arc::clone(&inner);
-        let dl_peer = peer.clone();
-        task::spawn(async move {
-            run_full_download(dl_inner, dl_peer, look_ahead_bytes).await;
-        });
-
-        let rng_inner = Arc::clone(&inner);
-        let rng_coord = Arc::clone(&coord);
-        task::spawn(async move {
-            run_range_watcher(rng_inner, peer, rng_coord, cancel).await;
-        });
-
-        Self { coord, inner }
+    /// Pin the Downloader peer registration to this source's lifetime.
+    /// Called once after `Downloader::register`; mirrors
+    /// `HlsSource::set_peer_handle`. Without this the handle returned by
+    /// `register` drops immediately and `PeerInner::Drop` cancels every
+    /// in-flight fetch.
+    pub(crate) fn set_peer_handle(&mut self, handle: PeerHandle) {
+        self.peer_handle = Some(handle);
     }
 }
 
 impl kithara_stream::Source for FileSource {
+    fn advance(&self, n: u64) {
+        self.coord.advance_position(n);
+    }
+
     fn as_segment_layout(&self) -> Option<Arc<dyn kithara_stream::SegmentLayout>> {
-        self.ensure_segment_index()?;
+        self.inner.segment_index.get()?;
         Some(Arc::new(FileSegmentLayout {
             inner: Arc::clone(&self.inner),
         }))
-    }
-
-    fn demand_range(&self, range: Range<u64>) {
-        if self.inner.asset.res.contains_range(range.clone()) {
-            return;
-        }
-        self.coord.request_range(range);
     }
 
     fn len(&self) -> Option<u64> {
@@ -172,7 +127,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase(&self) -> SourcePhase {
-        let pos = self.coord.timeline().byte_position();
+        let pos = self.coord.position();
         self.phase_at(pos..pos.saturating_add(1))
     }
 
@@ -197,6 +152,10 @@ impl kithara_stream::Source for FileSource {
         SourcePhase::Waiting
     }
 
+    fn position(&self) -> u64 {
+        self.coord.position()
+    }
+
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(
         &mut self,
@@ -219,11 +178,14 @@ impl kithara_stream::Source for FileSource {
         Ok(ReadOutcome::Bytes(count))
     }
 
+    fn set_position(&self, pos: u64) {
+        self.coord.set_position(pos);
+    }
+
     fn take_reader_hooks(&mut self) -> Option<kithara_stream::SharedHooks> {
         let hooks = super::reader::FileReaderHooks::new(
             self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
-            self.coord.timeline().byte_position_handle(),
             self.coord.timeline().seek_epoch_handle(),
         );
         Some(Arc::new(std::sync::Mutex::new(hooks)))
@@ -252,15 +214,6 @@ impl kithara_stream::Source for FileSource {
             self.coord.set_read_pos(range.start);
         }
 
-        if !self.inner.asset.res.contains_range(range.clone()) {
-            debug!(
-                range_start = range.start,
-                range_end = range.end,
-                "file_source::wait_range requesting on-demand download"
-            );
-            self.coord.request_range(range.clone());
-        }
-
         self.inner
             .asset
             .res
@@ -285,8 +238,10 @@ impl FileSegmentLayout {
 }
 
 impl kithara_stream::SegmentLayout for FileSegmentLayout {
-    fn init_segment_range(&self) -> Option<Range<u64>> {
-        self.segment_index().map(FileSegmentIndex::init_range)
+    fn init_segment_range(&self) -> Range<u64> {
+        self.segment_index()
+            .map(FileSegmentIndex::init_range)
+            .unwrap_or(0..0)
     }
 
     fn len(&self) -> Option<u64> {

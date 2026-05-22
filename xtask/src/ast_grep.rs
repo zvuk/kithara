@@ -1,22 +1,3 @@
-//! `cargo xtask ast-grep` — wrapper around the `ast-grep` CLI.
-//!
-//! Discovers every rule under `.config/ast-grep/` and lets each rule's
-//! own `severity:` field decide whether a hit blocks (`error`) or just
-//! reports (`warning`/`info`/`hint`). No per-id filter list lives in
-//! Rust — adding a new rule file is enough.
-//!
-//! Default mode parses ast-grep's JSON output and groups hits by `ruleId`,
-//! so each rule's description is printed once even when the rule fires
-//! many times. Pass `--raw` to fall through to ast-grep's native short
-//! formatter (one repeated paragraph per hit).
-//!
-//! Pass `--strict` to promote every warning to an error (used by
-//! exhaustive sweeps, not by the default audit).
-//!
-//! `--fix` (implies `--update-all`) cannot be combined with `--json`
-//! per ast-grep — in that mode we transparently fall back to the native
-//! output regardless of `--raw`.
-
 use std::{
     collections::BTreeMap,
     process::{Command, Stdio},

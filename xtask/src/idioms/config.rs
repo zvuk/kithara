@@ -1,5 +1,3 @@
-//! Loaders for `.config/idioms/*.toml`.
-
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result};

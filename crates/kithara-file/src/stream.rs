@@ -1,15 +1,10 @@
-//! File stream type implementation.
-//!
-//! Provides `File` marker type implementing `StreamType` trait.
-//! All code is synchronous — async HTTP I/O is handled by the [`Downloader`].
-
 use std::{path::PathBuf, sync::Arc};
 
-use kithara_assets::{AssetStoreBuilder, ResourceKey, asset_root_for_url};
+use kithara_assets::{AssetResource, AssetStoreBuilder, ResourceKey, asset_root_for_url};
 use kithara_events::EventBus;
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
-    SourceError as StreamSourceError, StreamType, Timeline,
+    AudioCodec, SourceError as StreamSourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig},
 };
 use tokio_util::sync::CancellationToken;
@@ -18,7 +13,9 @@ use crate::{
     config::{FileConfig, FileSrc},
     coord::FileCoord,
     error::SourceError,
-    session::{FilePeer, FileSource, FileStreamState},
+    session::{
+        FileAssetCtx, FileInner, FilePeer, FilePhase, FileSource, FileSourceCtx, FileStreamState,
+    },
 };
 
 /// Marker type for file streaming.
@@ -81,6 +78,8 @@ impl File {
         let total = len.unwrap_or(0);
         coord.set_download_pos(total);
 
+        let cached_codec = sniff_codec(&res);
+
         Ok(FileSource::local(
             res,
             coord,
@@ -88,6 +87,7 @@ impl File {
             store,
             key,
             cancel.child_token(),
+            cached_codec,
         ))
     }
 
@@ -108,7 +108,16 @@ impl File {
         let asset_root = asset_root_for_url(&url, name_or_query);
 
         let downloader = config.downloader.clone().unwrap_or_else(|| {
-            Downloader::new(DownloaderConfig::default().with_cancel(cancel.clone()))
+            let cancel_for_dl = cancel.child_token();
+            let client = kithara_net::HttpClient::new(
+                kithara_net::NetOptions::default(),
+                cancel_for_dl.child_token(),
+            );
+            Downloader::new(
+                DownloaderConfig::for_client(client)
+                    .cancel(cancel_for_dl)
+                    .build(),
+            )
         });
 
         let backend_builder = AssetStoreBuilder::new()
@@ -135,6 +144,14 @@ impl File {
             let total = coord.total_bytes().unwrap_or(0);
             coord.set_download_pos(total);
 
+            // The HTTP `Content-Type` that originally drove
+            // `FilePeer::capture_content_metadata` is gone on cold
+            // restart — recover the codec by sniffing the first bytes
+            // of the cached resource so the decoder doesn't fall back
+            // to extension-based probing (which silently fails on
+            // path-extension-less URLs like `streamhq?id=N`).
+            let cached_codec = sniff_codec(&state.res);
+
             return Ok(FileSource::local(
                 state.res.clone(),
                 coord,
@@ -142,23 +159,43 @@ impl File {
                 Arc::clone(&state.backend),
                 state.key.clone(),
                 cancel.child_token(),
+                cached_codec,
             ));
         }
 
+        let inner = Arc::new(FileInner::new(
+            FileSourceCtx {
+                cancel,
+                coord: Arc::clone(&coord),
+                bus: state.bus.clone(),
+            },
+            FileAssetCtx {
+                url,
+                headers: config.headers,
+                backend: Arc::clone(&state.backend),
+                res: state.res.clone(),
+                key: state.key.clone(),
+            },
+            FilePhase::Init,
+        ));
+
         let peer_handle = downloader
-            .register(Arc::new(FilePeer::new(coord.timeline())))
+            .register(Arc::new(FilePeer::new(Arc::clone(&inner))))
             .with_bus(state.bus.clone());
 
-        let source = FileSource::remote(
-            &state,
-            coord,
-            cancel,
-            url,
-            config.headers,
-            config.look_ahead_bytes,
-            peer_handle,
-        );
-
+        let mut source = FileSource::from_inner(inner, coord);
+        source.set_peer_handle(peer_handle);
         Ok(source)
     }
+}
+
+/// Probe the first bytes of a committed `AssetResource` and try to
+/// classify the codec by magic prefix. Returns `None` when the read
+/// itself fails or the prefix doesn't match a known signature — callers
+/// must treat both as "no hint available" and fall back to the regular
+/// probe path.
+fn sniff_codec(res: &AssetResource) -> Option<AudioCodec> {
+    let mut buf = [0u8; 16];
+    let read = res.read_at(0, &mut buf).ok()?;
+    AudioCodec::try_from(&buf[..read]).ok()
 }

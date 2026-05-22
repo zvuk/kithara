@@ -1,12 +1,3 @@
-//! Owned shared state of a session.
-//!
-//! `FileInner` is **immutable after creation** in every meaningful sense:
-//! all fields are either plain owned data (URL, key) or already-thread-safe
-//! handles (`AssetResource`, `EventBus`, `CancellationToken`, `Arc<…>`). The
-//! two genuinely mutable bits — the FSM phase and the content-type codec —
-//! live in `AtomicU8` and `OnceLock` respectively, so the struct can be
-//! shared as `Arc<FileInner>` without a `Mutex` in front of it.
-
 use std::sync::{
     Arc, OnceLock,
     atomic::{AtomicU8, Ordering},
@@ -105,13 +96,17 @@ impl FileInner {
         asset: FileAssetCtx,
         initial_phase: FilePhase,
     ) -> Self {
-        Self {
+        let inner = Self {
             source,
             asset,
             content_type_codec: OnceLock::new(),
             segment_index: OnceLock::new(),
             phase: AtomicU8::new(initial_phase as u8),
+        };
+        if matches!(initial_phase, FilePhase::Complete) {
+            inner.try_build_segment_index();
         }
+        inner
     }
 
     /// Mark the resource failed and evict the pre-allocated cache file.
@@ -126,8 +121,41 @@ impl FileInner {
         self.asset.backend.remove_resource(&self.asset.key);
     }
 
-    /// Lock-free FSM transition.
+    /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
+    /// on the `Complete` edge so the hot-path `as_segment_layout` audit
+    /// can short-circuit on `segment_index.get()` without re-reading the
+    /// file each tick.
     pub(crate) fn set_phase(&self, phase: FilePhase) {
         self.phase.store(phase as u8, Ordering::Release);
+        if matches!(phase, FilePhase::Complete) {
+            self.try_build_segment_index();
+        }
+    }
+
+    /// One-shot fragmented-mp4 parse from the fully cached file bytes.
+    /// Idempotent: a second call is a `OnceLock::get` fast-path no-op.
+    /// Called from `set_phase(Complete)` (and from `new` for files
+    /// constructed already-complete) so the hot-path `as_segment_layout`
+    /// audit only ever reads the cached result.
+    fn try_build_segment_index(&self) {
+        if self.segment_index.get().is_some() {
+            return;
+        }
+        let Some(total) = self.asset.res.len() else {
+            return;
+        };
+        if total == 0 || !self.asset.res.contains_range(0..total) {
+            return;
+        }
+        let Ok(total_usize) = usize::try_from(total) else {
+            return;
+        };
+        let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
+        if self.asset.res.read_at(0, &mut buf).is_err() {
+            return;
+        }
+        if let Some(index) = FileSegmentIndex::try_build(&buf) {
+            let _ = self.segment_index.set(index);
+        }
     }
 }

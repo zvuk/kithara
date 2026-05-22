@@ -1,9 +1,3 @@
-//! Platform-aware async time utilities.
-//!
-//! On native: delegates to [`tokio::time`].
-//! On wasm32: `Instant` uses [`web_time`], `sleep` uses `setTimeout`,
-//! and `timeout` races the future against a `setTimeout`-based deadline.
-
 #[cfg(target_arch = "wasm32")]
 use std::pin::pin;
 pub use std::time::Duration;

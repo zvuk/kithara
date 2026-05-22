@@ -1,24 +1,3 @@
-//! Worst-case persistence tests: every test simulates a process
-//! crash by either (a) skipping the explicit `checkpoint()` /
-//! teardown or (b) externally mangling the on-disk artefacts a real
-//! crash would leave behind. Each test then opens a fresh
-//! `AssetStore` over the same cache dir and asserts the rebuilt state
-//! is safe — never claims bytes that aren't durable, never panics, and
-//! survives obviously bad inputs.
-//!
-//! The matrix:
-//!   1. `pins.bin` truncated to zero / replaced with garbage
-//!   2. `lru.bin` truncated to zero / replaced with garbage
-//!   3. `availability.bin` truncated / garbage
-//!   4. Segment file deleted out from under the store after checkpoint
-//!   5. Segment partially written, no commit, no checkpoint
-//!   6. Crash between `commit()` and `checkpoint()` — slow-path recovers
-//!   7. Multi-store: per-store crash leaves siblings consistent
-//!
-//! These pin the contract: a crash anywhere in the persistence path
-//! degrades gracefully to an empty index plus the on-disk slow-path
-//! fallback; no hang, no panic, no decode-of-garbage.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{fs, path::Path};
@@ -63,11 +42,11 @@ fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path)) {
         .asset_root(Some(Consts::ASSET_ROOT))
         .build();
     let key = ResourceKey::new(Consts::KEY_NAME);
-    let res = store.acquire_resource(&key).unwrap();
-    res.write_at(0, b"hello-world!").unwrap();
-    res.commit(Some(12)).unwrap();
+    let res = store.acquire_resource(&key).expect("acquire");
+    res.write_at(0, b"hello-world!").expect("write_at");
+    res.commit(Some(12)).expect("commit");
     drop(res);
-    store.checkpoint().unwrap();
+    store.checkpoint().expect("checkpoint");
     mangle(dir);
 }
 
@@ -289,7 +268,7 @@ fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
     res.write_at(0, b"partial-bytes").unwrap();
 
     let canonical = segment_path(dir.path());
-    let canonical_visible_with_bytes = canonical.metadata().map(|m| m.len() > 0).unwrap_or(false);
+    let canonical_visible_with_bytes = canonical.metadata().is_ok_and(|m| m.len() > 0);
     assert!(
         !canonical_visible_with_bytes,
         "segment must not be observable at its canonical path before commit; \
@@ -348,7 +327,7 @@ fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding
     res.write_at(0, payload).unwrap();
 
     let canonical = segment_path(dir.path());
-    let mid_write_size = canonical.metadata().map(|m| m.len()).unwrap_or(0);
+    let mid_write_size = canonical.metadata().map_or(0, |m| m.len());
     assert_eq!(
         mid_write_size, 0,
         "mid-write the canonical path must contain zero observable bytes (got {mid_write_size})"

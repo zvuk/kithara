@@ -1,10 +1,3 @@
-//! Phase P-2 smoke tests for `AssetStore::{contains_range,
-//! available_ranges, final_len}`. The aggregate byte-availability
-//! index is still empty in P-2 (no observer, no seeding), so these
-//! tests only cover the slow-path `resource_state` fallback and the
-//! empty-aggregate behaviour. P-3 adds the observer and P-3's
-//! integration tests exercise the fast path.
-
 use kithara_assets::{AssetStoreBuilder, ResourceKey};
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceExt;

@@ -1,12 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Events emitted by file streams.
-//!
-//! Reader-side: factual download lifecycle (HTTP request, body, errors)
-//! lives in [`crate::DownloaderEvent`]. This module owns reader/source-
-//! level facts: byte-progress through the stream, terminal EOF, and
-//! non-network errors specific to file processing.
-
 /// Errors specific to the file stream layer (non-network, non-downloader).
 ///
 /// Network errors are reported by [`crate::DownloaderEvent::RequestFailed`]

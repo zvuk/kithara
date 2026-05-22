@@ -1,8 +1,4 @@
 #![forbid(unsafe_code)]
-#![cfg(test)]
-
-//! Unit tests for the whole-file atomic decorator. Lives in its own
-//! file per the workspace `lib.rs` / `mod.rs` discipline rule.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;

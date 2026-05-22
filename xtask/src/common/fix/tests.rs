@@ -1,17 +1,3 @@
-//! Engine-level smoke tests that exercise `expand_blocks` and
-//! `SourceRewriter` together to validate the four invariants from the
-//! contract (see `README.md`):
-//!
-//! - **I1** comment multiset preserved
-//! - **I2** idempotent: re-running the fix produces no further change
-//! - **I3** no-op safety: when nothing needs fixing, the source is left
-//!   byte-identical
-//! - **I4** format-stable: the engine itself never reorders bytes inside
-//!   a block, so any pre-formatted block stays formatted
-//!
-//! Per-check golden tests live next to each Phase 2 style check; this
-//! module proves the underlying engine is sound.
-
 use std::collections::BTreeMap;
 
 use super::{block::expand_blocks, rewriter::SourceRewriter};

@@ -1,10 +1,3 @@
-//! Tests for `PlayerTrack` — per-track state machine, fade lifecycle,
-//! and the prefetch / handover trigger logic. Drives load / play /
-//! fade / seek / read against `TestPcmReader`-backed resources and
-//! checks the notification stream observed through the in-process
-//! `HeapRb<PlayerNotification>` channel that the audio thread uses in
-//! production.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![allow(
     clippy::cast_possible_truncation,
@@ -261,6 +254,7 @@ async fn read_outcome_partial_then_eof() {
                 }
             }
             TrackReadOutcome::Full { .. } => {}
+            TrackReadOutcome::Failed => panic!("unexpected Failed in this scenario"),
         }
 
         eof_stop_count += drain_eof_stop_notifications(&mut rx, saw_partial);

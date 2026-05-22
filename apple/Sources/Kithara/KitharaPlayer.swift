@@ -4,8 +4,8 @@ import KitharaFFI
 
 /// A queue-based audio player with Combine-driven observation.
 ///
-/// Thin wrapper over the Rust ``AudioPlayer``. All state lives in Rust —
-/// Swift queries it on demand via ``snapshot()`` or receives push
+/// Thin wrapper over the Rust `AudioPlayer`. All state lives in Rust —
+/// Swift queries it on demand via ``snapshot`` or receives push
 /// updates through ``eventPublisher``.
 ///
 /// ```swift
@@ -14,7 +14,9 @@ import KitharaFFI
 /// try player.insert(item)
 /// player.play()
 /// ```
-public final class KitharaPlayer: @unchecked Sendable {
+public final class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
+    public typealias Item = KitharaPlayerItem
+
     private let _inner: AudioPlayer
     private let _eventSubject = PassthroughSubject<PlayerEvent, Never>()
 
@@ -23,6 +25,69 @@ public final class KitharaPlayer: @unchecked Sendable {
     /// Single stream of all player events from Rust.
     public var eventPublisher: AnyPublisher<PlayerEvent, Never> {
         _eventSubject.eraseToAnyPublisher()
+    }
+
+    // MARK: - Discrete publishers (AudioPlayerProtocol)
+
+    /// Current item changed publisher. Resolves the Rust-side `item_id`
+    /// back to the Swift instance owned by ``items()``. Combine equivalent
+    /// of the iOS `AudioPlayerProtocol.rxCurrentAudioItem`.
+    public var currentItem: AnyPublisher<KitharaPlayerItem?, Never> {
+        _eventSubject
+            .compactMap { [weak self] event -> KitharaPlayerItem?? in
+                guard let self else { return nil }
+                if case let .currentItemChanged(itemId) = event {
+                    if let id = itemId {
+                        return .some(self._knownItems[id])
+                    }
+                    return .some(nil)
+                }
+                return nil
+            }
+            .map { $0 }
+            .eraseToAnyPublisher()
+    }
+
+    /// Current playback rate publisher. `0.0` while paused, otherwise
+    /// equal to ``playingRate``. Combine equivalent of the iOS
+    /// `AudioPlayerProtocol.rxRate`.
+    public var rate: AnyPublisher<Float, Never> {
+        _eventSubject
+            .compactMap { event -> Float? in
+                if case let .rateChanged(rate) = event { return rate }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Live playback-time tick publisher (seconds). Mirrors the iOS
+    /// `AudioPlayerProtocol.currentTime` Observable shape so consumers
+    /// can drive a slider without polling. The sync ``currentTime``
+    /// getter remains for one-shot reads.
+    public var currentTimePublisher: AnyPublisher<TimeInterval, Never> {
+        _eventSubject
+            .compactMap { event -> TimeInterval? in
+                if case let .timeChanged(seconds) = event { return seconds }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Error publisher. Emits ``PlayerError`` whenever the Rust side
+    /// reports a player-wide error or an item failure. Combine
+    /// equivalent of the iOS `AudioPlayerProtocol.rxError`.
+    public var error: AnyPublisher<Error, Never> {
+        _eventSubject
+            .compactMap { event -> PlayerError? in
+                switch event {
+                case let .error(message): return .playerError(message)
+                case let .itemDidFail(itemId):
+                    return .itemFailed(itemId.map(String.init) ?? "<unknown>")
+                default: return nil
+                }
+            }
+            .map { $0 as Error }
+            .eraseToAnyPublisher()
     }
 
     // MARK: - State (queried from Rust on demand)
@@ -38,7 +103,8 @@ public final class KitharaPlayer: @unchecked Sendable {
     }
 
     /// Current playback time in seconds. `0.0` when no item is loaded.
-    /// Mirrors `AudioPlayerProtocol.currentTime` shape (non-optional).
+    /// Mirrors the iOS `AudioPlayerProtocol.currentTime` (sync getter,
+    /// resets to `0` on item removal).
     public var currentTime: TimeInterval {
         _inner.currentTime()
     }
@@ -57,8 +123,9 @@ public final class KitharaPlayer: @unchecked Sendable {
 
     // MARK: - Rate
 
-    /// Current playback rate (1.0 = normal speed).
-    public var rate: Float {
+    /// Synchronous one-shot read of the live playback rate (`0.0` while
+    /// paused). Counterpart of the publisher ``rate``.
+    public var currentRate: Float {
         _inner.rate()
     }
 
@@ -125,12 +192,21 @@ public final class KitharaPlayer: @unchecked Sendable {
     /// query params sent with matching key requests, and an optional
     /// per-rule salt forwarded to ``KeyProcessor/processKey(_:salt:)``.
     public struct KeyRule: Sendable {
+        /// Cipher applied to the encrypted key bytes on every fetch.
         public let processor: KeyProcessor
+        /// Hosts this rule applies to. Use `["*"]` to match any host.
         public let domains: [String]
+        /// Extra HTTP headers attached to every key request that hits
+        /// one of the configured domains.
         public let headers: [String: String]?
+        /// Extra query-string params attached to every key request.
         public let queryParams: [String: String]?
+        /// Optional salt forwarded to
+        /// ``KeyProcessor/processKey(_:salt:)`` on each decrypt.
         public let salt: String?
 
+        /// Construct a DRM rule. `processor` is required; everything
+        /// else may be left at default.
         public init(
             processor: KeyProcessor,
             domains: [String],
@@ -157,6 +233,8 @@ public final class KitharaPlayer: @unchecked Sendable {
         /// Optional cache directory path. `nil` uses the platform default.
         public var cacheDir: String?
 
+        /// Construct a player config. All parameters have sensible
+        /// defaults; pass DRM `keyRules` for encrypted streams.
         public init(
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],
@@ -175,8 +253,8 @@ public final class KitharaPlayer: @unchecked Sendable {
                 processor: KeyProcessorBridge(processor: rule.processor),
                 headers: rule.headers,
                 queryParams: rule.queryParams,
-                domains: rule.domains,
-                salt: rule.salt
+                salt: rule.salt,
+                domains: rule.domains
             )
         }
         let ffiConfig = FfiPlayerConfig(
@@ -223,13 +301,14 @@ public final class KitharaPlayer: @unchecked Sendable {
     // MARK: - Queue management (delegated to Rust)
 
     /// Items inserted via ``insert(_:after:)``, preserving Swift identity.
-    private var _knownItems: [String: KitharaPlayerItem] = [:]
+    private var _knownItems: [TrackId: KitharaPlayerItem] = [:]
 
     /// The current playback queue.
     ///
     /// Returns the same Swift instances that were passed to ``insert(_:after:)``,
-    /// preserving identity and active event publishers.
-    public var items: [KitharaPlayerItem] {
+    /// preserving identity and active event publishers. Mirrors the iOS
+    /// `AudioPlayerProtocol.items()` shape (function, not property).
+    public func items() -> [KitharaPlayerItem] {
         let ffiItems = _inner.items()
         return ffiItems.compactMap { ffiItem in
             let id = ffiItem.audioId()
@@ -241,11 +320,26 @@ public final class KitharaPlayer: @unchecked Sendable {
     ///
     /// - Parameters:
     ///   - item: The item to insert. May be loaded or not yet loaded (auto-load).
-    ///   - after: Insert after this item. If `nil`, appends to the end.
+    ///   - after: Insert after this item. If `nil`, the item is placed
+    ///     at the **head** (position 0), per the iOS
+    ///     `AudioPlayerProtocol.insert(_:after:)` contract. Use
+    ///     ``append(_:)`` for AVQueuePlayer-style append.
     /// - Throws: ``KitharaError`` if `after` is not in the queue.
     public func insert(_ item: KitharaPlayerItem, after: KitharaPlayerItem? = nil) throws {
         do {
             try _inner.insert(item: item._inner, after: after?._inner)
+            _knownItems[item.id] = item
+        } catch let ffiError as FfiError {
+            throw KitharaError(ffi: ffiError)
+        }
+    }
+
+    /// Append an item to the tail of the queue (AVQueuePlayer-style).
+    /// Counterpart of ``insert(_:after:)``, which inserts at the head
+    /// when `after == nil` per the iOS protocol contract.
+    public func append(_ item: KitharaPlayerItem) throws {
+        do {
+            try _inner.append(item: item._inner)
             _knownItems[item.id] = item
         } catch let ffiError as FfiError {
             throw KitharaError(ffi: ffiError)
@@ -278,7 +372,7 @@ public final class KitharaPlayer: @unchecked Sendable {
 
     /// Replace the item at `index` with a freshly-loaded one.
     ///
-    /// Use before ``selectItem(at:autoplay:)`` to re-play a track whose
+    /// Use before ``selectItem(at:transition:)`` to re-play a track whose
     /// resource was consumed by a prior playback. The replacement item
     /// must already have a loaded resource (``KitharaPlayerItem/load()``
     /// finished).
@@ -310,7 +404,7 @@ public final class KitharaPlayer: @unchecked Sendable {
 
     /// Select an item by identity (AVQueuePlayer-style).
     ///
-    /// Resolves the item's current index via ``items`` and delegates to
+    /// Resolves the item's current index via ``items()`` and delegates to
     /// ``selectItem(at:transition:)``. Race-free against concurrent
     /// `insert`/`remove` that would shift indices.
     ///
@@ -318,10 +412,10 @@ public final class KitharaPlayer: @unchecked Sendable {
     ///   - item: The item to select. Must currently be in the queue.
     ///   - transition: `.none` by default (immediate cut); pass
     ///     `.crossfade` for Next/Prev button UX.
-    /// - Throws: ``KitharaError/invalidArgument`` if the item is not in
+    /// - Throws: ``KitharaError/invalidArgument(_:)`` if the item is not in
     ///   the queue, or whatever ``selectItem(at:transition:)`` throws.
     public func selectItem(_ item: KitharaPlayerItem, transition: Transition = .none) throws {
-        let snapshot = items
+        let snapshot = items()
         guard let index = snapshot.firstIndex(where: { $0.id == item.id }) else {
             throw KitharaError.invalidArgument("item \(item.id) not in queue")
         }
@@ -385,8 +479,8 @@ public final class KitharaPlayer: @unchecked Sendable {
             processor: KeyProcessorBridge(processor: rule.processor),
             headers: rule.headers,
             queryParams: rule.queryParams,
-            domains: rule.domains,
-            salt: rule.salt
+            salt: rule.salt,
+            domains: rule.domains
         )
         _inner.setupHlsAesWithRule(rule: ffiRule)
     }

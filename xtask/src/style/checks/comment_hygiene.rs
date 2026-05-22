@@ -1,28 +1,3 @@
-//! Inline `//` comments without a whitelisted marker tend to be transient
-//! "neuro-slop" produced alongside code: they restate the obvious, encode
-//! task-specific context, and rot quickly. Doc comments (`///`, `//!`) are
-//! valuable — they ship to rustdoc — so this check leaves them alone for
-//! the `category` rule and only caps their *size* so longer contracts move
-//! to the owning crate `README.md` per AGENTS.md.
-//!
-//! Three sub-checks share the `comment_hygiene` id, with the variant
-//! recorded as a suffix on the violation key:
-//!
-//! - `…:LL:category` — inline `//` (or `/* */`) without a whitelisted
-//!   prefix (default whitelist: `SAFETY:`, `TODO:`, `FIXME:`, `XXX:`,
-//!   `NOTE:`, `WHY:`, `HACK:`, `kithara:`).
-//! - `…:LL:size:inline` — a whitelisted inline block longer than
-//!   `inline_max_lines`.
-//! - `…:LL:size:doc` — a `///` or `//!` block longer than
-//!   `doc_block_max_lines`.
-//! - `…::fn_name:density` — a fn body where inline `//` lines exceed
-//!   `fn_density_threshold` of total body lines (skipped if body shorter
-//!   than `fn_density_min_body_lines`).
-//!
-//! Autofix: only `category` violations are auto-removable. Length and
-//! density violations are surfaced for manual review (the WHY of removal
-//! is too context-specific to automate).
-
 use std::ops::Range;
 
 use anyhow::Result;
@@ -665,7 +640,7 @@ fn apply_category_fix(
     if targets.is_empty() {
         return None;
     }
-    targets.sort_by(|a, b| b.start.cmp(&a.start));
+    targets.sort_by_key(|r| std::cmp::Reverse(r.start));
     let mut buf = src.to_string();
     let mut last_start = usize::MAX;
     for r in targets {

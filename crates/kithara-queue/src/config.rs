@@ -1,7 +1,6 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{fmt, num::NonZeroUsize, sync::Arc};
 
-use derivative::Derivative;
-use derive_setters::Setters;
+use bon::Builder;
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
@@ -32,46 +31,75 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 /// pass it via [`TrackSource::Config`](crate::TrackSource::Config).
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) uses the
 /// [`ResourceConfig::new`](kithara_play::ResourceConfig::new) defaults.
-#[derive(Clone, Derivative, Setters)]
-#[derivative(Debug, Default)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Clone, Builder)]
+#[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct QueueConfig {
     /// Max concurrent `Loader` in-flight loads. Default: 3.
-    #[derivative(Default(value = "DEFAULT_MAX_CONCURRENT_LOADS"))]
+    #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
 
     /// Externally-owned player. `None` means Queue builds a default.
-    #[setters(skip)]
-    #[derivative(Debug = "ignore")]
     pub player: Option<Arc<PlayerImpl>>,
 
-    /// Whether the queue auto-advances to the next track at EOF. When
-    /// `false`, the queue stops at the end of the current track and
-    /// requires an explicit `Queue::play_next` call. Default: `true`.
-    #[derivative(Default(value = "true"))]
+    /// Whether the queue auto-advances to the next track at EOF.
+    #[builder(default = true)]
     pub should_autoplay: bool,
 
     /// Lead time in seconds before EOF at which the next queued track
-    /// is preloaded into the audio processor. Independent of crossfade.
-    /// See `kithara_play::PlayerConfig::prefetch_duration` for the
-    /// effective threshold formula. Default: 3.5.
-    #[derivative(Default(value = "DEFAULT_PREFETCH_DURATION"))]
+    /// is preloaded into the audio processor. Default: 3.5.
+    #[builder(default = DEFAULT_PREFETCH_DURATION)]
     pub prefetch_duration: f32,
 }
 
+impl fmt::Debug for QueueConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QueueConfig")
+            .field("max_concurrent_loads", &self.max_concurrent_loads)
+            .field("should_autoplay", &self.should_autoplay)
+            .field("prefetch_duration", &self.prefetch_duration)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for QueueConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 impl QueueConfig {
-    /// Create a new [`QueueConfig`] with all defaults. Equivalent to
-    /// [`QueueConfig::default`].
+    /// Create a new [`QueueConfig`] with all defaults.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the concurrency cap for `Loader` in-flight loads.
+    #[must_use]
+    pub fn with_max_concurrent_loads(mut self, cap: NonZeroUsize) -> Self {
+        self.max_concurrent_loads = cap;
+        self
     }
 
     /// Replace the [`PlayerImpl`] instance.
     #[must_use]
     pub fn with_player(mut self, player: Arc<PlayerImpl>) -> Self {
         self.player = Some(player);
+        self
+    }
+
+    /// Set the prefetch lead-time (seconds) before EOF.
+    #[must_use]
+    pub fn with_prefetch_duration(mut self, secs: f32) -> Self {
+        self.prefetch_duration = secs;
+        self
+    }
+
+    /// Set whether the queue auto-advances at EOF.
+    #[must_use]
+    pub fn with_should_autoplay(mut self, value: bool) -> Self {
+        self.should_autoplay = value;
         self
     }
 }

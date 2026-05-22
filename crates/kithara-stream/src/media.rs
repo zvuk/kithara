@@ -1,9 +1,4 @@
-//! Media format information types.
-//!
-//! These types allow sources to communicate codec/container information
-//! to decoders, enabling direct decoder instantiation without probing.
-
-use derive_setters::Setters;
+use bon::Builder;
 
 /// Container format type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +57,7 @@ pub enum AudioCodec {
 /// - File extension
 /// - HTTP Content-Type header
 /// - Container metadata
-#[derive(Debug, Clone, Default, PartialEq, Eq, Setters)]
-#[setters(prefix = "with_", strip_option)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Builder)]
 #[non_exhaustive]
 pub struct MediaInfo {
     /// Number of audio channels
@@ -167,6 +161,66 @@ impl AudioCodec {
     }
 }
 
+/// Error returned by [`TryFrom<&[u8]> for AudioCodec`] when the magic
+/// prefix can't be classified.
+///
+/// Used on cache hits — when the original HTTP `Content-Type` header is
+/// no longer available and the URL path carries no extension hint
+/// (`streamhq?id=N`) — to recover the codec from the bytes that were
+/// already persisted on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CodecMagicError {
+    /// Buffer is shorter than 4 bytes — not enough to hold any of the
+    /// known magic sequences.
+    #[error("magic prefix needs at least 4 bytes, got {got}")]
+    TooShort {
+        /// Length of the supplied buffer in bytes.
+        got: usize,
+    },
+    /// The first bytes did not match any codec we can identify by magic.
+    /// Callers should surface this as a probe failure rather than
+    /// guessing.
+    #[error("magic prefix did not match any known codec")]
+    Unknown,
+}
+
+impl TryFrom<&[u8]> for AudioCodec {
+    type Error = CodecMagicError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        match bytes {
+            b if b.len() < 4 => Err(CodecMagicError::TooShort { got: b.len() }),
+            [b'I', b'D', b'3', ..] => Ok(Self::Mp3),
+            [b'f', b'L', b'a', b'C', ..] => Ok(Self::Flac),
+            [b'O', b'g', b'g', b'S', ..] => Ok(Self::Vorbis),
+            [
+                b'R',
+                b'I',
+                b'F',
+                b'F',
+                _,
+                _,
+                _,
+                _,
+                b'W',
+                b'A',
+                b'V',
+                b'E',
+                ..,
+            ] => Ok(Self::Pcm),
+            [_, _, _, _, b'f', b't', b'y', b'p', ..] => Ok(Self::AacLc),
+            // MPEG audio sync: 11 leading 1-bits (`0xFFFx`). Layer field
+            // lives in byte 1 bits 1-2; layer III (`0b01`) is MP3, the
+            // reserved value `0b00` is the prefix AAC ADTS reuses.
+            [0xFF, b1, ..] if (b1 & 0xE0) == 0xE0 => match (b1 >> 1) & 0b11 {
+                0b00 => Ok(Self::AacLc),
+                _ => Ok(Self::Mp3),
+            },
+            _ => Err(CodecMagicError::Unknown),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -200,15 +254,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_media_info_new() {
-        let info = MediaInfo::default();
-        assert_eq!(info.container, None);
-        assert_eq!(info.codec, None);
-        assert_eq!(info.sample_rate, None);
-        assert_eq!(info.channels, None);
-    }
-
-    #[kithara::test]
     fn test_media_info_default() {
         let info = MediaInfo::default();
         assert_eq!(info.container, None);
@@ -228,7 +273,7 @@ mod tests {
     #[case(ContainerFormat::Caf)]
     #[case(ContainerFormat::Mkv)]
     fn test_media_info_with_container(#[case] container: ContainerFormat) {
-        let info = MediaInfo::default().with_container(container);
+        let info = MediaInfo::builder().container(container).build();
         assert_eq!(info.container, Some(container));
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, None);
@@ -242,7 +287,7 @@ mod tests {
     #[case(96000)]
     #[case(192000)]
     fn test_media_info_with_sample_rate(#[case] sample_rate: u32) {
-        let info = MediaInfo::default().with_sample_rate(sample_rate);
+        let info = MediaInfo::builder().sample_rate(sample_rate).build();
         assert_eq!(info.container, None);
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, Some(sample_rate));
@@ -255,7 +300,7 @@ mod tests {
     #[case(6)]
     #[case(8)]
     fn test_media_info_with_channels(#[case] channels: u16) {
-        let info = MediaInfo::default().with_channels(channels);
+        let info = MediaInfo::builder().channels(channels).build();
         assert_eq!(info.container, None);
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, None);
@@ -264,10 +309,11 @@ mod tests {
 
     #[kithara::test]
     fn test_media_info_builder_chain() {
-        let mut info = MediaInfo::default()
-            .with_container(ContainerFormat::Fmp4)
-            .with_sample_rate(44100)
-            .with_channels(2);
+        let mut info = MediaInfo::builder()
+            .container(ContainerFormat::Fmp4)
+            .sample_rate(44100)
+            .channels(2)
+            .build();
         info.codec = Some(AudioCodec::AacLc);
 
         assert_eq!(info.container, Some(ContainerFormat::Fmp4));
@@ -278,7 +324,7 @@ mod tests {
 
     #[kithara::test]
     fn test_media_info_partial_builder() {
-        let mut info = MediaInfo::default().with_sample_rate(48000);
+        let mut info = MediaInfo::builder().sample_rate(48000).build();
         info.codec = Some(AudioCodec::Mp3);
 
         assert_eq!(info.container, None);
@@ -303,7 +349,9 @@ mod tests {
 
     #[kithara::test]
     fn test_media_info_clone() {
-        let mut info = MediaInfo::default().with_container(ContainerFormat::Fmp4);
+        let mut info = MediaInfo::builder()
+            .container(ContainerFormat::Fmp4)
+            .build();
         info.codec = Some(AudioCodec::AacLc);
 
         let cloned = info.clone();
@@ -327,5 +375,36 @@ mod tests {
 
         assert_eq!(info1, info2);
         assert_ne!(info1, info3);
+    }
+
+    #[kithara::test]
+    #[case::id3v2(
+        b"ID3\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        AudioCodec::Mp3
+    )]
+    #[case::mpeg_sync_layer3(&[0xFF, 0xFB, 0x90, 0x44], AudioCodec::Mp3)]
+    #[case::aac_adts_sync(&[0xFF, 0xF1, 0x50, 0x80, 0x00, 0x1F, 0xFC], AudioCodec::AacLc)]
+    #[case::flac(b"fLaC\x00\x00\x00\x22", AudioCodec::Flac)]
+    #[case::ogg(b"OggS\x00\x02\x00\x00", AudioCodec::Vorbis)]
+    #[case::wav(b"RIFF\x24\x08\x00\x00WAVEfmt ", AudioCodec::Pcm)]
+    #[case::mp4(b"\x00\x00\x00\x20ftypisom", AudioCodec::AacLc)]
+    fn try_from_recognises_known_magic(#[case] bytes: &[u8], #[case] expected: AudioCodec) {
+        assert_eq!(AudioCodec::try_from(bytes), Ok(expected));
+    }
+
+    #[kithara::test]
+    fn try_from_rejects_short_buffer() {
+        assert_eq!(
+            AudioCodec::try_from(&b"ID"[..]),
+            Err(CodecMagicError::TooShort { got: 2 })
+        );
+    }
+
+    #[kithara::test]
+    #[case::random(&[0x00, 0x01, 0x02, 0x03])]
+    #[case::almost_riff_no_wave(b"RIFF\x00\x00\x00\x00XXXX____")]
+    #[case::sync_byte_alone(&[0xFE, 0xFB, 0x00, 0x00])]
+    fn try_from_unknown_magic_errors(#[case] bytes: &[u8]) {
+        assert_eq!(AudioCodec::try_from(bytes), Err(CodecMagicError::Unknown));
     }
 }

@@ -1,10 +1,3 @@
-//! Self-contained offline player fixture for integration tests.
-//!
-//! Bypasses [`kithara_play::PlayerImpl`] and drives a firewheel
-//! `FirewheelCtx<OfflineBackend>` directly with a single
-//! [`PlayerNode`]. Use this when a test only needs the audio render +
-//! command pipeline without queue / engine layers.
-
 use std::sync::{Arc, atomic::Ordering};
 
 use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};

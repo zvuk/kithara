@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Unified storage resource: disk (mmap) or memory backend.
-
 use std::{
     ops::Range,
     path::{Path, PathBuf},

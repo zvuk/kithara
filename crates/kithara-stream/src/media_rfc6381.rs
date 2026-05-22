@@ -1,7 +1,3 @@
-//! RFC 6381 codec strings for HLS `CODECS` and related descriptors.
-//!
-//! Mapping lives alongside [`MediaInfo`] as an inherent method.
-
 use std::borrow::Cow;
 
 use crate::media::{AudioCodec, ContainerFormat, MediaInfo};

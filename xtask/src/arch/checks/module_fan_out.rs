@@ -1,30 +1,3 @@
-//! Per-module intra-crate import fan-out.
-//!
-//! Counts how many *distinct sibling modules of the same crate* each file
-//! imports from. A file with high fan-out is reaching across the crate to
-//! pull bits from many neighbours — the architectural symptom is "this
-//! module is the orchestrator", which usually means responsibilities have
-//! drifted into one place that should have been split.
-//!
-//! Detection is import-graph (not call-graph): we look at `use` items at
-//! file scope and resolve each path to a top-level module of the same
-//! crate, then count unique neighbours. Resolution rules:
-//!
-//!   * `use crate::A::B::…`        → top-level `A`
-//!   * `use super::A::B::…`        → parent module's `A` (one hop up)
-//!   * `use super::super::A::…`    → two hops up, then `A`
-//!   * `use self::A::…`            → inside self, ignored
-//!   * `use std::…` / external     → ignored (intra-crate only)
-//!
-//! Each *file* contributes one count, and self-imports of children of the
-//! file's own module are subtracted (a `mod foo; use foo::Bar;` pattern
-//! does not inflate the fan-out of the parent).
-//!
-//! Per-crate overrides (`[module_fan_out.overrides]`) let app/test/macro
-//! crates relax the default without baselining each file. The threshold
-//! is intentionally permissive: this check is a *map* of orchestrator
-//! files, not a hard gate.
-
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},

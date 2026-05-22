@@ -1,9 +1,9 @@
-//! `record_bandwidth` + `tick` — drives one peer's decision cycle.
-
 use std::sync::atomic::Ordering;
 
-use kithara_events::{AbrEvent, AbrReason, BandwidthSource, VariantInfo};
+use kithara_events::{AbrEvent, AbrReason, BandwidthSource};
 use kithara_platform::time::{Duration, Instant};
+use kithara_test_utils::kithara;
+use tracing::{debug, trace};
 
 use super::{
     core::{AbrController, AbrPeerId},
@@ -22,7 +22,11 @@ impl AbrController {
         fetch_duration: Duration,
         source: BandwidthSource,
     ) {
-        if fetch_duration.as_millis() < self.settings.min_throughput_record_ms {
+        if fetch_duration.is_zero() {
+            debug!(
+                ?peer_id,
+                bytes, "ABR: bandwidth sample dropped — zero fetch duration"
+            );
             return;
         }
         self.estimator.push_sample(bytes, fetch_duration, source);
@@ -31,8 +35,7 @@ impl AbrController {
             return;
         };
 
-        let prev = entry.bytes_downloaded.fetch_add(bytes, Ordering::AcqRel);
-        let now_total = prev.saturating_add(bytes);
+        entry.bytes_downloaded.fetch_add(bytes, Ordering::AcqRel);
 
         let now = Instant::now();
         let bus = entry.bus();
@@ -52,21 +55,11 @@ impl AbrController {
             }
         }
 
-        if !entry.warmup_completed.load(Ordering::Acquire)
-            && now_total >= self.settings.warmup_min_bytes
-            && entry
-                .warmup_completed
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            && let Some(ref bus) = bus
-        {
-            bus.publish(AbrEvent::WarmupCompleted);
-        }
-
         self.tick(peer_id, now);
     }
 
-    pub(super) fn tick(&self, peer_id: AbrPeerId, now: Instant) {
+    #[kithara::probe(peer_id)]
+    pub(crate) fn tick(&self, peer_id: AbrPeerId, now: Instant) {
         let Some(ctx) = TickContext::resolve(self, peer_id) else {
             return;
         };
@@ -87,16 +80,6 @@ impl AbrController {
             .load(Ordering::Acquire)
             && let Some(ref bus) = bus
         {
-            let infos: Vec<VariantInfo> = variants
-                .iter()
-                .map(|v| VariantInfo {
-                    index: v.variant_index,
-                    bandwidth_bps: Some(v.bandwidth_bps),
-                    name: None,
-                    codecs: None,
-                    container: None,
-                })
-                .collect();
             let initial = ctx
                 .entry
                 .state
@@ -104,7 +87,7 @@ impl AbrController {
                 .map_or(0, |s| s.current_variant_index());
             bus.publish(AbrEvent::VariantsRegistered {
                 initial,
-                variants: infos,
+                variants: variants.clone(),
             });
             ctx.entry
                 .variants_registered_published
@@ -127,17 +110,8 @@ impl AbrController {
         let decision = state.decide(&view, now);
 
         if decision.did_change {
-            let current_before = state.current_variant_index();
-            state.apply(&decision, now);
-            if let Some(ref bus) = bus {
-                bus.publish(AbrEvent::VariantApplied {
-                    from: current_before,
-                    to: decision.target_variant_index,
-                    reason: decision.reason,
-                });
-            }
-            let reader_pt = progress.map_or(Duration::ZERO, |p| p.reader_playback_time);
-            self.schedule_incoherence_watch(peer_id, reader_pt, now);
+            state.request_target(decision.target_variant_index, decision.reason);
+            ctx.peer.wake();
         } else if decision.reason != AbrReason::AlreadyOptimal
             && let Some(ref bus) = bus
         {
@@ -145,6 +119,17 @@ impl AbrController {
                 reason: decision.reason,
             });
         }
+
+        trace!(
+            ?peer_id,
+            reason = ?decision.reason,
+            did_change = decision.did_change,
+            target = decision.target_variant_index,
+            estimate_bps,
+            mode = ?state.mode(),
+            pending_target_after = ?state.pending_target(),
+            "ABR: tick"
+        );
     }
 }
 

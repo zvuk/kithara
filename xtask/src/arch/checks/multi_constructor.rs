@@ -1,10 +1,3 @@
-//! Flag `impl T` blocks that expose more than one non-`self` constructor.
-//!
-//! The user policy is one canonical constructor per type (`new` or
-//! `default`); alternate construction shapes go through `Config`/`Options`
-//! parameter structs. Multiple `fn x() -> Self` / `fn y() -> Self`
-//! methods inside one inherent `impl` are flagged.
-
 use std::collections::HashSet;
 
 use anyhow::Result;

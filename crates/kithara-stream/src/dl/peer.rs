@@ -1,5 +1,3 @@
-//! Peer trait + per-peer handle for the channel-based downloader API.
-
 use std::{
     sync::Arc,
     task::{Context, Poll},

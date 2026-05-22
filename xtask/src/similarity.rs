@@ -1,7 +1,3 @@
-//! `cargo xtask similarity` — wrapper around `similarity-rs` with three
-//! tuned profiles. Single source of truth for thresholds; used by
-//! `just similarity`, `just audit`, and `just health`.
-
 use std::process::Command;
 
 use anyhow::{Result, bail};
@@ -19,7 +15,6 @@ impl Consts {
         "kithara-test-utils",
         "kithara-test-macros",
         "kithara-wasm-macros",
-        "kithara-hang-detector-macros",
     ];
 }
 
