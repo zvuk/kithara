@@ -70,9 +70,12 @@ public protocol AudioPlayerItemProtocol: AnyObject, Identifiable, Sendable {
 
     /// Whether the item is playable at `progress` (seconds) given the
     /// caller-supplied buffered `ranges`. Live streams are reported
-    /// playable unconditionally. The `and:` overload mirrors the iOS
-    /// `isPlayable(progress:and:)` external label.
+    /// playable unconditionally.
     func isPlayable(progress: Double, ranges: [ItemLoadedRange]) -> Bool
+
+    /// `and:`-labeled variant of ``isPlayable(progress:ranges:)``.
+    /// Mirrors the iOS `AudioPlayerItemProtocol.isPlayable(progress:and:)`
+    /// external label.
     func isPlayable(progress: Double, and ranges: [ItemLoadedRange]) -> Bool
 }
 
@@ -83,6 +86,8 @@ public protocol AudioPlayerItemProtocol: AnyObject, Identifiable, Sendable {
 /// Observable on the iOS side becomes a typed `foo: AnyPublisher`
 /// here; sync getters and setters keep their iOS names.
 public protocol AudioPlayerProtocol: AnyObject, Sendable {
+    /// Concrete queue-item type the conforming player drives. The
+    /// stock implementation pins this to ``KitharaPlayerItem``.
     associatedtype Item: AudioPlayerItemProtocol
 
     /// Playback volume (0.0–1.0, clamped).

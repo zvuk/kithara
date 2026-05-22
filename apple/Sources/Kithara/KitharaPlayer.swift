@@ -192,12 +192,21 @@ public final class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
     /// query params sent with matching key requests, and an optional
     /// per-rule salt forwarded to ``KeyProcessor/processKey(_:salt:)``.
     public struct KeyRule: Sendable {
+        /// Cipher applied to the encrypted key bytes on every fetch.
         public let processor: KeyProcessor
+        /// Hosts this rule applies to. Use `["*"]` to match any host.
         public let domains: [String]
+        /// Extra HTTP headers attached to every key request that hits
+        /// one of the configured domains.
         public let headers: [String: String]?
+        /// Extra query-string params attached to every key request.
         public let queryParams: [String: String]?
+        /// Optional salt forwarded to
+        /// ``KeyProcessor/processKey(_:salt:)`` on each decrypt.
         public let salt: String?
 
+        /// Construct a DRM rule. `processor` is required; everything
+        /// else may be left at default.
         public init(
             processor: KeyProcessor,
             domains: [String],
@@ -224,6 +233,8 @@ public final class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
         /// Optional cache directory path. `nil` uses the platform default.
         public var cacheDir: String?
 
+        /// Construct a player config. All parameters have sensible
+        /// defaults; pass DRM `keyRules` for encrypted streams.
         public init(
             eqBandCount: Int = 10,
             keyRules: [KeyRule] = [],

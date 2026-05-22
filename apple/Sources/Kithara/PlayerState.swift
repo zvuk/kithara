@@ -162,6 +162,8 @@ public typealias SeekCallback = KitharaFFI.SeekCallback
 // MARK: - Internal conversions
 
 extension PlayerStatus {
+    /// Convert an FFI status from a ``PlayerEvent`` payload into the
+    /// Swift-side enum.
     public init(ffi: FfiPlayerStatus) {
         switch ffi {
         case .readyToPlay: self = .readyToPlay
@@ -172,6 +174,8 @@ extension PlayerStatus {
 }
 
 extension ItemStatus {
+    /// Convert an FFI item status from an ``ItemEvent`` payload into
+    /// the Swift-side enum.
     public init(ffi: FfiItemStatus) {
         switch ffi {
         case .readyToPlay: self = .readyToPlay
@@ -182,6 +186,8 @@ extension ItemStatus {
 }
 
 extension TimeControlStatus {
+    /// Convert an FFI time-control status from a ``PlayerEvent``
+    /// payload into the Swift-side enum.
     public init(ffi: FfiTimeControlStatus) {
         switch ffi {
         case .paused: self = .paused
@@ -192,6 +198,9 @@ extension TimeControlStatus {
 }
 
 extension KitharaError {
+    /// Convert an FFI error from a throwing player call into the
+    /// Swift-side enum so consumers can pattern-match without
+    /// importing `KitharaFFI`.
     public init(ffi: FfiError) {
         switch ffi {
         case .NotReady:

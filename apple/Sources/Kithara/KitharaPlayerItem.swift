@@ -262,9 +262,12 @@ public struct ItemLoadResult: Sendable, Equatable {
 
 /// Buffered range expressed as `[start, start + duration)` seconds.
 public struct ItemLoadedRange: Sendable, Equatable {
+    /// Range start in seconds from the item's timeline origin.
     public let start: Double
+    /// Range length in seconds.
     public let duration: Double
 
+    /// Construct a range from its start + length in seconds.
     public init(start: Double, duration: Double) {
         self.start = start
         self.duration = duration

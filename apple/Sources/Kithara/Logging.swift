@@ -2,11 +2,17 @@ import KitharaFFI
 
 /// Severity level for ``Kithara/initLogging(level:)``.
 public enum LogLevel: UInt8, Sendable {
+    /// Finest-grained per-event traces. High volume.
     case trace = 0
+    /// Development-time diagnostic events.
     case debug = 1
+    /// High-level lifecycle events. Default.
     case info = 2
+    /// Recoverable issues that warrant attention.
     case warn = 3
+    /// Failures that need user-visible action.
     case error = 4
+    /// Disable logging entirely.
     case off = 255
 }
 
