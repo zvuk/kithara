@@ -201,6 +201,17 @@ impl std::fmt::Debug for FfiKeyRule {
 pub struct FfiItemConfig {
     pub abr_mode: Option<FfiAbrMode>,
     pub headers: Option<std::collections::HashMap<String, String>>,
+    /// Audio source. Accepts a network URL (`https://example.com/song.mp3`,
+    /// `https://…/master.m3u8`) **or** an absolute local file path
+    /// (`/Users/…/song.flac`). Parsed via
+    /// [`kithara::play::ResourceConfig::for_src`] at insert time, so the
+    /// same string flows untouched into the player core. The item's
+    /// [`crate::item::AudioPlayerItem::audio_id`] is a monotonic
+    /// [`kithara_events::TrackId`] reserved at construction (process-wide
+    /// counter) — independent of this string. The secondary handle
+    /// [`crate::item::AudioPlayerItem::uuid_i64`] is a `UUIDv5` over
+    /// `url + audio_id` and is distinct for every fresh insertion of the
+    /// same URL.
     pub url: String,
     /// Caller-declared live-stream flag. `true` means the source is a
     /// live HLS feed (radio / broadcast); the player skips end-of-stream
@@ -348,7 +359,7 @@ impl From<TimeRange> for FfiTimeRange {
 pub enum FfiPlayerEvent {
     TimeChanged { seconds: f64 },
     RateChanged { rate: f32 },
-    CurrentItemChanged { item_id: Option<String> },
+    CurrentItemChanged { item_id: Option<kithara_events::TrackId> },
     StatusChanged { status: FfiPlayerStatus },
     TimeControlStatusChanged { status: FfiTimeControlStatus },
     Error { error: String },
@@ -362,10 +373,10 @@ pub enum FfiPlayerEvent {
     /// [`Self::ItemDidPlayToEnd`]: the track did NOT reach its
     /// natural end. UI clients should surface this as a track
     /// failure (skip-and-flag), not treat it as completion.
-    ItemDidFail { item_id: Option<String> },
+    ItemDidFail { item_id: Option<kithara_events::TrackId> },
     /// Queue-level: the loading/playback status of an item changed.
-    /// `item_id` matches `AudioPlayerItem::id()`.
-    TrackStatusChanged { item_id: String, status: FfiTrackStatus },
+    /// `item_id` matches `AudioPlayerItem::audio_id()`.
+    TrackStatusChanged { item_id: kithara_events::TrackId, status: FfiTrackStatus },
     /// Queue reached the end with `RepeatMode::Off` active.
     QueueEnded,
     /// A crossfade between tracks just started. `duration_seconds` is

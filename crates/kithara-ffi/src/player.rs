@@ -284,6 +284,10 @@ impl AudioPlayer {
     ///
     /// Returns [`FfiError::InvalidArgument`] if `after` is not currently
     /// in the queue, or if the item's URL is malformed.
+    /// Insert an item into the queue. `after == None` places the item
+    /// at the head (position 0), mirroring the iOS
+    /// `AudioPlayerProtocol.insert(_:after:)` contract. Use
+    /// [`Self::append`] for AVQueuePlayer-style append.
     #[cfg_attr(
         all(),
         expect(
@@ -298,22 +302,43 @@ impl AudioPlayer {
     ) -> Result<(), FfiError> {
         let _rt = crate::FFI_RUNTIME.enter();
         let source = self.build_source_for_item(&item)?;
+        let id = item.track_id();
+        let after_id = after.as_ref().map(|i| i.track_id());
 
-        let id = if let Some(after_item) = after.as_ref() {
-            let after_id =
-                (*after_item.track_id.lock_sync()).ok_or_else(|| FfiError::InvalidArgument {
-                    reason: format!("item {} not found in queue", after_item.audio_id()),
-                })?;
-            self.queue
-                .insert(source, Some(after_id))
-                .map_err(|e| FfiError::InvalidArgument {
-                    reason: e.to_string(),
-                })?
-        } else {
-            self.queue.append(source)
-        };
+        self.queue
+            .insert_with_id(id, source, after_id)
+            .map_err(|e| FfiError::InvalidArgument {
+                reason: e.to_string(),
+            })?;
 
-        *item.track_id.lock_sync() = Some(id);
+        *item.inserted.lock_sync() = true;
+        self.items.lock_sync().insert(id, Arc::clone(&item));
+        item.restart_bridge();
+        Ok(())
+    }
+
+    /// Append an item to the tail of the queue. AVQueuePlayer-style
+    /// counterpart of [`Self::insert`], which follows the iOS protocol
+    /// shape (`after == nil` ⇒ head).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError`] when the source URL cannot be resolved into
+    /// a queue-owned [`kithara::play::Source`] — same failure surface as
+    /// [`Self::insert`].
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
+        )
+    )]
+    pub fn append(self: &Arc<Self>, item: Arc<AudioPlayerItem>) -> Result<(), FfiError> {
+        let _rt = crate::FFI_RUNTIME.enter();
+        let source = self.build_source_for_item(&item)?;
+        let id = item.track_id();
+        self.queue.append_with_id(id, source);
+        *item.inserted.lock_sync() = true;
         self.items.lock_sync().insert(id, Arc::clone(&item));
         item.restart_bridge();
         Ok(())
@@ -367,16 +392,19 @@ impl AudioPlayer {
     /// Returns [`FfiError::InvalidArgument`] if the item is not in the
     /// queue.
     pub fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
-        let id = (*item.track_id.lock_sync()).ok_or_else(|| FfiError::InvalidArgument {
-            reason: format!("item {} not in queue", item.audio_id()),
-        })?;
+        if !*item.inserted.lock_sync() {
+            return Err(FfiError::InvalidArgument {
+                reason: format!("item {} not in queue", item.audio_id()),
+            });
+        }
+        let id = item.track_id();
         self.queue
             .remove(id)
             .map_err(|e| FfiError::InvalidArgument {
                 reason: e.to_string(),
             })?;
         self.items.lock_sync().remove(&id);
-        *item.track_id.lock_sync() = None;
+        *item.inserted.lock_sync() = false;
         Ok(())
     }
 
@@ -384,7 +412,7 @@ impl AudioPlayer {
         self.queue.clear();
         let mut items = self.items.lock_sync();
         for (_, item) in items.drain() {
-            *item.track_id.lock_sync() = None;
+            *item.inserted.lock_sync() = false;
         }
     }
 
@@ -420,12 +448,12 @@ impl AudioPlayer {
         } else {
             tracks.get(idx - 1).map(|e| e.id)
         };
-        let new_id =
-            self.queue
-                .insert(source, after_for_insert)
-                .map_err(|e| FfiError::InvalidArgument {
-                    reason: e.to_string(),
-                })?;
+        let new_id = item.track_id();
+        self.queue
+            .insert_with_id(new_id, source, after_for_insert)
+            .map_err(|e| FfiError::InvalidArgument {
+                reason: e.to_string(),
+            })?;
         let _ = self.queue.remove(old_id);
 
         {
@@ -433,7 +461,7 @@ impl AudioPlayer {
             items.remove(&old_id);
             items.insert(new_id, Arc::clone(&item));
         }
-        *item.track_id.lock_sync() = Some(new_id);
+        *item.inserted.lock_sync() = true;
         item.restart_bridge();
         Ok(())
     }

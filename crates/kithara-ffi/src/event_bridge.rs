@@ -105,7 +105,10 @@ impl EventBridge {
             PlayerEvent::MuteChanged { muted } => FfiPlayerEvent::MuteChanged { muted: *muted },
             PlayerEvent::ItemDidPlayToEnd { .. } => FfiPlayerEvent::ItemDidPlayToEnd,
             PlayerEvent::ItemDidFail { item_id, .. } => FfiPlayerEvent::ItemDidFail {
-                item_id: item_id.as_ref().map(ToString::to_string),
+                item_id: item_id
+                    .as_ref()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(kithara_events::TrackId::from),
             },
             _ => return None,
         })

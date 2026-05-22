@@ -616,6 +616,13 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      */
     func advanceToNextItem() 
     
+    /**
+     * Append an item to the tail of the queue. AVQueuePlayer-style
+     * counterpart of [`Self::insert`], which follows the iOS protocol
+     * shape (`after == nil` ⇒ head).
+     */
+    func append(item: AudioPlayerItem) throws 
+    
     func crossfadeDuration()  -> Float
     
     /**
@@ -648,6 +655,10 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      *
      * Returns [`FfiError::InvalidArgument`] if `after` is not currently
      * in the queue, or if the item's URL is malformed.
+     * Insert an item into the queue. `after == None` places the item
+     * at the head (position 0), mirroring the iOS
+     * `AudioPlayerProtocol.insert(_:after:)` contract. Use
+     * [`Self::append`] for AVQueuePlayer-style append.
      */
     func insert(item: AudioPlayerItem, after: AudioPlayerItem?) throws 
     
@@ -884,6 +895,19 @@ open func advanceToNextItem()  {try! rustCall() {
 }
 }
     
+    /**
+     * Append an item to the tail of the queue. AVQueuePlayer-style
+     * counterpart of [`Self::insert`], which follows the iOS protocol
+     * shape (`after == nil` ⇒ head).
+     */
+open func append(item: AudioPlayerItem)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_kithara_ffi_fn_method_audioplayer_append(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeAudioPlayerItem_lower(item),$0
+    )
+}
+}
+    
 open func crossfadeDuration() -> Float  {
     return try!  FfiConverterFloat.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayer_crossfade_duration(
@@ -947,6 +971,10 @@ open func eqGain(band: UInt32) -> Float  {
      *
      * Returns [`FfiError::InvalidArgument`] if `after` is not currently
      * in the queue, or if the item's URL is malformed.
+     * Insert an item into the queue. `after == None` places the item
+     * at the head (position 0), mirroring the iOS
+     * `AudioPlayerProtocol.insert(_:after:)` contract. Use
+     * [`Self::append`] for AVQueuePlayer-style append.
      */
 open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_insert(
@@ -1327,15 +1355,29 @@ public func FfiConverterTypeAudioPlayer_lower(_ value: AudioPlayer) -> UInt64 {
 
 
 /**
- * FFI-facing audio player item with UUID identity.
+ * FFI-facing audio player item.
+ *
+ * Carries two identifiers, per iOS `AudioPlayerItemProtocol`:
+ * - [`Self::audio_id`] — monotonic [`TrackId`] (`u64`) reserved at
+ * construction via [`TrackId::allocate`]. The queue consumes the
+ * same value via
+ * [`kithara_queue::Queue::insert_with_id`] / `append_with_id`, so
+ * there is exactly one address space across the FFI ↔ core
+ * boundary. This is `audioId: TrackId` on iOS.
+ * - [`Self::uuid_i64`] — `i64` derived from a per-item UUIDv5 over
+ * `url + audio_id`. Stable for the item's lifetime and distinct
+ * for every fresh insertion of the same URL. This is
+ * `uuid: Int64` on iOS.
  */
 public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
     
     /**
-     * Stable per-item identifier (`UUIDv4` string). Mirrors the iOS
-     * `AudioPlayerItemProtocol.audioId`.
+     * Monotonic per-item identifier reserved at construction. Mirrors
+     * the iOS `AudioPlayerItemProtocol.audioId: TrackId`. Same value
+     * the queue uses internally — see [`Self::new`] for the
+     * allocation contract.
      */
-    func audioId()  -> String
+    func audioId()  -> TrackId
     
     /**
      * Cached item duration in seconds. Defaults to `0.0` until the
@@ -1377,19 +1419,39 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
     
     func setObserver(observer: ItemObserver) 
     
+    /**
+     * Audio source string — either a network URL or an absolute local
+     * path, as supplied via [`FfiItemConfig::url`]. The Swift wrapper
+     * surfaces this as a `URL` (`file://…` for local paths) so the iOS
+     * `AudioPlayerItemProtocol.url` contract holds for both cases.
+     */
     func url()  -> String
     
     /**
-     * 64-bit numeric form of [`Self::audio_id`]. Derived from the
-     * first 16 hex digits of the UUID — stable for the same UUID, but
-     * **not** cryptographically unique. Treat as an opaque numeric
-     * handle.
+     * Signed-integer view of the per-item UUIDv5 (`url + audioId`).
+     * Maps to `AudioPlayerItemProtocol.uuid: Int64` on iOS. Distinct
+     * from [`Self::audio_id`]: two items with the same URL but
+     * different monotonic ids produce different `uuid_i64`s, so the
+     * queue can distinguish independent insertions even when the
+     * caller has not reset state in between.
      */
     func uuidI64()  -> Int64
     
 }
 /**
- * FFI-facing audio player item with UUID identity.
+ * FFI-facing audio player item.
+ *
+ * Carries two identifiers, per iOS `AudioPlayerItemProtocol`:
+ * - [`Self::audio_id`] — monotonic [`TrackId`] (`u64`) reserved at
+ * construction via [`TrackId::allocate`]. The queue consumes the
+ * same value via
+ * [`kithara_queue::Queue::insert_with_id`] / `append_with_id`, so
+ * there is exactly one address space across the FFI ↔ core
+ * boundary. This is `audioId: TrackId` on iOS.
+ * - [`Self::uuid_i64`] — `i64` derived from a per-item UUIDv5 over
+ * `url + audio_id`. Stable for the item's lifetime and distinct
+ * for every fresh insertion of the same URL. This is
+ * `uuid: Int64` on iOS.
  */
 open class AudioPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1431,8 +1493,11 @@ open class AudioPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
         return try! rustCall { uniffi_kithara_ffi_fn_clone_audioplayeritem(self.handle, $0) }
     }
     /**
-     * Create a new item with frozen preferences. Loading starts
-     * automatically when the item is inserted into an
+     * Create a new item with frozen preferences. Reserves a fresh
+     * [`TrackId`] from the process-wide counter so `audioId` is stable
+     * from this point on, and derives a UUIDv5 over
+     * `format!("{url}:{audio_id}")` for the secondary `uuid` handle.
+     * Loading starts automatically when the item is inserted into an
      * [`crate::player::AudioPlayer`].
      */
 public convenience init(config: FfiItemConfig) {
@@ -1458,11 +1523,13 @@ public convenience init(config: FfiItemConfig) {
 
     
     /**
-     * Stable per-item identifier (`UUIDv4` string). Mirrors the iOS
-     * `AudioPlayerItemProtocol.audioId`.
+     * Monotonic per-item identifier reserved at construction. Mirrors
+     * the iOS `AudioPlayerItemProtocol.audioId: TrackId`. Same value
+     * the queue uses internally — see [`Self::new`] for the
+     * allocation contract.
      */
-open func audioId() -> String  {
-    return try!  FfiConverterString.lift(try! rustCall() {
+open func audioId() -> TrackId  {
+    return try!  FfiConverterTypeTrackId_lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayeritem_audio_id(
             self.uniffiCloneHandle(),$0
     )
@@ -1553,6 +1620,12 @@ open func setObserver(observer: ItemObserver)  {try! rustCall() {
 }
 }
     
+    /**
+     * Audio source string — either a network URL or an absolute local
+     * path, as supplied via [`FfiItemConfig::url`]. The Swift wrapper
+     * surfaces this as a `URL` (`file://…` for local paths) so the iOS
+     * `AudioPlayerItemProtocol.url` contract holds for both cases.
+     */
 open func url() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_kithara_ffi_fn_method_audioplayeritem_url(
@@ -1562,10 +1635,12 @@ open func url() -> String  {
 }
     
     /**
-     * 64-bit numeric form of [`Self::audio_id`]. Derived from the
-     * first 16 hex digits of the UUID — stable for the same UUID, but
-     * **not** cryptographically unique. Treat as an opaque numeric
-     * handle.
+     * Signed-integer view of the per-item UUIDv5 (`url + audioId`).
+     * Maps to `AudioPlayerItemProtocol.uuid: Int64` on iOS. Distinct
+     * from [`Self::audio_id`]: two items with the same URL but
+     * different monotonic ids produce different `uuid_i64`s, so the
+     * queue can distinguish independent insertions even when the
+     * caller has not reset state in between.
      */
 open func uuidI64() -> Int64  {
     return try!  FfiConverterInt64.lift(try! rustCall() {
@@ -2778,6 +2853,16 @@ public func FfiConverterTypeSeekCallback_lower(_ value: SeekCallback) -> UInt64 
 public struct FfiItemConfig: Equatable, Hashable {
     public let abrMode: FfiAbrMode?
     public let headers: [String: String]?
+    /**
+     * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
+     * `https://…/master.m3u8`) **or** an absolute local file path
+     * (`/Users/…/song.flac`). Parsed via
+     * [`kithara::play::ResourceConfig::for_src`] at insert time, so the
+     * same string flows untouched into the player core. The item's
+     * [`crate::item::AudioPlayerItem::audio_id`] is a deterministic
+     * UUIDv5 derived from this string under the URL namespace —
+     * identical source values produce identical `audio_id`s.
+     */
     public let url: String
     /**
      * Caller-declared live-stream flag. `true` means the source is a
@@ -2799,7 +2884,17 @@ public struct FfiItemConfig: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(abrMode: FfiAbrMode?, headers: [String: String]?, url: String, 
+    public init(abrMode: FfiAbrMode?, headers: [String: String]?, 
+        /**
+         * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
+         * `https://…/master.m3u8`) **or** an absolute local file path
+         * (`/Users/…/song.flac`). Parsed via
+         * [`kithara::play::ResourceConfig::for_src`] at insert time, so the
+         * same string flows untouched into the player core. The item's
+         * [`crate::item::AudioPlayerItem::audio_id`] is a deterministic
+         * UUIDv5 derived from this string under the URL namespace —
+         * identical source values produce identical `audio_id`s.
+         */url: String, 
         /**
          * Caller-declared live-stream flag. `true` means the source is a
          * live HLS feed (radio / broadcast); the player skips end-of-stream
@@ -3894,7 +3989,7 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     )
     case rateChanged(rate: Float
     )
-    case currentItemChanged(itemId: String?
+    case currentItemChanged(itemId: TrackId?
     )
     case statusChanged(status: FfiPlayerStatus
     )
@@ -3918,13 +4013,13 @@ public enum FfiPlayerEvent: Equatable, Hashable {
      * natural end. UI clients should surface this as a track
      * failure (skip-and-flag), not treat it as completion.
      */
-    case itemDidFail(itemId: String?
+    case itemDidFail(itemId: TrackId?
     )
     /**
      * Queue-level: the loading/playback status of an item changed.
-     * `item_id` matches `AudioPlayerItem::id()`.
+     * `item_id` matches `AudioPlayerItem::audio_id()`.
      */
-    case trackStatusChanged(itemId: String, status: FfiTrackStatus
+    case trackStatusChanged(itemId: TrackId, status: FfiTrackStatus
     )
     /**
      * Queue reached the end with `RepeatMode::Off` active.
@@ -3968,7 +4063,7 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         case 2: return .rateChanged(rate: try FfiConverterFloat.read(from: &buf)
         )
         
-        case 3: return .currentItemChanged(itemId: try FfiConverterOptionString.read(from: &buf)
+        case 3: return .currentItemChanged(itemId: try FfiConverterOptionTypeTrackId.read(from: &buf)
         )
         
         case 4: return .statusChanged(status: try FfiConverterTypeFfiPlayerStatus.read(from: &buf)
@@ -3994,10 +4089,10 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         
         case 11: return .itemDidPlayToEnd
         
-        case 12: return .itemDidFail(itemId: try FfiConverterOptionString.read(from: &buf)
+        case 12: return .itemDidFail(itemId: try FfiConverterOptionTypeTrackId.read(from: &buf)
         )
         
-        case 13: return .trackStatusChanged(itemId: try FfiConverterString.read(from: &buf), status: try FfiConverterTypeFfiTrackStatus.read(from: &buf)
+        case 13: return .trackStatusChanged(itemId: try FfiConverterTypeTrackId.read(from: &buf), status: try FfiConverterTypeFfiTrackStatus.read(from: &buf)
         )
         
         case 14: return .queueEnded
@@ -4028,7 +4123,7 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         
         case let .currentItemChanged(itemId):
             writeInt(&buf, Int32(3))
-            FfiConverterOptionString.write(itemId, into: &buf)
+            FfiConverterOptionTypeTrackId.write(itemId, into: &buf)
             
         
         case let .statusChanged(status):
@@ -4072,12 +4167,12 @@ public struct FfiConverterTypeFfiPlayerEvent: FfiConverterRustBuffer {
         
         case let .itemDidFail(itemId):
             writeInt(&buf, Int32(12))
-            FfiConverterOptionString.write(itemId, into: &buf)
+            FfiConverterOptionTypeTrackId.write(itemId, into: &buf)
             
         
         case let .trackStatusChanged(itemId,status):
             writeInt(&buf, Int32(13))
-            FfiConverterString.write(itemId, into: &buf)
+            FfiConverterTypeTrackId.write(itemId, into: &buf)
             FfiConverterTypeFfiTrackStatus.write(status, into: &buf)
             
         
@@ -4589,6 +4684,30 @@ fileprivate struct FfiConverterOptionDictionaryStringString: FfiConverterRustBuf
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeTrackId: FfiConverterRustBuffer {
+    typealias SwiftType = TrackId?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeTrackId.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeTrackId.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -4736,6 +4855,50 @@ fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
         return dict
     }
 }
+
+
+/**
+ * Typealias from the type name used in the UDL file to the builtin type.  This
+ * is needed because the UDL type name is used in function/method signatures.
+ */
+public typealias TrackId = UInt64
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTrackId: FfiConverter {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TrackId {
+        return try FfiConverterUInt64.read(from: &buf)
+    }
+
+    public static func write(_ value: TrackId, into buf: inout [UInt8]) {
+        return FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func lift(_ value: UInt64) throws -> TrackId {
+        return try FfiConverterUInt64.lift(value)
+    }
+
+    public static func lower(_ value: TrackId) -> UInt64 {
+        return FfiConverterUInt64.lower(value)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTrackId_lift(_ value: UInt64) throws -> TrackId {
+    return try FfiConverterTypeTrackId.lift(value)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTrackId_lower(_ value: TrackId) -> UInt64 {
+    return FfiConverterTypeTrackId.lower(value)
+}
+
 public func initLogging(level: UInt8)  {try! rustCall() {
     uniffi_kithara_ffi_fn_func_init_logging(
         FfiConverterUInt8.lower(level),$0
@@ -4767,7 +4930,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 12570) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_audio_id() != 52670) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_audio_id() != 32253) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_duration_sec() != 42988) {
@@ -4791,10 +4954,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_set_observer() != 63173) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 17628) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 37706) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_uuid_i64() != 52887) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_uuid_i64() != 47720) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 5291) {
@@ -4815,6 +4978,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 2533) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 64339) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_duration() != 59535) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4830,7 +4996,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_gain() != 4051) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 38712) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 9071) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_is_muted() != 23590) {
@@ -4917,7 +5083,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 53441) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 34872) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 64702) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 61841) {

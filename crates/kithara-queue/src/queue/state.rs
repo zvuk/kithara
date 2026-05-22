@@ -94,7 +94,6 @@ pub struct Queue {
     /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
     /// and the event stream stay in sync.
     pub(super) tracks: Arc<Tracks>,
-    pub(super) next_id: AtomicU64,
     pub(super) bus: EventBus,
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
@@ -112,7 +111,8 @@ pub struct Queue {
 impl Queue {
     /// Sentinel for "no track armed" stored in `crossfade_armed_for`.
     /// `TrackId(u64::MAX)` is reserved as the sentinel; real ids are
-    /// allocated monotonically starting from 0 by `next_id`.
+    /// allocated monotonically starting from `0` by
+    /// [`TrackId::allocate`](kithara_events::TrackId::allocate).
     pub(super) const NO_ARMED_TRACK: u64 = u64::MAX;
 
     /// Sentinel for "no cached position" stored in `cached_position`
@@ -165,7 +165,6 @@ impl Queue {
             #[cfg(any(test, feature = "probe"))]
             should_autoplay,
             cancel,
-            next_id: AtomicU64::new(0),
             navigation: Arc::new(Mutex::new(NavigationState::new())),
             pending_select: Arc::new(Mutex::new(None)),
             sources: Arc::new(Mutex::new(HashMap::new())),

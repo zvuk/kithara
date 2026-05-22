@@ -1,4 +1,6 @@
-use std::sync::{PoisonError, atomic::Ordering};
+use std::sync::PoisonError;
+#[cfg(any(test, feature = "probe"))]
+use std::sync::atomic::Ordering;
 
 use kithara_events::{QueueEvent, TrackId, TrackStatus};
 
@@ -13,8 +15,20 @@ use crate::{
 
 impl Queue {
     /// Append a track. Loading starts immediately in the background.
+    /// The id is allocated from the global counter via
+    /// [`TrackId::allocate`]; use [`Self::append_with_id`] when the
+    /// caller owns the id (FFI item pre-allocation).
     pub fn append<S: Into<TrackSource>>(&self, source: S) -> TrackId {
-        self.insert_entry(source.into(), Placement::Append)
+        self.insert_entry(TrackId::allocate(), source.into(), Placement::Append)
+    }
+
+    /// Append a track with a caller-supplied id. The id MUST come from
+    /// [`TrackId::allocate`] so it stays inside the process-wide
+    /// monotonic address space. Used by the FFI layer where the item
+    /// reserves its id at construction and surfaces it as `audioId`
+    /// before insert.
+    pub fn append_with_id<S: Into<TrackSource>>(&self, id: TrackId, source: S) -> TrackId {
+        self.insert_entry(id, source.into(), Placement::Append)
     }
 
     /// Remove all tracks from the queue.
@@ -76,6 +90,22 @@ impl Queue {
         source: S,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
+        self.insert_with_id(TrackId::allocate(), source, after)
+    }
+
+    /// Insert a track with a caller-supplied id. See
+    /// [`Self::append_with_id`] for why the id MUST come from
+    /// [`TrackId::allocate`].
+    ///
+    /// # Errors
+    /// Returns [`QueueError::UnknownTrackId`] if `after` does not match
+    /// any track.
+    pub fn insert_with_id<S: Into<TrackSource>>(
+        &self,
+        id: TrackId,
+        source: S,
+        after: Option<TrackId>,
+    ) -> Result<TrackId, QueueError> {
         let source = source.into();
         let pos = {
             let guard = self.lock_tracks();
@@ -88,18 +118,21 @@ impl Queue {
                     .ok_or(QueueError::UnknownTrackId(after_id))?,
             }
         };
-        Ok(self.insert_entry(source, Placement::At(pos)))
+        Ok(self.insert_entry(id, source, Placement::At(pos)))
     }
 
     /// Shared insertion path for [`Self::append`] and [`Self::insert`].
     ///
-    /// Allocates a fresh [`TrackId`], builds the [`TrackEntry`], places it
-    /// per `placement`, then mirrors the track into the player, bus, and
-    /// background loader. Position resolution — including fallible
-    /// `after_id` lookup — happens in the caller, so this helper is
-    /// infallible.
-    pub(super) fn insert_entry(&self, source: TrackSource, placement: Placement) -> TrackId {
-        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
+    /// Builds the [`TrackEntry`] with `id`, places it per `placement`,
+    /// then mirrors the track into the player, bus, and background
+    /// loader. Position resolution — including fallible `after_id`
+    /// lookup — happens in the caller, so this helper is infallible.
+    pub(super) fn insert_entry(
+        &self,
+        id: TrackId,
+        source: TrackSource,
+        placement: Placement,
+    ) -> TrackId {
         let entry = TrackEntry {
             id,
             name: extract_track_name(&source),
@@ -145,7 +178,7 @@ impl Queue {
     /// drive the loaded resource into the player on demand.
     #[cfg(any(test, feature = "probe"))]
     pub fn register_for_test(&self) -> TrackId {
-        let id = TrackId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let id = TrackId::allocate();
         let url = format!("test://memory/{}", id.as_u64());
         let entry = TrackEntry {
             id,
