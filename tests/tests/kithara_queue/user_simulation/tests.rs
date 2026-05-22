@@ -6,7 +6,6 @@ use std::{fmt::Write, sync::Arc, time::Duration};
 use kithara_app::{config::AppConfig, sources::build_source};
 use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_decode::DecoderBackend;
-use kithara_encode::AudioCodec;
 use kithara_events::AbrMode;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::EncryptionRequest, kithara,
@@ -15,7 +14,10 @@ use kithara_integration_tests::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_play::{PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, TrackSource, Transition};
-use kithara_stream::dl::{Downloader, DownloaderConfig};
+use kithara_stream::{
+    AudioCodec,
+    dl::{Downloader, DownloaderConfig},
+};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use url::Url;

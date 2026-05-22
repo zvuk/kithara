@@ -1,4 +1,4 @@
-use crate::codec::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
 const DEFAULT_LOSSY_BIT_RATE: u64 = 128_000;
 

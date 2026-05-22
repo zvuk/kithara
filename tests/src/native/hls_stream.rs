@@ -8,9 +8,8 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara_encode::{
-    EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource, codec::MediaInfo,
-};
+use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource};
+use kithara_stream::MediaInfo;
 
 use crate::{
     fixture_protocol::{
@@ -701,7 +700,7 @@ fn encrypt_aes128_cbc(data: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_encode::codec::AudioCodec;
+    use kithara_stream::AudioCodec;
 
     use super::*;
     use crate::{

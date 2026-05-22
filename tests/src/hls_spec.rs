@@ -4,7 +4,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
-use kithara_encode::codec::{AudioCodec, ContainerFormat, audio_codec_supports_fmp4_packaging};
+use kithara_stream::{AudioCodec, ContainerFormat, audio_codec_supports_fmp4_packaging};
 use thiserror::Error;
 
 use crate::{
@@ -532,7 +532,7 @@ mod tests {
     use std::{collections::HashMap, num::NonZeroU32};
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use kithara_encode::codec::AudioCodec;
+    use kithara_stream::AudioCodec;
 
     use super::*;
     use crate::{

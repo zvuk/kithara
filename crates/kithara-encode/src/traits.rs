@@ -1,7 +1,6 @@
-use crate::{
-    BytesEncodeRequest, EncodeResult, EncodedBytes, EncodedTrack, PackagedEncodeRequest,
-    codec::AudioCodec,
-};
+use kithara_stream::AudioCodec;
+
+use crate::{BytesEncodeRequest, EncodeResult, EncodedBytes, EncodedTrack, PackagedEncodeRequest};
 
 /// Runtime-polymorphic audio encoder backend.
 ///

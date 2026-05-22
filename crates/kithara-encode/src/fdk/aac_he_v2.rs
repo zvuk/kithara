@@ -16,10 +16,10 @@ use std::{
 };
 
 use fdk_aac_sys as sys;
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::{
     EncodeError, EncodeResult,
-    codec::{AudioCodec, ContainerFormat, MediaInfo},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest, PcmSource},
 };
 
@@ -114,13 +114,11 @@ impl AacHeV2Encoder {
             pts = pts.saturating_add(frame_pts_step);
         }
 
-        let media_info = MediaInfo {
-            codec: Some(AudioCodec::AacHeV2),
-            container: Some(ContainerFormat::Fmp4),
-            sample_rate: Some(sample_rate),
-            channels: Some(channels),
-            ..request.media_info.clone()
-        };
+        let mut media_info = request.media_info.clone();
+        media_info.codec = Some(AudioCodec::AacHeV2);
+        media_info.container = Some(ContainerFormat::Fmp4);
+        media_info.sample_rate = Some(sample_rate);
+        media_info.channels = Some(channels);
 
         Ok(EncodedTrack {
             media_info,

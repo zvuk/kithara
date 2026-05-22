@@ -1,6 +1,5 @@
-use kithara_encode::{
-    BytesEncodeTarget, EncodeError, EncoderFactory, InnerEncoder, codec::AudioCodec,
-};
+use kithara_encode::{BytesEncodeTarget, EncodeError, EncoderFactory, InnerEncoder};
+use kithara_stream::AudioCodec;
 use kithara_test_utils::kithara;
 
 #[kithara::test]

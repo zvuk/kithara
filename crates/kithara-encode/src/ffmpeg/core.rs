@@ -7,11 +7,12 @@ use ffmpeg::{
     format as av_format,
 };
 use ffmpeg_next as ffmpeg;
+use kithara_stream::AudioCodec;
 
 use super::{aac::AacFFmpegEncoder, flac::FlacFFmpegEncoder};
 use crate::{
     BytesEncodeRequest, EncodeError, EncodeResult, EncodedBytes, EncodedTrack, InnerEncoder,
-    PackagedEncodeRequest, codec::AudioCodec, fdk::aac_he_v2::AacHeV2Encoder,
+    PackagedEncodeRequest, fdk::aac_he_v2::AacHeV2Encoder,
 };
 
 #[derive(Debug, Clone, Copy)]

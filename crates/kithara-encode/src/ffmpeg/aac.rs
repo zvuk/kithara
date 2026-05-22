@@ -7,6 +7,7 @@ use ffmpeg::{
     encoder::find as find_encoder,
 };
 use ffmpeg_next as ffmpeg;
+use kithara_stream::AudioCodec;
 
 use super::{
     build_direct_filter, ensure_ffmpeg_initialized,
@@ -17,7 +18,6 @@ use super::{
 };
 use crate::{
     EncodeError, EncodeResult,
-    codec::{AudioCodec, MediaInfo},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
@@ -63,12 +63,10 @@ impl AacFFmpegEncoder {
         send_eof_to_encoder(&mut encoder.encoder)?;
         encoder.receive_and_collect_packets();
 
-        let media_info = MediaInfo {
-            codec: Some(AudioCodec::AacLc),
-            sample_rate: Some(request.pcm.sample_rate()),
-            channels: Some(request.pcm.channels()),
-            ..request.media_info.clone()
-        };
+        let mut media_info = request.media_info.clone();
+        media_info.codec = Some(AudioCodec::AacLc);
+        media_info.sample_rate = Some(request.pcm.sample_rate());
+        media_info.channels = Some(request.pcm.channels());
 
         Ok(EncodedTrack {
             media_info,

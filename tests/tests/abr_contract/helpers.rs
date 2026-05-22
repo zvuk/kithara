@@ -188,11 +188,11 @@ pub(crate) mod params {
         stream::Stream,
     };
     use kithara_audio::AudioConfig;
-    use kithara_encode::codec::AudioCodec;
     use kithara_integration_tests::{
         HlsFixtureBuilder,
         fixture_protocol::{DelayRule, PackagedSignal},
     };
+    use kithara_stream::AudioCodec;
     use tokio_util::sync::CancellationToken;
 
     use super::Consts;

@@ -7,11 +7,11 @@ use kithara::{
     platform::time::Duration,
     stream::{AudioCodec as StreamAudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_encode::codec::AudioCodec;
 use kithara_integration_tests::{
     HlsFixtureBuilder, SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
+use kithara_stream::AudioCodec;
 use reqwest::Client;
 
 use crate::gapless_common::{
