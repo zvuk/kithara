@@ -106,7 +106,6 @@ final class PlayerViewModel: ObservableObject {
         "https://cdn-edge.zvq.me/track/streamhq?id=130432502",
         "https://cdn-edge.zvq.me/track/streamhq?id=132017169",
         "https://ecs-stage-slicer-01.zvq.me/hls/track/176000075_1/master.m3u8",
-        "https://ecs-stage-slicer-01.zvq.me/drm/track/176000094_1/master.m3u8",
         "https://ecs-stage-slicer-01.zvq.me/hls/track/176000109_1/master.m3u8",
         "https://cdn-hls-slicer.zvuk.com/drm/track/173388194_1/master.m3u8",
         "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8",
