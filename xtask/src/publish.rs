@@ -116,22 +116,99 @@ fn run_dry_run_inner(order: &[String]) -> Result<()> {
 /// `cargo publish` directly; the original Cargo.toml is restored unconditionally.
 fn run_publish(order: &[String], delay: u64) -> Result<()> {
     let manifests = locate_manifests(order)?;
+    let versions = locate_versions(order)?;
+
+    let mut published_count = 0usize;
+    let mut last_action_was_publish = false;
 
     for (i, name) in order.iter().enumerate() {
         let pos = i + 1;
         let total = order.len();
-        println!("[{pos}/{total}] Publishing {name}...");
+        let version = &versions[name];
 
-        let manifest = &manifests[name];
-        publish_one(name, manifest)?;
+        if registry_has(name, version)? {
+            println!("[{pos}/{total}] Skipping {name} v{version} (already on crates.io).");
+            last_action_was_publish = false;
+            continue;
+        }
 
-        let is_last = pos == total;
-        if !is_last && delay > 0 {
+        if last_action_was_publish && delay > 0 {
             println!("  Waiting {delay}s before next publish...");
             thread::sleep(Duration::from_secs(delay));
         }
+
+        println!("[{pos}/{total}] Publishing {name} v{version}...");
+        let manifest = &manifests[name];
+        publish_one(name, manifest)?;
+        published_count += 1;
+        last_action_was_publish = true;
     }
+
+    println!();
+    println!(
+        "Published {published_count} crate(s); {} already on crates.io.",
+        order.len() - published_count
+    );
     Ok(())
+}
+
+fn locate_versions(order: &[String]) -> Result<HashMap<String, String>> {
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to run cargo metadata")?;
+    let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
+    let wanted: HashSet<&str> = order.iter().map(String::as_str).collect();
+
+    let mut out = HashMap::new();
+    for pkg in &metadata.packages {
+        if !workspace_members.contains(&pkg.id) {
+            continue;
+        }
+        if !wanted.contains(pkg.name.as_str()) {
+            continue;
+        }
+        out.insert(pkg.name.to_string(), pkg.version.to_string());
+    }
+    Ok(out)
+}
+
+/// HEAD-equivalent check via curl: GET .../api/v1/crates/<name>/<version>.
+/// Returns true if status is 200. Any non-2xx/non-404 is reported as an
+/// error so transient failures don't silently lead to duplicate-publish
+/// attempts.
+fn registry_has(name: &str, version: &str) -> Result<bool> {
+    let url = format!("https://crates.io/api/v1/crates/{name}/{version}");
+    let user_agent = format!("kithara-xtask-publish ({}@prosoftware.io)", "zvuk_ai");
+    let output = Command::new("curl")
+        .args([
+            "-sS",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "-A",
+            &user_agent,
+            "--max-time",
+            "20",
+            &url,
+        ])
+        .output()
+        .with_context(|| format!("curl crates.io for {name} {version}"))?;
+    if !output.status.success() {
+        bail!(
+            "curl failed for {name} {version}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    match code.as_str() {
+        "200" => Ok(true),
+        "404" => Ok(false),
+        other => bail!(
+            "unexpected HTTP {other} from crates.io for {name} {version} \
+             (refusing to proceed; check network and retry)"
+        ),
+    }
 }
 
 fn locate_manifests(order: &[String]) -> Result<HashMap<String, PathBuf>> {
