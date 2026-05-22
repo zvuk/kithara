@@ -21,7 +21,7 @@ use tracing::{debug, info, warn};
 use super::{
     arena_registry::ArenaRegistry,
     player_processor::PlayerCmd,
-    session_engine::{PlayerId, SessionDispatcher, session_client},
+    session::{PlayerId, SessionDispatcher, session_client},
     shared_eq::SharedEq,
     shared_player_state::SharedPlayerState,
 };

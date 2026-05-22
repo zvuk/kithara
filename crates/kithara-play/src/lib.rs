@@ -35,7 +35,7 @@ pub use impls::{
     player::{PlayerConfig, PlayerImpl},
     player_node::PlayerNode,
     resource::Resource,
-    session_engine::{
+    session::{
         AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionState,
         StartStreamFn, run_cmd,
     },

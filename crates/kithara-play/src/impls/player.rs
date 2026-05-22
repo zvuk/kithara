@@ -23,7 +23,7 @@ use super::{
     player_processor::PlayerCmd,
     player_resource::PlayerResource,
     player_track::TrackTransition,
-    session_engine::SessionDispatcher,
+    session::SessionDispatcher,
 };
 #[rustfmt::skip]
 use crate::traits::engine::Engine;

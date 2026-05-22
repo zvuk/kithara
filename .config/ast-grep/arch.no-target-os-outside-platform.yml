@@ -31,6 +31,15 @@ ignores:
   # `crates/kithara-wasm/README.md` (Architecture / Platform shim).
   - "crates/kithara-wasm/src/lib.rs"
   - "crates/kithara-wasm/src/internal.rs"
+  # `kithara-play` hosts the audio session, which has unavoidable platform
+  # asymmetry: native runs a dedicated engine thread with a ringbuf+park
+  # wake-up, while wasm32 splits state between the main thread (where the
+  # AudioContext must live) and Workers (which proxy commands via mpsc).
+  # `impls/session/mod.rs` is the single structural boundary — two
+  # `#[cfg]` declarations on `mod host_native;` / `mod host_web;`. Inside
+  # each host file there are zero inline cfg gates. Documented in
+  # `crates/kithara-play/README.md` "Session Hosting".
+  - "crates/kithara-play/src/impls/session/mod.rs"
 rule:
   any:
     - pattern: "#[cfg(target_os = $_)]"

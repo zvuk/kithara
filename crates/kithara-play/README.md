@@ -253,6 +253,38 @@ The offline render backend used by deterministic engine/player tests lives in `k
 
 For pure trait-level testing, enable the `mock` feature to get `unimock`-generated mocks of the public traits.
 
+## Session Hosting
+
+Audio session hosting has unavoidable platform asymmetry:
+
+- **Native** (`impls/session/host_native.rs`): a dedicated `kithara-engine`
+  worker thread drains a `ringbuf` of `CmdMsg`s; the engine thread parks
+  between commands and is woken via `unpark()` on every push.
+  `SessionClient` holds the ring-buffer producer plus the engine thread
+  handle. Singleton via `OnceLock`.
+- **Web** (`impls/session/host_web.rs`): `AudioContext` and the firewheel
+  `WebAudioBackend` must live on the main thread (browser constraint —
+  not `Transferable`). `SessionState` lives in a thread-local on the
+  main thread; Worker-side `SessionClient`s proxy their `CmdMsg` over an
+  `mpsc` bridge polled from the main thread's `requestAnimationFrame`.
+  `local: bool` distinguishes the two modes.
+
+The `impls/session/` layout reflects this:
+
+- `state.rs` — cross-platform `SessionState<B>`, `Cmd`, `Reply`,
+  `run_cmd`. Generic over `B: firewheel::AudioBackend`. **Zero `#[cfg]`.**
+- `client.rs` — cross-platform `trait SessionDispatcher`. **Zero `#[cfg]`.**
+- `host_native.rs` — native `SessionClient`, engine thread, singleton,
+  `start_stream_cpal`. Whole file activates only on non-wasm.
+- `host_web.rs` — web `SessionClient`, thread-local state, Worker
+  bridge, `tick_and_poll_remote`, `bridge_*` atomics readers,
+  `start_stream_web_audio`. Whole file activates only on wasm32.
+- `mod.rs` — module declarations + re-exports. Two `#[cfg]` lines on
+  `mod host_native;` / `mod host_web;` are the **single** structural
+  boundary; lint exempt is declared for this file alone in
+  `.config/ast-grep/arch.no-target-os-outside-platform.yml`. Inside each
+  host file there are zero inline `#[cfg]` gates.
+
 ## Cancel Hierarchy
 
 A single `CancellationToken` master flows top-down through the player tree. Subsystems (Downloader, AssetStore, HlsPeer, Audio worker, epoch_cancel) derive children from it via `.child_token()`; cancelling the master cascades to every descendant.
