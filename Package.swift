@@ -4,8 +4,8 @@ import Foundation
 import PackageDescription
 
 // Updated automatically by CI on release.
-let version = "0.0.1"
-let checksum = "a3e591d8016c43f5658af587e697a000abff1bd9f5ff1152c40b8d9c61b61b9a"
+let version = "0.0.1-alpha1"
+let checksum = "d4b1e959ee0b4591e3f95e4651fd17049f6669aba99b6e5dee5777841d2b70e3"
 
 // KITHARA_LOCAL_DEV       — use locally built xcframework (for development).
 // KITHARA_BINARY_BASE_URL — override binary download host (for GitLab mirror).
