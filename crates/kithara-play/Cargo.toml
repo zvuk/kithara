@@ -53,11 +53,16 @@ bevy_platform = { workspace = true }
 firewheel-web-audio = { workspace = true, optional = true }
 
 [features]
-default = ["backend-cpal"]
+default = ["backend-cpal", "symphonia"]
 backend-cpal = ["firewheel/cpal"]
 backend-web-audio = ["dep:firewheel-web-audio"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple"]
+# Software decoder pass-through. Required when not opting into a hardware
+# backend, since `kithara-decode`'s `DecoderBackend` enum needs at least
+# one variant available.
+symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
+fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
 probe = []
