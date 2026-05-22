@@ -1,16 +1,23 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fs,
+    path::{Path, PathBuf},
     process::Command,
     thread,
     time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{DependencyKind, MetadataCommand};
 
 use crate::util::check_tool;
 
-const DEFAULT_DELAY_SECS: u64 = 20;
+struct Consts;
+
+impl Consts {
+    const DEFAULT_DELAY_SECS: u64 = 20;
+    const WORKSPACE_HACK: &'static str = "kithara-workspace-hack";
+}
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct PublishArgs {
@@ -21,7 +28,7 @@ pub(crate) struct PublishArgs {
     /// Delay in seconds between publishes [default: 20].
     /// Skipped during dry-run. For first-time publishing of new crates,
     /// use 610 (crates.io allows 5 new crates burst, then 1 per 10 min).
-    #[arg(long, default_value_t = DEFAULT_DELAY_SECS)]
+    #[arg(long, default_value_t = Consts::DEFAULT_DELAY_SECS)]
     delay: u64,
 }
 
@@ -100,17 +107,23 @@ fn run_dry_run_inner(order: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Publish each crate using `cargo hakari publish` with a delay between them.
+/// Publish each crate with a delay between them.
+///
+/// `cargo hakari publish` only strips `kithara-workspace-hack` from the default
+/// `[dependencies]` section, leaving it in target-specific sections like
+/// `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`. Since kithara
+/// places the hack under such a target section, we strip it ourselves and call
+/// `cargo publish` directly; the original Cargo.toml is restored unconditionally.
 fn run_publish(order: &[String], delay: u64) -> Result<()> {
+    let manifests = locate_manifests(order)?;
+
     for (i, name) in order.iter().enumerate() {
         let pos = i + 1;
         let total = order.len();
         println!("[{pos}/{total}] Publishing {name}...");
 
-        run_cargo(
-            &["hakari", "publish", "-p", name],
-            &format!("cargo hakari publish -p {name}"),
-        )?;
+        let manifest = &manifests[name];
+        publish_one(name, manifest)?;
 
         let is_last = pos == total;
         if !is_last && delay > 0 {
@@ -119,6 +132,85 @@ fn run_publish(order: &[String], delay: u64) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn locate_manifests(order: &[String]) -> Result<HashMap<String, PathBuf>> {
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("failed to run cargo metadata")?;
+
+    let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
+    let wanted: HashSet<&str> = order.iter().map(String::as_str).collect();
+
+    let mut out = HashMap::new();
+    for pkg in &metadata.packages {
+        if !workspace_members.contains(&pkg.id) {
+            continue;
+        }
+        if !wanted.contains(pkg.name.as_str()) {
+            continue;
+        }
+        out.insert(
+            pkg.name.to_string(),
+            PathBuf::from(pkg.manifest_path.as_str()),
+        );
+    }
+
+    for name in order {
+        if !out.contains_key(name) {
+            bail!("manifest not found for crate {name}");
+        }
+    }
+    Ok(out)
+}
+
+fn publish_one(name: &str, manifest: &Path) -> Result<()> {
+    let original = fs::read_to_string(manifest)
+        .with_context(|| format!("read {} for {name}", manifest.display()))?;
+    let stripped = strip_workspace_hack(&original);
+    let did_strip = stripped != original;
+
+    if did_strip {
+        fs::write(manifest, &stripped)
+            .with_context(|| format!("write stripped manifest {}", manifest.display()))?;
+        println!(
+            "  Temporarily removed {} dependency.",
+            Consts::WORKSPACE_HACK
+        );
+    }
+
+    let result = run_cargo(
+        &["publish", "-p", name, "--allow-dirty"],
+        &format!("cargo publish -p {name}"),
+    );
+
+    if did_strip && let Err(restore_err) = fs::write(manifest, &original) {
+        eprintln!(
+            "  WARNING: failed to restore {}: {restore_err}",
+            manifest.display()
+        );
+    }
+
+    result
+}
+
+/// Remove every `kithara-workspace-hack = { ... }` dependency line, regardless
+/// of whether it lives under `[dependencies]` or a `[target.<cfg>.dependencies]`
+/// section. Preserves all other content byte-for-byte.
+fn strip_workspace_hack(manifest: &str) -> String {
+    let mut out = String::with_capacity(manifest.len());
+    for line in manifest.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(Consts::WORKSPACE_HACK)
+            && trimmed[Consts::WORKSPACE_HACK.len()..]
+                .trim_start()
+                .starts_with('=')
+        {
+            continue;
+        }
+        out.push_str(line);
+    }
+    out
 }
 
 fn run_cargo(args: &[&str], description: &str) -> Result<()> {
@@ -171,7 +263,7 @@ fn resolve_publish_order() -> Result<Vec<String>> {
         let deps: Vec<String> = pkg
             .dependencies
             .iter()
-            .filter(|dep| dep.path.is_some())
+            .filter(|dep| dep.path.is_some() && dep.kind != DependencyKind::Development)
             .map(|dep| dep.name.to_string())
             .filter(|dep_name| all_publishable.contains(dep_name) && *dep_name != name)
             .collect();
@@ -280,6 +372,30 @@ mod tests {
 
         let order = topo_sort(&graph).unwrap();
         assert_eq!(order, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn strip_workspace_hack_removes_from_default_and_target_sections() {
+        let input = "\
+[dependencies]
+foo = { workspace = true }
+kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-workspace-hack\" }
+
+[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]
+kithara-workspace-hack = { version = \"0.0.1-alpha1\", path = \"../kithara-workspace-hack\" }
+bar = { workspace = true }
+";
+        let out = strip_workspace_hack(input);
+        assert!(!out.contains("kithara-workspace-hack"), "{out}");
+        assert!(out.contains("foo = { workspace = true }"));
+        assert!(out.contains("bar = { workspace = true }"));
+        assert!(out.contains("[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]"));
+    }
+
+    #[test]
+    fn strip_workspace_hack_keeps_unrelated_lines() {
+        let input = "no_hack_here = true\n";
+        assert_eq!(strip_workspace_hack(input), input);
     }
 
     #[test]

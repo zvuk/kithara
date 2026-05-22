@@ -31,7 +31,7 @@ probe = []
 mock = []
 
 [dev-dependencies]
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }
 proptest = { workspace = true }
 

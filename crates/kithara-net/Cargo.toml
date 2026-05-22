@@ -50,7 +50,7 @@ gloo-timers = { workspace = true }
 
 [dev-dependencies]
 kithara-net = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }

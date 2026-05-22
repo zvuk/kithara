@@ -32,6 +32,6 @@ console_error_panic_hook = { workspace = true }
 
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false }
-kithara-test-macros = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-macros = { path = "../kithara-test-macros" }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }

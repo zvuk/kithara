@@ -48,5 +48,5 @@ cbc = { workspace = true }
 kithara-assets = { path = "." }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }
