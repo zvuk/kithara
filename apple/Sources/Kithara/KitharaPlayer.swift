@@ -4,8 +4,8 @@ import KitharaFFI
 
 /// A queue-based audio player with Combine-driven observation.
 ///
-/// Thin wrapper over the Rust ``AudioPlayer``. All state lives in Rust —
-/// Swift queries it on demand via ``snapshot()`` or receives push
+/// Thin wrapper over the Rust `AudioPlayer`. All state lives in Rust —
+/// Swift queries it on demand via ``snapshot`` or receives push
 /// updates through ``eventPublisher``.
 ///
 /// ```swift
@@ -30,7 +30,7 @@ public final class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
     // MARK: - Discrete publishers (AudioPlayerProtocol)
 
     /// Current item changed publisher. Resolves the Rust-side `item_id`
-    /// back to the Swift instance owned by ``items``. Combine equivalent
+    /// back to the Swift instance owned by ``items()``. Combine equivalent
     /// of the iOS `AudioPlayerProtocol.rxCurrentAudioItem`.
     public var currentItem: AnyPublisher<KitharaPlayerItem?, Never> {
         _eventSubject
@@ -55,6 +55,19 @@ public final class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
         _eventSubject
             .compactMap { event -> Float? in
                 if case let .rateChanged(rate) = event { return rate }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Live playback-time tick publisher (seconds). Mirrors the iOS
+    /// `AudioPlayerProtocol.currentTime` Observable shape so consumers
+    /// can drive a slider without polling. The sync ``currentTime``
+    /// getter remains for one-shot reads.
+    public var currentTimePublisher: AnyPublisher<TimeInterval, Never> {
+        _eventSubject
+            .compactMap { event -> TimeInterval? in
+                if case let .timeChanged(seconds) = event { return seconds }
                 return nil
             }
             .eraseToAnyPublisher()
@@ -348,7 +361,7 @@ public final class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
 
     /// Replace the item at `index` with a freshly-loaded one.
     ///
-    /// Use before ``selectItem(at:autoplay:)`` to re-play a track whose
+    /// Use before ``selectItem(at:transition:)`` to re-play a track whose
     /// resource was consumed by a prior playback. The replacement item
     /// must already have a loaded resource (``KitharaPlayerItem/load()``
     /// finished).
@@ -380,7 +393,7 @@ public final class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
 
     /// Select an item by identity (AVQueuePlayer-style).
     ///
-    /// Resolves the item's current index via ``items`` and delegates to
+    /// Resolves the item's current index via ``items()`` and delegates to
     /// ``selectItem(at:transition:)``. Race-free against concurrent
     /// `insert`/`remove` that would shift indices.
     ///
@@ -388,7 +401,7 @@ public final class KitharaPlayer: AudioPlayerProtocol, @unchecked Sendable {
     ///   - item: The item to select. Must currently be in the queue.
     ///   - transition: `.none` by default (immediate cut); pass
     ///     `.crossfade` for Next/Prev button UX.
-    /// - Throws: ``KitharaError/invalidArgument`` if the item is not in
+    /// - Throws: ``KitharaError/invalidArgument(_:)`` if the item is not in
     ///   the queue, or whatever ``selectItem(at:transition:)`` throws.
     public func selectItem(_ item: KitharaPlayerItem, transition: Transition = .none) throws {
         let snapshot = items()

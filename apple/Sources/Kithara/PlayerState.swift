@@ -114,7 +114,7 @@ public typealias ItemEvent = FfiItemEvent
 
 /// Loading/playback status of a track inside the queue.
 ///
-/// Surfaced through ``PlayerEvent/trackStatusChanged(itemId:status:)``.
+/// Surfaced through `PlayerEvent.trackStatusChanged(itemId:status:)`.
 public typealias TrackStatus = FfiTrackStatus
 
 /// Strongly-typed monotonic identifier shared between the player and

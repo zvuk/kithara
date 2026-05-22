@@ -4,11 +4,11 @@ import KitharaFFI
 /// Position-dependent symmetric cipher for DRM key decryption.
 ///
 /// Wraps the Rust `UniqueBinaryCipher` from `kithara-drm`. Conforms to
-/// ``KeyProcessor`` so it can be passed directly into a
-/// ``KitharaPlayer.KeyRule`` and registered through ``KitharaPlayer/init(config:)``.
+/// ``KeyProcessor`` so it can be passed directly into a `KeyRule`
+/// and registered through ``KitharaPlayer/init(config:)``.
 ///
 /// The cipher closes over the secret supplied at construction time —
-/// the per-call ``salt`` argument is ignored here. Use
+/// the per-call `salt` argument is ignored here. Use
 /// ``KitharaPlayer/setupHlsAes(keyDecryptor:)`` with an inline closure
 /// when the cipher needs to be derived from the salt on every decrypt.
 public final class Cipher: KeyProcessor, @unchecked Sendable {

@@ -4,7 +4,7 @@ import Kithara
 import RxSwift
 
 /// RxSwift bridge over Kithara's Combine publishers. Mirrors the
-/// `rx*` accessor shape that `TvoyZvuk` consumes from its existing
+/// `rx*` accessor shape expected by consumers of the
 /// `AudioPlayerProtocol` / `AudioPlayerItemProtocol` contracts.
 public extension KitharaPlayer {
     var rxCurrentAudioItem: Observable<KitharaPlayerItem?> {
@@ -13,6 +13,10 @@ public extension KitharaPlayer {
 
     var rxRate: Observable<Float> {
         rate.asObservable()
+    }
+
+    var rxCurrentTime: Observable<TimeInterval> {
+        currentTimePublisher.asObservable()
     }
 
     var rxError: Observable<Error> {
