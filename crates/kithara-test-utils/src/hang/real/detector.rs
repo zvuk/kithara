@@ -131,18 +131,15 @@ impl<C: HangDump> HangDetector<C> {
     }
 }
 
+// xtask-lint-ignore: retry_fallback
+pub(crate) const FALLBACK_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[must_use]
 pub fn default_timeout() -> Duration {
-    default_timeout_with_env(fallback_timeout())
+    default_timeout_with_env(FALLBACK_TIMEOUT)
 }
 
 #[must_use]
 fn default_timeout_with_env(default_timeout: Duration) -> Duration {
     super::platform::env_timeout().unwrap_or(default_timeout)
-}
-
-#[must_use]
-pub(crate) fn fallback_timeout() -> Duration {
-    const DEFAULT_TIMEOUT_SECS: u64 = 10;
-    Duration::from_secs(DEFAULT_TIMEOUT_SECS)
 }

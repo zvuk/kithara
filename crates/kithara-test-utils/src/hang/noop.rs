@@ -43,6 +43,7 @@ impl<C: HangDump> HangDetector<C> {
 
 #[must_use]
 pub fn default_timeout() -> Duration {
+    // xtask-lint-ignore: retry_fallback
     const FALLBACK_SECS: u64 = 10;
     Duration::from_secs(FALLBACK_SECS)
 }
