@@ -23,7 +23,7 @@ kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true }
 kithara-hls = { workspace = true, features = ["probe"] }
-kithara-queue = { workspace = true, features = ["probe"] }
+kithara-queue = { workspace = true, features = ["backend-cpal", "probe"] }
 kithara-app = { workspace = true, default-features = false, features = ["lib-only"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
 rkyv = { workspace = true }
@@ -70,7 +70,11 @@ async-trait = { workspace = true }
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara = { workspace = true }
-kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
+# fdk-aac пришёл из kithara-decode defaults до Phase 2 (workspace
+# default-features=false). HE-AAC v2 fMP4 фикстуры в rapid-scrub /
+# stress-seek тестах декодятся через symphonia path, и без fdk-aac
+# отдается LC-only — добавляем явно.
+kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia", "fdk-aac"] }
 kithara-encode = { workspace = true }
 kithara-file = { workspace = true }
 kithara-play = { workspace = true, features = ["backend-cpal"] }
