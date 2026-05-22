@@ -19,6 +19,32 @@ impl Consts {
     const DEFAULT_SCHEME: &'static str = "KitharaDemo_iOS";
     /// Bundle id installed by the demo target.
     const DEMO_BUNDLE_ID: &'static str = "com.kithara.demo";
+
+    /// Banned substrings: presence in any apple-slice `libkithara_ffi.a`
+    /// means the build leaked a software decoder backend that should stay
+    /// behind the `symphonia` / desktop feature gate. Note:
+    /// `symphonia_core`, `symphonia_format_isomp4`, `symphonia_common`,
+    /// `symphonia_metadata` are *parser* infrastructure (fMP4 box walker,
+    /// shared types) that the Apple decoder path reuses for demuxing —
+    /// they're not software decoders and are allowed.
+    const BANNED_SYMBOL_NEEDLES: &[&str] = &[
+        "symphonia_bundle_",     // symphonia-bundle-flac, symphonia-bundle-mp3, …
+        "symphonia_codec_",      // symphonia-codec-aac, symphonia-codec-alac, …
+        "symphonia_format_caf",  // CAF — Apple uses AppleAudioFileDemuxer instead
+        "symphonia_format_mkv",  // Matroska — not used on Apple
+        "symphonia_format_ogg",  // Ogg — not used on Apple
+        "symphonia_format_riff", // RIFF/WAV — Apple uses AppleAudioFileDemuxer
+        "fdk_aac",
+    ];
+    /// Positive proof — at least one of these must appear in every slice
+    /// to confirm the Apple HW dispatcher is actually linked in.
+    const APPLE_PROOF_NEEDLES: &[&str] = &["AppleCodec", "apple7decode"];
+    /// Slice subdirectories inside the `*.xcframework` we expect to find.
+    const XCFRAMEWORK_SLICES: &[&str] = &[
+        "ios-arm64",
+        "ios-arm64_x86_64-simulator",
+        "macos-arm64_x86_64",
+    ];
 }
 
 /// Recursively copy `src` directory to `dst`.
@@ -70,6 +96,14 @@ pub(crate) enum AppleCommand {
         #[arg(long)]
         skip_framework: bool,
     },
+    /// Audit symbols in an Apple `XCFramework`: assert that no
+    /// software-fallback backend (Symphonia / fdk-aac) leaked into
+    /// any slice. Used as a pre-publish gate from `just apple release`.
+    Audit {
+        /// Path to the `*.xcframework` directory (e.g.
+        /// `apple/KitharaFFIInternal.xcframework`).
+        path: PathBuf,
+    },
 }
 
 pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
@@ -88,7 +122,69 @@ pub(crate) fn run(cmd: AppleCommand) -> Result<()> {
             debug,
             skip_framework,
         ),
+        AppleCommand::Audit { path } => audit_symbols(&path),
     }
+}
+
+/// Run `nm` on every slice's static lib and fail if any
+/// software-backend symbol survived linking or the Apple dispatcher
+/// went missing.
+fn audit_symbols(xcframework_dir: &Path) -> Result<()> {
+    if !xcframework_dir.is_dir() {
+        bail!(
+            "xcframework path does not exist or is not a directory: {}",
+            xcframework_dir.display()
+        );
+    }
+    let mut errors: Vec<String> = Vec::new();
+    for slice in Consts::XCFRAMEWORK_SLICES {
+        let lib = xcframework_dir.join(slice).join("libkithara_ffi.a");
+        if !lib.is_file() {
+            errors.push(format!(
+                "slice missing: {} (no libkithara_ffi.a — xcframework layout wrong?)",
+                lib.display()
+            ));
+            continue;
+        }
+        let output = Command::new("nm")
+            .arg(&lib)
+            .output()
+            .with_context(|| format!("invoke nm on {}", lib.display()))?;
+        // `nm` returns non-zero for "no symbols" archives but still
+        // emits useful stdout; only treat IO failure as fatal.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for needle in Consts::BANNED_SYMBOL_NEEDLES {
+            let count = stdout.matches(needle).count();
+            if count > 0 {
+                errors.push(format!(
+                    "slice `{slice}` leaked {count} `{needle}` symbols — \
+                     software-backend dep must stay behind the symphonia feature gate"
+                ));
+            }
+        }
+        let has_apple_proof = Consts::APPLE_PROOF_NEEDLES
+            .iter()
+            .any(|n| stdout.contains(n));
+        if !has_apple_proof {
+            let proof = Consts::APPLE_PROOF_NEEDLES;
+            errors.push(format!(
+                "slice `{slice}` missing Apple-backend proof symbols \
+                 ({proof:?}) — AppleCodec not linked?"
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        bail!(
+            "Apple xcframework symbol audit failed ({} issues):\n  - {}",
+            errors.len(),
+            errors.join("\n  - ")
+        );
+    }
+    println!(
+        "==> Apple xcframework symbol audit passed: 0 banned symbols, AppleCodec linked in all {} slices",
+        Consts::XCFRAMEWORK_SLICES.len()
+    );
+    Ok(())
 }
 
 fn run_build(profile: crate::BuildProfile) -> Result<()> {

@@ -734,6 +734,9 @@ apple MODE="xcframework" *ARGS:
         for f in apple/KitharaFFIInternal.xcframework/*/libkithara_ffi.a; do
             strip -S -x "$f"
         done
+        # Symbol audit: fail fast if a software-backend dep leaked
+        # into the apple xcframework. Apple HW must own decode on iOS.
+        cargo xtask apple audit apple/KitharaFFIInternal.xcframework
         cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
         swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip \
             | tee /tmp/KitharaFFIInternal.xcframework.zip.sha256
