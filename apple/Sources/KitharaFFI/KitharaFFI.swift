@@ -620,6 +620,12 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
      * Append an item to the tail of the queue. AVQueuePlayer-style
      * counterpart of [`Self::insert`], which follows the iOS protocol
      * shape (`after == nil` ⇒ head).
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the source URL cannot be resolved into
+     * a queue-owned [`kithara::play::Source`] — same failure surface as
+     * [`Self::insert`].
      */
     func append(item: AudioPlayerItem) throws 
     
@@ -899,6 +905,12 @@ open func advanceToNextItem()  {try! rustCall() {
      * Append an item to the tail of the queue. AVQueuePlayer-style
      * counterpart of [`Self::insert`], which follows the iOS protocol
      * shape (`after == nil` ⇒ head).
+     *
+     * # Errors
+     *
+     * Returns [`FfiError`] when the source URL cannot be resolved into
+     * a queue-owned [`kithara::play::Source`] — same failure surface as
+     * [`Self::insert`].
      */
 open func append(item: AudioPlayerItem)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_append(
@@ -1364,7 +1376,7 @@ public func FfiConverterTypeAudioPlayer_lower(_ value: AudioPlayer) -> UInt64 {
  * [`kithara_queue::Queue::insert_with_id`] / `append_with_id`, so
  * there is exactly one address space across the FFI ↔ core
  * boundary. This is `audioId: TrackId` on iOS.
- * - [`Self::uuid_i64`] — `i64` derived from a per-item UUIDv5 over
+ * - [`Self::uuid_i64`] — `i64` derived from a per-item `UUIDv5` over
  * `url + audio_id`. Stable for the item's lifetime and distinct
  * for every fresh insertion of the same URL. This is
  * `uuid: Int64` on iOS.
@@ -1428,7 +1440,7 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
     func url()  -> String
     
     /**
-     * Signed-integer view of the per-item UUIDv5 (`url + audioId`).
+     * Signed-integer view of the per-item `UUIDv5` (`url + audioId`).
      * Maps to `AudioPlayerItemProtocol.uuid: Int64` on iOS. Distinct
      * from [`Self::audio_id`]: two items with the same URL but
      * different monotonic ids produce different `uuid_i64`s, so the
@@ -1448,7 +1460,7 @@ public protocol AudioPlayerItemProtocol: AnyObject, Sendable {
  * [`kithara_queue::Queue::insert_with_id`] / `append_with_id`, so
  * there is exactly one address space across the FFI ↔ core
  * boundary. This is `audioId: TrackId` on iOS.
- * - [`Self::uuid_i64`] — `i64` derived from a per-item UUIDv5 over
+ * - [`Self::uuid_i64`] — `i64` derived from a per-item `UUIDv5` over
  * `url + audio_id`. Stable for the item's lifetime and distinct
  * for every fresh insertion of the same URL. This is
  * `uuid: Int64` on iOS.
@@ -1495,7 +1507,7 @@ open class AudioPlayerItem: AudioPlayerItemProtocol, @unchecked Sendable {
     /**
      * Create a new item with frozen preferences. Reserves a fresh
      * [`TrackId`] from the process-wide counter so `audioId` is stable
-     * from this point on, and derives a UUIDv5 over
+     * from this point on, and derives a `UUIDv5` over
      * `format!("{url}:{audio_id}")` for the secondary `uuid` handle.
      * Loading starts automatically when the item is inserted into an
      * [`crate::player::AudioPlayer`].
@@ -1635,7 +1647,7 @@ open func url() -> String  {
 }
     
     /**
-     * Signed-integer view of the per-item UUIDv5 (`url + audioId`).
+     * Signed-integer view of the per-item `UUIDv5` (`url + audioId`).
      * Maps to `AudioPlayerItemProtocol.uuid: Int64` on iOS. Distinct
      * from [`Self::audio_id`]: two items with the same URL but
      * different monotonic ids produce different `uuid_i64`s, so the
@@ -2859,9 +2871,12 @@ public struct FfiItemConfig: Equatable, Hashable {
      * (`/Users/…/song.flac`). Parsed via
      * [`kithara::play::ResourceConfig::for_src`] at insert time, so the
      * same string flows untouched into the player core. The item's
-     * [`crate::item::AudioPlayerItem::audio_id`] is a deterministic
-     * UUIDv5 derived from this string under the URL namespace —
-     * identical source values produce identical `audio_id`s.
+     * [`crate::item::AudioPlayerItem::audio_id`] is a monotonic
+     * [`kithara_events::TrackId`] reserved at construction (process-wide
+     * counter) — independent of this string. The secondary handle
+     * [`crate::item::AudioPlayerItem::uuid_i64`] is a `UUIDv5` over
+     * `url + audio_id` and is distinct for every fresh insertion of the
+     * same URL.
      */
     public let url: String
     /**
@@ -2891,9 +2906,12 @@ public struct FfiItemConfig: Equatable, Hashable {
          * (`/Users/…/song.flac`). Parsed via
          * [`kithara::play::ResourceConfig::for_src`] at insert time, so the
          * same string flows untouched into the player core. The item's
-         * [`crate::item::AudioPlayerItem::audio_id`] is a deterministic
-         * UUIDv5 derived from this string under the URL namespace —
-         * identical source values produce identical `audio_id`s.
+         * [`crate::item::AudioPlayerItem::audio_id`] is a monotonic
+         * [`kithara_events::TrackId`] reserved at construction (process-wide
+         * counter) — independent of this string. The secondary handle
+         * [`crate::item::AudioPlayerItem::uuid_i64`] is a `UUIDv5` over
+         * `url + audio_id` and is distinct for every fresh insertion of the
+         * same URL.
          */url: String, 
         /**
          * Caller-declared live-stream flag. `true` means the source is a
@@ -4957,7 +4975,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 37706) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_uuid_i64() != 47720) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_uuid_i64() != 61679) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 5291) {
@@ -4978,7 +4996,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 2533) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 64339) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 55370) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_duration() != 59535) {
@@ -5083,7 +5101,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 53441) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 64702) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 57118) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 61841) {
