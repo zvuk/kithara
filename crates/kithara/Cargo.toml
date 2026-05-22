@@ -69,7 +69,11 @@ perf = [
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
-apple = ["kithara-audio/apple", "kithara-play/apple", "fdk-aac"]
+# Apple HW backend. Does NOT include `fdk-aac` — Apple AudioToolbox
+# decodes HE-AAC v1/v2 natively via kAudioFormatMPEG4AAC_HE / _HE_V2
+# (see crates/kithara-decode/src/apple/codec.rs). fdk-aac stays
+# coupled to symphonia for desktop/WASM software fallback builds only.
+apple = ["kithara-audio/apple", "kithara-play/apple"]
 android = ["kithara-audio/android", "kithara-decode/android"]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
