@@ -281,7 +281,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 RecreateNext::Seek(request) | RecreateNext::ApplySeek(request) => {
                     Some(request.seek.epoch)
                 }
-                RecreateNext::AnchorSeek { request, .. } => Some(request.seek.epoch),
             },
             TrackState::AwaitingResume(state) => Some(state.seek.epoch),
             TrackState::RecreatingDecoder(state) => match &state.next {
@@ -289,7 +288,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 RecreateNext::Seek(request) | RecreateNext::ApplySeek(request) => {
                     Some(request.seek.epoch)
                 }
-                RecreateNext::AnchorSeek { request, .. } => Some(request.seek.epoch),
             },
             _ => None,
         }
@@ -329,13 +327,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     .as_ref()
                     .and_then(|info| info.container)
             });
-        let init_range = self.shared_stream.format_change_segment_range().ok();
-        let init_offset = init_range.as_ref().map(|range| range.start);
-        let is_init_bearing = target_container.is_some_and(container_needs_init_range);
-        let already_at_init = init_offset.is_some_and(|o| o == self.session.base_offset);
-        let container_needs_init_resync =
-            is_init_bearing && init_offset.is_some() && !already_at_init;
-        let needs_recreation = codec_changed || variant_changed || container_needs_init_resync;
+        let needs_recreation = codec_changed || variant_changed;
         let recreate_offset = resolve_recreate_offset(
             &self.shared_stream,
             target_container,
@@ -350,12 +342,9 @@ impl<T: StreamType> StreamAudioSource<T> {
             anchor_variant = ?anchor.variant_index,
             codec_changed,
             variant_changed,
-            container_needs_init_resync,
-            already_at_init,
             needs_recreation,
             ?target_container,
             ?recreate_offset,
-            ?init_offset,
             base_offset = self.session.base_offset,
             "seek anchor alignment: compare format"
         );
@@ -397,16 +386,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             target_info.variant_index = Some(v);
         }
 
-        let next = if container_needs_init_resync && !codec_changed && !variant_changed {
-            RecreateNext::AnchorSeek { request, anchor }
-        } else {
-            RecreateNext::Seek(request)
-        };
-
         self.start_recreating_decoder(
             RecreateCause::VariantSwitch,
             target_info,
-            next,
+            RecreateNext::Seek(request),
             recreate_offset,
             request.attempt,
         );
@@ -1212,7 +1195,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     ) {
         let pending_seek_target = match &next {
             RecreateNext::Seek(req) | RecreateNext::ApplySeek(req) => Some(req.seek.target),
-            RecreateNext::AnchorSeek { request, .. } => Some(request.seek.target),
             RecreateNext::Decode => None,
         };
         info!(
@@ -1819,20 +1801,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 TrackStep::StateChanged
             }
             RecreateNext::ApplySeek(request) => self.finish_apply_seek_after_recreate(request),
-            RecreateNext::AnchorSeek { request, anchor } => {
-                reset_effects(&mut self.effects);
-                self.update_state(TrackState::ApplyingSeek(ApplySeekState {
-                    request,
-                    mode: SeekMode::Anchor(anchor),
-                }));
-                if self.apply_time_anchor_seek(request, anchor) {
-                    self.epoch.store(request.seek.epoch, Ordering::Release);
-                    self.finalize_seek_pending(request.seek.epoch);
-                    TrackStep::StateChanged
-                } else {
-                    TrackStep::StateChanged
-                }
-            }
         }
     }
 
