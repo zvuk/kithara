@@ -31,7 +31,7 @@ kithara = { workspace = true, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
-kithara-queue = { workspace = true }
+kithara-queue = { workspace = true, features = ["backend-cpal"] }
 kithara-test-macros = { workspace = true }
 # Optional direct dep so the `test` feature can enable `test-utils` on
 # kithara-play (needed for `init_offline_backend` / offline module).
