@@ -1,7 +1,7 @@
 use std::{fs, io::Cursor, process::Command};
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory},
+    decode::{DecoderBackend, DecoderConfig, DecoderFactory},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -393,18 +393,48 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
     );
 }
 
+// Decoder backend × codec matrix.
+//
+// `DecoderBackend::{Apple,Android,Symphonia}` variants are cfg-gated in
+// kithara-decode, so each backend's cases live behind a matching
+// `cfg_attr` predicate. The fn argument type stays `DecoderBackend`
+// (no string indirection) — only the cases whose backend variant is
+// compiled into this binary stay active.
+//
+// `tests/Cargo.toml` arranges the target.cfg dependency rows so that:
+//   - Symphonia is always on (kithara-decode/symphonia in [dependencies]),
+//   - Apple is on for `target_os = "macos" | "ios"`,
+//   - Android is on for `target_os = "android"`.
 #[kithara::test(
     native,
     tokio,
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case::aac("aac", AudioCodec::AacLc)]
-#[case::flac("flac", AudioCodec::Flac)]
+#[case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia)]
+#[case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia)]
+#[case::flac_symphonia("flac_symphonia", AudioCodec::Flac, DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::aac_lc_apple("aac_lc_apple", AudioCodec::AacLc, DecoderBackend::Apple),
+    case::aac_he_v2_apple("aac_he_v2_apple", AudioCodec::AacHeV2, DecoderBackend::Apple),
+    case::flac_apple("flac_apple", AudioCodec::Flac, DecoderBackend::Apple)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::aac_lc_android("aac_lc_android", AudioCodec::AacLc, DecoderBackend::Android),
+    case::aac_he_v2_android("aac_he_v2_android", AudioCodec::AacHeV2, DecoderBackend::Android),
+    case::flac_android("flac_android", AudioCodec::Flac, DecoderBackend::Android)
+)]
 async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
     #[case] label: &str,
     #[case] codec: AudioCodec,
+    #[case] backend: DecoderBackend,
 ) {
+    run_packaged_fmp4_decoder_check(label, codec, backend).await;
+}
+
+async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend: DecoderBackend) {
     let server = TestServerHelper::new().await;
     let builder = match codec {
         AudioCodec::AacLc => HlsFixtureBuilder::new()
@@ -412,6 +442,11 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
             .segments_per_variant(8)
             .segment_duration_secs(0.5)
             .packaged_audio_aac_lc(44_100, 2),
+        AudioCodec::AacHeV2 => HlsFixtureBuilder::new()
+            .variant_count(1)
+            .segments_per_variant(8)
+            .segment_duration_secs(0.5)
+            .packaged_audio_aac_he_v2(44_100, 2),
         AudioCodec::Flac => HlsFixtureBuilder::new()
             .variant_count(1)
             .segments_per_variant(8)
@@ -466,10 +501,11 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
         box_tags.iter().any(|tag| tag == "mdat"),
         "packaged {label} bytes must contain mdat, got {box_summaries:?}"
     );
+    let config = DecoderConfig::builder().backend(backend).build();
     let mut direct_decoder = DecoderFactory::create_from_media_info(
         Cursor::new(mp4_bytes.clone()),
         &media_info,
-        &DecoderConfig::default(),
+        &config,
     )
     .unwrap_or_else(|error| panic!("create decoder from packaged {label} fmp4: {error}"));
 
@@ -477,12 +513,9 @@ async fn test_packaged_hls_concat_bytes_work_with_decoder_factory_direct_fmp4(
         .next_chunk()
         .unwrap_or_else(|error| panic!("decode first direct chunk for packaged {label}: {error}"));
     let total_len = mp4_bytes.len();
-    let mut probe_decoder = DecoderFactory::create_with_probe(
-        Cursor::new(mp4_bytes.clone()),
-        Some("m4a"),
-        &DecoderConfig::default(),
-    )
-    .unwrap_or_else(|error| panic!("probe packaged {label} fmp4 decode failed: {error}"));
+    let mut probe_decoder =
+        DecoderFactory::create_with_probe(Cursor::new(mp4_bytes.clone()), Some("m4a"), &config)
+            .unwrap_or_else(|error| panic!("probe packaged {label} fmp4 decode failed: {error}"));
     let probe_chunk = probe_decoder
         .next_chunk()
         .unwrap_or_else(|error| panic!("decode first probe chunk for packaged {label}: {error}"));
