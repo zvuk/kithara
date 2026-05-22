@@ -38,6 +38,10 @@ default = ["file", "hls", "symphonia"]
 # Enable the Symphonia software decoder path. Disable to compile with
 # only a hardware backend (apple/android) and no software fallback.
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
+# libfdk-aac override for HE-AAC v1/v2 streams. Symphonia ships an
+# LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
+# stereo + SBR) streams fail in the software pipeline.
+fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
 hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "dep:kithara-drm"]
 assets = ["dep:kithara-assets", "dep:kithara-storage"]
@@ -65,7 +69,7 @@ perf = [
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
-apple = ["kithara-audio/apple", "kithara-play/apple"]
+apple = ["kithara-audio/apple", "kithara-play/apple", "fdk-aac"]
 android = ["kithara-audio/android", "kithara-decode/android"]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
