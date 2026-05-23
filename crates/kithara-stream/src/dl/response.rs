@@ -12,6 +12,16 @@ use kithara_platform::{
     tokio,
 };
 
+/// Boxed inner stream used inside [`BodyStream`].
+///
+/// On native: requires `Send` (multi-threaded tokio runtime).
+/// On wasm32: no `Send` bound (JsValue-backed streams are `!Send` and
+/// the browser tokio runtime is single-threaded — `Send` is vacuous).
+#[cfg(not(target_arch = "wasm32"))]
+type InnerStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;
+#[cfg(target_arch = "wasm32")]
+type InnerStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
+
 /// Response from a fetch — headers available immediately, body as
 /// async stream.
 pub struct FetchResponse {
@@ -35,7 +45,7 @@ impl std::fmt::Debug for FetchResponse {
 /// providing natural backpressure. I/O happens on the consumer's task,
 /// not on the downloader's worker threads.
 pub struct BodyStream {
-    inner: Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>,
+    inner: InnerStream,
 }
 
 impl std::fmt::Debug for BodyStream {
@@ -80,7 +90,7 @@ impl BodyStream {
 
     /// Wrap a raw stream (for testing or non-HTTP sources).
     #[must_use]
-    pub fn from_raw(inner: Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>) -> Self {
+    pub fn from_raw(inner: InnerStream) -> Self {
         Self { inner }
     }
 
@@ -127,7 +137,7 @@ fn wrap_with_cancel(
     byte_stream: ByteStream,
     cancel: CancelGroup,
     chunk_timeout: Duration,
-) -> Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>> {
+) -> InnerStream {
     Box::pin(stream::unfold(
         WrapState {
             cancel,

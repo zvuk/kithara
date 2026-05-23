@@ -15,7 +15,8 @@ use crate::disk_store::DiskAssetStore;
 use crate::{
     cache::{CachedAssets, CachedResource},
     evict::EvictAssets,
-    index::{AvailabilityIndex, EvictConfig, FlushHub, FlushPolicy},
+    flush::{FlushHub, FlushPolicy},
+    index::{AvailabilityIndex, EvictConfig},
     key::ResourceKey,
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
     mem_store::MemAssetStore,

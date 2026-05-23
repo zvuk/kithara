@@ -3,20 +3,19 @@
 use std::{
     num::NonZeroUsize,
     sync::{
-        Arc, OnceLock, Weak,
+        Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
 };
 
 #[cfg(test)]
 use kithara_platform::thread::sleep;
-use kithara_platform::{
-    Condvar, Mutex,
-    thread::{JoinHandle, spawn_named},
-    time::{Duration, Instant},
-};
+#[cfg(test)]
+use kithara_platform::time::Instant;
+use kithara_platform::{Condvar, Mutex, time::Duration};
 use tokio_util::sync::CancellationToken;
 
+use super::worker::WorkerSlot;
 use crate::error::AssetsResult;
 
 /// Source that can serialise its in-memory state to disk on demand.
@@ -86,14 +85,14 @@ impl Default for FlushPolicy {
 /// Internal mutable state shared between `signal()`, `flush_now()`, and
 /// the worker thread.
 #[derive(Default)]
-struct HubState {
+pub(super) struct HubState {
     /// `true` when at least one source has been marked dirty since the
     /// last flush cycle.
-    pending: bool,
+    pub(super) pending: bool,
     /// Number of `signal()` calls since the last flush cycle. Resets
     /// to zero on every flush. When it reaches
     /// `policy.force_every_n_ops` the worker bypasses the debounce.
-    op_count: usize,
+    pub(super) op_count: usize,
 }
 
 /// Shared flush coordinator. Created once per process or per
@@ -101,13 +100,14 @@ struct HubState {
 ///
 /// See module docs for the worker / sync-fallback semantics.
 pub struct FlushHub {
-    cancel: CancellationToken,
-    cv: Condvar,
-    policy: FlushPolicy,
-    flush_lock: Mutex<()>,
-    sources: Mutex<Vec<Weak<dyn Flushable>>>,
-    state: Mutex<HubState>,
-    worker: OnceLock<JoinHandle<()>>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(in crate::flush) cancel: CancellationToken,
+    pub(in crate::flush) cv: Condvar,
+    pub(in crate::flush) policy: FlushPolicy,
+    pub(in crate::flush) flush_lock: Mutex<()>,
+    pub(in crate::flush) sources: Mutex<Vec<Weak<dyn Flushable>>>,
+    pub(in crate::flush) state: Mutex<HubState>,
+    pub(in crate::flush) worker: WorkerSlot,
 }
 
 impl FlushHub {
@@ -122,11 +122,11 @@ impl FlushHub {
             cv: Condvar::new(),
             flush_lock: Mutex::new(()),
             sources: Mutex::new(Vec::new()),
-            worker: OnceLock::new(),
+            worker: WorkerSlot::new(),
         })
     }
 
-    fn flush_dirty(&self, durable: bool) -> AssetsResult<()> {
+    pub(super) fn flush_dirty(&self, durable: bool) -> AssetsResult<()> {
         let alive: Vec<Arc<dyn Flushable>> = {
             let mut g = self.sources.lock_sync();
             g.retain(|w| w.strong_count() > 0);
@@ -176,10 +176,11 @@ impl FlushHub {
         self.flush_dirty(true)
     }
 
-    /// Whether a background worker is attached.
+    /// Whether a background worker is attached. Always `false` on wasm32
+    /// where the worker module is gated out entirely.
     #[must_use]
     pub fn has_worker(&self) -> bool {
-        self.worker.get().is_some()
+        self.worker.is_started()
     }
 
     /// Count registered sources whose owning index is still alive.
@@ -201,50 +202,6 @@ impl FlushHub {
         self.sources.lock_sync().push(source);
     }
 
-    fn run(self: Arc<Self>) {
-        loop {
-            let mut guard = self.state.lock_sync();
-            while !guard.pending {
-                if self.cancel.is_cancelled() {
-                    drop(guard);
-                    let _g = self.flush_lock.lock_sync();
-                    let _ = self.flush_dirty(false);
-                    return;
-                }
-                let deadline = Instant::now() + self.policy.poll_interval;
-                let (next, _) = self.cv.wait_sync_timeout(guard, deadline);
-                guard = next;
-            }
-            drop(guard);
-
-            let debounce_deadline = Instant::now() + self.policy.debounce;
-            loop {
-                let guard = self.state.lock_sync();
-                if guard.op_count >= self.policy.force_every_n_ops.get() {
-                    break;
-                }
-                if self.cancel.is_cancelled() {
-                    drop(guard);
-                    let _g = self.flush_lock.lock_sync();
-                    let _ = self.flush_dirty(false);
-                    return;
-                }
-                if Instant::now() >= debounce_deadline {
-                    break;
-                }
-                let (_next, _) = self.cv.wait_sync_timeout(guard, debounce_deadline);
-            }
-
-            {
-                let mut guard = self.state.lock_sync();
-                guard.pending = false;
-                guard.op_count = 0;
-            }
-            let _g = self.flush_lock.lock_sync();
-            let _ = self.flush_dirty(false);
-        }
-    }
-
     /// Wake the worker. Bumps the operation counter so a sustained
     /// burst eventually bypasses the debounce. No-op when no worker is
     /// attached — the helper [`signal_or_flush_sync`] is the canonical
@@ -257,23 +214,6 @@ impl FlushHub {
             s.op_count = s.op_count.saturating_add(1);
         }
         self.cv.notify_one();
-    }
-
-    /// Spawn the background flush worker (idempotent). Subsequent
-    /// `signal()` calls coalesce mutations through `policy.debounce`
-    /// before flushing.
-    pub fn start_worker(self: &Arc<Self>) {
-        let hub = Arc::clone(self);
-        self.worker
-            .get_or_init(|| spawn_named("kithara-flush-hub", move || hub.run()));
-    }
-
-    /// Convenience: [`Self::new`] followed by [`Self::start_worker`].
-    #[must_use]
-    pub fn with_worker(cancel: CancellationToken, policy: FlushPolicy) -> Arc<Self> {
-        let hub = Self::new(cancel, policy);
-        hub.start_worker();
-        hub
     }
 }
 

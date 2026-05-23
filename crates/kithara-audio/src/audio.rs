@@ -1001,6 +1001,7 @@ where
             .unwrap_or_default()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     async fn spawn_probe(
         stream: Stream<T>,
         byte_pool: kithara_bufpool::BytePool,
@@ -1010,6 +1011,21 @@ where
             .await
             .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
         debug!("Audio::new — probe task done");
+        Ok(result)
+    }
+
+    /// Wasm probe path: the browser tokio runtime is single-threaded
+    /// and `spawn_blocking` requires `Send` — but `Stream<T>` is
+    /// `!Send` because it holds JS-backed network streams. Probe runs
+    /// inline on the calling task.
+    #[cfg(target_arch = "wasm32")]
+    async fn spawn_probe(
+        stream: Stream<T>,
+        byte_pool: kithara_bufpool::BytePool,
+    ) -> Result<Stream<T>, DecodeError> {
+        debug!("Audio::new — running probe inline (wasm)...");
+        let result = Self::probe_stream_blocking(stream, &byte_pool)?;
+        debug!("Audio::new — probe done");
         Ok(result)
     }
 }
@@ -1069,7 +1085,7 @@ impl<S> Drop for Audio<S> {
     }
 }
 
-impl<S: Send> PcmReader for Audio<S> {
+impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.abr_handle.clone()
     }

@@ -1,27 +1,17 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
-    fs,
+    collections::{HashMap, HashSet, hash_map::Entry},
     num::NonZeroU32,
-    path::PathBuf,
-    sync::{
-        Arc, OnceLock, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, OnceLock, Weak, atomic::AtomicBool},
 };
 
-use kithara_bufpool::BytePool;
 use kithara_platform::Mutex;
-use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
-use tokio_util::sync::CancellationToken;
 
-use super::{
+use crate::{
+    error::AssetsResult,
     flush::{FlushHub, Flushable, signal_or_flush_sync},
-    persist,
-    schema::PinsIndexFile,
 };
-use crate::error::{AssetsError, AssetsResult};
 
 /// In-memory + best-effort disk-backed index of pinned `asset_root`s.
 ///
@@ -38,9 +28,8 @@ use crate::error::{AssetsError, AssetsResult};
 ///
 /// Persistence is **lazy**: the disk file is materialised only on the
 /// first [`Self::flush`]. A pre-existing on-disk file from a previous
-/// run is opened eagerly during [`Self::with_persist_at`] for
-/// hydration, but a fresh build does not touch the filesystem until a
-/// real pin/unpin transition happens.
+/// run is opened eagerly during `Self::with_persist_at` (native only)
+/// for hydration. On wasm32 the index is always ephemeral.
 ///
 /// Three call-sites share a single instance per `cache_dir`:
 ///   * `LeaseAssets` (pin/unpin on resource lifecycle),
@@ -48,33 +37,29 @@ use crate::error::{AssetsError, AssetsResult};
 ///   * `DiskAssetDeleter` (drop pin when an `asset_root` is fully removed).
 #[derive(Clone)]
 pub struct PinsIndex {
-    inner: Arc<PinsInner>,
+    pub(super) inner: Arc<PinsInner>,
 }
 
 impl std::fmt::Debug for PinsIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PinsIndex")
-            .field("len", &self.inner.pins.try_lock().map(|p| p.len()).ok())
-            .field("persist", &self.inner.persist.is_some())
-            .finish()
+        let mut dbg = f.debug_struct("PinsIndex");
+        dbg.field("len", &self.inner.pins.try_lock().map(|p| p.len()).ok());
+        #[cfg(not(target_arch = "wasm32"))]
+        dbg.field("persist", &self.inner.persist.is_some());
+        dbg.finish()
     }
 }
 
-struct PinsInner {
-    dirty: AtomicBool,
-    pins: Mutex<HashMap<String, NonZeroU32>>,
+pub(super) struct PinsInner {
+    pub(super) dirty: AtomicBool,
+    pub(super) pins: Mutex<HashMap<String, NonZeroU32>>,
     /// Set by [`FlushHub::register`]. While `None`, mutators flush
     /// synchronously through [`Flushable::flush`] directly — matches
     /// the historical inline-flush path for ad-hoc tests that never
     /// attach a hub.
-    hub: OnceLock<Arc<FlushHub>>,
-    persist: Option<PinsPersist>,
-}
-
-struct PinsPersist {
-    cancel: CancellationToken,
-    res: OnceLock<Atomic<MmapResource>>,
-    path: PathBuf,
+    pub(super) hub: OnceLock<Arc<FlushHub>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) persist: Option<super::disk::PinsPersist>,
 }
 
 impl PinsIndex {
@@ -88,8 +73,8 @@ impl PinsIndex {
     ///
     /// # Errors
     ///
-    /// Propagates the underlying [`AssetsError`] when the on-disk
-    /// flush fails (mmap open, atomic swap, rkyv serialise).
+    /// Propagates the underlying [`AssetsError`](crate::error::AssetsError)
+    /// when the on-disk flush fails (mmap open, atomic swap, rkyv serialise).
     pub fn add(&self, asset_root: &str) -> AssetsResult<bool> {
         let transitioned = match self.inner.pins.lock_sync().entry(asset_root.to_string()) {
             Entry::Occupied(mut e) => {
@@ -131,6 +116,7 @@ impl PinsIndex {
         Self {
             inner: Arc::new(PinsInner {
                 pins: Mutex::new(HashMap::new()),
+                #[cfg(not(target_arch = "wasm32"))]
                 persist: None,
                 hub: OnceLock::new(),
                 dirty: AtomicBool::new(false),
@@ -162,8 +148,8 @@ impl PinsIndex {
     ///
     /// # Errors
     ///
-    /// Propagates the underlying [`AssetsError`] when the on-disk
-    /// flush fails.
+    /// Propagates the underlying [`AssetsError`](crate::error::AssetsError)
+    /// when the on-disk flush fails.
     pub fn remove(&self, asset_root: &str) -> AssetsResult<bool> {
         let transitioned = {
             let mut pins = self.inner.pins.lock_sync();
@@ -191,33 +177,6 @@ impl PinsIndex {
     pub fn snapshot(&self) -> HashSet<String> {
         self.inner.pins.lock_sync().keys().cloned().collect()
     }
-
-    /// Construct a disk-backed index rooted at `path`.
-    ///
-    /// If the file already exists and is non-empty, it is opened and
-    /// hydrated synchronously. Otherwise the disk file is **not**
-    /// materialised — it appears the first time [`Self::add`] /
-    /// [`Self::remove`] flush a real change.
-    pub fn with_persist_at(path: PathBuf, cancel: CancellationToken, pool: &BytePool) -> Self {
-        let (initial, opened) = hydrate_existing(&path, &cancel, pool);
-        Self {
-            inner: Arc::new(PinsInner {
-                pins: Mutex::new(initial),
-                persist: Some(PinsPersist {
-                    path,
-                    cancel,
-                    res: opened.map_or_else(OnceLock::new, |a| {
-                        let cell = OnceLock::new();
-                        cell.set(a)
-                            .unwrap_or_else(|_| unreachable!("freshly created cell"));
-                        cell
-                    }),
-                }),
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-            }),
-        }
-    }
 }
 
 impl Flushable for PinsInner {
@@ -241,98 +200,25 @@ impl Flushable for PinsInner {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 impl PinsInner {
-    fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
-        let Some(persist) = self.persist.as_ref() else {
-            self.dirty.store(false, Ordering::Release);
-            return Ok(());
-        };
-        let snapshot: Vec<String> = self.pins.lock_sync().keys().cloned().collect();
-        let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
-        write_pins(atomic, &snapshot, durable)?;
-        self.dirty.store(false, Ordering::Release);
+    fn flush_with_durability(&self, _durable: bool) -> AssetsResult<()> {
+        self.dirty
+            .store(false, std::sync::atomic::Ordering::Release);
         Ok(())
     }
-}
-
-fn hydrate_existing(
-    path: &std::path::Path,
-    cancel: &CancellationToken,
-    pool: &BytePool,
-) -> (HashMap<String, NonZeroU32>, Option<Atomic<MmapResource>>) {
-    let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
-    if !nonempty {
-        return (HashMap::new(), None);
-    }
-    match persist::open_existing(path, cancel) {
-        Ok(res) => {
-            let atomic = Atomic::new(res);
-            let initial = read_pins(&atomic, pool).unwrap_or_default();
-            (initial, Some(atomic))
-        }
-        Err(e) => {
-            tracing::debug!("open existing pins.bin failed: {e}");
-            (HashMap::new(), None)
-        }
-    }
-}
-
-fn read_pins(
-    res: &Atomic<MmapResource>,
-    pool: &BytePool,
-) -> AssetsResult<HashMap<String, NonZeroU32>> {
-    let mut buf = pool.get();
-    let n = res.read_into(&mut buf)?;
-
-    if n == 0 {
-        return Ok(HashMap::new());
-    }
-
-    let archived = match rkyv::access::<super::schema::ArchivedPinsIndexFile, rkyv::rancor::Error>(
-        &buf[..n],
-    ) {
-        Ok(a) => a,
-        Err(e) => {
-            tracing::debug!("Failed to validate pins index: {}", e);
-            return Ok(HashMap::new());
-        }
-    };
-
-    let pinned = archived
-        .pinned
-        .iter()
-        .filter(|(_, v)| **v)
-        .map(|(k, _)| (k.as_str().to_string(), NonZeroU32::MIN))
-        .collect();
-    Ok(pinned)
-}
-
-fn write_pins(res: &Atomic<MmapResource>, pins: &[String], durable: bool) -> AssetsResult<()> {
-    let mut map = BTreeMap::new();
-    for pin in pins {
-        map.insert(pin.clone(), true);
-    }
-    let file = PinsIndexFile {
-        version: 1,
-        pinned: map,
-    };
-
-    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
-        .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    if durable {
-        res.write_all_durable(&bytes)?;
-    } else {
-        res.write_all(&bytes)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
+    use std::fs;
+
+    use kithara_bufpool::BytePool;
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
 
     use super::*;
 

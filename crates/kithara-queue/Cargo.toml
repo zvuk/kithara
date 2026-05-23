@@ -13,7 +13,7 @@ workspace = true
 [features]
 default = ["backend-cpal", "symphonia"]
 backend-cpal = ["kithara-play/backend-cpal"]
-backend-web-audio = ["kithara-play/backend-web-audio"]
+backend-web-audio = ["kithara-play/backend-web-audio", "kithara-play/wasm-bindgen"]
 # Software decoder pass-through (see kithara-play). Required unless an
 # explicit hardware backend feature is enabled.
 symphonia = ["kithara-play/symphonia"]
@@ -27,6 +27,7 @@ probe = ["kithara-play/probe"]
 kithara-play = { workspace = true }
 kithara-abr = { workspace = true }
 kithara-events = { workspace = true }
+kithara-platform = { workspace = true }
 
 tokio = { workspace = true }
 tokio-util = { workspace = true }

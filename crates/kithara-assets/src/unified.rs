@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+use std::{fmt::Debug, hash::Hash, ops::Range, path::Path};
 
 use rangemap::RangeSet;
 

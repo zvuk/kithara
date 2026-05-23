@@ -93,6 +93,17 @@ impl<T: Default> Default for Mutex<T> {
     }
 }
 
+// On wasm32 the runtime is single-threaded; there is no real cross-thread
+// access to a `Mutex`. Override `wasm_safe_thread::Mutex`'s `T: Send` bound
+// on `Send`/`Sync` so types containing `!Send` interior (e.g. `JsValue`-backed
+// streams) stay usable behind `kithara_platform::Mutex`.
+#[cfg(target_arch = "wasm32")]
+// SAFETY: browser is single-threaded; a `Mutex` value never crosses threads.
+unsafe impl<T> Send for Mutex<T> {}
+#[cfg(target_arch = "wasm32")]
+// SAFETY: same — no concurrent access on the single browser thread.
+unsafe impl<T> Sync for Mutex<T> {}
+
 #[cfg(target_arch = "wasm32")]
 pub struct MutexGuard<'a, T>(pub(super) wasm_safe_thread::guard::Guard<'a, T>);
 

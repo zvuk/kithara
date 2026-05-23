@@ -74,6 +74,7 @@ pub(super) struct DownloaderInner {
     pub(super) client: HttpClient,
     /// Receiver — taken once by [`ensure_spawned`](Downloader::ensure_spawned).
     pub(super) register_rx: Mutex<Option<mpsc::UnboundedReceiver<RegisteredPeerEntry>>>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) runtime: Option<tokio::runtime::Handle>,
     /// Sender for registering new peers (cold path).
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
@@ -111,12 +112,14 @@ impl Downloader {
         let (tx, rx) = mpsc::unbounded_channel();
         let chunk_timeout = config.client.options().inactivity_timeout;
         let soft_timeout = config.soft_timeout;
+        #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
         let abr = AbrController::new(config.abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
                 chunk_timeout,
                 soft_timeout,
+                #[cfg(not(target_arch = "wasm32"))]
                 runtime,
                 abr,
                 client: config.client,
@@ -141,19 +144,38 @@ impl Downloader {
     /// Ensure the download loop is running (lazy spawn on first register
     /// in an async-capable context).
     fn ensure_spawned(&self) {
-        let handle = self
-            .inner
-            .runtime
-            .clone()
-            .or_else(|| tokio::runtime::Handle::try_current().ok());
-        let Some(handle) = handle else {
-            return;
-        };
         let Some(rx) = self.inner.register_rx.lock_sync().take() else {
             return;
         };
         let this = self.clone();
+        Self::spawn_run(&self.inner, this, rx);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_run(
+        inner: &DownloaderInner,
+        this: Self,
+        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
+    ) {
+        let Some(handle) = inner
+            .runtime
+            .clone()
+            .or_else(|| tokio::runtime::Handle::try_current().ok())
+        else {
+            return;
+        };
         handle.spawn(async move { this.run(rx).await });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn spawn_run(
+        _inner: &DownloaderInner,
+        this: Self,
+        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
+    ) {
+        drop(tokio::task::spawn(async move {
+            this.run(rx).await;
+        }));
     }
 
     /// Register a peer and return its [`PeerHandle`].

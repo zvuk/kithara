@@ -181,7 +181,7 @@ impl Queue {
         let pending_select = Arc::clone(&self.pending_select);
         let navigation = Arc::clone(&self.navigation);
         let bus = self.bus.clone();
-        tokio::spawn(async move {
+        drop(kithara_platform::tokio::task::spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
                 Ok(Err(_)) => return,
@@ -255,7 +255,7 @@ impl Queue {
                     mark_consumed();
                 }
             }
-        });
+        }));
     }
 
     /// Test-only path: if a respawn resource was pre-supplied via

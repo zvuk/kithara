@@ -372,7 +372,7 @@ fn handle_drain_step<N: Node>(
             cancel_all(slots);
             DrainStep::Shutdown
         }
-        Err(TryRecvError::Empty) => DrainStep::Empty,
+        Err(_) => DrainStep::Empty,
     }
 }
 

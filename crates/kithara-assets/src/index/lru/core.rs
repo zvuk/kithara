@@ -1,26 +1,20 @@
 #![forbid(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::BTreeMap;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc, OnceLock, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
+    collections::{HashMap, HashSet},
+    sync::{Arc, OnceLock, Weak, atomic::AtomicBool},
 };
 
-use kithara_bufpool::BytePool;
 use kithara_platform::Mutex;
-use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
-use tokio_util::sync::CancellationToken;
 
-use super::{
+#[cfg(not(target_arch = "wasm32"))]
+use crate::index::schema::{LruEntryFile, LruIndexFile};
+use crate::{
+    error::AssetsResult,
     flush::{FlushHub, Flushable, signal_or_flush_sync},
-    persist,
-    schema::{LruEntryFile, LruIndexFile},
 };
-use crate::error::{AssetsError, AssetsResult};
 
 /// Eviction configuration for an assets store decorator.
 #[derive(Clone, Debug, Default)]
@@ -39,41 +33,36 @@ pub struct EvictConfig {
 ///
 /// Persistence is **lazy**: the disk file is materialised only on the
 /// first [`Self::flush`]. A pre-existing on-disk file from a previous
-/// run is opened eagerly during [`Self::with_persist_at`] for
-/// hydration, but a fresh build does not touch the filesystem until a
-/// real touch/remove happens.
+/// run is opened eagerly during `Self::with_persist_at` (native only)
+/// for hydration. On wasm32 the index is always ephemeral.
 ///
 /// Two call-sites share a single instance per `cache_dir`:
 ///   * `EvictAssets` (touch/remove during open and eviction),
 ///   * `DiskAssetDeleter` (drop entry when an `asset_root` is fully removed).
 #[derive(Clone)]
 pub(crate) struct LruIndex {
-    inner: Arc<LruInner>,
+    pub(super) inner: Arc<LruInner>,
 }
 
 impl std::fmt::Debug for LruIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LruIndex")
-            .field("len", &self.inner.state.try_lock().map(|s| s.len()).ok())
-            .field("persist", &self.inner.persist.is_some())
-            .finish()
+        let mut dbg = f.debug_struct("LruIndex");
+        dbg.field("len", &self.inner.state.try_lock().map(|s| s.len()).ok());
+        #[cfg(not(target_arch = "wasm32"))]
+        dbg.field("persist", &self.inner.persist.is_some());
+        dbg.finish()
     }
 }
 
-struct LruInner {
-    dirty: AtomicBool,
-    state: Mutex<LruState>,
+pub(super) struct LruInner {
+    pub(super) dirty: AtomicBool,
+    pub(super) state: Mutex<LruState>,
     /// Set by [`LruIndex::attach_to`]. While `None`, mutators flush
     /// inline through [`Flushable::flush`] — matches the historical
     /// inline-flush behaviour for ad-hoc tests.
-    hub: OnceLock<Arc<FlushHub>>,
-    persist: Option<LruPersist>,
-}
-
-struct LruPersist {
-    cancel: CancellationToken,
-    res: OnceLock<Atomic<MmapResource>>,
-    path: PathBuf,
+    pub(super) hub: OnceLock<Arc<FlushHub>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) persist: Option<super::disk::LruPersist>,
 }
 
 impl LruIndex {
@@ -91,6 +80,7 @@ impl LruIndex {
         Self {
             inner: Arc::new(LruInner {
                 state: Mutex::new(LruState::default()),
+                #[cfg(not(target_arch = "wasm32"))]
                 persist: None,
                 hub: OnceLock::new(),
                 dirty: AtomicBool::new(false),
@@ -115,7 +105,8 @@ impl LruIndex {
     ///
     /// # Errors
     ///
-    /// Propagates [`AssetsError`] when the on-disk flush fails.
+    /// Propagates [`AssetsError`](crate::error::AssetsError) when the
+    /// on-disk flush fails.
     pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<()> {
         let removed = {
             let mut st = self.inner.state.lock_sync();
@@ -147,7 +138,8 @@ impl LruIndex {
     ///
     /// # Errors
     ///
-    /// Propagates [`AssetsError`] when the on-disk flush fails.
+    /// Propagates [`AssetsError`](crate::error::AssetsError) when the
+    /// on-disk flush fails.
     pub(crate) fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
         let created = {
             let mut st = self.inner.state.lock_sync();
@@ -167,7 +159,8 @@ impl LruIndex {
     ///
     /// # Errors
     ///
-    /// Propagates [`AssetsError`] when the on-disk flush fails.
+    /// Propagates [`AssetsError`](crate::error::AssetsError) when the
+    /// on-disk flush fails.
     pub(crate) fn update_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<bool> {
         let changed = {
             let mut st = self.inner.state.lock_sync();
@@ -177,37 +170,6 @@ impl LruIndex {
             signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
         }
         Ok(changed)
-    }
-
-    /// Construct a disk-backed index rooted at `path`.
-    ///
-    /// If the file already exists and is non-empty it is opened and
-    /// hydrated synchronously. Otherwise the disk file is **not**
-    /// materialised — it appears on the first [`Self::touch`] /
-    /// [`Self::remove`].
-    pub(crate) fn with_persist_at(
-        path: PathBuf,
-        cancel: CancellationToken,
-        pool: &BytePool,
-    ) -> Self {
-        let (initial, opened) = hydrate_existing(&path, &cancel, pool);
-        Self {
-            inner: Arc::new(LruInner {
-                state: Mutex::new(initial),
-                persist: Some(LruPersist {
-                    path,
-                    cancel,
-                    res: opened.map_or_else(OnceLock::new, |a| {
-                        let cell = OnceLock::new();
-                        cell.set(a)
-                            .unwrap_or_else(|_| unreachable!("freshly created cell"));
-                        cell
-                    }),
-                }),
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-            }),
-        }
     }
 }
 
@@ -229,73 +191,13 @@ impl Flushable for LruInner {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 impl LruInner {
-    fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
-        let Some(persist) = self.persist.as_ref() else {
-            self.dirty.store(false, Ordering::Release);
-            return Ok(());
-        };
-        let snapshot = self.state.lock_sync().clone();
-        let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
-        write_state(atomic, &snapshot, durable)?;
-        self.dirty.store(false, Ordering::Release);
+    fn flush_with_durability(&self, _durable: bool) -> AssetsResult<()> {
+        self.dirty
+            .store(false, std::sync::atomic::Ordering::Release);
         Ok(())
     }
-}
-
-fn hydrate_existing(
-    path: &std::path::Path,
-    cancel: &CancellationToken,
-    pool: &BytePool,
-) -> (LruState, Option<Atomic<MmapResource>>) {
-    let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
-    if !nonempty {
-        return (LruState::default(), None);
-    }
-    match persist::open_existing(path, cancel) {
-        Ok(res) => {
-            let atomic = Atomic::new(res);
-            let initial = read_state(&atomic, pool).unwrap_or_default();
-            (initial, Some(atomic))
-        }
-        Err(e) => {
-            tracing::debug!("open existing lru.bin failed: {e}");
-            (LruState::default(), None)
-        }
-    }
-}
-
-fn read_state(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<LruState> {
-    let mut buf = pool.get();
-    let n = res.read_into(&mut buf)?;
-
-    if n == 0 {
-        return Ok(LruState::default());
-    }
-
-    let file =
-        match rkyv::access::<super::schema::ArchivedLruIndexFile, rkyv::rancor::Error>(&buf[..n]) {
-            Ok(archived) => rkyv::deserialize::<LruIndexFile, rkyv::rancor::Error>(archived)
-                .expect("BUG: LRU archived → owned deserialize"),
-            Err(e) => {
-                tracing::debug!("Failed to deserialize lru index: {}", e);
-                return Ok(LruState::default());
-            }
-        };
-
-    Ok(LruState::from_file(file))
-}
-
-fn write_state(res: &Atomic<MmapResource>, state: &LruState, durable: bool) -> AssetsResult<()> {
-    let file = state.to_file();
-    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
-        .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
-    if durable {
-        res.write_all_durable(&bytes)?;
-    } else {
-        res.write_all(&bytes)?;
-    }
-    Ok(())
 }
 
 /// In-memory state of the LRU index.
@@ -354,7 +256,8 @@ impl LruState {
         out
     }
 
-    fn from_file(file: LruIndexFile) -> Self {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn from_file(file: LruIndexFile) -> Self {
         let mut by_root = HashMap::new();
         for (root, entry) in file.entries {
             by_root.insert(
@@ -381,7 +284,8 @@ impl LruState {
         self.by_root.remove(asset_root).is_some()
     }
 
-    fn to_file(&self) -> LruIndexFile {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn to_file(&self) -> LruIndexFile {
         let mut entries = BTreeMap::new();
         for (root, entry) in &self.by_root {
             entries.insert(

@@ -96,7 +96,7 @@ rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen"] }
+kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia"] }
 console_error_panic_hook = { workspace = true }
 js-sys = { workspace = true }
 num-traits = { workspace = true }
