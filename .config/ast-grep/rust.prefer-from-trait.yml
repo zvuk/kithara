@@ -1,0 +1,59 @@
+id: rust.prefer-from-trait
+message: |
+  `fn from_$NAME($_: X) -> Self` is a manual `From<X>` impl. Use
+  `impl From<X> for $TYPE` so callers can use `.into()` and the type
+  system can chain conversions.
+
+      // ❌
+      impl Key {
+          pub fn from_url(url: &Url) -> Self {
+              Self { hash: hash_url(url) }
+          }
+      }
+
+      // ✅
+      impl From<&Url> for Key {
+          fn from(url: &Url) -> Self {
+              Self { hash: hash_url(url) }
+          }
+      }
+
+  For newtypes and simple wraps use `#[derive(derive_more::From)]`.
+  Manual impl is only needed when conversion logic is non-trivial.
+
+  This rule catches ONLY infallible conversions (return Self). For
+  fallible (Result<Self> / Option<Self>) see rust.prefer-tryfrom-trait.
+
+  Suppress with `// ast-grep-ignore: rust.prefer-from-trait` when
+  there is a legitimate reason (e.g. a named constructor with
+  domain-specific semantics that should not be a generic From).
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 1a,
+  Wave 2).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: |
+        fn $NAME($$$ARGS) -> Self {
+            $$$BODY
+        }
+    - pattern: |
+        pub fn $NAME($$$ARGS) -> Self {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn $NAME($$$ARGS) -> Self {
+            $$$BODY
+        }
+constraints:
+  NAME:
+    regex: "^from_[a-z][a-z0-9_]*$"

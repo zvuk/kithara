@@ -21,7 +21,7 @@ Detected a heap-allocating expression inside a loop body that runs once \
 per iteration.
 
 Why it matters. `format!()`, `String::new()`, `Vec::new()`, `Box::new(...)`, \
-`.to_string()`, `.to_owned()` — каждое allocates from the global allocator. \
+`.to_string()`, `.to_owned()` — each one allocates from the global allocator. \
 Inside a loop that runs N times, this is N allocations, N drops, N free-list \
 churn rounds. For audio/render hot paths (process callback, decoder loop, \
 HLS scheduler tick) even small per-iteration allocations destroy cache \

@@ -1,11 +1,11 @@
 id: idioms.join-of-join-alls
 message: |
-  `join(join_all(a), join_all(b))` — нет short-circuit на ошибке: если первый
-  future в `a` упал на 50ms, остальные `a` и весь `b` продолжают работать
-  полные таймауты, прежде чем вы узнаете об ошибке. Это тратит I/O
-  и удлиняет critical path в холодном старте.
+  `join(join_all(a), join_all(b))` — no short-circuit on error: if the
+  first future in `a` fails after 50ms, the rest of `a` and all of `b`
+  keep running to full timeout before you learn about the failure.
+  That wastes I/O and lengthens the cold-start critical path.
 
-  Заменяй на short-circuit вариант:
+  Replace with the short-circuit form:
 
       // ❌
       let (a_results, b_results) =
@@ -15,14 +15,13 @@ message: |
 
       // ✅
       try_join(try_join_all(futs_a), try_join_all(futs_b)).await?;
-      // или, если предпочитаете макрос:
+      // or, if you prefer the macro:
       // try_join!(try_join_all(futs_a), try_join_all(futs_b))?;
 
-  Заметь: если future-замыкания заворачивают результат в кортеж
-  `(key, result)` только чтобы цикл `for` мог его деструктурировать
-  (а сам `key` потом игнорируется через `_`), это dead weight — после
-  перехода на `try_*` кортеж становится ненужным, и замыкания
-  возвращают `Result<T, E>` напрямую.
+  Note: if future closures wrap the result in a tuple `(key, result)`
+  only so the `for` loop can destructure it (and `key` is then ignored
+  via `_`), that's dead weight — after switching to `try_*`, the tuple
+  becomes unnecessary and closures can return `Result<T, E>` directly.
 
   Suppress with `// ast-grep-ignore: idioms.join-of-join-alls` only when
   partial-success aggregation is the actual goal (per-result inspection

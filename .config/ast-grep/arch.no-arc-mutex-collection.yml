@@ -1,16 +1,17 @@
 id: arch.no-arc-mutex-collection
 message: |
-  `Arc<Mutex<Vec<…>>>` / `Arc<RwLock<VecDeque<…>>>` — shared collection
-  под lock'ом. Обычно симптом: один компонент читает, другой пишет,
-  владельца нет, и это зашито в типе вместо явного контракта.
+  `Arc<Mutex<Vec<…>>>` / `Arc<RwLock<VecDeque<…>>>` — a shared collection
+  behind a lock. Usually a symptom: one component reads, another writes,
+  no clear owner, and that's encoded in the type instead of an explicit
+  contract.
 
-  Альтернативы:
-    - one owner + `tokio::sync::mpsc` / `crossbeam::channel` для push;
-    - `ArcSwap<Arc<Vec<…>>>` если read-mostly snapshot;
-    - убрать collection (часто Vec используется как мини-channel).
+  Alternatives:
+    - one owner + `tokio::sync::mpsc` / `crossbeam::channel` for push;
+    - `ArcSwap<Arc<Vec<…>>>` for read-mostly snapshots;
+    - drop the collection (Vec is often used as a mini-channel).
 
-  Если коллекция действительно shared mutable state — задокументируйте
-  владельца и lifecycle в README соответствующего крейта.
+  If the collection is genuinely shared mutable state, document the
+  owner and lifecycle in the README of the owning crate.
 severity: warning
 language: Rust
 files:

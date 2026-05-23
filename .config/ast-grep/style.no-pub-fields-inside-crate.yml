@@ -1,0 +1,50 @@
+id: style.no-pub-fields-inside-crate
+message: |
+  `pub field:` inside a `pub(crate) struct` is an unnecessary accessor
+  for inside-crate use. Within a single crate use `pub(crate) field:`
+  (or just private with accessor methods) to mark the inside-crate
+  boundary and ease future refactoring.
+
+      // ❌
+      pub(crate) struct Dashboard {
+          pub active_tab: Tab,
+          pub selected_eq_band: usize,
+      }
+
+      // ✅
+      pub(crate) struct Dashboard {
+          pub(crate) active_tab: Tab,
+          pub(crate) selected_eq_band: usize,
+      }
+
+  IMPORTANT (Category 7 in the meta-plan, Wave 10): audit re-exports
+  before fixing — if the `pub(crate)` struct is re-exported via
+  `pub use crate::path::Dashboard` in `lib.rs`, it is effectively
+  cross-crate public. In that case the rule does NOT apply (suppress).
+
+  This rule ONLY catches `pub` fields inside `pub(crate)` structs.
+  It does not touch `pub` structs (cross-crate API is sacred per the
+  meta-plan).
+
+  Suppress with `// ast-grep-ignore: style.no-pub-fields-inside-crate`
+  if the struct is `pub(crate)` but re-exported as public API.
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 7,
+  Wave 10).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  pattern: |
+    pub(crate) struct $NAME {
+      $$$BEFORE
+      pub $FIELD: $TY,
+      $$$AFTER
+    }

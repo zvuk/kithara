@@ -263,6 +263,8 @@ rangemap = { version = "1.7.1", features = ["serde1"] }
 mmap-io = { version = "1.0", default-features = false }
 dashmap = "6.2.1"
 bon = "3.9"
+derive_more = "2.1"
+strum = { version = "0.28", features = ["derive"] }
 lru = "0.18"
 
 # fuzzing

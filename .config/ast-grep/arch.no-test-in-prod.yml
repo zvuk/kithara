@@ -1,21 +1,21 @@
 id: arch.no-test-in-prod
 message: |
-  Тестовые артефакты не должны жить в production source. Имена с
-  суффиксом `_for_test`/`_for_tests` или модули `tests`/`test` в
-  `crates/*/src/` (вне `#[cfg(test)] mod`) загрязняют public API и
-  rustdoc, попадают в `cargo build --features test-utils`, и часто
-  создают параллельные пути записи, обходящие документированные
-  prod-входы (см. AGENTS.md, "Do not introduce parallel mutable sources
-  of truth without an explicit transition contract").
+  Test artifacts must not live in production source. Names with the
+  `_for_test`/`_for_tests` suffix or `tests`/`test` modules in
+  `crates/*/src/` (outside `#[cfg(test)] mod`) pollute the public API
+  and rustdoc, leak into `cargo build --features test-utils`, and often
+  create parallel write paths that bypass documented prod entry points
+  (see AGENTS.md, "Do not introduce parallel mutable sources of truth
+  without an explicit transition contract").
 
-  Заменители:
-    1. Использовать prod-вход (`AbrState::apply` вместо `set_variant_for_test`).
-    2. Перенести helper в same-crate `#[cfg(test)] mod tests {}` блок.
-    3. Перенести helper в crate-локальный `pub mod test_utils` под фичей
-       или в `tests/src/` для cross-crate потребителей.
+  Replacements:
+    1. Use the prod entry point (`AbrState::apply` instead of `set_variant_for_test`).
+    2. Move the helper into a same-crate `#[cfg(test)] mod tests {}` block.
+    3. Move the helper into a crate-local `pub mod test_utils` behind a
+       feature, or into `tests/src/` for cross-crate consumers.
 
-  Подавление допускается только через `// ast-grep-ignore: arch.no-test-in-prod`
-  с обоснованием в комментарии (отсылка к плану/issue).
+  Suppression is only allowed via `// ast-grep-ignore: arch.no-test-in-prod`
+  with a justification in the comment (reference to a plan/issue).
 severity: error
 language: Rust
 files:

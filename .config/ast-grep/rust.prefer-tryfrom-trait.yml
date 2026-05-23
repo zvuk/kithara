@@ -1,0 +1,59 @@
+id: rust.prefer-tryfrom-trait
+message: |
+  `fn from_$NAME($_: X) -> Result<Self, E>` or `-> Option<Self>` is a
+  manual `TryFrom<X>` impl. Use `impl TryFrom<X> for $TYPE` so callers
+  can use `.try_into()` and the `?` operator.
+
+      // ❌
+      impl AacCfg {
+          pub fn from_extra_data(data: &[u8]) -> Result<Self, ParseError> {
+              parse_extra_data(data)
+          }
+      }
+
+      // ✅
+      impl TryFrom<&[u8]> for AacCfg {
+          type Error = ParseError;
+          fn try_from(data: &[u8]) -> Result<Self, ParseError> {
+              parse_extra_data(data)
+          }
+      }
+
+  For `Option<Self>` use TryFrom with a unit error (`type Error = ()`)
+  when the error carries no information, or introduce an enum error.
+
+  Suppress with `// ast-grep-ignore: rust.prefer-tryfrom-trait` when
+  there is a legitimate reason (e.g. a named parser with multiple input
+  types that does not fit a generic TryFrom<X>).
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 1b,
+  Wave 3).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: |
+        fn $NAME($$$ARGS) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub fn $NAME($$$ARGS) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn $NAME($$$ARGS) -> $RET {
+            $$$BODY
+        }
+constraints:
+  NAME:
+    regex: "^from_[a-z][a-z0-9_]*$"
+  RET:
+    regex: "^(Result<Self|Option<Self|crate::Result<Self|anyhow::Result<Self)"
