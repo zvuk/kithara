@@ -155,30 +155,15 @@ impl AbrState {
         self.lock_count.load(Ordering::Acquire) > 0
     }
 
-    /// On the 0→1 lock transition, drop a throughput-driven pending
-    /// boundary-commit (`UpSwitch` / `DownSwitch` / urgent / buffer-low
-    /// variants). Seek is the canonical lock trigger (mirrored from
-    /// `Timeline::is_seek_pending`); a pre-seek up-switch chosen on
-    /// stale throughput would otherwise commit on the first boundary
-    /// after unlock, forcing decoder recreate before the new-variant
-    /// cache is warm (prod `app.log` `HangDetector` signature).
-    ///
-    /// `ManualOverride` and `Initial` pendings are preserved — they
-    /// encode user intent or first-pick that survive a position jump.
-    /// The
-    /// `peek_pending_decision_returns_none_during_seek` contract uses
-    /// `AlreadyOptimal`, also preserved.
+    /// Gate publication of pending decisions: while `lock_count > 0`,
+    /// [`peek_pending_decision`](Self::peek_pending_decision) returns
+    /// `None` so the boundary commit defers until unlock. The pending
+    /// intent itself is preserved across lock/unlock — destructive
+    /// invalidation of stale pre-seek intents is the job of
+    /// [`invalidate_pending`](Self::invalidate_pending), called from
+    /// `coord::reset_for_seek` on a semantic seek boundary.
     pub fn lock(&self) {
-        let prev = self.lock_count.fetch_add(1, Ordering::AcqRel);
-        if prev == 0 {
-            let mut slot = self.pending.lock_sync();
-            if slot
-                .as_ref()
-                .is_some_and(|p| is_throughput_driven(p.reason))
-            {
-                *slot = None;
-            }
-        }
+        self.lock_count.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Drop a throughput-driven pending boundary-commit. Called when a
@@ -280,19 +265,14 @@ impl AbrState {
     /// — between two boundaries we keep the latest intent and discard
     /// stale ones.
     ///
-    /// Throughput-driven writes (`UpSwitch`, `DownSwitch`, urgent /
-    /// no-estimate / buffer-low variants) are dropped silently while
-    /// ABR is locked: the controller may still call `decide()` while
-    /// the seek pipeline is reconfiguring, but an up-switch chosen on
-    /// pre-seek throughput must not survive into the post-unlock
-    /// boundary commit — it would force a decoder recreate before the
-    /// new-variant cache is warm (prod `app.log` `HangDetector`
-    /// signature). `ManualOverride` and `Initial` reasons bypass the
-    /// gate; they encode user intent or first-pick that is not stale.
+    /// The pending intent is written regardless of `is_locked` — the
+    /// publish gate lives in
+    /// [`peek_pending_decision`](Self::peek_pending_decision), which
+    /// returns `None` while locked so the boundary commit defers until
+    /// post-unlock. Destructive drop of stale pre-seek intents is the
+    /// job of [`invalidate_pending`](Self::invalidate_pending), called
+    /// from `coord::reset_for_seek` on a semantic seek boundary.
     pub fn request_target(&self, target: usize, reason: AbrReason) {
-        if self.is_locked() && is_throughput_driven(reason) {
-            return;
-        }
         *self.pending.lock_sync() = Some(PendingApply { reason, target });
     }
 
