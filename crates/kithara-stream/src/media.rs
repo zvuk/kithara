@@ -98,8 +98,7 @@ impl AudioCodec {
     /// - `mp4a.40.34` -> `Mp3`
     /// - `mp4a.69` or `mp4a.6B` -> `Mp3`
     #[must_use]
-    // ast-grep-ignore: rust.prefer-fromstr
-    pub fn from_hls_codec(codec: &str) -> Option<Self> {
+    pub fn parse_hls_codec(codec: &str) -> Option<Self> {
         let codec_lower = codec.to_lowercase();
 
         if codec_lower.starts_with("mp4a.40.29") {
@@ -132,8 +131,7 @@ impl AudioCodec {
     /// - `audio/aac` -> `AacLc`
     /// - `audio/flac` -> `Flac`
     #[must_use]
-    // ast-grep-ignore: rust.prefer-fromstr
-    pub fn from_mime(mime: &str) -> Option<Self> {
+    pub fn parse_mime(mime: &str) -> Option<Self> {
         let m = mime.to_lowercase();
         if m.contains("mp3") || m == "audio/mpeg" {
             return Some(Self::Mp3);
@@ -252,7 +250,7 @@ mod tests {
         #[case] expected: Option<AudioCodec>,
         #[case] _description: &str,
     ) {
-        assert_eq!(AudioCodec::from_hls_codec(codec_str), expected);
+        assert_eq!(AudioCodec::parse_hls_codec(codec_str), expected);
     }
 
     #[kithara::test]

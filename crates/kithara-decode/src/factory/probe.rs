@@ -41,7 +41,7 @@ pub(super) fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
     }
 
     if let Some(ref mime) = hint.mime
-        && let Some(codec) = AudioCodec::from_mime(mime)
+        && let Some(codec) = AudioCodec::parse_mime(mime)
     {
         return Ok(codec);
     }
@@ -285,6 +285,6 @@ mod tests {
     #[case("")]
     #[case("video/mp4")]
     fn test_codec_from_mime_unknown_returns_none(#[case] mime: &str) {
-        assert!(AudioCodec::from_mime(mime).is_none());
+        assert!(AudioCodec::parse_mime(mime).is_none());
     }
 }

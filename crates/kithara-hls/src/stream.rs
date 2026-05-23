@@ -87,7 +87,7 @@ impl StreamType for Hls {
         playlist_cache.set_base_url(config.base_url.clone());
         playlist_cache.set_headers(config.headers.clone());
 
-        let key_manager = KeyManager::from_options(
+        let key_manager = KeyManager::with_options(
             peer_handle.clone(),
             backend.clone(),
             config.headers.clone(),
@@ -106,10 +106,7 @@ impl StreamType for Hls {
             media_playlists.push(playlist);
         }
 
-        let playlist_state = Arc::new(PlaylistState::from_parsed(
-            &master.variants,
-            &media_playlists,
-        ));
+        let playlist_state = Arc::new(PlaylistState::assemble(&master.variants, &media_playlists));
 
         hls_peer.set_abr_variants(variant_info_from_master(&master, &media_playlists));
 

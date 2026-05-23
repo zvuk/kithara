@@ -51,11 +51,11 @@ impl Resource {
         let source_type = SourceType::detect(&config.src)?;
         match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio_config = config.into_file_config();
+                let audio_config = config.build_file_config();
                 Self::from_stream_audio(audio_config, src).await
             }
             SourceType::HlsStream(_) => {
-                let audio_config = config.into_hls_config()?;
+                let audio_config = config.build_hls_config()?;
                 Self::from_stream_audio(audio_config, src).await
             }
         }

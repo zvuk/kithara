@@ -60,7 +60,7 @@ fn test_config() -> DownloaderConfig {
 
 fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
     let stream = stream_iter(chunks.into_iter().map(|c| Ok(Bytes::from_static(c))));
-    BodyStream::from_raw(Box::pin(stream))
+    BodyStream::wrap_raw(Box::pin(stream))
 }
 
 fn sleep(ms: u64) -> tokio_time::Sleep {

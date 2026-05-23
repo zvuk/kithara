@@ -4,12 +4,11 @@ pub trait HangDump {
     fn label(&self) -> Option<&str> {
         None
     }
-    fn to_json(&self) -> String;
+    fn dump_json(&self) -> String;
 }
 
 impl<T> HangDump for T {
-    // ast-grep-ignore: rust.no-to-string-method
-    fn to_json(&self) -> String {
+    fn dump_json(&self) -> String {
         String::new()
     }
 }

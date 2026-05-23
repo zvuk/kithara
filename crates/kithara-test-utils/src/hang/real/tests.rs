@@ -5,7 +5,7 @@ use crate::kithara;
 
 #[kithara::test]
 fn no_context_serializes_to_null() {
-    assert_eq!(super::NoContext.to_json(), "null");
+    assert_eq!(super::NoContext.dump_json(), "null");
 }
 
 mod detector_tests {
@@ -121,7 +121,7 @@ fn blanket_impl_serializes_serde_type() {
         value: 7,
         name: "x",
     }
-    .to_json();
+    .dump_json();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed["value"], 7);
     assert_eq!(parsed["name"], "x");

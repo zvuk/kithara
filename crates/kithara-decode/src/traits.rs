@@ -94,17 +94,6 @@ impl DecoderChunkOutcome {
         }
     }
 
-    /// Consume this outcome into the inner [`PcmChunk`] when it is
-    /// `Chunk`. Returns `None` for `Pending` / `Eof`.
-    #[must_use]
-    // ast-grep-ignore: rust.prefer-from-not-to-into
-    pub fn into_chunk(self) -> Option<PcmChunk> {
-        match self {
-            Self::Chunk(chunk) => Some(chunk),
-            _ => None,
-        }
-    }
-
     /// `true` when the outcome is [`Self::Chunk`].
     #[must_use]
     pub fn is_chunk(&self) -> bool {
@@ -121,6 +110,17 @@ impl DecoderChunkOutcome {
     #[must_use]
     pub fn is_pending(&self) -> bool {
         matches!(self, Self::Pending(_))
+    }
+}
+
+impl TryFrom<DecoderChunkOutcome> for PcmChunk {
+    type Error = DecoderChunkOutcome;
+
+    fn try_from(outcome: DecoderChunkOutcome) -> Result<Self, Self::Error> {
+        match outcome {
+            DecoderChunkOutcome::Chunk(chunk) => Ok(chunk),
+            other => Err(other),
+        }
     }
 }
 

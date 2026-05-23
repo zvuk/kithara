@@ -78,8 +78,7 @@ impl PlaylistState {
     /// index in `variants`. Segment URIs are resolved against the media
     /// playlist URL; failures fall back to the media URL itself.
     #[must_use]
-    // ast-grep-ignore: rust.prefer-from-trait
-    pub fn from_parsed(
+    pub fn assemble(
         variants: &[crate::parsing::VariantStream],
         media_playlists: &[crate::parsing::MediaPlaylist],
     ) -> Self {
@@ -675,7 +674,7 @@ mod tests {
         };
 
         let media_playlists = vec![playlist];
-        let state = PlaylistState::from_parsed(&variants, &media_playlists);
+        let state = PlaylistState::assemble(&variants, &media_playlists);
 
         assert_eq!(state.num_variants(), 1);
 

@@ -236,7 +236,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let timeline = shared_stream.timeline();
         let peer_wake = shared_stream.make_notify_fn();
         let gapless =
-            GaplessStage::from_decoder(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
+            GaplessStage::build(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
         let session = DecoderSession {
             decoder,
             base_offset: 0,

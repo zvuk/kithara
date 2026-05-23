@@ -42,8 +42,7 @@ impl FileSource {
     /// inner is created up in `stream.rs::Stream<File>::open` and shared
     /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
     /// loop, so this constructor does nothing async.
-    // ast-grep-ignore: rust.prefer-from-trait
-    pub(crate) fn from_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
+    pub(crate) fn with_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
         Self {
             coord,
             inner,

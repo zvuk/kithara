@@ -77,8 +77,7 @@ impl RangeSpec {
     }
 
     #[must_use]
-    // ast-grep-ignore: rust.prefer-from-trait
-    pub fn from_start(start: u64) -> Self {
+    pub fn start_at(start: u64) -> Self {
         Self { end: None, start }
     }
 }
@@ -274,15 +273,15 @@ mod tests {
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    #[case::from_start_0(0, 0, None)]
-    #[case::from_start_100(100, 100, None)]
-    #[case::from_start_max(u64::MAX, u64::MAX, None)]
-    async fn test_range_spec_from_start(
+    #[case::start_at_0(0, 0, None)]
+    #[case::start_at_100(100, 100, None)]
+    #[case::start_at_max(u64::MAX, u64::MAX, None)]
+    async fn test_range_spec_start_at(
         #[case] start: u64,
         #[case] expected_start: u64,
         #[case] expected_end: Option<u64>,
     ) {
-        let range = RangeSpec::from_start(start);
+        let range = RangeSpec::start_at(start);
         assert_eq!(range.start, expected_start);
         assert_eq!(range.end, expected_end);
     }

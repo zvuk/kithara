@@ -140,7 +140,7 @@ impl FileInner {
         let codec = headers
             .get("content-type")
             .or_else(|| headers.get("Content-Type"))
-            .and_then(AudioCodec::from_mime);
+            .and_then(AudioCodec::parse_mime);
         if let Some(c) = codec {
             let _ = self.content_type_codec.set(c);
         }

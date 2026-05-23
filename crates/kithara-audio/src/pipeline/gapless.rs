@@ -37,8 +37,7 @@ impl GaplessStage {
     /// - **`SilenceTrim`** — prefer metadata when present; otherwise use the silence-trim parameters from the mode.
     /// - **Disabled** — passthrough, no trim.
     #[must_use]
-    // ast-grep-ignore: rust.prefer-from-trait
-    pub(crate) fn from_decoder(
+    pub(crate) fn build(
         decoder: &dyn Decoder,
         mode: GaplessMode,
         media_info: Option<&MediaInfo>,

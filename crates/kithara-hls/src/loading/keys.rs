@@ -107,8 +107,7 @@ impl KeyManager {
 
     /// Convenience constructor from [`crate::config::KeyOptions`].
     #[must_use]
-    // ast-grep-ignore: rust.prefer-from-trait
-    pub fn from_options(
+    pub fn with_options(
         downloader: PeerHandle,
         backend: AssetStore<DecryptContext>,
         base_headers: Option<Headers>,

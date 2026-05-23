@@ -351,7 +351,7 @@ mod tests {
         let retry_net = retry_net_default(mock);
 
         let url = test_url();
-        let range = RangeSpec::from_start(0);
+        let range = RangeSpec::start_at(0);
         let result = retry_net.get_range(url, range, None).await;
 
         assert!(result.is_ok());
@@ -373,7 +373,7 @@ mod tests {
         let retry_net = retry_net(mock, fast_retry_policy(3));
 
         let url = test_url();
-        let range = RangeSpec::from_start(0);
+        let range = RangeSpec::start_at(0);
         let result = retry_net.get_range(url, range, None).await;
 
         assert!(result.is_ok());

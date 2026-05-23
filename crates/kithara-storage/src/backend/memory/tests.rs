@@ -55,7 +55,7 @@ fn test_write_all_read_into() {
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_from_bytes() {
-    let res = MemResource::from_bytes(b"preloaded", CancellationToken::new());
+    let res = MemResource::with_bytes(b"preloaded", CancellationToken::new());
 
     assert_eq!(
         res.status(),
@@ -254,7 +254,7 @@ fn test_growable_multiple_writes_extend() {
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_from_bytes_readable() {
     let data = b"hello growable buffer world";
-    let res = MemResource::from_bytes(data, CancellationToken::new());
+    let res = MemResource::with_bytes(data, CancellationToken::new());
 
     let mut buf = vec![0u8; data.len()];
     let n = res.read_at(0, &mut buf).unwrap();

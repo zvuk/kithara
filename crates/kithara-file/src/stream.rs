@@ -227,7 +227,7 @@ impl File {
             .register(Arc::new(FilePeer::new(Arc::clone(&inner))))
             .with_bus(state.bus.clone());
 
-        let mut source = FileSource::from_inner(inner, coord);
+        let mut source = FileSource::with_inner(inner, coord);
         source.set_peer_handle(peer_handle);
         Ok(source)
     }
