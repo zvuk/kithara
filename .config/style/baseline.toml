@@ -479,7 +479,6 @@ schema_version = 1
 "crates/kithara-test-utils/src/test/noop.rs:5:category" = 1
 "crates/kithara-test-utils/src/test/noop.rs:6:category" = 1
 "crates/kithara-test-utils/src/test/real/probe_capture/mod.rs:1:size:doc" = 1
-"crates/kithara-ffi-macros/src/lib.rs:16:size:doc" = 1
 
 [const_locality]
 "crates/kithara-app/src/crossfade.rs::PROGRESS_LOG_INTERVAL" = 1

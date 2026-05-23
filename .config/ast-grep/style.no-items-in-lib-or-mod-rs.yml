@@ -26,7 +26,6 @@ ignores:
   # entry functions themselves cannot be moved.
   - "crates/kithara-probe-macros/src/lib.rs"
   - "crates/kithara-test-macros/src/lib.rs"
-  - "crates/kithara-ffi-macros/src/lib.rs"
 rule:
   any:
     - kind: function_item

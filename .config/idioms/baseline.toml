@@ -947,7 +947,6 @@ schema_version = 1
 "crates/kithara-test-utils/src/test/real/test_server/wasm.rs:65:4" = 1
 "crates/kithara-test-utils/src/test/real/test_server/wasm.rs:94:4" = 1
 "crates/kithara-test-utils/src/test/real/wav.rs:78:4" = 1
-"crates/kithara-ffi-macros/src/lib.rs:16:0" = 1
 "crates/kithara-ffi/src/web/bindings.rs:5:0" = 1
 "crates/kithara-ffi/src/web/js.rs:128:0" = 1
 "crates/kithara-ffi/src/web/js.rs:43:0" = 1

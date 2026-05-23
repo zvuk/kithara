@@ -4205,7 +4205,6 @@ dependencies = [
  "kithara",
  "kithara-drm",
  "kithara-events",
- "kithara-ffi-macros",
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
@@ -4230,16 +4229,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "kithara-ffi-macros"
-version = "0.0.1-alpha1"
-dependencies = [
- "kithara-workspace-hack",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]

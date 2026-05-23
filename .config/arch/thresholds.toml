@@ -57,7 +57,6 @@ warn = 8
 "kithara-ffi" = 20
 "kithara-test-utils" = 20
 "kithara-test-macros" = 20
-"kithara-ffi-macros" = 20
 "xtask" = 20
 
 [god_struct]
@@ -126,7 +125,6 @@ exempt_crates = [
     "xtask",
     "kithara-test-utils",
     "kithara-test-macros",
-    "kithara-ffi-macros",
     "kithara-probe-macros",
 ]
 
@@ -162,7 +160,6 @@ exempt_crates = []
 exempt = [
     "kithara-workspace-hack",
     "kithara-test-macros",
-    "kithara-ffi-macros",
 ]
 min_bytes = 200
 

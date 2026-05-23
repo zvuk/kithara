@@ -26,7 +26,6 @@ impl Consts {
         "kithara-workspace-hack",
         "kithara-test-utils",
         "kithara-test-macros",
-        "kithara-ffi-macros",
         "kithara-ffi",
         "kithara-fuzz",
         "kithara-decode",

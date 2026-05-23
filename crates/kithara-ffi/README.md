@@ -30,7 +30,7 @@ Cross-platform FFI adapter for the kithara audio player. Not published — consu
 
 `src/lib.rs` is the single structural boundary where `target_arch = "wasm32"` lives: `pub mod web;` is gated; everything under `src/web/` is unconditionally wasm-only. Likewise, `pub(crate) mod android;` is the only `target_os` gate in this file. The `arch.no-target-os-outside-platform` lint exempts `src/lib.rs` for exactly that reason; everywhere else inside the crate must stay free of inline `cfg(target_*)` gates.
 
-`src/web/` currently uses `#[wasm_bindgen]` for the JS-facing surface and the `#[wasm_export]` proc-macro from `kithara-ffi-macros` (see `crates/kithara-ffi-macros/README.md`). Phase E will replace the API surface with `#[uniffi::export]` (via `uniffi-bindgen-js`) while keeping `#[wasm_bindgen]` for the hot-path bridge atomics and Worker / AudioWorklet glue.
+`src/web/` uses `#[wasm_bindgen]` directly for the JS-facing surface (the Player singleton is exposed via free `player_*` functions; the xtask wasm postbuild step synthesises a JS `Player` class wrapper around them). Generated TypeScript definitions ship with the wasm-bindgen output.
 
 ## Build flows
 

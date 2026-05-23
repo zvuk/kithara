@@ -4,7 +4,6 @@ use std::sync::{
 };
 
 use js_sys::Promise;
-use kithara_ffi_macros::wasm_export;
 use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
 use kithara_play::wasm_support;
 use tracing::info;
@@ -84,10 +83,6 @@ impl Player {
         Ok(())
     }
 
-    fn find_player_idx(&self) -> Option<usize> {
-        None
-    }
-
     fn load_f32(a: &AtomicU32) -> f32 {
         f32::from_bits(a.load(Ordering::Relaxed))
     }
@@ -108,16 +103,11 @@ impl Player {
     fn store_f32(a: &AtomicU32, val: f32) {
         a.store(val.to_bits(), Ordering::Relaxed);
     }
-}
 
-#[wasm_export]
-impl Player {
-    #[export]
     fn eq_band_count(&self) -> u32 {
         Self::EQ_BANDS as u32
     }
 
-    #[export]
     fn eq_gain(&self, band: u32) -> f32 {
         self.eq_gains
             .get(band as usize)
@@ -125,52 +115,42 @@ impl Player {
             .unwrap_or(0.0)
     }
 
-    #[export]
     fn get_crossfade_seconds(&self) -> f32 {
         Self::load_f32(&self.crossfade_secs)
     }
 
-    #[export]
     fn get_duration_ms(&self) -> f64 {
         wasm_support::bridge_duration_secs() * Self::MS_PER_SECOND
     }
 
-    #[export]
     fn get_position_ms(&self) -> f64 {
         wasm_support::bridge_position_secs() * Self::MS_PER_SECOND
     }
 
-    #[export]
     fn get_session_ducking(&self) -> u32 {
         self.ducking.load(Ordering::Relaxed)
     }
 
-    #[export]
     fn get_volume(&self) -> f32 {
         Self::load_f32(&self.volume)
     }
 
-    #[export]
     fn is_playing(&self) -> bool {
         wasm_support::bridge_is_playing()
     }
 
-    #[export]
     fn pause(&self) {
         let _ = self.send_cmd(WorkerCmd::Pause);
     }
 
-    #[export]
     fn play(&self) {
         let _ = self.send_cmd(WorkerCmd::Play);
     }
 
-    #[export]
     fn process_count(&self) -> f64 {
         wasm_support::bridge_process_count() as f64
     }
 
-    #[export]
     fn reset_eq(&self) -> Result<(), JsValue> {
         for g in &self.eq_gains {
             Self::store_f32(g, 0.0);
@@ -178,12 +158,10 @@ impl Player {
         self.send_cmd(WorkerCmd::ResetEq)
     }
 
-    #[export]
     fn seek(&self, position_ms: f64) -> Result<(), JsValue> {
         self.send_cmd(WorkerCmd::Seek(position_ms))
     }
 
-    #[export]
     fn select_track(&self, url: String) -> Result<js_sys::Promise, JsValue> {
         clog!("[PLAYER] select_track: sending to Worker url={url}");
         let request_id = crate::web::js::next_request_id();
@@ -216,13 +194,11 @@ impl Player {
             .map_err(|_| JsValue::from_str("worker channel closed"))
     }
 
-    #[export]
     fn set_crossfade_seconds(&self, seconds: f32) {
         Self::store_f32(&self.crossfade_secs, seconds);
         let _ = self.send_cmd(WorkerCmd::SetCrossfade(seconds));
     }
 
-    #[export]
     fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), JsValue> {
         if let Some(slot) = self.eq_gains.get(band as usize) {
             Self::store_f32(slot, gain_db);
@@ -230,37 +206,146 @@ impl Player {
         self.send_cmd(WorkerCmd::SetEqGain { band, gain_db })
     }
 
-    #[export]
     fn set_session_ducking(&self, mode: u32) -> Result<(), JsValue> {
         self.ducking.store(mode, Ordering::Relaxed);
         self.send_cmd(WorkerCmd::SetDucking(mode))
     }
 
-    #[export]
     fn set_volume(&self, volume: f32) {
         Self::store_f32(&self.volume, volume);
         let _ = self.send_cmd(WorkerCmd::SetVolume(volume));
     }
 
-    #[export]
     fn stop(&self) {
         let _ = self.send_cmd(WorkerCmd::Stop);
     }
 
-    #[export]
     fn take_events(&self) -> String {
         crate::web::js::take_events()
     }
 
-    #[export]
     fn tick(&self) {
         wasm_support::tick_and_poll();
     }
 
-    #[export]
     fn warm_up_audio(&self) {
         wasm_support::warm_up_audio();
     }
+}
+
+// JS-facing surface. The xtask wasm postbuild step scans for `player_*`
+// free functions and synthesises a `Player` class wrapper in the
+// generated JS bundle, so the JS shape stays identical to what the old
+// `#[wasm_export]` proc-macro produced.
+
+#[wasm_bindgen]
+pub fn player_eq_band_count() -> u32 {
+    player().eq_band_count()
+}
+
+#[wasm_bindgen]
+pub fn player_eq_gain(band: u32) -> f32 {
+    player().eq_gain(band)
+}
+
+#[wasm_bindgen]
+pub fn player_get_crossfade_seconds() -> f32 {
+    player().get_crossfade_seconds()
+}
+
+#[wasm_bindgen]
+pub fn player_get_duration_ms() -> f64 {
+    player().get_duration_ms()
+}
+
+#[wasm_bindgen]
+pub fn player_get_position_ms() -> f64 {
+    player().get_position_ms()
+}
+
+#[wasm_bindgen]
+pub fn player_get_session_ducking() -> u32 {
+    player().get_session_ducking()
+}
+
+#[wasm_bindgen]
+pub fn player_get_volume() -> f32 {
+    player().get_volume()
+}
+
+#[wasm_bindgen]
+pub fn player_is_playing() -> bool {
+    player().is_playing()
+}
+
+#[wasm_bindgen]
+pub fn player_pause() {
+    player().pause()
+}
+
+#[wasm_bindgen]
+pub fn player_play() {
+    player().play()
+}
+
+#[wasm_bindgen]
+pub fn player_process_count() -> f64 {
+    player().process_count()
+}
+
+#[wasm_bindgen]
+pub fn player_reset_eq() -> Result<(), JsValue> {
+    player().reset_eq()
+}
+
+#[wasm_bindgen]
+pub fn player_seek(position_ms: f64) -> Result<(), JsValue> {
+    player().seek(position_ms)
+}
+
+#[wasm_bindgen]
+pub fn player_select_track(url: String) -> Result<js_sys::Promise, JsValue> {
+    player().select_track(url)
+}
+
+#[wasm_bindgen]
+pub fn player_set_crossfade_seconds(seconds: f32) {
+    player().set_crossfade_seconds(seconds)
+}
+
+#[wasm_bindgen]
+pub fn player_set_eq_gain(band: u32, gain_db: f32) -> Result<(), JsValue> {
+    player().set_eq_gain(band, gain_db)
+}
+
+#[wasm_bindgen]
+pub fn player_set_session_ducking(mode: u32) -> Result<(), JsValue> {
+    player().set_session_ducking(mode)
+}
+
+#[wasm_bindgen]
+pub fn player_set_volume(volume: f32) {
+    player().set_volume(volume)
+}
+
+#[wasm_bindgen]
+pub fn player_stop() {
+    player().stop()
+}
+
+#[wasm_bindgen]
+pub fn player_take_events() -> String {
+    player().take_events()
+}
+
+#[wasm_bindgen]
+pub fn player_tick() {
+    player().tick()
+}
+
+#[wasm_bindgen]
+pub fn player_warm_up_audio() {
+    player().warm_up_audio()
 }
 
 /// Returns a `Promise` that resolves after worker spawn.

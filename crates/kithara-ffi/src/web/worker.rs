@@ -12,8 +12,8 @@ macro_rules! clog {
 }
 
 /// Entry called inside a Web Worker thread (via `kithara_platform::spawn`).
-#[kithara_ffi_macros::assert_not_main_thread]
 pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
+    kithara_platform::thread::assert_not_main_thread(concat!(module_path!(), "::worker_main"));
     clog!("[WORKER] engine worker started");
 
     task_spawn(async move {

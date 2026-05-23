@@ -457,7 +457,6 @@ fn default_no_lib_statics_exempt_crates() -> Vec<String> {
         "xtask",
         "kithara-test-utils",
         "kithara-test-macros",
-        "kithara-ffi-macros",
         "kithara-probe-macros",
     ]
     .iter()
@@ -488,7 +487,6 @@ fn default_cancel_hierarchy_exempt_crates() -> Vec<String> {
     [
         "kithara-test-utils",
         "kithara-test-macros",
-        "kithara-ffi-macros",
         "kithara-probe-macros",
         "xtask",
     ]
