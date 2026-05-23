@@ -4,18 +4,18 @@ use std::sync::{Arc, atomic::AtomicU64};
 #[derive(Default)]
 pub(crate) struct SymphoniaConfig {
     /// Handle for dynamic byte length updates (HLS).
-    pub byte_len_handle: Option<Arc<AtomicU64>>,
+    pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     /// File extension hint for Symphonia probe (e.g., `"mp3"`, `"aac"`).
     ///
     /// Used by the probe path when no container is known up-front.
-    pub hint: Option<String>,
+    pub(crate) hint: Option<String>,
     /// Enable gapless trim wiring through the Symphonia decoder.
     ///
     /// When `true`, [`SymphoniaCodec::open_with_config`](super::codec::SymphoniaCodec::open_with_config)
     /// flips `AudioDecoderOptions::gapless = true`, and the factory in
     /// P7 calls [`probe_track_info`](super::codec::SymphoniaCodec::probe_track_info)
     /// to populate [`crate::DecoderTrackInfo::gapless`] from MP4 udta.
-    pub gapless: bool,
+    pub(crate) gapless: bool,
 }
 
 #[cfg(test)]

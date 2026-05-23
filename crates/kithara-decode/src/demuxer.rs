@@ -57,9 +57,9 @@ pub(crate) trait Demuxer: Send {
 #[non_exhaustive]
 pub(crate) struct TrackInfo {
     /// Audio codec carried by this track.
-    pub codec: AudioCodec,
+    pub(crate) codec: AudioCodec,
     /// Total track duration if available.
-    pub duration: Option<Duration>,
+    pub(crate) duration: Option<Duration>,
     /// Container-level gapless metadata — populated by demuxers that
     /// can extract it without consuming the decoder (MP4 `iTunSMPB`
     /// or track `elst`, FLAC `padded_sample_count`, etc.). `None` when
@@ -67,15 +67,15 @@ pub(crate) struct TrackInfo {
     /// recognised source. Codec-level capture (`AppleCodec` `PrimeInfo`
     /// refresh, `Symphonia` `AudioDecoderOptions::gapless`) supplements
     /// this for codecs whose priming is not container-visible.
-    pub gapless: Option<crate::GaplessInfo>,
+    pub(crate) gapless: Option<crate::GaplessInfo>,
     /// Codec-specific extra data — `AudioSpecificConfig` (AAC),
     /// `STREAMINFO` (FLAC), `esds` cookie (Apple), etc. Empty when the
     /// codec needs no extra data.
-    pub extra_data: Vec<u8>,
+    pub(crate) extra_data: Vec<u8>,
     /// Channel count.
-    pub channels: u16,
+    pub(crate) channels: u16,
     /// Decoded sample rate (Hz).
-    pub sample_rate: u32,
+    pub(crate) sample_rate: u32,
 }
 
 /// One demuxed audio frame, borrowed from the demuxer's internal state.
@@ -87,17 +87,17 @@ pub(crate) struct TrackInfo {
 pub(crate) struct Frame<'a> {
     /// Raw frame bytes — slice into the demuxer's owned buffer (mp4
     /// segment, Symphonia `Packet`, etc.). Zero-copy: never cloned.
-    pub data: &'a [u8],
+    pub(crate) data: &'a [u8],
     /// Opaque per-packet metadata for codecs that need it for VBR
     /// decoding. Apple-native MP3 / ALAC paths pass a serialized
     /// `AudioStreamPacketDescription` here; the codec interprets the
     /// bytes. Demuxers without VBR descriptors leave this empty.
     /// Borrow lifetime mirrors `data`.
-    pub packet_desc: &'a [u8],
+    pub(crate) packet_desc: &'a [u8],
     /// Frame duration.
-    pub duration: Duration,
+    pub(crate) duration: Duration,
     /// Presentation time of this frame.
-    pub pts: Duration,
+    pub(crate) pts: Duration,
 }
 
 /// Result of a [`Demuxer::next_frame`] call.

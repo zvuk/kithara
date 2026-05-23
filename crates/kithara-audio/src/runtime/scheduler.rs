@@ -33,10 +33,10 @@ pub(crate) enum SchedulerCmd<N> {
 
 /// A slot holding a node and its metadata.
 pub(crate) struct Slot<N> {
-    pub node: N,
-    pub service_class: ServiceClass,
-    pub id: SlotId,
-    pub is_terminal: bool,
+    pub(crate) node: N,
+    pub(crate) service_class: ServiceClass,
+    pub(crate) id: SlotId,
+    pub(crate) is_terminal: bool,
 }
 
 impl<N: Node> Slot<N> {

@@ -6,13 +6,13 @@ use crate::error::{DecodeError, DecodeResult};
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ProbeHint {
     /// Known codec (the highest priority).
-    pub codec: Option<AudioCodec>,
+    pub(crate) codec: Option<AudioCodec>,
     /// Container format hint.
-    pub container: Option<ContainerFormat>,
+    pub(crate) container: Option<ContainerFormat>,
     /// File extension hint (e.g., "mp3", "aac").
-    pub extension: Option<String>,
+    pub(crate) extension: Option<String>,
     /// MIME type hint (e.g., "audio/mpeg", "audio/flac").
-    pub mime: Option<String>,
+    pub(crate) mime: Option<String>,
 }
 
 /// Resolve `(codec, container)` from a probe hint.

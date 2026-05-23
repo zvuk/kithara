@@ -20,11 +20,11 @@ use crate::{
 
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
-    pub preload_notify: Arc<Notify>,
-    pub source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    pub outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
-    pub service_class: ServiceClass,
-    pub preload_chunks: usize,
+    pub(crate) preload_notify: Arc<Notify>,
+    pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+    pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
+    pub(crate) service_class: ServiceClass,
+    pub(crate) preload_chunks: usize,
 }
 
 /// Clonable handle to a shared audio worker.

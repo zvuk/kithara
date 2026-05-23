@@ -40,22 +40,22 @@ pub(crate) enum TrackState {
 /// Context for a pending seek, carried through multiple states.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SeekContext {
-    pub target: Duration,
-    pub epoch: u64,
+    pub(crate) target: Duration,
+    pub(crate) epoch: u64,
 }
 
 /// Stateful seek request tracked across retries and waits.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SeekRequest {
-    pub seek: SeekContext,
-    pub attempt: u8,
+    pub(crate) seek: SeekContext,
+    pub(crate) attempt: u8,
 }
 
 /// Seek application mode resolved before touching the decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ApplySeekState {
-    pub mode: SeekMode,
-    pub request: SeekRequest,
+    pub(crate) mode: SeekMode,
+    pub(crate) request: SeekRequest,
 }
 
 /// Resume state after a seek has been applied to the decoder.
@@ -63,10 +63,10 @@ pub(crate) struct ApplySeekState {
 pub(crate) struct ResumeState {
     /// Anchor byte offset from the seek — used for readiness checks and demand
     /// when the decoder's stream position differs from the `StreamIndex` layout.
-    pub anchor_offset: Option<u64>,
-    pub skip: Option<Duration>,
-    pub seek: SeekContext,
-    pub recover_attempts: u8,
+    pub(crate) anchor_offset: Option<u64>,
+    pub(crate) skip: Option<Duration>,
+    pub(crate) seek: SeekContext,
+    pub(crate) recover_attempts: u8,
 }
 
 /// What to do once decoder recreation succeeds.
@@ -83,11 +83,11 @@ pub(crate) enum RecreateNext {
 /// Decoder recreation task tracked by the FSM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecreateState {
-    pub media_info: MediaInfo,
-    pub cause: RecreateCause,
-    pub next: RecreateNext,
-    pub offset: u64,
-    pub attempt: u8,
+    pub(crate) media_info: MediaInfo,
+    pub(crate) cause: RecreateCause,
+    pub(crate) next: RecreateNext,
+    pub(crate) offset: u64,
+    pub(crate) attempt: u8,
 }
 
 /// What caused us to enter `WaitingForSource`.
@@ -158,9 +158,9 @@ pub(crate) enum TrackFailure {
 /// Created whole — never partially mutated. On recreation failure
 /// the old session remains untouched.
 pub(crate) struct DecoderSession {
-    pub decoder: Box<dyn Decoder>,
-    pub media_info: Option<MediaInfo>,
-    pub base_offset: u64,
+    pub(crate) decoder: Box<dyn Decoder>,
+    pub(crate) media_info: Option<MediaInfo>,
+    pub(crate) base_offset: u64,
 }
 
 /// Result of a single `step_track()` call.

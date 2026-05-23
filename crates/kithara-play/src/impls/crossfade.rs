@@ -21,8 +21,8 @@ pub(crate) fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
 /// Crossfade configuration for the player processor.
 #[derive(Clone, Debug)]
 pub(crate) struct CrossfadeSettings {
-    pub curve: CrossfadeCurve,
-    pub duration: f32,
+    pub(crate) curve: CrossfadeCurve,
+    pub(crate) duration: f32,
 }
 
 impl Default for CrossfadeSettings {
