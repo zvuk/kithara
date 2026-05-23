@@ -98,6 +98,7 @@ impl AudioCodec {
     /// - `mp4a.40.34` -> `Mp3`
     /// - `mp4a.69` or `mp4a.6B` -> `Mp3`
     #[must_use]
+    // ast-grep-ignore: rust.prefer-fromstr
     pub fn from_hls_codec(codec: &str) -> Option<Self> {
         let codec_lower = codec.to_lowercase();
 
@@ -131,6 +132,7 @@ impl AudioCodec {
     /// - `audio/aac` -> `AacLc`
     /// - `audio/flac` -> `Flac`
     #[must_use]
+    // ast-grep-ignore: rust.prefer-fromstr
     pub fn from_mime(mime: &str) -> Option<Self> {
         let m = mime.to_lowercase();
         if m.contains("mp3") || m == "audio/mpeg" {
