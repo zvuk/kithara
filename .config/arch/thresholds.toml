@@ -8,7 +8,16 @@ warn = 5
 deny = 10
 # Platform adapter crate: cfg gates are its raison d'être.
 exempt_crates = ["kithara-platform"]
-exclude_globs = ["**/tests/**", "**/benches/**"]
+exclude_globs = [
+    "**/tests/**",
+    "**/benches/**",
+    # `kithara-ffi/src/lib.rs` is the single structural boundary for the
+    # browser/wasm bindings (`pub mod web;`) and the Android JNI surface
+    # (`pub(crate) mod android;`). The mod-level cfg gates are exactly what
+    # this lint normally pushes toward; they live here intentionally.
+    # Documented in `crates/kithara-ffi/README.md` "Web target".
+    "crates/kithara-ffi/src/lib.rs",
+]
 
 [file_size]
 warn = 400
@@ -46,10 +55,9 @@ warn = 8
 [god_module.overrides]
 "kithara-app" = 20
 "kithara-ffi" = 20
-"kithara-wasm" = 20
 "kithara-test-utils" = 20
 "kithara-test-macros" = 20
-"kithara-wasm-macros" = 20
+"kithara-ffi-macros" = 20
 "xtask" = 20
 
 [god_struct]
@@ -103,7 +111,6 @@ warn = 4
 [module_fan_out.overrides]
 "kithara-app" = 8
 "kithara-ffi" = 8
-"kithara-wasm" = 8
 "kithara-test-utils" = 8
 "xtask" = 8
 
@@ -116,11 +123,10 @@ warn = 4
 exempt_crates = [
     "kithara-app",
     "kithara-ffi",
-    "kithara-wasm",
     "xtask",
     "kithara-test-utils",
     "kithara-test-macros",
-    "kithara-wasm-macros",
+    "kithara-ffi-macros",
     "kithara-probe-macros",
 ]
 
@@ -156,7 +162,7 @@ exempt_crates = []
 exempt = [
     "kithara-workspace-hack",
     "kithara-test-macros",
-    "kithara-wasm-macros",
+    "kithara-ffi-macros",
 ]
 min_bytes = 200
 

@@ -15,14 +15,13 @@ members = [
     "crates/kithara-storage",
     "crates/kithara-assets",
     "crates/kithara-bufpool",
-    "crates/kithara-wasm",
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
     "crates/kithara-app",
-    "crates/kithara-wasm-macros",
+    "crates/kithara-ffi-macros",
     "crates/kithara-ffi",
     "crates/kithara-workspace-hack",
     "tests",
@@ -44,7 +43,6 @@ default-members = [
     "crates/kithara-storage",
     "crates/kithara-assets",
     "crates/kithara-bufpool",
-    "crates/kithara-wasm",
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
@@ -157,8 +155,7 @@ kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha1" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha1" }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha1" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha1" }
-kithara-wasm = { path = "crates/kithara-wasm" }
-kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
+kithara-ffi-macros = { path = "crates/kithara-ffi-macros" }
 kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha1" }

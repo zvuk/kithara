@@ -3,7 +3,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 use kithara_platform::{sync::mpsc, tokio, tokio::task::spawn as task_spawn};
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDuckingMode};
 
-use crate::wasm::commands::WorkerCmd;
+use crate::web::commands::WorkerCmd;
 
 macro_rules! clog {
     ($($arg:tt)*) => {
@@ -12,7 +12,7 @@ macro_rules! clog {
 }
 
 /// Entry called inside a Web Worker thread (via `kithara_platform::spawn`).
-#[kithara_wasm_macros::assert_not_main_thread]
+#[kithara_ffi_macros::assert_not_main_thread]
 pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>) {
     clog!("[WORKER] engine worker started");
 
@@ -54,7 +54,7 @@ async fn dispatch_cmd(cmd: WorkerCmd, player: &Arc<PlayerImpl>) {
     match cmd {
         WorkerCmd::SelectTrack { url, request_id } => {
             let result = handle_select_track(player, &url).await;
-            crate::wasm::js::send_reply(request_id, result);
+            crate::web::js::send_reply(request_id, result);
         }
         WorkerCmd::Play => {
             player.play();

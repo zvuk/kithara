@@ -39,5 +39,5 @@ mod kithara_hls {
     mod stress_seek_random;
 }
 
-mod kithara_wasm;
+mod kithara_ffi_web;
 mod multi_instance;

@@ -1,5 +1,5 @@
 [package]
-name = "kithara-wasm-macros"
+name = "kithara-ffi-macros"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

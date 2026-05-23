@@ -8,7 +8,7 @@
 
 </div>
 
-# kithara-wasm-macros
+# kithara-ffi-macros
 
 Workspace proc-macro crate (`publish = false`) for wasm export glue and thread-affinity assertions.
 
@@ -44,4 +44,4 @@ fn worker_main() {
 
 ## Integration
 
-Used by `kithara-wasm` to keep wasm-bindgen exports and worker thread guards declarative and consistent.
+Used by `kithara-ffi`'s web bindings to keep wasm-bindgen exports and worker thread guards declarative and consistent.

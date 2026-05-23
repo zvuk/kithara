@@ -2,8 +2,8 @@ id: arch.no-target-os-outside-platform
 message: |
   `#[cfg(target_os = ...)]` or `#[cfg(target_arch = ...)]` outside the
   platform layer. Move the conditional code into `kithara-platform` (or
-  `kithara-wasm` for browser-only logic), expose a stable trait/fn from
-  there, and call that abstraction from this crate.
+  `kithara-ffi/web` for browser-only logic), expose a stable trait/fn
+  from there, and call that abstraction from this crate.
 
   Why: every business-logic file with a target gate is a place where the
   wasm or apple build can silently regress. The platform crates exist
@@ -22,15 +22,13 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
-  # `kithara-wasm` IS the browser/wasm platform shim (parallel to
-  # `kithara-platform` for native targets). The rule's own message
-  # explicitly authorises browser-only logic to live here. The shim
-  # entry points need a single cfg gate on `mod wasm;` and on the
-  # internal re-export module — that's the structural boundary, not a
-  # per-call-site target leak. Documented in
-  # `crates/kithara-wasm/README.md` (Architecture / Platform shim).
-  - "crates/kithara-wasm/src/lib.rs"
-  - "crates/kithara-wasm/src/internal.rs"
+  # `kithara-ffi/src/lib.rs` is the single structural boundary for the
+  # browser/wasm bindings (`pub mod web;` is the only target_arch gate)
+  # and for Android JNI (`pub(crate) mod android;` is the only target_os
+  # gate). The wasm submodule itself contains zero inline cfg gates
+  # (analogous to the Apple/Android subtrees). Documented in
+  # `crates/kithara-ffi/README.md`.
+  - "crates/kithara-ffi/src/lib.rs"
   # `kithara-play` hosts the audio session, which has unavoidable platform
   # asymmetry: native runs a dedicated engine thread with a ringbuf+park
   # wake-up, while wasm32 splits state between the main thread (where the

@@ -22,5 +22,4 @@ platforms = [
 workspace-members = [
     "kithara-integration-tests",
     "kithara-ffi",
-    "kithara-wasm",
 ]

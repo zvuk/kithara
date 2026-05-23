@@ -18,7 +18,7 @@ impl Consts {
     /// - workspace-hack: auto-generated hakari surface, no source modules.
     /// - test-utils / *-macros: helper/proc-macro crates with intentional unimported items.
     /// - kithara-ffi / kithara-fuzz / xtask: special export shapes / fuzz targets.
-    /// - kithara-decode / kithara-platform / kithara-wasm: heavy `#[cfg(target_*)]`
+    /// - kithara-decode / kithara-platform: heavy `#[cfg(target_*)]`
     ///   gating that the default rust-analyzer view treats as orphan modules
     ///   (false positives without per-target runs). These are validated through
     ///   target-specific builds (`just wasm check`, `cargo check --target ...`).
@@ -26,12 +26,11 @@ impl Consts {
         "kithara-workspace-hack",
         "kithara-test-utils",
         "kithara-test-macros",
-        "kithara-wasm-macros",
+        "kithara-ffi-macros",
         "kithara-ffi",
         "kithara-fuzz",
         "kithara-decode",
         "kithara-platform",
-        "kithara-wasm",
         "xtask",
     ];
 

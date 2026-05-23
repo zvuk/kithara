@@ -131,7 +131,6 @@ mod tests {
             "kithara-hls",
             "kithara-file",
             "kithara-audio",
-            "kithara-wasm",
             "kithara-decode",
         ];
         pub(super) const MID_CRATES: &[&str] = &[

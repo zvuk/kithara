@@ -68,7 +68,7 @@ fn find_in_path(binary: &str) -> Option<OsString> {
 #[cfg(not(target_arch = "wasm32"))]
 fn install_worker_shim_alias() -> Result<TempDir, std::io::Error> {
     let dir = tempfile::tempdir()?;
-    let alias = dir.path().join("kithara-wasm.js");
+    let alias = dir.path().join("kithara-ffi.js");
     fs::write(
         alias,
         "export * from './wasm-bindgen-test.js';\n\

@@ -72,9 +72,9 @@ fn run_build(profile: crate::BuildProfile) -> Result<()> {
 
     let metadata = MetadataCommand::new().exec().context("cargo metadata")?;
     let root = metadata.workspace_root.as_std_path();
-    let wasm_dir = root.join("crates/kithara-wasm");
+    let wasm_dir = root.join("crates/kithara-ffi");
 
-    println!("==> Building kithara-wasm");
+    println!("==> Building kithara-ffi (wasm32)");
     let mut cmd = Command::new("trunk");
     cmd.args(["build", "--config", "Trunk.toml"]);
     if matches!(profile, crate::BuildProfile::Release) {
@@ -191,10 +191,10 @@ fn strip_html_attrs(content: &str) -> String {
 
 fn rewrite_paths(content: &str) -> String {
     content
-        .replace("from '/kithara-wasm.js'", "from './kithara-wasm.js'")
+        .replace("from '/kithara-ffi.js'", "from './kithara-ffi.js'")
         .replace(
-            "module_or_path: '/kithara-wasm_bg.wasm'",
-            "module_or_path: './kithara-wasm_bg.wasm'",
+            "module_or_path: '/kithara-ffi_bg.wasm'",
+            "module_or_path: './kithara-ffi_bg.wasm'",
         )
 }
 
@@ -276,9 +276,9 @@ fn run_postbuild(staging_dir: &str) -> Result<()> {
     let content = rewrite_paths(&content);
     fs::write(&index, content).context("write index.html")?;
 
-    let js = dir.join("kithara-wasm.js");
+    let js = dir.join("kithara-ffi.js");
     if js.exists() {
-        let content = fs::read_to_string(&js).context("read kithara-wasm.js")?;
+        let content = fs::read_to_string(&js).context("read kithara-ffi.js")?;
         let content = apply_text_decoder_polyfill(&content);
         let mut content = content + Consts::CHECK_RUNTIME_JS;
         if let Some(class) = generate_player_class(&content) {
@@ -286,8 +286,8 @@ fn run_postbuild(staging_dir: &str) -> Result<()> {
             content.push_str(&class);
             println!("post-build: Player class appended");
         }
-        fs::write(&js, content).context("write kithara-wasm.js")?;
-        println!("post-build: kithara-wasm.js patched");
+        fs::write(&js, content).context("write kithara-ffi.js")?;
+        println!("post-build: kithara-ffi.js patched");
     }
 
     let pattern = format!("{}/snippets/wasm_safe_thread-*/inline0.js", dir.display());
@@ -323,11 +323,11 @@ mod tests {
 
     #[test]
     fn rewrite_absolute_to_relative_paths() {
-        let input = "from '/kithara-wasm.js'\nmodule_or_path: '/kithara-wasm_bg.wasm'";
+        let input = "from '/kithara-ffi.js'\nmodule_or_path: '/kithara-ffi_bg.wasm'";
         let result = rewrite_paths(input);
         assert_eq!(
             result,
-            "from './kithara-wasm.js'\nmodule_or_path: './kithara-wasm_bg.wasm'"
+            "from './kithara-ffi.js'\nmodule_or_path: './kithara-ffi_bg.wasm'"
         );
     }
 

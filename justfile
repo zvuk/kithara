@@ -69,7 +69,6 @@ quality *ARGS:
 # Feature-powerset check (requires cargo-hack).
 hack:
     cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace \
-      --exclude kithara-wasm \
       --exclude kithara-play \
       --exclude kithara-app \
       --exclude kithara-fuzz
@@ -512,8 +511,7 @@ mutants TARGET="" *ARGS:
         --exclude 'tests/**' \
         --exclude 'crates/kithara-ffi/**' \
         --exclude 'crates/kithara-app/**' \
-        --exclude 'crates/kithara-wasm/**' \
-        --exclude 'crates/kithara-wasm-macros/**' \
+        --exclude 'crates/kithara-ffi-macros/**' \
         --exclude 'xtask/**' \
         --exclude-re 'src/.*test.*\.rs' \
         -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
@@ -619,13 +617,10 @@ wasm MODE="check":
     set -uo pipefail
     case "{{MODE}}" in
       check)
-        for c in kithara-wasm kithara-storage kithara-net kithara-stream kithara-assets kithara-hls kithara-decode; do
-          if [[ "$c" == "kithara-wasm" ]]; then
-            cargo check -p "$c" --target wasm32-unknown-unknown --no-default-features
-          else
-            cargo check -p "$c" --target wasm32-unknown-unknown
-          fi
+        for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls kithara-decode; do
+          cargo check -p "$c" --target wasm32-unknown-unknown
         done
+        cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)
         CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
@@ -646,8 +641,8 @@ wasm MODE="check":
           echo "wasm-slim is not installed"; exit 2
         fi
         mkdir -p target
-        ln -sfn ../../target crates/kithara-wasm/target
-        cd crates/kithara-wasm
+        ln -sfn ../../target crates/kithara-ffi/target
+        cd crates/kithara-ffi
         RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json
         echo "wasm-slim report: target/wasm-slim-result.json"
         ;;

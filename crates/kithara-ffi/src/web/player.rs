@@ -4,13 +4,13 @@ use std::sync::{
 };
 
 use js_sys::Promise;
+use kithara_ffi_macros::wasm_export;
 use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
 use kithara_play::wasm_support;
-use kithara_wasm_macros::wasm_export;
 use tracing::info;
 use wasm_bindgen::prelude::*;
 
-use crate::wasm::commands::WorkerCmd;
+use crate::web::commands::WorkerCmd;
 
 macro_rules! clog {
     ($($arg:tt)*) => {
@@ -70,14 +70,14 @@ impl Player {
 
         wasm_support::ensure_main_session();
         wasm_support::init_worker_session();
-        crate::wasm::js::init_event_reader();
+        crate::web::js::init_event_reader();
         self.reset_cached_state();
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
         let worker = kithara_platform::spawn(move || {
-            crate::wasm::worker::worker_main(cmd_rx);
+            crate::web::worker::worker_main(cmd_rx);
         });
         std::mem::forget(worker);
 
@@ -186,10 +186,10 @@ impl Player {
     #[export]
     fn select_track(&self, url: String) -> Result<js_sys::Promise, JsValue> {
         clog!("[PLAYER] select_track: sending to Worker url={url}");
-        let request_id = crate::wasm::js::next_request_id();
+        let request_id = crate::web::js::next_request_id();
         let cmd = WorkerCmd::SelectTrack { url, request_id };
         self.send_cmd(cmd)?;
-        crate::wasm::js::reply_promise(request_id)
+        crate::web::js::reply_promise(request_id)
     }
 
     fn send_cmd(&self, cmd: WorkerCmd) -> Result<(), JsValue> {
@@ -249,7 +249,7 @@ impl Player {
 
     #[export]
     fn take_events(&self) -> String {
-        crate::wasm::js::take_events()
+        crate::web::js::take_events()
     }
 
     #[export]

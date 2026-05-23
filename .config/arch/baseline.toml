@@ -102,7 +102,7 @@ schema_version = 1
 "crates/kithara-decode/src/gapless/trimmer/tests.rs" = 1
 "crates/kithara-hls/src/variant/tests.rs" = 1
 "crates/kithara-stream/src/timeline.rs" = 1
-"crates/kithara-wasm/src/wasm/player.rs" = 1
+"crates/kithara-ffi/src/web/player.rs" = 1
 
 [file_size]
 "crates/kithara-abr/src/handle.rs" = 1
@@ -354,7 +354,7 @@ schema_version = 1
 "crates/kithara-test-utils/src/test/real/native/test_server_state.rs::TestServerState" = 1
 "crates/kithara-test-utils/src/test/real/signal_pcm.rs::SignalPcm" = 1
 "crates/kithara-test-utils/src/test/real/test_server.rs::HlsFixtureBuilder" = 1
-"crates/kithara-wasm/src/wasm/player.rs::Player" = 1
+"crates/kithara-ffi/src/web/player.rs::Player" = 1
 
 [god_trait]
 "crates/kithara-assets/src/base.rs::Assets" = 1

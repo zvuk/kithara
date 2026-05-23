@@ -241,7 +241,7 @@ impl SeleniumHarness {
         let toolchain =
             env::var("KITHARA_SELENIUM_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string());
         let mut cmd = Command::new("trunk");
-        cmd.current_dir(repo_root().join("crates/kithara-wasm"))
+        cmd.current_dir(repo_root().join("crates/kithara-ffi"))
             .env("RUSTUP_TOOLCHAIN", toolchain)
             .env_remove("NO_COLOR")
             .args([

@@ -4197,18 +4197,22 @@ name = "kithara-ffi"
 version = "0.0.1-alpha1"
 dependencies = [
  "bytes",
+ "console_error_panic_hook",
  "cpal",
  "futures",
  "jni 0.22.4",
+ "js-sys",
  "kithara",
  "kithara-drm",
  "kithara-events",
+ "kithara-ffi-macros",
  "kithara-platform",
  "kithara-play",
  "kithara-queue",
  "kithara-test-macros",
  "kithara-test-utils",
  "ndk-context",
+ "num-traits",
  "rand 0.10.1",
  "rustls-platform-verifier",
  "thiserror 2.0.18",
@@ -4216,11 +4220,26 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-android",
+ "tracing-log",
  "tracing-subscriber",
+ "tracing-wasm",
  "uniffi",
  "unimock",
  "url",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "kithara-ffi-macros"
+version = "0.0.1-alpha1"
+dependencies = [
+ "kithara-workspace-hack",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -4578,34 +4597,6 @@ dependencies = [
  "url",
  "usdt",
  "web-time",
-]
-
-[[package]]
-name = "kithara-wasm"
-version = "0.0.1-alpha1"
-dependencies = [
- "console_error_panic_hook",
- "js-sys",
- "kithara-platform",
- "kithara-play",
- "kithara-wasm-macros",
- "num-traits",
- "tracing",
- "tracing-log",
- "tracing-wasm",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "kithara-wasm-macros"
-version = "0.0.1-alpha1"
-dependencies = [
- "kithara-workspace-hack",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
