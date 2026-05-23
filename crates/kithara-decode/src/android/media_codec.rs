@@ -61,6 +61,12 @@ impl OutputBuffer {
     }
 }
 
+impl AsRef<[u8]> for OutputBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.data()
+    }
+}
+
 pub(crate) enum DequeueOutput {
     TryAgainLater,
     OutputFormatChanged(OutputFormat),

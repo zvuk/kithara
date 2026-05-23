@@ -16,10 +16,9 @@ pub(crate) enum CodecConfig {
     Flac(Vec<u8>),
 }
 
-impl CodecConfig {
-    #[cfg(test)]
+impl AsRef<[u8]> for CodecConfig {
     // ast-grep-ignore: idioms.match-self-conversion
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    fn as_ref(&self) -> &[u8] {
         match self {
             Self::Aac(bytes) | Self::Flac(bytes) => bytes,
         }
@@ -598,7 +597,7 @@ mod tests {
         assert!(init.timescale > 0, "timescale={}", init.timescale);
         assert!(init.sample_rate >= 8_000 && init.sample_rate <= 96_000);
         assert!(init.channels >= 1 && init.channels <= 8);
-        let asc = init.config.as_bytes();
+        let asc = init.config.as_ref();
         assert!(
             asc.len() == 2 || asc.len() == 5,
             "ASC length unexpected: {} bytes",
@@ -614,7 +613,7 @@ mod tests {
         let init = parse_init(&bytes).expect("BUG: parse FLAC init");
         assert_eq!(init.codec, AudioCodec::Flac);
         assert!(matches!(init.config, CodecConfig::Flac(_)));
-        let len = init.config.as_bytes().len();
+        let len = init.config.as_ref().len();
         assert_eq!(len, 34, "STREAMINFO body must be 34 bytes");
     }
 
