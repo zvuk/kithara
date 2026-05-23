@@ -1,0 +1,66 @@
+id: rust.prefer-io-write-read
+message: |
+  Inherent `fn write_$X(&mut self, buf: &[u8])` / `fn read_$X(&mut self, buf: &mut [u8])`
+  byte-shape methods are candidates for `impl std::io::Write` / `impl std::io::Read`
+  — implementing the trait enables `write!()` / `writeln!()` macros, `Read::read_to_end`,
+  `BufRead` adapters, and interoperation with `std::io` infrastructure.
+
+      // ❌ inherent byte-write
+      impl PacketBuilder {
+          pub fn write_bytes(&mut self, buf: &[u8]) -> Result<usize> { ... }
+      }
+
+      // ✅ trait impl
+      impl std::io::Write for PacketBuilder {
+          fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> { ... }
+          fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+      }
+
+  Exempt patterns the rule SHOULD NOT match (matched names excluded via
+  the regex on `$NAME`):
+  - `read_at(offset, buf)` — positional reads carry an extra `offset` arg;
+    that is a legitimate custom trait (kithara `Stream::read_at`,
+    `Source::read_at`), NOT a candidate for `io::Read`.
+  - `read_sample(buf)` returning `Option<(usize, i64)>` — multi-value
+    output, doesn't match `io::Read::read` signature `Result<usize>`.
+  - `write_all`, `write_fmt`, `write_str` — these are existing trait
+    methods or part of `io::Write` itself.
+
+  Suppress with `// ast-grep-ignore: rust.prefer-io-write-read` when the
+  inherent method has a domain-specific signature that cannot be expressed
+  as `io::Read` / `io::Write`.
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 12c, Wave 16).
+severity: warning
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: |
+        pub fn $NAME(&mut self, $BUF: &[u8]) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn $NAME(&mut self, $BUF: &[u8]) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub fn $NAME(&mut self, $BUF: &mut [u8]) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn $NAME(&mut self, $BUF: &mut [u8]) -> $RET {
+            $$$BODY
+        }
+constraints:
+  NAME:
+    regex: "^(write|read)_[a-z][a-z0-9_]*$"
+    not:
+      regex: "^(write_all|write_fmt|write_str|read_at|read_sample)$"
