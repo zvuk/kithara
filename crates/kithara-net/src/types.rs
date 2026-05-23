@@ -1,4 +1,4 @@
-use std::{cmp::min, collections::HashMap, time::Duration};
+use std::{cmp::min, collections::HashMap, fmt, time::Duration};
 
 use bitflags::bitflags;
 use bon::Builder;
@@ -80,13 +80,14 @@ impl RangeSpec {
     pub fn from_start(start: u64) -> Self {
         Self { end: None, start }
     }
+}
 
-    #[must_use]
-    pub fn to_header_value(&self) -> String {
-        self.end.map_or_else(
-            || format!("bytes={}-", self.start),
-            |end| format!("bytes={}-{}", self.start, end),
-        )
+impl fmt::Display for RangeSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.end {
+            Some(end) => write!(f, "bytes={}-{}", self.start, end),
+            None => write!(f, "bytes={}-", self.start),
+        }
     }
 }
 
@@ -268,7 +269,7 @@ mod tests {
         #[case] expected_header: &str,
     ) {
         let range = RangeSpec::new(start, end);
-        assert_eq!(range.to_header_value(), expected_header);
+        assert_eq!(range.to_string(), expected_header);
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
@@ -442,7 +443,7 @@ mod tests {
         #[case] expected_header: &str,
     ) {
         let range = RangeSpec::new(start, end);
-        assert_eq!(range.to_header_value(), expected_header);
+        assert_eq!(range.to_string(), expected_header);
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

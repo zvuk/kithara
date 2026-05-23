@@ -28,7 +28,7 @@ message: |
 
   See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 2,
   Wave 1).
-severity: warning
+severity: error
 language: Rust
 files:
   - crates/**/*.rs

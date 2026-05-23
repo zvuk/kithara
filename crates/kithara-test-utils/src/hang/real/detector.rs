@@ -13,6 +13,7 @@ pub trait HangDump {
 }
 
 impl<T: Serialize> HangDump for T {
+    // ast-grep-ignore: rust.no-to-string-method
     fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".into())
     }

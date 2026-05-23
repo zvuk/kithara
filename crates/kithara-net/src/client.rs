@@ -303,7 +303,7 @@ impl Net for RawHttp {
         let req = self
             .inner
             .get(url.clone())
-            .header("Range", range.to_header_value());
+            .header("Range", range.to_string());
         let resp = self.send_checked(req, headers, url, true).await?;
         Ok(Self::response_to_stream(resp))
     }
