@@ -96,8 +96,10 @@ struct AacStreamConfig {
     channels: u8,
 }
 
-impl AacStreamConfig {
-    fn from_extra_data(extra: &[u8]) -> Result<Self> {
+impl TryFrom<&[u8]> for AacStreamConfig {
+    type Error = Error;
+
+    fn try_from(extra: &[u8]) -> Result<Self> {
         if extra.len() < 2 {
             return decode_error("aac: AudioSpecificConfig too short");
         }
@@ -127,8 +129,12 @@ impl AacStreamConfig {
             channels,
         })
     }
+}
 
-    fn from_params(params: &AudioCodecParameters) -> Result<Self> {
+impl TryFrom<&AudioCodecParameters> for AacStreamConfig {
+    type Error = Error;
+
+    fn try_from(params: &AudioCodecParameters) -> Result<Self> {
         let sample_rate = params.sample_rate.ok_or(Error::Unsupported(
             "aac: sample_rate required without extra_data",
         ))?;
@@ -250,12 +256,12 @@ impl AacDecoder {
             // bits the spec only defines for AOT 1..=4, which mangles
             // HE-AAC v1/v2 (AOT 5 / 29) into garbage and crashes the
             // decoder.
-            (AacStreamConfig::from_extra_data(extra)?, Transport::Raw)
+            (AacStreamConfig::try_from(&extra[..])?, Transport::Raw)
         } else {
             // ADTS / raw HLS path: every packet carries its own ADTS
             // header, no extra_data available. The adapter prepends a
             // fresh ADTS prefix (`build_adts_header`) on each `fill`.
-            (AacStreamConfig::from_params(params)?, Transport::Adts)
+            (AacStreamConfig::try_from(params)?, Transport::Adts)
         };
         let mut decoder = Decoder::new(transport);
         if matches!(transport, Transport::Raw)
