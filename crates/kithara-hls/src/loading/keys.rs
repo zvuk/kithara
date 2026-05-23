@@ -107,6 +107,7 @@ impl KeyManager {
 
     /// Convenience constructor from [`crate::config::KeyOptions`].
     #[must_use]
+    // ast-grep-ignore: rust.prefer-from-trait
     pub fn from_options(
         downloader: PeerHandle,
         backend: AssetStore<DecryptContext>,
@@ -143,7 +144,7 @@ impl KeyManager {
                 .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
         }
 
-        let cache_key = ResourceKey::from_url(url);
+        let cache_key = ResourceKey::from(url);
         let res = self
             .backend
             .open_resource(&cache_key)
@@ -212,7 +213,7 @@ impl KeyManager {
             return Ok(cached.clone());
         }
 
-        let cache_key = ResourceKey::from_url(url);
+        let cache_key = ResourceKey::from(url);
         let rel_path = rel_path_from_url(url);
         if let Some(bytes) = super::atomic_fetch::try_read_cached(
             &self.backend,

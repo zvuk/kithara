@@ -2,17 +2,16 @@
 
 use std::{ffi::CStr, ptr::NonNull};
 
+use derive_more::From;
+
 use super::{error::AndroidBackendError, ffi};
 
+#[derive(From)]
 pub(crate) struct OwnedFormat {
     raw: NonNull<ffi::AMediaFormat>,
 }
 
 impl OwnedFormat {
-    pub(crate) fn from_raw(raw: NonNull<ffi::AMediaFormat>) -> Self {
-        Self { raw }
-    }
-
     pub(crate) fn get_i32(&self, key: &CStr) -> Option<i32> {
         let mut value = 0;
         unsafe { ffi::AMediaFormat_getInt32(self.raw(), key.as_ptr(), &mut value) }.then_some(value)

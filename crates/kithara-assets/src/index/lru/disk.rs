@@ -113,7 +113,7 @@ fn read_state(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<LruSt
         }
     };
 
-    Ok(LruState::from_file(file))
+    Ok(LruState::from(file))
 }
 
 fn write_state(res: &Atomic<MmapResource>, state: &LruState, durable: bool) -> AssetsResult<()> {

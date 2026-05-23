@@ -256,7 +256,7 @@ impl OwnedCodec {
             .ok_or_else(|| {
                 AndroidBackendError::operation("codec-output-format", "output format was null")
             })?;
-        Ok(OwnedFormat::from_raw(raw))
+        Ok(OwnedFormat::from(raw))
     }
 
     pub(crate) fn queue_end_of_stream(&mut self, index: usize) -> Result<(), AndroidBackendError> {

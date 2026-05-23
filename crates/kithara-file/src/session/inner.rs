@@ -31,7 +31,7 @@ impl FileStreamState {
         bus: Option<EventBus>,
         event_channel_capacity: usize,
     ) -> Result<Self, SourceError> {
-        let key = ResourceKey::from_url(url);
+        let key = ResourceKey::from(url);
         let res = assets.acquire_resource(&key).map_err(SourceError::Assets)?;
         let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
         Ok(Self {

@@ -17,6 +17,7 @@ kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 bon = { workspace = true }
+derive_more = { workspace = true }
 num-traits = { workspace = true }
 re_mp4 = { workspace = true }
 smallvec = { workspace = true }

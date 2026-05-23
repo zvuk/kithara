@@ -188,7 +188,7 @@ fn decode_visible_frames(mut decoder: Box<dyn Decoder>) -> DecodeResult<DecodedF
     let mut trimmer = decoder
         .track_info()
         .gapless
-        .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from_info);
+        .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from);
     let mut frames = 0usize;
 
     loop {

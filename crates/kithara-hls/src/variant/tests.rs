@@ -42,7 +42,7 @@ fn make_init(size: u64) -> InitEntry {
         return InitEntry::empty();
     }
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
-    let resource_id = ResourceKey::from_url(&url);
+    let resource_id = ResourceKey::from(&url);
     InitEntry {
         url,
         resource_id,
@@ -56,7 +56,7 @@ fn make_seg(idx: u32, size: u64) -> SegmentEntry {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
-    let resource_id = ResourceKey::from_url(&url);
+    let resource_id = ResourceKey::from(&url);
     SegmentEntry {
         url,
         resource_id,
@@ -342,7 +342,7 @@ fn on_evict_returns_none_for_foreign_asset() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100], &ctx);
     let foreign: Url = "https://other.example.com/x.m4s".parse().expect("url");
-    let foreign_key = ResourceKey::from_url(&foreign);
+    let foreign_key = ResourceKey::from(&foreign);
     let res = v.on_evict(&foreign_key);
     assert_eq!(res, None);
 }
@@ -368,7 +368,7 @@ fn dispatch_drm_segment_routes_through_with_ctx() {
     let init = make_init(0);
     init.set_state(SegmentState::Loaded);
     let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
-    let resource_id = ResourceKey::from_url(&url);
+    let resource_id = ResourceKey::from(&url);
     let key = *b"0123456789abcdef";
     let seg = SegmentEntry {
         url,

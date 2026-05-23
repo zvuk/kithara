@@ -4,11 +4,7 @@ use kithara_decode::PcmChunk;
 use kithara_platform::tokio::sync::Notify;
 use tracing::trace;
 
-use super::{
-    AudioWorkerSource,
-    handle::TrackRegistration,
-    types::{ServiceClass, TrackId},
-};
+use super::{AudioWorkerSource, handle::TrackRegistration, types::ServiceClass};
 use crate::{
     pipeline::{fetch::Fetch, track_fsm::TrackStep},
     runtime::{Node, Outlet, TickResult},
@@ -51,21 +47,6 @@ impl DecoderNode {
         }
     }
 
-    pub(crate) fn from_registration(_track_id: TrackId, reg: TrackRegistration) -> Self {
-        let seek_epoch = reg.source.timeline().seek_epoch();
-        Self {
-            source: reg.source,
-            outlet: reg.outlet,
-            service_class: reg.service_class,
-            preload_notify: reg.preload_notify,
-            preload_chunks: reg.preload_chunks,
-            runtime: DecoderRuntime {
-                seek_epoch,
-                ..Default::default()
-            },
-        }
-    }
-
     fn mark_preload_progress(&mut self) {
         if self.runtime.preloaded {
             return;
@@ -100,6 +81,23 @@ impl DecoderNode {
             seek_epoch: current,
             ..Default::default()
         };
+    }
+}
+
+impl From<TrackRegistration> for DecoderNode {
+    fn from(reg: TrackRegistration) -> Self {
+        let seek_epoch = reg.source.timeline().seek_epoch();
+        Self {
+            source: reg.source,
+            outlet: reg.outlet,
+            service_class: reg.service_class,
+            preload_notify: reg.preload_notify,
+            preload_chunks: reg.preload_chunks,
+            runtime: DecoderRuntime {
+                seek_epoch,
+                ..Default::default()
+            },
+        }
     }
 }
 

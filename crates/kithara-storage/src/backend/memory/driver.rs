@@ -121,6 +121,7 @@ impl MemResource {
     ///
     /// Panics if `MemDriver::open` fails (should never happen with initial data).
     #[must_use]
+    // ast-grep-ignore: rust.prefer-from-trait
     pub fn from_bytes(data: &[u8], cancel: CancellationToken) -> Self {
         Self::open(
             cancel,

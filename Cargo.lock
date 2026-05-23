@@ -4118,6 +4118,7 @@ dependencies = [
  "bon",
  "core-foundation 0.10.1",
  "core-foundation-sys",
+ "derive_more",
  "fdk-aac",
  "hotpath",
  "jni 0.22.4",

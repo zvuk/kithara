@@ -138,7 +138,7 @@ impl InitEntry {
             .parse()
             .expect("static placeholder URL parses");
         Self {
-            resource_id: ResourceKey::from_url(&url),
+            resource_id: ResourceKey::from(&url),
             url,
             state: SegmentState::Loaded.into(),
             size: AtomicU64::new(0),
@@ -486,7 +486,7 @@ impl HlsVariant {
         playlist_state
             .init_url(variant_idx)
             .map_or_else(InitEntry::empty, |url| InitEntry {
-                resource_id: ResourceKey::from_url(&url),
+                resource_id: ResourceKey::from(&url),
                 url,
                 state: SegmentState::Missing.into(),
                 size: AtomicU64::new(playlist_state.init_size(variant_idx)),
@@ -533,7 +533,7 @@ impl HlsVariant {
                 .map_or(Duration::ZERO, |(start, end)| end.saturating_sub(start));
             let decrypt_ctx = decrypt_contexts.get(seg_idx).cloned().flatten();
             entries.push(SegmentEntry {
-                resource_id: ResourceKey::from_url(&url),
+                resource_id: ResourceKey::from(&url),
                 url,
                 state: SegmentState::Missing.into(),
                 size: AtomicU64::new(media_size),

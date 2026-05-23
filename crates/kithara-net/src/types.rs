@@ -77,6 +77,7 @@ impl RangeSpec {
     }
 
     #[must_use]
+    // ast-grep-ignore: rust.prefer-from-trait
     pub fn from_start(start: u64) -> Self {
         Self { end: None, start }
     }

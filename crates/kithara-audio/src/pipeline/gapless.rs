@@ -37,6 +37,7 @@ impl GaplessStage {
     /// - **`SilenceTrim`** — prefer metadata when present; otherwise use the silence-trim parameters from the mode.
     /// - **Disabled** — passthrough, no trim.
     #[must_use]
+    // ast-grep-ignore: rust.prefer-from-trait
     pub(crate) fn from_decoder(
         decoder: &dyn Decoder,
         mode: GaplessMode,
@@ -46,14 +47,14 @@ impl GaplessStage {
             GaplessMode::MediaOnly => decoder
                 .track_info()
                 .gapless
-                .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from_info),
+                .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from),
             GaplessMode::CodecPriming => decoder.track_info().gapless.map_or_else(
                 || resolve_codec_priming(decoder, media_info),
-                GaplessTrimmer::from_info,
+                GaplessTrimmer::from,
             ),
             GaplessMode::SilenceTrim(params) => decoder.track_info().gapless.map_or_else(
                 || GaplessTrimmer::silence_trim(params),
-                GaplessTrimmer::from_info,
+                GaplessTrimmer::from,
             ),
             _ => GaplessTrimmer::disabled(),
         };

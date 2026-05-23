@@ -78,6 +78,7 @@ impl BodyStream {
     }
 
     /// Wrap an HTTP [`ByteStream`] with per-chunk cancel + timeout.
+    // ast-grep-ignore: rust.prefer-from-trait
     pub(super) fn from_http(
         byte_stream: ByteStream,
         cancel: CancelGroup,
@@ -90,6 +91,7 @@ impl BodyStream {
 
     /// Wrap a raw stream (for testing or non-HTTP sources).
     #[must_use]
+    // ast-grep-ignore: rust.prefer-from-trait
     pub fn from_raw(inner: InnerStream) -> Self {
         Self { inner }
     }

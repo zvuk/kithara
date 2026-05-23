@@ -30,7 +30,7 @@ message: |
 
   See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 1a,
   Wave 2).
-severity: warning
+severity: error
 language: Rust
 files:
   - crates/**/*.rs
@@ -57,3 +57,5 @@ rule:
 constraints:
   NAME:
     regex: "^from_[a-z][a-z0-9_]*$"
+    not:
+      regex: "^from_probe_arg$"

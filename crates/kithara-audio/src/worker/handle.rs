@@ -66,7 +66,7 @@ impl AudioWorkerHandle {
     /// data. Callers must ensure the worker is alive before registering.
     pub(crate) fn register_track(&self, reg: TrackRegistration) -> TrackId {
         let id = self.id_gen.next();
-        let node: Box<dyn crate::runtime::Node> = Box::new(DecoderNode::from_registration(id, reg));
+        let node: Box<dyn crate::runtime::Node> = Box::new(DecoderNode::from(reg));
         self.inner.register(id, node);
         id
     }

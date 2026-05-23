@@ -121,6 +121,7 @@ pub(super) struct BatchGroup {
 
 impl BatchGroup {
     /// Build from a drain of slot entries, grouping by cancel token identity.
+    // ast-grep-ignore: rust.prefer-from-trait
     pub(super) fn from_iter(entries: impl Iterator<Item = SlotEntry>) -> Self {
         let mut epochs: Vec<EpochGroup> = Vec::new();
         for entry in entries {

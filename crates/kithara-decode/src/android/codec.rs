@@ -242,7 +242,7 @@ fn build_format(
     // SAFETY: AMediaFormat_new returns a freshly allocated AMediaFormat
     let raw = NonNull::new(unsafe { ffi::AMediaFormat_new() })
         .ok_or_else(|| AndroidBackendError::operation("media-format-new", "returned null"))?;
-    let mut format = OwnedFormat::from_raw(raw);
+    let mut format = OwnedFormat::from(raw);
 
     // SAFETY: format is live; key/value are static null-terminated CStrs.
     unsafe {

@@ -256,25 +256,6 @@ impl LruState {
         out
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn from_file(file: LruIndexFile) -> Self {
-        let mut by_root = HashMap::new();
-        for (root, entry) in file.entries {
-            by_root.insert(
-                root,
-                LruEntry {
-                    last_touch: entry.last_touch,
-                    bytes: entry.bytes,
-                },
-            );
-        }
-
-        Self {
-            by_root,
-            clock: file.clock,
-        }
-    }
-
     pub(crate) fn len(&self) -> usize {
         self.by_root.len()
     }
@@ -337,6 +318,27 @@ impl LruState {
         }
         entry.bytes = Some(bytes);
         true
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<LruIndexFile> for LruState {
+    fn from(file: LruIndexFile) -> Self {
+        let mut by_root = HashMap::new();
+        for (root, entry) in file.entries {
+            by_root.insert(
+                root,
+                LruEntry {
+                    last_touch: entry.last_touch,
+                    bytes: entry.bytes,
+                },
+            );
+        }
+
+        Self {
+            by_root,
+            clock: file.clock,
+        }
     }
 }
 

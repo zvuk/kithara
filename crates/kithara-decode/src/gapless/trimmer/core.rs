@@ -211,27 +211,6 @@ impl GaplessTrimmer {
         }
     }
 
-    /// Build a trimmer driven by decoder-reported metadata. No
-    /// fade-in is applied — the decoder's frame counts are exact and
-    /// the trimmed boundary lands on a silent sample.
-    #[must_use]
-    pub fn from_info(info: GaplessInfo) -> Self {
-        let enabled = info.leading_frames > 0 || info.trailing_frames > 0;
-        Self {
-            mode: if enabled {
-                GaplessMode::Fixed {
-                    leading_remaining: info.leading_frames,
-                    fade_in: None,
-                }
-            } else {
-                GaplessMode::Disabled
-            },
-            trailing_frames: info.trailing_frames,
-            tail_buffer: TailBuffer::new(),
-            tail_buffered_frames: 0,
-        }
-    }
-
     /// Drop seek-sensitive state. Both heuristic search and pending
     /// fade-in are abandoned: after a seek we land mid-track and
     /// trying to "trim leading silence" or apply a fade-in there
@@ -294,6 +273,25 @@ impl GaplessTrimmer {
         Self {
             trailing_frames: params.scan_window_frames,
             mode: GaplessMode::Heuristic(Box::new(HeuristicState::new(params))),
+            tail_buffer: TailBuffer::new(),
+            tail_buffered_frames: 0,
+        }
+    }
+}
+
+impl From<GaplessInfo> for GaplessTrimmer {
+    fn from(info: GaplessInfo) -> Self {
+        let enabled = info.leading_frames > 0 || info.trailing_frames > 0;
+        Self {
+            mode: if enabled {
+                GaplessMode::Fixed {
+                    leading_remaining: info.leading_frames,
+                    fade_in: None,
+                }
+            } else {
+                GaplessMode::Disabled
+            },
+            trailing_frames: info.trailing_frames,
             tail_buffer: TailBuffer::new(),
             tail_buffered_frames: 0,
         }

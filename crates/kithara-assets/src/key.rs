@@ -45,12 +45,19 @@ impl ResourceKey {
         }
     }
 
+    /// Returns true if this is an absolute path key.
+    #[must_use]
+    pub fn is_absolute(&self) -> bool {
+        matches!(self, Self::Absolute(_))
+    }
+}
+
+impl From<&Url> for ResourceKey {
     /// Extracts a unique relative key from a URL.
     ///
     /// Includes query parameters when present so that URLs differing only
     /// in query (e.g. `?id=123` vs `?id=456`) produce distinct keys.
-    #[must_use]
-    pub fn from_url(url: &Url) -> Self {
+    fn from(url: &Url) -> Self {
         let segment = url
             .path_segments()
             .and_then(|mut segments| segments.next_back())
@@ -60,12 +67,6 @@ impl ResourceKey {
             .query()
             .map_or_else(|| segment.to_string(), |q| format!("{segment}_{q}"));
         Self::Relative(rel_path)
-    }
-
-    /// Returns true if this is an absolute path key.
-    #[must_use]
-    pub fn is_absolute(&self) -> bool {
-        matches!(self, Self::Absolute(_))
     }
 }
 
