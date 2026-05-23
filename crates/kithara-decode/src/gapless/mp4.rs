@@ -29,7 +29,7 @@ pub(crate) fn probe_mp4_gapless_dyn(
 ) -> DecodeResult<Option<GaplessInfo>> {
     let mut probe = GaplessProbe::default();
     match scan_mp4(reader, &mut probe) {
-        Ok(()) => Ok(probe.into_info()),
+        Ok(()) => Ok(probe.into()),
         Err(crate::mp4::Mp4MetadataError::Io(error)) => Err(error.into()),
         Err(crate::mp4::Mp4MetadataError::InvalidData(_)) => Ok(None),
     }
@@ -58,9 +58,9 @@ struct TrackState {
     sample_rate: Option<u32>,
 }
 
-impl GaplessProbe {
-    fn into_info(self) -> Option<GaplessInfo> {
-        self.elst_derived.or(self.itunsmpb)
+impl From<GaplessProbe> for Option<GaplessInfo> {
+    fn from(probe: GaplessProbe) -> Self {
+        probe.elst_derived.or(probe.itunsmpb)
     }
 }
 

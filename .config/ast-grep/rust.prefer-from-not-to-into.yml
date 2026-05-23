@@ -33,7 +33,7 @@ message: |
 
   See .docs/plans/2026-05-23-rust-idioms-refactor.md (Categories 1c/1d,
   Wave 4).
-severity: warning
+severity: error
 language: Rust
 files:
   - crates/**/*.rs
@@ -73,7 +73,7 @@ constraints:
   NAME:
     regex: "^(to|into)_[a-z][a-z0-9_]*$"
     not:
-      regex: "^(to_string|into_inner|into_iter)$"
+      regex: "^(to_string|into_inner|into_iter|into_probe_arg|from_probe_arg)$"
   RET:
     not:
       regex: "^(String|Self|&.*)$"

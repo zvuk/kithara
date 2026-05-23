@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use super::core::{LruIndex, LruInner, LruState};
 use crate::{
     error::{AssetsError, AssetsResult},
-    index::persist,
+    index::{persist, schema::LruIndexFile},
 };
 
 pub(super) struct LruPersist {
@@ -103,10 +103,8 @@ fn read_state(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<LruSt
     let file = match rkyv::access::<crate::index::schema::ArchivedLruIndexFile, rkyv::rancor::Error>(
         &buf[..n],
     ) {
-        Ok(archived) => {
-            rkyv::deserialize::<crate::index::schema::LruIndexFile, rkyv::rancor::Error>(archived)
-                .expect("BUG: LRU archived → owned deserialize")
-        }
+        Ok(archived) => rkyv::deserialize::<LruIndexFile, rkyv::rancor::Error>(archived)
+            .expect("BUG: LRU archived → owned deserialize"),
         Err(e) => {
             tracing::debug!("Failed to deserialize lru index: {}", e);
             return Ok(LruState::default());
@@ -117,7 +115,7 @@ fn read_state(res: &Atomic<MmapResource>, pool: &BytePool) -> AssetsResult<LruSt
 }
 
 fn write_state(res: &Atomic<MmapResource>, state: &LruState, durable: bool) -> AssetsResult<()> {
-    let file = state.to_file();
+    let file = LruIndexFile::from(state);
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
     if durable {

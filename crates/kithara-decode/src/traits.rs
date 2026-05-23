@@ -97,6 +97,7 @@ impl DecoderChunkOutcome {
     /// Consume this outcome into the inner [`PcmChunk`] when it is
     /// `Chunk`. Returns `None` for `Pending` / `Eof`.
     #[must_use]
+    // ast-grep-ignore: rust.prefer-from-not-to-into
     pub fn into_chunk(self) -> Option<PcmChunk> {
         match self {
             Self::Chunk(chunk) => Some(chunk),

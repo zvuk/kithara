@@ -76,7 +76,7 @@ impl AacFFmpegEncoder {
             packets_per_segment: request.packets_per_segment,
             encoder_delay: request.encoder_delay,
             trailing_delay: request.trailing_delay,
-            access_units: encoder.into_units(),
+            access_units: encoder.into(),
         })
     }
 
@@ -92,6 +92,12 @@ struct PacketCollectingEncoder {
     encoder_time_base: Rational,
     target_time_base: Rational,
     units: Vec<EncodedAccessUnit>,
+}
+
+impl From<PacketCollectingEncoder> for Vec<EncodedAccessUnit> {
+    fn from(encoder: PacketCollectingEncoder) -> Self {
+        encoder.units
+    }
 }
 
 impl PacketCollectingEncoder {
@@ -138,10 +144,6 @@ impl PacketCollectingEncoder {
             timestamp_origin: None,
             units: Vec::new(),
         })
-    }
-
-    fn into_units(self) -> Vec<EncodedAccessUnit> {
-        self.units
     }
 
     fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {

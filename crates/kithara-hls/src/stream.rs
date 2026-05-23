@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
+    AssetStore, AssetStoreBuilder, EvictConfig, OnInvalidatedFn, ProcessChunkFn, ResourceKey,
+    asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
@@ -222,7 +223,7 @@ fn build_asset_store(
         .cancel(cancel)
         .on_invalidated(on_invalidated)
         .root_dir(&config.store.cache_dir)
-        .evict_config(config.store.to_evict_config())
+        .evict_config(EvictConfig::from(&config.store))
         .ephemeral(config.store.is_ephemeral);
     if let Some(ref pool) = config.pool {
         builder = builder.pool(pool.clone());

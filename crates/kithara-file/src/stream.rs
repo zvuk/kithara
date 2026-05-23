@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use kithara_assets::{
-    AssetResource, AssetStoreBuilder, AssetsError, ResourceKey, asset_root_for_url,
+    AssetResource, AssetStoreBuilder, AssetsError, EvictConfig, ResourceKey, asset_root_for_url,
 };
 use kithara_events::EventBus;
 use kithara_platform::{time::Duration, tokio};
@@ -167,7 +167,7 @@ impl File {
         let backend_builder = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)
             .asset_root(Some(asset_root.as_str()))
-            .evict_config(config.store.to_evict_config())
+            .evict_config(EvictConfig::from(&config.store))
             .ephemeral(config.store.is_ephemeral)
             .cancel(cancel.clone());
         let backend = Arc::new(backend_builder.build());

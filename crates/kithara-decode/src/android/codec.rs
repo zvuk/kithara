@@ -53,9 +53,9 @@ impl AndroidCodec {
     /// Returns [`DecodeError::UnsupportedCodec`] for codecs the
     /// `MediaCodec` codec layer doesn't accept; any FFI failure
     /// surfaces as [`DecodeError::Backend`] via
-    /// [`AndroidBackendError::into_decode_error`].
+    /// [`DecodeError::from`].
     fn open(track: &TrackInfo) -> DecodeResult<Self> {
-        ensure_current_thread_attached().map_err(AndroidBackendError::into_decode_error)?;
+        ensure_current_thread_attached().map_err(DecodeError::from)?;
 
         let mime = match track.codec {
             AudioCodec::AacLc => MIME_AAC,
@@ -66,11 +66,9 @@ impl AndroidCodec {
             other => return Err(DecodeError::UnsupportedCodec(other)),
         };
 
-        let format = build_format(mime, track).map_err(AndroidBackendError::into_decode_error)?;
-        let codec = OwnedCodec::create_with_format(mime, &format)
-            .map_err(AndroidBackendError::into_decode_error)?;
-        let (spec, pcm_encoding) =
-            read_output_format(&codec).map_err(AndroidBackendError::into_decode_error)?;
+        let format = build_format(mime, track).map_err(DecodeError::from)?;
+        let codec = OwnedCodec::create_with_format(mime, &format).map_err(DecodeError::from)?;
+        let (spec, pcm_encoding) = read_output_format(&codec).map_err(DecodeError::from)?;
 
         Ok(Self {
             codec,
@@ -162,7 +160,7 @@ impl FrameCodec for AndroidCodec {
         match self
             .codec
             .dequeue_input_buffer(Consts::INPUT_DEQUEUE_TIMEOUT_US)
-            .map_err(AndroidBackendError::into_decode_error)?
+            .map_err(DecodeError::from)?
         {
             Some(mut buf) => {
                 let dst = buf.data_mut();
@@ -176,7 +174,7 @@ impl FrameCodec for AndroidCodec {
                         presentation_time_us: pts_us,
                         flags: 0,
                     })
-                    .map_err(AndroidBackendError::into_decode_error)?;
+                    .map_err(DecodeError::from)?;
             }
             None => {
                 out.clear();
@@ -187,7 +185,7 @@ impl FrameCodec for AndroidCodec {
         match self
             .codec
             .dequeue_output_buffer(Consts::OUTPUT_DEQUEUE_TIMEOUT_US)
-            .map_err(AndroidBackendError::into_decode_error)?
+            .map_err(DecodeError::from)?
         {
             DequeueOutput::Output(buffer) => {
                 let bytes = buffer.data();
@@ -198,7 +196,7 @@ impl FrameCodec for AndroidCodec {
                 let index = buffer.index;
                 self.codec
                     .release_output_buffer(index)
-                    .map_err(AndroidBackendError::into_decode_error)?;
+                    .map_err(DecodeError::from)?;
                 let channels = self.spec.channels as usize;
                 let frames = if channels == 0 {
                     0
@@ -221,9 +219,7 @@ impl FrameCodec for AndroidCodec {
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
-        self.codec
-            .flush()
-            .map_err(AndroidBackendError::into_decode_error)
+        self.codec.flush().map_err(DecodeError::from)
     }
 
     fn spec(&self) -> PcmSpec {

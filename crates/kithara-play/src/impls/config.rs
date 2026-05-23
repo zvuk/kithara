@@ -184,6 +184,7 @@ impl ResourceConfig {
     }
 
     /// Convert into an `AudioConfig<File>`.
+    // ast-grep-ignore: rust.prefer-from-not-to-into
     pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
         let (file_src, derived_hint) = match self.src {
             ResourceSrc::Url(ref url) => {
@@ -244,6 +245,7 @@ impl ResourceConfig {
     }
 
     /// Convert into an `AudioConfig<Hls>`.
+    // ast-grep-ignore: rust.prefer-from-not-to-into
     pub(crate) fn into_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),

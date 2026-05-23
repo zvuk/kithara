@@ -78,7 +78,7 @@ impl FlacFFmpegEncoder {
         media_info.sample_rate = Some(request.pcm.sample_rate());
         media_info.channels = Some(request.pcm.channels());
 
-        let (codec_config, access_units) = encoder.into_track_parts();
+        let (codec_config, access_units) = encoder.into();
 
         Ok(EncodedTrack {
             media_info,
@@ -105,6 +105,12 @@ struct PacketCollectingEncoder {
     target_time_base: Rational,
     codec_config: Vec<u8>,
     units: Vec<EncodedAccessUnit>,
+}
+
+impl From<PacketCollectingEncoder> for (Vec<u8>, Vec<EncodedAccessUnit>) {
+    fn from(encoder: PacketCollectingEncoder) -> Self {
+        (encoder.codec_config, encoder.units)
+    }
 }
 
 impl PacketCollectingEncoder {
@@ -154,10 +160,6 @@ impl PacketCollectingEncoder {
             timestamp_origin: None,
             units: Vec::new(),
         })
-    }
-
-    fn into_track_parts(self) -> (Vec<u8>, Vec<EncodedAccessUnit>) {
-        (self.codec_config, self.units)
     }
 
     fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {

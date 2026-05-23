@@ -453,7 +453,7 @@ impl HlsVariant {
             .cancel(cancel)
             .maybe_headers(self.headers.clone())
             .writer(slot.writer())
-            .on_complete(slot.into_on_complete())
+            .on_complete(OnCompleteFn::from(slot))
             .build()
     }
 
@@ -1432,11 +1432,13 @@ struct FetchSlot {
     variant: Weak<HlsVariant>,
 }
 
-impl FetchSlot {
-    fn into_on_complete(self) -> OnCompleteFn {
-        Box::new(move |bytes_written, _headers, err| self.settle(bytes_written, err))
+impl From<FetchSlot> for OnCompleteFn {
+    fn from(slot: FetchSlot) -> Self {
+        Box::new(move |bytes_written, _headers, err| slot.settle(bytes_written, err))
     }
+}
 
+impl FetchSlot {
     /// On success, commits the resource. `bytes_written` is forwarded as
     /// `final_len` — required by [`ProcessedResource::commit`] to trigger
     /// the post-write decrypt pass on encrypted segments (passing `None`

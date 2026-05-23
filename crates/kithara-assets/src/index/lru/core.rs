@@ -265,26 +265,6 @@ impl LruState {
         self.by_root.remove(asset_root).is_some()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn to_file(&self) -> LruIndexFile {
-        let mut entries = BTreeMap::new();
-        for (root, entry) in &self.by_root {
-            entries.insert(
-                root.clone(),
-                LruEntryFile {
-                    last_touch: entry.last_touch,
-                    bytes: entry.bytes,
-                },
-            );
-        }
-
-        LruIndexFile {
-            entries,
-            version: 1,
-            clock: self.clock,
-        }
-    }
-
     /// Touch an asset in-memory.
     pub(crate) fn touch(&mut self, asset_root: &str, bytes_hint: Option<u64>) -> bool {
         self.clock = self.clock.saturating_add(1);
@@ -318,6 +298,27 @@ impl LruState {
         }
         entry.bytes = Some(bytes);
         true
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<&LruState> for LruIndexFile {
+    fn from(state: &LruState) -> Self {
+        let mut entries = BTreeMap::new();
+        for (root, entry) in &state.by_root {
+            entries.insert(
+                root.clone(),
+                LruEntryFile {
+                    last_touch: entry.last_touch,
+                    bytes: entry.bytes,
+                },
+            );
+        }
+        Self {
+            entries,
+            version: 1,
+            clock: state.clock,
+        }
     }
 }
 

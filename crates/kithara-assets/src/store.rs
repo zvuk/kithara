@@ -124,13 +124,13 @@ impl StoreOptions {
         self.cache_capacity
             .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY)
     }
+}
 
-    /// Convert to internal `EvictConfig`.
-    #[must_use]
-    pub fn to_evict_config(&self) -> EvictConfig {
-        EvictConfig {
-            max_assets: self.max_assets,
-            max_bytes: self.max_bytes,
+impl From<&StoreOptions> for EvictConfig {
+    fn from(opts: &StoreOptions) -> Self {
+        Self {
+            max_assets: opts.max_assets,
+            max_bytes: opts.max_bytes,
         }
     }
 }

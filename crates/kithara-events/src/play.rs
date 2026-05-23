@@ -122,6 +122,7 @@ impl MediaTime {
     }
 
     #[must_use]
+    // ast-grep-ignore: rust.prefer-from-not-to-into
     pub fn to_duration(&self) -> Option<Duration> {
         if !self.is_valid() || self.is_indefinite() {
             return None;
