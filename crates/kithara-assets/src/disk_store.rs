@@ -296,6 +296,11 @@ impl Assets for DiskAssetStore {
             let mmap = self.open_storage_resource(key, path, mode)?;
             return Ok(mmap.into());
         }
+        // `StorageError::TmpClaimed` propagates up — the caller (the
+        // async layer in `kithara-file/src/stream.rs::create_remote`)
+        // is responsible for any retry policy. We do not block here so
+        // a sibling `AssetStore`'s in-flight tmp does not stall a
+        // tokio worker thread.
         let chunked = self.open_atomic_chunked_resource(key, path)?;
         Ok(StorageResource::from(chunked))
     }

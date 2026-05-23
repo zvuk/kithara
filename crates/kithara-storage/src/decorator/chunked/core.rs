@@ -108,13 +108,27 @@ impl<R: ResourceExt> AtomicChunked<R> {
     /// constructor and once more with the canonical path after the
     /// atomic rename in [`ResourceExt::commit`].
     ///
-    /// Any stale temp left from a prior crashed run is wiped first.
+    /// Atomically claims `<canonical>.tmp` via `OpenOptions::create_new`
+    /// — the filesystem rejects the second concurrent open of the same
+    /// tmp path. Returns [`StorageError::TmpClaimed`] if another
+    /// `AssetStore` instance (or another process) is already writing
+    /// the same canonical path; the caller should poll until the
+    /// holder releases (commit or drop) and either retry or take a
+    /// passthrough view of the canonical once committed.
+    ///
+    /// Stale temp left from a prior crashed run is **not** auto-wiped:
+    /// liveness is signalled by tmp existence alone, and a leftover
+    /// from a `kill -9` would block subsequent opens until cleaned up
+    /// explicitly. Maintenance task is the caller's responsibility (a
+    /// future enhancement may add PID-aware cleanup).
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::Failed`] if the canonical path has no
-    /// parent / non-utf8 file name (cannot derive a temp companion),
-    /// or if the supplied factory fails to open the inner.
+    /// - [`StorageError::Failed`] — canonical path has no parent /
+    ///   non-utf8 file name.
+    /// - [`StorageError::TmpClaimed`] — tmp path already exists.
+    /// - [`StorageError::Io`] / [`StorageError::Mmap`] — propagated
+    ///   from the OS or from the supplied factory.
     pub fn open<F>(canonical_path: PathBuf, factory: F) -> StorageResult<Self>
     where
         F: Fn(&Path, OpenIntent) -> StorageResult<R> + Send + Sync + 'static,
@@ -124,7 +138,22 @@ impl<R: ResourceExt> AtomicChunked<R> {
                 "AtomicChunked: cannot derive tmp path from {canonical_path:?}"
             ))
         })?;
-        let _ = fs::remove_file(&tmp_path);
+        if let Some(parent) = tmp_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(file) => {
+                drop(file);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(StorageError::TmpClaimed(tmp_path));
+            }
+            Err(e) => return Err(StorageError::Io(e)),
+        }
         let inner = factory(&tmp_path, OpenIntent::Fresh)?;
         Ok(Self {
             canonical_path,
@@ -144,6 +173,24 @@ impl<R: ResourceExt> AtomicChunked<R> {
             inner: Mutex::new(Arc::new(inner)),
             tmp_path: Mutex::new(None),
             factory: None,
+        }
+    }
+
+    /// Delete `<canonical>.tmp` unconditionally if it exists.
+    ///
+    /// `AtomicChunked::open` no longer auto-wipes stale temp files —
+    /// the sibling tmp's existence is the cross-instance ownership
+    /// signal that protects sibling writers from clobbering each
+    /// other (see [`Self::open`] docs). Callers that genuinely want
+    /// crashed-run recovery (e.g. service startup, test cleanup) call
+    /// this helper explicitly.
+    ///
+    /// Best-effort — missing tmp / permission errors are swallowed,
+    /// matching the legacy auto-wipe behaviour at the call site that
+    /// owned recovery before this contract change.
+    pub fn scrub_stale_tmp(canonical_path: &Path) {
+        if let Some(tmp_path) = make_tmp_path(canonical_path) {
+            let _ = fs::remove_file(&tmp_path);
         }
     }
 }

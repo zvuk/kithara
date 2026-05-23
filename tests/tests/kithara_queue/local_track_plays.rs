@@ -335,18 +335,22 @@ where
     F: FnMut(&QueueEvent) -> bool,
 {
     use kithara_platform::tokio::sync::broadcast::error::RecvError;
-    let res = timeout(deadline, async {
+    timeout(deadline, async {
         loop {
             match rx.recv().await {
-                Ok(Event::Queue(ev)) if pred(&ev) => return Some(ev),
+                Ok(Event::Queue(ev)) => {
+                    if pred(&ev) {
+                        return Some(ev);
+                    }
+                }
                 Ok(_) => continue,
-                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return None,
             }
         }
     })
-    .await;
-    res.unwrap_or(None)
+    .await
+    .unwrap_or(None)
 }
 
 /// Mirror of `real_playlist::queue_playlist_behavior` against local fixtures.

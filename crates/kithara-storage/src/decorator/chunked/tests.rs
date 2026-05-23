@@ -87,32 +87,81 @@ fn fail_cleans_tmp() {
 }
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
-fn open_wipes_stale_tmp_from_previous_run() {
+fn open_rejects_when_stale_tmp_blocks_claim_then_scrub_unblocks() {
     let dir = TempDir::new().unwrap();
     let canonical = dir.path().join("survivor.bin");
     let stale_tmp = make_tmp_path(&canonical).unwrap();
     fs::write(&stale_tmp, b"stale-from-previous-process").unwrap();
 
     let cancel = CancellationToken::new();
-    let res = AtomicChunked::<MmapResource>::open(canonical.clone(), move |target, intent| {
-        let mode = match intent {
-            OpenIntent::Fresh => OpenMode::ReadWrite,
-            OpenIntent::Reopen => OpenMode::ReadOnly,
-        };
-        Resource::open(
-            cancel.clone(),
-            MmapOptions {
-                mode,
-                initial_len: None,
-                path: target.to_path_buf(),
-            },
-        )
-    })
-    .unwrap();
+    let factory = {
+        let cancel = cancel.clone();
+        move |target: &std::path::Path, intent: OpenIntent| {
+            let mode = match intent {
+                OpenIntent::Fresh => OpenMode::ReadWrite,
+                OpenIntent::Reopen => OpenMode::ReadOnly,
+            };
+            Resource::open(
+                cancel.clone(),
+                MmapOptions {
+                    mode,
+                    initial_len: None,
+                    path: target.to_path_buf(),
+                },
+            )
+        }
+    };
+
+    let err = AtomicChunked::<MmapResource>::open(canonical.clone(), factory.clone())
+        .expect_err("stale tmp must block atomic claim");
+    assert!(
+        matches!(err, crate::StorageError::TmpClaimed(_)),
+        "expected TmpClaimed, got {err:?}"
+    );
+
+    AtomicChunked::<MmapResource>::scrub_stale_tmp(&canonical);
+
+    let res = AtomicChunked::<MmapResource>::open(canonical.clone(), factory)
+        .expect("post-scrub open must succeed");
     res.write_at(0, b"fresh").unwrap();
     res.commit(Some(5)).unwrap();
     let bytes = fs::read(&canonical).unwrap();
     assert_eq!(&bytes, b"fresh");
+}
+
+#[kithara::test(timeout(Duration::from_secs(2)))]
+fn concurrent_open_atomic_claim_returns_tmp_claimed() {
+    let dir = TempDir::new().unwrap();
+    let canonical = dir.path().join("contested.bin");
+
+    let cancel = CancellationToken::new();
+    let factory = {
+        let cancel = cancel.clone();
+        move |target: &std::path::Path, intent: OpenIntent| {
+            let mode = match intent {
+                OpenIntent::Fresh => OpenMode::ReadWrite,
+                OpenIntent::Reopen => OpenMode::ReadOnly,
+            };
+            Resource::open(
+                cancel.clone(),
+                MmapOptions {
+                    mode,
+                    initial_len: None,
+                    path: target.to_path_buf(),
+                },
+            )
+        }
+    };
+
+    let _holder = AtomicChunked::<MmapResource>::open(canonical.clone(), factory.clone())
+        .expect("first open claims tmp");
+
+    let err = AtomicChunked::<MmapResource>::open(canonical.clone(), factory)
+        .expect_err("second concurrent open must be rejected");
+    assert!(
+        matches!(err, crate::StorageError::TmpClaimed(_)),
+        "expected TmpClaimed, got {err:?}"
+    );
 }
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
