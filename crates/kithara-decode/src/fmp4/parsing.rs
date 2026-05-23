@@ -18,6 +18,7 @@ pub(crate) enum CodecConfig {
 
 impl CodecConfig {
     #[cfg(test)]
+    // ast-grep-ignore: idioms.match-self-conversion
     pub(crate) fn as_bytes(&self) -> &[u8] {
         match self {
             Self::Aac(bytes) | Self::Flac(bytes) => bytes,

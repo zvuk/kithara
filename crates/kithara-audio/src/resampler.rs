@@ -59,7 +59,7 @@ impl ResamplerQuality {
     const SINC_LEN_HIGH: usize = 256;
     /// Sinc filter length for normal quality (64-tap).
     const SINC_LEN_NORMAL: usize = 64;
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn sinc_params(self) -> SincInterpolationParameters {
         match self {
             Self::Good => SincInterpolationParameters {
@@ -95,13 +95,14 @@ enum ResamplerKind {
 }
 
 impl ResamplerKind {
+    // ast-grep-ignore: idioms.match-self-conversion
     fn input_frames_next(&self) -> usize {
         match self {
             Self::Poly(r) | Self::Sinc(r) => r.input_frames_next(),
             Self::Fft(r) => r.input_frames_next(),
         }
     }
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn output_frames_next(&self) -> usize {
         match self {
             Self::Poly(r) | Self::Sinc(r) => r.output_frames_next(),

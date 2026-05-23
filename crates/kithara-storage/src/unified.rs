@@ -82,7 +82,7 @@ impl ResourceExt for StorageResource {
             Self::Mem(r) => r.fail(reason),
         }
     }
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn len(&self) -> Option<u64> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -98,7 +98,7 @@ impl ResourceExt for StorageResource {
             Self::Mem(r) => r.next_gap(from, limit),
         }
     }
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn path(&self) -> Option<&Path> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -106,7 +106,7 @@ impl ResourceExt for StorageResource {
             Self::Mem(_) => None,
         }
     }
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn reactivate(&self) -> StorageResult<()> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -122,7 +122,7 @@ impl ResourceExt for StorageResource {
             Self::Mem(r) => r.read_at(offset, buf),
         }
     }
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn status(&self) -> ResourceStatus {
         match self {
             #[cfg(not(target_arch = "wasm32"))]

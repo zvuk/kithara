@@ -216,6 +216,7 @@ impl TrackState {
 
     /// Fieldless discriminant for external phase queries.
     #[inline(always)]
+    // ast-grep-ignore: idioms.match-self-conversion
     pub(crate) fn phase_tag(&self) -> TrackPhaseTag {
         match self {
             Self::Decoding => TrackPhaseTag::Decoding,

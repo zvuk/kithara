@@ -100,6 +100,7 @@ where
     }
 
     /// Return the crate-private aggregate availability handle.
+    // ast-grep-ignore: idioms.match-self-conversion
     pub(crate) fn availability(&self) -> &AvailabilityIndex {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -145,6 +146,7 @@ where
     ///
     /// Returns `AssetsError` if the persistent index resource cannot
     /// be opened or the atomic write fails.
+    // ast-grep-ignore: idioms.match-self-conversion
     pub fn checkpoint(&self) -> AssetsResult<()> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]

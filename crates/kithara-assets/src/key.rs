@@ -38,6 +38,7 @@ impl ResourceKey {
 
     /// Returns the absolute path if this is an Absolute key.
     #[must_use]
+    // ast-grep-ignore: idioms.match-self-conversion
     pub fn as_absolute_path(&self) -> Option<&Path> {
         match self {
             Self::Absolute(p) => Some(p),

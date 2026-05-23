@@ -87,6 +87,7 @@ pub enum DecoderChunkOutcome {
 impl DecoderChunkOutcome {
     /// Borrow the inner [`PcmChunk`] when this outcome is `Chunk`.
     #[must_use]
+    // ast-grep-ignore: idioms.match-self-conversion
     pub fn as_chunk(&self) -> Option<&PcmChunk> {
         match self {
             Self::Chunk(chunk) => Some(chunk),

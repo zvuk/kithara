@@ -38,6 +38,7 @@ impl NetError {
 
     /// Checks if this error is considered retryable
     #[must_use]
+    // ast-grep-ignore: idioms.match-self-conversion
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Http(http_err_str) => {
