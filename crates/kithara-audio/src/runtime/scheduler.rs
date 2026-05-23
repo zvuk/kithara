@@ -160,7 +160,7 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
         cancel: CancellationToken,
     ) -> SchedulerHandle<N> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
-        let wake = Arc::new(SchedulerWake::new());
+        let wake = Arc::new(SchedulerWake::default());
 
         let wake_clone = Arc::clone(&wake);
         let cancel_clone = cancel.clone();

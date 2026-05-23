@@ -3,17 +3,12 @@ use kithara_platform::{
     thread::{self, Thread},
 };
 
+#[derive(Default)]
 pub(crate) struct ThreadWake {
     waiter: Mutex<Option<Thread>>,
 }
 
 impl ThreadWake {
-    pub(crate) fn new() -> Self {
-        Self {
-            waiter: Mutex::new(None),
-        }
-    }
-
     pub(crate) fn register_current(&self) {
         *self.waiter.lock_sync() = Some(thread::current());
     }
@@ -48,7 +43,7 @@ mod tests {
     fn wake_unparks_registered_thread() {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let wake = Arc::new(ThreadWake::new());
+            let wake = Arc::new(ThreadWake::default());
             let done = Arc::new(AtomicBool::new(false));
             let worker_wake = Arc::clone(&wake);
             let worker_done = Arc::clone(&done);

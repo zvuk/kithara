@@ -21,17 +21,16 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Headers {
     inner: HashMap<String, String>,
 }
 
 impl Headers {
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
@@ -49,12 +48,6 @@ impl Headers {
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
-    }
-}
-
-impl Default for Headers {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

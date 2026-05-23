@@ -16,17 +16,12 @@ use super::{FlushHub, FlushPolicy};
 /// which would force the whole `Arc<FlushHub>` graph to be `!Sync` and break
 /// the `Assets: Send + Sync` bound on `LeaseAssets`. So worker storage lives
 /// only on native; wasm32 uses [`super::worker_stub::WorkerSlot`] instead.
+#[derive(Default)]
 pub(super) struct WorkerSlot {
     handle: OnceLock<JoinHandle<()>>,
 }
 
 impl WorkerSlot {
-    pub(super) fn new() -> Self {
-        Self {
-            handle: OnceLock::new(),
-        }
-    }
-
     pub(super) fn is_started(&self) -> bool {
         self.handle.get().is_some()
     }

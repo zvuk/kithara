@@ -93,19 +93,13 @@ impl<C> Fetch<C> {
 /// Validator that checks epoch for seek invalidation.
 ///
 /// Consumer increments epoch on seek; items with old epoch are discarded.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EpochValidator {
     /// Current consumer epoch.
     pub epoch: u64,
 }
 
 impl EpochValidator {
-    /// Create a new epoch validator.
-    #[must_use]
-    pub fn new() -> Self {
-        Self { epoch: 0 }
-    }
-
     /// Check if a fetch result matches the current epoch.
     pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
         item.epoch == self.epoch
@@ -118,12 +112,6 @@ impl EpochValidator {
     }
 }
 
-impl Default for EpochValidator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -132,7 +120,7 @@ mod tests {
 
     #[kithara::test]
     fn epoch_validator_keeps_matching_chunks() {
-        let mut validator = EpochValidator::new();
+        let mut validator = EpochValidator::default();
         let item = Fetch::new(vec![1u8, 2, 3], false, 1);
         validator.epoch = 1;
         assert!(validator.is_valid(&item));
@@ -140,7 +128,7 @@ mod tests {
 
     #[kithara::test]
     fn epoch_validator_rejects_stale_chunks_after_seek() {
-        let mut validator = EpochValidator::new();
+        let mut validator = EpochValidator::default();
         let stale = Fetch::new(vec![3u8], false, validator.epoch);
         let first = Fetch::new(vec![1u8], false, validator.epoch);
         let next_epoch = validator.next_epoch();

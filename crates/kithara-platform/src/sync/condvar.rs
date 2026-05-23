@@ -10,6 +10,7 @@ pub struct Condvar(ParkingLotCondvar);
 impl Condvar {
     #[inline]
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self(ParkingLotCondvar::new())
     }
@@ -58,6 +59,7 @@ pub struct Condvar(WstCondvar);
 impl Condvar {
     #[inline]
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self(WstCondvar::new())
     }

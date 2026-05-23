@@ -9,6 +9,7 @@ pub(crate) type TrackId = u64;
 pub(crate) struct TrackIdGen(AtomicU64);
 
 impl TrackIdGen {
+    // ast-grep-ignore: style.prefer-default-derive
     pub(crate) fn new() -> Self {
         Self(AtomicU64::new(1))
     }

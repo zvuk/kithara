@@ -122,7 +122,7 @@ impl FlushHub {
             cv: Condvar::new(),
             flush_lock: Mutex::new(()),
             sources: Mutex::new(Vec::new()),
-            worker: WorkerSlot::new(),
+            worker: WorkerSlot::default(),
         })
     }
 

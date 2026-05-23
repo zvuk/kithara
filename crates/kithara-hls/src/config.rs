@@ -30,6 +30,7 @@ pub struct KeyOptions {
 
 impl KeyOptions {
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self::default()
     }

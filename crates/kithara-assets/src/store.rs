@@ -216,6 +216,7 @@ impl Default for AssetStoreBuilder<()> {
 impl AssetStoreBuilder<()> {
     /// Builder with defaults (no `root_dir`/`asset_root`/evict/cancel/process set).
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         let dummy_process: ProcessChunkFn<()> =
             Arc::new(|input, output, _ctx: &mut (), _is_last| {

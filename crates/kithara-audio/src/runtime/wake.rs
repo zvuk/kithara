@@ -4,21 +4,13 @@ use kithara_platform::{
 };
 
 /// Level-triggered wake for the scheduler thread.
+#[derive(Default)]
 pub(crate) struct SchedulerWake {
     condvar: Condvar,
     woken: Mutex<bool>,
 }
 
 impl SchedulerWake {
-    /// Create a new wake in the "not woken" state.
-    #[must_use]
-    pub(crate) fn new() -> Self {
-        Self {
-            woken: Mutex::new(false),
-            condvar: Condvar::new(),
-        }
-    }
-
     /// Block until woken or `timeout` elapses.
     ///
     /// Returns `true` if woken by [`wake`](Self::wake), `false` on timeout.
@@ -48,11 +40,5 @@ impl SchedulerWake {
     pub(crate) fn wake(&self) {
         *self.woken.lock_sync() = true;
         self.condvar.notify_one();
-    }
-}
-
-impl Default for SchedulerWake {
-    fn default() -> Self {
-        Self::new()
     }
 }

@@ -124,7 +124,7 @@ impl AppleCodec {
             spec,
             frames_per_packet,
             input_bytes_per_packet,
-            input_state: Box::new(ConverterInputState::new()),
+            input_state: Box::new(ConverterInputState::default()),
             track_info: DecoderTrackInfo::default(),
             last_prime_info: None,
             gapless_enabled: false,

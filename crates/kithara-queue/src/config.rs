@@ -71,6 +71,7 @@ impl Default for QueueConfig {
 impl QueueConfig {
     /// Create a new [`QueueConfig`] with all defaults.
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self::default()
     }

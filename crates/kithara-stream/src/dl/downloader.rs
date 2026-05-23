@@ -226,7 +226,7 @@ impl Downloader {
     ///   stalls across the timeout window → panic.
     #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
-        let mut registry = Registry::new();
+        let mut registry = Registry::default();
 
         loop {
             let progress = tokio::select! {

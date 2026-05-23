@@ -119,6 +119,7 @@ impl Timeline {
     const NO_SEEK_TARGET: u64 = u64::MAX;
 
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self {
             committed_position_ns: Arc::new(AtomicU64::new(0)),

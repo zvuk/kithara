@@ -50,6 +50,7 @@ impl PlayerNode {
     /// [`PlayerNode::with_channel`] when you need to send commands
     /// from the main thread.
     #[cfg(test)]
+    // ast-grep-ignore: style.prefer-default-derive
     pub(crate) fn new() -> Self {
         let (_, rx) = HeapRb::<PlayerCmd>::new(1).split();
         Self {

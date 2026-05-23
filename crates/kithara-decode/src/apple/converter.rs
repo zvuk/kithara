@@ -102,6 +102,7 @@ pub(crate) fn log_gapless_prime_info(
 /// buffer — they stay valid until the next `read_next_packet` call, which
 /// is always issued by `AppleDecoder` *after* the converter has finished
 /// consuming the current packet.
+#[derive(Default)]
 pub(crate) struct ConverterInputState {
     pub(crate) packet_ptr: *const u8,
     pub(crate) packet_desc: AudioStreamPacketDescription,
@@ -110,15 +111,6 @@ pub(crate) struct ConverterInputState {
 }
 
 impl ConverterInputState {
-    pub(crate) fn new() -> Self {
-        Self {
-            packet_ptr: ptr::null(),
-            packet_desc: AudioStreamPacketDescription::default(),
-            packet_len: 0,
-            has_packet: false,
-        }
-    }
-
     pub(crate) fn clear(&mut self) {
         self.packet_ptr = ptr::null();
         self.packet_len = 0;

@@ -48,6 +48,7 @@ impl SharedPlayerState {
     /// The notification channel is bounded to 32 to avoid dropping
     /// notifications during high activity while keeping memory bounded.
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         let (tx, rx) = HeapRb::<PlayerNotification>::new(NOTIFICATION_RINGBUF_CAPACITY).split();
         Self {

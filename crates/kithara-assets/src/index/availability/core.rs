@@ -81,6 +81,7 @@ pub(super) struct InnerIndex {
 }
 
 impl AvailabilityIndex {
+    // ast-grep-ignore: style.prefer-default-derive
     pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(InnerIndex {

@@ -55,6 +55,7 @@ impl AudioWorkerHandle {
     /// [`AudioWorkerHandle::with_cancel`] with a child of the player
     /// master — see `kithara-play/README.md` "Cancel Hierarchy".
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self::with_cancel(CancellationToken::new()) // kithara:cancel:owner
     }
@@ -217,7 +218,7 @@ mod tests {
     where
         S: AudioWorkerSource<Chunk = PcmChunk> + 'static,
     {
-        let wake = Arc::new(ThreadWake::new());
+        let wake = Arc::new(ThreadWake::default());
         let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
         let preload_notify = Arc::new(Notify::new());
 

@@ -83,6 +83,7 @@ impl ThroughputEstimator {
     const SLOW_HALF_LIFE_SECS: f64 = 10.0;
 
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(ThroughputInner {

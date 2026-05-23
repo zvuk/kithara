@@ -802,7 +802,7 @@ where
         });
 
         let preload_notify = Arc::new(Notify::new());
-        let reader_wake = Arc::new(ThreadWake::new());
+        let reader_wake = Arc::new(ThreadWake::default());
         let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, Arc::clone(&reader_wake));
 
         let (worker, is_standalone) =
@@ -828,7 +828,7 @@ where
             abr_handle,
             pcm_rx: data_rx,
             _epoch: epoch,
-            validator: EpochValidator::new(),
+            validator: EpochValidator::default(),
             spec: output_spec,
             current_chunk: None,
             current_chunk_consumed_frames: 0,
@@ -1245,7 +1245,7 @@ mod tests {
         Audio {
             pcm_rx,
             _epoch: Arc::new(AtomicU64::new(0)),
-            validator: EpochValidator::new(),
+            validator: EpochValidator::default(),
             spec: PcmSpec::default(),
             current_chunk: None,
             current_chunk_consumed_frames: 0,
@@ -1262,7 +1262,7 @@ mod tests {
             notify_waiting: None,
             track_id: None,
             worker: None,
-            reader_wake: Arc::new(ThreadWake::new()),
+            reader_wake: Arc::new(ThreadWake::default()),
             is_standalone_worker: false,
             abr_handle: None,
             _marker: PhantomData,
@@ -1302,7 +1302,7 @@ mod tests {
         let audio = Audio {
             pcm_rx,
             _epoch: Arc::new(AtomicU64::new(0)),
-            validator: EpochValidator::new(),
+            validator: EpochValidator::default(),
             spec: PcmSpec::default(),
             current_chunk: None,
             current_chunk_consumed_frames: 0,
@@ -1319,7 +1319,7 @@ mod tests {
             notify_waiting: None,
             track_id: None,
             worker: None,
-            reader_wake: Arc::new(ThreadWake::new()),
+            reader_wake: Arc::new(ThreadWake::default()),
             is_standalone_worker: false,
             abr_handle: None,
             _marker: PhantomData,
