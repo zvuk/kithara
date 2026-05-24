@@ -92,17 +92,20 @@ impl AppleCodec {
         }
 
         if let Some(cookie) = cookie.as_ref().filter(|c| !c.is_empty()) {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "magic cookie length fits in u32 for valid configs"
-            )]
+            let cookie_size: UInt32 =
+                cookie
+                    .len()
+                    .try_into()
+                    .map_err(|e: std::num::TryFromIntError| {
+                        DecodeError::Backend(Box::new(std::io::Error::other(e)))
+                    })?;
             // SAFETY: `converter` was just successfully created above and
             let status = unsafe {
                 AudioConverterSetProperty(
                     converter,
                     Consts::kAudioConverterDecompressionMagicCookie,
-                    cookie.len() as UInt32,
-                    cookie.as_ptr() as *const c_void,
+                    cookie_size,
+                    cookie.as_ptr().cast::<c_void>(),
                 )
             };
             if status != Consts::noErr {
@@ -232,31 +235,38 @@ impl FrameCodec for AppleCodec {
             unsafe {
                 ptr::copy_nonoverlapping(
                     packet_desc.as_ptr(),
-                    &mut d as *mut _ as *mut u8,
+                    ptr::from_mut(&mut d).cast::<u8>(),
                     size_of::<AudioStreamPacketDescription>(),
                 );
             }
             d
         } else {
+            let frame_bytes: UInt32 =
+                frame_data
+                    .len()
+                    .try_into()
+                    .map_err(|e: std::num::TryFromIntError| {
+                        DecodeError::Backend(Box::new(std::io::Error::other(e)))
+                    })?;
             AudioStreamPacketDescription {
                 mStartOffset: 0,
                 mVariableFramesInPacket: 0,
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "frame size fits in u32 for any realistic codec packet"
-                )]
-                mDataByteSize: frame_data.len() as UInt32,
+                mDataByteSize: frame_bytes,
             }
         };
         self.input_state.set(frame_data, desc);
 
-        let channels = self.spec.channels as usize;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "frame_data length divided by mBytesPerPacket is bounded by packet count"
-        )]
-        let target_frames = if self.input_bytes_per_packet > 0 {
-            (frame_data.len() / self.input_bytes_per_packet as usize) as u32
+        let channels = usize::from(self.spec.channels);
+        let target_frames: u32 = if self.input_bytes_per_packet > 0 {
+            let packets = frame_data.len()
+                / usize::try_from(self.input_bytes_per_packet).map_err(
+                    |e: std::num::TryFromIntError| {
+                        DecodeError::Backend(Box::new(std::io::Error::other(e)))
+                    },
+                )?;
+            packets.try_into().map_err(|e: std::num::TryFromIntError| {
+                DecodeError::Backend(Box::new(std::io::Error::other(e)))
+            })?
         } else {
             self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
         };
@@ -264,25 +274,31 @@ impl FrameCodec for AppleCodec {
             out.clear();
             return Ok(0);
         }
-        let needed_samples = target_frames as usize * channels;
+        let needed_samples =
+            usize::try_from(target_frames).map_err(|e: std::num::TryFromIntError| {
+                DecodeError::Backend(Box::new(std::io::Error::other(e)))
+            })? * channels;
         out.ensure_len(needed_samples)
             .map_err(|e| DecodeError::Backend(Box::new(e)))?;
 
         let mut output_packets = target_frames;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "PCM buffer byte size fits in u32 for one packet"
-        )]
+        let buffer_bytes: u32 = (out.len()
+            * usize::try_from(Consts::BYTES_PER_F32_SAMPLE).unwrap_or(0))
+        .try_into()
+        .map_err(|e: std::num::TryFromIntError| {
+            DecodeError::Backend(Box::new(std::io::Error::other(e)))
+        })?;
         let mut buffer_list = AudioBufferList {
             mNumberBuffers: 1,
             mBuffers: [AudioBuffer {
                 mNumberChannels: u32::from(self.spec.channels),
-                mDataByteSize: (out.len() * Consts::BYTES_PER_F32_SAMPLE as usize) as u32,
-                mData: out.as_mut_ptr() as *mut c_void,
+                mDataByteSize: buffer_bytes,
+                mData: out.as_mut_ptr().cast::<c_void>(),
             }],
         };
 
-        let input_ptr = self.input_state.as_mut() as *mut ConverterInputState as *mut c_void;
+        let input_ptr =
+            ptr::from_mut::<ConverterInputState>(self.input_state.as_mut()).cast::<c_void>();
 
         // SAFETY: `self.converter` is live; `input_ptr` points at a live
         let status = unsafe {
@@ -309,7 +325,9 @@ impl FrameCodec for AppleCodec {
         }
 
         let frames = output_packets;
-        let samples_len = frames as usize * channels;
+        let samples_len = usize::try_from(frames).map_err(|e: std::num::TryFromIntError| {
+            DecodeError::Backend(Box::new(std::io::Error::other(e)))
+        })? * channels;
         out.truncate(samples_len);
         self.refresh_gapless_after_first_chunk();
         Ok(frames)
@@ -371,13 +389,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             cookie.push(0x80);
             cookie.push(0x00);
             cookie.push(0x00);
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "FLAC_STREAMINFO_LEN is 34, fits in u8"
-            )]
-            {
-                cookie.push(Consts::FLAC_STREAMINFO_LEN as u8);
-            }
+            cookie.push(Consts::FLAC_STREAMINFO_LEN_U8);
             cookie.extend_from_slice(streaminfo);
 
             let asbd = AudioStreamBasicDescription {
@@ -451,7 +463,7 @@ fn parse_pcm_extra_data(extra: &[u8]) -> DecodeResult<AudioStreamBasicDescriptio
     unsafe {
         ptr::copy_nonoverlapping(
             extra.as_ptr(),
-            &mut asbd as *mut _ as *mut u8,
+            ptr::from_mut(&mut asbd).cast::<u8>(),
             size_of::<AudioStreamBasicDescription>(),
         );
     }
@@ -494,7 +506,7 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
         });
     }
 
-    let esds = esds_wrap_asc(&track.extra_data);
+    let esds = esds_wrap_asc(&track.extra_data)?;
     let asbd = derive_aac_asbd_from_esds(&esds, track)?;
     let frames_per_packet = if asbd.mFramesPerPacket > 0 {
         asbd.mFramesPerPacket
@@ -512,16 +524,18 @@ fn derive_aac_asbd_from_esds(
     esds: &[u8],
     track: &TrackInfo,
 ) -> DecodeResult<AudioStreamBasicDescription> {
-    let cookie_size = UInt32::try_from(esds.len())
-        .map_err(|e| DecodeError::Backend(Box::new(std::io::Error::other(e.to_string()))))?;
-    let specifier_size = UInt32::try_from(size_of::<AudioFormatInfo>())
-        .map_err(|e| DecodeError::Backend(Box::new(std::io::Error::other(e.to_string()))))?;
+    let backend_err =
+        |e: std::num::TryFromIntError| DecodeError::Backend(Box::new(std::io::Error::other(e)));
+    let cookie_size: UInt32 = esds.len().try_into().map_err(backend_err)?;
+    let specifier_size: UInt32 = size_of::<AudioFormatInfo>()
+        .try_into()
+        .map_err(backend_err)?;
     let format_info = AudioFormatInfo {
         mASBD: AudioStreamBasicDescription {
             mFormatID: Consts::kAudioFormatMPEG4AAC,
             ..Default::default()
         },
-        mMagicCookie: esds.as_ptr() as *const c_void,
+        mMagicCookie: esds.as_ptr().cast::<c_void>(),
         mMagicCookieSize: cookie_size,
     };
 
@@ -533,7 +547,7 @@ fn derive_aac_asbd_from_esds(
         AudioFormatGetPropertyInfo(
             Consts::kAudioFormatProperty_FormatList,
             specifier_size,
-            &format_info as *const _ as *const c_void,
+            ptr::from_ref(&format_info).cast::<c_void>(),
             &mut list_bytes,
         )
     };
@@ -549,7 +563,9 @@ fn derive_aac_asbd_from_esds(
     }
 
     let item_size = size_of::<AudioFormatListItem>();
-    let item_count = (list_bytes as usize) / item_size;
+    let usize_err =
+        |e: std::num::TryFromIntError| DecodeError::Backend(Box::new(std::io::Error::other(e)));
+    let item_count = usize::try_from(list_bytes).map_err(usize_err)? / item_size;
     if item_count == 0 {
         return Err(DecodeError::Backend(Box::new(std::io::Error::other(
             format!("FormatList returned {list_bytes} bytes (< 1 item)"),
@@ -563,9 +579,9 @@ fn derive_aac_asbd_from_esds(
         AudioFormatGetProperty(
             Consts::kAudioFormatProperty_FormatList,
             specifier_size,
-            &format_info as *const _ as *const c_void,
+            ptr::from_ref(&format_info).cast::<c_void>(),
             &mut io_size,
-            items.as_mut_ptr() as *mut c_void,
+            items.as_mut_ptr().cast::<c_void>(),
         )
     };
     if status != Consts::noErr {
@@ -577,7 +593,7 @@ fn derive_aac_asbd_from_esds(
         ))));
     }
 
-    let returned = (io_size as usize) / item_size;
+    let returned = usize::try_from(io_size).map_err(usize_err)? / item_size;
     let chosen = items.first().copied().ok_or_else(|| {
         DecodeError::Backend(Box::new(std::io::Error::other(
             "FormatList returned zero items".to_string(),
@@ -619,39 +635,43 @@ fn derive_aac_asbd_from_esds(
 ///     DecoderSpecificInfo (tag 0x05): <ASC bytes>
 ///   SLConfigDescriptor (tag 0x06): predefined (1 byte) = 0x02
 /// ```
-fn esds_wrap_asc(asc: &[u8]) -> Vec<u8> {
-    let dsi_body = asc.len();
-    let dsi_total = 2 + dsi_body;
-    let dcd_body = 1 + 1 + 3 + 4 + 4 + dsi_total;
-    let dcd_total = 2 + dcd_body;
-    let slc_total = 3;
-    let esd_body = 2 + 1 + dcd_total + slc_total;
+fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
+    let too_long = |scope: &str, n: usize| {
+        DecodeError::InvalidData(format!(
+            "aac: {scope} too long for short-form ESDS size field ({n} > 127)"
+        ))
+    };
+    let dsi_body: u8 = asc
+        .len()
+        .try_into()
+        .map_err(|_| too_long("ASC", asc.len()))?;
+    let dcd_body_len = 1 + 1 + 3 + 4 + 4 + 2 + asc.len();
+    let dcd_body: u8 = dcd_body_len
+        .try_into()
+        .map_err(|_| too_long("DecoderConfigDescriptor", dcd_body_len))?;
+    let esd_body_len = 2 + 1 + 2 + dcd_body_len + 3;
+    let esd_body: u8 = esd_body_len
+        .try_into()
+        .map_err(|_| too_long("ES_Descriptor", esd_body_len))?;
 
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "AAC ESDS sizes fit in u8 — ASC bodies are <128 bytes in practice"
-    )]
-    {
-        let mut buf = Vec::with_capacity(2 + esd_body);
-        buf.push(0x03);
-        buf.push(esd_body as u8);
-        buf.extend_from_slice(&[0, 0]);
-        buf.push(0);
-        buf.push(0x04);
-        buf.push(dcd_body as u8);
-        buf.push(0x40);
-        buf.push(0x15);
-        buf.extend_from_slice(&[0, 0, 0]);
-        buf.extend_from_slice(&[0, 0, 0, 0]);
-        buf.extend_from_slice(&[0, 0, 0, 0]);
-        buf.push(0x05);
-        buf.push(dsi_body as u8);
-        buf.extend_from_slice(asc);
-        buf.push(0x06);
-        buf.push(0x01);
-        buf.push(0x02);
-        buf
-    }
+    let header: [u8; 22] = [
+        0x03, esd_body, // ES_Descriptor (tag, size)
+        0x00, 0x00, // ES_ID = 0
+        0x00, // Flags = 0
+        0x04, dcd_body, // DecoderConfigDescriptor (tag, size)
+        0x40,     // OTI = MPEG-4 Audio
+        0x15,     // streamType = AudioStream<<2 | reserved
+        0x00, 0x00, 0x00, // BufferSizeDB (3 bytes)
+        0x00, 0x00, 0x00, 0x00, // MaxBitrate (4 bytes)
+        0x00, 0x00, 0x00, 0x00, // AvgBitrate (4 bytes)
+        0x05, dsi_body, // DecoderSpecificInfo (tag, size)
+    ];
+    let trailer: [u8; 3] = [0x06, 0x01, 0x02];
+    Ok(header
+        .into_iter()
+        .chain(asc.iter().copied())
+        .chain(trailer)
+        .collect())
 }
 
 fn build_pcm_output_format(sample_rate: u32, channels: u16) -> AudioStreamBasicDescription {

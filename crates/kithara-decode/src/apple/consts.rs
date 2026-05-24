@@ -15,6 +15,9 @@ impl Consts {
     pub(crate) const FLAC_COOKIE_PREFIX_LEN: usize = 8;
     /// Size of the FLAC STREAMINFO metadata block body (fixed by spec).
     pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
+    /// Same as [`Self::FLAC_STREAMINFO_LEN`] typed for the
+    /// `METADATA_BLOCK_LENGTH` u8 byte in the Apple FLAC magic cookie.
+    pub(crate) const FLAC_STREAMINFO_LEN_U8: u8 = 34;
     pub(crate) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d_6763;
     pub(crate) const kAudioConverterErr_NoDataNow: OSStatus = 0x2164_6174;
     /// `'flst'` — `AudioFormatGetProperty` property that enumerates all
