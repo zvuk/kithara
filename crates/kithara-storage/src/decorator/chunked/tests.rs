@@ -96,7 +96,7 @@ fn open_rejects_when_stale_tmp_blocks_claim_then_scrub_unblocks() {
     let cancel = CancellationToken::new();
     let factory = {
         let cancel = cancel.clone();
-        move |target: &std::path::Path, intent: OpenIntent| {
+        move |target: &Path, intent: OpenIntent| {
             let mode = match intent {
                 OpenIntent::Fresh => OpenMode::ReadWrite,
                 OpenIntent::Reopen => OpenMode::ReadOnly,
@@ -137,7 +137,7 @@ fn concurrent_open_atomic_claim_returns_tmp_claimed() {
     let cancel = CancellationToken::new();
     let factory = {
         let cancel = cancel.clone();
-        move |target: &std::path::Path, intent: OpenIntent| {
+        move |target: &Path, intent: OpenIntent| {
             let mode = match intent {
                 OpenIntent::Fresh => OpenMode::ReadWrite,
                 OpenIntent::Reopen => OpenMode::ReadOnly,

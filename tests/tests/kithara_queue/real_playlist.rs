@@ -64,10 +64,7 @@ async fn shared_test_ctx() -> &'static TestCtx {
                     .client(HttpClient::new(net, CancellationToken::new()))
                     .build(),
             );
-            let flush_hub = FlushHub::new(
-                tokio_util::sync::CancellationToken::new(),
-                FlushPolicy::default(),
-            );
+            let flush_hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
             let config = AppConfig::new(downloader, flush_hub);
             let player = Arc::new(PlayerImpl::new(
                 PlayerConfig::builder()
