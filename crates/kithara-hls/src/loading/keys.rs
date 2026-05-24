@@ -2,10 +2,11 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use bytes::Bytes;
+use dashmap::DashMap;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_drm::{DecryptContext, KeyProcessorRegistry};
 use kithara_net::Headers;
@@ -34,7 +35,7 @@ pub struct KeyManager {
     /// **plaintext** is deterministic per track/quality and safe to
     /// persist; the on-the-wire response is encrypted with a fresh
     /// per-session seed and never touches disk.
-    decrypted_keys: Arc<Mutex<HashMap<Url, Bytes>>>,
+    decrypted_keys: Arc<DashMap<Url, Bytes>>,
     backend: AssetStore<DecryptContext>,
     /// Byte buffer pool for reading cached key bodies.
     byte_pool: kithara_bufpool::BytePool,
@@ -72,7 +73,7 @@ impl KeyManager {
             base_headers,
             key_registry,
             byte_pool,
-            decrypted_keys: Arc::new(Mutex::new(HashMap::new())),
+            decrypted_keys: Arc::new(DashMap::new()),
         }
     }
 
@@ -136,10 +137,8 @@ impl KeyManager {
         if rule.is_some() {
             return self
                 .decrypted_keys
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(url)
-                .cloned()
+                .map(|r| r.value().clone())
                 .ok_or_else(|| HlsError::KeyProcessing(format!("DRM key not prefetched: {url}")));
         }
 
@@ -202,14 +201,12 @@ impl KeyManager {
             .await;
         }
 
-        if let Some(cached) = self
-            .decrypted_keys
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(url)
-        {
+        // Clone the cached `Bytes` out of the shard guard before the next
+        // step — `try_read_cached` and the network fetch below must not
+        // hold a dashmap ref across their I/O.
+        if let Some(cached) = self.decrypted_keys.get(url).map(|r| r.value().clone()) {
             tracing::debug!(%url, "drm key: served from in-memory cache");
-            return Ok(cached.clone());
+            return Ok(cached);
         }
 
         let cache_key = ResourceKey::from(url);
@@ -223,10 +220,7 @@ impl KeyManager {
             Self::RESOURCE_KIND,
         )? {
             tracing::info!(%url, bytes = bytes.len(), "drm key: served from disk cache");
-            self.decrypted_keys
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(url.clone(), bytes.clone());
+            self.decrypted_keys.insert(url.clone(), bytes.clone());
             return Ok(bytes);
         }
 
@@ -275,10 +269,7 @@ impl KeyManager {
             Self::RESOURCE_KIND,
         );
 
-        self.decrypted_keys
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(url.clone(), decrypted.clone());
+        self.decrypted_keys.insert(url.clone(), decrypted.clone());
         Ok(decrypted)
     }
 

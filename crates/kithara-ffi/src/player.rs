@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
+use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
     audio::generate_log_spaced_bands,
@@ -99,7 +100,7 @@ pub struct AudioPlayer {
     /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
     /// `X-Auth-Token`). Merged into per-item `headers` on insert.
     /// Item-supplied headers take precedence on key collision.
-    player_headers: Mutex<HashMap<String, String>>,
+    player_headers: DashMap<String, String>,
     /// Shared storage options (cache dir, etc.) applied to every item.
     store: StoreOptions,
 }
@@ -210,11 +211,12 @@ impl AudioPlayer {
                 .build(),
         );
         let (key_options, player_headers) = build_initial_key_state(config.key_options);
+        let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
         Arc::new(Self {
             downloader,
             cancel,
             key_options: Mutex::new(key_options),
-            player_headers: Mutex::new(player_headers),
+            player_headers: player_headers_map,
             peak_bitrate: Mutex::new(PeakBitrate::default()),
             queue: Arc::new(Queue::new(queue_config)),
             store: config.store,
@@ -619,16 +621,15 @@ impl AudioPlayer {
     ///
     /// Items already in the queue keep their original key registry.
     pub fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
-        let mut player_headers = self.player_headers.lock_sync();
         if let Some(headers) = rule.headers.as_ref() {
             for (k, v) in headers {
-                player_headers.insert(k.clone(), v.clone());
+                self.player_headers.insert(k.clone(), v.clone());
             }
         }
         if let Some(salt) = rule.salt.as_ref() {
-            player_headers.insert(SALT_HEADER.to_string(), salt.clone());
+            self.player_headers
+                .insert(SALT_HEADER.to_string(), salt.clone());
         }
-        drop(player_headers);
 
         let processor_rule = build_processor_rule(rule);
         let mut opts = self.key_options.lock_sync();
@@ -641,11 +642,11 @@ impl AudioPlayer {
     /// [`AUTH_TOKEN_HEADER`]; merged into per-item HTTP headers on
     /// every subsequent [`insert`]. Pass an empty string to clear.
     pub fn setup_network(&self, auth_token: String) {
-        let mut headers = self.player_headers.lock_sync();
         if auth_token.is_empty() {
-            headers.remove(AUTH_TOKEN_HEADER);
+            self.player_headers.remove(AUTH_TOKEN_HEADER);
         } else {
-            headers.insert(AUTH_TOKEN_HEADER.to_string(), auth_token);
+            self.player_headers
+                .insert(AUTH_TOKEN_HEADER.to_string(), auth_token);
         }
     }
 
@@ -734,13 +735,15 @@ impl AudioPlayer {
         &self,
         item: &Arc<AudioPlayerItem>,
     ) -> Option<HashMap<String, String>> {
-        let player_headers = self.player_headers.lock_sync();
         let item_headers = item.headers();
-        if player_headers.is_empty() && item_headers.is_none() {
+        if self.player_headers.is_empty() && item_headers.is_none() {
             return None;
         }
-        let mut merged = player_headers.clone();
-        drop(player_headers);
+        let mut merged: HashMap<String, String> = self
+            .player_headers
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect();
         if let Some(item_h) = item_headers {
             merged.extend(item_h);
         }
@@ -840,8 +843,11 @@ mod tests {
     fn setup_network_writes_auth_token_into_player_headers() {
         let player = AudioPlayer::new(FfiPlayerConfig::default());
         player.setup_network("token-123".to_string());
-        let headers = player.player_headers.lock_sync().clone();
-        assert_eq!(headers.get(AUTH_TOKEN_HEADER), Some(&"token-123".into()));
+        let token = player
+            .player_headers
+            .get(AUTH_TOKEN_HEADER)
+            .map(|r| r.value().clone());
+        assert_eq!(token.as_deref(), Some("token-123"));
     }
 
     #[kithara::test]
@@ -849,12 +855,7 @@ mod tests {
         let player = AudioPlayer::new(FfiPlayerConfig::default());
         player.setup_network("token-123".to_string());
         player.setup_network(String::new());
-        assert!(
-            !player
-                .player_headers
-                .lock_sync()
-                .contains_key(AUTH_TOKEN_HEADER)
-        );
+        assert!(!player.player_headers.contains_key(AUTH_TOKEN_HEADER));
     }
 
     #[kithara::test]
@@ -869,8 +870,11 @@ mod tests {
         let player = AudioPlayer::new(FfiPlayerConfig::default());
         player.setup_hls_aes(Arc::new(DummyProcessor));
 
-        let headers = player.player_headers.lock_sync().clone();
-        let salt = headers.get(SALT_HEADER).expect("salt header populated");
+        let salt = player
+            .player_headers
+            .get(SALT_HEADER)
+            .map(|r| r.value().clone())
+            .expect("salt header populated");
         assert_eq!(salt.len(), SALT_LEN);
         assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()));
 

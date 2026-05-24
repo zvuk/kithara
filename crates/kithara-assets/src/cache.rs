@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path, sync::Arc};
+use std::{fmt, num::NonZeroUsize, path::Path, sync::Arc};
 
+use dashmap::DashSet;
 use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use lru::LruCache;
@@ -20,7 +21,7 @@ use crate::{
 /// LRU cache so it is never evicted.
 #[derive(Clone)]
 pub struct CachedResource<R> {
-    pinned: Arc<Mutex<HashSet<ResourceKey>>>,
+    pinned: Arc<DashSet<ResourceKey>>,
     inner: R,
     key: ResourceKey,
 }
@@ -47,12 +48,12 @@ impl<R> CachedResource<R> {
 
     /// Unpin this resource (by-ref, for use inside wrappers).
     pub(crate) fn set_released(&self) {
-        self.pinned.lock_sync().remove(&self.key);
+        self.pinned.remove(&self.key);
     }
 
     /// Pin this resource in the LRU cache (by-ref, for use inside wrappers).
     pub(crate) fn set_retained(&self) {
-        self.pinned.lock_sync().insert(self.key.clone());
+        self.pinned.insert(self.key.clone());
     }
 }
 
@@ -118,7 +119,7 @@ where
     A: Assets,
 {
     inner: Arc<A>,
-    pinned: Arc<Mutex<HashSet<ResourceKey>>>,
+    pinned: Arc<DashSet<ResourceKey>>,
     capacity: NonZeroUsize,
     on_invalidated: Option<crate::store::OnInvalidatedFn>,
     cache: SharedCache<A>,
@@ -148,7 +149,7 @@ where
         Self {
             inner,
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
-            pinned: Arc::new(Mutex::new(HashSet::new())),
+            pinned: Arc::new(DashSet::new()),
             capacity,
             on_invalidated,
         }
@@ -257,7 +258,7 @@ where
 
     fn is_pinned_key(&self, key: &CacheKey<A::Context>) -> bool {
         match key {
-            CacheKey::Resource(resource_key, _) => self.pinned.lock_sync().contains(resource_key),
+            CacheKey::Resource(resource_key, _) => self.pinned.contains(resource_key),
             _ => false,
         }
     }
@@ -295,12 +296,11 @@ where
     }
 
     fn pinned_cache_count(&self, cache: &CacheMap<A>) -> usize {
-        let pinned = self.pinned.lock_sync();
         cache
             .iter()
             .filter(|(k, e)| {
                 Self::is_protected_resource(e)
-                    || matches!(k, CacheKey::Resource(rk, _) if pinned.contains(rk))
+                    || matches!(k, CacheKey::Resource(rk, _) if self.pinned.contains(rk))
             })
             .count()
     }
@@ -470,7 +470,7 @@ where
                 cache.pop(&cache_key);
             }
         }
-        self.pinned.lock_sync().remove(key);
+        self.pinned.remove(key);
         self.inner.remove_resource(key)
     }
 

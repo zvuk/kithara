@@ -1,15 +1,15 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     fs,
     num::NonZeroU32,
     path::PathBuf,
     sync::{Arc, OnceLock, atomic::Ordering},
 };
 
+use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_platform::Mutex;
 use kithara_storage::{Atomic, MmapResource, ResourceExt, StorageError};
 use tokio_util::sync::CancellationToken;
 
@@ -36,7 +36,7 @@ impl PinsIndex {
         let (initial, opened) = hydrate_existing(&path, &cancel, pool);
         Self {
             inner: Arc::new(PinsInner {
-                pins: Mutex::new(initial),
+                pins: initial,
                 persist: Some(PinsPersist {
                     path,
                     cancel,
@@ -60,7 +60,7 @@ impl PinsInner {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
-        let snapshot: Vec<String> = self.pins.lock_sync().keys().cloned().collect();
+        let snapshot: Vec<String> = self.pins.iter().map(|r| r.key().clone()).collect();
         let atomic = persist::init_atomic(&persist.res, &persist.path, &persist.cancel)?;
         write_pins(atomic, &snapshot, durable)?;
         self.dirty.store(false, Ordering::Release);
@@ -72,10 +72,10 @@ fn hydrate_existing(
     path: &std::path::Path,
     cancel: &CancellationToken,
     pool: &BytePool,
-) -> (HashMap<String, NonZeroU32>, Option<Atomic<MmapResource>>) {
+) -> (DashMap<String, NonZeroU32>, Option<Atomic<MmapResource>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
     if !nonempty {
-        return (HashMap::new(), None);
+        return (DashMap::new(), None);
     }
     match persist::open_existing(path, cancel) {
         Ok(res) => {
@@ -85,7 +85,7 @@ fn hydrate_existing(
         }
         Err(e) => {
             tracing::debug!("open existing pins.bin failed: {e}");
-            (HashMap::new(), None)
+            (DashMap::new(), None)
         }
     }
 }
@@ -93,12 +93,12 @@ fn hydrate_existing(
 fn read_pins(
     res: &Atomic<MmapResource>,
     pool: &BytePool,
-) -> AssetsResult<HashMap<String, NonZeroU32>> {
+) -> AssetsResult<DashMap<String, NonZeroU32>> {
     let mut buf = pool.get();
     let n = res.read_into(&mut buf)?;
 
     if n == 0 {
-        return Ok(HashMap::new());
+        return Ok(DashMap::new());
     }
 
     let archived =
@@ -108,7 +108,7 @@ fn read_pins(
             Ok(a) => a,
             Err(e) => {
                 tracing::debug!("Failed to validate pins index: {}", e);
-                return Ok(HashMap::new());
+                return Ok(DashMap::new());
             }
         };
 

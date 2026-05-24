@@ -72,6 +72,7 @@ kithara-queue = { workspace = true, features = ["backend-cpal"] }
 # kithara-play (needed for `init_offline_backend` / offline module).
 kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "probe"] }
 bytes = { workspace = true }
+dashmap = { workspace = true }
 rand = { workspace = true }
 unimock = { workspace = true }
 url = { workspace = true }

@@ -3972,6 +3972,7 @@ version = "0.0.1-alpha1"
 dependencies = [
  "bon",
  "criterion",
+ "dashmap",
  "kithara-events",
  "kithara-platform",
  "kithara-test-utils",
@@ -4200,6 +4201,7 @@ dependencies = [
  "bytes",
  "console_error_panic_hook",
  "cpal",
+ "dashmap",
  "futures",
  "jni 0.22.4",
  "js-sys",

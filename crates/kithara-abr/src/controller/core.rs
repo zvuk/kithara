@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     num::NonZeroU64,
     sync::{
         Arc, Weak,
@@ -8,6 +7,7 @@ use std::{
 };
 
 use bon::Builder;
+use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
     Mutex, RwLock,
@@ -100,7 +100,7 @@ pub struct AbrController {
     pub(super) estimator: Arc<dyn Estimator>,
     pub(super) self_weak: Weak<Self>,
     next_peer_id: AtomicU64,
-    peers: Mutex<HashMap<AbrPeerId, Arc<PeerEntry>>>,
+    peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
 }
 
 impl AbrController {
@@ -167,7 +167,7 @@ impl AbrController {
     }
 
     pub(crate) fn peer_entry(&self, id: AbrPeerId) -> Option<Arc<PeerEntry>> {
-        self.peers.lock_sync().get(&id).cloned()
+        self.peers.get(&id).map(|r| Arc::clone(r.value()))
     }
 
     /// Register a peer. Returns an [`AbrHandle`] that the caller keeps alive
@@ -187,7 +187,7 @@ impl AbrController {
             throttle: Mutex::new(EventThrottleCache::default()),
             state: state.clone(),
         });
-        self.peers.lock_sync().insert(id, entry);
+        self.peers.insert(id, entry);
         AbrHandle::new(Arc::clone(self), id, state, bus)
     }
 
@@ -205,7 +205,7 @@ impl AbrController {
 
     /// Called from [`AbrHandle::drop`].
     pub(crate) fn unregister(&self, id: AbrPeerId) {
-        if let Some(entry) = self.peers.lock_sync().remove(&id)
+        if let Some((_, entry)) = self.peers.remove(&id)
             && let Some(token) = entry.incoherence_cancel.lock_sync().take()
         {
             token.cancel();
@@ -222,7 +222,7 @@ impl AbrController {
             estimator,
             self_weak: weak.clone(),
             next_peer_id: AtomicU64::new(0),
-            peers: Mutex::new(HashMap::new()),
+            peers: DashMap::new(),
         })
     }
 }

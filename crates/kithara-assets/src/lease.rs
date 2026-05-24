@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::HashMap,
     fmt::{self, Debug},
     fs,
     ops::Range,
@@ -9,6 +8,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use dashmap::DashMap;
 use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use tokio_util::sync::CancellationToken;
@@ -27,9 +27,9 @@ enum AccessMode {
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 
 /// Shared registry of live (non-dropped) lease resources keyed by
-/// [`ResourceKey`]. Held under a single `Mutex` because every operation
-/// is a quick map mutation; contention is bounded by lease churn rate.
-type LiveRegistry = Mutex<HashMap<ResourceKey, Weak<LiveResource>>>;
+/// [`ResourceKey`]. Per-shard locks via `DashMap`; contention is bounded
+/// by lease churn rate and shard count (default 32).
+type LiveRegistry = DashMap<ResourceKey, Weak<LiveResource>>;
 
 struct LiveResource {
     state: Mutex<AssetResourceState>,
@@ -60,10 +60,11 @@ impl Drop for LiveResource {
         let Some(registry) = self.registry.upgrade() else {
             return;
         };
-        let mut guard = registry.lock_sync();
-        if guard.get(&self.key).and_then(Weak::upgrade).is_none() {
-            guard.remove(&self.key);
-        }
+        // Remove the entry only if the stored `Weak` no longer upgrades —
+        // i.e. no other `Arc<LiveResource>` exists. `remove_if` runs the
+        // predicate while holding the shard write lock, so the read/remove
+        // pair stays atomic without nesting `get` and `remove`.
+        registry.remove_if(&self.key, |_, weak| weak.upgrade().is_none());
     }
 }
 
@@ -139,25 +140,41 @@ where
 
     fn open_live_resource(&self, key: &ResourceKey, status: ResourceStatus) -> Arc<LiveResource> {
         let next = AssetResourceState::from(status);
-        let mut registry = self.live.lock_sync();
-        if let Some(existing) = registry.get(key).and_then(Weak::upgrade) {
-            let preserve_live = matches!(
-                existing.snapshot(),
-                AssetResourceState::Active | AssetResourceState::Failed(_)
-            ) && matches!(next, AssetResourceState::Committed { .. });
-            if !preserve_live {
-                existing.set(next);
+        // Hold a single shard write lock via `entry()` so the lookup and the
+        // conditional insert stay atomic. The shard guard is released as soon
+        // as the function returns; the returned `Arc<LiveResource>` is the only
+        // thing outliving the lock.
+        let entry = self.live.entry(key.clone());
+        match entry {
+            dashmap::mapref::entry::Entry::Occupied(mut occ) => {
+                if let Some(existing) = occ.get().upgrade() {
+                    let preserve_live = matches!(
+                        existing.snapshot(),
+                        AssetResourceState::Active | AssetResourceState::Failed(_)
+                    ) && matches!(next, AssetResourceState::Committed { .. });
+                    if !preserve_live {
+                        existing.set(next);
+                    }
+                    return existing;
+                }
+                let live = Arc::new(LiveResource::new(
+                    key.clone(),
+                    Arc::downgrade(&self.live),
+                    next,
+                ));
+                occ.insert(Arc::downgrade(&live));
+                live
             }
-            return existing;
+            dashmap::mapref::entry::Entry::Vacant(vac) => {
+                let live = Arc::new(LiveResource::new(
+                    key.clone(),
+                    Arc::downgrade(&self.live),
+                    next,
+                ));
+                vac.insert(Arc::downgrade(&live));
+                live
+            }
         }
-
-        let live = Arc::new(LiveResource::new(
-            key.clone(),
-            Arc::downgrade(&self.live),
-            next,
-        ));
-        registry.insert(key.clone(), Arc::downgrade(&live));
-        live
     }
 
     fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard> {
@@ -198,7 +215,7 @@ where
             cancel,
             inner,
             pins,
-            live: Arc::new(Mutex::new(HashMap::new())),
+            live: Arc::new(DashMap::new()),
         }
     }
 }
@@ -368,13 +385,15 @@ where
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.live.lock_sync().remove(key);
+        self.live.remove(key);
         self.inner.remove_resource(key)
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        let live = self.live.lock_sync().get(key).and_then(Weak::upgrade);
-        if let Some(live) = live {
+        // Clone the `Weak` out of the shard guard before calling `upgrade()` so
+        // we never hold a dashmap ref while operating on the `Arc<LiveResource>`.
+        let weak = self.live.get(key).map(|r| r.value().clone());
+        if let Some(live) = weak.and_then(|w| w.upgrade()) {
             return Ok(live.snapshot());
         }
         self.inner.resource_state(key)

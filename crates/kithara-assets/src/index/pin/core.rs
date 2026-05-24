@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
+    collections::HashSet,
     num::NonZeroU32,
     sync::{Arc, OnceLock, Weak, atomic::AtomicBool},
 };
 
-use kithara_platform::Mutex;
+use dashmap::{DashMap, mapref::entry::Entry};
 
 use crate::{
     error::AssetsResult,
@@ -43,7 +43,7 @@ pub struct PinsIndex {
 impl std::fmt::Debug for PinsIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut dbg = f.debug_struct("PinsIndex");
-        dbg.field("len", &self.inner.pins.try_lock().map(|p| p.len()).ok());
+        dbg.field("len", &Some(self.inner.pins.len()));
         #[cfg(not(target_arch = "wasm32"))]
         dbg.field("persist", &self.inner.persist.is_some());
         dbg.finish()
@@ -52,7 +52,7 @@ impl std::fmt::Debug for PinsIndex {
 
 pub(super) struct PinsInner {
     pub(super) dirty: AtomicBool,
-    pub(super) pins: Mutex<HashMap<String, NonZeroU32>>,
+    pub(super) pins: DashMap<String, NonZeroU32>,
     /// Set by [`FlushHub::register`]. While `None`, mutators flush
     /// synchronously through [`Flushable::flush`] directly — matches
     /// the historical inline-flush path for ad-hoc tests that never
@@ -76,7 +76,7 @@ impl PinsIndex {
     /// Propagates the underlying [`AssetsError`](crate::error::AssetsError)
     /// when the on-disk flush fails (mmap open, atomic swap, rkyv serialise).
     pub fn add(&self, asset_root: &str) -> AssetsResult<bool> {
-        let transitioned = match self.inner.pins.lock_sync().entry(asset_root.to_string()) {
+        let transitioned = match self.inner.pins.entry(asset_root.to_string()) {
             Entry::Occupied(mut e) => {
                 let count = e.get_mut();
                 *count = count.saturating_add(1);
@@ -105,7 +105,7 @@ impl PinsIndex {
     /// Whether `asset_root` is currently pinned.
     #[cfg(test)]
     pub(crate) fn contains(&self, asset_root: &str) -> bool {
-        self.inner.pins.lock_sync().contains_key(asset_root)
+        self.inner.pins.contains_key(asset_root)
     }
 
     /// Construct an ephemeral index (mem backend mode).
@@ -115,7 +115,7 @@ impl PinsIndex {
     pub(crate) fn ephemeral() -> Self {
         Self {
             inner: Arc::new(PinsInner {
-                pins: Mutex::new(HashMap::new()),
+                pins: DashMap::new(),
                 #[cfg(not(target_arch = "wasm32"))]
                 persist: None,
                 hub: OnceLock::new(),
@@ -151,21 +151,20 @@ impl PinsIndex {
     /// Propagates the underlying [`AssetsError`](crate::error::AssetsError)
     /// when the on-disk flush fails.
     pub fn remove(&self, asset_root: &str) -> AssetsResult<bool> {
-        let transitioned = {
-            let mut pins = self.inner.pins.lock_sync();
-            let next = pins.get(asset_root).map(|c| NonZeroU32::new(c.get() - 1));
-            match next {
-                None => false,
-                Some(Some(decremented)) => {
-                    pins.insert(asset_root.to_string(), decremented);
+        // Hold the shard write lock through `entry()` so the
+        // refcount-read + decrement-or-remove stays atomic.
+        let transitioned =
+            if let Entry::Occupied(mut e) = self.inner.pins.entry(asset_root.to_string()) {
+                if let Some(decremented) = NonZeroU32::new(e.get().get() - 1) {
+                    *e.get_mut() = decremented;
                     false
-                }
-                Some(None) => {
-                    pins.remove(asset_root);
+                } else {
+                    e.remove();
                     true
                 }
-            }
-        };
+            } else {
+                false
+            };
         if transitioned {
             signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
         }
@@ -175,7 +174,7 @@ impl PinsIndex {
     /// Snapshot of currently pinned `asset_root`s (keys only — refcount stays internal).
     #[must_use]
     pub fn snapshot(&self) -> HashSet<String> {
-        self.inner.pins.lock_sync().keys().cloned().collect()
+        self.inner.pins.iter().map(|r| r.key().clone()).collect()
     }
 }
 

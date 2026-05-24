@@ -2,7 +2,7 @@
 
 use std::{collections::HashSet, fmt, path::Path, sync::Arc};
 
-use kithara_platform::Mutex;
+use dashmap::DashSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -49,7 +49,7 @@ where
     /// Single canonical removal channel — see [`crate::deleter`].
     deleter: Arc<dyn AssetDeleter>,
     inner: Arc<A>,
-    seen: Arc<Mutex<HashSet<String>>>,
+    seen: Arc<DashSet<String>>,
     cancel: CancellationToken,
     cfg: EvictConfig,
     /// Shared LRU index — same instance held by `DiskAssetDeleter` so
@@ -91,7 +91,7 @@ where
             lru,
             pins,
             deleter,
-            seen: Arc::new(Mutex::new(HashSet::new())),
+            seen: Arc::new(DashSet::new()),
         }
     }
 
@@ -136,8 +136,7 @@ where
     }
 
     fn mark_seen(&self, asset_root: &str) -> bool {
-        let mut g = self.seen.lock_sync();
-        g.insert(asset_root.to_string())
+        self.seen.insert(asset_root.to_string())
     }
 
     fn on_asset_created(&self, asset_root: &str) {
