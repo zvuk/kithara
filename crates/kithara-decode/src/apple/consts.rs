@@ -17,6 +17,15 @@ impl Consts {
     pub(crate) const FLAC_STREAMINFO_LEN: usize = 34;
     pub(crate) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d_6763;
     pub(crate) const kAudioConverterErr_NoDataNow: OSStatus = 0x2164_6174;
+    /// `'flst'` — `AudioFormatGetProperty` property that enumerates all
+    /// `AudioFormatListItem`s an ESDS-wrapped cookie can decode to. For
+    /// HE-AAC v1/v2 the ESDS encodes multiple compatible layers (LC
+    /// base, HE-AAC v1 SBR, HE-AAC v2 PS). Apple returns them sorted
+    /// from MOST rich to LEAST rich (channel count first, then sample
+    /// rate), so `items[0]` is the full output format (e.g. stereo
+    /// 44.1 kHz for HE-AAC v2). Specifier = `AudioFormatInfo` struct
+    /// containing a partial ASBD (`mFormatID` required) + ESDS cookie.
+    pub(crate) const kAudioFormatProperty_FormatList: u32 = 0x666c_7374;
     /// `'prim'` — codec-reported `AudioConverterPrimeInfo` (encoder
     /// priming + trailing padding in PCM frames). Available after the
     /// converter has consumed at least one input packet.
@@ -45,17 +54,10 @@ impl Consts {
     pub(crate) const kAudioFormatFlagsNativeFloatPacked: AudioFormatFlags =
         Self::kAudioFormatFlagIsFloat | Self::kAudioFormatFlagIsPacked;
     pub(crate) const kAudioFormatLinearPCM: AudioFormatID = 0x6c70_636d;
-    /// `'aac '` — MPEG-4 AAC LC input format ID.
+    /// `'aac '` — MPEG-4 AAC LC input format ID. Also used as a hint for
+    /// HE-AAC v1/v2: the actual codec class is derived from the ESDS
+    /// cookie via `kAudioFormatProperty_FormatList`.
     pub(crate) const kAudioFormatMPEG4AAC: AudioFormatID = 0x6161_6320;
-    /// `'aach'` — MPEG-4 HE-AAC (LC + SBR). Decodes to 2x the encoded
-    /// sample rate; `AudioConverter` handles the upsampling once it reads
-    /// the `AudioSpecificConfig` cookie. Frames per *encoded* packet stay
-    /// at 1024 (the SBR layer doubles output frames per packet).
-    pub(crate) const kAudioFormatMPEG4AAC_HE: AudioFormatID = 0x6161_6368;
-    /// `'aacp'` — MPEG-4 HE-AAC v2 (LC + SBR + Parametric Stereo).
-    /// Same input/output frame ratio as HE-AAC v1; PS reconstructs the
-    /// stereo image from a mono base + side parameters at decode time.
-    pub(crate) const kAudioFormatMPEG4AAC_HE_V2: AudioFormatID = 0x6161_6370;
     /// `'.mp3'` — MPEG-1/2 Layer 3 input format ID.
     pub(crate) const kAudioFormatMPEGLayer3: AudioFormatID = 0x2e6d_7033;
     pub(crate) const noErr: OSStatus = 0;

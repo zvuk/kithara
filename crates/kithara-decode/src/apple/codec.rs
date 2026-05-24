@@ -14,8 +14,9 @@ use super::{
     ffi::{
         AudioBuffer, AudioBufferList, AudioConverterDispose, AudioConverterFillComplexBuffer,
         AudioConverterNew, AudioConverterPrimeInfo, AudioConverterRef, AudioConverterReset,
-        AudioConverterSetProperty, AudioStreamBasicDescription, AudioStreamPacketDescription,
-        UInt32,
+        AudioConverterSetProperty, AudioFormatGetProperty, AudioFormatGetPropertyInfo,
+        AudioFormatInfo, AudioFormatListItem, AudioStreamBasicDescription,
+        AudioStreamPacketDescription, UInt32,
     },
 };
 use crate::{
@@ -350,24 +351,7 @@ struct AppleInputFormat {
 fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     match track.codec {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-            let format_id = match track.codec {
-                AudioCodec::AacHe => Consts::kAudioFormatMPEG4AAC_HE,
-                AudioCodec::AacHeV2 => Consts::kAudioFormatMPEG4AAC_HE_V2,
-                _ => Consts::kAudioFormatMPEG4AAC,
-            };
-            let asbd = AudioStreamBasicDescription {
-                mSampleRate: f64::from(track.sample_rate),
-                mFormatID: format_id,
-                mFramesPerPacket: Consts::AAC_FRAMES_PER_PACKET,
-                mChannelsPerFrame: u32::from(track.channels),
-                ..Default::default()
-            };
-            let cookie = (!track.extra_data.is_empty()).then(|| track.extra_data.clone());
-            Ok(AppleInputFormat {
-                asbd,
-                cookie,
-                frames_per_packet: Consts::AAC_FRAMES_PER_PACKET,
-            })
+            build_aac_input_format(track)
         }
         AudioCodec::Flac => {
             if track.extra_data.len() < Consts::FLAC_STREAMINFO_LEN {
@@ -472,6 +456,202 @@ fn parse_pcm_extra_data(extra: &[u8]) -> DecodeResult<AudioStreamBasicDescriptio
         );
     }
     Ok(asbd)
+}
+
+/// Derive the input ASBD + ESDS-wrapped cookie for an AAC track using
+/// Apple's canonical `kAudioFormatProperty_FormatList` discovery path.
+///
+/// Why not manual ASBD construction?
+///
+/// For plain AAC-LC, `mFormatID = kAudioFormatMPEG4AAC` + raw ASC as
+/// `MagicCookie` works. For HE-AAC v1 (SBR, AOT=5) and HE-AAC v2 (PS,
+/// AOT=29) with **explicit** signalling in the ASC, `AudioConverterNew`
+/// silently builds an LC pipeline and `SetProperty(MagicCookie)`
+/// returns `'!dat'`. The codec then emits `'bada'` (`kAudioCodecBadDataError`)
+/// on the first `FillComplexBuffer`. Apple's documented fix is to let
+/// `AudioFormat` parse the ESDS and hand back the correct ASBD via
+/// `kAudioFormatProperty_FormatList`, which enumerates every layer the
+/// cookie can produce (sorted MOST → LEAST rich), then use the richest
+/// entry's ASBD for `AudioConverterNew`.
+///
+/// `AudioFormat` APIs reject raw ASC bytes (also `'!dat'`) — Apple expects
+/// an ESDS atom body (the same shape `AudioFileGetProperty(MagicCookieData)`
+/// returns for m4a files), so we wrap the demuxer's raw ASC in the
+/// minimum ISO/IEC 14496-1 descriptor chain first.
+fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
+    if track.extra_data.is_empty() {
+        let asbd = AudioStreamBasicDescription {
+            mSampleRate: f64::from(track.sample_rate),
+            mFormatID: Consts::kAudioFormatMPEG4AAC,
+            mFramesPerPacket: Consts::AAC_FRAMES_PER_PACKET,
+            mChannelsPerFrame: u32::from(track.channels),
+            ..Default::default()
+        };
+        return Ok(AppleInputFormat {
+            asbd,
+            cookie: None,
+            frames_per_packet: Consts::AAC_FRAMES_PER_PACKET,
+        });
+    }
+
+    let esds = esds_wrap_asc(&track.extra_data);
+    let asbd = derive_aac_asbd_from_esds(&esds, track)?;
+    let frames_per_packet = if asbd.mFramesPerPacket > 0 {
+        asbd.mFramesPerPacket
+    } else {
+        Consts::AAC_FRAMES_PER_PACKET
+    };
+    Ok(AppleInputFormat {
+        asbd,
+        cookie: Some(esds),
+        frames_per_packet,
+    })
+}
+
+fn derive_aac_asbd_from_esds(
+    esds: &[u8],
+    track: &TrackInfo,
+) -> DecodeResult<AudioStreamBasicDescription> {
+    let cookie_size = UInt32::try_from(esds.len())
+        .map_err(|e| DecodeError::Backend(Box::new(std::io::Error::other(e.to_string()))))?;
+    let specifier_size = UInt32::try_from(size_of::<AudioFormatInfo>())
+        .map_err(|e| DecodeError::Backend(Box::new(std::io::Error::other(e.to_string()))))?;
+    let format_info = AudioFormatInfo {
+        mASBD: AudioStreamBasicDescription {
+            mFormatID: Consts::kAudioFormatMPEG4AAC,
+            ..Default::default()
+        },
+        mMagicCookie: esds.as_ptr() as *const c_void,
+        mMagicCookieSize: cookie_size,
+    };
+
+    let mut list_bytes: UInt32 = 0;
+    // SAFETY: `format_info` is a valid stack value with `mMagicCookie`
+    // pointing into the `esds` slice (alive for the duration of this
+    // function). `list_bytes` is a writable `u32` slot.
+    let status = unsafe {
+        AudioFormatGetPropertyInfo(
+            Consts::kAudioFormatProperty_FormatList,
+            specifier_size,
+            &format_info as *const _ as *const c_void,
+            &mut list_bytes,
+        )
+    };
+    if status != Consts::noErr || list_bytes == 0 {
+        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+            format!(
+                "AudioFormatGetPropertyInfo(FormatList) failed: {} (size={}, esds_len={})",
+                os_status_to_string(status),
+                list_bytes,
+                esds.len()
+            ),
+        ))));
+    }
+
+    let item_size = size_of::<AudioFormatListItem>();
+    let item_count = (list_bytes as usize) / item_size;
+    if item_count == 0 {
+        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+            format!("FormatList returned {list_bytes} bytes (< 1 item)"),
+        ))));
+    }
+    let mut items: Vec<AudioFormatListItem> = vec![AudioFormatListItem::default(); item_count];
+    let mut io_size = list_bytes;
+    // SAFETY: `items` holds `item_count` `AudioFormatListItem`s
+    // (verified above); `format_info` is still alive.
+    let status = unsafe {
+        AudioFormatGetProperty(
+            Consts::kAudioFormatProperty_FormatList,
+            specifier_size,
+            &format_info as *const _ as *const c_void,
+            &mut io_size,
+            items.as_mut_ptr() as *mut c_void,
+        )
+    };
+    if status != Consts::noErr {
+        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+            format!(
+                "AudioFormatGetProperty(FormatList) failed: {}",
+                os_status_to_string(status)
+            ),
+        ))));
+    }
+
+    let returned = (io_size as usize) / item_size;
+    let chosen = items.first().copied().ok_or_else(|| {
+        DecodeError::Backend(Box::new(std::io::Error::other(
+            "FormatList returned zero items".to_string(),
+        )))
+    })?;
+
+    tracing::debug!(
+        format_id = format!("{:#010x}", chosen.mASBD.mFormatID),
+        sample_rate = chosen.mASBD.mSampleRate,
+        channels = chosen.mASBD.mChannelsPerFrame,
+        frames_per_packet = chosen.mASBD.mFramesPerPacket,
+        channel_layout = format!("{:#010x}", chosen.mChannelLayoutTag),
+        item_count = returned,
+        esds_len = esds.len(),
+        track_codec = ?track.codec,
+        track_sample_rate = track.sample_rate,
+        track_channels = track.channels,
+        "AppleCodec: AAC ASBD derived from FormatList"
+    );
+
+    Ok(chosen.mASBD)
+}
+
+/// Wrap a raw `AudioSpecificConfig` (the demuxer's `DecoderSpecificInfo`
+/// tag 0x05 body) in the minimum ISO/IEC 14496-1 ESDS descriptor chain
+/// that Apple's `AudioFormat` / `AudioConverter` APIs accept as a magic
+/// cookie. The shape mirrors what `AudioFileGetProperty(MagicCookieData)`
+/// returns for an `.m4a` file:
+///
+/// ```text
+/// ES_Descriptor (tag 0x03):
+///   ES_ID (2 bytes) = 0; Flags (1 byte) = 0
+///   DecoderConfigDescriptor (tag 0x04):
+///     OTI (1 byte) = 0x40 (MPEG-4 Audio)
+///     StreamType (1 byte) = 0x15 (Audio << 2 | reserved bit)
+///     BufferSizeDB (3 bytes) = 0
+///     MaxBitrate (4 bytes) = 0
+///     AvgBitrate (4 bytes) = 0
+///     DecoderSpecificInfo (tag 0x05): <ASC bytes>
+///   SLConfigDescriptor (tag 0x06): predefined (1 byte) = 0x02
+/// ```
+fn esds_wrap_asc(asc: &[u8]) -> Vec<u8> {
+    let dsi_body = asc.len();
+    let dsi_total = 2 + dsi_body;
+    let dcd_body = 1 + 1 + 3 + 4 + 4 + dsi_total;
+    let dcd_total = 2 + dcd_body;
+    let slc_total = 3;
+    let esd_body = 2 + 1 + dcd_total + slc_total;
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "AAC ESDS sizes fit in u8 — ASC bodies are <128 bytes in practice"
+    )]
+    {
+        let mut buf = Vec::with_capacity(2 + esd_body);
+        buf.push(0x03);
+        buf.push(esd_body as u8);
+        buf.extend_from_slice(&[0, 0]);
+        buf.push(0);
+        buf.push(0x04);
+        buf.push(dcd_body as u8);
+        buf.push(0x40);
+        buf.push(0x15);
+        buf.extend_from_slice(&[0, 0, 0]);
+        buf.extend_from_slice(&[0, 0, 0, 0]);
+        buf.extend_from_slice(&[0, 0, 0, 0]);
+        buf.push(0x05);
+        buf.push(dsi_body as u8);
+        buf.extend_from_slice(asc);
+        buf.push(0x06);
+        buf.push(0x01);
+        buf.push(0x02);
+        buf
+    }
 }
 
 fn build_pcm_output_format(sample_rate: u32, channels: u16) -> AudioStreamBasicDescription {
