@@ -28,7 +28,7 @@ message: |
   exact-size or ordered iteration with no backing collection).
 
   See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 12b, Wave 15).
-severity: warning
+severity: error
 language: Rust
 files:
   - crates/**/*.rs
