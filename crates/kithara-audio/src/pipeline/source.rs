@@ -29,9 +29,9 @@ use crate::{
         fetch::Fetch,
         gapless::GaplessStage,
         track_fsm::{
-            ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateState,
-            ResumeState, SeekContext, SeekMode, SeekRequest, TrackFailure, TrackPhaseTag,
-            TrackState, TrackStep, WaitContext, WaitingReason, map_source_phase,
+            ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateOutcome,
+            RecreateState, ResumeState, SeekContext, SeekMode, SeekRequest, TrackFailure,
+            TrackPhaseTag, TrackState, TrackStep, WaitContext, WaitingReason, map_source_phase,
         },
     },
     traits::AudioEffect,
@@ -176,8 +176,14 @@ impl<T: StreamType> Seek for OffsetReader<T> {
 ///
 /// Production: creates Symphonia `Decoder` via [`OffsetReader`].
 /// Tests: returns `MockDecoder` without real I/O.
+///
+/// Returns `Result<_, DecodeError>` so the caller can distinguish a
+/// **transient** failure (e.g. probe ran before the source buffered
+/// `[0..PROBE)` of a freshly-switched variant — `ErrorClass::Interrupted`)
+/// from a **hard** decoder/codec error. Transient errors must route to
+/// `wait_for_source_on_recreate`, not `Failed(RecreateFailed)`.
 pub(crate) type DecoderFactory<T> =
-    Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn Decoder>> + Send>;
+    Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Result<Box<dyn Decoder>, DecodeError> + Send>;
 
 /// Audio source for Stream with format change detection.
 ///
@@ -408,9 +414,16 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     /// Apply pending format change: clear fence, seek to segment start, recreate decoder.
-    /// Returns true if decoder was recreated successfully.
+    ///
+    /// `Ok(())` = decoder recreated; `Err(DecodeError)` propagates the cause.
+    /// Caller distinguishes transient (`ErrorClass::Interrupted`) from hard via
+    /// [`DecodeError::classify`].
     #[kithara::probe(target_offset)]
-    fn apply_format_change(&mut self, new_info: &MediaInfo, target_offset: u64) -> bool {
+    fn apply_format_change(
+        &mut self,
+        new_info: &MediaInfo,
+        target_offset: u64,
+    ) -> Result<(), DecodeError> {
         let current_pos = self.shared_stream.position();
         debug!(
             current_pos,
@@ -422,10 +435,12 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         self.shared_stream.clear_variant_fence();
 
-        if let Err(e) = self.shared_stream.seek(SeekFrom::Start(target_offset)) {
-            warn!(?e, target_offset, "Failed to seek to segment boundary");
-            return false;
-        }
+        self.shared_stream
+            .seek(SeekFrom::Start(target_offset))
+            .map_err(|e| {
+                warn!(?e, target_offset, "Failed to seek to segment boundary");
+                DecodeError::from(e)
+            })?;
 
         let pos_after_seek = self.shared_stream.position();
         debug!(
@@ -433,10 +448,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             pos_after_seek, "apply_format_change: stream seeked, about to recreate decoder"
         );
 
-        let recreated = self.recreate_decoder(new_info, target_offset);
+        let result = self.recreate_decoder(new_info, target_offset);
         let pos_after_recreate = self.shared_stream.position();
-        debug!(recreated, pos_after_recreate, "apply_format_change: exit");
-        recreated
+        debug!(
+            recreated = result.is_ok(),
+            pos_after_recreate, "apply_format_change: exit"
+        );
+        result
     }
 
     fn apply_seek_applied(
@@ -1097,7 +1115,11 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// (`decoder`, `base_offset`, `media_info`) change together.
     /// On failure, `session` is unchanged (fixes prior bug where
     /// `media_info` and `base_offset` were updated before factory call).
-    fn recreate_decoder(&mut self, new_info: &MediaInfo, base_offset: u64) -> bool {
+    fn recreate_decoder(
+        &mut self,
+        new_info: &MediaInfo,
+        base_offset: u64,
+    ) -> Result<(), DecodeError> {
         debug!(
             old = ?self.session.media_info,
             new = ?new_info,
@@ -1105,14 +1127,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             "Recreating decoder for new format"
         );
 
-        let Some(new_decoder) =
-            (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
-        else {
-            warn!(base_offset, "Failed to recreate decoder");
-            return false;
-        };
+        let new_decoder = (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
+            .map_err(|e| {
+                warn!(base_offset, ?e, "Failed to recreate decoder");
+                e
+            })?;
         self.install_recreated_session(new_info, base_offset, new_decoder);
-        true
+        Ok(())
     }
 
     /// Soft seek rejection: the seek attempt cannot be honoured
@@ -1799,10 +1820,13 @@ impl<T: StreamType> StreamAudioSource<T> {
 
     /// Execute the actual decoder recreation once readiness is confirmed.
     ///
-    /// Returns `Some(true)` on success, `Some(false)` on soft failure
-    /// (caller must mark track failed), or `None` when the track was
-    /// already terminated inside this helper (e.g. stream seek error).
-    fn execute_recreation(&mut self, recreate: &RecreateState) -> Option<bool> {
+    /// Returns `Some(RecreateOutcome::Done)` on success,
+    /// `Some(RecreateOutcome::SoftFailed)` on hard failure (caller marks track failed),
+    /// `Some(RecreateOutcome::NeedsSourceWait)` on transient `ErrorClass::Interrupted`
+    /// (caller routes to `wait_for_source_on_recreate` for retry once the source
+    /// has buffered the probe window), or `None` when the track was already
+    /// terminated inside this helper (e.g. stream seek error).
+    fn execute_recreation(&mut self, recreate: &RecreateState) -> Option<RecreateOutcome> {
         if recreate.cause == RecreateCause::FormatBoundary
             && matches!(recreate.next, RecreateNext::Decode)
         {
@@ -1815,8 +1839,8 @@ impl<T: StreamType> StreamAudioSource<T> {
                 stream_len = ?self.shared_stream.len(),
                 "execute_recreation: FormatBoundary+Decode branch enter"
             );
-            if !self.apply_format_change(&recreate.media_info, recreate.offset) {
-                return Some(false);
+            if let Err(e) = self.apply_format_change(&recreate.media_info, recreate.offset) {
+                return Some(Self::classify_recreate_err(&e, recreate.offset));
             }
             let target_time = self.timeline.committed_position();
             debug!(
@@ -1833,14 +1857,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                     ?target_time,
                     "Failed to seek decoder to timeline position after cross-codec recreate"
                 );
-                return Some(false);
+                return Some(Self::classify_recreate_err(&e, recreate.offset));
             }
             debug!(
                 ?target_time,
                 stream_pos_final = self.shared_stream.position(),
                 "execute_recreation: FormatBoundary+Decode branch exit"
             );
-            return Some(true);
+            return Some(RecreateOutcome::Done);
         }
         self.shared_stream.clear_variant_fence();
         if self
@@ -1854,7 +1878,25 @@ impl<T: StreamType> StreamAudioSource<T> {
             return None;
         }
         self.shared_stream.clear_variant_fence();
-        Some(self.recreate_decoder(&recreate.media_info, recreate.offset))
+        Some(
+            match self.recreate_decoder(&recreate.media_info, recreate.offset) {
+                Ok(()) => RecreateOutcome::Done,
+                Err(e) => Self::classify_recreate_err(&e, recreate.offset),
+            },
+        )
+    }
+
+    /// Map a recreate-path error to the FSM outcome. Transient
+    /// `ErrorClass::Interrupted` (probe ran before the source buffered
+    /// `[0..PROBE)` of a freshly-switched variant — see Wave 2.A
+    /// memo / commit message) → `NeedsSourceWait` so the caller retries
+    /// after the source phase becomes Ready. Everything else → hard fail.
+    fn classify_recreate_err(e: &DecodeError, _offset: u64) -> RecreateOutcome {
+        if e.classify() == ErrorClass::Interrupted {
+            RecreateOutcome::NeedsSourceWait
+        } else {
+            RecreateOutcome::SoftFailed
+        }
     }
 
     fn finish_apply_seek_after_recreate(&mut self, request: SeekRequest) -> TrackStep<PcmChunk> {
@@ -2009,17 +2051,22 @@ impl<T: StreamType> StreamAudioSource<T> {
             }
         };
 
-        let Some(recreated) = self.execute_recreation(&recreate) else {
+        let Some(outcome) = self.execute_recreation(&recreate) else {
             return TrackStep::Failed;
         };
-        if !recreated {
-            self.update_state(TrackState::Failed(TrackFailure::RecreateFailed {
-                offset: recreate.offset,
-            }));
-            return TrackStep::Failed;
+        match outcome {
+            RecreateOutcome::Done => self.apply_recreate_next(&recreate.next),
+            RecreateOutcome::SoftFailed => {
+                self.update_state(TrackState::Failed(TrackFailure::RecreateFailed {
+                    offset: recreate.offset,
+                }));
+                TrackStep::Failed
+            }
+            RecreateOutcome::NeedsSourceWait => {
+                self.update_state(TrackState::RecreatingDecoder(recreate.clone()));
+                self.wait_for_source_on_recreate(recreate.offset)
+            }
         }
-
-        self.apply_recreate_next(&recreate.next)
     }
 
     fn step_seek_requested(&mut self) -> TrackStep<PcmChunk> {

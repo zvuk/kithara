@@ -233,7 +233,7 @@ impl HlsCoord {
             v_new.set_position(target_byte);
             self.variant_generation.fetch_add(1, Ordering::Release);
             self.abr.apply_decision(&decision, Instant::now());
-            v_new.rebuild(ctx, target_seg);
+            v_new.rebuild_with_decoder_probe(ctx, target_seg);
         }
         let reader_pt = self.timeline.committed_position();
         self.abr

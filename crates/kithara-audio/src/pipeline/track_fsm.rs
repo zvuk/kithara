@@ -90,6 +90,23 @@ pub(crate) struct RecreateState {
     pub(crate) attempt: u8,
 }
 
+/// Outcome of one `execute_recreation` call.
+///
+/// `NeedsSourceWait` exists for the post-VariantChange WAV-ABR / fMP4
+/// case where the decoder factory's probe reads `[0..PROBE)` of the
+/// freshly-switched variant *before* the HLS scheduler has buffered
+/// those bytes — the probe surfaces an `ErrorClass::Interrupted`
+/// (`StreamPending(WaitBudgetExhausted)`). Treating that as a hard
+/// `RecreateFailed` deadlocks the audio worker (Cluster C/D/E/F in
+/// `pure-dancing-porcupine.md`, Wave 2.A); routing back through
+/// `wait_for_source_on_recreate` lets the source catch up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecreateOutcome {
+    Done,
+    SoftFailed,
+    NeedsSourceWait,
+}
+
 /// What caused us to enter `WaitingForSource`.
 #[derive(Debug)]
 pub(crate) enum WaitContext {

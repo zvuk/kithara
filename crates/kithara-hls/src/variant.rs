@@ -1126,6 +1126,13 @@ impl HlsVariant {
     /// Callers: seek (`seek_to`), ABR variant flip
     /// (`activate_at_segment`), eviction of an active-variant resource,
     /// and the initial peer activation.
+    /// Whether the next dispatch should issue the separate init fetch
+    /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
+    /// non-zero init segment that hasn't been loaded yet.
+    fn needs_init_fetch(&self) -> bool {
+        self.init_size() > 0 && !matches!(self.init.state(), SegmentState::Loaded)
+    }
+
     #[kithara::probe(
         variant = self.variant as u64,
         from_seg,
@@ -1133,14 +1140,56 @@ impl HlsVariant {
     )]
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
         let segs_len = self.num_segments();
+        let init = self
+            .needs_init_fetch()
+            .then_some(PlannedFetch::Init)
+            .into_iter();
+        let tail = (from_seg..segs_len).map(PlannedFetch::Segment);
         let mut queue = self.queue.lock_sync();
         queue.clear();
-        if self.init_size() > 0 && !matches!(self.init.state(), SegmentState::Loaded) {
-            queue.push_back(PlannedFetch::Init);
-        }
-        for seg in from_seg..segs_len {
-            queue.push_back(PlannedFetch::Segment(seg));
-        }
+        queue.extend(init.chain(tail));
+    }
+
+    /// Same as [`Self::rebuild`] but **also** enqueues `seg 0` when
+    /// `from_seg > 0`. The decoder factory's probe (Symphonia format
+    /// reader) reads the container's first ~1 KB to construct the
+    /// codec; on post-ABR switch into mid-playback the active variant's
+    /// queue would otherwise start at `target_seg`, leaving
+    /// `[0..PROBE)` unfetched and the probe hanging on
+    /// `wait_range budget exceeded v=new range_start=0` (Cluster C/D/F
+    /// sentinel, Wave 2.A.3b memo).
+    ///
+    /// `seg 0` is required even when the variant advertises a separate
+    /// init (CMAF `EXT-X-MAP`): the init covers a few-dozen-byte
+    /// header, but the probe scans further into the first media chunk.
+    /// Skipping `seg 0` here masked the bug while `rebuild(0)` worked
+    /// (loaded every segment from 0 — over-fetched whole file).
+    ///
+    /// After probe succeeds, `decoder_seek_safe(target_time)` jumps the
+    /// decoder forward to the user-visible position, so segments
+    /// `1..from_seg` are **never** fetched — only `seg 0` itself.
+    /// Adds at most one extra segment (~`one_segment_size` bytes) per
+    /// switch; if `seg 0` is already cached the scheduler skips the
+    /// fetch and the queue entry resolves via `committed_final_len` in
+    /// `dispatch`.
+    #[kithara::probe(
+        variant = self.variant as u64,
+        from_seg,
+        old_queue_len = self.queue.lock_sync().len() as u64
+    )]
+    pub(crate) fn rebuild_with_decoder_probe(&self, _ctx: &PlanCtx, from_seg: u32) {
+        let segs_len = self.num_segments();
+        let init = self
+            .needs_init_fetch()
+            .then_some(PlannedFetch::Init)
+            .into_iter();
+        let probe_seg = (from_seg > 0)
+            .then_some(PlannedFetch::Segment(0))
+            .into_iter();
+        let tail = (from_seg..segs_len).map(PlannedFetch::Segment);
+        let mut queue = self.queue.lock_sync();
+        queue.clear();
+        queue.extend(init.chain(probe_seg).chain(tail));
     }
 
     pub(crate) fn rebuild_at_time(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {

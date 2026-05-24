@@ -882,11 +882,11 @@ where
             match DecoderFactory::create_from_media_info(source, info, &config) {
                 Ok(d) => {
                     d.update_byte_len(byte_len);
-                    Some(d)
+                    Ok(d)
                 }
                 Err(e) => {
                     warn!(?e, "failed to recreate decoder");
-                    None
+                    Err(e)
                 }
             }
         })
