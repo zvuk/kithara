@@ -1,5 +1,6 @@
 //! Integration tests for kithara-hls
 
+mod aac_he_v2_hls_decode;
 mod abr_switch_playback;
 mod abr_integration;
 mod basic_playback;

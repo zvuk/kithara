@@ -432,6 +432,25 @@ impl HlsFixtureBuilder {
         self.packaged_audio_signal_flac(sample_rate, channels, PackagedSignal::Sine { freq_hz })
     }
 
+    /// Like [`Self::packaged_audio_aac_he_v2`] but with a deterministic
+    /// pure sine tone instead of a sawtooth. Lets tests phase-check the
+    /// decoded PCM against the expected fundamental — catches Apple
+    /// decoder regressions where the cookie is silently rejected and the
+    /// output stream is malformed (silence, channel mismatch, wrong SR).
+    #[must_use]
+    pub fn packaged_audio_sine_aac_he_v2(
+        self,
+        sample_rate: u32,
+        channels: u16,
+        freq_hz: f64,
+    ) -> Self {
+        self.packaged_audio_signal_aac_he_v2(
+            sample_rate,
+            channels,
+            PackagedSignal::Sine { freq_hz },
+        )
+    }
+
     #[must_use]
     pub fn push_delay_rule(mut self, delay_rule: DelayRule) -> Self {
         self.spec.delay_rules.push(delay_rule);

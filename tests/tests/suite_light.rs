@@ -52,6 +52,7 @@ mod kithara_file {
 }
 
 mod kithara_hls {
+    mod aac_he_v2_hls_decode;
     mod abr_integration;
     mod basic_playback;
     mod cancel_isolation;

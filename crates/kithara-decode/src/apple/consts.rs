@@ -47,15 +47,6 @@ impl Consts {
     pub(crate) const kAudioFormatLinearPCM: AudioFormatID = 0x6c70_636d;
     /// `'aac '` — MPEG-4 AAC LC input format ID.
     pub(crate) const kAudioFormatMPEG4AAC: AudioFormatID = 0x6161_6320;
-    /// `'aach'` — MPEG-4 HE-AAC (LC + SBR). Decodes to 2x the encoded
-    /// sample rate; `AudioConverter` handles the upsampling once it reads
-    /// the `AudioSpecificConfig` cookie. Frames per *encoded* packet stay
-    /// at 1024 (the SBR layer doubles output frames per packet).
-    pub(crate) const kAudioFormatMPEG4AAC_HE: AudioFormatID = 0x6161_6368;
-    /// `'aacp'` — MPEG-4 HE-AAC v2 (LC + SBR + Parametric Stereo).
-    /// Same input/output frame ratio as HE-AAC v1; PS reconstructs the
-    /// stereo image from a mono base + side parameters at decode time.
-    pub(crate) const kAudioFormatMPEG4AAC_HE_V2: AudioFormatID = 0x6161_6370;
     /// `'.mp3'` — MPEG-1/2 Layer 3 input format ID.
     pub(crate) const kAudioFormatMPEGLayer3: AudioFormatID = 0x2e6d_7033;
     pub(crate) const noErr: OSStatus = 0;
