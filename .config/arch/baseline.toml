@@ -75,7 +75,6 @@ schema_version = 1
 "crates/kithara-app/src/state.rs:79:StateController::cancel" = 1
 "crates/kithara-decode/src/fmp4/demuxer.rs:29:Fmp4SegmentDemuxer::duration" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:70:HeuristicState::trim_trailing" = 1
-"crates/kithara-ffi/src/player.rs:68:AudioPlayer::cancel" = 2
 "crates/kithara-file/src/session/source.rs:27:FileSource::coord" = 1
 "crates/kithara-play/src/impls/player.rs:124:PlayerImpl::bus" = 1
 "crates/kithara-play/src/impls/player.rs:124:PlayerImpl::cancel" = 1
@@ -220,7 +219,6 @@ schema_version = 1
 "crates/kithara-hls/src/loading/atomic_fetch.rs::fetch_atomic_body" = 1
 "crates/kithara-hls/src/loading/atomic_fetch.rs::try_read_cached" = 1
 "crates/kithara-hls/src/loading/atomic_fetch.rs::write_back_cache" = 1
-"crates/kithara-hls/src/loading/keys.rs::KeyManager::from_options" = 1
 "crates/kithara-hls/src/loading/keys.rs::KeyManager::new" = 1
 "crates/kithara-hls/src/loading/size_estimation.rs::SizeEstimator::new" = 1
 "crates/kithara-hls/src/variant.rs::HlsVariant::new" = 1
@@ -421,23 +419,18 @@ schema_version = 1
 [multi_constructor]
 "crates/kithara-assets/src/disk_store.rs:108:DiskAssetStore" = 1
 "crates/kithara-assets/src/key.rs:28:ResourceKey" = 1
-"crates/kithara-assets/src/lease.rs:108:LeaseAssets" = 1
 "crates/kithara-assets/src/mem_store.rs:96:MemAssetStore" = 1
 "crates/kithara-audio/src/pipeline/fetch.rs:24:Fetch" = 1
-"crates/kithara-audio/src/worker/handle.rs:154:MockSource" = 1
 "crates/kithara-audio/src/worker/handle.rs:51:AudioWorkerHandle" = 1
 "crates/kithara-bufpool/src/pool/core.rs:224:Pool" = 1
 "crates/kithara-bufpool/src/pool/shared.rs:16:SharedPool" = 1
 "crates/kithara-decode/src/android/error.rs:24:AndroidBackendError" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:165:GaplessTrimmer" = 1
-"crates/kithara-decode/src/symphonia/aac_fdk.rs:99:AacStreamConfig" = 1
 "crates/kithara-decode/src/symphonia/adapter.rs:30:ReadSeekAdapter" = 1
 "crates/kithara-events/src/play.rs:74:MediaTime" = 1
 "crates/kithara-file/src/session/source.rs:40:FileSource" = 1
-"crates/kithara-hls/src/loading/keys.rs:47:KeyManager" = 1
 "crates/kithara-hls/src/playlist.rs:67:PlaylistState" = 1
 "crates/kithara-net/src/traits.rs:48:ByteStream" = 1
-"crates/kithara-net/src/types.rs:73:RangeSpec" = 1
 "crates/kithara-play/src/impls/engine.rs:128:EngineImpl" = 1
 "crates/kithara-play/src/impls/player.rs:161:PlayerImpl" = 1
 "crates/kithara-play/src/impls/player_node.rs:46:PlayerNode" = 1
@@ -524,10 +517,6 @@ schema_version = 1
 "crates/kithara-stream/src/timeline.rs::ChunkPosition" = 1
 "crates/kithara-test-utils/src/probe/capture/event.rs::ProbeEvent" = 1
 
-[readme_presence]
-kithara-fuzz = 1
-xtask = 1
-
 [redundant_accessors]
 "crates/kithara-assets/src/cache.rs::CachedAssets::inner" = 1
 "crates/kithara-assets/src/process.rs::ProcessingAssets::inner" = 1
@@ -541,12 +530,10 @@ xtask = 1
 
 [redundant_reexport]
 "crates/kithara-hls/config.rs:6:0::kithara_abr::AbrMode" = 1
-"crates/kithara-hls/stream.rs:46:9::Hls::Source" = 1
 "crates/kithara-integration-tests/offline/backend.rs:43:9::OfflineBackend::Config" = 1
 "crates/kithara-integration-tests/offline/backend.rs:46:9::OfflineBackend::StartStreamError" = 1
 "crates/kithara-integration-tests/offline/backend.rs:47:9::OfflineBackend::StreamError" = 1
 "crates/kithara-storage/backend/memory/driver.rs:59:9::MemDriver::Options" = 1
-"crates/kithara-storage/backend/mmap/driver.rs:108:9::MmapDriver::Options" = 1
 "crates/kithara-test-utils/lib.rs:10:4::kithara_test_macros::test" = 1
 
 [shared_state]
