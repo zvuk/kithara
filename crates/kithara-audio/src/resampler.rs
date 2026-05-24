@@ -44,43 +44,41 @@ pub enum ResamplerQuality {
     Maximum,
 }
 
-impl ResamplerQuality {
-    /// Oversampling factor for good/high quality sinc filters.
-    const OVERSAMPLING_HIGH: usize = 256;
-    /// Oversampling factor for normal quality sinc filter.
-    const OVERSAMPLING_NORMAL: usize = 128;
-    /// Cutoff frequency ratio for sinc filters.
-    const SINC_CUTOFF: f32 = 0.95;
+impl From<ResamplerQuality> for SincInterpolationParameters {
+    fn from(quality: ResamplerQuality) -> Self {
+        /// Oversampling factor for good/high quality sinc filters.
+        const OVERSAMPLING_HIGH: usize = 256;
+        /// Oversampling factor for normal quality sinc filter.
+        const OVERSAMPLING_NORMAL: usize = 128;
+        /// Cutoff frequency ratio for sinc filters.
+        const CUTOFF: f32 = 0.95;
+        /// Sinc filter length for good quality (128-tap).
+        const LEN_GOOD: usize = 128;
+        /// Sinc filter length for high quality (256-tap).
+        const LEN_HIGH: usize = 256;
+        /// Sinc filter length for normal quality (64-tap).
+        const LEN_NORMAL: usize = 64;
 
-    /// Sinc filter length for good quality (128-tap).
-    const SINC_LEN_GOOD: usize = 128;
-
-    /// Sinc filter length for high quality (256-tap).
-    const SINC_LEN_HIGH: usize = 256;
-    /// Sinc filter length for normal quality (64-tap).
-    const SINC_LEN_NORMAL: usize = 64;
-    // ast-grep-ignore: idioms.match-self-conversion
-    fn sinc_params(self) -> SincInterpolationParameters {
-        match self {
-            Self::Good => SincInterpolationParameters {
-                sinc_len: Self::SINC_LEN_GOOD,
-                f_cutoff: Self::SINC_CUTOFF,
+        match quality {
+            ResamplerQuality::Good => Self {
+                sinc_len: LEN_GOOD,
+                f_cutoff: CUTOFF,
                 interpolation: SincInterpolationType::Linear,
-                oversampling_factor: Self::OVERSAMPLING_HIGH,
+                oversampling_factor: OVERSAMPLING_HIGH,
                 window: WindowFunction::BlackmanHarris2,
             },
-            Self::High => SincInterpolationParameters {
-                sinc_len: Self::SINC_LEN_HIGH,
-                f_cutoff: Self::SINC_CUTOFF,
+            ResamplerQuality::High => Self {
+                sinc_len: LEN_HIGH,
+                f_cutoff: CUTOFF,
                 interpolation: SincInterpolationType::Cubic,
-                oversampling_factor: Self::OVERSAMPLING_HIGH,
+                oversampling_factor: OVERSAMPLING_HIGH,
                 window: WindowFunction::BlackmanHarris2,
             },
-            Self::Normal | Self::Fast | Self::Maximum => SincInterpolationParameters {
-                sinc_len: Self::SINC_LEN_NORMAL,
-                f_cutoff: Self::SINC_CUTOFF,
+            ResamplerQuality::Normal | ResamplerQuality::Fast | ResamplerQuality::Maximum => Self {
+                sinc_len: LEN_NORMAL,
+                f_cutoff: CUTOFF,
                 interpolation: SincInterpolationType::Linear,
-                oversampling_factor: Self::OVERSAMPLING_NORMAL,
+                oversampling_factor: OVERSAMPLING_NORMAL,
                 window: WindowFunction::BlackmanHarris2,
             },
         }
@@ -374,7 +372,7 @@ impl ResamplerProcessor {
                 let sinc = Async::new_sinc(
                     ratio,
                     Self::MAX_RATIO_ADJUSTMENT,
-                    &quality.sinc_params(),
+                    &SincInterpolationParameters::from(quality),
                     chunk_size,
                     channels,
                     FixedAsync::Input,

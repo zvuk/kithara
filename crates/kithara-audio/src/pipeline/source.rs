@@ -2148,7 +2148,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             return TrackStep::StateChanged;
         }
 
-        match self.state.phase_tag() {
+        match TrackPhaseTag::from(&self.state) {
             TrackPhaseTag::Decoding => self.step_decoding(),
             TrackPhaseTag::SeekRequested => self.step_seek_requested(),
             TrackPhaseTag::WaitingForSource => self.step_waiting_for_source(),
@@ -2414,7 +2414,7 @@ mod playing_flag_tests {
                 playing_for_state(state),
                 *expected,
                 "mismatch for phase_tag={:?}",
-                state.phase_tag()
+                TrackPhaseTag::from(state)
             );
         }
     }
