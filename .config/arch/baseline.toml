@@ -60,12 +60,6 @@ schema_version = 1
 "crates/kithara-test-utils/src/probe/real/wire.rs" = 1
 "crates/kithara/src/lib.rs" = 1
 
-[direction]
-"kithara-abr -> kithara-test-utils" = 1
-"kithara-assets -> kithara-test-utils" = 1
-"kithara-storage -> kithara-test-utils" = 1
-"kithara-stream -> kithara-test-utils" = 1
-
 [field_always_constant]
 "crates/kithara-abr/src/handle.rs:271:StatefulPeer::state" = 1
 "crates/kithara-abr/src/handle.rs:271:StatefulPeer::variants" = 1
