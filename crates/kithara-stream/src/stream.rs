@@ -347,6 +347,17 @@ impl<T: StreamType> Stream<T> {
             let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
+            // WHY: `wait_range` returns `Interrupted` when the source has a
+            // variant fence raised, which the consumer sees only as a
+            // generic "retry" — burning the wait-spin budget and never
+            // surfacing the `VariantChange` discriminator. Skip the wait
+            // when a fence is pending and go straight to `read_at`, which
+            // returns `Pending(VariantChange)` so the caller can ack via
+            // `clear_variant_fence` and continue.
+            if self.source.has_variant_change_pending() {
+                return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
+            }
+
             let wait_result = self
                 .source
                 .wait_range(range, Some(Self::WAIT_RANGE_TIMEOUT));

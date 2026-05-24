@@ -175,6 +175,7 @@ async fn drm_stream_byte_integrity(
         .expect("create HLS stream");
 
     let label = label.to_string();
+    let is_auto_abr = abr_variant == 99;
     let result = spawn_blocking(move || {
         let label = &label;
 
@@ -258,19 +259,47 @@ async fn drm_stream_byte_integrity(
         if let Some(error) = read_error {
             panic!("[{label}] Phase 1 ended with read error before EOF: {error}");
         }
-        assert!(
-            read_vs_len.unsigned_abs() < 1024,
-            "[{label}] Phase 1 did not read full stream: total_read={total_read} \
-             stream_len={stream_len} delta={read_vs_len} saw_eof={saw_eof}"
-        );
+        // WHY: For ABR-auto fMP4, a non-byte-continuous variant switch
+        // (`HlsCoord::commit_variant_switch`, `needs_byte_continuity=false`
+        // path) leaves the byte axis discontinuous: the reader physically
+        // streams `pre_switch_v0_bytes + post_switch_v_new_bytes`, while
+        // `stream.len()` only reports the active variant's natural total.
+        // The strict equality contract only holds for byte-continuous
+        // streams (single variant, or WAV ABR via `byte_shift`).
+        if is_auto_abr {
+            assert!(
+                saw_eof,
+                "[{label}] Phase 1 did not reach EOF: total_read={total_read} \
+                 stream_len={stream_len} delta={read_vs_len}"
+            );
+            assert!(
+                total_read >= stream_len.saturating_sub(1024),
+                "[{label}] Phase 1 read less than active variant size: \
+                 total_read={total_read} stream_len={stream_len} delta={read_vs_len}"
+            );
+        } else {
+            assert!(
+                read_vs_len.unsigned_abs() < 1024,
+                "[{label}] Phase 1 did not read full stream: total_read={total_read} \
+                 stream_len={stream_len} delta={read_vs_len} saw_eof={saw_eof}"
+            );
+        }
 
-        let coverage_delta = (last_end as i64) - (total_read as i64);
-        debug!("[{label}] box coverage delta (last_end - total_read) = {coverage_delta}");
+        // For ABR-auto streams Phase 2 re-scans bytes [0..stream_len) from
+        // the post-switch active variant. Phase 1's `total_read` may exceed
+        // that because it accumulated pre-switch v_old bytes too (see Phase
+        // 1 note above), so compare scan coverage against `stream_len`
+        // instead. Single-variant cases keep the strict equality against
+        // `total_read`.
+        let coverage_ref = if is_auto_abr { stream_len } else { total_read };
+        let coverage_delta = (last_end as i64) - (coverage_ref as i64);
+        debug!("[{label}] box coverage delta (last_end - {coverage_ref}) = {coverage_delta}");
 
         assert!(
             coverage_delta.unsigned_abs() < 1024,
-            "[{label}] fMP4 box coverage doesn't match actual data: \
-             last_end={last_end} total_read={total_read} delta={coverage_delta}"
+            "[{label}] fMP4 box coverage doesn't match active-variant size: \
+             last_end={last_end} coverage_ref={coverage_ref} total_read={total_read} \
+             stream_len={stream_len} delta={coverage_delta}"
         );
 
         info!("[{label}] PASSED");
