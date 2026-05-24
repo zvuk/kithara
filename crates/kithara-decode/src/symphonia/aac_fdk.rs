@@ -47,15 +47,15 @@ use symphonia_core::{codec_profile, support_audio_codec};
 
 struct Consts;
 impl Consts {
-    /// Pre-allocated per-frame PCM buffer. AAC frames are at most
-    /// 2048 samples × 2 channels for HE-AAC v2.
-    const MAX_SAMPLES: usize = 8192;
-
     /// ADTS sample-frequency-index table (ISO/IEC 13818-7).
     const AAC_SAMPLE_RATES: [u32; 13] = [
         96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
         8_000, 7_350,
     ];
+
+    /// Pre-allocated per-frame PCM buffer. AAC frames are at most
+    /// 2048 samples × 2 channels for HE-AAC v2.
+    const MAX_SAMPLES: usize = 8192;
 }
 
 fn sample_rate_index(rate: u32) -> u8 {
@@ -85,15 +85,15 @@ fn channel_layout(channels: u8) -> Option<Channels> {
 /// `Decoder::stream_info()` once the first packet has decoded.
 #[derive(Clone, Copy, Debug)]
 struct AacStreamConfig {
-    /// MPEG-4 Audio Object Type (1=Main, 2=LC, 5=SBR, 29=PS, …).
-    object_type: u8,
     /// AAC core sample rate (pre-SBR/PS upsampling).
     sample_rate: u32,
+    /// Number of audio channels (post-PS, what the decoder outputs).
+    channels: u8,
+    /// MPEG-4 Audio Object Type (1=Main, 2=LC, 5=SBR, 29=PS, …).
+    object_type: u8,
     /// Index into [`Consts::AAC_SAMPLE_RATES`](Consts::AAC_SAMPLE_RATES)
     /// for ADTS header byte 2/3.
     sample_rate_index: u8,
-    /// Number of audio channels (post-PS, what the decoder outputs).
-    channels: u8,
 }
 
 impl TryFrom<&[u8]> for AacStreamConfig {
@@ -107,8 +107,6 @@ impl TryFrom<&[u8]> for AacStreamConfig {
         let mut object_type = read_object_type(&mut bs)?;
         let mut sample_rate = read_sample_rate(&mut bs)?;
         let mut channels = read_channel_config(&mut bs)?;
-        // SBR / PS explicit signalling: re-read the extension fields
-        // so `object_type` reflects the wrapped (core) AOT.
         if object_type == 5 || object_type == 29 {
             sample_rate = read_sample_rate(&mut bs)?;
             object_type = read_object_type(&mut bs)?;
@@ -188,7 +186,7 @@ fn build_adts_header(cfg: AacStreamConfig, payload_len: usize) -> [u8; 7] {
     let adts_object_type = cfg.object_type.saturating_sub(1);
     [
         0xFF,
-        0xF1, // MPEG-4, no CRC
+        0xF1,
         (adts_object_type << 6) | (cfg.sample_rate_index << 2) | ((cfg.channels >> 2) & 0x01),
         ((cfg.channels & 0x03) << 6) | u8::try_from((frame_length >> 11) & 0x03).unwrap_or(0),
         u8::try_from((frame_length >> 3) & 0xFF).unwrap_or(0),
@@ -212,17 +210,20 @@ fn audio_buffer(
 
 /// Symphonia [`AudioDecoder`] wrapping libfdk-aac via [`fdk_aac`].
 pub(crate) struct AacDecoder {
-    decoder: Decoder,
-    codec_params: AudioCodecParameters,
     config: AacStreamConfig,
-    pcm: [i16; Consts::MAX_SAMPLES],
     buf: AudioBuffer<i16>,
+    codec_params: AudioCodecParameters,
+    decoder: Decoder,
     /// `Transport::Raw` when fmp4 / M4A supplied an
     /// `AudioSpecificConfig` via `extra_data` (packets are raw AAC
     /// frames); `Transport::Adts` when the upstream is ADTS-framed
     /// (each packet carries its own header — bare HLS AAC, .aac
     /// files).
     transport: Transport,
+    pcm: [i16; Consts::MAX_SAMPLES],
+    /// First-decode-only refresh: rebuild [`Self::buf`] and capture
+    /// `outputDelay` once the decoder reports authoritative metadata.
+    metadata_validated: bool,
     /// Algorithmic-delay frames still to drop from the head of the
     /// PCM stream. Initialised from `stream_info.outputDelay` on the
     /// first successful decode, decremented as each chunk consumes it.
@@ -231,9 +232,6 @@ pub(crate) struct AacDecoder {
     /// trim (`elst`, iTunSMPB) operates on top of the time-aligned
     /// PCM stream this adapter produces.
     delay_remaining: u32,
-    /// First-decode-only refresh: rebuild [`Self::buf`] and capture
-    /// `outputDelay` once the decoder reports authoritative metadata.
-    metadata_validated: bool,
 }
 
 impl fmt::Debug for AacDecoder {
@@ -248,51 +246,8 @@ impl fmt::Debug for AacDecoder {
 }
 
 impl AacDecoder {
-    fn try_new(params: &AudioCodecParameters, _opts: AudioDecoderOptions) -> Result<Self> {
-        let (config, transport) = if let Some(extra) = &params.extra_data {
-            // fmp4 / M4A path: AudioSpecificConfig in extra_data,
-            // packets are raw AAC frames. `Transport::Raw` + `config_raw`
-            // is the correct mode; ADTS wrapping would need profile
-            // bits the spec only defines for AOT 1..=4, which mangles
-            // HE-AAC v1/v2 (AOT 5 / 29) into garbage and crashes the
-            // decoder.
-            (AacStreamConfig::try_from(&extra[..])?, Transport::Raw)
-        } else {
-            // ADTS / raw HLS path: every packet carries its own ADTS
-            // header, no extra_data available. The adapter prepends a
-            // fresh ADTS prefix (`build_adts_header`) on each `fill`.
-            (AacStreamConfig::try_from(params)?, Transport::Adts)
-        };
-        let mut decoder = Decoder::new(transport);
-        if matches!(transport, Transport::Raw)
-            && let Some(extra) = &params.extra_data
-        {
-            decoder
-                .config_raw(extra)
-                .map_err(|e| Error::DecodeError(e.message()))?;
-        }
-        // Pre-allocate buffer; refined in `configure_metadata` once
-        // the decoder reports the actual frame size (1024 for AAC-LC,
-        // 2048 for HE-AAC, etc.).
-        let buf = audio_buffer(config.channels, config.sample_rate, 1024)?;
-        Ok(Self {
-            decoder,
-            codec_params: params.clone(),
-            config,
-            pcm: [0; Consts::MAX_SAMPLES],
-            buf,
-            transport,
-            delay_remaining: 0,
-            metadata_validated: false,
-        })
-    }
-
     fn configure_metadata(&mut self) -> Result<()> {
         let info = self.decoder.stream_info();
-        // `aacSampleRate` is the core (pre-SBR) rate — what we encode
-        // into the ADTS header. `sampleRate` is the post-SBR/PS rate
-        // (what fdk-aac actually emits as PCM), used for the
-        // AudioBuffer spec so downstream knows the true output rate.
         let core_rate = u32::try_from(info.aacSampleRate).unwrap_or(self.config.sample_rate);
         let output_rate = u32::try_from(info.sampleRate).unwrap_or(core_rate);
         let channels = u8::try_from(info.numChannels).unwrap_or(self.config.channels);
@@ -300,19 +255,12 @@ impl AacDecoder {
             self.decoder.decoded_frame_size().max(channels as usize) / channels.max(1) as usize;
 
         self.config = AacStreamConfig {
+            channels,
             object_type: u8::try_from(info.aot).unwrap_or(self.config.object_type),
             sample_rate: core_rate,
             sample_rate_index: sample_rate_index(core_rate),
-            channels,
         };
         self.buf = audio_buffer(channels, output_rate, samples_per_frame)?;
-        // Surface the post-SBR/PS output rate through `codec_params`
-        // too. Downstream consumers (UniversalDecoder, audio engine
-        // ringbuf, AVAudioEngine on Apple) configure their output
-        // device from `codec_params().sample_rate` — leaving it at the
-        // pre-SBR core rate (22.05 kHz for HE-AAC v2) while the
-        // decoder actually emits PCM at the effective rate
-        // (44.1 kHz) plays back at 2× speed.
         self.codec_params.sample_rate = Some(output_rate);
         self.delay_remaining = info.outputDelay;
         self.metadata_validated = true;
@@ -327,14 +275,36 @@ impl AacDecoder {
         );
         Ok(())
     }
+
+    fn try_new(params: &AudioCodecParameters, _opts: AudioDecoderOptions) -> Result<Self> {
+        let (config, transport) = if let Some(extra) = &params.extra_data {
+            (AacStreamConfig::try_from(&extra[..])?, Transport::Raw)
+        } else {
+            (AacStreamConfig::try_from(params)?, Transport::Adts)
+        };
+        let mut decoder = Decoder::new(transport);
+        if matches!(transport, Transport::Raw)
+            && let Some(extra) = &params.extra_data
+        {
+            decoder
+                .config_raw(extra)
+                .map_err(|e| Error::DecodeError(e.message()))?;
+        }
+        let buf = audio_buffer(config.channels, config.sample_rate, 1024)?;
+        Ok(Self {
+            decoder,
+            config,
+            buf,
+            transport,
+            codec_params: params.clone(),
+            pcm: [0; Consts::MAX_SAMPLES],
+            delay_remaining: 0,
+            metadata_validated: false,
+        })
+    }
 }
 
 impl AudioDecoder for AacDecoder {
-    fn reset(&mut self) {
-        self.delay_remaining = 0;
-        self.metadata_validated = false;
-    }
-
     fn codec_info(&self) -> &CodecInfo {
         &Self::supported_codecs()
             .first()
@@ -412,19 +382,14 @@ impl AudioDecoder for AacDecoder {
     fn last_decoded(&self) -> GenericAudioBufferRef<'_> {
         self.buf.as_generic_audio_buffer_ref()
     }
+
+    fn reset(&mut self) {
+        self.delay_remaining = 0;
+        self.metadata_validated = false;
+    }
 }
 
 impl RegisterableAudioDecoder for AacDecoder {
-    fn try_registry_new(
-        params: &AudioCodecParameters,
-        opts: &AudioDecoderOptions,
-    ) -> Result<Box<dyn AudioDecoder>>
-    where
-        Self: Sized,
-    {
-        Ok(Box::new(Self::try_new(params, *opts)?))
-    }
-
     fn supported_codecs() -> &'static [SupportedAudioCodec] {
         &[support_audio_codec!(
             CODEC_ID_AAC,
@@ -436,5 +401,15 @@ impl RegisterableAudioDecoder for AacDecoder {
                 codec_profile!(CODEC_PROFILE_AAC_HE_V2, "aac-he-v2", "High Efficiency V2"),
             ]
         )]
+    }
+
+    fn try_registry_new(
+        params: &AudioCodecParameters,
+        opts: &AudioDecoderOptions,
+    ) -> Result<Box<dyn AudioDecoder>>
+    where
+        Self: Sized,
+    {
+        Ok(Box::new(Self::try_new(params, *opts)?))
     }
 }

@@ -350,12 +350,6 @@ struct AppleInputFormat {
 fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     match track.codec {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-            // All three AAC variants share the same encoded
-            // `mFramesPerPacket` (1024 samples per access unit). The
-            // SBR layer (HE / HE-V2) and PS layer (HE-V2 only) double
-            // the decoded output sample rate vs the core stream;
-            // AudioConverter recovers that geometry from the
-            // AudioSpecificConfig cookie.
             let format_id = match track.codec {
                 AudioCodec::AacHe => Consts::kAudioFormatMPEG4AAC_HE,
                 AudioCodec::AacHeV2 => Consts::kAudioFormatMPEG4AAC_HE_V2,

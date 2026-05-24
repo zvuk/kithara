@@ -6,10 +6,10 @@ use web_time::Instant;
 use super::platform::write_dump;
 
 pub trait HangDump {
+    fn dump_json(&self) -> String;
     fn label(&self) -> Option<&str> {
         None
     }
-    fn dump_json(&self) -> String;
 }
 
 impl<T: Serialize> HangDump for T {

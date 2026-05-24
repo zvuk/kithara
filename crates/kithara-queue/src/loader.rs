@@ -84,30 +84,6 @@ impl Loader {
         }
     }
 
-    /// Watches the [`EventBus`] for the first
-    /// [`DownloaderEvent::LoadSlow`] and flips the track status to
-    /// [`TrackStatus::Slow`]. Returns a never-completing future:
-    /// the caller `select!`s it against `Resource::new`, so the
-    /// completion side always belongs to the resource future.
-    async fn watch_for_slow_status(
-        id: TrackId,
-        bus: Option<EventBus>,
-        tracks: Arc<Tracks>,
-    ) -> std::convert::Infallible {
-        let mut rx = match bus {
-            Some(b) => b.subscribe(),
-            None => return std::future::pending().await,
-        };
-        let mut marked = false;
-        while let Ok(ev) = rx.recv().await {
-            if !marked && matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
-                tracks.set_status(id, TrackStatus::Slow);
-                marked = true;
-            }
-        }
-        std::future::pending().await
-    }
-
     /// Spawn an async load. Acquires a semaphore permit for the duration of
     /// the load. Emits `Loading` on start, `Failed(reason)` on error. On
     /// success, the [`Resource`] is returned through the `JoinHandle`.
@@ -138,6 +114,30 @@ impl Loader {
             }
             result
         })
+    }
+
+    /// Watches the [`EventBus`] for the first
+    /// [`DownloaderEvent::LoadSlow`] and flips the track status to
+    /// [`TrackStatus::Slow`]. Returns a never-completing future:
+    /// the caller `select!`s it against `Resource::new`, so the
+    /// completion side always belongs to the resource future.
+    async fn watch_for_slow_status(
+        id: TrackId,
+        bus: Option<EventBus>,
+        tracks: Arc<Tracks>,
+    ) -> std::convert::Infallible {
+        let mut rx = match bus {
+            Some(b) => b.subscribe(),
+            None => return std::future::pending().await,
+        };
+        let mut marked = false;
+        while let Ok(ev) = rx.recv().await {
+            if !marked && matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
+                tracks.set_status(id, TrackStatus::Slow);
+                marked = true;
+            }
+        }
+        std::future::pending().await
     }
 }
 

@@ -1668,6 +1668,22 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Compute the upper bound of the byte range required for the
+    /// decoder to safely produce its first chunk after a seek landing
+    /// at `byte`: the end of the segment containing `byte` (segmented
+    /// sources) or the standard 32 KB look-ahead (raw sources). Always
+    /// clamped to `Source::len()` so we don't gate on phantom bytes
+    /// past EOF.
+    fn seek_landing_end(&self, byte: u64) -> u64 {
+        let segment_end = self
+            .shared_stream
+            .as_segment_layout()
+            .and_then(|layout| layout.segment_at_byte(byte))
+            .map(|seg| seg.byte_range.end);
+        let end = segment_end.unwrap_or_else(|| self.boundary_end(byte));
+        self.shared_stream.len().map_or(end, |len| end.min(len))
+    }
+
     /// Check whether the underlying source has data ready for a non-blocking
     /// decode. Returns `true` for `Ready`, `Eof`, or `Seeking` phases.
     fn source_is_ready(&self) -> bool {
@@ -1728,22 +1744,6 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn source_phase_for_seek_landing(&self, byte: u64) -> SourcePhase {
         let end = self.seek_landing_end(byte);
         self.shared_stream.phase_at(byte..end)
-    }
-
-    /// Compute the upper bound of the byte range required for the
-    /// decoder to safely produce its first chunk after a seek landing
-    /// at `byte`: the end of the segment containing `byte` (segmented
-    /// sources) or the standard 32 KB look-ahead (raw sources). Always
-    /// clamped to `Source::len()` so we don't gate on phantom bytes
-    /// past EOF.
-    fn seek_landing_end(&self, byte: u64) -> u64 {
-        let segment_end = self
-            .shared_stream
-            .as_segment_layout()
-            .and_then(|layout| layout.segment_at_byte(byte))
-            .map(|seg| seg.byte_range.end);
-        let end = segment_end.unwrap_or_else(|| self.boundary_end(byte));
-        self.shared_stream.len().map_or(end, |len| end.min(len))
     }
 
     fn source_phase_for_wait_context(&self, context: &WaitContext) -> SourcePhase {
@@ -1818,6 +1818,19 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Map a recreate-path error to the FSM outcome. Transient
+    /// `ErrorClass::Interrupted` (probe ran before the source buffered
+    /// `[0..PROBE)` of a freshly-switched variant — see Wave 2.A
+    /// memo / commit message) → `NeedsSourceWait` so the caller retries
+    /// after the source phase becomes Ready. Everything else → hard fail.
+    fn classify_recreate_err(e: &DecodeError, _offset: u64) -> RecreateOutcome {
+        if e.classify() == ErrorClass::Interrupted {
+            RecreateOutcome::NeedsSourceWait
+        } else {
+            RecreateOutcome::SoftFailed
+        }
+    }
+
     /// Execute the actual decoder recreation once readiness is confirmed.
     ///
     /// Returns `Some(RecreateOutcome::Done)` on success,
@@ -1884,19 +1897,6 @@ impl<T: StreamType> StreamAudioSource<T> {
                 Err(e) => Self::classify_recreate_err(&e, recreate.offset),
             },
         )
-    }
-
-    /// Map a recreate-path error to the FSM outcome. Transient
-    /// `ErrorClass::Interrupted` (probe ran before the source buffered
-    /// `[0..PROBE)` of a freshly-switched variant — see Wave 2.A
-    /// memo / commit message) → `NeedsSourceWait` so the caller retries
-    /// after the source phase becomes Ready. Everything else → hard fail.
-    fn classify_recreate_err(e: &DecodeError, _offset: u64) -> RecreateOutcome {
-        if e.classify() == ErrorClass::Interrupted {
-            RecreateOutcome::NeedsSourceWait
-        } else {
-            RecreateOutcome::SoftFailed
-        }
     }
 
     fn finish_apply_seek_after_recreate(&mut self, request: SeekRequest) -> TrackStep<PcmChunk> {

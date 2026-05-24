@@ -141,6 +141,12 @@ pub struct ResourceConfig {
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
     pub src: ResourceSrc,
+    /// Method used by HLS size estimation to probe segment lengths.
+    /// Default is [`SizeProbeMethod::Head`]; switch to
+    /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
+    /// `HEAD` (zvuk stage `/drm/`).
+    #[builder(default)]
+    pub size_probe_method: SizeProbeMethod,
     /// Storage configuration (cache directory, eviction limits).
     #[builder(default)]
     pub store: StoreOptions,
@@ -150,12 +156,6 @@ pub struct ResourceConfig {
     /// Maximum peak bitrate for expensive networks (e.g., cellular).
     #[builder(default = 0.0)]
     pub preferred_peak_bitrate_for_expensive_networks: f64,
-    /// Method used by HLS size estimation to probe segment lengths.
-    /// Default is [`SizeProbeMethod::Head`]; switch to
-    /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
-    /// `HEAD` (zvuk stage `/drm/`).
-    #[builder(default)]
-    pub size_probe_method: SizeProbeMethod,
 }
 
 impl ResourceConfig {
@@ -167,20 +167,6 @@ impl ResourceConfig {
     /// absolute path. See [`Self::parse_src`].
     pub fn new<S: AsRef<str>>(input: S) -> Result<Self, DecodeError> {
         Self::for_src(input).map(ResourceConfigBuilder::build)
-    }
-
-    /// Chainable counterpart to [`Self::new`]: parses input and returns a
-    /// builder with `src` already populated so call-sites can add options
-    /// before `.build()`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
-    /// absolute path. See [`Self::parse_src`].
-    pub fn for_src<S: AsRef<str>>(
-        input: S,
-    ) -> Result<ResourceConfigBuilder<resource_config_builder::SetSrc>, DecodeError> {
-        Self::parse_src(input).map(|src| Self::builder().src(src))
     }
 
     /// Build an `AudioConfig<File>` from this resource configuration.
@@ -288,6 +274,20 @@ impl ResourceConfig {
             .maybe_worker(self.worker)
             .gapless_mode(self.gapless_mode)
             .build())
+    }
+
+    /// Chainable counterpart to [`Self::new`]: parses input and returns a
+    /// builder with `src` already populated so call-sites can add options
+    /// before `.build()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
+    /// absolute path. See [`Self::parse_src`].
+    pub fn for_src<S: AsRef<str>>(
+        input: S,
+    ) -> Result<ResourceConfigBuilder<resource_config_builder::SetSrc>, DecodeError> {
+        Self::parse_src(input).map(|src| Self::builder().src(src))
     }
 
     /// Parse a URL string or local file path into a [`ResourceSrc`].

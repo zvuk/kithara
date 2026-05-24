@@ -31,13 +31,13 @@ pub(crate) struct SizeEstimator {
     playlist: Arc<PlaylistState>,
     headers: Option<kithara_net::Headers>,
     peer: PeerHandle,
+    /// Whether probes are real `HEAD`s or single-byte ranged `GET`s.
+    probe_method: SizeProbeMethod,
     media_playlists: Vec<MediaPlaylist>,
     /// Max probe requests in flight at once. `0` is normalised to
     /// `1`. Caps concurrency against upstreams that throttle or drop
     /// TCP on burst (e.g. zvuk stage `/drm/`).
     concurrency: usize,
-    /// Whether probes are real `HEAD`s or single-byte ranged `GET`s.
-    probe_method: SizeProbeMethod,
 }
 
 /// Result of [`SizeEstimator::estimate`]: a `size_maps` vector indexed by
@@ -65,16 +65,12 @@ impl SizeEstimator {
             headers,
             peer,
             media_playlists,
-            concurrency: concurrency.max(1),
             probe_method,
+            concurrency: concurrency.max(1),
         }
     }
 
     fn content_length(resp: &FetchResponse) -> u64 {
-        // Prefer the `Content-Range` total when present — for
-        // `Range: bytes=0-0` probes `Content-Length` is `1` and only
-        // `Content-Range: bytes 0-0/TOTAL` carries the resource
-        // size. Falls back to `Content-Length` for plain `HEAD`s.
         if let Some(total) = resp
             .headers
             .get("content-range")

@@ -93,34 +93,6 @@ impl Queue {
         self.insert_with_id(TrackId::allocate(), source, after)
     }
 
-    /// Insert a track with a caller-supplied id. See
-    /// [`Self::append_with_id`] for why the id MUST come from
-    /// [`TrackId::allocate`].
-    ///
-    /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `after` does not match
-    /// any track.
-    pub fn insert_with_id<S: Into<TrackSource>>(
-        &self,
-        id: TrackId,
-        source: S,
-        after: Option<TrackId>,
-    ) -> Result<TrackId, QueueError> {
-        let source = source.into();
-        let pos = {
-            let guard = self.lock_tracks();
-            match after {
-                None => 0,
-                Some(after_id) => guard
-                    .iter()
-                    .position(|e| e.id == after_id)
-                    .map(|i| i + 1)
-                    .ok_or(QueueError::UnknownTrackId(after_id))?,
-            }
-        };
-        Ok(self.insert_entry(id, source, Placement::At(pos)))
-    }
-
     /// Shared insertion path for [`Self::append`] and [`Self::insert`].
     ///
     /// Builds the [`TrackEntry`] with `id`, places it per `placement`,
@@ -171,6 +143,34 @@ impl Queue {
         let id = self.register_for_test();
         self.complete_load_for_test(id, resource);
         id
+    }
+
+    /// Insert a track with a caller-supplied id. See
+    /// [`Self::append_with_id`] for why the id MUST come from
+    /// [`TrackId::allocate`].
+    ///
+    /// # Errors
+    /// Returns [`QueueError::UnknownTrackId`] if `after` does not match
+    /// any track.
+    pub fn insert_with_id<S: Into<TrackSource>>(
+        &self,
+        id: TrackId,
+        source: S,
+        after: Option<TrackId>,
+    ) -> Result<TrackId, QueueError> {
+        let source = source.into();
+        let pos = {
+            let guard = self.lock_tracks();
+            match after {
+                None => 0,
+                Some(after_id) => guard
+                    .iter()
+                    .position(|e| e.id == after_id)
+                    .map(|i| i + 1)
+                    .ok_or(QueueError::UnknownTrackId(after_id))?,
+            }
+        };
+        Ok(self.insert_entry(id, source, Placement::At(pos)))
     }
 
     /// Test helper: register a placeholder track entry without starting

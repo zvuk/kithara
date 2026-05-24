@@ -1,10 +1,10 @@
 use std::{marker::PhantomData, path::PathBuf, time::Duration};
 
 pub trait HangDump {
+    fn dump_json(&self) -> String;
     fn label(&self) -> Option<&str> {
         None
     }
-    fn dump_json(&self) -> String;
 }
 
 impl<T> HangDump for T {

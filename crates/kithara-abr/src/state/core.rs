@@ -150,22 +150,6 @@ impl AbrState {
         nanos.max(1)
     }
 
-    #[must_use]
-    pub fn is_locked(&self) -> bool {
-        self.lock_count.load(Ordering::Acquire) > 0
-    }
-
-    /// Gate publication of pending decisions: while `lock_count > 0`,
-    /// [`peek_pending_decision`](Self::peek_pending_decision) returns
-    /// `None` so the boundary commit defers until unlock. The pending
-    /// intent itself is preserved across lock/unlock — destructive
-    /// invalidation of stale pre-seek intents is the job of
-    /// [`invalidate_pending`](Self::invalidate_pending), called from
-    /// `coord::reset_for_seek` on a semantic seek boundary.
-    pub fn lock(&self) {
-        self.lock_count.fetch_add(1, Ordering::AcqRel);
-    }
-
     /// Drop a throughput-driven pending boundary-commit. Called when a
     /// new seek epoch arrives (`HlsPeer::apply_seek_change`): a pending
     /// up-switch chosen against pre-seek throughput becomes stale once
@@ -193,6 +177,22 @@ impl AbrState {
         {
             *slot = None;
         }
+    }
+
+    #[must_use]
+    pub fn is_locked(&self) -> bool {
+        self.lock_count.load(Ordering::Acquire) > 0
+    }
+
+    /// Gate publication of pending decisions: while `lock_count > 0`,
+    /// [`peek_pending_decision`](Self::peek_pending_decision) returns
+    /// `None` so the boundary commit defers until unlock. The pending
+    /// intent itself is preserved across lock/unlock — destructive
+    /// invalidation of stale pre-seek intents is the job of
+    /// [`invalidate_pending`](Self::invalidate_pending), called from
+    /// `coord::reset_for_seek` on a semantic seek boundary.
+    pub fn lock(&self) {
+        self.lock_count.fetch_add(1, Ordering::AcqRel);
     }
 
     #[must_use]

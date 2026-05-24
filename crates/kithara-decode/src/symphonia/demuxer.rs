@@ -214,11 +214,6 @@ impl Demuxer for SymphoniaDemuxer {
                 Err(SymphoniaError::IoError(e))
                     if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock =>
                 {
-                    // `Interrupted` carries the seek-pending signal;
-                    // `WouldBlock` carries `NotReady` / `Retry` via the
-                    // [`StreamPending`] payload (HLS source wraps it
-                    // there to keep `Interrupted` reserved for seek so
-                    // `is_seek_pending_io` stays unambiguous).
                     let reason = e
                         .get_ref()
                         .and_then(|src| src.downcast_ref::<StreamPending>())

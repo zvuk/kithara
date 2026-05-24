@@ -207,13 +207,6 @@ impl AudioPlayerItem {
         self.config.abr_mode
     }
 
-    /// Strongly-typed view of [`Self::audio_id`] for queue calls that
-    /// take a [`TrackId`]. The value is identical — just the wrapper
-    /// type — so there is no conversion loss across the boundary.
-    pub(crate) fn track_id(&self) -> TrackId {
-        self.id
-    }
-
     pub(crate) fn headers(&self) -> Option<HashMap<String, String>> {
         self.config.headers.clone()
     }
@@ -242,6 +235,13 @@ impl AudioPlayerItem {
             CancellationToken::new(), // kithara:cancel:bridge
         );
         *self.event_bridge.lock_sync() = Some(bridge);
+    }
+
+    /// Strongly-typed view of [`Self::audio_id`] for queue calls that
+    /// take a [`TrackId`]. The value is identical — just the wrapper
+    /// type — so there is no conversion loss across the boundary.
+    pub(crate) fn track_id(&self) -> TrackId {
+        self.id
     }
 }
 

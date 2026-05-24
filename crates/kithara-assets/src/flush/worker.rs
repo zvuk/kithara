@@ -33,21 +33,6 @@ impl WorkerSlot {
 }
 
 impl FlushHub {
-    /// Spawn the background flush worker (idempotent). Subsequent
-    /// `signal()` calls coalesce mutations through `policy.debounce`
-    /// before flushing.
-    pub fn start_worker(self: &Arc<Self>) {
-        self.worker.start_with(Arc::clone(self));
-    }
-
-    /// Convenience: [`Self::new`] followed by [`Self::start_worker`].
-    #[must_use]
-    pub fn with_worker(cancel: CancellationToken, policy: FlushPolicy) -> Arc<Self> {
-        let hub = Self::new(cancel, policy);
-        hub.start_worker();
-        hub
-    }
-
     fn run(self: Arc<Self>) {
         loop {
             let mut guard = self.state.lock_sync();
@@ -90,5 +75,20 @@ impl FlushHub {
             let _g = self.flush_lock.lock_sync();
             let _ = self.flush_dirty(false);
         }
+    }
+
+    /// Spawn the background flush worker (idempotent). Subsequent
+    /// `signal()` calls coalesce mutations through `policy.debounce`
+    /// before flushing.
+    pub fn start_worker(self: &Arc<Self>) {
+        self.worker.start_with(Arc::clone(self));
+    }
+
+    /// Convenience: [`Self::new`] followed by [`Self::start_worker`].
+    #[must_use]
+    pub fn with_worker(cancel: CancellationToken, policy: FlushPolicy) -> Arc<Self> {
+        let hub = Self::new(cancel, policy);
+        hub.start_worker();
+        hub
     }
 }

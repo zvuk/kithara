@@ -111,14 +111,14 @@ impl StdError for StreamReadError {
 /// own decoder.
 #[derive(Debug, Clone, Copy)]
 pub struct StreamPending {
-    pub reason: PendingReason,
-    pub pos: u64,
-    pub want: usize,
     pub len: Option<u64>,
+    pub reason: PendingReason,
     pub phase: SourcePhase,
-    pub epoch: u64,
     pub flushing: bool,
     pub variant_fence: bool,
+    pub epoch: u64,
+    pub pos: u64,
+    pub want: usize,
 }
 
 impl fmt::Display for StreamPending {
@@ -348,12 +348,6 @@ impl<T: StreamType> Stream<T> {
             let range = pos..pos.saturating_add(buf.len() as u64);
 
             // WHY: `wait_range` returns `Interrupted` when the source has a
-            // variant fence raised, which the consumer sees only as a
-            // generic "retry" — burning the wait-spin budget and never
-            // surfacing the `VariantChange` discriminator. Skip the wait
-            // when a fence is pending and go straight to `read_at`, which
-            // returns `Pending(VariantChange)` so the caller can ack via
-            // `clear_variant_fence` and continue.
             if self.source.has_variant_change_pending() {
                 return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
             }
@@ -448,31 +442,14 @@ impl<T: StreamType> Read for Stream<T> {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
             Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
             Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
-                // `ErrorKind::Interrupted` is the in-band signal
-                // `kithara-decode::is_seek_pending_io` checks for —
-                // wrap the reason as the source for typed downcasts.
                 Err(IoError::new(ErrorKind::Interrupted, reason))
             }
             Ok(StreamReadOutcome::Pending(
                 reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
-            )) => {
-                // Cooperative pause — the caller must retry once the
-                // source has progressed (notify_waiting wakes them via
-                // the Timeline's seek epoch or asset_store updates).
-                // `ErrorKind::Interrupted` carries the same semantics
-                // through Symphonia's seek chain as `SeekPending`,
-                // letting `is_seek_pending_io` classify the failure as
-                // transient. The previous `WouldBlock` mapping looked
-                // like a hard "would block" to Symphonia's fmp4 reader,
-                // which surfaced it as `SeekFailed("isomp4: invalid
-                // atom size")` and corrupted the demuxer cursor on
-                // HE-AAC v2 fragmented MP4 (observed as a false-EOF
-                // cascade during rapid scrubs into cold byte ranges).
-                Err(IoError::new(
-                    ErrorKind::Interrupted,
-                    self.snapshot_pending(reason, buf.len()),
-                ))
-            }
+            )) => Err(IoError::new(
+                ErrorKind::Interrupted,
+                self.snapshot_pending(reason, buf.len()),
+            )),
             Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                 Err(IoError::other(VariantChangeError))
             }

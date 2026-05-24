@@ -127,6 +127,13 @@ impl RetryPolicy {
 #[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct NetOptions {
+    /// `Accept-Encoding` algorithms the client offers and auto-decodes.
+    /// Defaults to all four (`gzip | deflate | brotli | zstd`); narrow it
+    /// when an upstream rejects the full set (anti-bot WAFs that
+    /// fingerprint on the exact `Accept-Encoding` string are a common
+    /// reason).
+    #[builder(default = Compression::all())]
+    pub compression: Compression,
     /// Maximum allowed inactivity between consecutive read operations.
     /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
     /// "The timeout applies to each read operation, and resets after a
@@ -165,13 +172,6 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
-    /// `Accept-Encoding` algorithms the client offers and auto-decodes.
-    /// Defaults to all four (`gzip | deflate | brotli | zstd`); narrow it
-    /// when an upstream rejects the full set (anti-bot WAFs that
-    /// fingerprint on the exact `Accept-Encoding` string are a common
-    /// reason).
-    #[builder(default = Compression::all())]
-    pub compression: Compression,
 }
 
 impl Default for NetOptions {

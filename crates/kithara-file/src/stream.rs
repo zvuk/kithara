@@ -55,39 +55,6 @@ impl StreamType for File {
 }
 
 impl File {
-    /// Wait for a sibling `AssetStore` to release the atomic-chunked
-    /// tmp file, then open. The sibling owner signals release either by
-    /// committing (canonical appears) or by dropping without commit
-    /// (tmp disappears) — both unblock our next
-    /// `OpenOptions::create_new` call.
-    ///
-    /// Wrapped in `#[kithara::hang_watchdog]` so a stale tmp from a
-    /// crashed-out previous process (which never releases the
-    /// filesystem-level signal) surfaces as a deterministic panic
-    /// rather than an indefinite hang. Production startup should call
-    /// `AtomicChunked::scrub_stale_tmp` for known canonicals to make
-    /// this path the cold case.
-    #[kithara::hang_watchdog]
-    async fn create_remote_wait_for_claim(
-        url: url::Url,
-        config: FileConfig,
-        cancel: CancellationToken,
-    ) -> Result<FileSource, StreamSourceError> {
-        loop {
-            match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
-                Ok(src) => {
-                    hang_reset!();
-                    return Ok(src);
-                }
-                Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(_)))) => {
-                    hang_tick!();
-                    tokio::time::sleep(TMP_CLAIMED_POLL_INTERVAL).await;
-                }
-                Err(e) => return Err(StreamSourceError::from(e)),
-            }
-        }
-    }
-
     /// Create a source for a local file.
     fn create_local(
         path: PathBuf,
@@ -188,12 +155,6 @@ impl File {
             let total = coord.total_bytes().unwrap_or(0);
             coord.set_download_pos(total);
 
-            // The HTTP `Content-Type` that originally drove
-            // `FilePeer::capture_content_metadata` is gone on cold
-            // restart — recover the codec by sniffing the first bytes
-            // of the cached resource so the decoder doesn't fall back
-            // to extension-based probing (which silently fails on
-            // path-extension-less URLs like `streamhq?id=N`).
             let cached_codec = sniff_codec(&state.res);
 
             return Ok(FileSource::local(
@@ -230,6 +191,39 @@ impl File {
         let mut source = FileSource::with_inner(inner, coord);
         source.set_peer_handle(peer_handle);
         Ok(source)
+    }
+
+    /// Wait for a sibling `AssetStore` to release the atomic-chunked
+    /// tmp file, then open. The sibling owner signals release either by
+    /// committing (canonical appears) or by dropping without commit
+    /// (tmp disappears) — both unblock our next
+    /// `OpenOptions::create_new` call.
+    ///
+    /// Wrapped in `#[kithara::hang_watchdog]` so a stale tmp from a
+    /// crashed-out previous process (which never releases the
+    /// filesystem-level signal) surfaces as a deterministic panic
+    /// rather than an indefinite hang. Production startup should call
+    /// `AtomicChunked::scrub_stale_tmp` for known canonicals to make
+    /// this path the cold case.
+    #[kithara::hang_watchdog]
+    async fn create_remote_wait_for_claim(
+        url: url::Url,
+        config: FileConfig,
+        cancel: CancellationToken,
+    ) -> Result<FileSource, StreamSourceError> {
+        loop {
+            match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
+                Ok(src) => {
+                    hang_reset!();
+                    return Ok(src);
+                }
+                Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(_)))) => {
+                    hang_tick!();
+                    tokio::time::sleep(TMP_CLAIMED_POLL_INTERVAL).await;
+                }
+                Err(e) => return Err(StreamSourceError::from(e)),
+            }
+        }
     }
 }
 

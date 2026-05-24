@@ -229,9 +229,6 @@ fn red_open_always_starts_at_layout_seg_0() {
     let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let chunk = pull_one_chunk(&mut decoder).expect("BUG: at least one PCM chunk from seg-0");
-    // First AAC frame at 44.1 kHz = 1024 / 44_100 ≈ 23.22 ms — the
-    // upper bound below; lower bound `ZERO` covers backends that do
-    // not strip codec delay (Apple AudioConverter, Symphonia native).
     let max_strip_time = Duration::from_micros(24_000);
     assert!(
         chunk.meta.timestamp <= max_strip_time,

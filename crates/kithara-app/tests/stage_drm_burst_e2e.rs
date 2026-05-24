@@ -128,8 +128,6 @@ async fn stage_drm_range_get_probe_returns_full_size_map() {
             let client = client.clone();
             let headers = headers.clone();
             async move {
-                // Mirrors what production sends for
-                // `SizeProbeMethod::RangeGet`: a single-byte ranged GET.
                 let r = client
                     .get_range(u.clone(), RangeSpec::new(0, Some(0)), Some(headers))
                     .await;

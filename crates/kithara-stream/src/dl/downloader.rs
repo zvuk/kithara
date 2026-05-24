@@ -151,33 +151,6 @@ impl Downloader {
         Self::spawn_run(&self.inner, this, rx);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn spawn_run(
-        inner: &DownloaderInner,
-        this: Self,
-        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
-    ) {
-        let Some(handle) = inner
-            .runtime
-            .clone()
-            .or_else(|| tokio::runtime::Handle::try_current().ok())
-        else {
-            return;
-        };
-        handle.spawn(async move { this.run(rx).await });
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn spawn_run(
-        _inner: &DownloaderInner,
-        this: Self,
-        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
-    ) {
-        drop(tokio::task::spawn(async move {
-            this.run(rx).await;
-        }));
-    }
-
     /// Register a peer and return its [`PeerHandle`].
     ///
     /// Double-registers the peer: fetch channel through the download loop
@@ -247,6 +220,33 @@ impl Downloader {
 
             registry.reschedule();
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_run(
+        inner: &DownloaderInner,
+        this: Self,
+        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
+    ) {
+        let Some(handle) = inner
+            .runtime
+            .clone()
+            .or_else(|| tokio::runtime::Handle::try_current().ok())
+        else {
+            return;
+        };
+        handle.spawn(async move { this.run(rx).await });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn spawn_run(
+        _inner: &DownloaderInner,
+        this: Self,
+        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
+    ) {
+        drop(tokio::task::spawn(async move {
+            this.run(rx).await;
+        }));
     }
 }
 

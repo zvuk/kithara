@@ -99,8 +99,8 @@ impl<'a, K, V> IntoIterator for &'a ArenaRegistry<K, V>
 where
     K: Clone + Eq + Hash,
 {
-    type Item = (Index, &'a V);
     type IntoIter = ArenaIter<'a, V>;
+    type Item = (Index, &'a V);
 
     fn into_iter(self) -> Self::IntoIter {
         self.values.iter()
@@ -111,8 +111,8 @@ impl<'a, K, V> IntoIterator for &'a mut ArenaRegistry<K, V>
 where
     K: Clone + Eq + Hash,
 {
-    type Item = (Index, &'a mut V);
     type IntoIter = ArenaIterMut<'a, V>;
+    type Item = (Index, &'a mut V);
 
     fn into_iter(self) -> Self::IntoIter {
         self.values.iter_mut()

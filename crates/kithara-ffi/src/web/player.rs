@@ -83,27 +83,6 @@ impl Player {
         Ok(())
     }
 
-    fn load_f32(a: &AtomicU32) -> f32 {
-        f32::from_bits(a.load(Ordering::Relaxed))
-    }
-
-    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
-        self.cmd_tx.lock_sync()
-    }
-
-    fn reset_cached_state(&self) {
-        Self::store_f32(&self.volume, Self::DEFAULT_VOLUME);
-        Self::store_f32(&self.crossfade_secs, Self::CROSSFADE_SECONDS);
-        for gain in &self.eq_gains {
-            Self::store_f32(gain, 0.0);
-        }
-        self.ducking.store(0, Ordering::Relaxed);
-    }
-
-    fn store_f32(a: &AtomicU32, val: f32) {
-        a.store(val.to_bits(), Ordering::Relaxed);
-    }
-
     fn eq_band_count(&self) -> u32 {
         Self::EQ_BANDS as u32
     }
@@ -139,6 +118,14 @@ impl Player {
         wasm_support::bridge_is_playing()
     }
 
+    fn load_f32(a: &AtomicU32) -> f32 {
+        f32::from_bits(a.load(Ordering::Relaxed))
+    }
+
+    fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
+        self.cmd_tx.lock_sync()
+    }
+
     fn pause(&self) {
         let _ = self.send_cmd(WorkerCmd::Pause);
     }
@@ -149,6 +136,15 @@ impl Player {
 
     fn process_count(&self) -> f64 {
         wasm_support::bridge_process_count() as f64
+    }
+
+    fn reset_cached_state(&self) {
+        Self::store_f32(&self.volume, Self::DEFAULT_VOLUME);
+        Self::store_f32(&self.crossfade_secs, Self::CROSSFADE_SECONDS);
+        for gain in &self.eq_gains {
+            Self::store_f32(gain, 0.0);
+        }
+        self.ducking.store(0, Ordering::Relaxed);
     }
 
     fn reset_eq(&self) -> Result<(), JsValue> {
@@ -220,6 +216,10 @@ impl Player {
         let _ = self.send_cmd(WorkerCmd::Stop);
     }
 
+    fn store_f32(a: &AtomicU32, val: f32) {
+        a.store(val.to_bits(), Ordering::Relaxed);
+    }
+
     fn take_events(&self) -> String {
         crate::web::js::take_events()
     }
@@ -232,11 +232,6 @@ impl Player {
         wasm_support::warm_up_audio();
     }
 }
-
-// JS-facing surface. The xtask wasm postbuild step scans for `player_*`
-// free functions and synthesises a `Player` class wrapper in the
-// generated JS bundle, so the JS shape stays identical to what the old
-// `#[wasm_export]` proc-macro produced.
 
 #[wasm_bindgen]
 pub fn player_eq_band_count() -> u32 {

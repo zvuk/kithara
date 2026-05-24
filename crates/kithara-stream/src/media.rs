@@ -209,9 +209,6 @@ impl TryFrom<&[u8]> for AudioCodec {
                 ..,
             ] => Ok(Self::Pcm),
             [_, _, _, _, b'f', b't', b'y', b'p', ..] => Ok(Self::AacLc),
-            // MPEG audio sync: 11 leading 1-bits (`0xFFFx`). Layer field
-            // lives in byte 1 bits 1-2; layer III (`0b01`) is MP3, the
-            // reserved value `0b00` is the prefix AAC ADTS reuses.
             [0xFF, b1, ..] if (b1 & 0xE0) == 0xE0 => match (b1 >> 1) & 0b11 {
                 0b00 => Ok(Self::AacLc),
                 _ => Ok(Self::Mp3),

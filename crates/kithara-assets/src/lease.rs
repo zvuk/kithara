@@ -60,10 +60,6 @@ impl Drop for LiveResource {
         let Some(registry) = self.registry.upgrade() else {
             return;
         };
-        // Remove the entry only if the stored `Weak` no longer upgrades —
-        // i.e. no other `Arc<LiveResource>` exists. `remove_if` runs the
-        // predicate while holding the shard write lock, so the read/remove
-        // pair stays atomic without nesting `get` and `remove`.
         registry.remove_if(&self.key, |_, weak| weak.upgrade().is_none());
     }
 }
@@ -140,10 +136,6 @@ where
 
     fn open_live_resource(&self, key: &ResourceKey, status: ResourceStatus) -> Arc<LiveResource> {
         let next = AssetResourceState::from(status);
-        // Hold a single shard write lock via `entry()` so the lookup and the
-        // conditional insert stay atomic. The shard guard is released as soon
-        // as the function returns; the returned `Arc<LiveResource>` is the only
-        // thing outliving the lock.
         let entry = self.live.entry(key.clone());
         match entry {
             dashmap::mapref::entry::Entry::Occupied(mut occ) => {
@@ -390,8 +382,6 @@ where
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        // Clone the `Weak` out of the shard guard before calling `upgrade()` so
-        // we never hold a dashmap ref while operating on the `Arc<LiveResource>`.
         let weak = self.live.get(key).map(|r| r.value().clone());
         if let Some(live) = weak.and_then(|w| w.upgrade()) {
             return Ok(live.snapshot());

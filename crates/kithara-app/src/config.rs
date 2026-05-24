@@ -27,6 +27,10 @@ pub struct AppConfig {
     /// Color palette for the UI.
     #[builder(default)]
     pub palette: Palette,
+    /// HLS size-estimation probe strategy (see
+    /// [`kithara::hls::SizeProbeMethod`]).
+    #[builder(default = baked::BAKED_SIZE_PROBE_METHOD)]
+    pub size_probe_method: SizeProbeMethod,
     /// Log filter directives.
     #[builder(default)]
     pub log_directives: Vec<String>,
@@ -42,10 +46,6 @@ pub struct AppConfig {
     /// Number of EQ bands for the UI.
     #[builder(default = baked::BAKED_EQ_BAND_COUNT)]
     pub eq_band_count: usize,
-    /// HLS size-estimation probe strategy (see
-    /// [`kithara::hls::SizeProbeMethod`]).
-    #[builder(default = baked::BAKED_SIZE_PROBE_METHOD)]
-    pub size_probe_method: SizeProbeMethod,
 }
 
 fn default_tracks() -> Vec<String> {

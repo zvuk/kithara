@@ -80,6 +80,10 @@ pub struct AudioPlayer {
     /// shutdown pulse reaches subsystems before structural Arc
     /// teardown unwinds. See `kithara-play/README.md` "Cancel Hierarchy".
     cancel: CancellationToken,
+    /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
+    /// `X-Auth-Token`). Merged into per-item `headers` on insert.
+    /// Item-supplied headers take precedence on key collision.
+    player_headers: DashMap<String, String>,
     /// Shared downloader for every track created through this player.
     /// Pinned to `FFI_RUNTIME` so its async tasks land on a runtime that
     /// is always alive, independent of the caller thread (Swift /
@@ -97,10 +101,6 @@ pub struct AudioPlayer {
     /// cap unless cellular is tighter; cellular is held for future
     /// network-state-aware switching.
     peak_bitrate: Mutex<PeakBitrate>,
-    /// Player-wide HTTP headers (e.g. `X-Encrypted-Key`,
-    /// `X-Auth-Token`). Merged into per-item `headers` on insert.
-    /// Item-supplied headers take precedence on key collision.
-    player_headers: DashMap<String, String>,
     /// Shared storage options (cache dir, etc.) applied to every item.
     store: StoreOptions,
 }
@@ -242,6 +242,33 @@ impl AudioPlayer {
         let _ = self.queue.select(next.id, kithara_queue::Transition::None);
     }
 
+    /// Append an item to the tail of the queue. AVQueuePlayer-style
+    /// counterpart of [`Self::insert`], which follows the iOS protocol
+    /// shape (`after == nil` ⇒ head).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FfiError`] when the source URL cannot be resolved into
+    /// a queue-owned [`kithara::play::Source`] — same failure surface as
+    /// [`Self::insert`].
+    #[cfg_attr(
+        all(),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
+        )
+    )]
+    pub fn append(self: &Arc<Self>, item: Arc<AudioPlayerItem>) -> Result<(), FfiError> {
+        let _rt = crate::FFI_RUNTIME.enter();
+        let source = self.build_source_for_item(&item)?;
+        let id = item.track_id();
+        self.queue.append_with_id(id, source);
+        *item.inserted.lock_sync() = true;
+        self.items.lock_sync().insert(id, Arc::clone(&item));
+        item.restart_bridge();
+        Ok(())
+    }
+
     pub fn crossfade_duration(&self) -> f32 {
         self.queue.crossfade_duration()
     }
@@ -313,33 +340,6 @@ impl AudioPlayer {
                 reason: e.to_string(),
             })?;
 
-        *item.inserted.lock_sync() = true;
-        self.items.lock_sync().insert(id, Arc::clone(&item));
-        item.restart_bridge();
-        Ok(())
-    }
-
-    /// Append an item to the tail of the queue. AVQueuePlayer-style
-    /// counterpart of [`Self::insert`], which follows the iOS protocol
-    /// shape (`after == nil` ⇒ head).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`FfiError`] when the source URL cannot be resolved into
-    /// a queue-owned [`kithara::play::Source`] — same failure surface as
-    /// [`Self::insert`].
-    #[cfg_attr(
-        all(),
-        expect(
-            clippy::needless_pass_by_value,
-            reason = "UniFFI Lift trait requires owned Arc — FFI ABI contract"
-        )
-    )]
-    pub fn append(self: &Arc<Self>, item: Arc<AudioPlayerItem>) -> Result<(), FfiError> {
-        let _rt = crate::FFI_RUNTIME.enter();
-        let source = self.build_source_for_item(&item)?;
-        let id = item.track_id();
-        self.queue.append_with_id(id, source);
         *item.inserted.lock_sync() = true;
         self.items.lock_sync().insert(id, Arc::clone(&item));
         item.restart_bridge();

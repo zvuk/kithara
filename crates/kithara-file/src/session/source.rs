@@ -38,18 +38,6 @@ pub struct FileSource {
 }
 
 impl FileSource {
-    /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
-    /// inner is created up in `stream.rs::Stream<File>::open` and shared
-    /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
-    /// loop, so this constructor does nothing async.
-    pub(crate) fn with_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
-        Self {
-            coord,
-            inner,
-            peer_handle: None,
-        }
-    }
-
     /// Create a source for a local/cached file (no downloads needed).
     ///
     /// `cancel` is a child of the file config master so a track drop
@@ -97,6 +85,18 @@ impl FileSource {
     /// in-flight fetch.
     pub(crate) fn set_peer_handle(&mut self, handle: PeerHandle) {
         self.peer_handle = Some(handle);
+    }
+
+    /// Build a `FileSource` over a pre-constructed [`FileInner`]. The
+    /// inner is created up in `stream.rs::Stream<File>::open` and shared
+    /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
+    /// loop, so this constructor does nothing async.
+    pub(crate) fn with_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
+        Self {
+            coord,
+            inner,
+            peer_handle: None,
+        }
     }
 }
 

@@ -151,8 +151,6 @@ impl PinsIndex {
     /// Propagates the underlying [`AssetsError`](crate::error::AssetsError)
     /// when the on-disk flush fails.
     pub fn remove(&self, asset_root: &str) -> AssetsResult<bool> {
-        // Hold the shard write lock through `entry()` so the
-        // refcount-read + decrement-or-remove stays atomic.
         let transitioned =
             if let Entry::Occupied(mut e) = self.inner.pins.entry(asset_root.to_string()) {
                 if let Some(decremented) = NonZeroU32::new(e.get().get() - 1) {

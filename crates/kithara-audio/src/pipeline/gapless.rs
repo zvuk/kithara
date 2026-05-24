@@ -22,12 +22,6 @@ pub(crate) struct GaplessStage {
 }
 
 impl GaplessStage {
-    /// Release any trimmer-held tail at decoder EOF.
-    pub(crate) fn flush(&mut self) {
-        let output = self.trimmer.flush();
-        self.replace_pending(output);
-    }
-
     /// Builds the trimmer for this track before any PCM flows through [`Self::push`].
     ///
     /// The implementation maps `GaplessMode` and the decoder `DecoderTrackInfo` into a `GaplessTrimmer`:
@@ -61,6 +55,12 @@ impl GaplessStage {
             trimmer,
             pending: None,
         }
+    }
+
+    /// Release any trimmer-held tail at decoder EOF.
+    pub(crate) fn flush(&mut self) {
+        let output = self.trimmer.flush();
+        self.replace_pending(output);
     }
 
     /// Return the next trimmed chunk from the current output batch.

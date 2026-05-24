@@ -106,24 +106,6 @@ impl KeyManager {
         iv
     }
 
-    /// Convenience constructor from [`crate::config::KeyOptions`].
-    #[must_use]
-    pub fn with_options(
-        downloader: PeerHandle,
-        backend: AssetStore<DecryptContext>,
-        base_headers: Option<Headers>,
-        options: crate::config::KeyOptions,
-        byte_pool: kithara_bufpool::BytePool,
-    ) -> Self {
-        Self::new(
-            downloader,
-            backend,
-            base_headers,
-            options.key_registry,
-            byte_pool,
-        )
-    }
-
     /// Synchronous key lookup — no I/O.
     ///
     /// DRM keys come from the in-memory map populated by a prior
@@ -201,9 +183,6 @@ impl KeyManager {
             .await;
         }
 
-        // Clone the cached `Bytes` out of the shard guard before the next
-        // step — `try_read_cached` and the network fetch below must not
-        // hold a dashmap ref across their I/O.
         if let Some(cached) = self.decrypted_keys.get(url).map(|r| r.value().clone()) {
             tracing::debug!(%url, "drm key: served from in-memory cache");
             return Ok(cached);
@@ -429,6 +408,24 @@ impl KeyManager {
             .iter()
             .map(|segment| self.resolve_segment_decrypt_ctx(&playlist.url, segment))
             .collect()
+    }
+
+    /// Convenience constructor from [`crate::config::KeyOptions`].
+    #[must_use]
+    pub fn with_options(
+        downloader: PeerHandle,
+        backend: AssetStore<DecryptContext>,
+        base_headers: Option<Headers>,
+        options: crate::config::KeyOptions,
+        byte_pool: kithara_bufpool::BytePool,
+    ) -> Self {
+        Self::new(
+            downloader,
+            backend,
+            base_headers,
+            options.key_registry,
+            byte_pool,
+        )
     }
 }
 
