@@ -20,15 +20,6 @@ impl Consts {
     pub(crate) const FLAC_STREAMINFO_LEN_U8: u8 = 34;
     pub(crate) const kAudioConverterDecompressionMagicCookie: u32 = 0x646d_6763;
     pub(crate) const kAudioConverterErr_NoDataNow: OSStatus = 0x2164_6174;
-    /// `'flst'` — `AudioFormatGetProperty` property that enumerates all
-    /// `AudioFormatListItem`s an ESDS-wrapped cookie can decode to. For
-    /// HE-AAC v1/v2 the ESDS encodes multiple compatible layers (LC
-    /// base, HE-AAC v1 SBR, HE-AAC v2 PS). Apple returns them sorted
-    /// from MOST rich to LEAST rich (channel count first, then sample
-    /// rate), so `items[0]` is the full output format (e.g. stereo
-    /// 44.1 kHz for HE-AAC v2). Specifier = `AudioFormatInfo` struct
-    /// containing a partial ASBD (`mFormatID` required) + ESDS cookie.
-    pub(crate) const kAudioFormatProperty_FormatList: u32 = 0x666c_7374;
     /// `'prim'` — codec-reported `AudioConverterPrimeInfo` (encoder
     /// priming + trailing padding in PCM frames). Available after the
     /// converter has consumed at least one input packet.
@@ -63,6 +54,15 @@ impl Consts {
     pub(crate) const kAudioFormatMPEG4AAC: AudioFormatID = 0x6161_6320;
     /// `'.mp3'` — MPEG-1/2 Layer 3 input format ID.
     pub(crate) const kAudioFormatMPEGLayer3: AudioFormatID = 0x2e6d_7033;
+    /// `'flst'` — `AudioFormatGetProperty` property that enumerates all
+    /// `AudioFormatListItem`s an ESDS-wrapped cookie can decode to. For
+    /// HE-AAC v1/v2 the ESDS encodes multiple compatible layers (LC
+    /// base, HE-AAC v1 SBR, HE-AAC v2 PS). Apple returns them sorted
+    /// from MOST rich to LEAST rich (channel count first, then sample
+    /// rate), so `items[0]` is the full output format (e.g. stereo
+    /// 44.1 kHz for HE-AAC v2). Specifier = `AudioFormatInfo` struct
+    /// containing a partial ASBD (`mFormatID` required) + ESDS cookie.
+    pub(crate) const kAudioFormatProperty_FormatList: u32 = 0x666c_7374;
     pub(crate) const noErr: OSStatus = 0;
 }
 
