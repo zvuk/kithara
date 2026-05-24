@@ -69,7 +69,7 @@ impl FileSource {
             FilePhase::Complete,
         ));
         if let Some(codec) = cached_codec {
-            let _ = inner.content_type_codec.set(codec);
+            let _ = inner.content_type_info.set(MediaInfo::from(codec));
         }
         Self {
             coord,
@@ -119,11 +119,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        self.inner
-            .content_type_codec
-            .get()
-            .copied()
-            .map(|c| MediaInfo::new(Some(c), None))
+        self.inner.content_type_info.get().cloned()
     }
 
     fn phase(&self) -> SourcePhase {

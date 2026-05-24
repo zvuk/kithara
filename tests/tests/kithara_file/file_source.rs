@@ -11,7 +11,7 @@ use bytes::Bytes;
 use kithara::{
     assets::StoreOptions,
     file::{File, FileConfig},
-    stream::Stream,
+    stream::{AudioCodec, ContainerFormat, Stream},
 };
 use kithara_integration_tests::{TestHttpServer, TestTempDir, temp_dir};
 use kithara_platform::tokio::task::spawn_blocking;
@@ -66,6 +66,31 @@ async fn test_audio_endpoint(req: Request) -> Response {
     serve_with_range(Consts::AUDIO_DATA, req)
 }
 
+/// Mirror of `serve_with_range` that also sets `Content-Type`. Real
+/// production servers (e.g. `cdn-edge.zvq.me`) return the codec MIME on
+/// every response, and the file source must surface it through
+/// `Stream::media_info`.
+fn serve_with_mime(data: &'static [u8], mime: &'static str, req: Request) -> Response {
+    let mut resp = serve_with_range(data, req);
+    resp.headers_mut().insert(
+        "Content-Type",
+        mime.parse().expect("BUG: hard-coded mime is valid"),
+    );
+    resp
+}
+
+async fn audio_mpeg_endpoint(req: Request) -> Response {
+    serve_with_mime(Consts::AUDIO_DATA, "audio/mpeg", req)
+}
+
+async fn audio_wav_endpoint(req: Request) -> Response {
+    serve_with_mime(Consts::AUDIO_DATA, "audio/wav", req)
+}
+
+async fn audio_flac_endpoint(req: Request) -> Response {
+    serve_with_mime(Consts::AUDIO_DATA, "audio/flac", req)
+}
+
 async fn test_large_endpoint(req: Request) -> Response {
     serve_with_range(Consts::LARGE_DATA, req)
 }
@@ -74,6 +99,9 @@ fn test_app() -> Router {
     Router::new()
         .route("/audio.mp3", get(test_audio_endpoint))
         .route("/large.bin", get(test_large_endpoint))
+        .route("/track/streamhq", get(audio_mpeg_endpoint))
+        .route("/track/lossless", get(audio_flac_endpoint))
+        .route("/track/wav", get(audio_wav_endpoint))
 }
 
 async fn run_test_server() -> TestHttpServer {
@@ -170,6 +198,59 @@ async fn stream_file_seek_reads_expected_bytes(
     })
     .await
     .unwrap();
+}
+
+/// Regression: standalone HTTP file sources used to discard the
+/// container hint from `Content-Type`, yielding `MediaInfo { codec:
+/// Some(_), container: None }`. With Apple-only desktop builds (no
+/// Symphonia fallback) `apple_standalone_supports(codec, None)` is
+/// false → `DecoderFactory` returns `UnsupportedCodec` and the track
+/// fails to load. Production stream URL: `cdn-edge.zvq.me/track/streamhq?id=…`
+/// served as `audio/mpeg`.
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[case("/track/streamhq", AudioCodec::Mp3, ContainerFormat::MpegAudio)]
+#[case("/track/lossless", AudioCodec::Flac, ContainerFormat::Flac)]
+#[case("/track/wav", AudioCodec::Pcm, ContainerFormat::Wav)]
+async fn stream_media_info_carries_container_from_content_type(
+    #[future] test_server: TestHttpServer,
+    temp_dir: TestTempDir,
+    #[case] route: &str,
+    #[case] expected_codec: AudioCodec,
+    #[case] expected_container: ContainerFormat,
+) {
+    let server = test_server.await;
+    let url = server.url(route);
+
+    let config = FileConfig::for_src(url.into())
+        .store(StoreOptions::new(temp_dir.path()))
+        .build();
+    let mut stream = Stream::<File>::new(config).await.unwrap();
+
+    let info = spawn_blocking(move || {
+        let mut primer = [0u8; 1];
+        let _ = stream.read(&mut primer).unwrap();
+        stream.media_info()
+    })
+    .await
+    .unwrap();
+
+    let info = info.expect("media_info must be available once Content-Type arrived");
+    assert_eq!(
+        info.codec,
+        Some(expected_codec),
+        "{route}: codec lost; got {:?}",
+        info.codec
+    );
+    assert_eq!(
+        info.container,
+        Some(expected_container),
+        "{route}: container dropped on the floor (regression — Apple-only build will fail to dispatch); got {:?}",
+        info.container
+    );
 }
 
 #[kithara::test(

@@ -86,7 +86,59 @@ impl MediaInfo {
             variant_index: None,
         }
     }
+
+    /// Parse codec **and** container from an HTTP `Content-Type` value.
+    ///
+    /// Distinct from [`AudioCodec::parse_mime`], which returns the codec
+    /// only. Standalone HTTP file sources can lose container information
+    /// if the caller drops it on the floor; downstream Apple/Android
+    /// dispatch needs both codec and container to pick a backend.
+    #[must_use]
+    pub fn parse_mime(mime: &str) -> Option<Self> {
+        let codec = AudioCodec::parse_mime(mime)?;
+        let container = match mime.to_lowercase().as_str() {
+            "audio/mp4" | "audio/x-m4a" => Some(ContainerFormat::Mp4),
+            "audio/aac" | "audio/aacp" => Some(ContainerFormat::Adts),
+            _ => ContainerFormat::try_from(codec).ok(),
+        };
+        Some(Self::new(Some(codec), container))
+    }
 }
+
+/// Build `MediaInfo` from a codec alone, filling the container when it is
+/// implied by the codec for standalone (non-HLS) sources. AAC and Adpcm
+/// have ambiguous containers and leave `container = None`.
+impl From<AudioCodec> for MediaInfo {
+    fn from(codec: AudioCodec) -> Self {
+        Self::new(Some(codec), ContainerFormat::try_from(codec).ok())
+    }
+}
+
+/// The codec uniquely picks a container for standalone sources.
+/// Mp3→MpegAudio, Pcm→Wav, Flac→Flac, Vorbis/Opus→Ogg, Alac→Caf.
+/// AAC (ADTS vs Mp4) and Adpcm are ambiguous and fail.
+impl TryFrom<AudioCodec> for ContainerFormat {
+    type Error = AmbiguousContainer;
+
+    fn try_from(codec: AudioCodec) -> Result<Self, Self::Error> {
+        match codec {
+            AudioCodec::Mp3 => Ok(Self::MpegAudio),
+            AudioCodec::Pcm => Ok(Self::Wav),
+            AudioCodec::Flac => Ok(Self::Flac),
+            AudioCodec::Vorbis | AudioCodec::Opus => Ok(Self::Ogg),
+            AudioCodec::Alac => Ok(Self::Caf),
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Adpcm => {
+                Err(AmbiguousContainer(codec))
+            }
+        }
+    }
+}
+
+/// Returned by `TryFrom<AudioCodec> for ContainerFormat` when the codec
+/// alone is not enough to determine the container (AAC, Adpcm).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("ambiguous container for codec: {0:?}")]
+pub struct AmbiguousContainer(pub AudioCodec);
 
 impl AudioCodec {
     /// Parse from HLS CODECS attribute value.

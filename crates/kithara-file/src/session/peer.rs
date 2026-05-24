@@ -12,7 +12,7 @@ use kithara_events::{FileError, FileEvent};
 use kithara_net::{Headers, NetError, RangeSpec};
 use kithara_storage::ResourceExt;
 use kithara_stream::{
-    AudioCodec,
+    MediaInfo,
     dl::{FetchCmd, Peer, RequestPriority, reject_html_response},
 };
 
@@ -137,12 +137,12 @@ impl FileInner {
         if let Some(len) = content_length {
             self.source.coord.set_total_bytes(Some(resume_from + len));
         }
-        let codec = headers
+        let info = headers
             .get("content-type")
             .or_else(|| headers.get("Content-Type"))
-            .and_then(AudioCodec::parse_mime);
-        if let Some(c) = codec {
-            let _ = self.content_type_codec.set(c);
+            .and_then(MediaInfo::parse_mime);
+        if let Some(i) = info {
+            let _ = self.content_type_info.set(i);
         }
     }
 
