@@ -71,7 +71,7 @@ enum TrackKind {
 }
 
 /// Build a track spec for `kind`. HLS fixtures get 16 segments ×
-/// 4 s = 64 s of media so SeekNearEnd lands with room before
+/// 4 s = 64 s of media so `SeekNearEnd` lands with room before
 /// natural EOF.
 async fn build_spec(
     helper: &TestServerHelper,
@@ -163,7 +163,7 @@ async fn run_single_backend(
     run_scenario(vec![spec], actions).await;
 }
 
-/// Multi-track helper. Builds N TrackSpecs and appends them to the
+/// Multi-track helper. Builds N `TrackSpecs` and appends them to the
 /// same Queue so scenarios can `SelectAt(idx)` between them. ABR
 /// mode is `Auto(None)` for every track (production default).
 async fn run_multi(helper: &TestServerHelper, kinds: &[TrackKind], actions: Vec<Action>) {
@@ -210,7 +210,7 @@ async fn user_sim_seek_forward_unbuffered_repro(#[case] kind: TrackKind, #[case]
     .await;
 }
 
-/// Bug #6 — backward seek causes silent hang. PlayFor watchdog in
+/// Bug #6 — backward seek causes silent hang. `PlayFor` watchdog in
 /// the harness panics on stuck position.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[case::mp3_file(TrackKind::Mp3File, AbrMode::Auto(None))]
@@ -371,7 +371,7 @@ async fn user_sim_long_play_then_seek_forward(#[case] kind: TrackKind, #[case] a
     run_single(&helper, kind, abr, scenarios::long_play_then_seek_forward()).await;
 }
 
-/// Local repro for the "PastEof on fresh Loaded" race. The user's
+/// Local repro for the "`PastEof` on fresh Loaded" race. The user's
 /// production bug fires on the very first seek after a track changes
 /// status to `Loaded`, before the demuxer has parsed the mvhd box.
 /// `Queue::duration_seconds()` returns `Some(0.0)` in that window, and
@@ -520,7 +520,7 @@ async fn user_sim_switch_track_then_seek(#[case] kinds: &[TrackKind]) {
     run_multi(&helper, kinds, scenarios::switch_track_then_seek()).await;
 }
 
-/// Many SelectAt + seek bounces between two tracks. Lights up the
+/// Many `SelectAt` + seek bounces between two tracks. Lights up the
 /// "previous DRM key state still mounted" path if there is one.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[case::drm_plain(&[TrackKind::HlsAacLcDrmAbr4, TrackKind::HlsAacLcAbr4])]
@@ -879,7 +879,7 @@ async fn user_sim_prod_drm_random_seed_1337() {
 /// PROD DRM — Auto-ABR up-switch + seek burst. **THE** scenario for
 /// the user's manual repro: bug only happens with Auto ABR enabled,
 /// Manual works fine. Plays 15 s so the ABR throughput estimator
-/// commits an UpSwitch, then bursts 4 seeks across the track. Per
+/// commits an `UpSwitch`, then bursts 4 seeks across the track. Per
 /// the user's report each post-switch seek either reaches false-EOF
 /// or hangs. Harness panics on either symptom.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(600)))]
@@ -934,7 +934,7 @@ async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
 /// while the engine is still ramping up. No duration wait, no
 /// `wait_for_position_at_least`, no per-seek-landed wait. The track
 /// must NOT auto-advance. Doesn't matter which underlying bug fires
-/// (SeekOutOfRange + decoder corruption, recreate loop, byte_shift
+/// (`SeekOutOfRange` + decoder corruption, recreate loop, `byte_shift`
 /// mismatch, EOF conflation with decode error, etc.) — the contract
 /// is "scrubbing a queued track stays on that track".
 ///
@@ -1003,7 +1003,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
 /// `Loaded` — no `wait_for_position_at_least` before the seek. This is
 /// what catches the race: Queue knows duration from playlist but the
 /// decoder hasn't parsed the init segment's mvhd yet, so seek targets
-/// past the demuxer-known timestamp fail OutOfRange.
+/// past the demuxer-known timestamp fail `OutOfRange`.
 async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     use kithara_play::SeekOutcome;
     let prod = build_prod_ctx();
@@ -1304,7 +1304,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
 /// `app.log` (line 1849: `[HangDetector] audio_worker_loop no progress
 /// for 10s`). Mirrors the user's manual GUI flow with prod DRM tracks
 /// from `app.yaml`. Codec-agnostic: app.log captured the same hang on
-/// AacLc and Flac variants on different runs.
+/// `AacLc` and Flac variants on different runs.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[ignore = "requires zvuk prod creds + cdn-hls-slicer.zvuk.com reachable"]
 async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
@@ -1314,7 +1314,7 @@ async fn user_sim_prod_drm_multi_track_select_seek_end_hang() {
 /// Companion to the DRM variant on plain (non-encrypted) HLS tracks
 /// from `app.yaml`. Isolation pin: if this fails too, the bug lives
 /// in the generic variant-switch recreate path (`HlsVariant` /
-/// `step_recreating_decoder`), not in the DRM PKCS7 byte_shift seam.
+/// `step_recreating_decoder`), not in the DRM PKCS7 `byte_shift` seam.
 /// If this passes while the DRM variant fails, the bug is DRM-only.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
 #[ignore = "requires plain HLS prod URLs reachable (stream.silvercomet.top + ecs-stage-slicer-01)"]

@@ -635,6 +635,9 @@ fn apply_category_fix(
         if inside_any(c.byte_range.start, macro_spans) {
             continue;
         }
+        if !is_safe_to_autoremove(c) {
+            continue;
+        }
         targets.push(removal_range(src, &c.byte_range));
     }
     if targets.is_empty() {
@@ -650,6 +653,59 @@ fn apply_category_fix(
         }
     }
     Some(buf)
+}
+
+/// A comment is safe to delete via autofix only when its body looks like trivial
+/// restatement of nearby code, with no signal of external-contract documentation
+/// (spec references, byte-format annotations, identifier mentions, version refs).
+/// When in doubt, refuse: lost prose is irreversible — the user can always add a
+/// marker manually for cases the autofix skips.
+fn is_safe_to_autoremove(c: &Comment) -> bool {
+    if c.kind == CommentKind::Block {
+        return false;
+    }
+    if c.line_end != c.line_start {
+        return false;
+    }
+    let body = c.body_trimmed.as_str();
+    if body.is_empty() {
+        return true;
+    }
+    if body.chars().count() > 30 {
+        return false;
+    }
+    if has_value_signal(body) {
+        return false;
+    }
+    true
+}
+
+fn has_value_signal(body: &str) -> bool {
+    if body.chars().filter(char::is_ascii_uppercase).count() >= 2 {
+        return true;
+    }
+    if body.chars().any(|ch| ch.is_ascii_digit()) {
+        return true;
+    }
+    if body.contains('`') || body.contains('=') || body.contains('(') || body.contains(')') {
+        return true;
+    }
+    if body.chars().skip(1).any(|ch| ch == ':') {
+        return true;
+    }
+    let lower = body.to_ascii_lowercase();
+    if lower.starts_with("see ")
+        || lower.contains(" see ")
+        || lower.starts_with("per ")
+        || lower.contains(" per ")
+        || lower.contains(" ref ")
+        || lower.contains("rfc")
+        || lower.contains("spec")
+        || lower.contains("invariant")
+    {
+        return true;
+    }
+    false
 }
 
 fn removal_range(src: &str, comment: &Range<usize>) -> Range<usize> {
@@ -951,5 +1007,107 @@ mod tests {
         let excludes = compile_excludes(&cfg.exclude_paths);
         assert!(path_excluded(&excludes, "crates/foo/build.rs"));
         assert!(!path_excluded(&excludes, "crates/foo/src/lib.rs"));
+    }
+
+    fn run_fix(src: &str) -> Option<String> {
+        let comments = scan_comments(src);
+        let file = parse(src);
+        let macros = collect_macro_spans(&file);
+        apply_category_fix(src, &comments, &macros, &cfg())
+    }
+
+    #[test]
+    fn fix_preserves_esds_descriptor_annotation() {
+        let src = "fn f() {\n    // ES_Descriptor (tag, size)\n    let _ = 1;\n}\n";
+        assert!(
+            run_fix(src).is_none(),
+            "ESDS-style byte-format annotation must be preserved"
+        );
+    }
+
+    #[test]
+    fn fix_preserves_oti_equals_annotation() {
+        let src = "fn f() {\n    // OTI = MPEG-4 Audio\n    let _ = 1;\n}\n";
+        assert!(
+            run_fix(src).is_none(),
+            "spec reference with `=` must be preserved"
+        );
+    }
+
+    #[test]
+    fn fix_preserves_byte_size_note() {
+        let src = "fn f() {\n    // AvgBitrate (4 bytes)\n    let _ = 1;\n}\n";
+        assert!(run_fix(src).is_none(), "byte-size note must be preserved");
+    }
+
+    #[test]
+    fn fix_preserves_backtick_identifier_ref() {
+        let src = "fn f() {\n    // `foo` field\n    let _ = 1;\n}\n";
+        assert!(
+            run_fix(src).is_none(),
+            "backtick identifier ref must be preserved"
+        );
+    }
+
+    #[test]
+    fn fix_preserves_long_explanation() {
+        let src = "fn f() {\n    // long explanation about why this dance is necessary\n    let _ = 1;\n}\n";
+        assert!(
+            run_fix(src).is_none(),
+            "long comment (>30 chars) must be preserved"
+        );
+    }
+
+    #[test]
+    fn fix_preserves_rfc_reference() {
+        let src = "fn f() {\n    // see RFC 6381\n    let _ = 1;\n}\n";
+        assert!(run_fix(src).is_none(), "RFC reference must be preserved");
+    }
+
+    #[test]
+    fn fix_preserves_spec_word() {
+        let src = "fn f() {\n    // per spec\n    let _ = 1;\n}\n";
+        assert!(run_fix(src).is_none(), "spec mention must be preserved");
+    }
+
+    #[test]
+    fn fix_preserves_block_comment_always() {
+        let src = "fn f() {\n    /* foo */\n    let _ = 1;\n}\n";
+        assert!(
+            run_fix(src).is_none(),
+            "block comments must never be autoremoved"
+        );
+    }
+
+    #[test]
+    fn fix_preserves_caps_word() {
+        let src = "fn f() {\n    // ESDS bytes\n    let _ = 1;\n}\n";
+        assert!(
+            run_fix(src).is_none(),
+            "2+ consecutive caps must be preserved"
+        );
+    }
+
+    #[test]
+    fn fix_preserves_invariant_word() {
+        let src = "fn f() {\n    // holds invariant\n    let _ = 1;\n}\n";
+        assert!(
+            run_fix(src).is_none(),
+            "`invariant` reference must be preserved"
+        );
+    }
+
+    #[test]
+    fn fix_still_removes_short_lowercase_prose() {
+        let src = "fn f() {\n    // initialize\n    let x = 1;\n}\n";
+        let out = run_fix(src).expect("fix");
+        assert_eq!(out, "fn f() {\n    let x = 1;\n}\n");
+    }
+
+    #[test]
+    fn fix_still_removes_trailing_short_lowercase() {
+        let src = "fn f() {\n    let x = 5; // unused\n}\n";
+        let out = run_fix(src).expect("fix");
+        assert_eq!(out, "fn f() {\n    let x = 5;\n}\n");
     }
 }

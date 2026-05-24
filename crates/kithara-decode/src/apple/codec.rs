@@ -515,8 +515,8 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     };
     Ok(AppleInputFormat {
         asbd,
-        cookie: Some(esds),
         frames_per_packet,
+        cookie: Some(esds),
     })
 }
 
