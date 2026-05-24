@@ -193,6 +193,8 @@ impl AppleCodec {
         matches!(
             codec,
             AudioCodec::AacLc
+                | AudioCodec::AacHe
+                | AudioCodec::AacHeV2
                 | AudioCodec::Flac
                 | AudioCodec::Pcm
                 | AudioCodec::Mp3
@@ -347,10 +349,15 @@ struct AppleInputFormat {
 /// Build the input ASBD + cookie + frames-per-packet for the given track.
 fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     match track.codec {
-        AudioCodec::AacLc => {
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+            let format_id = match track.codec {
+                AudioCodec::AacHe => Consts::kAudioFormatMPEG4AAC_HE,
+                AudioCodec::AacHeV2 => Consts::kAudioFormatMPEG4AAC_HE_V2,
+                _ => Consts::kAudioFormatMPEG4AAC,
+            };
             let asbd = AudioStreamBasicDescription {
                 mSampleRate: f64::from(track.sample_rate),
-                mFormatID: Consts::kAudioFormatMPEG4AAC,
+                mFormatID: format_id,
                 mFramesPerPacket: Consts::AAC_FRAMES_PER_PACKET,
                 mChannelsPerFrame: u32::from(track.channels),
                 ..Default::default()
