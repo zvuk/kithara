@@ -45,6 +45,7 @@ pub(super) async fn run_tui(queue: Arc<Queue>, config: &crate::config::AppConfig
     let bus = queue.bus().clone();
     let controller = Arc::new(StateController::new(
         Arc::clone(&queue),
+        config.clone(),
         config.cancel.child_token(),
     ));
 

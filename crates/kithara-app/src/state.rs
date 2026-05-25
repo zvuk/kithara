@@ -2,12 +2,19 @@ use std::sync::Arc;
 
 use kithara::{
     abr::AbrHandle,
+    audio::Envelope,
     events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo},
+    prelude::ResourceConfig,
 };
 use kithara_platform::sync::Mutex;
-use kithara_queue::{Queue, QueueEvent, TrackEntry};
+use kithara_queue::{Queue, QueueEvent, TrackEntry, TrackSource};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
+
+use crate::{config::AppConfig, sources::build_resource_config, waveform::analyze};
+
+/// Analysis resolution for the per-track waveform envelope.
+const WAVEFORM_BUCKETS: usize = 1500;
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -24,6 +31,8 @@ pub struct UiState {
     pub abr_variants: Vec<(usize, String)>,
     pub eq_bands: Vec<f32>,
     pub tracks: Vec<TrackEntry>,
+    /// Peak envelope of the current track; `None` until analysed.
+    pub waveform: Option<Envelope>,
     pub abr_mode_is_auto: bool,
     pub is_seeking: bool,
     pub playing: bool,
@@ -56,6 +65,7 @@ impl UiState {
             crossfade: queue.crossfade_duration(),
             crossfade_progress: None,
             eq_bands: vec![0.0; queue.eq_band_count()],
+            waveform: None,
             status_note: None,
             is_seeking: false,
             seek_position: 0.0,
@@ -89,10 +99,16 @@ impl StateController {
     /// `cancel` must be a child of the app master so the listener task
     /// stops when the app shuts down; the controller's `Drop` also
     /// cancels it to stop the listener when the UI tears down first.
-    pub fn new(queue: Arc<Queue>, cancel: CancellationToken) -> Self {
+    /// `config` supplies the shared stores for per-track waveform analysis.
+    pub fn new(queue: Arc<Queue>, config: AppConfig, cancel: CancellationToken) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
 
-        spawn_listener(Arc::clone(&queue), Arc::clone(&state), cancel.clone());
+        spawn_listener(
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            config,
+            cancel.clone(),
+        );
 
         Self {
             queue,
@@ -163,10 +179,18 @@ impl Drop for StateController {
     }
 }
 
-fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: CancellationToken) {
+fn spawn_listener(
+    queue: Arc<Queue>,
+    state: Arc<Mutex<UiState>>,
+    config: AppConfig,
+    cancel: CancellationToken,
+) {
     let mut rx = queue.subscribe();
 
     tokio::spawn(async move {
+        let mut current_analyze: Option<CancellationToken> = None;
+        spawn_analyze(&queue, &state, &config, &cancel, &mut current_analyze);
+
         loop {
             let event = tokio::select! {
                 biased;
@@ -175,12 +199,82 @@ fn spawn_listener(queue: Arc<Queue>, state: Arc<Mutex<UiState>>, cancel: Cancell
             };
 
             match event {
-                Ok(event) => apply_event(event, &queue, &state),
+                Ok(event) => {
+                    let track_changed =
+                        matches!(event, Event::Queue(QueueEvent::CurrentTrackChanged { .. }));
+                    apply_event(event, &queue, &state);
+                    if track_changed {
+                        spawn_analyze(&queue, &state, &config, &cancel, &mut current_analyze);
+                    }
+                }
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             }
         }
     });
+}
+
+/// Analyse the current track, cancelling any in-flight prior analysis.
+/// `cancel` is the listener cancel; each run uses `cancel.child_token()`.
+fn spawn_analyze(
+    queue: &Arc<Queue>,
+    state: &Arc<Mutex<UiState>>,
+    config: &AppConfig,
+    cancel: &CancellationToken,
+    current_analyze: &mut Option<CancellationToken>,
+) {
+    if let Some(prev) = current_analyze.take() {
+        prev.cancel();
+    }
+
+    let track_id = {
+        let st = state.lock_sync();
+        let Some(idx) = st.current_track_index else {
+            return;
+        };
+        let Some(entry) = st.tracks.get(idx) else {
+            return;
+        };
+        entry.id
+    };
+
+    state.lock_sync().waveform = None;
+
+    let Some(source) = queue.track_source(track_id) else {
+        return;
+    };
+    let Some(resource_cfg) = resource_config_from_source(source, config) else {
+        return;
+    };
+
+    let analyze_cancel = cancel.child_token();
+    *current_analyze = Some(analyze_cancel.clone());
+    let state = Arc::clone(state);
+
+    tokio::spawn(async move {
+        let Some(envelope) = analyze(resource_cfg, WAVEFORM_BUCKETS, analyze_cancel).await else {
+            return;
+        };
+        let mut st = state.lock_sync();
+        // Commit only if the analysed track is still current.
+        let current_id = st
+            .current_track_index
+            .and_then(|i| st.tracks.get(i))
+            .map(|entry| entry.id);
+        if current_id == Some(track_id) {
+            st.waveform = Some(envelope);
+        }
+    });
+}
+
+/// Build an analysis resource from a track's source, reusing the shared
+/// stores so the analysis and the player share one download.
+fn resource_config_from_source(source: TrackSource, config: &AppConfig) -> Option<ResourceConfig> {
+    match source {
+        TrackSource::Config(cfg) => Some(*cfg),
+        TrackSource::Uri(url) => build_resource_config(&url, config),
+        _ => None,
+    }
 }
 
 fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {

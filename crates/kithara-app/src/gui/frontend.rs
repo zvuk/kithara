@@ -54,6 +54,7 @@ impl Frontend for GuiFrontend {
         queue.set_tracks(crate::sources::build_sources(&config));
         let controller = Arc::new(crate::state::StateController::new(
             Arc::clone(&queue),
+            config.clone(),
             config.cancel.child_token(),
         ));
 
