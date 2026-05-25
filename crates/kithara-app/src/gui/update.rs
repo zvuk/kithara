@@ -1,10 +1,11 @@
-use iced::Task;
+use iced::{Task, window};
 use kithara::abr::AbrMode;
-use kithara_queue::{TrackId, Transition};
+use kithara_queue::{RepeatMode, TrackId, Transition};
 use tracing::{error, info};
 
 use super::{
     app::Kithara,
+    dj,
     message::{Message, Tab},
 };
 
@@ -13,6 +14,22 @@ fn track_id_at(state: &Kithara, index: usize) -> Option<TrackId> {
 }
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
+    let task = match message {
+        Message::Dj(msg) => dj::handle(state, &msg),
+        Message::WindowCloseRequested(id) => handle_window_close_requested(state, id),
+        other => {
+            handle_player(state, other);
+            Task::none()
+        }
+    };
+
+    state.ui_state = state.controller.snapshot();
+    task
+}
+
+/// All player/UI messages that mutate state without scheduling a follow-up
+/// task. Window/DJ messages are handled separately in [`update`].
+fn handle_player(state: &mut Kithara, message: Message) {
     match message {
         Message::TogglePlayPause => handle_toggle_play_pause(state),
         Message::Next => handle_next(state),
@@ -26,16 +43,24 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
         Message::UrlChanged(text) => handle_url_changed(state, text),
         Message::AddUrl => handle_add_url(state),
         Message::ToggleMute => handle_toggle_mute(state),
+        Message::ToggleShuffle => handle_toggle_shuffle(state),
+        Message::ToggleRepeat => handle_toggle_repeat(state),
         Message::EqResetAll => handle_eq_reset_all(state),
         Message::SelectTrack(idx) => handle_select_track(state, idx),
         Message::DeleteTrack => handle_delete_track(state),
         Message::TabSelected(tab) => handle_tab_selected(state, tab),
         Message::SetAbrMode(variant) => handle_set_abr_mode(state, variant),
         Message::Tick => handle_tick(state),
+        Message::Dj(_) | Message::WindowCloseRequested(_) => {}
     }
+}
 
-    state.ui_state = state.controller.snapshot();
-    Task::none()
+fn handle_window_close_requested(state: &Kithara, id: window::Id) -> Task<Message> {
+    if state.window_id == Some(id) {
+        iced::exit()
+    } else {
+        window::close(id)
+    }
 }
 
 fn handle_toggle_play_pause(state: &Kithara) {
@@ -139,6 +164,24 @@ fn handle_toggle_mute(state: &mut Kithara) {
         };
         handle_volume_changed(state, target);
     }
+}
+
+fn handle_toggle_shuffle(state: &Kithara) {
+    let new = !state.ui_state.shuffle_enabled;
+    state.controller.queue().set_shuffle(new);
+    state.controller.mutate(|st| st.shuffle_enabled = new);
+}
+
+fn handle_toggle_repeat(state: &Kithara) {
+    // `RepeatMode` is non_exhaustive; the wildcard covers `One` and any
+    // future variant, both cycling back to `Off`.
+    let next = match state.ui_state.repeat_mode {
+        RepeatMode::Off => RepeatMode::All,
+        RepeatMode::All => RepeatMode::One,
+        _ => RepeatMode::Off,
+    };
+    state.controller.queue().set_repeat(next);
+    state.controller.mutate(|st| st.repeat_mode = next);
 }
 
 fn handle_eq_reset_all(state: &Kithara) {

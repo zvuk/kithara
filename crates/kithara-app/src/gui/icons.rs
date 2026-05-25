@@ -17,6 +17,9 @@ pub(crate) enum Icon {
     Equalizer,
     Settings,
     MusicNote,
+    Shuffle,
+    Repeat,
+    RepeatOnce,
 }
 
 fn icon_bytes(icon: Icon) -> &'static [u8] {
@@ -32,6 +35,9 @@ fn icon_bytes(icon: Icon) -> &'static [u8] {
         Icon::Equalizer => include_bytes!("../../assets/icons/faders.svg"),
         Icon::Settings => include_bytes!("../../assets/icons/gear.svg"),
         Icon::MusicNote => include_bytes!("../../assets/icons/music-note.svg"),
+        Icon::Shuffle => include_bytes!("../../assets/icons/shuffle.svg"),
+        Icon::Repeat => include_bytes!("../../assets/icons/repeat.svg"),
+        Icon::RepeatOnce => include_bytes!("../../assets/icons/repeat-once.svg"),
     }
 }
 

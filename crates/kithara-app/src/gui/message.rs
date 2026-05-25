@@ -25,6 +25,10 @@ pub(crate) enum Message {
     AddUrl,
     /// Toggle mute state.
     ToggleMute,
+    /// Toggle shuffle on / off.
+    ToggleShuffle,
+    /// Cycle repeat mode (Off -> All -> One -> Off).
+    ToggleRepeat,
     /// Reset all EQ bands to 0 dB.
     EqResetAll,
     /// Select a track from the playlist by index. First click just
@@ -40,6 +44,11 @@ pub(crate) enum Message {
     SetAbrMode(Option<usize>),
     /// Periodic tick from the subscription (100 ms).
     Tick,
+    /// DJ Studio control event (grouped to keep this enum thin).
+    Dj(super::dj::DjMsg),
+    /// System close button on a window. Exits the app only for the live
+    /// window; the mode-swap window is closed programmatically.
+    WindowCloseRequested(iced::window::Id),
 }
 
 /// Tabs in the main content area. Mirrors the iOS reference layout
