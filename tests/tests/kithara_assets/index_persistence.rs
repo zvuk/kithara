@@ -8,7 +8,7 @@ use std::{
 };
 
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey,
+    AssetScope, AssetStoreBuilder, EvictConfig,
     index::schema::{ArchivedAvailabilityFile, ArchivedLruIndexFile, ArchivedPinsIndexFile},
 };
 use kithara_integration_tests::{kithara, temp_dir};
@@ -99,15 +99,15 @@ fn read_archived_availability(path: &Path, asset_root: &str, key: &str) -> Archi
     }
 }
 
-fn build_store(temp_dir: &kithara_integration_tests::TestTempDir, asset_root: &str) -> AssetStore {
+fn build_scope(temp_dir: &kithara_integration_tests::TestTempDir, asset_root: &str) -> AssetScope {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root(Some(asset_root))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
         })
         .build()
+        .scope(asset_root)
 }
 
 /// End-to-end persistence contract: realistic acquire → write →
@@ -121,7 +121,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
     let lru = lru_path(&root);
     let availability = availability_path(&root);
 
-    let store = build_store(&temp_dir, asset_root);
+    let scope = build_scope(&temp_dir, asset_root);
     assert!(
         !pins.exists(),
         "pins.bin must not exist before any activity"
@@ -132,8 +132,11 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
         "availability.bin must not exist before checkpoint()"
     );
 
-    let key_a = ResourceKey::new("segment-a.bin");
-    let res_a = store.acquire_resource(&key_a).expect("acquire segment-a");
+    let key_a = scope.key("segment-a.bin");
+    let res_a = scope
+        .store()
+        .acquire_resource(&key_a, None)
+        .expect("acquire segment-a");
     assert!(
         has_nonempty(&pins),
         "pins.bin must be flushed eagerly after acquire_resource"
@@ -175,7 +178,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
         "commit() must NOT auto-persist availability.bin (explicit checkpoint contract)"
     );
 
-    let ranges_in_memory = store.available_ranges(&key_a);
+    let ranges_in_memory = scope.store().available_ranges(&key_a);
     let as_vec: Vec<(u64, u64)> = ranges_in_memory.iter().map(|r| (r.start, r.end)).collect();
     assert_eq!(
         as_vec,
@@ -183,8 +186,11 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
         "in-memory availability must reflect the committed range"
     );
 
-    let key_b = ResourceKey::new("segment-b.bin");
-    let res_b = store.acquire_resource(&key_b).expect("acquire segment-b");
+    let key_b = scope.key("segment-b.bin");
+    let res_b = scope
+        .store()
+        .acquire_resource(&key_b, None)
+        .expect("acquire segment-b");
     let clock_after_second = read_archived_lru_clock(&lru);
     assert_eq!(
         clock_after_second, clock_after_first,
@@ -198,7 +204,7 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
         !availability.exists(),
         "sanity: still no file pre-checkpoint"
     );
-    store.checkpoint().expect("checkpoint must succeed");
+    scope.store().checkpoint().expect("checkpoint must succeed");
     assert!(
         has_nonempty(&availability),
         "availability.bin must exist and be non-empty after checkpoint()"
@@ -218,8 +224,8 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
         "after dropping the last live resource, no asset_root should remain pinned; got {pinned_after_drop:?}"
     );
 
-    let reopened = build_store(&temp_dir, asset_root);
-    let rehydrated = reopened.available_ranges(&key_a);
+    let reopened = build_scope(&temp_dir, asset_root);
+    let rehydrated = reopened.store().available_ranges(&key_a);
     let rehydrated_vec: Vec<(u64, u64)> = rehydrated.iter().map(|r| (r.start, r.end)).collect();
     assert_eq!(
         rehydrated_vec,
@@ -234,14 +240,14 @@ fn index_files_persisted_during_real_workload(temp_dir: kithara_integration_test
 #[kithara::test(timeout(Duration::from_secs(3)))]
 fn index_files_land_under_root_dir_index(temp_dir: kithara_integration_tests::TestTempDir) {
     let root = temp_dir.path().to_path_buf();
-    let store = build_store(&temp_dir, "basic-asset");
-    let key = ResourceKey::new("one.bin");
+    let scope = build_scope(&temp_dir, "basic-asset");
+    let key = scope.key("one.bin");
     {
-        let res = store.acquire_resource(&key).unwrap();
+        let res = scope.store().acquire_resource(&key, None).unwrap();
         res.write_at(0, b"x").unwrap();
         res.commit(Some(1)).unwrap();
     }
-    store.checkpoint().unwrap();
+    scope.store().checkpoint().unwrap();
 
     for p in [pins_path(&root), lru_path(&root), availability_path(&root)] {
         assert!(

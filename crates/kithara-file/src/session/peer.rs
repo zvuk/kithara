@@ -8,8 +8,10 @@ use std::{
 };
 
 use kithara_abr::Abr;
+use kithara_assets::ProducerHandle;
 use kithara_events::{FileError, FileEvent};
 use kithara_net::{Headers, NetError, RangeSpec};
+use kithara_platform::Mutex;
 use kithara_storage::ResourceExt;
 use kithara_stream::{
     MediaInfo,
@@ -32,14 +34,43 @@ pub(crate) struct FilePeer {
     /// re-polls.
     inflight: Arc<AtomicBool>,
     inner: Arc<FileInner>,
+    /// Single-producer election handle. `Some` only while this peer is
+    /// the elected producer for the shared resource. Starts as the
+    /// attach-time winner (or `None` for a loser); a loser promotes
+    /// itself via [`DemandLease::try_take_producer`] once the previous
+    /// producer drops. When no demand lease was attached (standalone,
+    /// no shared store) the peer always drives — see `poll_next`.
+    producer: Mutex<Option<ProducerHandle>>,
 }
 
 impl FilePeer {
-    pub(crate) fn new(inner: Arc<FileInner>) -> Self {
+    pub(crate) fn new(inner: Arc<FileInner>, producer: Option<ProducerHandle>) -> Self {
         Self {
             inner,
             inflight: Arc::new(AtomicBool::new(false)),
+            producer: Mutex::new(producer),
         }
+    }
+
+    /// Whether this peer may issue GETs for the shared resource.
+    ///
+    /// Resources with no demand lease (standalone store, single
+    /// consumer) always drive. With a lease, only the elected producer
+    /// drives; a non-producer first tries to take over an abandoned slot
+    /// (`try_take_producer`) and otherwise yields to the live producer.
+    fn ensure_producer(&self) -> bool {
+        let Some(lease) = self.inner.demand_lease.as_ref() else {
+            return true;
+        };
+        let mut producer = self.producer.lock_sync();
+        if producer.is_some() {
+            return true;
+        }
+        if let Some(handle) = lease.try_take_producer() {
+            *producer = Some(handle);
+            return true;
+        }
+        false
     }
 
     fn build_fetch_cmd(&self, resume_from: u64) -> FetchCmd {
@@ -105,6 +136,14 @@ impl Peer for FilePeer {
         let Some(gap_start) = self.inner.next_gap_start() else {
             return Poll::Ready(None);
         };
+        // A gap remains. Only the elected producer issues GETs so two
+        // consumers of one shared resource (e.g. player + waveform) share
+        // a single download. A non-producer yields and re-polls on the
+        // next downloader tick (a sibling fetch completing), which also
+        // covers producer handoff after the original producer drops.
+        if !self.ensure_producer() {
+            return Poll::Pending;
+        }
         self.inflight.store(true, Ordering::Release);
         self.inner.set_phase(FilePhase::Downloading);
         Poll::Ready(Some(vec![self.build_fetch_cmd(gap_start)]))

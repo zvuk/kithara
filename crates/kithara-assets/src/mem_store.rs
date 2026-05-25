@@ -15,20 +15,41 @@ use crate::{
     base::{Assets, Capabilities},
     deleter::AssetDeleter,
     error::{AssetsError, AssetsResult},
+    identity::RequestIdentity,
     index::{AvailabilityIndex, ScopedAvailabilityObserver},
     key::ResourceKey,
 };
 
+/// Composite cache key for mem-backed active resources.
+///
+/// Identity is part of the key so distinct request identities under the
+/// same resource key yield distinct inflight handles. The `ResourceKey`
+/// already carries the asset namespace. See the inflight sharing
+/// contract in `README.md`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct MemCacheKey {
+    key: ResourceKey,
+    identity: Option<RequestIdentity>,
+}
+
+impl MemCacheKey {
+    fn new(key: &ResourceKey, identity: Option<&RequestIdentity>) -> Self {
+        Self {
+            key: key.clone(),
+            identity: identity.cloned(),
+        }
+    }
+}
+
 /// In-memory [`Assets`] implementation.
 ///
-/// Shares existing [`MemResource`] instances for the same key via an internal
-/// weak cache. This ensures that multiple handles to the same resource share
-/// the same underlying data and status, even if the primary handle is
-/// evicted from [`CachedAssets`](crate::cache::CachedAssets).
+/// Shares existing [`MemResource`] instances for the same composite key
+/// (`asset_root`, `ResourceKey`, `RequestIdentity`) via an internal weak
+/// cache. Distinct `asset_roots` stay isolated by construction.
 #[derive(Clone, Debug)]
 pub struct MemAssetStore {
     /// Weak cache of active resources to ensure sharing.
-    active_resources: Arc<DashMap<String, Weak<MemResource>>>,
+    active_resources: Arc<DashMap<MemCacheKey, Weak<MemResource>>>,
     /// Single canonical removal channel. Synchronises in-memory
     /// `active_resources` clearing with the [`AvailabilityIndex`].
     /// See [`crate::deleter`].
@@ -36,59 +57,45 @@ pub struct MemAssetStore {
     availability: AvailabilityIndex,
     cancel: CancellationToken,
     mem_resource_capacity: Option<usize>,
-    asset_root: String,
 }
 
-/// Mem-backed [`AssetDeleter`].
-///
-/// Scoped to a single `own_asset_root` because mem backends are
-/// single-asset by construction. Foreign-asset deletion only touches
-/// the shared in-memory indexes — there are no per-resource handles
-/// for a foreign `asset_root` in this backend instance.
 #[derive(Debug)]
 pub(crate) struct MemAssetDeleter {
-    active_resources: Arc<DashMap<String, Weak<MemResource>>>,
+    active_resources: Arc<DashMap<MemCacheKey, Weak<MemResource>>>,
     availability: AvailabilityIndex,
     lru: crate::index::LruIndex,
     pins: crate::index::PinsIndex,
-    own_asset_root: String,
 }
 
 impl MemAssetDeleter {
     pub(crate) fn new(
-        own_asset_root: String,
         availability: AvailabilityIndex,
         pins: crate::index::PinsIndex,
         lru: crate::index::LruIndex,
-        active_resources: Arc<DashMap<String, Weak<MemResource>>>,
+        active_resources: Arc<DashMap<MemCacheKey, Weak<MemResource>>>,
     ) -> Self {
         Self {
             active_resources,
             availability,
             lru,
             pins,
-            own_asset_root,
         }
     }
 }
 
 impl AssetDeleter for MemAssetDeleter {
     fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
-        if asset_root == self.own_asset_root {
-            self.active_resources.clear();
-        }
+        self.active_resources
+            .retain(|k, _| k.key.asset_root() != Some(asset_root));
         self.availability.clear_root(asset_root);
         let pins_result = self.pins.remove(asset_root).map(|_| ());
         let lru_result = self.lru.remove(asset_root);
         pins_result.and(lru_result)
     }
 
-    fn remove_resource(&self, asset_root: &str, key: &ResourceKey) -> AssetsResult<()> {
-        if asset_root == self.own_asset_root {
-            self.active_resources
-                .remove(&MemAssetStore::resource_cache_key(key));
-        }
-        self.availability.remove(asset_root, key);
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        self.active_resources.retain(|k, _| k.key != *key);
+        self.availability.remove(key);
         Ok(())
     }
 }
@@ -96,14 +103,13 @@ impl AssetDeleter for MemAssetDeleter {
 impl MemAssetStore {
     /// Create a new in-memory asset store with its own unshared
     /// [`AvailabilityIndex`].
-    pub fn new<S: Into<String>>(
-        asset_root: S,
+    #[must_use]
+    pub fn new(
         cancel: CancellationToken,
         mem_resource_capacity: Option<usize>,
         pool: &kithara_bufpool::BytePool,
     ) -> Self {
         Self::with_availability(
-            asset_root,
             cancel,
             mem_resource_capacity,
             AvailabilityIndex::new(),
@@ -111,44 +117,29 @@ impl MemAssetStore {
         )
     }
 
-    pub(crate) fn resource_cache_key(key: &ResourceKey) -> String {
-        match key {
-            ResourceKey::Relative(path) => path.clone(),
-            ResourceKey::Absolute(path) => path.to_string_lossy().to_string(),
-        }
-    }
-
     fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
-        ScopedAvailabilityObserver::new(
-            self.asset_root.clone(),
-            key.clone(),
-            self.availability.clone(),
-        )
+        ScopedAvailabilityObserver::new(key.clone(), self.availability.clone())
     }
 
     /// Like [`MemAssetStore::new`] but shares the given aggregate
     /// availability handle.
-    pub(crate) fn with_availability<S: Into<String>>(
-        asset_root: S,
+    pub(crate) fn with_availability(
         cancel: CancellationToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
         pool: &kithara_bufpool::BytePool,
     ) -> Self {
-        let asset_root = asset_root.into();
         let active_resources = Arc::new(DashMap::new());
         let _ = pool;
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         let deleter: Arc<dyn AssetDeleter> = Arc::new(MemAssetDeleter::new(
-            asset_root.clone(),
             availability.clone(),
             pins,
             lru,
             Arc::clone(&active_resources),
         ));
         Self::with_availability_and_deleter(
-            asset_root,
             cancel,
             mem_resource_capacity,
             availability,
@@ -160,21 +151,19 @@ impl MemAssetStore {
     /// Like [`Self::with_availability`] but accepts a pre-built
     /// [`AssetDeleter`] so the production builder can share the same
     /// deleter instance with the LRU evictor (`EvictAssets`).
-    pub(crate) fn with_availability_and_deleter<S: Into<String>>(
-        asset_root: S,
+    pub(crate) fn with_availability_and_deleter(
         cancel: CancellationToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
-        active_resources: Arc<DashMap<String, Weak<MemResource>>>,
+        active_resources: Arc<DashMap<MemCacheKey, Weak<MemResource>>>,
         deleter: Arc<dyn AssetDeleter>,
     ) -> Self {
         Self {
-            cancel,
-            mem_resource_capacity,
-            availability,
             active_resources,
             deleter,
-            asset_root: asset_root.into(),
+            availability,
+            cancel,
+            mem_resource_capacity,
         }
     }
 }
@@ -187,15 +176,14 @@ impl Assets for MemAssetStore {
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        if let ResourceKey::Relative(rel) = key
-            && rel.is_empty()
-        {
+        if key.rel_path().is_some_and(str::is_empty) {
             return Err(AssetsError::InvalidKey);
         }
 
-        let cache_key = Self::resource_cache_key(key);
+        let cache_key = MemCacheKey::new(key, identity);
         if let Some(weak) = self.active_resources.get(&cache_key)
             && let Some(res) = weak.upgrade()
         {
@@ -222,16 +210,12 @@ impl Assets for MemAssetStore {
         Ok(StorageResource::from((*shared).clone()))
     }
 
-    fn asset_root(&self) -> &str {
-        &self.asset_root
-    }
-
     fn capabilities(&self) -> Capabilities {
         Capabilities::CACHE | Capabilities::PROCESSING
     }
 
-    fn delete_asset(&self) -> AssetsResult<()> {
-        self.deleter.delete_asset(&self.asset_root)
+    fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
+        self.deleter.delete_asset(asset_root)
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
@@ -245,15 +229,14 @@ impl Assets for MemAssetStore {
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        if let ResourceKey::Relative(rel) = key
-            && rel.is_empty()
-        {
+        if key.rel_path().is_some_and(str::is_empty) {
             return Err(AssetsError::InvalidKey);
         }
 
-        let cache_key = Self::resource_cache_key(key);
+        let cache_key = MemCacheKey::new(key, identity);
         if let Some(weak) = self.active_resources.get(&cache_key)
             && let Some(res) = weak.upgrade()
         {
@@ -264,13 +247,11 @@ impl Assets for MemAssetStore {
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.deleter.remove_resource(&self.asset_root, key)
+        self.deleter.remove_resource(key)
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        if let ResourceKey::Relative(rel) = key
-            && rel.is_empty()
-        {
+        if key.rel_path().is_some_and(str::is_empty) {
             return Err(AssetsError::InvalidKey);
         }
 
@@ -291,29 +272,24 @@ mod tests {
     use super::*;
 
     fn make_mem_store() -> MemAssetStore {
-        MemAssetStore::new(
-            "test_asset",
-            CancellationToken::new(),
-            None,
-            &crate::BytePool::default(),
-        )
+        MemAssetStore::new(CancellationToken::new(), None, &crate::BytePool::default())
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn acquire_creates_mem_resource() {
         let store = make_mem_store();
-        let key = ResourceKey::new("seg_0.m4s");
+        let key = ResourceKey::relative("test_asset", "seg_0.m4s");
 
-        let res = store.acquire_resource(&key).unwrap();
+        let res = store.acquire_resource(&key, None).unwrap();
         assert!(matches!(res, StorageResource::Mem(_)));
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn write_commit_read_roundtrip() {
         let store = make_mem_store();
-        let key = ResourceKey::new("seg_0.m4s");
+        let key = ResourceKey::relative("test_asset", "seg_0.m4s");
 
-        let res = store.acquire_resource(&key).unwrap();
+        let res = store.acquire_resource(&key, None).unwrap();
         res.write_at(0, b"segment data").unwrap();
         res.commit(Some(12)).unwrap();
 
@@ -326,9 +302,9 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn no_path_for_mem_resources() {
         let store = make_mem_store();
-        let key = ResourceKey::new("seg_0.m4s");
+        let key = ResourceKey::relative("test_asset", "seg_0.m4s");
 
-        let res = store.acquire_resource(&key).unwrap();
+        let res = store.acquire_resource(&key, None).unwrap();
         assert!(res.path().is_none());
     }
 

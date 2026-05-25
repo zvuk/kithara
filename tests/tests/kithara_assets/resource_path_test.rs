@@ -2,21 +2,21 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
+    assets::{AssetScope, AssetStoreBuilder, EvictConfig},
     storage::ResourceExt,
 };
 use kithara_integration_tests::{TestTempDir, temp_dir};
 use kithara_platform::time::Duration;
 
-fn asset_store_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetStore {
+fn asset_scope_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetScope {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root(Some(asset_root))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
         })
         .build()
+        .scope(asset_root)
 }
 
 /// Writes to `asset_resource` via either `write_all` (atomic) or
@@ -38,10 +38,11 @@ fn asset_resource_path_method(
     #[case] resource_name: &str,
     #[case] write_mode: WriteMode,
 ) {
-    let asset_store = asset_store_with_root(&temp_dir, "test-asset");
-    let key = ResourceKey::new(resource_name);
-    let asset_resource = asset_store
-        .acquire_resource(&key)
+    let scope = asset_scope_with_root(&temp_dir, "test-asset");
+    let key = scope.key(resource_name);
+    let asset_resource = scope
+        .store()
+        .acquire_resource(&key, None)
         .expect("Failed to open resource");
 
     match write_mode {
@@ -61,7 +62,7 @@ fn asset_resource_path_method(
     }
 
     let asset_path = asset_resource.path().unwrap();
-    let root_dir = asset_store.root_dir();
+    let root_dir = scope.store().root_dir();
 
     assert!(asset_path.starts_with(root_dir));
     let expected_suffix = format!("test-asset/{resource_name}");
@@ -77,10 +78,11 @@ fn asset_resource_path_method(
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
 fn asset_resource_path_consistency(temp_dir: TestTempDir) {
-    let asset_store = asset_store_with_root(&temp_dir, "test-asset");
-    let key = ResourceKey::new("data.bin");
-    let asset_resource = asset_store
-        .acquire_resource(&key)
+    let scope = asset_scope_with_root(&temp_dir, "test-asset");
+    let key = scope.key("data.bin");
+    let asset_resource = scope
+        .store()
+        .acquire_resource(&key, None)
         .expect("Failed to open resource");
 
     let asset_path = asset_resource.path().unwrap();
@@ -102,14 +104,15 @@ fn asset_resource_path_consistency(temp_dir: TestTempDir) {
 fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempDir) {
     let asset_root = "my-asset";
     let resource_name = "subdir/file.txt";
-    let asset_store = asset_store_with_root(&temp_dir, asset_root);
-    let key = ResourceKey::new(resource_name);
-    let asset_resource = asset_store
-        .acquire_resource(&key)
+    let scope = asset_scope_with_root(&temp_dir, asset_root);
+    let key = scope.key(resource_name);
+    let asset_resource = scope
+        .store()
+        .acquire_resource(&key, None)
         .expect("Failed to open resource");
 
     let path = asset_resource.path().unwrap();
-    let root_dir = asset_store.root_dir();
+    let root_dir = scope.store().root_dir();
 
     assert!(path.starts_with(root_dir));
 
@@ -128,16 +131,18 @@ fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempD
 )]
 fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir) {
     let asset_root = "shared-asset";
-    let asset_store = asset_store_with_root(&temp_dir, asset_root);
+    let scope = asset_scope_with_root(&temp_dir, asset_root);
 
-    let key1 = ResourceKey::new("resource1.bin");
-    let resource1 = asset_store
-        .acquire_resource(&key1)
+    let key1 = scope.key("resource1.bin");
+    let resource1 = scope
+        .store()
+        .acquire_resource(&key1, None)
         .expect("Failed to open resource1");
 
-    let key2 = ResourceKey::new("resource2.bin");
-    let resource2 = asset_store
-        .acquire_resource(&key2)
+    let key2 = scope.key("resource2.bin");
+    let resource2 = scope
+        .store()
+        .acquire_resource(&key2, None)
         .expect("Failed to open resource2");
 
     assert_ne!(resource1.path(), resource2.path());

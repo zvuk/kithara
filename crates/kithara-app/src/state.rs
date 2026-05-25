@@ -85,9 +85,12 @@ pub struct StateController {
 impl StateController {
     /// Build a controller and start the listener task that mirrors
     /// queue events into [`UiState`].
-    pub fn new(queue: Arc<Queue>) -> Self {
+    ///
+    /// `cancel` must be a child of the app master so the listener task
+    /// stops when the app shuts down; the controller's `Drop` also
+    /// cancels it to stop the listener when the UI tears down first.
+    pub fn new(queue: Arc<Queue>, cancel: CancellationToken) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
-        let cancel = CancellationToken::new(); // kithara:cancel:owner
 
         spawn_listener(Arc::clone(&queue), Arc::clone(&state), cancel.clone());
 

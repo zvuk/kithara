@@ -67,6 +67,7 @@ impl FileSource {
                     .expect("BUG: hard-coded literal `file:///local` is a valid URL"),
             },
             FilePhase::Complete,
+            None,
         ));
         if let Some(codec) = cached_codec {
             let _ = inner.content_type_info.set(MediaInfo::from(codec));

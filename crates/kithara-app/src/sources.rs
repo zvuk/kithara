@@ -55,6 +55,8 @@ pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
             let cfg = builder
                 .downloader(config.downloader.clone())
                 .flush_hub(config.flush_hub.clone())
+                .file_asset_store(config.file_asset_store.clone())
+                .hls_asset_store(config.hls_asset_store.clone())
                 .keys(keys)
                 .maybe_headers(headers)
                 .size_probe_method(config.size_probe_method)

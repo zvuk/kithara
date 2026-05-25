@@ -9,7 +9,9 @@ use kithara_platform::{
 };
 use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
-use crate::{AssetResourceState, AssetsResult, ResourceKey, base::Assets};
+use crate::{
+    AssetResourceState, AssetsResult, ResourceKey, base::Assets, identity::RequestIdentity,
+};
 
 /// Constants for streaming processing (64KB, multiple of AES block size 16).
 struct Consts;
@@ -377,28 +379,29 @@ where
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        Ok(self.wrap(self.inner.acquire_resource(key)?, ctx))
+        Ok(self.wrap(self.inner.acquire_resource(key, identity)?, ctx))
     }
 
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        identity: Option<&RequestIdentity>,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        Ok(self.wrap(self.inner.open_resource(key)?, ctx))
+        Ok(self.wrap(self.inner.open_resource(key, identity)?, ctx))
     }
 
     delegate::delegate! {
         to self.inner {
             fn capabilities(&self) -> crate::base::Capabilities;
             fn root_dir(&self) -> &Path;
-            fn asset_root(&self) -> &str;
             fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
             fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState>;
-            fn delete_asset(&self) -> AssetsResult<()>;
+            fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
             fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
         }
     }
@@ -607,23 +610,21 @@ mod tests {
         );
 
         let store = AssetStoreBuilder::new()
-            .asset_root(Some("drm-fallthrough"))
             .process_fn(process_fn)
             .ephemeral(true)
             .build();
-
-        let key = ResourceKey::new("segment.m4s");
+        let key = ResourceKey::relative("drm-fallthrough", "segment.m4s");
         let ctx = DrmCtx { xor_key: 0x42 };
 
         let writer = store
-            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
             .expect("BUG: acquire with ctx must succeed");
         let payload = b"uncommitted encrypted bytes";
         writer
             .write_at(0, payload)
             .expect("BUG: writer must be able to stream bytes before commit");
 
-        match store.open_resource(&key) {
+        match store.open_resource(&key, None) {
             Err(err) => {
                 let msg = err.to_string();
                 assert!(
@@ -797,20 +798,18 @@ mod tests {
         );
 
         let store = AssetStoreBuilder::new()
-            .asset_root(Some("drm-reactivate-poisons-reader"))
             .process_fn(process_fn)
             .ephemeral(true)
             .cache_capacity(NonZeroUsize::new(4).expect("BUG: nonzero"))
             .build();
-
-        let key = ResourceKey::new("segment-0.m4s");
+        let key = ResourceKey::relative("drm-reactivate-poisons-reader", "segment-0.m4s");
         let ctx = DrmCtx { xor_key: 0x42 };
         let plaintext = b"hello drm world";
         let ciphertext: Vec<u8> = plaintext.iter().map(|b| b ^ 0x42).collect();
 
         {
             let a = store
-                .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+                .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
                 .expect("BUG: writer A acquire");
             a.write_at(0, &ciphertext).expect("BUG: writer A write");
             a.commit(Some(ciphertext.len() as u64))
@@ -824,7 +823,7 @@ mod tests {
         );
 
         let reader = store
-            .open_resource(&key)
+            .open_resource(&key, None)
             .expect("BUG: reader open_resource after commit");
 
         let mut probe = vec![0u8; ciphertext.len()];
@@ -840,7 +839,7 @@ mod tests {
         );
 
         let _writer_b = store
-            .acquire_resource_with_ctx(&key, Some(ctx.clone()))
+            .acquire_resource_with_ctx(&key, None, Some(ctx.clone()))
             .expect("BUG: writer B reacquire");
 
         assert!(

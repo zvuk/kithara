@@ -1,6 +1,6 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_assets::{AssetResource, AssetStoreBuilder, ResourceKey};
+use kithara_assets::{AssetResource, AssetStoreBuilder};
 use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_storage::{ResourceExt, WaitOutcome};
@@ -22,11 +22,10 @@ fn make_coord(timeline: Timeline) -> Arc<FileCoord> {
 fn make_source(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
     let backend = Arc::new(
         AssetStoreBuilder::new()
-            .asset_root(None)
             .cancel(CancellationToken::new())
             .build(),
     );
-    let key = ResourceKey::new("test-source");
+    let key = backend.scope("test").key("test-source");
     FileSource::local(
         res,
         coord,
@@ -75,12 +74,11 @@ fn file_coord_total_bytes_roundtrip() {
 fn create_committed_resource(data: &[u8]) -> AssetResource {
     let store = AssetStoreBuilder::new()
         .ephemeral(true)
-        .asset_root(Some("test"))
         .cancel(CancellationToken::new())
         .build();
 
-    let key = ResourceKey::new("test.dat");
-    let res = store.acquire_resource(&key).unwrap();
+    let key = store.scope("test").key("test.dat");
+    let res = store.acquire_resource(&key, None).unwrap();
     res.write_at(0, data).unwrap();
     res.commit(Some(data.len() as u64)).unwrap();
     res

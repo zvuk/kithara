@@ -18,6 +18,7 @@ use crate::{
     base::{Assets, Capabilities},
     deleter::AssetDeleter,
     error::{AssetsError, AssetsResult},
+    identity::RequestIdentity,
     index::AvailabilityIndex,
     key::ResourceKey,
     state::AssetResourceState,
@@ -26,10 +27,10 @@ use crate::{
 /// Initial mmap file size for index resources (4 KB).
 const INDEX_INITIAL_SIZE: u64 = 4096;
 
-/// Concrete on-disk [`Assets`] implementation for a single asset.
+/// Concrete on-disk [`Assets`] implementation.
 ///
-/// Maps [`ResourceKey`] to disk paths under a root directory.
-/// Each `DiskAssetStore` is scoped to a single `asset_root`.
+/// One `DiskAssetStore` services every asset under its `root_dir`;
+/// `asset_root` is a per-call parameter.
 #[derive(Clone, Debug)]
 pub struct DiskAssetStore {
     /// Single canonical removal channel. Synchronises FS deletion with
@@ -38,7 +39,6 @@ pub struct DiskAssetStore {
     availability: AvailabilityIndex,
     cancel: CancellationToken,
     root_dir: PathBuf,
-    asset_root: String,
 }
 
 /// Disk-backed [`AssetDeleter`].
@@ -86,11 +86,14 @@ impl AssetDeleter for DiskAssetDeleter {
         fs_result.and(pins_result).and(lru_result)
     }
 
-    fn remove_resource(&self, asset_root: &str, key: &ResourceKey) -> AssetsResult<()> {
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
         let path = match key {
-            ResourceKey::Relative(rel) => {
+            ResourceKey::Relative {
+                asset_root,
+                rel_path,
+            } => {
                 let safe_root = sanitize_rel(asset_root).map_err(|()| AssetsError::InvalidKey)?;
-                let safe_rel = sanitize_rel(rel).map_err(|()| AssetsError::InvalidKey)?;
+                let safe_rel = sanitize_rel(rel_path).map_err(|()| AssetsError::InvalidKey)?;
                 self.root_dir.join(safe_root).join(safe_rel)
             }
             ResourceKey::Absolute(path) => path.clone(),
@@ -100,21 +103,18 @@ impl AssetDeleter for DiskAssetDeleter {
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
         };
-        self.availability.remove(asset_root, key);
+        self.availability.remove(key);
         result
     }
 }
 
 impl DiskAssetStore {
-    /// Create a store rooted at `root_dir` for a specific `asset_root`
-    /// with its own unshared [`AvailabilityIndex`]. Convenient for
-    /// tests and the `internal` feature surface; production
+    /// Create a store rooted at `root_dir` with its own unshared
+    /// [`AvailabilityIndex`]. Convenient for tests; production
     /// construction (via `AssetStoreBuilder::build`) uses
-    /// [`DiskAssetStore::with_availability`] to share the aggregate
-    /// with the enum variant.
-    pub fn new<P: Into<PathBuf>, S: Into<String>>(
+    /// [`DiskAssetStore::with_availability_and_deleter`].
+    pub fn new<P: Into<PathBuf>>(
         root_dir: P,
-        asset_root: S,
         cancel: CancellationToken,
         _pool: &kithara_bufpool::BytePool,
     ) -> Self {
@@ -128,12 +128,7 @@ impl DiskAssetStore {
             pins,
             lru,
         ));
-        Self::with_availability_and_deleter(root_dir, asset_root, cancel, availability, deleter)
-    }
-
-    #[must_use]
-    pub fn asset_root(&self) -> &str {
-        &self.asset_root
+        Self::with_availability_and_deleter(root_dir, cancel, availability, deleter)
     }
 
     /// Persist the current [`AvailabilityIndex`] snapshot to
@@ -209,7 +204,7 @@ impl DiskAssetStore {
             final_len: Some(len),
         } = resource.status()
         {
-            self.availability.record_commit(&self.asset_root, key, len);
+            self.availability.record_commit(key, len);
         }
         Ok(resource)
     }
@@ -220,11 +215,14 @@ impl DiskAssetStore {
 
     fn resource_path(&self, key: &ResourceKey) -> AssetsResult<PathBuf> {
         match key {
-            ResourceKey::Relative(rel) => {
-                let asset_root =
-                    sanitize_rel(&self.asset_root).map_err(|()| AssetsError::InvalidKey)?;
-                let rel_path = sanitize_rel(rel).map_err(|()| AssetsError::InvalidKey)?;
-                Ok(self.root_dir.join(asset_root).join(rel_path))
+            ResourceKey::Relative {
+                asset_root,
+                rel_path,
+            } => {
+                let asset_root_safe =
+                    sanitize_rel(asset_root).map_err(|()| AssetsError::InvalidKey)?;
+                let rel = sanitize_rel(rel_path).map_err(|()| AssetsError::InvalidKey)?;
+                Ok(self.root_dir.join(asset_root_safe).join(rel))
             }
             ResourceKey::Absolute(path) => Ok(path.clone()),
         }
@@ -236,11 +234,7 @@ impl DiskAssetStore {
     }
 
     fn scoped_observer(&self, key: &ResourceKey) -> Arc<dyn AvailabilityObserver> {
-        crate::index::ScopedAvailabilityObserver::new(
-            self.asset_root.clone(),
-            key.clone(),
-            self.availability.clone(),
-        )
+        crate::index::ScopedAvailabilityObserver::new(key.clone(), self.availability.clone())
     }
 
     /// Like [`DiskAssetStore::new`] but shares the given aggregate
@@ -259,9 +253,8 @@ impl DiskAssetStore {
     /// share one [`Arc<dyn AssetDeleter>`] between the store and the
     /// LRU evictor; tests construct a fresh deleter via
     /// [`Self::new`].
-    pub(crate) fn with_availability_and_deleter<P: Into<PathBuf>, S: Into<String>>(
+    pub(crate) fn with_availability_and_deleter<P: Into<PathBuf>>(
         root_dir: P,
-        asset_root: S,
         cancel: CancellationToken,
         availability: AvailabilityIndex,
         deleter: Arc<dyn AssetDeleter>,
@@ -271,7 +264,6 @@ impl DiskAssetStore {
             availability,
             deleter,
             root_dir: root_dir.into(),
-            asset_root: asset_root.into(),
         }
     }
 }
@@ -284,6 +276,7 @@ impl Assets for DiskAssetStore {
     fn acquire_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        _identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
@@ -300,23 +293,15 @@ impl Assets for DiskAssetStore {
         Ok(StorageResource::from(chunked))
     }
 
-    fn asset_root(&self) -> &str {
-        &self.asset_root
-    }
-
     fn capabilities(&self) -> Capabilities {
-        if self.asset_root.is_empty() {
-            Capabilities::PROCESSING
-        } else {
-            Capabilities::all()
-        }
+        Capabilities::all()
     }
 
-    fn delete_asset(&self) -> AssetsResult<()> {
+    fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
         if self.cancel.is_cancelled() {
             return Err(StorageError::Cancelled.into());
         }
-        self.deleter.delete_asset(&self.asset_root)
+        self.deleter.delete_asset(asset_root)
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<MmapResource> {
@@ -332,6 +317,7 @@ impl Assets for DiskAssetStore {
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
+        _identity: Option<&RequestIdentity>,
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
@@ -343,7 +329,7 @@ impl Assets for DiskAssetStore {
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.deleter.remove_resource(&self.asset_root, key)
+        self.deleter.remove_resource(key)
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
@@ -432,13 +418,12 @@ mod tests {
 
         let store = DiskAssetStore::new(
             dir.path().join("cache"),
-            "_",
             CancellationToken::new(),
             &crate::BytePool::default(),
         );
 
         let key = ResourceKey::absolute(&file_path);
-        let res = store.open_resource(&key).unwrap();
+        let res = store.open_resource(&key, None).unwrap();
 
         assert!(matches!(res.status(), ResourceStatus::Committed { .. }));
 

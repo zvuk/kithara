@@ -1,8 +1,13 @@
 use std::{fmt, sync::Arc};
 
 use bon::Builder;
-use kithara::{assets::FlushHub, hls::SizeProbeMethod, stream::dl::Downloader};
+use kithara::{
+    assets::{AssetStore, FlushHub, StoreOptions},
+    hls::{HlsStore, SizeProbeMethod},
+    stream::dl::Downloader,
+};
 use kithara_drm::KeyProcessorRegistry;
+use tokio_util::sync::CancellationToken;
 
 use crate::{baked, theme::Palette};
 
@@ -21,6 +26,16 @@ pub struct AppConfig {
     pub flush_hub: Arc<FlushHub>,
     /// Shared HTTP downloader for every track.
     pub downloader: Downloader,
+    /// App master cancel. Single owner for the whole app subtree; the
+    /// queue, player, stores, and UI listener all derive children from
+    /// it (see `main.rs`).
+    pub cancel: CancellationToken,
+    /// App-wide shared file store: concurrent consumers of one URL
+    /// (player + waveform) share a single download and cache surface.
+    pub file_asset_store: Arc<AssetStore>,
+    /// App-wide shared HLS store (shared cache + DRM `process_fn` +
+    /// per-`asset_root` eviction routing).
+    pub hls_asset_store: HlsStore,
     /// DRM key processing registry.
     #[builder(default = baked::build_baked_drm_registry())]
     pub key_registry: KeyProcessorRegistry,
@@ -74,14 +89,31 @@ impl fmt::Debug for AppConfig {
 }
 
 impl AppConfig {
-    /// Create a default config around the given downloader and shared
-    /// flush hub. Every other field defaults to its `app.toml` baked
-    /// value; override via the generated `with_*` setters.
+    /// Create a default config around the given downloader, shared flush
+    /// hub, and app master cancel. Builds the app-wide file and HLS
+    /// stores as children of `cancel` so every track shares one cache
+    /// and one download per URL. Every other field defaults to its
+    /// `app.toml` baked value; override via the generated `with_*`
+    /// setters.
     #[must_use]
-    pub fn new(downloader: Downloader, flush_hub: Arc<FlushHub>) -> Self {
+    pub fn new(
+        downloader: Downloader,
+        flush_hub: Arc<FlushHub>,
+        cancel: CancellationToken,
+    ) -> Self {
+        let store_options = StoreOptions::default_builder()
+            .flush_hub(Arc::clone(&flush_hub))
+            .build();
+        let file_asset_store =
+            kithara::file::build_shared_asset_store(&store_options, cancel.child_token());
+        let hls_asset_store =
+            kithara::hls::build_shared_asset_store(&store_options, None, cancel.child_token());
         Self::builder()
             .downloader(downloader)
             .flush_hub(flush_hub)
+            .cancel(cancel)
+            .file_asset_store(file_asset_store)
+            .hls_asset_store(hls_asset_store)
             .build()
     }
 

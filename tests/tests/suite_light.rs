@@ -44,6 +44,8 @@ mod kithara_file {
     mod early_stream_close;
     mod file_source;
     mod html_error_cleanup;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod shared_download;
 }
 
 mod kithara_hls {

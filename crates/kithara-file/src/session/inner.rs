@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
-use kithara_assets::{AssetResource, AssetStore, ResourceKey};
+use kithara_assets::{AssetResource, AssetStore, DemandLease, ResourceKey};
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
@@ -27,12 +27,13 @@ pub(crate) struct FileStreamState {
 impl FileStreamState {
     pub(crate) fn create(
         assets: &Arc<AssetStore>,
-        url: &Url,
+        key: ResourceKey,
         bus: Option<EventBus>,
         event_channel_capacity: usize,
     ) -> Result<Self, SourceError> {
-        let key = ResourceKey::from(url);
-        let res = assets.acquire_resource(&key).map_err(SourceError::Assets)?;
+        let res = assets
+            .acquire_resource(&key, None)
+            .map_err(SourceError::Assets)?;
         let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
         Ok(Self {
             bus,
@@ -89,6 +90,13 @@ pub(crate) struct FileInner {
     /// (no `moof` chain), or while the file is still downloading.
     pub(crate) segment_index: OnceLock<FileSegmentIndex>,
 
+    /// Consumer demand lease held for this source's lifetime. `Some` on
+    /// the remote-download path: it keeps the demand slot alive and lets
+    /// [`FilePeer`](super::FilePeer) take over the single-producer
+    /// election if the original producer drops. `None` for local /
+    /// already-cached sources that never download.
+    pub(crate) demand_lease: Option<DemandLease>,
+
     /// FSM phase as `FilePhase as u8`. Lock-free transitions.
     phase: AtomicU8,
 }
@@ -98,12 +106,14 @@ impl FileInner {
         source: FileSourceCtx,
         asset: FileAssetCtx,
         initial_phase: FilePhase,
+        demand_lease: Option<DemandLease>,
     ) -> Self {
         let inner = Self {
             source,
             asset,
             content_type_info: OnceLock::new(),
             segment_index: OnceLock::new(),
+            demand_lease,
             phase: AtomicU8::new(initial_phase as u8),
         };
         if matches!(initial_phase, FilePhase::Complete) {

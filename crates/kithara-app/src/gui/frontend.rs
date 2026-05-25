@@ -52,7 +52,10 @@ impl Frontend for GuiFrontend {
         let _guard = rt.enter();
 
         queue.set_tracks(crate::sources::build_sources(&config));
-        let controller = Arc::new(crate::state::StateController::new(Arc::clone(&queue)));
+        let controller = Arc::new(crate::state::StateController::new(
+            Arc::clone(&queue),
+            config.cancel.child_token(),
+        ));
 
         iced::application(
             move || Kithara::new(Arc::clone(&controller), palette),

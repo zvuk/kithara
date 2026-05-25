@@ -10,7 +10,7 @@ use std::{
 
 use delegate::delegate;
 use kithara_abr::AbrHandle;
-use kithara_assets::{AssetStore, ResourceKey};
+use kithara_assets::{AssetScope, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_platform::{
     time::{Duration, Instant},
@@ -34,7 +34,7 @@ use crate::{
 /// and the per-track [`AssetStore`] used by reader paths and by every
 /// variant's `dispatch` closures.
 pub(crate) struct HlsCoordEnv {
-    pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
+    pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) cancel: CancellationToken,
     pub(crate) headers: Option<kithara_net::Headers>,
 }
@@ -48,7 +48,7 @@ pub(crate) struct HlsCoordEnv {
 /// references it hands to variants and to peer `PlanCtx`-builders.
 pub(crate) struct HlsCoord {
     pub(crate) abr: AbrHandle,
-    pub(crate) asset_store: Arc<AssetStore<DecryptContext>>,
+    pub(crate) scope: AssetScope<DecryptContext>,
     pub(crate) variants: Arc<Vec<Arc<HlsVariant>>>,
     pub(crate) cancel: CancellationToken,
     pub(crate) headers: Option<kithara_net::Headers>,
@@ -96,7 +96,7 @@ impl HlsCoord {
             variants,
             playlist_state,
             cancel: env.cancel,
-            asset_store: env.asset_store,
+            scope: env.scope,
             headers: env.headers,
             peer_wake: OnceLock::new(),
             variant_generation: AtomicU64::new(0),

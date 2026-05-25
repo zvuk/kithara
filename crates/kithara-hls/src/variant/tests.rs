@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::AtomicU64};
 
-use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
+use kithara_assets::{AssetScope, AssetStoreBuilder, ProcessChunkFn};
 use kithara_drm::DecryptContext;
 use kithara_platform::time::Duration;
 use kithara_stream::Timeline;
@@ -30,19 +30,19 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     PlanCtx {
         prefetch_budget,
         master_cancel: cancel,
-        asset_store: backend,
+        scope: backend.scope("test"),
         seek_epoch: 0,
         look_ahead_bytes: None,
         headers: None,
     }
 }
 
-fn make_init(size: u64) -> InitEntry {
+fn make_init(size: u64, scope: &AssetScope<DecryptContext>) -> InitEntry {
     if size == 0 {
-        return InitEntry::empty();
+        return InitEntry::empty(scope);
     }
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
-    let resource_id = ResourceKey::from(&url);
+    let resource_id = scope.key_from_url(&url);
     InitEntry {
         url,
         resource_id,
@@ -52,11 +52,11 @@ fn make_init(size: u64) -> InitEntry {
     }
 }
 
-fn make_seg(idx: u32, size: u64) -> SegmentEntry {
+fn make_seg(idx: u32, size: u64, scope: &AssetScope<DecryptContext>) -> SegmentEntry {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
-    let resource_id = ResourceKey::from(&url);
+    let resource_id = scope.key_from_url(&url);
     SegmentEntry {
         url,
         resource_id,
@@ -69,11 +69,17 @@ fn make_seg(idx: u32, size: u64) -> SegmentEntry {
 }
 
 fn make_var(variant: usize, init_size: u64, media_sizes: &[u64], ctx: &PlanCtx) -> Arc<HlsVariant> {
-    let init = make_init(init_size);
+    let init = make_init(init_size, &ctx.scope);
     let segments: Vec<SegmentEntry> = media_sizes
         .iter()
         .enumerate()
-        .map(|(i, &size)| make_seg(u32::try_from(i).expect("segment index < u32::MAX"), size))
+        .map(|(i, &size)| {
+            make_seg(
+                u32::try_from(i).expect("segment index < u32::MAX"),
+                size,
+                &ctx.scope,
+            )
+        })
         .collect();
     HlsVariant::from_parts(
         variant,
@@ -342,7 +348,7 @@ fn on_evict_returns_none_for_foreign_asset() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100], &ctx);
     let foreign: Url = "https://other.example.com/x.m4s".parse().expect("url");
-    let foreign_key = ResourceKey::from(&foreign);
+    let foreign_key = ctx.scope.key_from_url(&foreign);
     let res = v.on_evict(&foreign_key);
     assert_eq!(res, None);
 }
@@ -365,10 +371,10 @@ fn skeleton_types_instantiate() {
 #[kithara::test]
 fn dispatch_drm_segment_routes_through_with_ctx() {
     let ctx = test_ctx(3);
-    let init = make_init(0);
+    let init = make_init(0, &ctx.scope);
     init.set_state(SegmentState::Loaded);
     let url: Url = "https://example.com/seg0.m4s".parse().expect("valid url");
-    let resource_id = ResourceKey::from(&url);
+    let resource_id = ctx.scope.key_from_url(&url);
     let key = *b"0123456789abcdef";
     let seg = SegmentEntry {
         url,

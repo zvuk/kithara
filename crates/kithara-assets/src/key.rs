@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,32 +11,100 @@ use url::Url;
 
 use crate::error::{AssetsError, AssetsResult};
 
-/// Key type for addressing resources within an asset.
-///
-/// A `ResourceKey` identifies a single resource (file) within an asset store.
+/// Self-identifying key for a single resource (file) within an asset store.
 ///
 /// Two variants:
-/// - `Relative`: path within `<root_dir>/<asset_root>` (existing behavior).
-/// - `Absolute`: filesystem path used directly, bypassing `root/asset_root` resolution.
-///   Used for local files opened via `AssetStore`.
+/// - `Relative`: a `rel_path` under an `asset_root` namespace.
+/// - `Absolute`: a filesystem path used directly; its own namespace,
+///   bypassing `root_dir`/`asset_root` resolution. Used for local files.
+///
+/// Mint relative keys through [`crate::AssetScope`], which holds the
+/// `asset_root`. `Arc<str>` keeps clones into the cache and HLS
+/// bookkeeping maps cheap.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResourceKey {
-    /// Relative path within `asset_root` (existing behavior).
-    Relative(String),
-    /// Absolute filesystem path — bypasses `root_dir/asset_root` resolution.
-    /// Used for local files opened directly.
+    /// `rel_path` under an `asset_root` namespace.
+    Relative {
+        #[serde(with = "arc_str")]
+        asset_root: Arc<str>,
+        #[serde(with = "arc_str")]
+        rel_path: Arc<str>,
+    },
+    /// Absolute filesystem path — its own namespace.
     Absolute(PathBuf),
 }
 
-impl ResourceKey {
-    /// Create a relative resource key (backward-compatible).
-    pub fn new<S: Into<String>>(rel_path: S) -> Self {
-        Self::Relative(rel_path.into())
+/// Serialize `Arc<str>` as a plain string; the workspace serde has no
+/// `rc` feature, so the reference-counting is dropped on the wire.
+mod arc_str {
+    use std::sync::Arc;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(value: &Arc<str>, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(value)
     }
 
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Arc<str>, D::Error> {
+        let s = String::deserialize(de)?;
+        Ok(Arc::from(s.as_str()))
+    }
+}
+
+impl ResourceKey {
     /// Create an absolute resource key for a local file.
     pub fn absolute<P: Into<PathBuf>>(path: P) -> Self {
         Self::Absolute(path.into())
+    }
+
+    /// Create a relative key under `asset_root`.
+    pub(crate) fn relative(asset_root: impl Into<Arc<str>>, rel_path: impl Into<Arc<str>>) -> Self {
+        Self::Relative {
+            asset_root: asset_root.into(),
+            rel_path: rel_path.into(),
+        }
+    }
+
+    /// Derive a unique `rel_path` from a URL.
+    ///
+    /// Last non-empty path segment (or `"index"`), plus a `_<query>`
+    /// suffix when a query is present so URLs differing only in query
+    /// (e.g. `?id=123` vs `?id=456`) produce distinct keys.
+    pub(crate) fn rel_path_from_url(url: &Url) -> String {
+        let segment = url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("index");
+        url.query()
+            .map_or_else(|| segment.to_string(), |q| format!("{segment}_{q}"))
+    }
+
+    /// The asset namespace, or `None` for an absolute key.
+    #[must_use]
+    pub fn asset_root(&self) -> Option<&str> {
+        match self {
+            Self::Relative { asset_root, .. } => Some(asset_root),
+            Self::Absolute(_) => None,
+        }
+    }
+
+    /// The relative path, or `None` for an absolute key.
+    #[must_use]
+    pub fn rel_path(&self) -> Option<&str> {
+        match self {
+            Self::Relative { rel_path, .. } => Some(rel_path),
+            Self::Absolute(_) => None,
+        }
+    }
+
+    /// Returns the absolute path if this is an Absolute key.
+    #[must_use]
+    pub fn as_absolute_path(&self) -> Option<&Path> {
+        match self {
+            Self::Absolute(p) => Some(p),
+            Self::Relative { .. } => None,
+        }
     }
 
     /// Returns true if this is an absolute path key.
@@ -41,23 +112,15 @@ impl ResourceKey {
     pub fn is_absolute(&self) -> bool {
         matches!(self, Self::Absolute(_))
     }
-}
 
-impl From<&Url> for ResourceKey {
-    /// Extracts a unique relative key from a URL.
-    ///
-    /// Includes query parameters when present so that URLs differing only
-    /// in query (e.g. `?id=123` vs `?id=456`) produce distinct keys.
-    fn from(url: &Url) -> Self {
-        let segment = url
-            .path_segments()
-            .and_then(|mut segments| segments.next_back())
-            .filter(|s| !s.is_empty())
-            .unwrap_or("index");
-        let rel_path = url
-            .query()
-            .map_or_else(|| segment.to_string(), |q| format!("{segment}_{q}"));
-        Self::Relative(rel_path)
+    /// Whether this relative key names the same resource as `url` would
+    /// under its asset root. An absolute key never matches a URL.
+    #[must_use]
+    pub fn matches_url(&self, url: &Url) -> bool {
+        match self {
+            Self::Relative { rel_path, .. } => **rel_path == Self::rel_path_from_url(url),
+            Self::Absolute(_) => false,
+        }
     }
 }
 
@@ -348,30 +411,55 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::absolute(true)]
-    #[case::relative(false)]
-    fn test_resource_key_absolute_flag(#[case] is_absolute: bool) {
-        if is_absolute {
-            let path = PathBuf::from("/tmp/song.mp3");
-            let key = ResourceKey::absolute(&path);
-            assert!(key.is_absolute());
-            let ResourceKey::Absolute(p) = &key else {
-                unreachable!("absolute key must be the Absolute variant")
-            };
-            assert_eq!(p.as_path(), path.as_path());
-        } else {
-            let key = ResourceKey::new("seg.m4s");
-            assert!(!key.is_absolute());
-            assert!(matches!(key, ResourceKey::Relative(_)));
-        }
+    fn test_resource_key_absolute() {
+        let path = PathBuf::from("/tmp/song.mp3");
+        let key = ResourceKey::absolute(&path);
+        assert!(key.is_absolute());
+        assert_eq!(key.as_absolute_path(), Some(path.as_path()));
+    }
+
+    #[kithara::test]
+    fn test_resource_key_relative_is_not_absolute() {
+        let key = ResourceKey::relative("root", "seg.m4s");
+        assert!(!key.is_absolute());
+        assert_eq!(key.as_absolute_path(), None);
+        assert_eq!(key.asset_root(), Some("root"));
+        assert_eq!(key.rel_path(), Some("seg.m4s"));
     }
 
     #[kithara::test]
     fn test_resource_key_absolute_hash_differs() {
         let abs = ResourceKey::absolute("/tmp/a.mp3");
-        let rel = ResourceKey::new("/tmp/a.mp3");
+        let rel = ResourceKey::relative("root", "/tmp/a.mp3");
         let mut set = HashSet::new();
         set.insert(abs.clone());
         assert_ne!(abs, rel);
+        assert_eq!(abs.asset_root(), None);
+    }
+
+    /// The asset namespace is part of relative key identity: two scopes
+    /// over different roots mint unequal, distinctly-hashing keys for the
+    /// same `rel_path`; an absolute key is its own namespace, unaffected.
+    #[kithara::test]
+    fn test_relative_key_identity_carries_asset_root() {
+        let a = ResourceKey::relative("root_a", "seg.m4s");
+        let b = ResourceKey::relative("root_b", "seg.m4s");
+        assert_ne!(a, b, "same rel_path under different roots must differ");
+
+        let mut set = HashSet::new();
+        set.insert(a.clone());
+        assert!(
+            !set.contains(&b),
+            "distinct roots must not collide in a set"
+        );
+        set.insert(b);
+        assert_eq!(set.len(), 2);
+
+        let same = ResourceKey::relative("root_a", "seg.m4s");
+        assert_eq!(a, same, "same root + rel_path must be equal");
+
+        let abs = ResourceKey::absolute("/tmp/seg.m4s");
+        assert_ne!(abs, a);
+        assert_eq!(abs.asset_root(), None);
     }
 }
