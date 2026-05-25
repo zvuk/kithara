@@ -100,6 +100,7 @@ async fn test_signal_server_encoded_formats_are_decodable(
         channels: 2,
         length: SignalSpecLength::Seconds(1.0),
         format,
+        bit_rate: None,
     };
 
     let response = client
@@ -148,6 +149,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
         channels: 2,
         length: SignalSpecLength::Seconds(1.0),
         format,
+        bit_rate: None,
     };
 
     let response = client
@@ -560,6 +562,7 @@ fn wav_spec() -> SignalSpec {
         channels: 2,
         length: SignalSpecLength::Seconds(1.0),
         format: SignalFormat::Wav,
+        bit_rate: None,
     }
 }
 

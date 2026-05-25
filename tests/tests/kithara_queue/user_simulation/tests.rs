@@ -590,7 +590,7 @@ async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: &[TrackKind]) {
 mod apple_backend {
     use super::*;
 
-    #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+    #[::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
     #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
     #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
     async fn user_sim_seek_storm_apple(#[case] kind: TrackKind, #[case] abr: AbrMode) {
@@ -606,7 +606,7 @@ mod apple_backend {
         .await;
     }
 
-    #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+    #[::kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
     #[case::aac_abr_auto(TrackKind::HlsAacLcAbr4, AbrMode::Auto(None))]
     #[case::aac_drm_auto(TrackKind::HlsAacLcDrmAbr4, AbrMode::Auto(None))]
     async fn user_sim_long_play_then_seek_backward_apple(

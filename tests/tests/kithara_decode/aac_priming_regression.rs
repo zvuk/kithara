@@ -39,6 +39,7 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
         channels: 2,
         length: SignalSpecLength::Seconds(1.0),
         format: SignalFormat::Aac,
+        bit_rate: None,
     };
 
     let response = client

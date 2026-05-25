@@ -124,6 +124,7 @@ async fn make_signal_resource(
         channels: 2,
         length: SignalSpecLength::Seconds(duration_secs),
         format: SignalFormat::Wav,
+        bit_rate: None,
     };
     let url = server.sine(&spec, freq_hz).await;
     let mut config = ResourceConfig::for_src(url.as_str())

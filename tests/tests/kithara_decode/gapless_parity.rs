@@ -251,6 +251,7 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
         channels: GAPLESS_CHANNELS,
         length: SignalSpecLength::Frames(expected_frames),
         format,
+        bit_rate: None,
     };
 
     let bytes = Client::new()
