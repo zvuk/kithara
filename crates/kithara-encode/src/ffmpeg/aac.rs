@@ -4,13 +4,12 @@ use ffmpeg::{
         Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
         flag::Flags as CodecFlags,
     },
-    encoder::find as find_encoder,
 };
 use ffmpeg_next as ffmpeg;
 use kithara_stream::AudioCodec;
 
 use super::{
-    build_direct_filter, ensure_ffmpeg_initialized,
+    build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
     pcm::{
         drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
         send_frame_to_filter,

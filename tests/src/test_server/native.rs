@@ -7,7 +7,11 @@ use url::Url;
 use crate::{
     hls_url::HlsSpec,
     http_server::TestHttpServer,
-    routes::{assets, signal, stream},
+    routes::{
+        assets, signal,
+        signal::{encode_signal_payload, encoded_signal_cache_key},
+        stream,
+    },
     signal_spec::{SignalKind as InternalSignalKind, parse_signal_request},
     signal_url::{SignalKind, SignalSpec, signal_path},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
@@ -76,16 +80,16 @@ impl TestServerHelper {
     /// Build a URL for `/signal/sawtooth/...`.
     #[must_use]
     pub async fn sawtooth(&self, spec: &SignalSpec) -> Url {
-        self.signal_url(SignalKind::Sawtooth, spec)
+        self.signal_url(SignalKind::Sawtooth, spec).await
     }
 
     /// Build a URL for `/signal/sawtooth-desc/...`.
     #[must_use]
     pub async fn sawtooth_descending(&self, spec: &SignalSpec) -> Url {
-        self.signal_url(SignalKind::SawtoothDescending, spec)
+        self.signal_url(SignalKind::SawtoothDescending, spec).await
     }
 
-    fn signal_url(&self, kind: SignalKind, spec: &SignalSpec) -> Url {
+    async fn signal_url(&self, kind: SignalKind, spec: &SignalSpec) -> Url {
         let path = signal_path(kind, spec);
         let prefix = format!("/signal/{}/", kind.path_segment());
         let spec_with_ext = path
@@ -95,25 +99,37 @@ impl TestServerHelper {
             InternalSignalKind::try_from(kind.path_segment()).expect("valid signal route");
         let request =
             parse_signal_request(internal_kind, spec_with_ext).expect("valid signal spec");
-        let token = self.state.insert_signal(request);
-        self.url(&format!(
-            "/signal/{}/{}.{}",
-            kind.path_segment(),
-            token,
-            spec.format.path_ext()
-        ))
+        let token = self.state.insert_signal(request.clone());
+        let token_with_ext = format!("{token}.{}", spec.format.path_ext());
+
+        // Encode at fixture build time so the request handler can serve
+        // range requests with no inline work. Mirrors the production
+        // analogue where a media file already exists on disk by the time
+        // the player opens it. Stay in spawn_blocking to keep the
+        // encoder off the tokio worker thread.
+        let cache_key = encoded_signal_cache_key(internal_kind, &token_with_ext);
+        let state = Arc::clone(&self.state);
+        tokio::task::spawn_blocking(move || {
+            if let Some(encoded) = encode_signal_payload(&request) {
+                state.insert_encoded_signal(cache_key, encoded);
+            }
+        })
+        .await
+        .expect("signal pre-encode task panicked");
+
+        self.url(&format!("/signal/{}/{token_with_ext}", kind.path_segment(),))
     }
 
     /// Build a URL for `/signal/silence/...`.
     #[must_use]
     pub async fn silence(&self, spec: &SignalSpec) -> Url {
-        self.signal_url(SignalKind::Silence, spec)
+        self.signal_url(SignalKind::Silence, spec).await
     }
 
     /// Build a URL for `/signal/sine/...`.
     #[must_use]
     pub async fn sine(&self, spec: &SignalSpec, freq_hz: f64) -> Url {
-        self.signal_url(SignalKind::Sine { freq_hz }, spec)
+        self.signal_url(SignalKind::Sine { freq_hz }, spec).await
     }
 
     /// Build an arbitrary URL on this server.

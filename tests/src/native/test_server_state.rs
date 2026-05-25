@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use moka::sync::Cache;
 use uuid::Uuid;
 
 use crate::{
@@ -12,10 +13,23 @@ use crate::{
     signal_spec::SignalRequest,
 };
 
+/// Soft cap on distinct encoded-signal entries kept in memory per
+/// `TestServerState`. Each entry is a couple of `MiB` at most; 256
+/// leaves plenty of headroom while bounding worst-case test-server
+/// memory use.
+const ENCODED_SIGNAL_CACHE_CAPACITY: u64 = 256;
+
+#[derive(Clone)]
+pub(crate) struct EncodedSignal {
+    pub bytes: Arc<Vec<u8>>,
+    pub content_type: &'static str,
+}
+
 pub(crate) struct TestServerState {
     hls_cache: GeneratedHlsCache,
     hls_blobs: RwLock<HashMap<String, Arc<Vec<u8>>>>,
     tokens: RwLock<HashMap<String, StoredToken>>,
+    encoded_signals: Cache<String, EncodedSignal>,
 }
 
 #[derive(Clone)]
@@ -30,7 +44,24 @@ impl TestServerState {
             tokens: RwLock::new(HashMap::new()),
             hls_cache: RwLock::new(HashMap::new()),
             hls_blobs: RwLock::new(HashMap::new()),
+            encoded_signals: Cache::new(ENCODED_SIGNAL_CACHE_CAPACITY),
         })
+    }
+
+    /// Lookup a previously encoded signal payload. Test fixture builders
+    /// (`TestServerHelper::{sine,sweep,…}`) populate this cache at setup
+    /// time via [`Self::insert_encoded_signal`], so request handlers
+    /// never encode on the critical path (the production analogue is "a
+    /// file already exists on disk"). A miss is a fixture-setup bug.
+    pub(crate) fn get_encoded_signal(&self, key: &str) -> Option<EncodedSignal> {
+        self.encoded_signals.get(key)
+    }
+
+    /// Insert a pre-encoded signal payload. Test helpers call this at
+    /// fixture build time so that the request handler can serve range
+    /// requests immediately, without inline encoding work.
+    pub(crate) fn insert_encoded_signal(&self, key: String, encoded: EncodedSignal) {
+        self.encoded_signals.insert(key, encoded);
     }
 
     pub(crate) fn get_hls(&self, token: &str) -> Option<Arc<GeneratedHls>> {

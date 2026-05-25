@@ -549,6 +549,7 @@ mod tests {
             channels: 2,
             length: SignalSpecLength::Seconds(1.0),
             format: SignalFormat::Wav,
+            bit_rate: None,
         };
         let helper = TestServerHelper::new().await;
         let url = helper.sine(&spec, 440.0).await;

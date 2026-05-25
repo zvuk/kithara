@@ -5,14 +5,13 @@ use ffmpeg::{
     codec::{
         context::Context as CodecContext, encoder::Audio as AudioEncoder, flag::Flags as CodecFlags,
     },
-    encoder::find as find_encoder,
     format::{self as av_format, flag::Flags as FormatFlags},
     media::Type as MediaType,
 };
 use ffmpeg_next as ffmpeg;
 
 use super::{
-    build_direct_filter, ensure_ffmpeg_initialized,
+    build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
     pcm::{
         drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
         send_frame_to_filter,
@@ -47,7 +46,7 @@ impl EncodeTarget {
                 bit_rate,
                 ext: "mp3",
                 mime: "audio/mpeg",
-                option_pairs: &[("b", "128k")],
+                option_pairs: &[],
             },
             BytesEncodeTarget::Flac => Self {
                 ext: "flac",
@@ -59,13 +58,13 @@ impl EncodeTarget {
                 bit_rate,
                 ext: "aac",
                 mime: "audio/aac",
-                option_pairs: &[("b", "128k")],
+                option_pairs: &[],
             },
             BytesEncodeTarget::M4a => Self {
                 bit_rate,
                 ext: "m4a",
                 mime: "audio/mp4",
-                option_pairs: &[("b", "128k")],
+                option_pairs: &[],
             },
         };
 

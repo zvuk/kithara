@@ -72,6 +72,9 @@ pub struct SignalSpec {
     pub length: SignalSpecLength,
     pub channels: u16,
     pub sample_rate: u32,
+    /// Override encoder bit rate (bps) for lossy formats (mp3/aac/m4a).
+    /// `None` lets the server pick the default (128 kbps).
+    pub bit_rate: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,6 +95,8 @@ struct SignalPathPayload {
     start_freq: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sweep_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bit_rate: Option<u64>,
     channels: u16,
     sample_rate: u32,
 }
@@ -156,6 +161,7 @@ pub fn signal_path(kind: SignalKind, spec: &SignalSpec) -> String {
             | SignalKind::Sine { .. }
             | SignalKind::Silence => None,
         },
+        bit_rate: spec.bit_rate,
     };
     let json = serde_json::to_vec(&payload).expect("signal path payload must serialize");
     let spec_b64 = URL_SAFE_NO_PAD.encode(json);

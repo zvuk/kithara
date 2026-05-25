@@ -270,6 +270,7 @@ syn = { version = "2", features = ["full"] }
 rangemap = { version = "1.7.1", features = ["serde1"] }
 mmap-io = { version = "1.0", default-features = false }
 dashmap = "6.2.1"
+moka = { version = "0.12", features = ["sync"] }
 bon = "3.9"
 derive_more = { version = "2.1", features = ["from", "into", "try_from", "display", "as_ref", "deref", "deref_mut", "constructor", "is_variant", "from_str"] }
 strum = { version = "0.28", features = ["derive"] }
