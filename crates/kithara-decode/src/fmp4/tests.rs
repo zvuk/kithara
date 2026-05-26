@@ -281,14 +281,22 @@ fn red_cursor_byte_range_freezes_when_layout_size_grows() {
     panic!("RED scaffold — see doc comment");
 }
 
+/// A boundary seek for an SBR codec backs up into the immediately
+/// preceding segment (`SymphoniaCodec::priming` requests AAC pre-roll, so
+/// `Fmp4SegmentDemuxer::seek` lands at `target − warmup`) and decodes that
+/// segment as decode-and-discard warm-up before reaching `target`. Reads
+/// must stay confined to the pre-roll segment plus the target segment —
+/// never a prefix walk from seg-0.
 #[kithara::test]
-fn seek_reads_only_init_and_target_segment() {
+fn seek_backs_up_one_segment_for_aac_preroll() {
     let (blob, segmented) = build_test_layout(5);
     let (mut decoder, reads, record) = make_decoder(blob, segmented.clone());
 
     reads.lock().expect("BUG: clear").clear();
     record.store(true, Ordering::Release);
 
+    // Target sits on the seg-2/seg-3 boundary (18 s). AAC SBR warm-up
+    // backs the seek into seg-2.
     let target = Duration::from_secs(18);
     let outcome = decoder.seek(target).expect("BUG: seek");
     let DecoderSeekOutcome::Landed {
@@ -299,10 +307,15 @@ fn seek_reads_only_init_and_target_segment() {
     else {
         panic!("expected Landed, got {outcome:?}");
     };
-    assert!(landed_at >= Duration::from_secs(18) && landed_at < Duration::from_secs(24));
+    assert!(
+        landed_at >= Duration::from_secs(12) && landed_at < Duration::from_secs(18),
+        "AAC boundary seek must land in the preceding segment for SBR \
+         pre-roll, got {landed_at:?}",
+    );
     let landed_byte = landed_byte.expect("BUG: landed_byte should be set");
+    let segment_2 = &segmented.segments[2];
     let segment_3 = &segmented.segments[3];
-    assert_eq!(landed_byte, segment_3.byte_range.start);
+    assert_eq!(landed_byte, segment_2.byte_range.start);
 
     for _ in 0..16 {
         match decoder.next_chunk().expect("BUG: decode after seek") {
@@ -313,13 +326,13 @@ fn seek_reads_only_init_and_target_segment() {
     record.store(false, Ordering::Release);
 
     let reads_snapshot = reads.lock().expect("BUG: reads lock").clone();
-    let target_range = segment_3.byte_range.clone();
+    let preroll_start = segment_2.byte_range.start;
+    let target_end = segment_3.byte_range.end;
     for r in &reads_snapshot {
         assert!(
-            r.start >= target_range.start && r.end <= target_range.end,
-            "read {:?} fell outside target segment {:?} (prefix-walk regression)",
-            r,
-            target_range,
+            r.start >= preroll_start && r.end <= target_end,
+            "read {r:?} fell outside pre-roll+target window {preroll_start}..{target_end} \
+             (prefix-walk regression)",
         );
     }
 }

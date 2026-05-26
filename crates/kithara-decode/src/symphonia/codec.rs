@@ -22,7 +22,7 @@ use symphonia::core::{
 
 use crate::{
     GaplessInfo,
-    codec::FrameCodec,
+    codec::{CodecPriming, FrameCodec},
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
     symphonia::config::SymphoniaConfig,
@@ -173,6 +173,24 @@ impl SymphoniaCodec {
 }
 
 impl FrameCodec for SymphoniaCodec {
+    fn priming(&self, codec: AudioCodec) -> CodecPriming {
+        // AAC needs ~2 access units of pre-roll so SBR/PS QMF state converges
+        // after a flush (ISO/IEC 14496-12 audio pre-roll). HE-AAC v2 is an
+        // AAC-LC core + SBR/PS extensions that the fMP4 init parse and this
+        // codec layer both see only as `AacLc` (fdk-aac auto-detects SBR from
+        // the bitstream), so the pre-roll must be conservative for `AacLc`
+        // too — a plain-LC stream just decode-discards one harmless extra AU.
+        // The fMP4 segment demuxer reads this back-off so a boundary seek
+        // warms SBR across the previous segment instead of starting cold.
+        match codec {
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => CodecPriming {
+                packets: 2,
+                ..CodecPriming::default()
+            },
+            _ => CodecPriming::default(),
+        }
+    }
+
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
@@ -323,17 +341,26 @@ mod priming_tests {
     }
 
     #[kithara::test]
-    fn symphonia_priming_is_default_for_all_codecs() {
+    fn symphonia_priming_warms_aac_and_defaults_elsewhere() {
         let codec = SymphoniaCodec::open_with_config(&mp3_track(), &SymphoniaConfig::default())
             .expect("BUG: MP3 codec open");
-        for c in [
-            AudioCodec::AacLc,
-            AudioCodec::AacHe,
-            AudioCodec::AacHeV2,
-            AudioCodec::Mp3,
-            AudioCodec::Flac,
-            AudioCodec::Pcm,
-        ] {
+        // AAC (incl. HE-AAC v1/v2, which the codec layer sees as `AacLc`)
+        // needs SBR/PS pre-roll across a seek boundary: 2 access units of
+        // decode-and-discard warm-up so QMF state converges before the
+        // seek target.
+        for c in [AudioCodec::AacLc, AudioCodec::AacHe, AudioCodec::AacHeV2] {
+            assert_eq!(
+                codec.priming(c),
+                CodecPriming {
+                    packets: 2,
+                    ..CodecPriming::default()
+                },
+                "{c:?} must request SBR pre-roll"
+            );
+        }
+        // Codecs that converge instantly (or that Symphonia primes
+        // internally) keep the empty contract.
+        for c in [AudioCodec::Mp3, AudioCodec::Flac, AudioCodec::Pcm] {
             assert_eq!(
                 codec.priming(c),
                 CodecPriming::default(),

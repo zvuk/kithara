@@ -221,6 +221,18 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     chunks_decoded: u64,
     total_samples: u64,
+    /// `(seek_epoch, target)` of the most recent applied seek.
+    /// `committed_position` lags `target` until the seek's first
+    /// (trim-aligned) chunk is consumed: the decoder lands at the
+    /// containing segment's start and trims forward, so
+    /// `commit_seek_landed` records the segment boundary, not the
+    /// requested instant. A variant-switch recreate firing inside that
+    /// window must resume at the real target, not at the lagging
+    /// committed boundary — otherwise playback rewinds to the segment
+    /// start. Tagged with the seek epoch so a later seek (especially a
+    /// backward one) never resumes against a stale forward target. See
+    /// `execute_recreation`.
+    resume_target: Option<(u64, Duration)>,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -265,6 +277,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             total_samples: 0,
             last_spec: None,
             emit: None,
+            resume_target: None,
         }
     }
 
@@ -466,6 +479,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         anchor_offset: Option<u64>,
     ) {
         reset_effects(&mut self.effects);
+        self.resume_target = Some((epoch, position));
         self.emit_seek_lifecycle(SeekLifecycleStage::SeekApplied, epoch, location);
         self.update_state(TrackState::AwaitingResume(ResumeState {
             anchor_offset,
@@ -1894,7 +1908,15 @@ impl<T: StreamType> StreamAudioSource<T> {
             if let Err(e) = self.apply_format_change(&recreate.media_info, recreate.offset) {
                 return Some(Self::classify_recreate_err(&e, recreate.offset));
             }
-            let target_time = self.timeline.committed_position();
+            let committed = self.timeline.committed_position();
+            let target_time = match self.resume_target {
+                Some((seek_epoch, target))
+                    if seek_epoch == self.epoch.load(Ordering::Acquire) && target > committed =>
+                {
+                    target
+                }
+                _ => committed,
+            };
             debug!(
                 ?target_time,
                 stream_pos = self.shared_stream.position(),

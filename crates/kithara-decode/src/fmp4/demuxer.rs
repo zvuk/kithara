@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use kithara_stream::SegmentLayout;
+use kithara_stream::{AudioCodec, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -8,7 +8,7 @@ use super::{
     source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
-    codec::CodecPriming,
+    codec::{CodecPriming, access_unit_frames},
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PrerollHint, TrackInfo},
     error::{DecodeError, DecodeResult},
     traits::BoxedSource,
@@ -195,7 +195,14 @@ impl Demuxer for Fmp4SegmentDemuxer {
     }
 
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
-        let Some(desc) = self.segments.segment_at_time(target) else {
+        // Back the seek into the previous segment(s) when the codec needs
+        // SBR/PS pre-roll: landing at `target - warmup` means a boundary
+        // seek decodes the tail of the prior segment to converge SBR state,
+        // and `ComposedDecoder::pending_seek_target` drops it up to `target`.
+        let seek_target =
+            warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
+                .map_or(target, |backoff| target.saturating_sub(backoff));
+        let Some(desc) = self.segments.segment_at_time(seek_target) else {
             return Err(DecodeError::SeekFailed(format!(
                 "no segment for time {}ms",
                 target.as_millis()
@@ -239,6 +246,23 @@ impl Demuxer for Fmp4SegmentDemuxer {
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
     }
+}
+
+/// Seek warm-up back-off duration for `codec` at `sample_rate`, derived
+/// from the codec's pre-roll packet count. `None` when no pre-roll is
+/// required (`packets == 0`) or the codec has no fixed access-unit size.
+fn warmup_backoff(codec: AudioCodec, sample_rate: u32, priming: &CodecPriming) -> Option<Duration> {
+    if priming.packets == 0 {
+        return None;
+    }
+    let au = access_unit_frames(codec);
+    if au == 0 {
+        return None;
+    }
+    let frames = priming.packets.saturating_mul(au);
+    Some(Duration::from_secs_f64(
+        f64::from(frames) / f64::from(sample_rate.max(1)),
+    ))
 }
 
 fn compute_preroll_byte(
