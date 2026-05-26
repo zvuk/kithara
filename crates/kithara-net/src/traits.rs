@@ -57,15 +57,6 @@ impl ByteStream {
     pub fn into_inner(self) -> RawByteStream {
         self.inner
     }
-
-    /// Create a `ByteStream` with empty headers (for tests or non-HTTP sources).
-    #[must_use]
-    pub fn without_headers(inner: RawByteStream) -> Self {
-        Self {
-            inner,
-            headers: Headers::new(),
-        }
-    }
 }
 
 impl Stream for ByteStream {

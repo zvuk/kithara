@@ -68,11 +68,6 @@ impl RangeSpec {
     pub fn new(start: u64, end: Option<u64>) -> Self {
         Self { end, start }
     }
-
-    #[must_use]
-    pub fn start_at(start: u64) -> Self {
-        Self { end: None, start }
-    }
 }
 
 impl fmt::Display for RangeSpec {
@@ -263,20 +258,6 @@ mod tests {
     ) {
         let range = RangeSpec::new(start, end);
         assert_eq!(range.to_string(), expected_header);
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    #[case::start_at_0(0, 0, None)]
-    #[case::start_at_100(100, 100, None)]
-    #[case::start_at_max(u64::MAX, u64::MAX, None)]
-    async fn test_range_spec_start_at(
-        #[case] start: u64,
-        #[case] expected_start: u64,
-        #[case] expected_end: Option<u64>,
-    ) {
-        let range = RangeSpec::start_at(start);
-        assert_eq!(range.start, expected_start);
-        assert_eq!(range.end, expected_end);
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
