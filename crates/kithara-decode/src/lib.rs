@@ -39,11 +39,11 @@ mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
 
+pub use codec::CodecPriming;
 pub use error::{DecodeError, DecodeResult, ErrorClass};
 pub use factory::{DecoderBackend, DecoderConfig, DecoderFactory};
 pub use gapless::{
-    GaplessInfo, GaplessMode, GaplessOutput, GaplessTrimmer, SilenceTrimParams,
-    codec_priming_frames, probe_mp4_gapless,
+    GaplessInfo, GaplessMode, GaplessOutput, GaplessTrimmer, SilenceTrimParams, probe_mp4_gapless,
 };
 pub use pcm_time::{duration_for_frames, frames_for_duration};
 pub use traits::{

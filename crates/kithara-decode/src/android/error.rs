@@ -40,10 +40,7 @@ impl From<AndroidBackendError> for DecodeError {
     fn from(err: AndroidBackendError) -> Self {
         match err {
             AndroidBackendError::UnsupportedCodec { codec } => DecodeError::UnsupportedCodec(codec),
-            AndroidBackendError::UnsupportedPcmEncoding { .. } => {
-                DecodeError::Backend(Box::new(err))
-            }
-            other => DecodeError::Backend(Box::new(other)),
+            _ => DecodeError::backend(err),
         }
     }
 }

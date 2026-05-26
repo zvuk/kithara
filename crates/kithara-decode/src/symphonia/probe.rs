@@ -113,7 +113,7 @@ where
     tracing::debug!(hint = ?config.hint, seek_enabled, "Probing format");
     let format_reader = get_probe()
         .probe(&probe_hint, mss, format_opts, meta_opts)
-        .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        .map_err(DecodeError::backend)?;
 
     if !seek_enabled {
         seek_enabled_handle.store(true, Ordering::Release);
@@ -140,37 +140,31 @@ fn create_reader_for_container(
             let meta_opts = MetadataOptions::default();
             let format_reader = get_probe()
                 .probe(&hint, mss, format_opts, meta_opts)
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+                .map_err(DecodeError::backend)?;
             Ok(format_reader)
         }
         ContainerFormat::Fmp4 => {
-            let reader = IsoMp4Reader::try_new(mss, format_opts)
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            let reader = IsoMp4Reader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
             Ok(Box::new(reader))
         }
         ContainerFormat::MpegAudio => {
-            let reader = MpaReader::try_new(mss, format_opts)
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            let reader = MpaReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
             Ok(Box::new(reader))
         }
         ContainerFormat::Adts => {
-            let reader = AdtsReader::try_new(mss, format_opts)
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            let reader = AdtsReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
             Ok(Box::new(reader))
         }
         ContainerFormat::Flac => {
-            let reader = FlacReader::try_new(mss, format_opts)
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            let reader = FlacReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
             Ok(Box::new(reader))
         }
         ContainerFormat::Wav => {
-            let reader = WavReader::try_new(mss, format_opts)
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            let reader = WavReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
             Ok(Box::new(reader))
         }
         ContainerFormat::Ogg => {
-            let reader = OggReader::try_new(mss, format_opts)
-                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            let reader = OggReader::try_new(mss, format_opts).map_err(DecodeError::backend)?;
             Ok(Box::new(reader))
         }
         ContainerFormat::MpegTs => Err(DecodeError::UnsupportedContainer(container)),

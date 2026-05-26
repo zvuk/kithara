@@ -5,7 +5,8 @@ use std::{
 };
 
 use kithara_stream::{
-    NotReadyCause, PendingReason, StreamPending, StreamReadError, VariantChangeError,
+    AudioCodec, NotReadyCause, PendingReason, PrerollHint, StreamPending, StreamReadError,
+    VariantChangeError,
 };
 
 mod kithara {
@@ -38,6 +39,9 @@ pub enum InputReadOutcome {
 /// the requested target itself unless it coincides). `PastEof` carries
 /// the decoder's known total duration so the caller can park at EOF
 /// without rounding.
+// Not #[non_exhaustive]: `tests/src/decode_mock.rs` constructs variants by
+// named-field syntax across crates; direct construction is part of the
+// intended mock contract (AGENTS.md "small, obviously stable exception").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderSeekOutcome {
     /// Decoder is now parked at `landed_at` / `landed_frame` /
@@ -57,6 +61,14 @@ pub enum DecoderSeekOutcome {
         landed_at: Duration,
         landed_frame: u64,
         landed_byte: Option<u64>,
+        /// Hint from the demuxer: an earlier byte position the source must
+        /// still hold so the decoder can warm MDCT overlap-add state before
+        /// emitting user-visible samples. `NotNeeded` until a demuxer
+        /// computes a meaningful pre-roll hint (file backend by byte offset
+        /// back, HLS by prev segment start); consumed by the audio pipeline
+        /// to warm MDCT overlap-add state before emitting user-visible
+        /// chunks.
+        preroll: PrerollHint,
     },
     /// Seek target was past the decoder's known duration. The decoder
     /// is parked at the end; the next `next_chunk` returns
@@ -85,16 +97,6 @@ pub enum DecoderChunkOutcome {
 }
 
 impl DecoderChunkOutcome {
-    /// Borrow the inner [`PcmChunk`] when this outcome is `Chunk`.
-    #[must_use]
-    // ast-grep-ignore: idioms.match-self-conversion
-    pub fn as_chunk(&self) -> Option<&PcmChunk> {
-        match self {
-            Self::Chunk(chunk) => Some(chunk),
-            _ => None,
-        }
-    }
-
     /// `true` when the outcome is [`Self::Chunk`].
     #[must_use]
     pub fn is_chunk(&self) -> bool {
@@ -105,12 +107,6 @@ impl DecoderChunkOutcome {
     #[must_use]
     pub fn is_eof(&self) -> bool {
         matches!(self, Self::Eof)
-    }
-
-    /// `true` when the outcome is [`Self::Pending`].
-    #[must_use]
-    pub fn is_pending(&self) -> bool {
-        matches!(self, Self::Pending(_))
     }
 }
 
@@ -195,6 +191,22 @@ pub(crate) type BoxedSource = Box<dyn DecoderInput>;
 /// decoder type is determined at runtime (e.g., based on media info).
 #[kithara::mock(api = DecoderMock)]
 pub trait Decoder: Send + 'static {
+    /// Default leading-silence frame count for `codec` when no
+    /// container-/encoder-level gapless metadata is available.
+    ///
+    /// Default implementation returns the codec's encoder-side
+    /// priming ([`AudioCodec::encoder_priming_frames`]) — every
+    /// decoder inherits it for free. Concrete decoders override only
+    /// when they add their own algorithmic delay on top
+    /// ([`crate::codec::FrameCodec::decoder_algo_delay`] — currently
+    /// Symphonia `mpa` adds 529 for MP3).
+    ///
+    /// Used by `kithara_audio::pipeline::gapless::resolve_codec_priming`
+    /// for the [`crate::GaplessMode::CodecPriming`] fallback path.
+    fn default_priming_frames(&self, codec: AudioCodec) -> u64 {
+        AudioCodec::encoder_priming_frames(codec)
+    }
+
     /// Get total duration from track metadata.
     ///
     /// Returns `None` if duration cannot be determined.

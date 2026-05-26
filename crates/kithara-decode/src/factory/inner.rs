@@ -275,18 +275,12 @@ fn create_apple(
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 fn apple_standalone_supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
-    matches!(
-        (codec, container),
-        (AudioCodec::Pcm, Some(ContainerFormat::Wav))
-            | (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio))
-            | (AudioCodec::Alac, Some(ContainerFormat::Mp4))
-            | (AudioCodec::Alac, Some(ContainerFormat::Caf))
-    )
+    crate::apple::AppleAudioFileDemuxer::supports(codec, container)
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 fn build_apple_standalone_decoder(
-    source: BoxedSource,
+    mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
@@ -295,20 +289,17 @@ fn build_apple_standalone_decoder(
         apple::{AppleAudioFileDemuxer, AppleCodec},
         composed::ComposedDecoder,
         demuxer::Demuxer,
+        gapless::scoped_probe,
     };
-    let demuxer = match (codec, container) {
-        (AudioCodec::Pcm, Some(ContainerFormat::Wav)) => AppleAudioFileDemuxer::open_wav(source)?,
-        (AudioCodec::Mp3, Some(ContainerFormat::MpegAudio)) => {
-            AppleAudioFileDemuxer::open_mp3(source)?
-        }
-        (AudioCodec::Alac, Some(ContainerFormat::Mp4)) => {
-            AppleAudioFileDemuxer::open_alac_m4a(source)?
-        }
-        (AudioCodec::Alac, Some(ContainerFormat::Caf)) => {
-            AppleAudioFileDemuxer::open_alac_caf(source)?
-        }
-        _ => return Err(DecodeError::UnsupportedCodec(codec)),
+    let probed_gapless = if config.gapless {
+        scoped_probe(&mut *source, codec)?
+    } else {
+        None
     };
+    let mut demuxer = AppleAudioFileDemuxer::open_for(source, codec, container)?;
+    if probed_gapless.is_some() {
+        demuxer.set_gapless(probed_gapless);
+    }
     let codec_impl = AppleCodec::open_with_config(demuxer.track_info(), config.gapless)?;
     let pool = config
         .pcm_pool
@@ -342,9 +333,8 @@ fn create_android(
                 ?codec,
                 "fmp4_segment: dispatching to segment-aware Android HW codec path"
             );
-            let gapless = config.gapless;
             return build_fmp4_segment_decoder(source, layout, config, |track| {
-                AndroidCodec::open_with_config(track, gapless)
+                AndroidCodec::open_with_config(track)
             });
         }
         #[cfg(feature = "symphonia")]
@@ -408,7 +398,7 @@ fn build_android_standalone_decoder(
         }
         _ => return Err(DecodeError::UnsupportedCodec(codec)),
     };
-    let codec_impl = AndroidCodec::open_with_config(demuxer.track_info(), config.gapless)?;
+    let codec_impl = AndroidCodec::open_with_config(demuxer.track_info())?;
     let pool = config
         .pcm_pool
         .clone()
@@ -446,44 +436,12 @@ fn create_file_symphonia_universal(
     container: Option<ContainerFormat>,
     config: &DecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
-    use std::io::SeekFrom;
-
     use crate::{
-        GaplessInfo,
         composed::ComposedDecoder,
         demuxer::Demuxer,
-        gapless::{LAME_DECODER_DELAY, probe_mp4_gapless_dyn, read_lame_trim},
+        gapless::scoped_probe,
         symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
-        traits::DecoderInput,
     };
-
-    /// LAME header probe window: read up to ~16 `KiB` to cover `ID3v2`
-    /// tags and a couple of MP3 frames before the Xing/Info+LAME slot.
-    const LAME_PROBE_WINDOW_BYTES: usize = 16 * 1024;
-
-    fn probe_codec_gapless(
-        codec: AudioCodec,
-        source: &mut dyn DecoderInput,
-    ) -> Option<GaplessInfo> {
-        match codec {
-            AudioCodec::AacLc => probe_mp4_gapless_dyn(source).ok().flatten(),
-            AudioCodec::Mp3 => {
-                let mut buffer = Vec::with_capacity(LAME_PROBE_WINDOW_BYTES);
-                source
-                    .take(LAME_PROBE_WINDOW_BYTES as u64)
-                    .read_to_end(&mut buffer)
-                    .ok()?;
-                let trim = read_lame_trim(&buffer)?;
-                Some(GaplessInfo {
-                    leading_frames: u64::from(trim.enc_delay)
-                        .saturating_add(u64::from(LAME_DECODER_DELAY)),
-                    trailing_frames: u64::from(trim.enc_padding)
-                        .saturating_sub(u64::from(LAME_DECODER_DELAY)),
-                })
-            }
-            _ => None,
-        }
-    }
 
     tracing::debug!(
         ?codec,
@@ -492,10 +450,7 @@ fn create_file_symphonia_universal(
     );
 
     let probed_gapless = if config.gapless {
-        let _ = source.seek(SeekFrom::Start(0));
-        let info = probe_codec_gapless(codec, &mut *source);
-        let _ = source.seek(SeekFrom::Start(0));
-        info
+        scoped_probe(&mut *source, codec)?
     } else {
         None
     };

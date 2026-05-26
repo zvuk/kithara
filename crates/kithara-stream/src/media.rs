@@ -141,6 +141,31 @@ impl TryFrom<AudioCodec> for ContainerFormat {
 pub struct AmbiguousContainer(pub AudioCodec);
 
 impl AudioCodec {
+    /// Encoder-side priming silence in PCM frames added by mainstream
+    /// encoders for `codec` when no container or encoder tag declares
+    /// an explicit count. Used as a fallback by the gapless pipeline
+    /// when probing yields no metadata.
+    ///
+    /// Does **not** include any decoder-side algorithmic delay — that
+    /// is per-backend (LAME-convention `mpa` decoders add 529 for MP3,
+    /// Apple's `AudioConverter` internally compensates and adds 0) and
+    /// lives on the `FrameCodec` trait in `kithara-decode`.
+    ///
+    /// Free-standing (`AudioCodec::encoder_priming_frames(codec)`)
+    /// rather than `codec.encoder_priming_frames()` so that the
+    /// `match codec { ... }` body does not pretend to be a
+    /// `From<AudioCodec>` conversion — `u64` here means "priming
+    /// frames", not the codec rewritten as an integer.
+    #[must_use]
+    pub fn encoder_priming_frames(codec: Self) -> u64 {
+        match codec {
+            Self::AacLc | Self::AacHe | Self::AacHeV2 => 1024,
+            Self::Mp3 => 576,
+            Self::Opus => 312,
+            Self::Flac | Self::Vorbis | Self::Alac | Self::Pcm | Self::Adpcm => 0,
+        }
+    }
+
     /// Parse from HLS CODECS attribute value.
     ///
     /// Examples:

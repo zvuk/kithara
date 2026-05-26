@@ -682,7 +682,10 @@ impl HlsVariant {
                         entry.set_state(SegmentState::Loaded);
                         continue;
                     }
-                    out.push(self.emit_fetch_cmd(ctx, seg_idx));
+                    let Some(cmd) = self.emit_fetch_cmd(ctx, seg_idx) else {
+                        continue;
+                    };
+                    out.push(cmd);
                 }
             }
             remaining -= 1;
@@ -708,26 +711,34 @@ impl HlsVariant {
         segment_index = u64::from(seg_idx),
         variant = self.variant as u64
     )]
-    fn emit_fetch_cmd(self: &Arc<Self>, ctx: &PlanCtx, seg_idx: u32) -> FetchCmd {
+    fn emit_fetch_cmd(self: &Arc<Self>, ctx: &PlanCtx, seg_idx: u32) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
-        let resource = entry.decrypt_ctx.clone().map_or_else(
-            || {
-                ctx.asset_store
-                    .acquire_resource(&entry.resource_id)
-                    .expect("acquire_resource for segment must succeed")
-            },
+        let acquire = entry.decrypt_ctx.clone().map_or_else(
+            || ctx.asset_store.acquire_resource(&entry.resource_id),
             |ctx_inner| {
                 ctx.asset_store
                     .acquire_resource_with_ctx(&entry.resource_id, Some(ctx_inner))
-                    .expect("acquire_resource_with_ctx for segment must succeed")
             },
         );
-        self.build_cmd(
+        let resource = match acquire {
+            Ok(r) => r,
+            Err(err) => {
+                debug!(
+                    variant = self.variant,
+                    seg_idx,
+                    error = %err,
+                    "emit_fetch_cmd: acquire_resource dropped (variant switch in flight)"
+                );
+                entry.set_state(SegmentState::Missing);
+                return None;
+            }
+        };
+        Some(self.build_cmd(
             entry.url.clone(),
             resource,
             Arc::clone(&entry.state),
             PlannedFetch::Segment(seg_idx),
-        )
+        ))
     }
 
     /// Reader-facing lookup in **virtual** byte space. Subtracts the

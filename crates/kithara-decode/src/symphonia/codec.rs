@@ -21,6 +21,7 @@ use symphonia::core::{
 };
 
 use crate::{
+    GaplessInfo,
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
@@ -28,7 +29,21 @@ use crate::{
     types::{DecoderTrackInfo, PcmSpec},
 };
 
-const TRACK_ID: u32 = 0;
+/// Module-scoped constants for [`SymphoniaCodec`].
+struct Consts;
+
+impl Consts {
+    /// Symphonia packets are unidimensional (single audio track) so
+    /// we pin `track_id` = 0 — Symphonia uses the field for routing
+    /// across multiplexed streams that we never produce.
+    const TRACK_ID: u32 = 0;
+
+    /// LAME-convention decoder algorithmic delay for the `mpa` MP3
+    /// decoder (528 polyphase synthesis filter convergence + 1 sync
+    /// sample). See [`crate::codec::FrameCodec::decoder_algo_delay`]
+    /// + `kithara-decode/README.md` "Gapless probe contract".
+    const MP3_DECODER_DELAY: u64 = 528 + 1;
+}
 
 /// Frame codec backed by a symphonia codec registry decoder.
 pub(crate) struct SymphoniaCodec {
@@ -62,7 +77,7 @@ impl SymphoniaCodec {
         let opts = AudioDecoderOptions::default();
         let decoder = registry
             .make_audio_decoder(params, &opts)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            .map_err(DecodeError::backend)?;
 
         let sample_rate = params.sample_rate.ok_or_else(|| {
             DecodeError::InvalidData("symphonia native params missing sample rate".into())
@@ -123,10 +138,13 @@ impl SymphoniaCodec {
         let registry: &CodecRegistry = crate::symphonia::registry::get_codecs();
         let mut opts = AudioDecoderOptions::default();
         opts.gapless = config.gapless;
-        let track_gapless = track.gapless;
         let decoder = registry
             .make_audio_decoder(&params, &opts)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            .map_err(DecodeError::backend)?;
+        let algo_delay = symphonia_decoder_algo_delay(track.codec);
+        let track_gapless = track
+            .gapless
+            .map(|info| apply_decoder_algo_delay(info, algo_delay));
 
         let spec = PcmSpec {
             channels: track.channels,
@@ -165,7 +183,7 @@ impl FrameCodec for SymphoniaCodec {
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate);
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet = Packet::new(
-            TRACK_ID,
+            Consts::TRACK_ID,
             packet_pts,
             PktDuration::new(0),
             frame_data.to_vec(),
@@ -183,7 +201,7 @@ impl FrameCodec for SymphoniaCodec {
                 out.clear();
                 return Ok(0);
             }
-            Err(e) => return Err(DecodeError::Backend(Box::new(e))),
+            Err(e) => return Err(DecodeError::backend(e)),
         };
 
         let num_samples = decoded.samples_interleaved();
@@ -226,11 +244,14 @@ impl FrameCodec for SymphoniaCodec {
             return Ok(0);
         }
 
-        out.ensure_len(num_samples)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        out.ensure_len(num_samples)?;
         decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
         out.truncate(num_samples);
         Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
+    }
+
+    fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
+        symphonia_decoder_algo_delay(codec)
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
@@ -247,6 +268,23 @@ impl FrameCodec for SymphoniaCodec {
     }
 }
 
+fn symphonia_decoder_algo_delay(codec: AudioCodec) -> u64 {
+    match codec {
+        AudioCodec::Mp3 => Consts::MP3_DECODER_DELAY,
+        _ => 0,
+    }
+}
+
+fn apply_decoder_algo_delay(info: GaplessInfo, algo_delay: u64) -> GaplessInfo {
+    if algo_delay == 0 {
+        return info;
+    }
+    GaplessInfo {
+        leading_frames: info.leading_frames.saturating_add(algo_delay),
+        trailing_frames: info.trailing_frames.saturating_sub(algo_delay),
+    }
+}
+
 fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfile>)> {
     match codec {
         AudioCodec::AacLc => Ok((CODEC_ID_AAC, Some(CODEC_PROFILE_AAC_LC))),
@@ -258,6 +296,50 @@ fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfi
         AudioCodec::Opus => Ok((CODEC_ID_OPUS, None)),
         AudioCodec::Vorbis => Ok((CODEC_ID_VORBIS, None)),
         AudioCodec::Pcm | AudioCodec::Adpcm => Err(DecodeError::UnsupportedCodec(codec)),
+    }
+}
+
+#[cfg(test)]
+mod priming_tests {
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
+
+    use super::SymphoniaCodec;
+    use crate::{
+        codec::{CodecPriming, FrameCodec},
+        demuxer::TrackInfo,
+        symphonia::config::SymphoniaConfig,
+    };
+
+    fn mp3_track() -> TrackInfo {
+        TrackInfo {
+            codec: AudioCodec::Mp3,
+            sample_rate: 44_100,
+            channels: 2,
+            extra_data: Vec::new(),
+            duration: None,
+            gapless: None,
+        }
+    }
+
+    #[kithara::test]
+    fn symphonia_priming_is_default_for_all_codecs() {
+        let codec = SymphoniaCodec::open_with_config(&mp3_track(), &SymphoniaConfig::default())
+            .expect("BUG: MP3 codec open");
+        for c in [
+            AudioCodec::AacLc,
+            AudioCodec::AacHe,
+            AudioCodec::AacHeV2,
+            AudioCodec::Mp3,
+            AudioCodec::Flac,
+            AudioCodec::Pcm,
+        ] {
+            assert_eq!(
+                codec.priming(c),
+                CodecPriming::default(),
+                "symphonia handles {c:?} priming internally"
+            );
+        }
     }
 }
 

@@ -236,6 +236,7 @@ where
                     landed_at: pos,
                     landed_frame: 0,
                     landed_byte: None,
+                    preroll: kithara_stream::PrerollHint::NotNeeded,
                 })
             }))
             .at_least_times(0),

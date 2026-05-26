@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crate::source::PendingReason;
+use crate::{preroll::PrerollHint, source::PendingReason};
 
 /// Lightweight read-side signal fed into [`DecoderHooks::on_chunk`].
 ///
@@ -28,8 +28,14 @@ pub enum ReaderChunkSignal {
 pub enum ReaderSeekSignal {
     /// Decoder parked at the destination. `landed_byte` is the absolute
     /// byte offset the decoder picked (granule-aligned), when the
-    /// backend exposes one.
-    Landed { landed_byte: Option<u64> },
+    /// backend exposes one. `preroll` hints at an earlier byte position
+    /// the source must keep available so the decoder can warm its MDCT
+    /// state before emitting the first user-visible chunk. HLS uses this
+    /// to delay segment eviction; random-access sources (file) ignore it.
+    Landed {
+        landed_byte: Option<u64>,
+        preroll: PrerollHint,
+    },
     /// Seek target was past the decoder's known duration. The decoder
     /// is now parked at EOF.
     PastEof,

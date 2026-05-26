@@ -8,7 +8,8 @@ use super::{
     source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
-    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
+    codec::CodecPriming,
+    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PrerollHint, TrackInfo},
     error::{DecodeError, DecodeResult},
     traits::BoxedSource,
 };
@@ -193,7 +194,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
         }
     }
 
-    fn seek(&mut self, target: Duration) -> DecodeResult<DemuxSeekOutcome> {
+    fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         let Some(desc) = self.segments.segment_at_time(target) else {
             return Err(DecodeError::SeekFailed(format!(
                 "no segment for time {}ms",
@@ -210,6 +211,18 @@ impl Demuxer for Fmp4SegmentDemuxer {
         let landed_at = desc.decode_time;
         let segment_index = desc.segment_index;
         let variant_index = desc.variant_index;
+        let preroll = match compute_preroll_byte(
+            target,
+            landed_at,
+            segment_index,
+            self.segments.as_ref(),
+            &priming,
+        ) {
+            Some(byte) => PrerollHint::Required(byte),
+            None if priming.byte_margin == 0 => PrerollHint::NotNeeded,
+            None if segment_index == 0 => PrerollHint::FirstSegment,
+            None => PrerollHint::NotNeeded,
+        };
         self.cursor = Some(SegmentCursor {
             segment_index,
             variant_index,
@@ -219,12 +232,31 @@ impl Demuxer for Fmp4SegmentDemuxer {
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
             landed_byte: Some(landed_byte),
+            preroll,
         })
     }
 
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
     }
+}
+
+fn compute_preroll_byte(
+    target: Duration,
+    landed_at: Duration,
+    segment_index: u32,
+    layout: &dyn SegmentLayout,
+    priming: &CodecPriming,
+) -> Option<u64> {
+    if priming.byte_margin == 0 {
+        return None;
+    }
+    if landed_at < target {
+        return None;
+    }
+    let prev_index = segment_index.checked_sub(1)?;
+    let prev = layout.segment_at_index(prev_index)?;
+    Some(prev.byte_range.start)
 }
 
 fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInfo {

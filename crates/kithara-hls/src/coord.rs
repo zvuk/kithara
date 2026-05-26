@@ -223,7 +223,10 @@ impl HlsCoord {
             if is_cross_codec {
                 v_new.invalidate_init();
             }
-            let target_time = self.timeline.committed_position();
+            let target_time = self
+                .timeline
+                .seek_target()
+                .unwrap_or_else(|| self.timeline.committed_position());
             let target_seg: u32 = self
                 .playlist_state
                 .find_seek_point_for_time(new_v, target_time)

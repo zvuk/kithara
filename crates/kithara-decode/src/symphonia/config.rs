@@ -12,9 +12,10 @@ pub(crate) struct SymphoniaConfig {
     /// Enable gapless trim wiring through the Symphonia decoder.
     ///
     /// When `true`, [`SymphoniaCodec::open_with_config`](super::codec::SymphoniaCodec::open_with_config)
-    /// flips `AudioDecoderOptions::gapless = true`, and the factory in
-    /// P7 calls [`probe_track_info`](super::codec::SymphoniaCodec::probe_track_info)
-    /// to populate [`crate::DecoderTrackInfo::gapless`] from MP4 udta.
+    /// flips `AudioDecoderOptions::gapless = true` so codecs that
+    /// internally trim (FLAC/Opus/Vorbis) honour it. MP3 priming is
+    /// applied separately via
+    /// [`crate::codec::FrameCodec::decoder_algo_delay`].
     pub(crate) gapless: bool,
 }
 

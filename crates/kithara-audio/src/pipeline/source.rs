@@ -247,6 +247,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             decoder,
             base_offset: 0,
             media_info: initial_media_info,
+            installed_at_seek_epoch: timeline.seek_epoch(),
         };
         timeline.set_playing(true);
         Self {
@@ -669,6 +670,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 landed_frame,
                 landed_at,
                 landed_byte,
+                ..
             } => (landed_frame, landed_at, landed_byte),
             DecoderSeekOutcome::PastEof { duration } => {
                 let end_frame = num_traits::cast::ToPrimitive::to_u64(
@@ -787,6 +789,18 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// `NoChange` when neither applies.
     #[kithara::probe]
     fn detect_format_change(&self) -> FormatChangeDetection {
+        // Suppress redundant cross-variant recreate inside a single seek
+        // epoch: when the session was installed for the in-flight seek's
+        // epoch and that seek is still pending, the decoder is already
+        // aligned with the seek's landing variant. A second recreate at
+        // the same epoch is wasted work and discards the freshly-built
+        // decoder before it ever emits a sample.
+        let timeline = self.shared_stream.timeline();
+        if timeline.is_seek_pending()
+            && self.session.installed_at_seek_epoch == timeline.seek_epoch()
+        {
+            return FormatChangeDetection::NoChange;
+        }
         let current_info = self.shared_stream.media_info();
         let session_info = self.session.media_info.as_ref();
         let Some(target) = current_info
@@ -913,6 +927,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             base_offset,
             decoder: new_decoder,
             media_info: Some(new_info.clone()),
+            installed_at_seek_epoch: self.shared_stream.timeline().seek_epoch(),
         };
         debug!(?new_duration, base_offset, "Decoder recreated successfully");
         self.emit_event(AudioEvent::DecoderReady {

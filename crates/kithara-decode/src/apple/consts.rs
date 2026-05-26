@@ -24,6 +24,11 @@ impl Consts {
     /// priming + trailing padding in PCM frames). Available after the
     /// converter has consumed at least one input packet.
     pub(crate) const kAudioConverterPrimeInfo: u32 = 0x7072_696d;
+    /// `'pmth'` — `AudioConverterPrimeMethod`: controls how the
+    /// converter handles codec-side priming/padding. Set to
+    /// [`Self::kConverterPrimeMethod_None`] so the decoder emits raw
+    /// `'adts'` — raw AAC ADTS-framed bitstream file-type hint.
+    pub(crate) const kAudioFileAAC_ADTSType: u32 = 0x6164_7473;
     /// `'caff'` — Core Audio Format file-type hint.
     pub(crate) const kAudioFileCAFType: u32 = 0x6361_6666;
     /// `'m4af'` — M4A (ALAC / AAC) file-type hint.

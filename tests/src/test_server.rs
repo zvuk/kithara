@@ -327,6 +327,23 @@ impl HlsFixtureBuilder {
         self
     }
 
+    /// Override the encoder bit-rate hint on the packaged-audio request set
+    /// by one of the `packaged_audio_*` builders. `None` keeps the codec's
+    /// default (set by `default_bit_rate`).
+    ///
+    /// Must be called AFTER a `packaged_audio_*` builder so `packaged_audio`
+    /// is populated.
+    #[must_use]
+    pub fn packaged_audio_bit_rate(mut self, bit_rate: Option<u64>) -> Self {
+        let packaged = self.spec.packaged_audio.as_mut().expect(
+            "packaged_audio_bit_rate: call packaged_audio_* before packaged_audio_bit_rate",
+        );
+        if let Some(rate) = bit_rate {
+            packaged.bit_rate = Some(rate);
+        }
+        self
+    }
+
     #[must_use]
     pub fn packaged_audio_aac_lc(self, sample_rate: u32, channels: u16) -> Self {
         self.packaged_audio_signal_aac_lc(sample_rate, channels, PackagedSignal::Sawtooth)

@@ -62,19 +62,16 @@ impl AndroidMediaExtractor {
     pub(crate) fn open(mut source: BoxedSource) -> DecodeResult<Self> {
         let end = source
             .seek(SeekFrom::End(0))
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            .map_err(DecodeError::backend)?;
         source
             .seek(SeekFrom::Start(0))
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
-        let size = i64::try_from(end).map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            .map_err(DecodeError::backend)?;
+        let size = i64::try_from(end).map_err(DecodeError::backend)?;
         let mut ctx = Box::new(DataSourceCtx { source, size });
 
         // SAFETY: `AMediaDataSource_new` returns NULL on failure; we
-        let ds = NonNull::new(unsafe { AMediaDataSource_new() }).ok_or_else(|| {
-            DecodeError::Backend(Box::new(std::io::Error::other(
-                "AMediaDataSource_new returned null",
-            )))
-        })?;
+        let ds = NonNull::new(unsafe { AMediaDataSource_new() })
+            .ok_or_else(|| DecodeError::backend_msg("AMediaDataSource_new returned null"))?;
 
         // SAFETY: `ds` is live; `ctx` is boxed (stable address) and
         unsafe {
@@ -92,9 +89,9 @@ impl AndroidMediaExtractor {
             None => {
                 // SAFETY: `ds` is non-null and we're abandoning it
                 unsafe { AMediaDataSource_delete(ds.as_ptr()) };
-                return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+                return Err(DecodeError::backend_msg(
                     "AMediaExtractor_new returned null",
-                ))));
+                ));
             }
         };
 
@@ -106,9 +103,9 @@ impl AndroidMediaExtractor {
                 AMediaExtractor_delete(ex.as_ptr());
                 AMediaDataSource_delete(ds.as_ptr());
             }
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!("AMediaExtractor_setDataSourceCustom failed: {st}"),
-            ))));
+            return Err(DecodeError::backend_msg(format!(
+                "AMediaExtractor_setDataSourceCustom failed: {st}"
+            )));
         }
 
         // SAFETY: extractor is live.
@@ -133,7 +130,7 @@ impl AndroidMediaExtractor {
         if n < 0 {
             return Ok(None);
         }
-        let read = usize::try_from(n).map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        let read = usize::try_from(n).map_err(DecodeError::backend)?;
         // SAFETY: extractor is live.
         let pts_us = unsafe { AMediaExtractor_getSampleTime(self.raw.as_ptr()) };
         Ok(Some((read, pts_us)))
@@ -145,9 +142,9 @@ impl AndroidMediaExtractor {
         let st =
             unsafe { AMediaExtractor_seekTo(self.raw.as_ptr(), pts_us, SEEK_MODE_PREVIOUS_SYNC) };
         if st != MEDIA_STATUS_OK {
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!("AMediaExtractor_seekTo failed: {st}"),
-            ))));
+            return Err(DecodeError::backend_msg(format!(
+                "AMediaExtractor_seekTo failed: {st}"
+            )));
         }
         Ok(())
     }
@@ -159,17 +156,17 @@ impl AndroidMediaExtractor {
                 // SAFETY: extractor is live; `i` is bounded by
                 let st = unsafe { AMediaExtractor_selectTrack(self.raw.as_ptr(), i) };
                 if st != MEDIA_STATUS_OK {
-                    return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                        format!("AMediaExtractor_selectTrack({i}) failed: {st}"),
-                    ))));
+                    return Err(DecodeError::backend_msg(format!(
+                        "AMediaExtractor_selectTrack({i}) failed: {st}"
+                    )));
                 }
                 self.selected_track = Some(i);
                 return Ok(info);
             }
         }
-        Err(DecodeError::Backend(Box::new(std::io::Error::other(
+        Err(DecodeError::backend_msg(
             "no audio track found in extractor",
-        ))))
+        ))
     }
 
     pub(crate) fn track_count(&self) -> usize {
@@ -180,9 +177,9 @@ impl AndroidMediaExtractor {
         // SAFETY: extractor is live; the NDK bounds-checks `idx` and
         let fmt_raw = unsafe { AMediaExtractor_getTrackFormat(self.raw.as_ptr(), idx) };
         let fmt = NonNull::new(fmt_raw).ok_or_else(|| {
-            DecodeError::Backend(Box::new(std::io::Error::other(format!(
+            DecodeError::backend_msg(format!(
                 "AMediaExtractor_getTrackFormat({idx}) returned null"
-            ))))
+            ))
         })?;
         let info = read_track_format(fmt);
         // SAFETY: we own the returned format handle; free it on return.
@@ -206,9 +203,7 @@ fn read_track_format(fmt: NonNull<ffi::AMediaFormat>) -> DecodeResult<TrackForma
     // SAFETY: `fmt` is non-null; `mime_ptr` is an out-param. The NDK
     let ok = unsafe { AMediaFormat_getString(fmt.as_ptr(), KEY_MIME.as_ptr(), &mut mime_ptr) };
     if !ok || mime_ptr.is_null() {
-        return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-            "format missing mime",
-        ))));
+        return Err(DecodeError::backend_msg("format missing mime"));
     }
     // SAFETY: `mime_ptr` is a NUL-terminated C string valid for the
     let mime = unsafe { CStr::from_ptr(mime_ptr) }

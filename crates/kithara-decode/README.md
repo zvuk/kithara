@@ -133,7 +133,7 @@ When `symphonia` is disabled (`default-features = false` + only `apple` / `andro
 - `src/symphonia/` (feature `symphonia`) — Symphonia `Decoder` implementation; probe and direct paths; `ReadSeekAdapter`.
 - `src/apple/` (feature `apple`, macOS / iOS) — Apple `AudioToolbox` backend over `AudioFile` / `AudioConverter` FFI.
 - `src/android/` (feature `android`, Android) — `MediaExtractor` / `MediaCodec` backend over JNI.
-- `src/gapless.rs` — `GaplessInfo`, `GaplessMode`, `GaplessTrimmer`, `SilenceTrimParams`, plus `codec_priming_frames` and the MP4 gapless probe.
+- `src/gapless/` — `GaplessInfo`, `GaplessMode`, `GaplessTrimmer`, `SilenceTrimParams`, the encoder-side `probe_codec_gapless`, MP4 `udta`/`iTunSMPB` / MPEG-audio Xing/LAME tag parsers, and the trailing fade/silence trim heuristics.
 - `src/pcm_time.rs` — timeline math (`duration_for_frames`, `frames_for_duration`, PTS helpers) shared across backends.
 - `src/types.rs`, `src/error.rs` — shared types and `DecodeError` / `ErrorClass`.
 
@@ -150,6 +150,87 @@ To exercise the same protocol per backend in isolation (no cross-feature unifica
 ```bash
 just test-decoders
 ```
+
+## Gapless probe contract
+
+The gapless pipeline splits "where does silence come from?" into two
+independent layers:
+
+1. **Encoder-side priming / padding** — silence the *encoder* added at
+   compress time. `probe_codec_gapless` reads container metadata
+   (`iTunSMPB` / `elst` for AAC LC inside MP4, Xing/Info+LAME for MP3
+   inside MPEG audio) and returns `Some(GaplessInfo)` when it found
+   real values. **No fallback chains** — when metadata is absent the
+   probe returns `None` and the pipeline falls back through
+   `GaplessMode::CodecPriming` to `AudioCodec::encoder_priming_frames`
+   (libmp3lame default 576, AAC LC MDCT block 1024, Opus RFC pre-skip
+   312, others 0).
+
+2. **Decoder-side algorithmic delay** — silence the *decoder* itself
+   emits before it converges. Lives on `FrameCodec::decoder_algo_delay`
+   and is per-backend:
+   - Symphonia `mpa` (LAME convention): +529 leading, −529 trailing
+     for MP3. Symphonia's own demuxer parses the LAME tag and sets
+     `track.delay = enc_delay + 528 + 1`, but the 0.6.0-alpha.1
+     demuxer does NOT populate per-packet `trim_start` / `trim_end`,
+     so the decoder's `opts.gapless` flag is a no-op for MP3 — the
+     caller must apply the trim.
+   - Apple `AudioConverter` MP3: +0 (internally compensated; the
+     converter emits exactly `enc_delay` samples of leading silence).
+   - Android `MediaCodec`: +0 (no surfaced priming; metadata comes
+     from the demuxer's MP4 udta probe).
+
+`SymphoniaCodec::open_with_config` folds its own algo delay into the
+probed `GaplessInfo` before exposing it through `track_info()`; the
+audio pipeline reads one fully-resolved trim and forgets the layered
+origin. `Decoder::default_priming_frames` exposes the same combined
+number for the `CodecPriming` fallback so
+`kithara_audio::pipeline::gapless::resolve_codec_priming` does not
+need to know which backend it is talking to.
+
+Empirical justification: raw Symphonia output of a libmp3lame
+sawtooth (`enc_delay` = 576) starts at sample 1105 = 576 + 529; raw
+Apple output of the same fixture starts at sample 576. Both backends
+ignore the LAME tag entirely — verified by patching `enc_delay` in the
+tag to arbitrary values (0 / 100 / 1152 / 2400); leading silence in
+output stayed constant. The probe is the only thing that reads the
+tag, then the codec adds (or doesn't add) its own algorithmic delay.
+
+## Apple AAC input format (ESDS rationale)
+
+The Apple `AudioConverter` accepts AAC via a magic cookie whose layout
+is the ISO/IEC 14496-1 `ES_Descriptor`. Demuxers can hand us either
+the raw `AudioSpecificConfig` body (fMP4 / HLS path, first byte =
+5-bit AOT << 3, e.g. `0x10`–`0x17` for AAC LC) or the full ESDS atom
+body (`AppleAudioFileDemuxer` reads `kAudioFilePropertyMagicCookieData`
+which for M4A is already a complete ES_Descriptor; first byte = ESDS
+tag `0x03`). A single-byte sniff disambiguates without parsing —
+`build_aac_input_format` wraps raw ASC into the minimum ESDS chain
+Apple's `AudioFormat` / `AudioConverter` APIs accept; full ESDS bodies
+go through unchanged.
+
+The ESDS shape we produce mirrors what `AudioFileGetProperty(MagicCookieData)`
+returns for an `.m4a` file:
+
+```text
+ES_Descriptor (tag 0x03):
+  ES_ID (2 bytes) = 0; Flags (1 byte) = 0
+  DecoderConfigDescriptor (tag 0x04):
+    OTI (1 byte) = 0x40 (MPEG-4 Audio)
+    StreamType (1 byte) = 0x15 (Audio << 2 | reserved bit)
+    BufferSizeDB (3 bytes) = 0
+    MaxBitrate (4 bytes) = 0
+    AvgBitrate (4 bytes) = 0
+    DecoderSpecificInfo (tag 0x05): <ASC bytes>
+  SLConfigDescriptor (tag 0x06): predefined (1 byte) = 0x02
+```
+
+After cookie installation we ask `AudioFormatGetProperty(FormatList)`
+to derive the canonical ASBD for the first format item — that is the
+authoritative `mSampleRate` / `mChannelsPerFrame` /
+`mFramesPerPacket`, not whatever the demuxer reported in `TrackInfo`
+(HE-AAC v2 doubles the rate vs the container declaration; `FormatList`
+returns the upsampled rate).
 
 ## Integration
 

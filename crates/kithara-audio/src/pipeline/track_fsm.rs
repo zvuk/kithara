@@ -178,6 +178,12 @@ pub(crate) struct DecoderSession {
     pub(crate) decoder: Box<dyn Decoder>,
     pub(crate) media_info: Option<MediaInfo>,
     pub(crate) base_offset: u64,
+    /// Seek epoch at which this session was installed. Used by
+    /// `detect_format_change` to suppress a redundant recreate when
+    /// the in-flight seek epoch still matches the epoch that produced
+    /// the session — the decoder is already aligned with the seek's
+    /// landing variant.
+    pub(crate) installed_at_seek_epoch: u64,
 }
 
 /// Result of a single `step_track()` call.

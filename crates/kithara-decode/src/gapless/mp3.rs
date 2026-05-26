@@ -5,10 +5,6 @@ impl Consts {
     const SYNC_VALUE: u32 = 0xFFE0_0000;
 }
 
-/// Canonical LAME/Lavc/Lavf decoder convergence delay (528 + 1 samples).
-/// LAME-aware decoders pre-skip `LAME_DECODER_DELAY + enc_delay` and post-skip `enc_padding − LAME_DECODER_DELAY`.
-pub(crate) const LAME_DECODER_DELAY: u32 = 528 + 1;
-
 /// Raw fields read from the LAME extension of a Xing/Info tag.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LameTrim {

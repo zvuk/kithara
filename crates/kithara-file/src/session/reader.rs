@@ -69,7 +69,7 @@ impl DecoderHooks for FileReaderHooks {
 
     fn on_seek(&mut self, signal: ReaderSeekSignal) {
         self.initial_seek_published = true;
-        let ReaderSeekSignal::Landed { landed_byte } = signal else {
+        let ReaderSeekSignal::Landed { landed_byte, .. } = signal else {
             return;
         };
         let Some(to) = landed_byte else {

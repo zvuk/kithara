@@ -65,11 +65,11 @@ impl AppleAudioFile {
     pub(crate) fn open(mut source: BoxedSource, hint: Option<u32>) -> DecodeResult<Self> {
         let end = source
             .seek(SeekFrom::End(0))
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            .map_err(DecodeError::backend)?;
         source
             .seek(SeekFrom::Start(0))
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
-        let size = i64::try_from(end).map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            .map_err(DecodeError::backend)?;
+        let size = i64::try_from(end).map_err(DecodeError::backend)?;
         let mut ctx = Box::new(CallbackCtx {
             source,
             size,
@@ -90,10 +90,10 @@ impl AppleAudioFile {
             )
         };
         if status != Consts::noErr {
-            return Err(DecodeError::Backend(Box::new(io::Error::other(format!(
+            return Err(DecodeError::backend_msg(format!(
                 "AudioFileOpenWithCallbacks failed: {}",
                 os_status_to_string(status)
-            )))));
+            )));
         }
 
         let data_format = read_data_format(handle)?;
@@ -124,7 +124,7 @@ impl AppleAudioFile {
         let io_err = self._ctx.last_error.take().unwrap_or_else(|| {
             io::Error::other(format!("{op} failed: {}", os_status_to_string(status)))
         });
-        DecodeError::Backend(Box::new(io_err))
+        DecodeError::backend(io_err)
     }
 
     /// Read one VBR packet at `starting_packet` into `buf`. Returns
@@ -136,8 +136,7 @@ impl AppleAudioFile {
         starting_packet: u64,
         buf: &mut [u8],
     ) -> DecodeResult<Option<(u32, AudioStreamPacketDescription)>> {
-        let mut bytes =
-            UInt32::try_from(buf.len()).map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        let mut bytes = UInt32::try_from(buf.len()).map_err(DecodeError::backend)?;
         let mut packets: UInt32 = 1;
         let mut desc = AudioStreamPacketDescription::default();
         self._ctx.last_error.set(None);
@@ -176,8 +175,7 @@ impl AppleAudioFile {
         max_packets: u32,
         buf: &mut [u8],
     ) -> DecodeResult<(u32, u32)> {
-        let mut bytes =
-            UInt32::try_from(buf.len()).map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        let mut bytes = UInt32::try_from(buf.len()).map_err(DecodeError::backend)?;
         let mut packets: UInt32 = max_packets;
         self._ctx.last_error.set(None);
         // SAFETY: `self.handle` non-null; out-params exclusively
@@ -210,8 +208,8 @@ impl Drop for AppleAudioFile {
 
 fn read_data_format(handle: AudioFileID) -> DecodeResult<AudioStreamBasicDescription> {
     let mut asbd = AudioStreamBasicDescription::default();
-    let mut size = UInt32::try_from(size_of::<AudioStreamBasicDescription>())
-        .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+    let mut size =
+        UInt32::try_from(size_of::<AudioStreamBasicDescription>()).map_err(DecodeError::backend)?;
     // SAFETY: `handle` is live; `asbd` and `size` are exclusively
     let status = unsafe {
         AudioFileGetProperty(
@@ -222,18 +220,17 @@ fn read_data_format(handle: AudioFileID) -> DecodeResult<AudioStreamBasicDescrip
         )
     };
     if status != Consts::noErr {
-        return Err(DecodeError::Backend(Box::new(io::Error::other(format!(
+        return Err(DecodeError::backend_msg(format!(
             "AudioFileGetProperty(DataFormat) failed: {}",
             os_status_to_string(status)
-        )))));
+        )));
     }
     Ok(asbd)
 }
 
 fn read_packet_count(handle: AudioFileID) -> DecodeResult<u64> {
     let mut count: u64 = 0;
-    let mut size =
-        UInt32::try_from(size_of::<u64>()).map_err(|e| DecodeError::Backend(Box::new(e)))?;
+    let mut size = UInt32::try_from(size_of::<u64>()).map_err(DecodeError::backend)?;
     // SAFETY: `handle` live; `count`/`size` exclusively borrowed; size
     let status = unsafe {
         AudioFileGetProperty(
@@ -244,18 +241,17 @@ fn read_packet_count(handle: AudioFileID) -> DecodeResult<u64> {
         )
     };
     if status != Consts::noErr {
-        return Err(DecodeError::Backend(Box::new(io::Error::other(format!(
+        return Err(DecodeError::backend_msg(format!(
             "AudioFileGetProperty(PacketCount) failed: {}",
             os_status_to_string(status)
-        )))));
+        )));
     }
     Ok(count)
 }
 
 fn read_max_packet_size(handle: AudioFileID) -> DecodeResult<u32> {
     let mut sz: u32 = 0;
-    let mut size =
-        UInt32::try_from(size_of::<u32>()).map_err(|e| DecodeError::Backend(Box::new(e)))?;
+    let mut size = UInt32::try_from(size_of::<u32>()).map_err(DecodeError::backend)?;
     // SAFETY: `handle` live; `sz`/`size` exclusively borrowed; size
     let status = unsafe {
         AudioFileGetProperty(
@@ -266,10 +262,10 @@ fn read_max_packet_size(handle: AudioFileID) -> DecodeResult<u32> {
         )
     };
     if status != Consts::noErr {
-        return Err(DecodeError::Backend(Box::new(io::Error::other(format!(
+        return Err(DecodeError::backend_msg(format!(
             "AudioFileGetProperty(MaxPacketSize) failed: {}",
             os_status_to_string(status)
-        )))));
+        )));
     }
     Ok(sz)
 }

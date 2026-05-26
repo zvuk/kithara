@@ -1,6 +1,5 @@
 use kithara_decode::{
-    Decoder, GaplessMode, GaplessOutput, GaplessTrimmer, PcmChunk, codec_priming_frames,
-    duration_for_frames,
+    Decoder, GaplessMode, GaplessOutput, GaplessTrimmer, PcmChunk, duration_for_frames,
 };
 use kithara_platform::time::Duration;
 use kithara_stream::MediaInfo;
@@ -101,7 +100,7 @@ fn resolve_codec_priming(decoder: &dyn Decoder, media_info: Option<&MediaInfo>) 
     let Some(codec) = media_info.and_then(|info| info.codec) else {
         return GaplessTrimmer::disabled();
     };
-    let frames = codec_priming_frames(codec);
+    let frames = decoder.default_priming_frames(codec);
     if frames == 0 {
         GaplessTrimmer::disabled()
     } else {

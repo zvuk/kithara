@@ -1,5 +1,6 @@
-use std::{error::Error as StdError, io, io::ErrorKind};
+use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
+use kithara_bufpool::BudgetExhausted;
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
 use thiserror::Error;
 
@@ -122,6 +123,28 @@ pub enum ErrorClass {
 }
 
 impl DecodeError {
+    /// Wrap any `StdError + Send + Sync` payload as a [`DecodeError::Backend`].
+    /// Avoids 30+ repeats of `.map_err(|e| DecodeError::Backend(Box::new(e)))`
+    /// across the apple / android / symphonia codec layers.
+    #[must_use]
+    pub fn backend<E>(err: E) -> Self
+    where
+        E: Into<Box<dyn StdError + Send + Sync>>,
+    {
+        Self::Backend(err.into())
+    }
+
+    /// Convenience constructor for "we have a description string, not
+    /// a typed source error" — typically `format!(...)` payloads for
+    /// FFI status codes (Apple `OSStatus`, Android `media_status_t`).
+    #[must_use]
+    pub fn backend_msg<S>(msg: S) -> Self
+    where
+        S: Into<String>,
+    {
+        Self::Backend(Box::new(io::Error::other(msg.into())))
+    }
+
     /// Tag the error in one source-chain pass so hot decode loops can
     /// replace `is_interrupted()` + `is_variant_change()` predicate
     /// ladders with a single `match` over the discriminant.
@@ -174,6 +197,18 @@ impl From<io::Error> for DecodeError {
         } else {
             Self::Io(err)
         }
+    }
+}
+
+impl From<TryFromIntError> for DecodeError {
+    fn from(err: TryFromIntError) -> Self {
+        Self::backend(err)
+    }
+}
+
+impl From<BudgetExhausted> for DecodeError {
+    fn from(err: BudgetExhausted) -> Self {
+        Self::backend(err)
     }
 }
 
@@ -232,9 +267,14 @@ mod tests {
 
     #[kithara::test]
     fn test_decode_error_backend_wraps_any_error() {
-        let inner = IoError::other("symphonia error");
-        let err = DecodeError::Backend(Box::new(inner));
+        let err = DecodeError::backend(IoError::other("symphonia error"));
         assert!(err.to_string().contains("Decoder error"));
+    }
+
+    #[kithara::test]
+    fn test_decode_error_backend_msg_wraps_a_display() {
+        let err = DecodeError::backend_msg(format!("oss status {}", 42));
+        assert!(err.to_string().contains("oss status 42"));
     }
 
     #[kithara::test]
@@ -245,11 +285,11 @@ mod tests {
 
     #[kithara::test]
     #[case::seek_pending_counts_as_interrupted(
-        DecodeError::Backend(Box::new(IoError::other(PendingReason::SeekPending))),
+        DecodeError::backend(IoError::other(PendingReason::SeekPending)),
         true
     )]
     #[case::other_io_is_not_interrupted(
-        DecodeError::Backend(Box::new(IoError::other("other backend error"))),
+        DecodeError::backend(IoError::other("other backend error")),
         false
     )]
     fn test_backend_is_interrupted(#[case] decode_err: DecodeError, #[case] expected: bool) {
