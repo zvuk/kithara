@@ -90,6 +90,10 @@ async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
     );
 }
 
+/// Count files under `root`, excluding the asset store's `_index/`
+/// bookkeeping dir (availability/lru/pins snapshots persisted by the
+/// flush hub) — those are not prefetched media and must not inflate the
+/// prefetch-cap assertion.
 fn count_files_recursive(root: &Path) -> usize {
     let mut count = 0;
     let Ok(entries) = fs::read_dir(root) else {
@@ -98,6 +102,9 @@ fn count_files_recursive(root: &Path) -> usize {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == "_index") {
+                continue;
+            }
             count += count_files_recursive(&path);
         } else {
             count += 1;
@@ -141,10 +148,11 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
 
     let files = count_files_recursive(temp_dir.path());
 
-    // Budget: ~5 segs of media + init + 4 playlists + master + key
-    // metadata. 15 leaves headroom for asset-store bookkeeping files
-    // while still catching the "no cap" failure (which downloads all
-    // 37 segments + auxiliaries → 45+ files).
+    // Budget: ~5-7 media segs + init + 4 playlists + master. The `_index/`
+    // dir (availability.bin / lru.bin / pins.bin written by the asset
+    // store's flush hub) is bookkeeping, not prefetched media, so it is
+    // excluded from the count. 15 catches the "no cap" failure (which
+    // downloads all 37 segments + auxiliaries → 45+ files).
     const PREFETCH_FILE_CAP: usize = 15;
     assert!(
         files <= PREFETCH_FILE_CAP,
