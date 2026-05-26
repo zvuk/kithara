@@ -124,12 +124,6 @@ impl AbrController {
         )
     }
 
-    /// Current shared bandwidth estimate.
-    #[must_use]
-    pub fn current_bandwidth_estimate_bps(&self) -> Option<u64> {
-        self.estimator.estimate_bps()
-    }
-
     pub(crate) fn on_locked(&self, peer_id: AbrPeerId) {
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(bus) = entry.bus()
