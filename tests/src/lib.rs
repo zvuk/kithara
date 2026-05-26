@@ -22,6 +22,7 @@ pub mod consts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod decode_mock;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod encode_ext;
 pub mod encode_test_pcm;
 pub mod fixture_protocol;
 pub mod fixtures;
@@ -40,6 +41,7 @@ mod native;
 pub mod net_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod offline;
+pub mod rfc6381;
 pub mod rng;
 pub mod server_url;
 pub mod signal_pcm;

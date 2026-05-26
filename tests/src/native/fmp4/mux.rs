@@ -10,6 +10,7 @@ use crate::{
         bytes::{Mp4Bytes, full_box, mp4_box},
         codec::CodecDescriptor,
     },
+    rfc6381::Rfc6381Ext,
 };
 
 /// Native priming the codec's encoder emits at the start of every track,

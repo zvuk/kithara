@@ -40,16 +40,6 @@ impl BytesEncodeTarget {
     }
 
     #[must_use]
-    pub const fn content_type(self) -> &'static str {
-        match self {
-            Self::Mp3 => "audio/mpeg",
-            Self::Flac => "audio/flac",
-            Self::Aac => "audio/aac",
-            Self::M4a => "audio/mp4",
-        }
-    }
-
-    #[must_use]
     pub const fn default_bit_rate(self) -> Option<u64> {
         match self {
             Self::Mp3 | Self::Aac | Self::M4a => Some(DEFAULT_LOSSY_BIT_RATE),

@@ -1,11 +1,22 @@
 use std::borrow::Cow;
 
-use crate::media::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
-impl MediaInfo {
-    /// Returns a codec string such as `mp4a.40.2` when the codec/container pair is known.
-    #[must_use]
-    pub fn rfc6381_codec(&self) -> Option<Cow<'static, str>> {
+/// RFC 6381 codec-string generation for test fixtures.
+///
+/// Production is a player/client: it only *parses* the `CODECS="..."`
+/// attribute of incoming playlists (see `kithara-hls` parsing). It never
+/// emits codec strings, so the generation side lives in the test harness that
+/// muxes fMP4 fixtures and builds synthetic HLS manifests. `MediaInfo` is owned
+/// by `kithara-stream`, so the method is exposed via an extension trait.
+pub(crate) trait Rfc6381Ext {
+    /// Returns a codec string such as `mp4a.40.2` when the codec/container
+    /// pair is known.
+    fn rfc6381_codec(&self) -> Option<Cow<'static, str>>;
+}
+
+impl Rfc6381Ext for MediaInfo {
+    fn rfc6381_codec(&self) -> Option<Cow<'static, str>> {
         let codec = self.codec?;
         let container = self.container.unwrap_or(ContainerFormat::Fmp4);
         rfc6381_for_codec_and_container(codec, container)
@@ -57,9 +68,9 @@ fn rfc6381_for_codec_and_container(
     }
 }
 
-/// Whether the codec is supported for fMP4 packaged-audio generation in test utilities.
-#[must_use]
-pub const fn audio_codec_supports_fmp4_packaging(codec: AudioCodec) -> bool {
+/// Whether the codec is supported for fMP4 packaged-audio generation in test
+/// utilities.
+pub(crate) const fn audio_codec_supports_fmp4_packaging(codec: AudioCodec) -> bool {
     matches!(
         codec,
         AudioCodec::AacLc | AudioCodec::AacHeV2 | AudioCodec::Flac
@@ -68,9 +79,10 @@ pub const fn audio_codec_supports_fmp4_packaging(codec: AudioCodec) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{Rfc6381Ext, audio_codec_supports_fmp4_packaging};
 
     #[kithara::test]
     #[case::aac_lc_fmp4(AudioCodec::AacLc, ContainerFormat::Fmp4, Some("mp4a.40.2"))]
@@ -82,16 +94,16 @@ mod tests {
         #[case] container: ContainerFormat,
         #[case] expected: Option<&str>,
     ) {
-        let info = MediaInfo::new(Some(codec), Some(container));
+        let info = MediaInfo::builder()
+            .codec(codec)
+            .container(container)
+            .build();
         assert_eq!(info.rfc6381_codec().as_deref(), expected);
     }
 
     #[kithara::test]
     fn aac_lc_defaults_container_to_fmp4_mapping() {
-        let info = MediaInfo {
-            codec: Some(AudioCodec::AacLc),
-            ..Default::default()
-        };
+        let info = MediaInfo::builder().codec(AudioCodec::AacLc).build();
         assert_eq!(info.rfc6381_codec().as_deref(), Some("mp4a.40.2"));
     }
 
