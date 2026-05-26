@@ -42,7 +42,6 @@ fn make_source(res: AssetResource, coord: Arc<FileCoord>, bus: EventBus) -> File
 fn test_file_coord_initial_state() {
     let coord = FileCoord::new(Timeline::new());
     assert_eq!(coord.read_pos(), 0);
-    assert_eq!(coord.timeline().download_position(), 0);
 }
 
 #[kithara::test]
@@ -53,12 +52,13 @@ fn test_file_coord_set_and_get_positions(#[case] value: u64, #[case] read_pos: b
     if read_pos {
         coord.set_read_pos(value);
         assert_eq!(coord.read_pos(), value);
-        assert_eq!(coord.timeline().download_position(), 0);
     } else {
         coord.set_download_pos(value);
-        assert_eq!(coord.timeline().download_position(), value);
-        assert_eq!(coord.timeline().download_position(), value);
-        assert_eq!(coord.read_pos(), 0);
+        assert_eq!(
+            coord.read_pos(),
+            0,
+            "download position is orthogonal to read position"
+        );
     }
 }
 

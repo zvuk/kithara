@@ -83,7 +83,6 @@ pub struct Timeline {
     /// reset its preload counters / drop parked chunks on each new
     /// epoch — needs its own one-shot signal. `initiate_seek` arms both.
     decoder_node_seek_latch: Arc<AtomicBool>,
-    download_position: Arc<AtomicU64>,
     /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `PLAYING`.
     flags: Arc<AtomicU8>,
     /// Sample rate (Hz) of the most recently committed chunk; lets
@@ -123,7 +122,6 @@ impl Timeline {
             committed_position_ns: Arc::new(AtomicU64::new(0)),
             committed_frame_end: Arc::new(AtomicU64::new(0)),
             last_sample_rate: Arc::new(AtomicU64::new(0)),
-            download_position: Arc::new(AtomicU64::new(0)),
             pending_seek_epoch: Arc::new(AtomicU64::new(Self::NO_PENDING_SEEK)),
             total_duration_ns: Arc::new(AtomicU64::new(Self::NO_DURATION)),
             segment_position: Arc::new(AtomicU64::new(0)),
@@ -249,11 +247,6 @@ impl Timeline {
         self.seek_preempt_latch.swap(false, Ordering::Acquire)
     }
 
-    #[must_use]
-    pub fn download_position(&self) -> u64 {
-        self.download_position.load(Ordering::Acquire)
-    }
-
     #[inline]
     fn flags_snapshot_with(&self, order: Ordering) -> TimelineFlags {
         TimelineFlags::from_bits_truncate(self.flags.load(order))
@@ -376,9 +369,12 @@ impl Timeline {
         self.committed_position_ns.store(nanos, Ordering::Release);
     }
 
+    /// Report the current download byte position. The value is not
+    /// stored on the timeline — it exists only as a USDT probe point
+    /// (`#[kithara::probe]`) for download-progress observability.
     #[kithara::probe(position)]
     pub fn set_download_position(&self, position: u64) {
-        self.download_position.store(position, Ordering::Release);
+        let _ = position;
     }
 
     /// Toggle the `PLAYING` flag.
@@ -445,21 +441,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    #[kithara::test]
-    fn download_position_defaults_to_zero() {
-        let timeline = Timeline::new();
-        assert_eq!(timeline.download_position(), 0);
-    }
-
-    #[kithara::test]
-    fn download_position_is_shared_between_clones() {
-        let timeline = Timeline::new();
-        let clone = timeline.clone();
-
-        timeline.set_download_position(512);
-        assert_eq!(clone.download_position(), 512);
-    }
 
     #[kithara::test]
     fn initiate_seek_sets_flushing_and_target() {
