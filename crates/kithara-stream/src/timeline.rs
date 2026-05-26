@@ -57,8 +57,6 @@ bitflags! {
         const FLUSHING     = 1 << 1;
         /// Seek initiated but the decoder has not yet repositioned.
         const SEEK_PENDING = 1 << 2;
-        /// End of stream reached.
-        const EOF          = 1 << 3;
     }
 }
 
@@ -86,7 +84,7 @@ pub struct Timeline {
     /// epoch — needs its own one-shot signal. `initiate_seek` arms both.
     decoder_node_seek_latch: Arc<AtomicBool>,
     download_position: Arc<AtomicU64>,
-    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `EOF`, `PLAYING`.
+    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `PLAYING`.
     flags: Arc<AtomicU8>,
     /// Sample rate (Hz) of the most recently committed chunk; lets
     /// readers convert `committed_frame_end` ↔ `committed_position`
@@ -290,11 +288,6 @@ impl Timeline {
         self.flags.fetch_or(flags.bits(), order);
     }
 
-    #[must_use]
-    pub fn is_eof(&self) -> bool {
-        self.contains_flag(TimelineFlags::EOF)
-    }
-
     /// Check if the pipeline is being flushed (seek pending).
     #[must_use]
     pub fn is_flushing(&self) -> bool {
@@ -388,14 +381,10 @@ impl Timeline {
         self.download_position.store(position, Ordering::Release);
     }
 
-    pub fn set_eof(&self, eof: bool) {
-        self.replace_flags(TimelineFlags::EOF, eof);
-    }
-
     /// Toggle the `PLAYING` flag.
     ///
-    /// Orthogonal to `FLUSHING` / `SEEK_PENDING` / `EOF`: toggling
-    /// `PLAYING` does not affect the seek or EOF state.
+    /// Orthogonal to `FLUSHING` / `SEEK_PENDING`: toggling `PLAYING`
+    /// does not affect the seek state.
     pub fn set_playing(&self, playing: bool) {
         self.replace_flags(TimelineFlags::PLAYING, playing);
     }
@@ -586,24 +575,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn set_eof_toggles_flag_without_affecting_others() {
-        let tl = Timeline::new();
-        assert!(!tl.is_eof());
-        tl.set_eof(true);
-        assert!(tl.is_eof());
-        assert!(!tl.is_flushing());
-        assert!(!tl.is_seek_pending());
-        tl.set_eof(false);
-        assert!(!tl.is_eof());
-    }
-
-    #[kithara::test]
-    fn flag_triple_matrix_matches_bitflags_snapshot() {
-        for mask in 0u8..8 {
+    fn flag_pair_matrix_matches_bitflags_snapshot() {
+        for mask in 0u8..4 {
             let tl = Timeline::new();
             let want_flushing = mask & 1 != 0;
             let want_seek_pending = mask & 2 != 0;
-            let want_eof = mask & 4 != 0;
 
             if want_flushing || want_seek_pending {
                 let _ = tl.initiate_seek(Duration::from_secs(1));
@@ -614,31 +590,24 @@ mod tests {
                     tl.clear_seek_pending(tl.seek_epoch());
                 }
             }
-            tl.set_eof(want_eof);
 
-            assert_eq!(tl.is_flushing(), want_flushing, "mask {mask:#05b} flushing");
+            assert_eq!(tl.is_flushing(), want_flushing, "mask {mask:#04b} flushing");
             assert_eq!(
                 tl.is_seek_pending(),
                 want_seek_pending,
-                "mask {mask:#05b} seek_pending"
+                "mask {mask:#04b} seek_pending"
             );
-            assert_eq!(tl.is_eof(), want_eof, "mask {mask:#05b} eof");
 
             let snapshot = tl.flags_snapshot_with(Ordering::Acquire);
             assert_eq!(
                 snapshot.contains(TimelineFlags::FLUSHING),
                 want_flushing,
-                "mask {mask:#05b} snapshot flushing"
+                "mask {mask:#04b} snapshot flushing"
             );
             assert_eq!(
                 snapshot.contains(TimelineFlags::SEEK_PENDING),
                 want_seek_pending,
-                "mask {mask:#05b} snapshot seek_pending"
-            );
-            assert_eq!(
-                snapshot.contains(TimelineFlags::EOF),
-                want_eof,
-                "mask {mask:#05b} snapshot eof"
+                "mask {mask:#04b} snapshot seek_pending"
             );
         }
     }
@@ -670,7 +639,7 @@ mod tests {
         let a = thread::spawn(move || {
             barrier_a.wait();
             for i in 0..ITER {
-                tl_a.set_eof(i % 2 == 0);
+                tl_a.set_playing(i % 2 == 0);
             }
         });
 
@@ -705,7 +674,10 @@ mod tests {
             .join()
             .expect("BUG: spawned thread C must not panic in this test");
 
-        assert!(!tl.is_eof(), "EOF must match the last deterministic write");
+        assert!(
+            !tl.is_playing(),
+            "PLAYING must match the last deterministic write"
+        );
         assert!(!tl.is_flushing(), "FLUSHING must be fully cleared");
         assert!(
             !tl.is_seek_pending(),
@@ -742,12 +714,11 @@ mod tests {
 
     #[kithara::test]
     fn playing_is_orthogonal_to_other_flags() {
-        for mask in 0u8..8 {
+        for mask in 0u8..4 {
             for &initial_playing in &[false, true] {
                 let tl = Timeline::new();
                 let want_flushing = mask & 1 != 0;
                 let want_seek_pending = mask & 2 != 0;
-                let want_eof = mask & 4 != 0;
 
                 if want_flushing || want_seek_pending {
                     let _ = tl.initiate_seek(Duration::from_secs(1));
@@ -758,31 +729,24 @@ mod tests {
                         tl.clear_seek_pending(tl.seek_epoch());
                     }
                 }
-                tl.set_eof(want_eof);
                 tl.set_playing(initial_playing);
 
                 assert_eq!(tl.is_playing(), initial_playing);
                 assert_eq!(
                     tl.is_flushing(),
                     want_flushing,
-                    "mask {mask:#05b} play={initial_playing} flushing"
+                    "mask {mask:#04b} play={initial_playing} flushing"
                 );
                 assert_eq!(
                     tl.is_seek_pending(),
                     want_seek_pending,
-                    "mask {mask:#05b} play={initial_playing} seek_pending"
-                );
-                assert_eq!(
-                    tl.is_eof(),
-                    want_eof,
-                    "mask {mask:#05b} play={initial_playing} eof"
+                    "mask {mask:#04b} play={initial_playing} seek_pending"
                 );
 
                 tl.set_playing(!initial_playing);
                 assert_eq!(tl.is_playing(), !initial_playing);
                 assert_eq!(tl.is_flushing(), want_flushing);
                 assert_eq!(tl.is_seek_pending(), want_seek_pending);
-                assert_eq!(tl.is_eof(), want_eof);
             }
         }
     }
