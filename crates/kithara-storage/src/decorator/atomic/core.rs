@@ -103,7 +103,3 @@ impl<R: ResourceExt> Atomic<R> {
         self.inner.write_all(data)
     }
 }
-
-/// Crash-safe mmap-backed resource.
-#[cfg(not(target_arch = "wasm32"))]
-pub type AtomicMmap = Atomic<crate::MmapResource>;

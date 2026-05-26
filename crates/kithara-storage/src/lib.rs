@@ -26,8 +26,6 @@ pub use backend::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use backend::{MmapDriver, MmapOptions, MmapResource};
-#[cfg(not(target_arch = "wasm32"))]
-pub use decorator::AtomicMmap;
 pub use decorator::{Atomic, AtomicChunked, OpenIntent};
 pub use error::{StorageError, StorageResult};
 pub use resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome};

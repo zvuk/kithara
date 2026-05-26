@@ -70,23 +70,9 @@ impl<C> Fetch<C> {
         self.kind == FetchKind::NaturalEof
     }
 
-    /// True iff this is a failure marker.
-    pub fn is_failure(&self) -> bool {
-        self.kind == FetchKind::Failure
-    }
-
     /// True iff this is any terminal marker (natural EOF or failure).
     pub fn is_terminal(&self) -> bool {
         !matches!(self.kind, FetchKind::Data)
-    }
-
-    /// Explicit natural-EOF marker.
-    pub fn natural_eof(data: C, epoch: u64) -> Self {
-        Self {
-            data,
-            epoch,
-            kind: FetchKind::NaturalEof,
-        }
     }
 }
 

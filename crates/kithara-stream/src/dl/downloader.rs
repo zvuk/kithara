@@ -135,12 +135,6 @@ impl Downloader {
         }
     }
 
-    /// Shared ABR controller for this downloader.
-    #[must_use]
-    pub fn abr_controller(&self) -> &Arc<AbrController> {
-        &self.inner.abr
-    }
-
     /// Ensure the download loop is running (lazy spawn on first register
     /// in an async-capable context).
     fn ensure_spawned(&self) {

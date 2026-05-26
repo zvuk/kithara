@@ -184,15 +184,6 @@ impl Timeline {
         self.write_playhead(pos, pos.frame_offset, pos.source_byte_offset);
     }
 
-    /// Frame end (exclusive) of the consumer's playhead. `Audio::read`
-    /// derives the per-chunk consumption offset from this and the
-    /// chunk's `frame_offset`, so we don't need a separate
-    /// `chunk_offset` field outside the timeline.
-    #[must_use]
-    pub fn committed_frame_end(&self) -> u64 {
-        self.committed_frame_end.load(Ordering::Acquire)
-    }
-
     #[must_use]
     pub fn committed_position(&self) -> Duration {
         Duration::from_nanos(self.committed_position_ns.load(Ordering::Acquire))
@@ -332,12 +323,6 @@ impl Timeline {
         self.contains_flag(TimelineFlags::SEEK_PENDING)
     }
 
-    /// Sample rate of the most recently committed chunk.
-    #[must_use]
-    pub fn last_sample_rate(&self) -> u32 {
-        u32::try_from(self.last_sample_rate.load(Ordering::Acquire)).unwrap_or(0)
-    }
-
     pub fn mark_pending_seek_epoch(&self, seek_epoch: u64) {
         self.pending_seek_epoch.store(seek_epoch, Ordering::Release);
     }
@@ -387,11 +372,6 @@ impl Timeline {
         } else {
             Some(Duration::from_nanos(ns))
         }
-    }
-
-    #[must_use]
-    pub fn segment_position(&self) -> u64 {
-        self.segment_position.load(Ordering::Acquire)
     }
 
     /// # Panics

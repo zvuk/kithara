@@ -7,7 +7,7 @@ use std::{
 };
 
 use bon::Builder;
-use kithara_abr::{AbrController, AbrMode, AbrSettings};
+use kithara_abr::{AbrController, AbrSettings};
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
@@ -601,20 +601,6 @@ impl PlayerImpl {
         self.items.lock_sync().len()
     }
 
-    /// Read the underlying audio `src` of `items[index]` without taking
-    /// it. Returns `None` when the slot is empty (loader hasn't filled
-    /// it yet, or the engine has already taken it via `enqueue_to_processor`).
-    /// Callers use this to capture the src that will be sent to the
-    /// audio thread when they subsequently call `select_item_with_crossfade`.
-    #[must_use]
-    pub fn item_src(&self, index: usize) -> Option<Arc<str>> {
-        self.items
-            .lock_sync()
-            .get(index)?
-            .as_ref()
-            .map(|q| Arc::clone(q.resource.src()))
-    }
-
     /// Load the current queue item into the active slot.
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
@@ -970,14 +956,6 @@ impl PlayerImpl {
         EngineImpl::session_ducking()
     }
 
-    /// Change ABR mode at runtime. Takes effect on next `decide()`.
-    ///
-    /// In our model, ABR is per-resource (`Resource::abr()` handle), not per-player.
-    /// Mode set here propagates to newly-loaded resources only.
-    pub fn set_abr_mode(&self, mode: AbrMode) {
-        let _ = mode;
-    }
-
     /// Enable or disable the built-in linear auto-advance handler.
     ///
     /// External orchestrators (e.g. `kithara_queue::Queue`) disable this
@@ -1096,15 +1074,6 @@ impl PlayerImpl {
     /// Pump audio backend/runtime state.
     pub fn tick(&self) -> Result<(), PlayError> {
         self.engine.tick()
-    }
-
-    /// Load the item at `index` if it is the current item and a slot is active.
-    ///
-    /// Used by the FFI layer after a deferred (auto-load) insert completes.
-    pub fn try_load_if_current(&self, index: usize) {
-        if self.current_index() == index && self.current_slot.lock_sync().is_some() {
-            self.load_current_item();
-        }
     }
 
     /// Drop the armed next slot without committing.

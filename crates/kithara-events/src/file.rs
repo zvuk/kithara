@@ -15,14 +15,6 @@ pub enum FileError {
     Other(String),
 }
 
-impl FileError {
-    /// Whether the consumer can reasonably retry the request.
-    #[must_use]
-    pub const fn is_recoverable(&self) -> bool {
-        matches!(self, Self::Io(_))
-    }
-}
-
 impl std::fmt::Display for FileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
