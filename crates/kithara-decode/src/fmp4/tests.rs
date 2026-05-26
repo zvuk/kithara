@@ -13,6 +13,7 @@ use kithara_stream::{SegmentDescriptor, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use crate::{
+    codec::CodecPriming,
     composed::ComposedDecoder,
     demuxer::Demuxer,
     fmp4::Fmp4SegmentDemuxer,
@@ -81,6 +82,10 @@ impl SegmentLayout for FakeSegmented {
             }
         }
         self.segments.last().cloned()
+    }
+
+    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
+        self.segments.get(segment_index as usize).cloned()
     }
 
     fn segment_count(&self) -> Option<u32> {
@@ -218,27 +223,29 @@ fn pull_one_chunk(
 /// in-tree fdk-aac adapter strips its algorithmic delay
 /// (`outputDelay ≈ 1024` frames for AAC-LC @ 44.1 kHz, see
 /// `crates/kithara-decode/src/symphonia/aac_fdk.rs`), so the first
-/// emitted PCM chunk's timestamp is the strip count expressed in time
-/// (~23.22 ms). The "open restarts at seg-0" contract is preserved —
-/// only the time-domain anchor is offset by the codec strip — so we
-/// assert the timestamp sits inside the first AAC frame's window,
-/// not strictly equal to zero.
+/// emitted chunk lands at packet index 1 (≈ 46.44 ms).
+/// The "open restarts at seg-0" contract is preserved — the
+/// time-domain anchor is offset by the codec strip — so we assert
+/// the timestamp sits inside the first few AAC frames' window, not
+/// strictly equal to zero.
 #[kithara::test]
 fn red_open_always_starts_at_layout_seg_0() {
     let (blob, segmented) = build_test_layout(3);
     let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let chunk = pull_one_chunk(&mut decoder).expect("BUG: at least one PCM chunk from seg-0");
-    let max_strip_time = Duration::from_micros(24_000);
+    // 1 codec-strip frame + 1 warm-up packet ≈ 2 × 23.22 ms ≈ 46 ms.
+    // Cap at 50 ms to leave a small margin.
+    let max_strip_time = Duration::from_micros(50_000);
     assert!(
         chunk.meta.timestamp <= max_strip_time,
         "RED — Fmp4SegmentDemuxer::open hardcodes next_byte=0, so the \
-         first chunk always lands inside seg-0 (timestamp ≤ one AAC \
-         frame's worth of codec-delay strip, ≈23.22 ms @ 44.1 kHz). \
-         There is no API to resume at a non-zero decode_time. ABR \
-         variant-switch recreate_decoder relies on this and \
-         consequently restarts playback at seg-0 of the new variant. \
-         When the resume API lands, INVERT this assertion. Got: {:?}",
+         first chunk always lands inside seg-0 (timestamp ≤ codec strip + \
+         warm-up packet, ≈46 ms @ 44.1 kHz). There is no API to resume \
+         at a non-zero decode_time. ABR variant-switch recreate_decoder \
+         relies on this and consequently restarts playback at seg-0 of \
+         the new variant. When the resume API lands, INVERT this \
+         assertion. Got: {:?}",
         chunk.meta.timestamp
     );
 }
@@ -315,4 +322,94 @@ fn seek_reads_only_init_and_target_segment() {
             target_range,
         );
     }
+}
+
+#[kithara::test]
+fn seek_emits_notneeded_for_symphonia_aac_segment_boundary() {
+    let (blob, segmented) = build_test_layout(5);
+    let (mut decoder, _reads, _record) = make_decoder(blob, segmented.clone());
+
+    let target = Duration::from_secs(18);
+    let outcome = decoder.seek(target).expect("BUG: seek");
+    let DecoderSeekOutcome::Landed { preroll, .. } = outcome else {
+        panic!("expected Landed, got {outcome:?}");
+    };
+    assert_eq!(
+        preroll,
+        kithara_stream::PrerollHint::NotNeeded,
+        "Symphonia fdk-aac handles MDCT priming internally — fmp4 demuxer must \
+         emit NotNeeded (priming.byte_margin==0); got {preroll:?}"
+    );
+}
+
+#[kithara::test]
+fn seek_emits_notneeded_for_symphonia_aac_first_segment() {
+    let (blob, segmented) = build_test_layout(5);
+    let (mut decoder, _reads, _record) = make_decoder(blob, segmented.clone());
+
+    let outcome = decoder.seek(Duration::ZERO).expect("BUG: seek to start");
+    let DecoderSeekOutcome::Landed { preroll, .. } = outcome else {
+        panic!("expected Landed, got {outcome:?}");
+    };
+    assert_eq!(
+        preroll,
+        kithara_stream::PrerollHint::NotNeeded,
+        "Symphonia fdk-aac handles priming internally — even seg-0 seek must emit \
+         NotNeeded (priming.byte_margin==0); got {preroll:?}"
+    );
+}
+
+fn build_test_layout_flac(num_segments: usize) -> (Vec<u8>, FakeSegmented) {
+    let init = read_fixture("init-slossless-a1.mp4");
+    let init_len = init.len() as u64;
+
+    let segment_duration_secs = 6u64;
+
+    let mut blob = init.clone();
+    let mut descs = Vec::new();
+    let mut byte_cursor = init_len;
+    for i in 1..=num_segments {
+        let seg_bytes = read_fixture(&format!("segment-{i}-slossless-a1.m4s"));
+        let len = seg_bytes.len() as u64;
+        let start = byte_cursor;
+        let end = start + len;
+        let seg_index = u32::try_from(i - 1).expect("BUG: segment index fits u32");
+        descs.push(SegmentDescriptor::new(
+            start..end,
+            Duration::from_secs(u64::from(seg_index) * segment_duration_secs),
+            Duration::from_secs(segment_duration_secs),
+            seg_index,
+            0,
+        ));
+        blob.extend_from_slice(&seg_bytes);
+        byte_cursor = end;
+    }
+
+    (
+        blob,
+        FakeSegmented {
+            init_range: 0..init_len,
+            segments: Arc::new(descs),
+        },
+    )
+}
+
+#[kithara::test]
+fn seek_emits_notneeded_for_first_segment_flac() {
+    let (blob, segmented) = build_test_layout_flac(3);
+    let source: BoxedSource = Box::new(Cursor::new(blob));
+    let layout: Arc<dyn SegmentLayout> = Arc::new(segmented);
+    let mut demuxer = Fmp4SegmentDemuxer::open(source, layout).expect("BUG: build FLAC demuxer");
+
+    let outcome = demuxer
+        .seek(Duration::ZERO, CodecPriming::default())
+        .expect("BUG: seek to start on FLAC");
+    let crate::demuxer::DemuxSeekOutcome::Landed { preroll, .. } = outcome else {
+        panic!("expected Landed, got {outcome:?}");
+    };
+    assert_eq!(
+        preroll,
+        kithara_stream::PrerollHint::NotNeeded,
+        "FLAC has warmup_frames=0, so seg-0 seek must emit NotNeeded, not FirstSegment; got {preroll:?}"
+    );
 }

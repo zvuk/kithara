@@ -30,12 +30,12 @@ enum Codec {
     Flac,
 }
 
-fn build_fixture(codec: Codec) -> HlsFixtureBuilder {
+fn build_fixture(codec: Codec, bit_rate: Option<u64>) -> HlsFixtureBuilder {
     let b = HlsFixtureBuilder::new()
         .variant_count(VARIANT_COUNT)
         .segments_per_variant(SEGMENTS_PER_VARIANT)
         .segment_duration_secs(SEGMENT_DURATION_SECS);
-    match codec {
+    let b = match codec {
         Codec::AacLc => b.packaged_audio_sine_aac_lc(SAMPLE_RATE, CHANNELS, FREQ_HZ),
         Codec::AacHeV2 => b.packaged_audio_signal_aac_he_v2(
             SAMPLE_RATE,
@@ -43,7 +43,8 @@ fn build_fixture(codec: Codec) -> HlsFixtureBuilder {
             PackagedSignal::Sine { freq_hz: FREQ_HZ },
         ),
         Codec::Flac => b.packaged_audio_sine_flac(SAMPLE_RATE, CHANNELS, FREQ_HZ),
-    }
+    };
+    b.packaged_audio_bit_rate(bit_rate)
 }
 
 async fn run_case(
@@ -52,13 +53,14 @@ async fn run_case(
     ephemeral: bool,
     initial_mode: AbrMode,
     seek_count: usize,
+    bit_rate: Option<u64>,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let helper = TestServerHelper::new().await;
     let created = helper
-        .create_hls(build_fixture(codec))
+        .create_hls(build_fixture(codec, bit_rate))
         .await
         .expect("create sine HLS fixture");
 
@@ -159,6 +161,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         10,
+        None,
     )
 )]
 #[cfg_attr(
@@ -169,6 +172,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         0,
+        None,
     )
 )]
 #[cfg_attr(
@@ -179,6 +183,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         1,
+        None,
     )
 )]
 #[cfg_attr(
@@ -189,6 +194,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         10,
+        Some(320_000),
     )
 )]
 #[cfg_attr(
@@ -199,6 +205,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         0,
+        Some(320_000),
     )
 )]
 #[cfg_attr(
@@ -209,6 +216,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         10,
+        None,
     )
 )]
 #[cfg_attr(
@@ -219,6 +227,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         0,
+        None,
     )
 )]
 #[case::aac_he_v2_symphonia_eph_manual_10seek(
@@ -226,28 +235,32 @@ async fn run_case(
     DecoderBackend::Symphonia,
     true,
     AbrMode::Manual(0),
-    10
+    10,
+    None
 )]
 #[case::aac_he_v2_symphonia_eph_manual_e2e(
     Codec::AacHeV2,
     DecoderBackend::Symphonia,
     true,
     AbrMode::Manual(0),
-    0
+    0,
+    None
 )]
 #[case::aac_lc_symphonia_eph_manual_10seek(
     Codec::AacLc,
     DecoderBackend::Symphonia,
     true,
     AbrMode::Manual(0),
-    10
+    10,
+    Some(320_000)
 )]
 #[case::aac_lc_symphonia_eph_manual_e2e(
     Codec::AacLc,
     DecoderBackend::Symphonia,
     true,
     AbrMode::Manual(0),
-    0
+    0,
+    Some(320_000)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -257,6 +270,7 @@ async fn run_case(
         true,
         AbrMode::Auto(Some(1)),
         10,
+        None,
     )
 )]
 #[cfg_attr(
@@ -267,6 +281,7 @@ async fn run_case(
         true,
         AbrMode::Auto(Some(1)),
         0,
+        None,
     )
 )]
 #[cfg_attr(
@@ -277,6 +292,7 @@ async fn run_case(
         false,
         AbrMode::Manual(0),
         10,
+        None,
     )
 )]
 #[cfg_attr(
@@ -287,6 +303,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         10,
+        None,
     )
 )]
 #[cfg_attr(
@@ -297,6 +314,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         0,
+        None,
     )
 )]
 #[cfg_attr(
@@ -307,6 +325,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         10,
+        Some(320_000),
     )
 )]
 #[cfg_attr(
@@ -317,6 +336,7 @@ async fn run_case(
         true,
         AbrMode::Manual(0),
         10,
+        None,
     )
 )]
 #[cfg_attr(
@@ -327,6 +347,7 @@ async fn run_case(
         true,
         AbrMode::Auto(Some(1)),
         10,
+        None,
     )
 )]
 async fn phase_continuity_hls(
@@ -335,6 +356,15 @@ async fn phase_continuity_hls(
     #[case] ephemeral: bool,
     #[case] initial_mode: AbrMode,
     #[case] seek_count: usize,
+    #[case] bit_rate: Option<u64>,
 ) {
-    run_case(codec, backend, ephemeral, initial_mode, seek_count).await;
+    run_case(
+        codec,
+        backend,
+        ephemeral,
+        initial_mode,
+        seek_count,
+        bit_rate,
+    )
+    .await;
 }

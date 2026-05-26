@@ -33,6 +33,7 @@ async fn run_case(
     backend: DecoderBackend,
     ephemeral: bool,
     seek_count: usize,
+    bit_rate: Option<u64>,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
@@ -43,7 +44,7 @@ async fn run_case(
         channels: CHANNELS,
         length: SignalSpecLength::Frames(STREAM_FRAMES as usize),
         format,
-        bit_rate: None,
+        bit_rate,
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
 
@@ -625,50 +626,63 @@ async fn codec_distortion_profile(
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::sentinel_mp3_apple_eph_e2e(SignalFormat::Mp3, DecoderBackend::Apple, true, 0,)
+    case::sentinel_mp3_apple_eph_e2e(
+        SignalFormat::Mp3,
+        DecoderBackend::Apple,
+        true,
+        0,
+        Some(320_000)
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple_eph_10seek(SignalFormat::Mp3, DecoderBackend::Apple, true, 10,)
+    case::mp3_apple_eph_10seek(SignalFormat::Mp3, DecoderBackend::Apple, true, 10, Some(320_000))
 )]
-#[case::mp3_symphonia_eph_e2e(SignalFormat::Mp3, DecoderBackend::Symphonia, true, 0)]
-#[case::mp3_symphonia_eph_10seek(SignalFormat::Mp3, DecoderBackend::Symphonia, true, 10)]
+#[case::mp3_symphonia_eph_e2e(SignalFormat::Mp3, DecoderBackend::Symphonia, true, 0, Some(320_000))]
+#[case::mp3_symphonia_eph_10seek(
+    SignalFormat::Mp3,
+    DecoderBackend::Symphonia,
+    true,
+    10,
+    Some(320_000)
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::m4a_apple_eph_e2e(SignalFormat::M4a, DecoderBackend::Apple, true, 0,)
+    case::m4a_apple_eph_e2e(SignalFormat::M4a, DecoderBackend::Apple, true, 0, Some(320_000))
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::m4a_apple_eph_10seek(SignalFormat::M4a, DecoderBackend::Apple, true, 10,)
+    case::m4a_apple_eph_10seek(SignalFormat::M4a, DecoderBackend::Apple, true, 10, Some(320_000))
 )]
-#[case::m4a_symphonia_eph_e2e(SignalFormat::M4a, DecoderBackend::Symphonia, true, 0)]
+#[case::m4a_symphonia_eph_e2e(SignalFormat::M4a, DecoderBackend::Symphonia, true, 0, Some(320_000))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::flac_apple_eph_e2e(SignalFormat::Flac, DecoderBackend::Apple, true, 0,)
+    case::flac_apple_eph_e2e(SignalFormat::Flac, DecoderBackend::Apple, true, 0, None)
 )]
-#[case::flac_symphonia_eph_e2e(SignalFormat::Flac, DecoderBackend::Symphonia, true, 0)]
+#[case::flac_symphonia_eph_e2e(SignalFormat::Flac, DecoderBackend::Symphonia, true, 0, None)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_apple_eph_e2e(SignalFormat::Aac, DecoderBackend::Apple, true, 0,)
+    case::aac_apple_eph_e2e(SignalFormat::Aac, DecoderBackend::Apple, true, 0, Some(320_000))
 )]
-#[case::aac_symphonia_eph_e2e(SignalFormat::Aac, DecoderBackend::Symphonia, true, 0)]
+#[case::aac_symphonia_eph_e2e(SignalFormat::Aac, DecoderBackend::Symphonia, true, 0, Some(320_000))]
 #[cfg_attr(
     target_os = "android",
-    case::mp3_android_eph_e2e(SignalFormat::Mp3, DecoderBackend::Android, true, 0,)
+    case::mp3_android_eph_e2e(SignalFormat::Mp3, DecoderBackend::Android, true, 0, Some(320_000))
 )]
 #[cfg_attr(
     target_os = "android",
-    case::m4a_android_eph_e2e(SignalFormat::M4a, DecoderBackend::Android, true, 0,)
+    case::m4a_android_eph_e2e(SignalFormat::M4a, DecoderBackend::Android, true, 0, Some(320_000))
 )]
 #[cfg_attr(
     target_os = "android",
-    case::flac_android_eph_e2e(SignalFormat::Flac, DecoderBackend::Android, true, 0,)
+    case::flac_android_eph_e2e(SignalFormat::Flac, DecoderBackend::Android, true, 0, None)
 )]
 async fn phase_continuity_file(
     #[case] format: SignalFormat,
     #[case] backend: DecoderBackend,
     #[case] ephemeral: bool,
     #[case] seek_count: usize,
+    #[case] bit_rate: Option<u64>,
 ) {
-    run_case(format, backend, ephemeral, seek_count).await;
+    run_case(format, backend, ephemeral, seek_count, bit_rate).await;
 }
