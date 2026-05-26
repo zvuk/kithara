@@ -107,7 +107,7 @@ fn error_chain_is_variant_change(err: &(dyn StdError + 'static)) -> bool {
 
 /// Single-discriminant classification of a [`DecodeError`].
 ///
-/// Walking the source chain via `is_interrupted` + `is_variant_change`
+/// Walking the source chain via separate per-class boolean predicates
 /// in sequence forces the chain to be traversed twice on the failure
 /// path. [`DecodeError::classify`] runs the walk once and returns this
 /// tag so callers can `match` instead of cascading boolean predicates.
@@ -146,8 +146,8 @@ impl DecodeError {
     }
 
     /// Tag the error in one source-chain pass so hot decode loops can
-    /// replace `is_interrupted()` + `is_variant_change()` predicate
-    /// ladders with a single `match` over the discriminant.
+    /// replace per-class boolean predicate ladders with a single
+    /// `match` over the discriminant.
     #[must_use]
     #[inline]
     // ast-grep-ignore: idioms.match-self-conversion
@@ -181,12 +181,6 @@ impl DecodeError {
     #[must_use]
     pub fn is_interrupted(&self) -> bool {
         matches!(self.classify(), ErrorClass::Interrupted)
-    }
-
-    /// Returns `true` if the error signals a non-retriable cross-variant boundary.
-    #[must_use]
-    pub fn is_variant_change(&self) -> bool {
-        matches!(self.classify(), ErrorClass::VariantChange)
     }
 }
 
@@ -299,7 +293,7 @@ mod tests {
     #[kithara::test]
     fn test_io_variant_change_is_detected() {
         let decode_err = DecodeError::Io(IoError::other(VariantChangeError));
-        assert!(decode_err.is_variant_change());
+        assert_eq!(decode_err.classify(), ErrorClass::VariantChange);
         assert!(!decode_err.is_interrupted());
     }
 }
