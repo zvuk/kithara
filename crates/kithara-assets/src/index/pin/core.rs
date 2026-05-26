@@ -126,8 +126,8 @@ impl PinsIndex {
 
     /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
     /// when a hub is attached (drains every dirty source) or runs the
-    /// inline serialise+write path otherwise. Used by explicit
-    /// checkpoint paths (`LeaseAssets::flush_pins`, `internal::*`).
+    /// inline serialise+write path otherwise. Used by the eager pin
+    /// add/remove path.
     ///
     /// # Errors
     ///

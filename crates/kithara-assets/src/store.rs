@@ -288,21 +288,6 @@ where
         }
     }
 
-    /// Build disk-backed asset store with its own unshared
-    /// [`AvailabilityIndex`]. Kept for tests and the `internal`
-    /// feature; production construction uses
-    /// [`AssetStoreBuilder::build`] which shares the aggregate with
-    /// the enum variant.
-    ///
-    /// # Panics
-    /// Panics if `process_fn` is not set for Ctx != ().
-    #[cfg(not(target_arch = "wasm32"))]
-    #[must_use]
-    pub fn build_disk(self) -> DiskStore<Ctx> {
-        let (chain, _base) = self.build_disk_with_availability(AvailabilityIndex::new());
-        chain
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     fn build_disk_with_availability(
         self,
@@ -766,7 +751,7 @@ mod tests {
             .asset_root(Some("test"))
             .ephemeral(true)
             .build();
-        assert!(backend.is_ephemeral());
+        assert!(matches!(backend, AssetStore::Mem { .. }));
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -788,7 +773,8 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test"))
-            .build_disk();
+            .build_disk_with_availability(AvailabilityIndex::new())
+            .0;
         assert_eq!(store.capabilities(), Capabilities::all());
     }
 
@@ -799,7 +785,8 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(None)
-            .build_disk();
+            .build_disk_with_availability(AvailabilityIndex::new())
+            .0;
         assert_eq!(store.capabilities(), Capabilities::PROCESSING);
     }
 
@@ -811,7 +798,7 @@ mod tests {
             .asset_root(Some("test"))
             .ephemeral(false)
             .build();
-        assert!(!backend.is_ephemeral());
+        assert!(matches!(backend, AssetStore::Disk { .. }));
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -871,9 +858,10 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test"))
-            .build_disk();
+            .build_disk_with_availability(AvailabilityIndex::new())
+            .0;
         let backend: AssetStore = store.into();
-        assert!(!backend.is_ephemeral());
+        assert!(matches!(backend, AssetStore::Disk { .. }));
     }
 
     /// Red test pinning the root cause of the

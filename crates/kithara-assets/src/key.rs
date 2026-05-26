@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -34,16 +34,6 @@ impl ResourceKey {
     /// Create an absolute resource key for a local file.
     pub fn absolute<P: Into<PathBuf>>(path: P) -> Self {
         Self::Absolute(path.into())
-    }
-
-    /// Returns the absolute path if this is an Absolute key.
-    #[must_use]
-    // ast-grep-ignore: idioms.match-self-conversion
-    pub fn as_absolute_path(&self) -> Option<&Path> {
-        match self {
-            Self::Absolute(p) => Some(p),
-            Self::Relative(_) => None,
-        }
     }
 
     /// Returns true if this is an absolute path key.
@@ -365,11 +355,14 @@ mod tests {
             let path = PathBuf::from("/tmp/song.mp3");
             let key = ResourceKey::absolute(&path);
             assert!(key.is_absolute());
-            assert_eq!(key.as_absolute_path(), Some(path.as_path()));
+            let ResourceKey::Absolute(p) = &key else {
+                unreachable!("absolute key must be the Absolute variant")
+            };
+            assert_eq!(p.as_path(), path.as_path());
         } else {
             let key = ResourceKey::new("seg.m4s");
             assert!(!key.is_absolute());
-            assert_eq!(key.as_absolute_path(), None);
+            assert!(matches!(key, ResourceKey::Relative(_)));
         }
     }
 

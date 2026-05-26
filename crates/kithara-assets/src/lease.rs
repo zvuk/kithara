@@ -110,24 +110,6 @@ where
         Self::with_byte_recorder(inner, cancel, None, pins)
     }
 
-    /// Persist the current pins snapshot to disk (best-effort).
-    ///
-    /// Mutations through [`PinsIndex::add`] / [`PinsIndex::remove`]
-    /// already flush eagerly; this method is a passive flush kept for
-    /// API compatibility with callers that want an explicit checkpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the pins index resource cannot be
-    /// written. No-op (returns `Ok`) when the lease layer is bypassed
-    /// (capability inactive) or the index is ephemeral.
-    pub fn flush_pins(&self) -> AssetsResult<()> {
-        if !self.is_active() {
-            return Ok(());
-        }
-        self.pins.flush()
-    }
-
     fn is_active(&self) -> bool {
         self.inner
             .capabilities()
@@ -252,12 +234,6 @@ impl<R, L> LeaseResource<crate::cache::CachedResource<R>, L>
 where
     R: ResourceExt + Clone + Send + Sync + Debug + 'static,
 {
-    /// Unpin the underlying cached resource.
-    pub fn release(self) -> Self {
-        self.inner.set_released();
-        self
-    }
-
     /// Pin the underlying cached resource so it is never evicted.
     pub fn retain(self) -> Self {
         self.inner.set_retained();
@@ -593,20 +569,6 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn explicit_flush_after_pin_is_safe() {
-        let dir = tempfile::tempdir().unwrap();
-        let lease = make_lease(dir.path());
-        let key = ResourceKey::new("audio.mp3");
-
-        let _res = lease.acquire_resource(&key).unwrap();
-
-        lease.flush_pins().unwrap();
-
-        let on_disk = load_persisted_pins(dir.path());
-        assert!(on_disk.contains("test_asset"));
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn drop_guard_eagerly_persists_unpin() {
         let dir = tempfile::tempdir().unwrap();
         let key = ResourceKey::new("audio.mp3");
@@ -623,22 +585,6 @@ mod tests {
             on_disk.is_empty(),
             "unpin should be eagerly persisted, got {:?}",
             on_disk
-        );
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn flush_persists_active_pins() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = ResourceKey::new("audio.mp3");
-
-        let lease = make_lease(dir.path());
-        let _res = lease.acquire_resource(&key).unwrap();
-
-        lease.flush_pins().unwrap();
-        let on_disk = load_persisted_pins(dir.path());
-        assert!(
-            on_disk.contains("test_asset"),
-            "flush should persist active pins"
         );
     }
 
@@ -675,21 +621,6 @@ mod tests {
         let _res = lease.open_resource(&key).unwrap();
 
         assert!(lease.pins.snapshot().is_empty(), "bypass should not pin");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn bypass_flush_is_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        let lease = make_lease_disabled(dir.path());
-        let p = dir.path().join("audio.mp3");
-        fs::write(&p, b"data").unwrap();
-        let key = ResourceKey::absolute(&p);
-
-        let _res = lease.open_resource(&key).unwrap();
-        lease.flush_pins().unwrap();
-
-        let on_disk = load_persisted_pins(dir.path());
-        assert!(on_disk.is_empty(), "bypass flush should not persist");
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

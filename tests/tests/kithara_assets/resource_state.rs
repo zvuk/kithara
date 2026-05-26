@@ -4,7 +4,7 @@ use kithara_assets::{
     AssetResourceState, AssetStoreBuilder, BytePool, DiskAssetStore, EvictConfig, ProcessChunkFn,
     ResourceKey,
 };
-use kithara_integration_tests::asset_fixture::PinsIndex;
+use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceExt;
 use kithara_test_utils::kithara;

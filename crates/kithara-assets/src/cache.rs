@@ -17,7 +17,7 @@ use crate::{
 /// Resource wrapper returned by [`CachedAssets`].
 ///
 /// Delegates all [`ResourceExt`] methods to the inner resource.
-/// Adds [`hold`] / [`release`] to pin/unpin the resource in the
+/// Adds [`retain`](CachedResource::retain) to pin the resource in the
 /// LRU cache so it is never evicted.
 #[derive(Clone)]
 pub struct CachedResource<R> {
@@ -33,22 +33,11 @@ impl<R: fmt::Debug> fmt::Debug for CachedResource<R> {
 }
 
 impl<R> CachedResource<R> {
-    /// Unpin this resource, making it eligible for LRU eviction.
-    pub fn release(self) -> Self {
-        self.set_released();
-        self
-    }
-
-    /// Pin this resource in the LRU cache. It will not be evicted
-    /// until [`release`] is called for the same key.
+    /// Pin this resource in the LRU cache so it is never evicted while the
+    /// process lives. Pins are permanent: there is no production unpin path.
     pub fn retain(self) -> Self {
         self.set_retained();
         self
-    }
-
-    /// Unpin this resource (by-ref, for use inside wrappers).
-    pub(crate) fn set_released(&self) {
-        self.pinned.remove(&self.key);
     }
 
     /// Pin this resource in the LRU cache (by-ref, for use inside wrappers).
@@ -109,7 +98,7 @@ type CacheItem<A> = (
 /// - Same `(ResourceKey, Context)` returns the same resource handle.
 /// - Cache is process-scoped and not persisted.
 /// - LRU capacity is configurable (default: 5 entries).
-/// - Resources can be pinned via [`CachedResource::hold`] / [`CachedResource::release`].
+/// - Resources can be pinned via [`CachedResource::retain`].
 ///   Pinned resources live outside the target capacity and are never evicted.
 /// - When the inner store lacks [`Capabilities::CACHE`], all operations
 ///   delegate directly to the inner layer.
@@ -236,15 +225,6 @@ where
         }
 
         committed
-    }
-
-    /// Compatibility helper for callers that only care about committed resources.
-    #[must_use]
-    pub fn has_resource(&self, key: &ResourceKey) -> bool {
-        matches!(
-            self.resource_state(key),
-            Ok(AssetResourceState::Committed { .. })
-        )
     }
 
     #[must_use]
@@ -638,42 +618,11 @@ mod tests {
 
         assert_eq!(cached.cache.lock_sync().len(), 4);
         assert!(
-            cached.has_resource(&keys[0]),
+            matches!(
+                cached.resource_state(&keys[0]),
+                Ok(AssetResourceState::Committed { .. })
+            ),
             "pinned resource must survive"
-        );
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn release_unpins_and_allows_eviction() {
-        let dir = tempfile::tempdir().unwrap();
-        let cap = NonZeroUsize::new(3).unwrap();
-        let cached = make_cached(dir.path(), cap);
-
-        let keys: Vec<ResourceKey> = (0..5)
-            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
-            .collect();
-
-        let first = cached.acquire_resource(&keys[0]).unwrap().retain();
-        first.write_at(0, b"data").unwrap();
-        first.commit(Some(4)).unwrap();
-
-        for key in &keys[1..4] {
-            let res = cached.acquire_resource(key).unwrap();
-            res.write_at(0, b"data").unwrap();
-            res.commit(Some(4)).unwrap();
-        }
-        assert_eq!(cached.cache.lock_sync().len(), 4, "3 normal + 1 pinned");
-
-        first.release();
-
-        let res = cached.acquire_resource(&keys[4]).unwrap();
-        res.write_at(0, b"data").unwrap();
-        res.commit(Some(4)).unwrap();
-
-        assert_eq!(
-            cached.cache.lock_sync().len(),
-            3,
-            "released resource must be evicted, cache back to capacity"
         );
     }
 
@@ -734,7 +683,10 @@ mod tests {
         res.write_at(0, b"data").unwrap();
         res.commit(Some(4)).unwrap();
 
-        assert!(cached.has_resource(&key));
+        assert!(matches!(
+            cached.resource_state(&key),
+            Ok(AssetResourceState::Committed { .. })
+        ));
 
         cached.remove_resource(&key).unwrap();
 

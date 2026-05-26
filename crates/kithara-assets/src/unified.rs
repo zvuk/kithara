@@ -205,21 +205,6 @@ where
         None
     }
 
-    /// Compatibility helper for callers that only care about committed resources.
-    #[must_use]
-    pub fn has_resource(&self, key: &ResourceKey) -> bool {
-        matches!(
-            self.resource_state(key),
-            Ok(AssetResourceState::Committed { .. })
-        )
-    }
-
-    /// Whether this backend is ephemeral (in-memory).
-    #[must_use]
-    pub fn is_ephemeral(&self) -> bool {
-        matches!(self, Self::Mem { .. })
-    }
-
     /// Open a resource by key (no processing context).
     ///
     /// # Errors
