@@ -30,7 +30,7 @@ pub(super) fn shell_style(p: GuiPalette) -> impl Fn(&Theme) -> ContainerStyle {
     }
 }
 
-pub(super) fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle {
+pub(crate) fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus) -> ButtonStyle {
     move |_theme, status| {
         let background = match status {
             ButtonStatus::Active => Some(Background::Color(Color::TRANSPARENT)),

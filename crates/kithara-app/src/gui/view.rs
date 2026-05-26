@@ -14,7 +14,6 @@ use iced::{
             Handle as SliderHandle, HandleShape as SliderHandleShape, Rail as SliderRail,
             Status as SliderStatus, Style as SliderStyle,
         },
-        svg::{Handle as SvgHandle, Svg},
         text, text_input, vertical_slider,
     },
 };
@@ -75,6 +74,8 @@ impl Consts {
     /// Crossfade slider upper bound — mirrors the iOS reference (0…8s).
     const CROSSFADE_MAX: f32 = 8.0;
     const CROSSFADE_STEP: f32 = 0.5;
+    const DJ_LAUNCH_GAP: f32 = 7.0;
+    const DJ_LAUNCH_ICON: f32 = 14.0;
     const DJ_LAUNCH_PADDING_X: f32 = 10.0;
     const DJ_LAUNCH_PADDING_Y: f32 = 7.0;
     const ELEMENT_SPACING: f32 = 10.0;
@@ -102,7 +103,6 @@ impl Consts {
 
     const EQ_ZERO_THRESHOLD: f32 = 0.05;
     const HEADING_FONT: f32 = 16.0;
-    const LOGO_SIZE: f32 = 48.0;
     const MAIN_BUTTON_PADDING: f32 = 14.0;
 
     const MAIN_TRANSPORT_ICON_SIZE: f32 = 35.0;
@@ -139,8 +139,6 @@ impl Consts {
     const TAB_CONTENT_PADDING_X: f32 = 8.0;
     const TAB_CONTENT_PADDING_Y: f32 = 8.0;
     const TAB_ICON_SIZE: f32 = 18.0;
-    const TITLE_FONT: f32 = 28.0;
-    const TITLE_SPACING: f32 = 2.0;
     const TOGGLE_ICON_PADDING: f32 = 6.0;
     const TOGGLE_ICON_SIZE: f32 = 22.0;
     const TRACK_NAME_FONT: f32 = 22.0;
@@ -198,34 +196,10 @@ pub(crate) fn format_time(seconds: f64) -> String {
 
 fn view_header(state: &Kithara) -> Element<'_, Message> {
     let p = state.palette;
-    let logo = Svg::new(SvgHandle::from_memory(
-        include_bytes!("../../assets/logo.svg") as &[u8],
-    ))
-    .width(Length::Fixed(Consts::LOGO_SIZE))
-    .height(Length::Fixed(Consts::LOGO_SIZE));
-
-    let title_color = if state.ui_state.playing {
-        p.accent
-    } else {
-        p.text
-    };
-
-    let title = column![
-        text("Kithara")
-            .size(Consts::TITLE_FONT)
-            .font(fonts::display(Weight::Semibold))
-            .color(title_color),
-        text("Player")
-            .size(Consts::SUBTITLE_FONT)
-            .font(fonts::mono(Weight::Medium))
-            .color(p.muted)
-    ]
-    .spacing(Consts::TITLE_SPACING);
 
     container(
         row![
-            logo,
-            title,
+            super::studio::brand_mark(p, "PLAYER"),
             Space::new().width(Length::Fill),
             dj_studio_button(p),
         ]
@@ -233,32 +207,25 @@ fn view_header(state: &Kithara) -> Element<'_, Message> {
         .spacing(Consts::SECTION_SPACING),
     )
     .width(Length::Fill)
-    .padding(Consts::SECTION_PADDING)
-    .style(panel_style(p))
     .into()
 }
 
 /// Compact-header entry point to the DJ Studio. The studio has no tab of
 /// its own on this layout, so this button is the only way in.
 fn dj_studio_button(p: GuiPalette) -> Element<'static, Message> {
-    button(text("DJ Studio").size(Consts::SMALL_FONT).color(p.text_dim))
-        .padding([Consts::DJ_LAUNCH_PADDING_Y, Consts::DJ_LAUNCH_PADDING_X])
-        .style(move |_theme, status| {
-            let (text_color, border_color) = match status {
-                ButtonStatus::Hovered | ButtonStatus::Pressed => (p.text, p.accent),
-                ButtonStatus::Active | ButtonStatus::Disabled => (p.text_dim, p.line),
-            };
-            ButtonStyle {
-                background: Some(Background::Color(with_alpha(p.bg_deep, 0.55))),
-                text_color,
-                border: Border::default()
-                    .rounded(Consts::BORDER_RADIUS_BUTTON)
-                    .width(Consts::BORDER_WIDTH)
-                    .color(border_color),
-                ..ButtonStyle::default()
-            }
-        })
-        .on_press(Message::Dj(DjMsg::Toggle))
+    button(
+        row![
+            Icon::Disc.view(Consts::DJ_LAUNCH_ICON, p.accent),
+            text("DJ Studio")
+                .size(Consts::SMALL_FONT)
+                .color(p.text),
+        ]
+        .spacing(Consts::DJ_LAUNCH_GAP)
+        .align_y(Alignment::Center),
+    )
+    .padding([Consts::DJ_LAUNCH_PADDING_Y, Consts::DJ_LAUNCH_PADDING_X])
+    .style(super::studio::ghost_button_style(p))
+    .on_press(Message::Dj(DjMsg::Toggle))
         .into()
 }
 

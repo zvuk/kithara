@@ -20,6 +20,7 @@ pub(crate) enum Icon {
     Shuffle,
     Repeat,
     RepeatOnce,
+    Disc,
 }
 
 fn icon_bytes(icon: Icon) -> &'static [u8] {
@@ -38,6 +39,7 @@ fn icon_bytes(icon: Icon) -> &'static [u8] {
         Icon::Shuffle => include_bytes!("../../assets/icons/shuffle.svg"),
         Icon::Repeat => include_bytes!("../../assets/icons/repeat.svg"),
         Icon::RepeatOnce => include_bytes!("../../assets/icons/repeat-once.svg"),
+        Icon::Disc => include_bytes!("../../assets/icons/disc.svg"),
     }
 }
 

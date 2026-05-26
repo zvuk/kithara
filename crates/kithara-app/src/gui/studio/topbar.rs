@@ -31,7 +31,7 @@ pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, Message> {
     .on_press(Message::Dj(DjMsg::Toggle));
 
     container(
-        row![brand_mark(p), Space::new().width(Length::Fill), exit]
+        row![brand_mark(p, "DJ STUDIO"), Space::new().width(Length::Fill), exit]
             .align_y(Alignment::Center)
             .spacing(Gap::SECTION_ROOMY),
     )
@@ -40,7 +40,7 @@ pub(super) fn view_topbar(p: GuiPalette) -> Element<'static, Message> {
     .into()
 }
 
-fn brand_mark(p: GuiPalette) -> Element<'static, Message> {
+pub(crate) fn brand_mark(p: GuiPalette, sub: &'static str) -> Element<'static, Message> {
     let logo = Svg::new(SvgHandle::from_memory(
         include_bytes!("../../../assets/logo.svg") as &[u8],
     ))
@@ -61,7 +61,7 @@ fn brand_mark(p: GuiPalette) -> Element<'static, Message> {
             StudioSize::BRAND_DIVIDER_HEIGHT,
             p.line
         ),
-        text("DJ STUDIO")
+        text(sub)
             .size(StudioType::MONO_XS)
             .font(fonts::mono(Weight::Medium))
             .color(p.muted),
