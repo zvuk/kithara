@@ -202,9 +202,7 @@ impl File {
     /// Wrapped in `#[kithara::hang_watchdog]` so a stale tmp from a
     /// crashed-out previous process (which never releases the
     /// filesystem-level signal) surfaces as a deterministic panic
-    /// rather than an indefinite hang. Production startup should call
-    /// `AtomicChunked::scrub_stale_tmp` for known canonicals to make
-    /// this path the cold case.
+    /// rather than an indefinite hang.
     #[kithara::hang_watchdog]
     async fn create_remote_wait_for_claim(
         url: url::Url,

@@ -175,24 +175,6 @@ impl<R: ResourceExt> AtomicChunked<R> {
             factory: None,
         }
     }
-
-    /// Delete `<canonical>.tmp` unconditionally if it exists.
-    ///
-    /// `AtomicChunked::open` no longer auto-wipes stale temp files —
-    /// the sibling tmp's existence is the cross-instance ownership
-    /// signal that protects sibling writers from clobbering each
-    /// other (see [`Self::open`] docs). Callers that genuinely want
-    /// crashed-run recovery (e.g. service startup, test cleanup) call
-    /// this helper explicitly.
-    ///
-    /// Best-effort — missing tmp / permission errors are swallowed,
-    /// matching the legacy auto-wipe behaviour at the call site that
-    /// owned recovery before this contract change.
-    pub fn scrub_stale_tmp(canonical_path: &Path) {
-        if let Some(tmp_path) = make_tmp_path(canonical_path) {
-            let _ = fs::remove_file(&tmp_path);
-        }
-    }
 }
 
 impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
