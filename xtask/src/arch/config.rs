@@ -113,6 +113,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) field_always_equals_other_field: FieldAlwaysEqualsOtherFieldThreshold,
     #[serde(default)]
     pub(crate) cancel_hierarchy: CancelHierarchyThreshold,
+    #[serde(default)]
+    pub(crate) dead_exports: DeadExportsThreshold,
 }
 
 #[derive(Debug, Deserialize)]
@@ -489,6 +491,63 @@ fn default_cancel_hierarchy_exempt_crates() -> Vec<String> {
         "kithara-test-macros",
         "kithara-probe-macros",
         "xtask",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DeadExportsThreshold {
+    /// Definition kinds to evaluate: `fn`, `method`, `const`, `static`,
+    /// `type`, `struct`, `enum`, `trait`.
+    #[serde(default = "default_dead_exports_kinds")]
+    pub(crate) kinds: Vec<String>,
+    /// Crates treated as test-only scaffolding (integration harness, test-util
+    /// and test-macro crates). Any reference originating in one of these counts
+    /// as a test reference. Configured in
+    /// `.config/arch/thresholds.toml` (`[dead_exports]`).
+    #[serde(default)]
+    pub(crate) test_crates: Vec<String>,
+    /// Crates skipped entirely (neither defs collected nor refs counted):
+    /// build tooling and workspace-hack shims. Configured in
+    /// `.config/arch/thresholds.toml` (`[dead_exports]`).
+    #[serde(default)]
+    pub(crate) ignore_crates: Vec<String>,
+    /// Symbol names that are never flagged (e.g. FFI entry points the scanner
+    /// cannot see called from non-Rust callers).
+    #[serde(default)]
+    pub(crate) exempt: Vec<String>,
+    /// Workspace-relative path fragments whose definitions `--fix` must never
+    /// auto-delete: platform-gated module directories (e.g. `android/`) whose
+    /// callers live in build configurations or non-Rust code this scan cannot
+    /// see. Reporting still flags them; only autofix is held back.
+    #[serde(default)]
+    pub(crate) fix_protect_paths: Vec<String>,
+    /// Attribute path segments that mark a definition as an external entry
+    /// point with no in-tree Rust caller (`no_mangle`, `wasm_bindgen`, ...).
+    /// Configured in `.config/arch/thresholds.toml` (`[dead_exports]`).
+    #[serde(default)]
+    pub(crate) export_attrs: Vec<String>,
+}
+
+impl Default for DeadExportsThreshold {
+    fn default() -> Self {
+        Self {
+            kinds: default_dead_exports_kinds(),
+            test_crates: Vec::new(),
+            ignore_crates: Vec::new(),
+            exempt: Vec::new(),
+            fix_protect_paths: Vec::new(),
+            export_attrs: Vec::new(),
+        }
+    }
+}
+
+fn default_dead_exports_kinds() -> Vec<String> {
+    [
+        "fn", "method", "const", "static", "type", "struct", "enum", "trait",
     ]
     .iter()
     .map(|s| (*s).to_string())

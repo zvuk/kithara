@@ -36,6 +36,7 @@ pub(crate) trait Check {
         Ok(FixOutcome {
             writes: 0,
             skipped: vec![format!("check '{}' has no autofix", self.id())],
+            changes: Vec::new(),
         })
     }
 }
