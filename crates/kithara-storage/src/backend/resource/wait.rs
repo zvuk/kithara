@@ -15,9 +15,16 @@ use crate::{
     resource::{WaitOutcome, range_covered_by},
 };
 
+/// Watchdog timeout for the network-bound `wait_range_inner`: must exceed
+/// the `kithara-net` `total_timeout` (default 120s) so a stalled upstream is
+/// failed by the network layer (this wait then returns `Failed`) before the
+/// deadlock-watchdog fires. Only a wait that never returns after the fetch
+/// resolved is a real deadlock.
+const WAIT_HANG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
 impl<D: DriverIo> Resource<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    #[kithara::hang_watchdog]
+    #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
     pub(super) fn wait_range_inner(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         const WAIT_SPIN_TIMEOUT_MS: u64 = 50;
 
@@ -31,6 +38,11 @@ impl<D: DriverIo> Resource<D> {
         if range.is_empty() {
             return Ok(WaitOutcome::Ready);
         }
+
+        // How far the available prefix of `range` reaches. Bytes arrive
+        // front-to-back for a sequential fetch, so this advancing means the
+        // wait is making progress (not deadlocked) and the watchdog resets.
+        let mut filled_front = range.start;
 
         loop {
             hang_tick!();
@@ -64,6 +76,16 @@ impl<D: DriverIo> Resource<D> {
                 if self.inner.driver.valid_window().is_none() {
                     return Ok(WaitOutcome::Ready);
                 }
+            }
+
+            let front = state
+                .available
+                .gaps(&range)
+                .next()
+                .map_or(range.end, |gap| gap.start);
+            if front > filled_front {
+                filled_front = front;
+                hang_reset!();
             }
 
             debug!(
