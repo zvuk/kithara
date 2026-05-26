@@ -1,7 +1,7 @@
 use std::{io::Cursor, time::Duration};
 
 use kithara_decode::{DecodeError, DecoderConfig, DecoderFactory, PcmChunk};
-use kithara_integration_tests::create_test_wav;
+use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
 

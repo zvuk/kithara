@@ -6,7 +6,9 @@ use kithara::{
     decode::{DecoderConfig, DecoderFactory, PcmChunk},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_integration_tests::audio_fixture::EmbeddedAudio;
+use kithara_integration_tests::{
+    audio_fixture::EmbeddedAudio, decode_ext::DecoderChunkOutcomeTestExt,
+};
 
 fn test_config() -> DecoderConfig {
     DecoderConfig::default()

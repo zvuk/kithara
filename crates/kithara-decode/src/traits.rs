@@ -97,12 +97,6 @@ pub enum DecoderChunkOutcome {
 }
 
 impl DecoderChunkOutcome {
-    /// `true` when the outcome is [`Self::Chunk`].
-    #[must_use]
-    pub fn is_chunk(&self) -> bool {
-        matches!(self, Self::Chunk(_))
-    }
-
     /// `true` when the outcome is [`Self::Eof`].
     #[must_use]
     pub fn is_eof(&self) -> bool {

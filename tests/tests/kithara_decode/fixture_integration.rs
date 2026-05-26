@@ -6,8 +6,8 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, SignalDirection, SignalFormat, SignalSpec,
-    SignalSpecLength, TestServerHelper, audio_fixture::EmbeddedAudio, detect_direction,
-    fixture_protocol::PackagedSignal,
+    SignalSpecLength, TestServerHelper, audio_fixture::EmbeddedAudio,
+    decode_ext::DecoderChunkOutcomeTestExt, detect_direction, fixture_protocol::PackagedSignal,
 };
 use kithara_platform::time::Duration;
 use reqwest::Client;

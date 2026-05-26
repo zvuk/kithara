@@ -20,6 +20,7 @@ pub mod assets_ext;
 pub mod audio_fixture;
 pub mod audio_mock;
 pub mod consts;
+pub mod decode_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod decode_mock;
 #[cfg(not(target_arch = "wasm32"))]
