@@ -269,4 +269,22 @@ mod tests {
         res.reactivate().unwrap();
         assert_eq!(res.status(), ResourceStatus::Active);
     }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn reactivate_clears_failed_for_refetch() {
+        let mem = MemResource::new(CancellationToken::new());
+        let res = StorageResource::from(mem);
+
+        res.write_at(0, b"par").unwrap();
+        res.fail("fetch cancelled before completion".to_string());
+        assert!(matches!(res.status(), ResourceStatus::Failed(_)));
+
+        res.reactivate()
+            .expect("reactivate must clear a prior failure so the key can be re-fetched");
+        assert_eq!(res.status(), ResourceStatus::Active);
+
+        res.write_at(0, b"data").unwrap();
+        res.commit(Some(4)).unwrap();
+        assert!(matches!(res.status(), ResourceStatus::Committed { .. }));
+    }
 }
