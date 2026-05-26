@@ -35,7 +35,8 @@ impl Check for DeadExports {
         let cfg = &ctx.config.thresholds.dead_exports;
         let exempt: HashSet<&str> = cfg.exempt.iter().map(String::as_str).collect();
         let (defs, refs) = scan(ctx, cfg);
-        Ok(emit(&defs, &refs, &exempt))
+        let protected = protected_names(&defs, cfg);
+        Ok(emit(&defs, &refs, &exempt, &protected))
     }
 
     fn fix(&self, ctx: &Context<'_>, apply: bool) -> Result<FixOutcome> {
@@ -108,10 +109,18 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
     (defs, refs)
 }
 
-fn emit(defs: &[Def], refs: &Refs, exempt: &HashSet<&str>) -> Vec<Violation> {
+fn emit(
+    defs: &[Def],
+    refs: &Refs,
+    exempt: &HashSet<&str>,
+    protected: &HashSet<&str>,
+) -> Vec<Violation> {
     let mut violations = Vec::new();
     for def in defs {
-        if exempt.contains(def.name.as_str()) || refs.prod.contains(&def.name) {
+        if exempt.contains(def.name.as_str())
+            || protected.contains(def.name.as_str())
+            || refs.prod.contains(&def.name)
+        {
             continue;
         }
         let status = if refs.test_external.contains(&def.name) {
@@ -143,21 +152,7 @@ fn fix_dead_exports(ctx: &Context<'_>, apply: bool) -> Result<FixOutcome> {
     let cfg = &ctx.config.thresholds.dead_exports;
     let (defs, refs) = scan(ctx, cfg);
     let exempt: HashSet<&str> = cfg.exempt.iter().map(String::as_str).collect();
-    // A name is protected if any of its defs is gated (`#[cfg(target_*)]`) or
-    // lives under a protected path (platform-gated module dir). Such names are
-    // never auto-deleted, and their re-exports are never pruned, because a
-    // build configuration or non-Rust caller this scan can't see may use them.
-    let protected: HashSet<&str> = defs
-        .iter()
-        .filter(|d| {
-            d.gated
-                || cfg
-                    .fix_protect_paths
-                    .iter()
-                    .any(|p| d.rel_path.contains(p.as_str()))
-        })
-        .map(|d| d.name.as_str())
-        .collect();
+    let protected = protected_names(&defs, cfg);
     let dead: HashSet<String> = defs
         .iter()
         .filter(|d| {
@@ -333,6 +328,23 @@ fn item_head(it: &Item) -> Option<Head<'_>> {
         Item::Type(x) => Some(head(&x.vis, &x.attrs, &x.ident)),
         _ => None,
     }
+}
+
+/// Names whose callers this scan cannot see and so must never be reported or
+/// auto-deleted: items gated by `#[cfg(target_os/target_arch)]` (compiled on
+/// another target) or living under a platform-gated module dir
+/// (`fix_protect_paths`, e.g. `/android/`).
+fn protected_names<'a>(defs: &'a [Def], cfg: &DeadExportsThreshold) -> HashSet<&'a str> {
+    defs.iter()
+        .filter(|d| {
+            d.gated
+                || cfg
+                    .fix_protect_paths
+                    .iter()
+                    .any(|p| d.rel_path.contains(p.as_str()))
+        })
+        .map(|d| d.name.as_str())
+        .collect()
 }
 
 /// A `#[cfg(target_os/target_arch = ...)]`-gated item — its callers may live in

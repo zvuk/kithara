@@ -326,8 +326,12 @@ ignore_crates = ["xtask", "kithara-workspace-hack"]
 # Rust caller; such definitions are never flagged.
 export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
 # Symbol names never flagged (escape hatch for false positives the syntactic
-# scanner cannot resolve — e.g. names reached only through a macro expansion).
-exempt = []
+# scanner cannot resolve — e.g. names reached only through a macro expansion or
+# a non-Rust caller).
+#   advance_to_next_item: documented public QueuePlayer API (AVQueuePlayer
+#   analogue) exposed to Swift via the uniffi FFI layer; the only in-tree Rust
+#   caller is a test.
+exempt = ["advance_to_next_item"]
 # Path fragments whose defs `--fix` must never auto-delete: platform-gated
 # module dirs whose callers live in cfg-disabled or non-Rust (JNI) code the
 # scan cannot see. Reporting still lists them; deletion is held for review.
