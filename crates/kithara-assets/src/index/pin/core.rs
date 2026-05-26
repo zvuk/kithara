@@ -10,7 +10,7 @@ use dashmap::{DashMap, mapref::entry::Entry};
 
 use crate::{
     error::AssetsResult,
-    flush::{FlushHub, Flushable, signal_or_flush_sync},
+    flush::{FlushHub, Flushable, flush_sync},
 };
 
 /// In-memory + best-effort disk-backed index of pinned `asset_root`s.
@@ -88,7 +88,7 @@ impl PinsIndex {
             }
         };
         if transitioned {
-            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
+            flush_sync(&*self.inner)?;
         }
         Ok(transitioned)
     }
@@ -164,7 +164,7 @@ impl PinsIndex {
                 false
             };
         if transitioned {
-            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
+            flush_sync(&*self.inner)?;
         }
         Ok(transitioned)
     }

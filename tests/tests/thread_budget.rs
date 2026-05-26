@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use kithara_assets::StoreOptions;
+use kithara_assets::{FlushHub, FlushPolicy, StoreOptions};
 use kithara_audio::{Audio, AudioConfig, AudioWorkerHandle};
 use kithara_hls::{AbrMode, Hls, HlsConfig};
 use kithara_integration_tests::{TestServerHelper, TestTempDir, kithara, temp_dir};
@@ -106,12 +106,18 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let cancel = CancellationToken::new();
     let shared_worker = AudioWorkerHandle::new();
+    let shared_hub = FlushHub::new(cancel.child_token(), FlushPolicy::default());
+    let shared_store = || {
+        let mut opts = StoreOptions::new(temp_dir.path());
+        opts.flush_hub = Some(shared_hub.clone());
+        opts
+    };
 
     settle();
     let before = active_named_thread_count();
 
     let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(shared_store())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::Manual(0))
         .build();
@@ -121,7 +127,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let a1 = Audio::<Stream<Hls>>::new(config).await;
 
     let hls_config2 = HlsConfig::for_url(server.asset("hls/master.m3u8"))
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(shared_store())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::Manual(1))
         .build();
@@ -131,7 +137,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let a2 = Audio::<Stream<Hls>>::new(config).await;
 
     let drm_config = HlsConfig::for_url(server.asset("drm/master.m3u8"))
-        .store(StoreOptions::new(temp_dir.path()))
+        .store(shared_store())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::Manual(0))
         .build();
@@ -168,11 +174,14 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     drop(audios);
     cancel.cancel();
     shared_worker.shutdown();
+    drop(shared_hub);
     settle();
 
     assert_eq!(
-        delta, 0,
-        "3 tracks with shared worker: 0 extra kithara threads expected, got delta={delta} \
+        delta, 1,
+        "3 tracks with a shared audio worker and a shared flush hub must add exactly 1 \
+         kithara thread (the single shared flush-hub worker, started lazily on the first \
+         store registration); it must not scale per track. got delta={delta} \
          (before={before}, after={after})"
     );
 }

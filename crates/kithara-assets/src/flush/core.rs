@@ -95,18 +95,25 @@ pub(super) struct HubState {
     pub(super) op_count: usize,
 }
 
+/// Wait primitive shared between `signal()`, the worker thread, and
+/// `flush_now()`. Held in its own `Arc` so the worker can park on it
+/// without keeping a strong `Arc<FlushHub>` alive — that is what lets
+/// the hub reach refcount zero and run its `Drop`.
+pub(in crate::flush) struct HubWait {
+    pub(in crate::flush) cv: Condvar,
+    pub(in crate::flush) state: Mutex<HubState>,
+}
+
 /// Shared flush coordinator. Created once per process or per
 /// `AssetStore` builder; threaded into every index via `register`.
 ///
 /// See module docs for the worker / sync-fallback semantics.
 pub struct FlushHub {
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(in crate::flush) cancel: CancellationToken,
-    pub(in crate::flush) cv: Condvar,
     pub(in crate::flush) policy: FlushPolicy,
     pub(in crate::flush) flush_lock: Mutex<()>,
     pub(in crate::flush) sources: Mutex<Vec<Weak<dyn Flushable>>>,
-    pub(in crate::flush) state: Mutex<HubState>,
+    pub(in crate::flush) wait: Arc<HubWait>,
     pub(in crate::flush) worker: WorkerSlot,
 }
 
@@ -116,12 +123,17 @@ impl FlushHub {
     #[must_use]
     pub fn new(cancel: CancellationToken, policy: FlushPolicy) -> Arc<Self> {
         Arc::new(Self {
+            // The caller passes a child token it owns exclusively (see
+            // the cancel-hierarchy rule): `Drop` cancels it to stop the
+            // worker without touching the shared parent (storage, app).
             cancel,
             policy,
-            state: Mutex::new(HubState::default()),
-            cv: Condvar::new(),
             flush_lock: Mutex::new(()),
             sources: Mutex::new(Vec::new()),
+            wait: Arc::new(HubWait {
+                cv: Condvar::new(),
+                state: Mutex::new(HubState::default()),
+            }),
             worker: WorkerSlot::default(),
         })
     }
@@ -169,7 +181,7 @@ impl FlushHub {
     pub fn flush_now(&self) -> AssetsResult<()> {
         let _g = self.flush_lock.lock_sync();
         {
-            let mut s = self.state.lock_sync();
+            let mut s = self.wait.state.lock_sync();
             s.pending = false;
             s.op_count = 0;
         }
@@ -200,20 +212,41 @@ impl FlushHub {
     /// `flush_dirty` pass.
     pub(crate) fn register(self: &Arc<Self>, source: Weak<dyn Flushable>) {
         self.sources.lock_sync().push(source);
+        self.start_worker();
     }
 
-    /// Wake the worker. Bumps the operation counter so a sustained
-    /// burst eventually bypasses the debounce. No-op when no worker is
-    /// attached — the helper [`signal_or_flush_sync`] is the canonical
-    /// entry point for mutators and routes through `flush_now()`
-    /// instead.
+    /// Lazily spawn the background flush worker (idempotent). Called on
+    /// the first source registration, mirroring the downloader / audio
+    /// worker lazy-start. The thread is torn down by [`FlushHub`]'s
+    /// `Drop`.
+    pub(crate) fn start_worker(self: &Arc<Self>) {
+        self.worker.start_with(self);
+    }
+
+    /// Wake the worker to coalesce a burst of mutations into one
+    /// background flush. Bumps the operation counter so a sustained
+    /// burst eventually bypasses the debounce. The availability index
+    /// is the caller: it is rewritten on every write/commit, so it
+    /// debounces through the worker. Pins and the LRU index instead
+    /// flush eagerly via [`flush_sync`] for crash safety.
     pub(crate) fn signal(self: &Arc<Self>) {
         {
-            let mut s = self.state.lock_sync();
+            let mut s = self.wait.state.lock_sync();
             s.pending = true;
             s.op_count = s.op_count.saturating_add(1);
         }
-        self.cv.notify_one();
+        self.wait.cv.notify_one();
+    }
+}
+
+impl Drop for FlushHub {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        {
+            let _g = self.wait.state.lock_sync();
+            self.wait.cv.notify_all();
+        }
+        self.worker.shutdown_join();
     }
 }
 
@@ -227,30 +260,23 @@ impl std::fmt::Debug for FlushHub {
     }
 }
 
-/// Helper used by every index mutator. Marks the source dirty, then:
+/// Eagerly flush a single index source. Pins and the LRU index are
+/// crash-safety state — a pinned resource must be durable immediately
+/// so a crash can't lose it and let the resource be evicted — so their
+/// mutators flush synchronously here rather than deferring to the
+/// debounced [`FlushHub`] worker. The worker instead serves the
+/// frequently-rewritten availability index, which wakes it via
+/// [`FlushHub::signal`].
 ///
-/// - **Hub attached, with worker** — wakes the worker; flush happens
-///   on the background thread under `flush_lock`.
-/// - **Hub attached, no worker** — runs [`FlushHub::flush_now`] which
-///   drains every dirty source registered with that hub.
-/// - **No hub attached** — runs `Flushable::flush` on the source
-///   directly, matching the legacy inline-flush behaviour for ad-hoc
-///   tests that never call `attach_to`.
+/// Marks the source dirty before flushing: `Flushable::flush` clears
+/// the flag on success, so a failed flush leaves `dirty == true` and
+/// the next cycle retries.
 ///
 /// # Errors
 ///
-/// Propagates whichever flush path runs.
-pub(crate) fn signal_or_flush_sync(
-    hub: Option<&Arc<FlushHub>>,
-    source: &dyn Flushable,
-) -> AssetsResult<()> {
+/// Propagates the underlying flush error.
+pub(crate) fn flush_sync(source: &dyn Flushable) -> AssetsResult<()> {
     source.dirty().store(true, Ordering::Release);
-    if let Some(h) = hub
-        && h.has_worker()
-    {
-        h.signal();
-        return Ok(());
-    }
     source.flush()
 }
 
@@ -319,16 +345,14 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn no_worker_flushes_synchronously_via_signal_or_flush_sync() {
-        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+    fn flush_sync_flushes_eagerly() {
         let src = CountingSource::new("src");
-        hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
-        signal_or_flush_sync(Some(&hub), &*src).unwrap();
+        flush_sync(&*src).unwrap();
         assert_eq!(
             src.flush_count(),
             1,
-            "no worker → mutator drives sync flush"
+            "pin/LRU mutators flush eagerly and synchronously"
         );
     }
 
@@ -361,28 +385,27 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(2)))]
-    fn signal_or_flush_sync_uses_non_durable_variant() {
-        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+    fn flush_sync_uses_non_durable_variant() {
         let src = CountingSource::new("src");
-        hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
-        signal_or_flush_sync(Some(&hub), &*src).unwrap();
-        assert_eq!(src.flush_count(), 1, "mutator path → non-durable");
+        flush_sync(&*src).unwrap();
+        assert_eq!(src.flush_count(), 1, "eager mutator path → non-durable");
         assert_eq!(
             src.durable_flush_count(),
             0,
-            "mutator path must NOT pay the sync_data fence"
+            "eager mutator path must NOT pay the sync_data fence"
         );
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn worker_coalesces_burst_into_single_flush() {
-        let hub = FlushHub::with_worker(CancellationToken::new(), fast_policy());
+        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
         let src = CountingSource::new("burst");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
         for _ in 0..5 {
-            signal_or_flush_sync(Some(&hub), &*src).unwrap();
+            src.dirty.store(true, Ordering::Release);
+            hub.signal();
         }
 
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -404,12 +427,13 @@ mod tests {
             force_every_n_ops: NonZeroUsize::new(4).unwrap(),
             poll_interval: Duration::from_millis(20),
         };
-        let hub = FlushHub::with_worker(CancellationToken::new(), policy);
+        let hub = FlushHub::new(CancellationToken::new(), policy);
         let src = CountingSource::new("force");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
         for _ in 0..6 {
-            signal_or_flush_sync(Some(&hub), &*src).unwrap();
+            src.dirty.store(true, Ordering::Release);
+            hub.signal();
         }
 
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -426,7 +450,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn cancel_triggers_final_flush() {
         let cancel = CancellationToken::new();
-        let hub = FlushHub::with_worker(cancel.clone(), fast_policy());
+        let hub = FlushHub::new(cancel.clone(), fast_policy());
         let src = CountingSource::new("final");
         hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
 
@@ -499,5 +523,33 @@ mod tests {
         hub.flush_now().unwrap();
         assert_eq!(src.attempts.load(Ordering::Acquire), 2, "retried");
         assert!(!src.dirty.load(Ordering::Acquire));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(2)))]
+    fn register_lazily_starts_worker() {
+        let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+        assert!(
+            !hub.has_worker(),
+            "fresh hub has no worker until a source registers"
+        );
+        let src = CountingSource::new("lazy");
+        hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
+        assert!(
+            hub.has_worker(),
+            "first registration lazily starts the background worker"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn repeated_hub_drop_joins_cleanly() {
+        for _ in 0..20 {
+            let hub = FlushHub::new(CancellationToken::new(), fast_policy());
+            let src = CountingSource::new("churn");
+            hub.register(Arc::downgrade(&src) as Weak<dyn Flushable>);
+            for _ in 0..3 {
+                src.dirty.store(true, Ordering::Release);
+                hub.signal();
+            }
+        }
     }
 }

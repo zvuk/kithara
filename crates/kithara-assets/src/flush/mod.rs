@@ -8,4 +8,4 @@ mod worker;
 mod worker;
 
 pub use core::{FlushHub, FlushPolicy};
-pub(crate) use core::{Flushable, signal_or_flush_sync};
+pub(crate) use core::{Flushable, flush_sync};

@@ -13,7 +13,7 @@ use kithara_platform::Mutex;
 use crate::index::schema::{LruEntryFile, LruIndexFile};
 use crate::{
     error::AssetsResult,
-    flush::{FlushHub, Flushable, signal_or_flush_sync},
+    flush::{FlushHub, Flushable, flush_sync},
 };
 
 /// Eviction configuration for an assets store decorator.
@@ -113,7 +113,7 @@ impl LruIndex {
             st.remove(asset_root)
         };
         if removed {
-            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
+            flush_sync(&*self.inner)?;
         }
         Ok(())
     }
@@ -145,7 +145,7 @@ impl LruIndex {
             let mut st = self.inner.state.lock_sync();
             st.touch(asset_root, bytes_hint)
         };
-        signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
+        flush_sync(&*self.inner)?;
         Ok(created)
     }
 
@@ -167,7 +167,7 @@ impl LruIndex {
             st.update_bytes(asset_root, bytes)
         };
         if changed {
-            signal_or_flush_sync(self.inner.hub.get(), &*self.inner)?;
+            flush_sync(&*self.inner)?;
         }
         Ok(changed)
     }

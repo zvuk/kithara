@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroUsize;
+
 use kithara_assets::{AssetStoreBuilder, FlushHub, FlushPolicy, ResourceKey};
 use kithara_platform::time::Duration;
 use kithara_storage::ResourceExt;
@@ -8,6 +10,17 @@ use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
 const INDEXES_PER_DISK_STORE: usize = 3;
+
+/// Policy whose worker stays dormant for the whole test: a one-hour
+/// debounce and an unreachable op cap mean the background worker never
+/// flushes on its own, so `flush_now` is provably the persistence path.
+fn dormant_worker_policy() -> FlushPolicy {
+    FlushPolicy {
+        debounce: Duration::from_secs(3600),
+        poll_interval: Duration::from_secs(3600),
+        force_every_n_ops: NonZeroUsize::new(usize::MAX).expect("usize::MAX is non-zero"),
+    }
+}
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn shared_hub_registers_three_indexes_per_store() {
@@ -88,7 +101,7 @@ fn shared_hub_gcs_dropped_store_indexes() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn shared_hub_flush_now_persists_every_store() {
     let dir = tempdir().unwrap();
-    let hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
+    let hub = FlushHub::new(CancellationToken::new(), dormant_worker_policy());
 
     let store_a = AssetStoreBuilder::new()
         .root_dir(dir.path().join("a"))

@@ -117,13 +117,6 @@ impl StoreOptions {
         let cache_dir = PathBuf::from("/kithara");
         Self::builder().cache_dir(cache_dir)
     }
-
-    /// Effective LRU cache capacity (explicit or default).
-    #[must_use]
-    pub fn effective_cache_capacity(&self) -> NonZeroUsize {
-        self.cache_capacity
-            .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY)
-    }
 }
 
 impl From<&StoreOptions> for EvictConfig {
@@ -333,7 +326,7 @@ where
         let hub = self
             .flush_hub
             .clone()
-            .unwrap_or_else(|| FlushHub::new(cancel.clone(), FlushPolicy::default()));
+            .unwrap_or_else(|| FlushHub::new(cancel.child_token(), FlushPolicy::default()));
 
         let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
         let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
@@ -405,7 +398,7 @@ where
         let hub = self
             .flush_hub
             .clone()
-            .unwrap_or_else(|| FlushHub::new(cancel.clone(), FlushPolicy::default()));
+            .unwrap_or_else(|| FlushHub::new(cancel.child_token(), FlushPolicy::default()));
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         pins.attach_to(&hub);
