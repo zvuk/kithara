@@ -1195,6 +1195,11 @@ async fn stress_offline_crossfade_no_gaps() {
             s.max_silence_run,
             f64::from(s.max_silence_run) * BLOCK as f64 / f64::from(SR) * 1000.0,
         );
+        // Wall-clock render budget. RTSan instruments every malloc/lock in
+        // the whole process, inflating render wall-clock far past the audio
+        // block budget; it cannot judge this throughput contract. RTSan still
+        // runs the crossfade path to detect real RT violations in `process()`.
+        #[cfg(not(rtsan))]
         assert!(
             s.slow_renders <= 1,
             "{}: {} renders exceeded budget {block_budget:?}, max={:?} — \
@@ -1209,6 +1214,7 @@ async fn stress_offline_crossfade_no_gaps() {
         "HLS→MP3 repeated: worst silence gap {worst_silence} blocks — \
          intermittent underrun during crossfade"
     );
+    #[cfg(not(rtsan))]
     assert!(
         worst_slow <= 1,
         "HLS→MP3 repeated: {worst_slow} blocks exceeded budget, \
