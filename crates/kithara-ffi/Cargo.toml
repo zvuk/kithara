@@ -49,6 +49,12 @@ default = ["backend-uniffi"]
 backend-uniffi = ["dep:uniffi"]
 apple = ["kithara/apple"]
 android = ["kithara/android"]
+# Cross-platform software decode backend. Not part of apple/android
+# (those own hardware decode on-device). Used for the host-side
+# uniffi-bindgen build, where neither the apple nor the android
+# (target_os-gated) DecoderBackend variant exists, so without a
+# backend feature `DecoderBackend` would be an empty enum.
+symphonia = ["kithara/symphonia"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
 wasm = []
