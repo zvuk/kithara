@@ -101,7 +101,7 @@ doc:
 #   just test --profile ci    # CI nextest profile
 #   just test EXPR            # nextest filter expression
 test *ARGS:
-    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+    NEXTEST_EXPERIMENTAL_SETUP_SCRIPTS=1 cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
 
 # Run the cross-decoder protocol suite once per backend in isolation so a
 # regression in one backend's feature-gating cannot hide behind feature

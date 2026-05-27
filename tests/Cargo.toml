@@ -173,6 +173,11 @@ path = "bin/test_server.rs"
 test = false
 
 [[bin]]
+name = "fixture-cache-setup"
+path = "bin/fixture-cache-setup.rs"
+test = false
+
+[[bin]]
 name = "wasm_test_runner"
 path = "bin/wasm_test_runner.rs"
 test = false

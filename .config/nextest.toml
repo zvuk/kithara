@@ -1,3 +1,14 @@
+# Ephemeral per-run fixture cache (L2). Gated behind the experimental
+# setup-scripts flag in `just test`; absent flag → L2 disabled, L1-only.
+experimental = ["setup-scripts"]
+
+[scripts.setup.fixture-cache]
+command = 'cargo run -q -p kithara-integration-tests --bin fixture-cache-setup'
+
+[[profile.default.scripts]]
+filter = 'package(kithara-integration-tests)'
+setup = ['fixture-cache']
+
 [profile.default]
 fail-fast = false
 test-threads = "num-cpus"
