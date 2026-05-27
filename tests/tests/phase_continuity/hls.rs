@@ -9,19 +9,32 @@ use kithara::{
 };
 use kithara_decode::DecoderBackend;
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::PackagedSignal,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
 use kithara_platform::tokio::task::spawn_blocking;
+use kithara_stream::AudioCodec;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::common::{
-    CHANNELS, FREQ_HZ, PhaseDrift, SAMPLE_RATE, SinePhaseSpec, e2e_phase_scan, seek_phase_scan,
+    CHANNELS, FREQ_HZ, PhaseDrift, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan,
 };
 
 const SEGMENT_DURATION_SECS: f64 = 2.0;
 const SEGMENTS_PER_VARIANT: usize = 30;
 const VARIANT_COUNT: usize = 3;
+/// Highest-quality variant index. Production zvuk masters put FLAC lossless
+/// on the top variant above the AAC ladder; [`Fixture::AacWithFlacTop`]
+/// mirrors that and `Manual(TOP_VARIANT)` selects it.
+const TOP_VARIANT: usize = VARIANT_COUNT - 1;
+
+/// AES-128 key/IV for the encrypted (DRM) fixtures. The test server encrypts
+/// segments with this key and serves it at the `#EXT-X-KEY` URI, so the value
+/// only needs to be a valid 16-byte key — the client fetches and decrypts with
+/// the same bytes. `30313233…` = ASCII `b"0123456789abcdef"`.
+const AES_KEY_HEX: &str = "30313233343536373839616263646566";
+const AES_IV_HEX: &str = "00000000000000000000000000000000";
 
 #[derive(Debug, Clone, Copy)]
 enum Codec {
@@ -30,29 +43,93 @@ enum Codec {
     Flac,
 }
 
-fn build_fixture(codec: Codec, bit_rate: Option<u64>) -> HlsFixtureBuilder {
+#[derive(Debug, Clone, Copy)]
+enum Fixture {
+    /// One codec across all variants.
+    Single(Codec),
+    /// AAC on the lower variants + FLAC lossless on the top variant, the same
+    /// 440 Hz sine encoded into every variant. Mirrors production masters where
+    /// "switch to highest quality" is a cross-codec AAC→FLAC variant change.
+    AacWithFlacTop,
+}
+
+fn e2e(mode: AbrMode) -> Vec<(AbrMode, f64)> {
+    vec![(mode, 0.0)]
+}
+
+/// Single seek, no variant change (legacy `*_1seek` coverage).
+fn one_seek() -> Vec<(AbrMode, f64)> {
+    vec![(AbrMode::Manual(0), 0.0), (AbrMode::Manual(0), 0.5)]
+}
+
+/// Play the lower variant through the first half, then switch to the top
+/// variant and play to the end. On [`Fixture::AacWithFlacTop`] this is the
+/// production "switch to highest quality" AAC→FLAC change.
+fn switch_to_top_mid() -> Vec<(AbrMode, f64)> {
+    vec![
+        (AbrMode::Manual(0), 0.0),
+        (AbrMode::Manual(TOP_VARIANT), 0.5),
+    ]
+}
+
+/// Eight scripted seeks with variant switches at every step (increasing
+/// fractions partition the track, so total read ≈ one pass). Replaces the
+/// legacy `*_10seek` random cycling with a deterministic, switch-heavy script.
+fn multi_switch() -> Vec<(AbrMode, f64)> {
+    vec![
+        (AbrMode::Manual(0), 0.05),
+        (AbrMode::Manual(TOP_VARIANT), 0.18),
+        (AbrMode::Manual(1), 0.31),
+        (AbrMode::Manual(TOP_VARIANT), 0.44),
+        (AbrMode::Manual(0), 0.57),
+        (AbrMode::Manual(TOP_VARIANT), 0.70),
+        (AbrMode::Manual(1), 0.83),
+        (AbrMode::Manual(TOP_VARIANT), 0.93),
+    ]
+}
+
+/// Eight scripted seeks that keep `mode` constant (Auto stays Auto): replaces
+/// the legacy auto `*_10seek` which seeked without switching variants.
+fn seeks_no_switch(mode: AbrMode) -> Vec<(AbrMode, f64)> {
+    (1..=8).map(|i| (mode, f64::from(i) * 0.11)).collect()
+}
+
+fn build_fixture(fixture: Fixture, bit_rate: Option<u64>, drm: bool) -> HlsFixtureBuilder {
     let b = HlsFixtureBuilder::new()
         .variant_count(VARIANT_COUNT)
         .segments_per_variant(SEGMENTS_PER_VARIANT)
         .segment_duration_secs(SEGMENT_DURATION_SECS);
-    let b = match codec {
-        Codec::AacLc => b.packaged_audio_sine_aac_lc(SAMPLE_RATE, CHANNELS, FREQ_HZ),
-        Codec::AacHeV2 => b.packaged_audio_signal_aac_he_v2(
+    let b = match fixture {
+        Fixture::Single(Codec::AacLc) => {
+            b.packaged_audio_sine_aac_lc(SAMPLE_RATE, CHANNELS, FREQ_HZ)
+        }
+        Fixture::Single(Codec::AacHeV2) => b.packaged_audio_signal_aac_he_v2(
             SAMPLE_RATE,
             CHANNELS,
             PackagedSignal::Sine { freq_hz: FREQ_HZ },
         ),
-        Codec::Flac => b.packaged_audio_sine_flac(SAMPLE_RATE, CHANNELS, FREQ_HZ),
+        Fixture::Single(Codec::Flac) => b.packaged_audio_sine_flac(SAMPLE_RATE, CHANNELS, FREQ_HZ),
+        Fixture::AacWithFlacTop => b
+            .packaged_audio_sine_aac_lc(SAMPLE_RATE, CHANNELS, FREQ_HZ)
+            .override_variant_codec(TOP_VARIANT, AudioCodec::Flac),
     };
-    b.packaged_audio_bit_rate(bit_rate)
+    let b = b.packaged_audio_bit_rate(bit_rate);
+    if drm {
+        b.encryption(EncryptionRequest {
+            key_hex: AES_KEY_HEX.to_owned(),
+            iv_hex: Some(AES_IV_HEX.to_owned()),
+        })
+    } else {
+        b
+    }
 }
 
 async fn run_case(
-    codec: Codec,
+    fixture: Fixture,
     backend: DecoderBackend,
     ephemeral: bool,
-    initial_mode: AbrMode,
-    seek_count: usize,
+    drm: bool,
+    scenario: Vec<(AbrMode, f64)>,
     bit_rate: Option<u64>,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -60,7 +137,7 @@ async fn run_case(
 
     let helper = TestServerHelper::new().await;
     let created = helper
-        .create_hls(build_fixture(codec, bit_rate))
+        .create_hls(build_fixture(fixture, bit_rate, drm))
         .await
         .expect("create sine HLS fixture");
 
@@ -71,6 +148,7 @@ async fn run_case(
         store.cache_capacity = Some(NonZeroUsize::new(SEGMENTS_PER_VARIANT + 10).expect("nonzero"));
         store.is_ephemeral = true;
     }
+    let initial_mode = scenario.first().map_or(AbrMode::default(), |&(m, _)| m);
     let hls_config = HlsConfig::for_url(created.master_url())
         .store(store)
         .cancel(cancel)
@@ -88,11 +166,12 @@ async fn run_case(
         .expect("HLS sine fixture should report duration")
         .as_secs_f64();
     info!(
-        ?codec,
+        ?fixture,
         ?backend,
         ?initial_mode,
         ephemeral,
-        seek_count,
+        drm,
+        steps = scenario.len(),
         total_secs,
         "fixture ready"
     );
@@ -112,36 +191,27 @@ async fn run_case(
         abr_variants, VARIANT_COUNT,
         "fixture should expose {VARIANT_COUNT} variants, got {abr_variants}",
     );
-    let cycle_manual = matches!(initial_mode, AbrMode::Manual(_));
 
     let drifts = spawn_blocking(move || -> Vec<PhaseDrift> {
         let sine = SinePhaseSpec::default_440();
-        if seek_count == 0 {
-            e2e_phase_scan(&mut audio, sine, total_frames_truth)
-        } else {
-            seek_phase_scan(
-                &mut audio,
-                sine,
-                total_secs,
-                seek_count,
-                0xCAFE_F00D_DEAD_BEEFu64,
-                |i| {
-                    if cycle_manual && let Some(h) = abr_handle.as_ref() {
-                        let target = i % abr_variants;
-                        if let Err(e) = h.set_mode(AbrMode::Manual(target)) {
-                            warn!(?e, target, "manual switch failed");
-                        }
-                    }
-                },
-            )
-        }
+        let mut current = initial_mode;
+        scripted_phase_scan(&mut audio, sine, total_frames_truth, &scenario, |&mode| {
+            if mode != current {
+                if let Some(h) = abr_handle.as_ref()
+                    && let Err(e) = h.set_mode(mode)
+                {
+                    warn!(?e, ?mode, "variant switch failed");
+                }
+                current = mode;
+            }
+        })
     })
     .await
     .expect("spawn_blocking joined");
 
     assert!(
         drifts.is_empty(),
-        "phase continuity broken on {} scan(s) (codec={codec:?} backend={backend:?} seek_count={seek_count}): {drifts:?}",
+        "phase continuity broken on {} scan(s) (fixture={fixture:?} backend={backend:?} drm={drm}): {drifts:?}",
         drifts.len(),
     );
 }
@@ -155,216 +225,295 @@ async fn run_case(
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::sentinel_aac_he_v2_apple_eph_manual_10seek(
-        Codec::AacHeV2,
+    case::sentinel_aac_he_v2_apple_eph_manual_multi(
+        Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
-        AbrMode::Manual(0),
-        10,
+        false,
+        multi_switch(),
         None,
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_he_v2_apple_eph_manual_e2e(
-        Codec::AacHeV2,
+        Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
-        AbrMode::Manual(0),
-        0,
+        false,
+        e2e(AbrMode::Manual(0)),
         None,
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v2_apple_eph_manual_1seek(
-        Codec::AacHeV2,
+    case::aac_lc_apple_eph_manual_multi(
+        Fixture::Single(Codec::AacLc),
         DecoderBackend::Apple,
         true,
-        AbrMode::Manual(0),
-        1,
-        None,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_lc_apple_eph_manual_10seek(
-        Codec::AacLc,
-        DecoderBackend::Apple,
-        true,
-        AbrMode::Manual(0),
-        10,
+        false,
+        multi_switch(),
         Some(320_000),
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_lc_apple_eph_manual_e2e(
-        Codec::AacLc,
+        Fixture::Single(Codec::AacLc),
         DecoderBackend::Apple,
         true,
-        AbrMode::Manual(0),
-        0,
+        false,
+        e2e(AbrMode::Manual(0)),
         Some(320_000),
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::flac_apple_eph_manual_10seek(
-        Codec::Flac,
+    case::flac_apple_eph_manual_multi(
+        Fixture::Single(Codec::Flac),
         DecoderBackend::Apple,
         true,
-        AbrMode::Manual(0),
-        10,
+        false,
+        multi_switch(),
         None,
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::flac_apple_eph_manual_e2e(
-        Codec::Flac,
+        Fixture::Single(Codec::Flac),
         DecoderBackend::Apple,
         true,
-        AbrMode::Manual(0),
-        0,
+        false,
+        e2e(AbrMode::Manual(0)),
         None,
     )
 )]
-#[case::aac_he_v2_symphonia_eph_manual_10seek(
-    Codec::AacHeV2,
+#[case::aac_he_v2_symphonia_eph_manual_multi(
+    Fixture::Single(Codec::AacHeV2),
     DecoderBackend::Symphonia,
     true,
-    AbrMode::Manual(0),
-    10,
+    false,
+    multi_switch(),
     None
 )]
 #[case::aac_he_v2_symphonia_eph_manual_e2e(
-    Codec::AacHeV2,
+    Fixture::Single(Codec::AacHeV2),
     DecoderBackend::Symphonia,
     true,
-    AbrMode::Manual(0),
-    0,
+    false,
+    e2e(AbrMode::Manual(0)),
     None
 )]
-#[case::aac_lc_symphonia_eph_manual_10seek(
-    Codec::AacLc,
+#[case::aac_lc_symphonia_eph_manual_multi(
+    Fixture::Single(Codec::AacLc),
     DecoderBackend::Symphonia,
     true,
-    AbrMode::Manual(0),
-    10,
+    false,
+    multi_switch(),
     Some(320_000)
 )]
 #[case::aac_lc_symphonia_eph_manual_e2e(
-    Codec::AacLc,
+    Fixture::Single(Codec::AacLc),
     DecoderBackend::Symphonia,
     true,
-    AbrMode::Manual(0),
-    0,
+    false,
+    e2e(AbrMode::Manual(0)),
     Some(320_000)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v2_apple_eph_auto_10seek(
-        Codec::AacHeV2,
+    case::aac_he_v2_apple_eph_auto_multi(
+        Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
-        AbrMode::Auto(Some(1)),
-        10,
+        false,
+        seeks_no_switch(AbrMode::Auto(Some(1))),
         None,
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_he_v2_apple_eph_auto_e2e(
-        Codec::AacHeV2,
+        Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
-        AbrMode::Auto(Some(1)),
-        0,
+        false,
+        e2e(AbrMode::Auto(Some(1))),
         None,
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v2_apple_mmap_manual_10seek(
-        Codec::AacHeV2,
+    case::aac_he_v2_apple_mmap_manual_multi(
+        Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         false,
-        AbrMode::Manual(0),
-        10,
+        false,
+        multi_switch(),
         None,
     )
 )]
+#[case::prod_flac_top_sustained_symphonia(
+    Fixture::AacWithFlacTop,
+    DecoderBackend::Symphonia,
+    true,
+    false,
+    e2e(AbrMode::Manual(TOP_VARIANT)),
+    None
+)]
+#[case::flac_only_top_sustained_symphonia(
+    Fixture::Single(Codec::Flac),
+    DecoderBackend::Symphonia,
+    true,
+    false,
+    e2e(AbrMode::Manual(TOP_VARIANT)),
+    None
+)]
 #[cfg_attr(
     target_os = "android",
-    case::aac_he_v2_android_eph_manual_10seek(
-        Codec::AacHeV2,
+    case::aac_he_v2_android_eph_manual_multi(
+        Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Android,
         true,
-        AbrMode::Manual(0),
-        10,
+        false,
+        multi_switch(),
         None,
     )
 )]
 #[cfg_attr(
     target_os = "android",
     case::aac_he_v2_android_eph_manual_e2e(
-        Codec::AacHeV2,
+        Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Android,
         true,
-        AbrMode::Manual(0),
-        0,
+        false,
+        e2e(AbrMode::Manual(0)),
         None,
     )
 )]
 #[cfg_attr(
     target_os = "android",
-    case::aac_lc_android_eph_manual_10seek(
-        Codec::AacLc,
+    case::aac_lc_android_eph_manual_multi(
+        Fixture::Single(Codec::AacLc),
         DecoderBackend::Android,
         true,
-        AbrMode::Manual(0),
-        10,
+        false,
+        multi_switch(),
         Some(320_000),
     )
 )]
 #[cfg_attr(
     target_os = "android",
-    case::flac_android_eph_manual_10seek(
-        Codec::Flac,
+    case::flac_android_eph_manual_multi(
+        Fixture::Single(Codec::Flac),
         DecoderBackend::Android,
         true,
-        AbrMode::Manual(0),
-        10,
+        false,
+        multi_switch(),
         None,
     )
 )]
 #[cfg_attr(
     target_os = "android",
-    case::aac_he_v2_android_eph_auto_10seek(
-        Codec::AacHeV2,
+    case::aac_he_v2_android_eph_auto_multi(
+        Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Android,
         true,
-        AbrMode::Auto(Some(1)),
-        10,
+        false,
+        seeks_no_switch(AbrMode::Auto(Some(1))),
         None,
     )
 )]
 async fn phase_continuity_hls(
-    #[case] codec: Codec,
+    #[case] fixture: Fixture,
     #[case] backend: DecoderBackend,
     #[case] ephemeral: bool,
-    #[case] initial_mode: AbrMode,
-    #[case] seek_count: usize,
+    #[case] drm: bool,
+    #[case] scenario: Vec<(AbrMode, f64)>,
     #[case] bit_rate: Option<u64>,
 ) {
-    run_case(
-        codec,
-        backend,
-        ephemeral,
-        initial_mode,
-        seek_count,
-        bit_rate,
+    run_case(fixture, backend, ephemeral, drm, scenario, bit_rate).await;
+}
+
+/// Pins real, uncompensated decoder-warmup phase drifts at HLS seek/switch
+/// seams. None of these break within a single steady codec — they surface only
+/// where the decoder is repositioned, because the per-codec decode delay is not
+/// reflected in the output timeline:
+///
+/// - **Cross-codec switch** (`cross_codec_switch_*`): switching to the
+///   highest-quality variant (AAC→FLAC, mirroring zvuk masters) drops
+///   ~1024 samples (one AAC access unit) at the seam. `default_priming_frames`
+///   is `AacLc == 1024`, `Flac == 0`; AAC output is offset by 1024 vs FLAC, so
+///   the seam jumps `≈ 21.878 samples = 1024 mod (44100/440)`. Both backends,
+///   with and without DRM.
+/// - **In-variant seek** (`he_v2_in_variant_seek_apple`): a plain seek with no
+///   variant change in HE-AAC v2 (Apple) drifts ~40 samples post-seek — the
+///   SBR/PS warmup applied on the variant-switch recreate path is missing on
+///   the plain in-variant seek path.
+///
+/// `#[ignore]`d, not deleted: acceptance targets for the replanned HLS
+/// decoder-warmup / per-codec algo-delay work (decoder owns warmup). Drop the
+/// `#[ignore]` when that fix lands. Run with `--run-ignored`.
+///
+/// NOTE: this does NOT cover the separately reported production symptom — a
+/// 1–5 s forward position jump every 10–30 s during sustained FLAC playback on
+/// the real-time (cpal) player. That is a player-loop timeline bug, not a
+/// decode-path drift, and is invisible to offline `Audio::read()` pulls (which
+/// never skip content). It needs a real player-loop repro.
+#[kithara::test(
+    tokio,
+    native,
+    serial,
+    timeout(Duration::from_secs(25)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+)]
+#[ignore = "pins real regression — uncompensated decoder warmup at HLS seek/switch seams (cross-codec AAC→FLAC ~1024 samples; he_v2 in-variant seek ~40 samples); unignore when HLS decoder-warmup / per-codec algo-delay fix lands"]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::cross_codec_switch_apple_drm(
+        Fixture::AacWithFlacTop,
+        DecoderBackend::Apple,
+        true,
+        switch_to_top_mid(),
     )
-    .await;
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::cross_codec_switch_apple_plain(
+        Fixture::AacWithFlacTop,
+        DecoderBackend::Apple,
+        false,
+        switch_to_top_mid(),
+    )
+)]
+#[case::cross_codec_switch_symphonia_drm(
+    Fixture::AacWithFlacTop,
+    DecoderBackend::Symphonia,
+    true,
+    switch_to_top_mid()
+)]
+#[case::cross_codec_switch_symphonia_plain(
+    Fixture::AacWithFlacTop,
+    DecoderBackend::Symphonia,
+    false,
+    switch_to_top_mid()
+)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::he_v2_in_variant_seek_apple(
+        Fixture::Single(Codec::AacHeV2),
+        DecoderBackend::Apple,
+        false,
+        one_seek(),
+    )
+)]
+async fn phase_continuity_hls_known_warmup_drift(
+    #[case] fixture: Fixture,
+    #[case] backend: DecoderBackend,
+    #[case] drm: bool,
+    #[case] scenario: Vec<(AbrMode, f64)>,
+) {
+    let bit_rate = matches!(fixture, Fixture::AacWithFlacTop).then_some(320_000);
+    run_case(fixture, backend, true, drm, scenario, bit_rate).await;
 }

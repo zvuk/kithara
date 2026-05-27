@@ -286,6 +286,83 @@ where
     drifts
 }
 
+/// Scripted scan: walk an ordered `[(payload, seek_fraction)]` scenario.
+///
+/// Each step seeks to `seek_fraction` of the stream (0.0..=1.0), invokes
+/// `switch(payload)` (the HLS caller uses it to flip `AbrMode`, switching
+/// variant only when it actually differs), then reads + phase-scans
+/// **continuously** until the next step's seek point (or end of stream for
+/// the final step).
+///
+/// A single shared anchor tracks the absolute sine phase across the whole
+/// scenario, so a dropped or duplicated fragment — at a seek boundary, at a
+/// variant switch, OR during sustained playback between steps — breaks
+/// continuity and is reported. A forward gap between steps is scanned through
+/// (catches the "periodically swallowed fragment" glitch); a backward gap
+/// degenerates to a single post-seek window (catches the seek glitch).
+pub(crate) fn scripted_phase_scan<T, S, F>(
+    audio: &mut Audio<Stream<T>>,
+    sine: SinePhaseSpec,
+    total_frames_truth: u64,
+    scenario: &[(S, f64)],
+    mut switch: F,
+) -> Vec<PhaseDrift>
+where
+    T: StreamType<Events = EventBus>,
+    F: FnMut(&S),
+{
+    assert!(
+        !scenario.is_empty(),
+        "scripted scenario must contain at least one step",
+    );
+    let chan = sine.channels as usize;
+    let scan_end = total_frames_truth.saturating_sub(SAFETY_END_MARGIN_FRAMES);
+    let max_seek_frame = total_frames_truth.saturating_sub(u64::from(SAMPLE_RATE));
+    let frame_at =
+        |frac: f64| ((frac.clamp(0.0, 1.0) * total_frames_truth as f64) as u64).min(max_seek_frame);
+
+    let want_samples = READ_FRAMES_AFTER_SEEK * chan;
+    let mut buf = vec![0.0_f32; want_samples];
+    let mut anchor: Option<(u64, f64)> = None;
+    let mut drifts: Vec<PhaseDrift> = Vec::new();
+
+    for (i, (payload, at_frac)) in scenario.iter().enumerate() {
+        let seek_frame = frame_at(*at_frac);
+        let seek_secs = seek_frame as f64 / f64::from(SAMPLE_RATE);
+        audio
+            .seek(Duration::from_secs_f64(seek_secs))
+            .unwrap_or_else(|e| panic!("step #{i} seek to {seek_secs:.3}s failed: {e}"));
+        switch(payload);
+
+        let stop_frame = scenario
+            .get(i + 1)
+            .map_or(scan_end, |(_, next_frac)| frame_at(*next_frac));
+
+        let label = format!("step#{i}@{seek_secs:.3}s");
+        let mut consumed = seek_frame;
+        let mut next_scan_at = seek_frame;
+        loop {
+            let Some(n) = read_block(audio, &mut buf, &label) else {
+                break;
+            };
+            let frames_this_read = (n / chan) as u64;
+            if consumed >= next_scan_at {
+                if let Some(drift) =
+                    check_against_previous(&mut anchor, consumed, &buf[..n], chan, sine, &label)
+                {
+                    drifts.push(drift);
+                }
+                next_scan_at = next_scan_at.saturating_add(E2E_SCAN_INTERVAL_FRAMES);
+            }
+            consumed += frames_this_read;
+            if consumed >= stop_frame {
+                break;
+            }
+        }
+    }
+    drifts
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
