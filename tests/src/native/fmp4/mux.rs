@@ -34,7 +34,7 @@ pub(crate) enum PackagedMuxError {
     InvalidMediaInfo,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PackagedVariantData {
     pub(crate) init_segment: Arc<Vec<u8>>,
     pub(crate) rfc6381_codec: Cow<'static, str>,
