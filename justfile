@@ -101,7 +101,13 @@ doc:
 #   just test --profile ci    # CI nextest profile
 #   just test EXPR            # nextest filter expression
 test *ARGS:
-    NEXTEST_EXPERIMENTAL_SETUP_SCRIPTS=1 cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+    cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
+
+# Opt-in: run tests with the L2 fixture cache enabled (nextest `cache` profile
+# runs a setup script that prepares the cache dir + exports KITHARA_FIXTURE_CACHE).
+# ~5% faster by reusing encode/mux output across the test processes in one run.
+test-cached *ARGS:
+    cargo nextest run --profile cache --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
 
 # Run the cross-decoder protocol suite once per backend in isolation so a
 # regression in one backend's feature-gating cannot hide behind feature
