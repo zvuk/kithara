@@ -27,6 +27,8 @@ pub mod decode_mock;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod encode_ext;
 pub mod encode_test_pcm;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod fixture_cache;
 pub mod fixture_protocol;
 pub mod fixtures;
 pub mod hls_blob_store;

@@ -140,6 +140,70 @@ fn kind_str(kind: SignalKind) -> &'static str {
 /// handler can serve range requests immediately. Returns `None` for
 /// infinite WAV (served via streaming, not via cache).
 pub(crate) fn encode_signal_payload(request: &SignalRequest) -> Option<EncodedSignal> {
+    encode_signal_payload_with_cache(request, &crate::fixture_cache::FixtureCache::from_env())
+}
+
+fn encode_signal_payload_with_cache(
+    request: &SignalRequest,
+    cache: &crate::fixture_cache::FixtureCache,
+) -> Option<EncodedSignal> {
+    let spec_key = signal_l2_spec_key(request);
+    if let Some(blob) = cache.get("signal", spec_key.as_bytes())
+        && let Some(hit) = decode_l2_blob(&blob)
+    {
+        return Some(hit);
+    }
+    let encoded = encode_signal_payload_uncached(request)?;
+    cache.store("signal", spec_key.as_bytes(), &encode_l2_blob(&encoded));
+    Some(encoded)
+}
+
+/// Deterministic spec string for the L2 key; includes every field that changes the bytes.
+fn signal_l2_spec_key(request: &SignalRequest) -> String {
+    let s = &request.spec;
+    format!(
+        "{kind:?}|{fmt:?}|sr={sr}|ch={ch}|len={len:?}|freq={freq:?}|sweep={sweep:?}|br={br:?}",
+        kind = s.kind,
+        fmt = request.format,
+        sr = s.sample_rate,
+        ch = s.channels,
+        len = s.length,
+        freq = s.sine_freq_hz,
+        sweep = s.sweep,
+        br = s.bit_rate,
+    )
+}
+
+fn known_content_type(s: &str) -> Option<&'static str> {
+    match s {
+        "audio/wav" => Some("audio/wav"),
+        "audio/mpeg" => Some("audio/mpeg"),
+        "audio/flac" => Some("audio/flac"),
+        "audio/aac" => Some("audio/aac"),
+        "audio/mp4" => Some("audio/mp4"),
+        _ => None,
+    }
+}
+
+/// Serialize an `EncodedSignal` to one L2 blob: `"<content-type>\n<bytes>"`.
+fn encode_l2_blob(enc: &EncodedSignal) -> Vec<u8> {
+    let mut out = Vec::with_capacity(enc.content_type.len() + 1 + enc.bytes.len());
+    out.extend_from_slice(enc.content_type.as_bytes());
+    out.push(b'\n');
+    out.extend_from_slice(&enc.bytes);
+    out
+}
+
+fn decode_l2_blob(blob: &[u8]) -> Option<EncodedSignal> {
+    let nl = blob.iter().position(|&b| b == b'\n')?;
+    let content_type = known_content_type(std::str::from_utf8(&blob[..nl]).ok()?)?;
+    Some(EncodedSignal {
+        bytes: Arc::new(blob[nl + 1..].to_vec()),
+        content_type,
+    })
+}
+
+fn encode_signal_payload_uncached(request: &SignalRequest) -> Option<EncodedSignal> {
     match request.format {
         SignalFormat::Wav => encode_wav_payload(&request.spec),
         SignalFormat::Mp3 | SignalFormat::Flac | SignalFormat::Aac | SignalFormat::M4a => {
@@ -393,6 +457,45 @@ mod tests {
 
     fn encode(json: &str) -> String {
         URL_SAFE_NO_PAD.encode(json)
+    }
+
+    #[test]
+    fn l2_payload_roundtrips_bytes_and_content_type() {
+        let enc = EncodedSignal {
+            bytes: std::sync::Arc::new(b"RIFFxxxx".to_vec()),
+            content_type: "audio/wav",
+        };
+        let blob = encode_l2_blob(&enc);
+        let back = decode_l2_blob(&blob).expect("valid blob");
+        assert_eq!(&*back.bytes, b"RIFFxxxx");
+        assert_eq!(back.content_type, "audio/wav");
+    }
+
+    #[test]
+    fn l2_blob_rejects_unknown_content_type() {
+        let mut blob = b"audio/exotic\n".to_vec();
+        blob.extend_from_slice(b"data");
+        assert!(decode_l2_blob(&blob).is_none());
+    }
+
+    #[test]
+    fn signal_l2_hits_on_second_call_through_cache_dir() {
+        let dir = std::env::temp_dir().join(format!("fixcache-sig-{}", uuid::Uuid::new_v4()));
+        let cache = crate::fixture_cache::FixtureCache::from_dir(Some(dir.clone()));
+        let spec = encode(r#"{"frames":1024,"sample_rate":44100,"channels":2}"#);
+        let req = parse_signal_request(SignalKind::Sawtooth, &format!("{spec}.flac"))
+            .expect("valid signal request");
+        let first = encode_signal_payload_with_cache(&req, &cache).expect("first encode");
+        assert!(
+            cache
+                .get("signal", signal_l2_spec_key(&req).as_bytes())
+                .is_some(),
+            "L2 entry written"
+        );
+        let second = encode_signal_payload_with_cache(&req, &cache).expect("second encode");
+        assert_eq!(&*first.bytes, &*second.bytes);
+        assert_eq!(first.content_type, second.content_type);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[kithara::test(tokio)]
