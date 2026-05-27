@@ -83,7 +83,9 @@ impl<D: DriverIo> Resource<D> {
     }
 
     pub(super) fn reactivate_inner(&self) -> StorageResult<()> {
-        self.check_health()?;
+        if self.inner.cancel.is_cancelled() {
+            return Err(crate::StorageError::Cancelled);
+        }
 
         self.inner.driver.reactivate()?;
 
@@ -91,6 +93,7 @@ impl<D: DriverIo> Resource<D> {
             let mut state = self.inner.state.lock_sync();
             state.committed = false;
             state.final_len = None;
+            state.failed = None;
         }
         self.inner.condvar.notify_all();
         Ok(())

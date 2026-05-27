@@ -221,6 +221,18 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     chunks_decoded: u64,
     total_samples: u64,
+    /// `(seek_epoch, target)` of the most recent applied seek.
+    /// `committed_position` lags `target` until the seek's first
+    /// (trim-aligned) chunk is consumed: the decoder lands at the
+    /// containing segment's start and trims forward, so
+    /// `commit_seek_landed` records the segment boundary, not the
+    /// requested instant. A variant-switch recreate firing inside that
+    /// window must resume at the real target, not at the lagging
+    /// committed boundary — otherwise playback rewinds to the segment
+    /// start. Tagged with the seek epoch so a later seek (especially a
+    /// backward one) never resumes against a stale forward target. See
+    /// `execute_recreation`.
+    resume_target: Option<(u64, Duration)>,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -265,6 +277,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             total_samples: 0,
             last_spec: None,
             emit: None,
+            resume_target: None,
         }
     }
 
@@ -466,6 +479,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         anchor_offset: Option<u64>,
     ) {
         reset_effects(&mut self.effects);
+        self.resume_target = Some((epoch, position));
         self.emit_seek_lifecycle(SeekLifecycleStage::SeekApplied, epoch, location);
         self.update_state(TrackState::AwaitingResume(ResumeState {
             anchor_offset,
@@ -1770,7 +1784,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 } => self.source_phase_for_seek_landing(byte),
                 SeekMode::Direct { target_byte: None } => self.shared_stream.phase(),
             },
-            WaitContext::Recreation(recreate) => self.source_phase_for_boundary(recreate.offset),
+            WaitContext::Recreation(recreate) => self.recreate_phase(recreate.offset),
             WaitContext::PostSeek(resume) => resume.anchor_offset.map_or_else(
                 || self.shared_stream.phase(),
                 |byte| self.source_phase_for_boundary(byte),
@@ -1805,14 +1819,38 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// argument and we fall through to the `[offset..offset +
     /// DEFAULT_READ_AHEAD)` slow path, whose window the scheduler
     /// actively keeps in flight around the reader.
-    fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
-        if let Ok(init_range) = self.shared_stream.format_change_segment_range() {
-            let init_len = init_range.end.saturating_sub(init_range.start);
-            if init_len <= Self::DEFAULT_READ_AHEAD_BYTES {
-                return self.source_ready_for_range(init_range);
-            }
+    /// Byte range whose readiness gates decoder recreation. Shared by
+    /// the gate ([`Self::source_ready_for_recreate`]) and the wait path
+    /// ([`Self::wait_for_source_on_recreate`] /
+    /// [`WaitContext::Recreation`]) so the two never disagree on what
+    /// "ready" means — a mismatch livelocks the worker
+    /// (`recv_outcome_blocking` hang on HE-AAC v2 variant switch).
+    ///
+    /// For CMAF (a separate init segment within the read-ahead window)
+    /// this is the init range alone: the factory probe needs only the
+    /// init to rebuild the codec, and after a far seek the HLS scheduler
+    /// keeps segments around the reader cursor — never `[0..READ_AHEAD)`
+    /// of seg 0 — so gating or waiting on the wider boundary window
+    /// hangs. Otherwise the `[offset..offset+READ_AHEAD)` boundary window.
+    fn recreate_ready_range(&self, offset: u64) -> Range<u64> {
+        if let Ok(init_range) = self.shared_stream.format_change_segment_range()
+            && init_range.end.saturating_sub(init_range.start) <= Self::DEFAULT_READ_AHEAD_BYTES
+        {
+            return init_range;
         }
-        self.source_is_ready_for_boundary(recreate.offset)
+        offset..self.boundary_end(offset)
+    }
+
+    fn recreate_phase(&self, offset: u64) -> SourcePhase {
+        self.shared_stream
+            .phase_at(self.recreate_ready_range(offset))
+    }
+
+    fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
+        matches!(
+            self.recreate_phase(recreate.offset),
+            SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
+        )
     }
 }
 
@@ -1870,7 +1908,15 @@ impl<T: StreamType> StreamAudioSource<T> {
             if let Err(e) = self.apply_format_change(&recreate.media_info, recreate.offset) {
                 return Some(Self::classify_recreate_err(&e, recreate.offset));
             }
-            let target_time = self.timeline.committed_position();
+            let committed = self.timeline.committed_position();
+            let target_time = match self.resume_target {
+                Some((seek_epoch, target))
+                    if seek_epoch == self.epoch.load(Ordering::Acquire) && target > committed =>
+                {
+                    target
+                }
+                _ => committed,
+            };
             debug!(
                 ?target_time,
                 stream_pos = self.shared_stream.position(),
@@ -2170,7 +2216,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// `step_recreating_decoder`. Transitions to `WaitingForSource` or
     /// terminates the track, depending on the source phase.
     fn wait_for_source_on_recreate(&mut self, offset: u64) -> TrackStep<PcmChunk> {
-        let phase = self.source_phase_for_boundary(offset);
+        let phase = self.recreate_phase(offset);
         if let Some(reason) = map_source_phase(phase) {
             let recreate = match std::mem::replace(&mut self.state, TrackState::Decoding) {
                 TrackState::RecreatingDecoder(recreate) => recreate,

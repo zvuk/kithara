@@ -102,6 +102,10 @@ pub(crate) trait Mp4Visitor {
     fn on_track_sample_rate(&mut self, _sample_rate: u32) -> ControlFlow<()> {
         ControlFlow::Continue(())
     }
+
+    fn on_track_codec(&mut self, _fourcc: [u8; 4]) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
 }
 
 /// MP4 metadata parsing error.
@@ -288,6 +292,11 @@ impl<'a> Mp4Scanner<'a> {
 
     fn parse_stbl(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_payload_child(end, Consts::BOX_STSD, "stsd", |this, payload| {
+            if let Some(fourcc) = parse_stsd_codec(&payload)
+                && this.visitor.on_track_codec(fourcc).is_break()
+            {
+                return Ok(ControlFlow::Break(()));
+            }
             if let Some(sample_rate) = parse_stsd_sample_rate(&payload) {
                 return Ok(this.visitor.on_track_sample_rate(sample_rate));
             }
@@ -395,6 +404,38 @@ impl<'a> Mp4Scanner<'a> {
             visit(this, payload)
         })
     }
+}
+
+/// Extract the four-character codec tag of the first sample entry of an
+/// `stsd` (`mp4a`, `fLaC`, `alac`, …). Layout: 4-byte version+flags,
+/// 4-byte entry count, then the sample entry (4-byte size, 4-byte format
+/// tag). Returns `None` if the payload is too short.
+fn parse_stsd_codec(payload: &[u8]) -> Option<[u8; 4]> {
+    let tag = payload.get(12..16)?;
+    Some([tag[0], tag[1], tag[2], tag[3]])
+}
+
+/// Captures the first audio-track codec tag and stops the scan.
+#[derive(Default)]
+struct CodecSniffer {
+    fourcc: Option<[u8; 4]>,
+}
+
+impl Mp4Visitor for CodecSniffer {
+    fn on_track_codec(&mut self, fourcc: [u8; 4]) -> ControlFlow<()> {
+        self.fourcc = Some(fourcc);
+        ControlFlow::Break(())
+    }
+}
+
+/// Sniff the first audio sample-entry codec tag from an MP4 container.
+/// Used by the probe path to disambiguate codecs that share the
+/// `.m4a`/`.mp4` extension (AAC vs ALAC vs FLAC). Reader position is
+/// restored; returns `None` when the container has no parseable `stsd`.
+pub(crate) fn sniff_mp4_codec(reader: &mut dyn DecoderInput) -> Option<[u8; 4]> {
+    let mut sniffer = CodecSniffer::default();
+    scan_mp4(reader, &mut sniffer).ok()?;
+    sniffer.fourcc
 }
 
 /// Extract the audio sample rate from the first sample entry of an `stsd`.

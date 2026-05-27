@@ -17,6 +17,13 @@ pub(crate) const CHANNELS: u16 = 2;
 pub(crate) const FREQ_HZ: f64 = 440.0;
 pub(crate) const STREAM_FRAMES: u64 = (SAMPLE_RATE as u64) * 60;
 pub(crate) const TOLERANCE_SAMPLES: f64 = 0.5;
+/// Minimum fitted amplitude for a scan window to carry a meaningful phase.
+/// The test sine is full-scale (amp ≈ 1.0, ≥ 0.5 even through lossy AAC);
+/// a window over codec priming/leading silence fits amp ≈ 1e-4, where the
+/// phase is pure fit noise. Anchoring continuity on such a window compares
+/// real signal against noise and false-positives at random — so windows
+/// below this floor are skipped entirely (no anchor, no comparison).
+pub(crate) const MIN_SIGNAL_AMP: f64 = 0.1;
 /// Phase fit window. Needs ≥ one full period of the test sine
 /// (≈100 samples @ 440 Hz / 44.1 kHz) so DFT correlation leakage
 /// (`Σ cos(2δk+φ)` term) cancels to <1e-3 sample of bias. 128 samples
@@ -166,6 +173,10 @@ fn check_against_previous(
         .collect();
     let delta = sine.delta_rad_per_sample();
     let (measured, amp) = measure_phase_rad_window(&mono, delta);
+    if amp < MIN_SIGNAL_AMP {
+        info!(consumed, amp, "{label} skipped (no signal)");
+        return None;
+    }
     let result = match *last {
         None => {
             info!(consumed, measured, amp, "{label} first scan");
@@ -271,6 +282,129 @@ where
         {
             drifts.push(drift);
         }
+    }
+    drifts
+}
+
+/// Scripted scan: walk an ordered `[(payload, seek_fraction)]` scenario.
+///
+/// Each step seeks to `seek_fraction` of the stream (0.0..=1.0), invokes
+/// `switch(payload)` (the HLS caller uses it to flip `AbrMode`, switching
+/// variant only when it actually differs), then reads + phase-scans
+/// **continuously** until the next step's seek point (or end of stream for
+/// the final step).
+///
+/// A single shared anchor tracks the absolute sine phase across the whole
+/// scenario, so a dropped or duplicated fragment — at a seek boundary, at a
+/// variant switch, OR during sustained playback between steps — breaks
+/// continuity and is reported. A forward gap between steps is scanned through
+/// (catches the "periodically swallowed fragment" glitch); a backward gap
+/// degenerates to a single post-seek window (catches the seek glitch).
+pub(crate) fn scripted_phase_scan<T, S, F>(
+    audio: &mut Audio<Stream<T>>,
+    sine: SinePhaseSpec,
+    total_frames_truth: u64,
+    scenario: &[(S, f64)],
+    mut switch: F,
+) -> Vec<PhaseDrift>
+where
+    T: StreamType<Events = EventBus>,
+    F: FnMut(&S),
+{
+    assert!(
+        !scenario.is_empty(),
+        "scripted scenario must contain at least one step",
+    );
+    let chan = sine.channels as usize;
+    let scan_end = total_frames_truth.saturating_sub(SAFETY_END_MARGIN_FRAMES);
+    let max_seek_frame = total_frames_truth.saturating_sub(u64::from(SAMPLE_RATE));
+    let frame_at =
+        |frac: f64| ((frac.clamp(0.0, 1.0) * total_frames_truth as f64) as u64).min(max_seek_frame);
+
+    let want_samples = READ_FRAMES_AFTER_SEEK * chan;
+    let mut buf = vec![0.0_f32; want_samples];
+    let mut anchor: Option<(u64, f64)> = None;
+    let mut drifts: Vec<PhaseDrift> = Vec::new();
+
+    for (i, (payload, at_frac)) in scenario.iter().enumerate() {
+        let seek_frame = frame_at(*at_frac);
+        let seek_secs = seek_frame as f64 / f64::from(SAMPLE_RATE);
+        audio
+            .seek(Duration::from_secs_f64(seek_secs))
+            .unwrap_or_else(|e| panic!("step #{i} seek to {seek_secs:.3}s failed: {e}"));
+        switch(payload);
+
+        let stop_frame = scenario
+            .get(i + 1)
+            .map_or(scan_end, |(_, next_frac)| frame_at(*next_frac));
+
+        let label = format!("step#{i}@{seek_secs:.3}s");
+        let mut consumed = seek_frame;
+        let mut next_scan_at = seek_frame;
+        loop {
+            let Some(n) = read_block(audio, &mut buf, &label) else {
+                break;
+            };
+            let frames_this_read = (n / chan) as u64;
+            if consumed >= next_scan_at {
+                if let Some(drift) =
+                    check_against_previous(&mut anchor, consumed, &buf[..n], chan, sine, &label)
+                {
+                    drifts.push(drift);
+                }
+                next_scan_at = next_scan_at.saturating_add(E2E_SCAN_INTERVAL_FRAMES);
+            }
+            consumed += frames_this_read;
+            if consumed >= stop_frame {
+                break;
+            }
+        }
+    }
+    drifts
+}
+
+/// Scan an already-rendered interleaved PCM buffer for phase continuity.
+///
+/// Unlike [`scripted_phase_scan`], which pulls from a live `Audio` stream,
+/// this walks a captured buffer — e.g. the output of the real-time player
+/// loop (`OfflinePlayer::render`). The buffer's frame index doubles as the
+/// playback clock: every window is compared against the previous one via the
+/// shared [`check_against_previous`] anchor, so any seam in the rendered
+/// timeline is reported regardless of sign:
+///
+/// - a **forward content skip** (player jumps ahead in the source) reads as a
+///   positive `jump_samples` (`skip mod period`);
+/// - **uncompensated injected silence / lag** (player advances its clock while
+///   the decoder stalls) reads as a negative jump, because the output frame
+///   index ran ahead of the content the window actually carries.
+///
+/// Silent windows (fade-in, underrun gaps) fit `amp < MIN_SIGNAL_AMP` and are
+/// skipped — they neither anchor nor compare.
+pub(crate) fn scan_rendered_pcm(
+    pcm: &[f32],
+    sine: SinePhaseSpec,
+    scan_interval_frames: u64,
+) -> Vec<PhaseDrift> {
+    let chan = sine.channels as usize;
+    let total_frames = (pcm.len() / chan) as u64;
+    let want = READ_FRAMES_AFTER_SEEK;
+    let mut anchor: Option<(u64, f64)> = None;
+    let mut drifts: Vec<PhaseDrift> = Vec::new();
+    let mut at: u64 = 0;
+    while at + want as u64 <= total_frames {
+        let start = at as usize * chan;
+        let end = start + want * chan;
+        if let Some(drift) = check_against_previous(
+            &mut anchor,
+            at,
+            &pcm[start..end],
+            chan,
+            sine,
+            "render phase",
+        ) {
+            drifts.push(drift);
+        }
+        at = at.saturating_add(scan_interval_frames);
     }
     drifts
 }

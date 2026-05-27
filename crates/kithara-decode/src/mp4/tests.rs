@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 
 use super::{
     ItunSmpb, Mp4EditListEntry, Mp4MediaTiming, Mp4MetadataError, Mp4Visitor, parse_data_box,
-    parse_elst, parse_itunsmpb, parse_mdhd, parse_mvhd_timescale, scan_mp4,
+    parse_elst, parse_itunsmpb, parse_mdhd, parse_mvhd_timescale, scan_mp4, sniff_mp4_codec,
 };
 
 mod cursors {
@@ -288,6 +288,42 @@ fn make_track_mp4() -> Vec<u8> {
     moov.extend_from_slice(&atom(*b"trak", &trak));
 
     atom(*b"moov", &moov)
+}
+
+fn make_track_mp4_with_codec(codec: [u8; 4]) -> Vec<u8> {
+    let stbl = atom(*b"stbl", &stsd(44_100, codec));
+    let minf = atom(*b"minf", &stbl);
+    let mut mdia = Vec::new();
+    mdia.extend_from_slice(&mdhd_v0(44_100, 88_200));
+    mdia.extend_from_slice(&minf);
+    let trak = atom(*b"trak", &atom(*b"mdia", &mdia));
+    let mut moov = Vec::new();
+    moov.extend_from_slice(&mvhd_v0(1_000));
+    moov.extend_from_slice(&trak);
+    atom(*b"moov", &moov)
+}
+
+#[kithara::test]
+#[case(*b"mp4a")]
+#[case(*b"fLaC")]
+#[case(*b"alac")]
+fn sniff_returns_first_audio_sample_entry_codec(#[case] codec: [u8; 4]) {
+    let mut reader = Cursor::new(make_track_mp4_with_codec(codec));
+    assert_eq!(sniff_mp4_codec(&mut reader), Some(codec));
+}
+
+#[kithara::test]
+fn sniff_restores_reader_position() {
+    let mut reader = Cursor::new(make_track_mp4_with_codec(*b"fLaC"));
+    let before = reader.stream_position().expect("position");
+    let _ = sniff_mp4_codec(&mut reader);
+    assert_eq!(reader.stream_position().expect("position"), before);
+}
+
+#[kithara::test]
+fn sniff_returns_none_for_non_mp4_bytes() {
+    let mut reader = Cursor::new(vec![0u8; 64]);
+    assert_eq!(sniff_mp4_codec(&mut reader), None);
 }
 
 fn make_itunsmpb_mp4(text: &str) -> Vec<u8> {
