@@ -37,7 +37,7 @@ pub(crate) struct ItemState {
 ///   `url + audio_id`. Stable for the item's lifetime and distinct
 ///   for every fresh insertion of the same URL. This is
 ///   `uuid: Int64` on iOS.
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct AudioPlayerItem {
     pub(crate) state: Arc<Mutex<ItemState>>,
     /// Scoped event bus — set by `AudioPlayer::insert` so per-resource
@@ -62,7 +62,7 @@ pub struct AudioPlayerItem {
 }
 
 /// Methods exported across the FFI boundary.
-#[cfg_attr(feature = "backend-uniffi", uniffi::export)]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl AudioPlayerItem {
     /// Create a new item with frozen preferences. Reserves a fresh
     /// [`TrackId`] from the process-wide counter so `audioId` is stable
@@ -71,7 +71,7 @@ impl AudioPlayerItem {
     /// Loading starts automatically when the item is inserted into an
     /// [`crate::player::AudioPlayer`].
     #[must_use]
-    #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(config: FfiItemConfig) -> Arc<Self> {
         let live = config.is_live_stream;
         let id = TrackId::allocate();

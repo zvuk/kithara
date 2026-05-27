@@ -65,7 +65,7 @@ fn default_net_options() -> NetOptions {
 }
 
 /// FFI-facing audio player.
-#[cfg_attr(feature = "backend-uniffi", derive(uniffi::Object))]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct AudioPlayer {
     /// Swift-owned items indexed by `TrackId`. Populated by [`insert`],
     /// drained by [`remove`] / [`remove_all_items`]. Lets [`items`] return
@@ -192,10 +192,10 @@ fn build_initial_key_state(
 }
 
 /// Methods exported across the FFI boundary.
-#[cfg_attr(feature = "backend-uniffi", uniffi::export)]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl AudioPlayer {
     #[must_use]
-    #[cfg_attr(feature = "backend-uniffi", uniffi::constructor)]
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(config: FfiPlayerConfig) -> Arc<Self> {
         let cancel = CancellationToken::new(); // kithara:cancel:owner
         let player_config = PlayerConfig::builder()

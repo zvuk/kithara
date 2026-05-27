@@ -33,6 +33,10 @@ use crate::{
 /// cross-platform and capability-complete (gapless seek, full
 /// `StreamContext` propagation). Hardware backends (`Apple`/`Android`)
 /// are opt-in — there is no runtime fallback.
+///
+/// Exactly one backend feature is expected per build: device builds
+/// (`apple` / `android`) compile with `--no-default-features` so
+/// `symphonia` is absent, and the hardware variant is the sole default.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DecoderBackend {

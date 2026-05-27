@@ -158,7 +158,7 @@ impl Player {
         self.send_cmd(WorkerCmd::Seek(position_ms))
     }
 
-    fn select_track(&self, url: String) -> Result<js_sys::Promise, JsValue> {
+    fn select_track(&self, url: String) -> Result<Promise, JsValue> {
         clog!("[PLAYER] select_track: sending to Worker url={url}");
         let request_id = crate::web::js::next_request_id();
         let cmd = WorkerCmd::SelectTrack { url, request_id };
@@ -299,7 +299,7 @@ pub fn player_seek(position_ms: f64) -> Result<(), JsValue> {
 }
 
 #[wasm_bindgen]
-pub fn player_select_track(url: String) -> Result<js_sys::Promise, JsValue> {
+pub fn player_select_track(url: String) -> Result<Promise, JsValue> {
     player().select_track(url)
 }
 

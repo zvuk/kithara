@@ -1,6 +1,6 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_platform::{sync::mpsc, tokio, tokio::task::spawn as task_spawn};
+use kithara_platform::{sync::mpsc, tokio::task::spawn as task_spawn};
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDuckingMode};
 
 use crate::web::commands::WorkerCmd;
@@ -99,17 +99,23 @@ async fn handle_select_track(player: &Arc<PlayerImpl>, url: &str) -> Result<(), 
 
     clog!("[WORKER] select_track: url={url}");
 
-    let mut config = ResourceConfig::new(url).map_err(|e| format!("invalid URL: {e}"))?;
-    if config.store.cache_capacity.is_none() {
-        config.store.cache_capacity = NonZeroUsize::new(WASM_CACHE_CAPACITY);
-    }
-    config = config.worker(player.worker().clone());
+    let mut config = ResourceConfig::for_src(url)
+        .map_err(|e| format!("invalid URL: {e}"))?
+        .worker(player.worker().clone())
+        .build();
+    config.store.cache_capacity = config
+        .store
+        .cache_capacity
+        .or_else(|| NonZeroUsize::new(WASM_CACHE_CAPACITY));
 
     let mut resource = Resource::new(config)
         .await
         .map_err(|e| format!("resource load failed: {e:?}"))?;
 
-    resource.preload().await;
+    resource
+        .preload()
+        .await
+        .map_err(|e| format!("preload failed: {e:?}"))?;
 
     player
         .play_resource(resource)

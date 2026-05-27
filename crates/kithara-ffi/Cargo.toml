@@ -23,7 +23,7 @@ crate-type = ["lib", "staticlib", "cdylib"]
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/uniffi_bindgen.rs"
-required-features = ["backend-uniffi"]
+required-features = ["uniffi"]
 
 [lints]
 workspace = true
@@ -45,8 +45,15 @@ tracing-subscriber = { workspace = true }
 # `src/web/*` doesn't use any of these directly.
 
 [features]
-default = ["backend-uniffi"]
-backend-uniffi = ["dep:uniffi"]
+# `symphonia` is in the default set so a bare `cargo check -p kithara-ffi`
+# (and the host uniffi-bindgen build) has a `DecoderBackend` variant — the
+# apple/android (target_os-gated) variants are absent off-device, so without
+# a backend `DecoderBackend` would be an empty enum and fail to compile.
+# Device builds compile with `--no-default-features` (see `xtask apple`/
+# `xtask android`), so `symphonia` is never pulled into apple/android — the
+# hardware backend is the sole decoder there.
+default = ["uniffi", "symphonia"]
+uniffi = ["dep:uniffi"]
 apple = ["kithara/apple"]
 android = ["kithara/android"]
 # Cross-platform software decode backend. Not part of apple/android
@@ -54,7 +61,7 @@ android = ["kithara/android"]
 # uniffi-bindgen build, where neither the apple nor the android
 # (target_os-gated) DecoderBackend variant exists, so without a
 # backend feature `DecoderBackend` would be an empty enum.
-symphonia = ["kithara/symphonia"]
+symphonia = ["kithara/symphonia", "kithara-queue/symphonia"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
 wasm = []
@@ -71,9 +78,13 @@ dev = []
 test = ["kithara/probe", "dep:kithara-play", "dep:tokio", "dep:cpal"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = ["file", "hls"] }
+# `default-features = false` on kithara/kithara-queue: their defaults pull
+# `symphonia`, which would leak into apple/android device builds (compiled
+# with `--no-default-features`). symphonia is re-added explicitly via the
+# crate-local `symphonia` feature (in the default set, off on device).
+kithara = { workspace = true, default-features = false, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
-kithara-queue = { workspace = true, features = ["backend-cpal"] }
+kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
 # Optional direct dep so the `test` feature can enable `test-utils` on
 # kithara-play (needed for `init_offline_backend` / offline module).
 kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "probe"] }

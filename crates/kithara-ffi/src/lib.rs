@@ -6,13 +6,13 @@
 //! structural boundary where target-conditional `cfg` gates live (one
 //! `target_os = "android"` gate + the `target_arch = "wasm32"` split).
 
-#[cfg(all(feature = "backend-uniffi", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 uniffi::setup_scaffolding!();
 
-#[cfg(all(feature = "backend-uniffi", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 use kithara_events::TrackId;
 
-#[cfg(all(feature = "backend-uniffi", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 uniffi::custom_type!(TrackId, u64, { remote });
 
 #[cfg(target_os = "android")]
