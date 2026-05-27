@@ -90,12 +90,6 @@ impl EpochValidator {
     pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
         item.epoch == self.epoch
     }
-
-    /// Increment epoch (called on seek). Returns new epoch.
-    pub fn next_epoch(&mut self) -> u64 {
-        self.epoch = self.epoch.wrapping_add(1);
-        self.epoch
-    }
 }
 
 #[cfg(test)]
@@ -117,8 +111,8 @@ mod tests {
         let mut validator = EpochValidator::default();
         let stale = Fetch::new(vec![3u8], false, validator.epoch);
         let first = Fetch::new(vec![1u8], false, validator.epoch);
-        let next_epoch = validator.next_epoch();
-        let next = Fetch::new(vec![2u8], false, next_epoch);
+        validator.epoch = validator.epoch.wrapping_add(1);
+        let next = Fetch::new(vec![2u8], false, validator.epoch);
 
         assert!(!validator.is_valid(&first));
         assert!(!validator.is_valid(&stale));

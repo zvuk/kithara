@@ -687,11 +687,6 @@ impl PlayerImpl {
         self.select_item(index, true)
     }
 
-    /// Get shared playback rate atomic for the audio pipeline.
-    pub fn playback_rate_shared(&self) -> &Arc<AtomicF32> {
-        &self.playback_rate_shared
-    }
-
     /// Current playback position in seconds.
     pub fn position_seconds(&self) -> Option<f64> {
         let slot_id = (*self.current_slot.lock_sync())?;
@@ -1426,7 +1421,7 @@ mod tests {
     fn set_rate_updates_shared_atomic() {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(2.0);
-        let shared = player.playback_rate_shared();
+        let shared = &player.playback_rate_shared;
         assert!((shared.load(Ordering::Relaxed) - 2.0).abs() < f32::EPSILON);
     }
 
@@ -1435,7 +1430,7 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(0.0);
         assert!(player.rate() >= 0.01);
-        assert!(player.playback_rate_shared().load(Ordering::Relaxed) >= 0.01);
+        assert!(player.playback_rate_shared.load(Ordering::Relaxed) >= 0.01);
 
         player.set_rate(-1.0);
         assert!(player.rate() >= 0.01);

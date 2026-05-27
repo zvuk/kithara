@@ -410,38 +410,6 @@ impl IsolatorEq {
         self.gains.len()
     }
 
-    /// Whether every band sits at exactly unity gain with no smoothing in
-    /// flight — in that case `process_sample` can skip the LR-4 + allpass
-    /// chain entirely and return the input unchanged.
-    ///
-    /// O(1) read of cached state — refreshed only when gain state actually
-    /// changes (`set_gain`, `reset`, per-block smoother tick), keeping
-    /// the `process_sample` hot path off the gain-band walk.
-    #[must_use]
-    pub fn is_bypass_active(&self) -> bool {
-        self.cached_bypass_active
-    }
-
-    /// Whether every band is at full kill (linear 0) with no smoothing in
-    /// flight — in that case `process_sample` can skip the LR-4 + allpass
-    /// chain entirely and return a literal zero.
-    ///
-    /// Mirrors [`Self::is_bypass_active`] for the opposite extreme: a user
-    /// who slammed every fader to [`MIN_GAIN_DB`] wants silence, not a
-    /// near-zero filtered signal. O(1) read of cached state.
-    #[must_use]
-    pub fn is_silence_active(&self) -> bool {
-        self.cached_silence_active
-    }
-
-    /// Whether any band is still smoothing toward its target.
-    #[must_use]
-    pub fn is_smoothing(&self) -> bool {
-        self.gains.iter().any(|g| {
-            (g.target_linear - g.current_linear).abs() > Consts::SMOOTH_CONVERGENCE_THRESHOLD
-        })
-    }
-
     /// Process a single sample through the crossover EQ.
     ///
     /// Gain smoothing advances automatically every [`Consts::SMOOTH_BLOCK_SIZE`] calls.
@@ -527,7 +495,7 @@ impl IsolatorEq {
     /// `current_linear` may have changed: smoother tick in
     /// `process_sample`, `set_gain`, `reset`. Tests that mutate
     /// `gains[i]` fields directly must also call this before relying on
-    /// `is_silence_active` / `is_bypass_active`.
+    /// `cached_silence_active` / `cached_bypass_active`.
     fn refresh_fastpath_cache(&mut self) {
         self.cached_silence_active = compute_silence_active(&self.gains);
         self.cached_bypass_active = compute_bypass_active(&self.gains);
@@ -643,7 +611,9 @@ impl EqEffect {
     /// Check if any band is currently smoothing.
     #[cfg(test)]
     fn is_smoothing(&self) -> bool {
-        self.eq_l.is_smoothing()
+        self.eq_l.gains.iter().any(|g| {
+            (g.target_linear - g.current_linear).abs() > Consts::SMOOTH_CONVERGENCE_THRESHOLD
+        })
     }
 
     /// Set the gain for a specific band (clamped to min/max dB).
@@ -1204,7 +1174,7 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let eq = IsolatorEq::new(&bands, 44100);
         assert!(
-            eq.is_bypass_active(),
+            eq.cached_bypass_active,
             "default 0 dB bands should activate bypass so the LR-4 chain \
              never runs for users who never touch the EQ"
         );
@@ -1214,12 +1184,15 @@ mod tests {
     fn eq_bypass_deactivates_on_gain_change() {
         let bands = generate_log_spaced_bands(3);
         let mut eq = IsolatorEq::new(&bands, 44100);
-        assert!(eq.is_bypass_active(), "precondition: fresh EQ is in bypass");
+        assert!(
+            eq.cached_bypass_active,
+            "precondition: fresh EQ is in bypass"
+        );
 
         eq.set_gain(0, 3.0);
 
         assert!(
-            !eq.is_bypass_active(),
+            !eq.cached_bypass_active,
             "bypass must deactivate the instant any band targets a non-unity \
              gain, so the next sample reaches the actual filter chain"
         );
@@ -1236,14 +1209,14 @@ mod tests {
 
         eq_effect.set_gain(0, 6.0);
         converge_smoother(&mut eq_effect, spec);
-        assert!(!eq_effect.eq_l.is_bypass_active());
+        assert!(!eq_effect.eq_l.cached_bypass_active);
 
         eq_effect.set_gain(0, 0.0);
         converge_smoother(&mut eq_effect, spec);
         converge_smoother(&mut eq_effect, spec);
 
         assert!(
-            eq_effect.eq_l.is_bypass_active(),
+            eq_effect.eq_l.cached_bypass_active,
             "after gains smooth back to unity, bypass must reactivate so the \
              filter chain stops running"
         );
@@ -1253,7 +1226,7 @@ mod tests {
     fn eq_bypass_returns_input_unchanged() {
         let bands = generate_log_spaced_bands(3);
         let mut eq = IsolatorEq::new(&bands, 44100);
-        assert!(eq.is_bypass_active(), "precondition: bypass is active");
+        assert!(eq.cached_bypass_active, "precondition: bypass is active");
 
         let inputs = [0.0_f32, 0.25, -0.5, 0.999, -0.999, 1e-6, -1e-6];
         for &input in &inputs {
@@ -1280,7 +1253,7 @@ mod tests {
         converge_smoother(&mut eq_effect, spec);
 
         assert!(
-            eq_effect.eq_l.is_silence_active(),
+            eq_effect.eq_l.cached_silence_active,
             "all bands at MIN_GAIN_DB after smoother converges must activate \
              the silence fast path so the filter chain is skipped entirely"
         );
@@ -1295,7 +1268,7 @@ mod tests {
             eq.gains[i].current_linear = 0.0;
         }
         eq.refresh_fastpath_cache();
-        assert!(eq.is_silence_active(), "precondition: silence is active");
+        assert!(eq.cached_silence_active, "precondition: silence is active");
 
         let inputs = [0.0_f32, 0.25, -0.5, 0.999, -0.999];
         for &input in &inputs {
@@ -1317,12 +1290,12 @@ mod tests {
             eq.gains[i].current_linear = 0.0;
         }
         eq.refresh_fastpath_cache();
-        assert!(eq.is_silence_active(), "precondition: silence is active");
+        assert!(eq.cached_silence_active, "precondition: silence is active");
 
         eq.set_gain(1, -3.0);
 
         assert!(
-            !eq.is_silence_active(),
+            !eq.cached_silence_active,
             "raising any band above MIN_GAIN_DB must disable silence so the \
              filter chain re-engages via smoother ramp-up"
         );
