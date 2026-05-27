@@ -5,7 +5,7 @@ use std::sync::Arc;
 use kithara_events::{Event, EventReceiver, PlayerEvent};
 use kithara_integration_tests::offline::OfflineSession;
 use kithara_platform::Mutex;
-use kithara_play::{EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, SessionDispatcher};
+use kithara_play::{PlayerConfig, PlayerImpl, SessionDispatcher};
 
 pub(crate) struct OfflinePlayerHarness {
     events: Mutex<EventReceiver>,
@@ -15,19 +15,11 @@ pub(crate) struct OfflinePlayerHarness {
 
 impl OfflinePlayerHarness {
     pub(crate) fn with_sample_rate(mut player_config: PlayerConfig, sample_rate: u32) -> Self {
-        let bus = player_config.bus.clone().unwrap_or_default();
-        player_config.bus = Some(bus.clone());
-
         let session = Arc::new(OfflineSession::new_manual());
-        let engine_config = EngineConfig::builder()
-            .eq_layout(player_config.eq_layout.clone())
-            .max_slots(player_config.max_slots)
-            .sample_rate(sample_rate)
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
-            .maybe_pcm_pool(player_config.pcm_pool.clone())
-            .build();
-        let engine = EngineImpl::new(engine_config, bus);
-        let player = Arc::new(PlayerImpl::with_engine(player_config, engine));
+        player_config.sample_rate = sample_rate;
+        player_config.session = Some(Arc::clone(&session) as Arc<dyn SessionDispatcher>);
+
+        let player = Arc::new(PlayerImpl::new(player_config));
         let events = player.subscribe();
 
         Self {

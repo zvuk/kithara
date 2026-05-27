@@ -92,6 +92,11 @@ pub struct PlayerConfig {
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
     pub max_slots: usize,
+    /// Sample rate passed to the engine/runtime backend as a hint.
+    /// Default: 44100. Offline/test harnesses set this to drive
+    /// deterministic render at a known rate.
+    #[builder(default = 44_100)]
+    pub sample_rate: u32,
 }
 
 impl fmt::Debug for PlayerConfig {
@@ -172,6 +177,7 @@ impl PlayerImpl {
         let engine_config = EngineConfig {
             eq_layout: config.eq_layout.clone(),
             max_slots: config.max_slots,
+            sample_rate: config.sample_rate,
             pcm_pool: Some(resolved_pool.clone()),
             session: config.session.clone(),
             cancel: Some(cancel.clone()),
@@ -1098,30 +1104,6 @@ impl PlayerImpl {
         self.volume.load(Ordering::Relaxed)
     }
 
-    /// Build a player on top of an externally-constructed engine.
-    ///
-    /// Used by integration-test harnesses that drive a single
-    /// `EngineImpl` for shared offline-render plumbing. Production code
-    /// uses [`PlayerImpl::new`] which builds its engine internally.
-    ///
-    /// The caller-provided `engine` is expected to share the same cancel
-    /// master as this player (or a parent of it). Test harnesses that
-    /// don't care about the cascade omit `PlayerConfig.cancel` and the
-    /// player creates its own orphan master — the externally-built
-    /// engine's worker keeps its own independent cancel in that case.
-    #[must_use]
-    pub fn with_engine(mut config: PlayerConfig, engine: EngineImpl) -> Self {
-        let resolved_pool = config.pcm_pool.clone().unwrap_or_default();
-        let bus = config.bus.clone().unwrap_or_default();
-        let cancel = config.cancel.clone().unwrap_or_default(); // kithara:cancel:owner
-        config.cancel = Some(cancel);
-        if config.abr.is_none() {
-            config.abr = Some(AbrController::new(AbrSettings::default()));
-        }
-
-        Self::new_with_engine(config, resolved_pool, bus, engine)
-    }
-
     /// Shared audio worker handle for this player's engine.
     ///
     /// Clone and pass to [`ResourceConfig::with_worker`] so resources
@@ -1351,6 +1333,7 @@ mod tests {
             eq_layout: generate_log_spaced_bands(5),
             gapless_mode: GaplessMode::MediaOnly,
             max_slots: 2,
+            sample_rate: 44_100,
             pcm_pool: None,
             auto_advance_enabled: true,
             session: None,
