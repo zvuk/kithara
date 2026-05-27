@@ -71,8 +71,7 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancellationToken, policy
                 return;
             }
             let deadline = Instant::now() + policy.poll_interval;
-            let (next, _) = wait.cv.wait_sync_timeout(guard, deadline);
-            guard = next;
+            guard = wait.cv.wait_sync_timeout(guard, deadline);
         }
         drop(guard);
 
@@ -90,7 +89,7 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancellationToken, policy
             if Instant::now() >= debounce_deadline {
                 break;
             }
-            let (_next, _) = wait.cv.wait_sync_timeout(guard, debounce_deadline);
+            let _ = wait.cv.wait_sync_timeout(guard, debounce_deadline);
         }
 
         {

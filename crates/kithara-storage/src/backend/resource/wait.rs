@@ -76,7 +76,7 @@ impl<D: DriverIo> Resource<D> {
 
             yield_now();
             let deadline = Instant::now() + PlatformDuration::from_millis(WAIT_SPIN_TIMEOUT_MS);
-            let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
+            let _state = self.inner.condvar.wait_sync_timeout(state, deadline);
         }
     }
 }

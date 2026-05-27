@@ -8,6 +8,6 @@ pub mod mpsc;
 mod mutex;
 mod rwlock;
 
-pub use condvar::{Condvar, WaitTimeoutResult};
+pub use condvar::Condvar;
 pub use mutex::{Mutex, MutexGuard, NotAvailable};
 pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};

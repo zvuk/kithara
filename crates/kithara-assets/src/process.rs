@@ -126,7 +126,7 @@ impl ReadinessGate {
                     return true;
                 }
                 let deadline = Instant::now() + Duration::from_millis(COND_WAIT_MS);
-                let (next, _) = self.cv.wait_sync_timeout(guard, deadline);
+                let next = self.cv.wait_sync_timeout(guard, deadline);
                 *next
             };
             if ready {
