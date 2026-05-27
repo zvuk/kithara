@@ -10,7 +10,7 @@ use std::{
 };
 
 use fast_interleave::deinterleave_variable;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
@@ -166,8 +166,15 @@ pub struct Audio<S> {
     /// Worker handle for unregistration and optional shutdown.
     worker: Option<AudioWorkerHandle>,
 
-    /// Shared pool for temporary interleaved buffers (used in `read_planar`).
+    /// Shared PCM pool: source for the decode worker's per-packet buffers and
+    /// for the held `read_planar` interleaved scratch below.
     pcm_pool: PcmPool,
+
+    /// Interleaved scratch for `read_planar`, drawn from `pcm_pool` once and
+    /// pre-sized off the audio thread in `new` so the real-time path never
+    /// reallocates. `Option` only so it can be detached during the inner
+    /// `read` call, then restored.
+    interleaved: Option<PcmBuf>,
 
     /// Marker for source type.
     _marker: PhantomData<S>,
@@ -187,11 +194,11 @@ impl<S> Audio<S> {
     /// Probe buffer size in bytes for initial stream detection.
     const PROBE_BUFFER_SIZE: usize = 1024;
 
-    /// Per-buffer frame capacity used to pre-warm the PCM pool. Covers the
-    /// largest decoder packet across supported codecs (FLAC's 4608-frame
-    /// block; AAC/MP3/ALAC are smaller and reuse these buffers without a
-    /// realloc). A host output block larger than this triggers a single
-    /// one-time grow on the `read_planar` buffer, not a per-packet alloc.
+    /// Per-buffer frame capacity used to pre-warm the PCM pool for the decode
+    /// worker's per-packet buffers. Covers the largest decoder packet across
+    /// supported codecs (FLAC's 4608-frame block; AAC/MP3/ALAC are smaller and
+    /// reuse these buffers without a realloc). The `read_planar` interleaved
+    /// scratch is sized separately and held per-`Audio` (see `interleaved`).
     const WARM_DECODE_FRAMES: usize = 4608;
 
     /// Backoff duration between receive attempts.
@@ -214,6 +221,26 @@ impl<S> Audio<S> {
             buf.clear();
             buf.resize(capacity, 0.0);
         });
+    }
+
+    /// Acquire and pre-size the held interleaved scratch for `read_planar`.
+    ///
+    /// Sized to one second of interleaved output at `spec` — the consumer
+    /// reads at most a few hundred ms per call, so this covers the request
+    /// with margin for host-rate / playback-rate changes. Called off the audio
+    /// thread in `new`, so `read_planar` reuses this buffer without ever
+    /// reallocating on the real-time path.
+    fn alloc_interleaved_scratch(pool: &PcmPool, spec: PcmSpec) -> PcmBuf {
+        let channels = usize::from(spec.channels).max(2);
+        let sample_rate = usize::try_from(spec.sample_rate).unwrap_or(usize::MAX);
+        let capacity = sample_rate.saturating_mul(channels);
+        pool.get_with(|buf| {
+            buf.clear();
+            let cap = buf.capacity();
+            if cap < capacity {
+                buf.reserve(capacity - cap);
+            }
+        })
     }
 
     /// Runtime ABR handle (cloned from the stream's source at
@@ -805,6 +832,8 @@ where
 
         Self::log_pipeline_ready(initial_spec, output_spec, &host_sample_rate);
 
+        let interleaved = Self::alloc_interleaved_scratch(pool, output_spec);
+
         let emit = Self::create_emit(&bus);
         let decoder_factory = Self::create_decoder_factory(
             decoder_backend,
@@ -866,6 +895,7 @@ where
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
             cancel: Some(cancel),
+            interleaved: Some(interleaved),
             pcm_pool: pool.clone(),
             preloaded: false,
             track_id: Some(track_id),
@@ -1201,16 +1231,29 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
         }
         let frames = output[0].len();
         let total_samples = frames * channels;
-        let mut interleaved = self.pcm_pool.get_with(|b| {
-            b.clear();
-            b.resize(total_samples, 0.0);
-        });
-        match self.read(&mut interleaved)? {
-            ReadOutcome::Eof { position } => Ok(ReadOutcome::Eof { position }),
-            ReadOutcome::Pending { reason, position } => {
+
+        // Detach the held, pre-sized scratch so we can pass it to `self.read`
+        // (which needs `&mut self`); restore it before returning. Pre-sized in
+        // `new`, so this `resize` stays within capacity and never reallocates
+        // on the audio thread.
+        let mut interleaved = self
+            .interleaved
+            .take()
+            .unwrap_or_else(|| self.pcm_pool.get());
+        interleaved.clear();
+        interleaved.resize(total_samples, 0.0);
+        debug_assert!(
+            interleaved.capacity() >= total_samples,
+            "Audio::read_planar scratch undersized: capacity={} < total_samples={total_samples}",
+            interleaved.capacity(),
+        );
+
+        let result = match self.read(&mut interleaved[..]) {
+            Ok(ReadOutcome::Eof { position }) => Ok(ReadOutcome::Eof { position }),
+            Ok(ReadOutcome::Pending { reason, position }) => {
                 Ok(ReadOutcome::Pending { reason, position })
             }
-            ReadOutcome::Frames { count, position } => {
+            Ok(ReadOutcome::Frames { count, position }) => {
                 let actual_frames = count.get() / channels;
                 debug_assert!(
                     actual_frames <= frames,
@@ -1219,19 +1262,25 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
                 );
                 let num_channels =
                     NonZeroUsize::new(channels).expect("channels checked non-zero above");
-                deinterleave_variable(&interleaved, num_channels, output, 0..actual_frames);
-                let Some(actual) = NonZeroUsize::new(actual_frames) else {
-                    return Ok(ReadOutcome::Pending {
+                deinterleave_variable(&interleaved[..], num_channels, output, 0..actual_frames);
+                NonZeroUsize::new(actual_frames).map_or(
+                    Ok(ReadOutcome::Pending {
                         position,
                         reason: PendingReason::Buffering,
-                    });
-                };
-                Ok(ReadOutcome::Frames {
-                    position,
-                    count: actual,
-                })
+                    }),
+                    |actual| {
+                        Ok(ReadOutcome::Frames {
+                            position,
+                            count: actual,
+                        })
+                    },
+                )
             }
-        }
+            Err(err) => Err(err),
+        };
+
+        self.interleaved = Some(interleaved);
+        result
     }
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
@@ -1286,6 +1335,7 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
+            interleaved: None,
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
@@ -1343,6 +1393,7 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
+            interleaved: None,
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
