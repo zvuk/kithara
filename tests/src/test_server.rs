@@ -30,11 +30,14 @@ mod wasm;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native::router;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{TestServerHelper, run_test_server};
+pub use native::{BehaviorHandle, TestServerHelper, run_test_server};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use shared::shared;
 #[cfg(target_arch = "wasm32")]
 pub use wasm::TestServerHelper;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::test_server_state::{Content, Delivery, FixtureBehavior};
 
 #[derive(Debug, Error)]
 pub enum CreateHlsError {

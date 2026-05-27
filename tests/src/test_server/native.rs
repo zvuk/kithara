@@ -8,14 +8,14 @@ use crate::{
     hls_url::HlsSpec,
     http_server::TestHttpServer,
     routes::{
-        assets, signal,
+        assets, behavior, signal,
         signal::{encode_signal_payload, encoded_signal_cache_key},
         stream,
     },
     signal_spec::{SignalKind as InternalSignalKind, parse_signal_request},
     signal_url::{SignalKind, SignalSpec, signal_path},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
-    test_server_state::TestServerState,
+    test_server_state::{FixtureBehavior, TestServerState},
 };
 
 /// Facade over the process-global shared test server.
@@ -139,6 +139,41 @@ impl TestServerHelper {
     pub fn url(&self, path: &str) -> Url {
         self.base_url.join(path).expect("join server URL path")
     }
+
+    /// Register a fixture behavior and return a handle exposing its URL and
+    /// in-process request count.
+    #[must_use]
+    pub fn register_behavior(&self, behavior: FixtureBehavior) -> BehaviorHandle {
+        let token = self.state.insert_behavior(behavior);
+        BehaviorHandle {
+            state: Arc::clone(&self.state),
+            base_url: self.base_url.clone(),
+            token,
+        }
+    }
+}
+
+/// Handle to a registered fixture behavior on the shared server.
+pub struct BehaviorHandle {
+    state: Arc<TestServerState>,
+    base_url: Url,
+    token: String,
+}
+
+impl BehaviorHandle {
+    /// URL that dispatches to this behavior.
+    #[must_use]
+    pub fn url(&self) -> Url {
+        self.base_url
+            .join(&format!("/behavior/{}", self.token))
+            .expect("join behavior url")
+    }
+
+    /// Number of requests this behavior has served, observed in-process.
+    #[must_use]
+    pub fn request_count(&self) -> u64 {
+        self.state.behavior_hits(&self.token).unwrap_or(0)
+    }
 }
 
 async fn health() -> &'static str {
@@ -161,6 +196,7 @@ pub(crate) fn router(state: Arc<TestServerState>) -> Router {
     Router::<Arc<TestServerState>>::new()
         .route("/health", get(health))
         .merge(assets::router())
+        .merge(behavior::router())
         .merge(signal::router())
         .merge(stream::router())
         .merge(crate::routes::token::router())
@@ -171,7 +207,10 @@ pub(crate) fn router(state: Arc<TestServerState>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kithara;
+    use crate::{
+        kithara,
+        test_server_state::{Content, Delivery},
+    };
 
     #[kithara::test(tokio)]
     async fn two_helpers_share_one_base_url() {
@@ -182,5 +221,17 @@ mod tests {
             b.base_url(),
             "all helpers reuse the shared server"
         );
+    }
+
+    #[kithara::test(tokio)]
+    async fn behavior_handle_reports_in_process_count() {
+        let helper = TestServerHelper::new().await;
+        let handle = helper.register_behavior(FixtureBehavior {
+            content: Content::Status(404),
+            delivery: Delivery::Normal,
+        });
+        assert_eq!(handle.request_count(), 0);
+        let _ = reqwest::get(handle.url()).await.unwrap();
+        assert_eq!(handle.request_count(), 1);
     }
 }

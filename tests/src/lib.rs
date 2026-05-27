@@ -80,5 +80,8 @@ pub use signal_source_utils::*;
 pub use signal_url::{
     SignalFormat, SignalKind, SignalSpec, SignalSpecLength, SweepMode, signal_path,
 };
-pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
+pub use test_server::{
+    BehaviorHandle, Content, CreateHlsError, CreatedHls, Delivery, FixtureBehavior,
+    HlsFixtureBuilder, TestServerHelper,
+};
 pub use wav::{create_test_wav, create_wav_exact_bytes};
