@@ -187,8 +187,35 @@ impl<S> Audio<S> {
     /// Probe buffer size in bytes for initial stream detection.
     const PROBE_BUFFER_SIZE: usize = 1024;
 
+    /// Per-buffer frame capacity used to pre-warm the PCM pool. Covers the
+    /// largest decoder packet across supported codecs (FLAC's 4608-frame
+    /// block; AAC/MP3/ALAC are smaller and reuse these buffers without a
+    /// realloc). A host output block larger than this triggers a single
+    /// one-time grow on the `read_planar` buffer, not a per-packet alloc.
+    const WARM_DECODE_FRAMES: usize = 4608;
+
     /// Backoff duration between receive attempts.
     const RECV_BACKOFF: Duration = Duration::from_micros(100);
+
+    /// Pre-warm the shared PCM pool so the decode hot path (`pool.get()`
+    /// per packet) and the first `read_planar` calls reuse pre-allocated
+    /// buffers instead of paying a cold-start allocation on the audio
+    /// thread. Warms only a cold pool (`allocated_bytes == 0`), so the
+    /// process-global default singleton is warmed once on the first track
+    /// while a freshly-built custom pool still gets warmed when it's first
+    /// resolved here.
+    fn warm_pcm_pool(pool: &PcmPool, channels: usize, chunks: usize) {
+        if pool.allocated_bytes() != 0 {
+            return;
+        }
+        let capacity = Self::WARM_DECODE_FRAMES * channels.max(1);
+        let count = chunks.saturating_mul(2).max(1);
+        pool.pre_warm(count, |buf| {
+            buf.clear();
+            buf.resize(capacity, 0.0);
+        });
+    }
+
     /// Runtime ABR handle (cloned from the stream's source at
     /// construction). `Some` for adaptive sources (HLS), `None` for
     /// file/non-adaptive sources.
@@ -742,6 +769,11 @@ where
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
 
         let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
+        let warm_channels = initial_media_info
+            .as_ref()
+            .and_then(|info| info.channels)
+            .map_or(2, usize::from);
+        Self::warm_pcm_pool(pool, warm_channels, pcm_buffer_chunks);
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),
             initial_media_info.clone(),
