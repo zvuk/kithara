@@ -1,25 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
-    fs, io,
+    fs,
     io::{Read, Seek, SeekFrom},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
     time::Duration,
 };
 
-use axum::{
-    Router,
-    body::Body,
-    extract::{Request, State},
-    http::{HeaderMap, Method, StatusCode, header},
-    response::{IntoResponse, Response},
-    routing::get,
-};
-use bytes::Bytes;
-use futures::stream;
 use kithara::{
     assets::StoreOptions,
     file::{File, FileConfig, FileSrc},
@@ -28,7 +15,9 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_integration_tests::{TestHttpServer, TestTempDir};
+use kithara_integration_tests::{
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     thread,
@@ -53,112 +42,6 @@ fn clean_temp_dir() -> TestTempDir {
     dir
 }
 
-#[derive(Clone)]
-struct ServerState {
-    file_data: Vec<u8>,
-    call_count: Arc<AtomicUsize>,
-}
-
-async fn handle_request(
-    State(state): State<ServerState>,
-    headers: HeaderMap,
-    req: Request,
-) -> Response {
-    let call_num = state.call_count.fetch_add(1, Ordering::SeqCst);
-    let method = req.method().clone();
-
-    if method == Method::HEAD {
-        tracing::info!(
-            "Server: HEAD request - Content-Length: {}",
-            Consts::TOTAL_SIZE
-        );
-        return (
-            StatusCode::OK,
-            [
-                (header::CONTENT_LENGTH, Consts::TOTAL_SIZE.to_string()),
-                (header::CONTENT_TYPE, "audio/mpeg".to_string()),
-            ],
-        )
-            .into_response();
-    }
-
-    let range_header = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-
-    tracing::info!(
-        "Server: {} #{}, Range: {:?}",
-        method,
-        call_num,
-        range_header
-    );
-
-    if let Some(range_str) = range_header
-        && let Some(range_part) = range_str.strip_prefix("bytes=")
-    {
-        let parts: Vec<&str> = range_part.split('-').collect();
-        let start = parts[0].parse::<usize>().unwrap_or(0);
-        let end = parts
-            .get(1)
-            .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(Consts::TOTAL_SIZE - 1);
-
-        let end = (end + 1).min(Consts::TOTAL_SIZE);
-        tracing::info!("Server: serving range [{}, {})", start, end);
-
-        let chunk = Bytes::from(state.file_data[start..end].to_vec());
-        let content_range = format!("bytes {}-{}/{}", start, end - 1, Consts::TOTAL_SIZE);
-
-        return (
-            StatusCode::PARTIAL_CONTENT,
-            [
-                (header::CONTENT_LENGTH, (end - start).to_string()),
-                (header::CONTENT_RANGE, content_range),
-                (header::CONTENT_TYPE, "audio/mpeg".to_string()),
-            ],
-            chunk,
-        )
-            .into_response();
-    }
-
-    tracing::warn!(
-        "Server: sequential request - sends {}KB of {}KB",
-        Consts::STREAM_CLOSES_AT / 1024,
-        Consts::TOTAL_SIZE / 1024
-    );
-
-    let chunk = Bytes::from(state.file_data[0..Consts::STREAM_CLOSES_AT].to_vec());
-    let body_stream = stream::iter(vec![Ok::<_, io::Error>(chunk)]);
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_LENGTH, Consts::TOTAL_SIZE.to_string())
-        .header(header::CONTENT_TYPE, "audio/mpeg")
-        .body(Body::from_stream(body_stream))
-        .expect("valid response")
-}
-
-/// Shared server setup for tests.
-async fn setup_server(file_data: Vec<u8>) -> (url::Url, Arc<AtomicUsize>, TestHttpServer) {
-    let state = ServerState {
-        file_data,
-        call_count: Arc::new(AtomicUsize::new(0)),
-    };
-
-    let call_count = state.call_count.clone();
-
-    let app = Router::new()
-        .route("/test.mp3", get(handle_request).head(handle_request))
-        .with_state(state);
-
-    let server = TestHttpServer::new(app).await;
-    let url = server.url("/test.mp3");
-
-    (url, call_count, server)
-}
-
 /// Test: early stream close + seek beyond downloaded data.
 ///
 /// After sequential stream closes at 512KB, seek to 700KB
@@ -172,7 +55,17 @@ async fn file_stream_closes_early_seek_still_works() {
     let cancel_token = CancellationToken::new();
 
     let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
-    let (url, _call_count, _server) = setup_server(file_data).await;
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(file_data),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::EarlyClose {
+            after_bytes: Consts::STREAM_CLOSES_AT,
+        },
+    });
+    let url = handle.url();
 
     let dl = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
@@ -257,7 +150,17 @@ async fn partial_cache_resume_works() {
     let cache_dir = clean_temp_dir();
 
     let file_data: Vec<u8> = (0..Consts::TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
-    let (url, _call_count, _server) = setup_server(file_data).await;
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(file_data),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::EarlyClose {
+            after_bytes: Consts::STREAM_CLOSES_AT,
+        },
+    });
+    let url = handle.url();
 
     let cancel1 = CancellationToken::new();
     let config1 = FileConfig::for_src(FileSrc::Remote(url.clone()))

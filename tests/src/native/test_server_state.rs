@@ -42,6 +42,7 @@ pub enum Content {
 pub enum Delivery {
     Normal,
     Range,
+    EarlyClose { after_bytes: usize },
 }
 
 #[derive(Clone)]

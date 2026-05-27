@@ -1,12 +1,15 @@
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
 use axum::{
     Router,
+    body::Body,
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
+use bytes::Bytes;
+use futures::stream;
 
 use crate::{
     routes::range::build_range_response,
@@ -14,7 +17,7 @@ use crate::{
 };
 
 pub(crate) fn router() -> Router<Arc<TestServerState>> {
-    Router::new().route("/behavior/{token}", get(dispatch))
+    Router::new().route("/behavior/{token}", get(dispatch).head(dispatch))
 }
 
 async fn dispatch(
@@ -38,13 +41,44 @@ fn serve_content(behavior: &FixtureBehavior, headers: &HeaderMap) -> Response {
         Content::StaticBytes {
             bytes,
             content_type,
-        } => match behavior.delivery {
+        } => match &behavior.delivery {
             Delivery::Range => build_range_response(bytes, headers, true, true, *content_type),
             Delivery::Normal => {
                 build_range_response(bytes, &HeaderMap::new(), true, true, *content_type)
             }
+            Delivery::EarlyClose { after_bytes } => {
+                early_close_response(bytes, headers, *after_bytes, *content_type)
+            }
         },
     }
+}
+
+fn early_close_response(
+    bytes: &[u8],
+    headers: &HeaderMap,
+    after_bytes: usize,
+    content_type: Option<&'static str>,
+) -> Response {
+    // A range request gets a normal partial response — this is the on-demand
+    // seek path that must succeed after the sequential stream closes early.
+    if headers.contains_key(header::RANGE) {
+        return build_range_response(bytes, headers, true, true, content_type);
+    }
+    // Sequential GET: advertise the full length but deliver only `after_bytes`
+    // then close, so the client observes a premature end-of-stream. A stream
+    // body keeps hyper from validating the chunk length against the explicit
+    // Content-Length; ending short closes the connection mid-message.
+    let total = bytes.len();
+    let truncated = Bytes::copy_from_slice(&bytes[..after_bytes.min(total)]);
+    let body = Body::from_stream(stream::iter(vec![Ok::<_, io::Error>(truncated)]));
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, total.to_string())
+        .header(header::ACCEPT_RANGES, "bytes");
+    if let Some(ct) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, ct);
+    }
+    builder.body(body).expect("early close response")
 }
 
 fn html_response(body: &str) -> Response {
@@ -112,5 +146,47 @@ mod tests {
         assert!(resp.text().await.unwrap().contains("captive portal"));
 
         assert_eq!(state.behavior_hits(&token), Some(1));
+    }
+
+    #[kithara::test(tokio)]
+    async fn early_close_advertises_full_length_and_range_still_works() {
+        let state = TestServerState::new();
+        let token = state.insert_behavior(FixtureBehavior {
+            content: Content::StaticBytes {
+                bytes: Arc::new(vec![7u8; 1000]),
+                content_type: Some("audio/mpeg"),
+            },
+            delivery: Delivery::EarlyClose { after_bytes: 400 },
+        });
+        let server = TestHttpServer::new(router().with_state(Arc::clone(&state))).await;
+        let client = reqwest::Client::new();
+
+        // Sequential GET advertises the full length (1000) but closes after 400
+        // bytes, so draining the body surfaces a premature end-of-stream.
+        let resp = client
+            .get(server.url(&format!("/behavior/{token}")))
+            .send()
+            .await;
+        let body = match resp {
+            Ok(resp) => {
+                assert_eq!(resp.status(), reqwest::StatusCode::OK);
+                assert_eq!(resp.headers()[reqwest::header::CONTENT_LENGTH], "1000");
+                resp.bytes().await
+            }
+            Err(err) => Err(err),
+        };
+        assert!(
+            body.is_err(),
+            "early-close body must not complete the advertised length"
+        );
+
+        let part = client
+            .get(server.url(&format!("/behavior/{token}")))
+            .header("Range", "bytes=600-699")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(part.status(), reqwest::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(part.bytes().await.unwrap().len(), 100);
     }
 }
