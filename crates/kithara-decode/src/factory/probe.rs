@@ -103,6 +103,19 @@ pub(super) fn container_from_mime(mime: &str) -> Option<ContainerFormat> {
     }
 }
 
+/// Map an MP4 `stsd` sample-entry tag to a codec. The `.m4a`/`.mp4`
+/// extension only narrows the container to MP4; the codec lives in the
+/// sample entry, so a sniffed tag disambiguates AAC vs ALAC vs FLAC.
+/// `mp4a` covers every AAC profile (AOT lives in the `esds`).
+pub(super) fn codec_from_mp4_fourcc(fourcc: [u8; 4]) -> Option<AudioCodec> {
+    match &fourcc {
+        b"mp4a" => Some(AudioCodec::AacLc),
+        b"fLaC" => Some(AudioCodec::Flac),
+        b"alac" => Some(AudioCodec::Alac),
+        _ => None,
+    }
+}
+
 /// Infer likely codec from container format.
 pub(super) fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
     match container {
@@ -156,6 +169,15 @@ mod tests {
         };
         let codec = probe_codec(&hint).expect("BUG: should probe successfully");
         assert_eq!(codec, AudioCodec::Vorbis);
+    }
+
+    #[kithara::test]
+    #[case(*b"mp4a", Some(AudioCodec::AacLc))]
+    #[case(*b"fLaC", Some(AudioCodec::Flac))]
+    #[case(*b"alac", Some(AudioCodec::Alac))]
+    #[case(*b"avc1", None)]
+    fn test_codec_from_mp4_fourcc(#[case] fourcc: [u8; 4], #[case] expected: Option<AudioCodec>) {
+        assert_eq!(codec_from_mp4_fourcc(fourcc), expected);
     }
 
     #[kithara::test]

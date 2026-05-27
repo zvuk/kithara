@@ -7,10 +7,14 @@ use bon::Builder;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, SegmentLayout, SharedHooks};
 
-use super::probe::{ProbeHint, container_from_extension, probe_codec, resolve_codec_container};
+use super::probe::{
+    ProbeHint, codec_from_mp4_fourcc, container_from_extension, probe_codec,
+    resolve_codec_container,
+};
 use crate::{
     Decoder,
     error::{DecodeError, DecodeResult},
+    mp4::sniff_mp4_codec,
     traits::BoxedSource,
 };
 
@@ -189,11 +193,23 @@ impl DecoderFactory {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        let probe_hint = ProbeHint {
+        let mut source = source;
+        let mut probe_hint = ProbeHint {
             container: hint.and_then(container_from_extension),
             extension: hint.map(String::from),
             ..Default::default()
         };
+
+        // `.m4a`/`.mp4` only identify the container — AAC, ALAC, and FLAC
+        // all live in MP4. Sniff the `stsd` sample-entry tag so e.g. a FLAC
+        // fMP4 segment is not misrouted to the AAC decoder path.
+        if matches!(
+            probe_hint.container,
+            Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
+        ) && let Some(codec) = sniff_mp4_codec(&mut source).and_then(codec_from_mp4_fourcc)
+        {
+            probe_hint.codec = Some(codec);
+        }
 
         probe_codec(&probe_hint)?;
         Self::create(source, &probe_hint, config)
