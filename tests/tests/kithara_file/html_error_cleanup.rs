@@ -1,74 +1,23 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    net::SocketAddr,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::time::Duration;
 
-use axum::{
-    Router,
-    extract::State,
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
-    routing::get,
-};
 use kithara::{
     assets::StoreOptions,
     events::{DownloaderEvent, Event, EventBus, FileEvent},
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_integration_tests::{TestTempDir, temp_dir};
+use kithara_integration_tests::{
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
+};
 use kithara_platform::{
     time::Instant,
     tokio::time::{sleep, timeout},
 };
-use tokio::{net::TcpListener, task};
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
-#[derive(Clone)]
-struct ServerState {
-    track_hits: Arc<AtomicUsize>,
-}
-
-impl ServerState {
-    fn new() -> Self {
-        Self {
-            track_hits: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-}
-
-/// Mirrors the corporate-firewall captive-portal response the user reported:
-/// the backend replies `200 OK text/html` with an error body instead of the
-/// expected audio payload.
-async fn captive_portal_handler(State(state): State<ServerState>) -> Response {
-    state.track_hits.fetch_add(1, Ordering::Relaxed);
-    let html = "<html><body>VPN required to access this resource</body></html>";
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        "text/html; charset=utf-8".parse().unwrap(),
-    );
-    (StatusCode::OK, headers, html.to_string()).into_response()
-}
-
-async fn start_captive_portal_server(state: ServerState) -> SocketAddr {
-    let app = Router::new()
-        .fallback(get(captive_portal_handler))
-        .with_state(state);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    task::spawn(async move {
-        axum::serve(listener, app).await.ok();
-    });
-    addr
-}
+const CAPTIVE_PORTAL_HTML: &str = "<html><body>VPN required to access this resource</body></html>";
 
 /// Walk `root` recursively and collect every file that is not inside the
 /// `_index` directory.
@@ -131,14 +80,16 @@ async fn wait_for_download_terminal(
 async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
     temp_dir: TestTempDir,
 ) {
-    let server_state = ServerState::new();
-    let addr = start_captive_portal_server(server_state.clone()).await;
-    let url = Url::parse(&format!("http://{addr}/track/streamhq?id=27390231")).unwrap();
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::HtmlError(CAPTIVE_PORTAL_HTML),
+        delivery: Delivery::Normal,
+    });
 
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
     let cancel = CancellationToken::new();
-    let config = FileConfig::for_src(url.into())
+    let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel.clone())
@@ -171,14 +122,16 @@ async fn remote_file_html_response_does_not_leak_cache_file_while_stream_alive(
 /// explicitly locks the invariant against future accidental retry loops.
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
-    let server_state = ServerState::new();
-    let addr = start_captive_portal_server(server_state.clone()).await;
-    let url = Url::parse(&format!("http://{addr}/track/streamhq?id=27390231")).unwrap();
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::HtmlError(CAPTIVE_PORTAL_HTML),
+        delivery: Delivery::Normal,
+    });
 
     let bus = EventBus::new(64);
     let mut rx = bus.subscribe();
     let cancel = CancellationToken::new();
-    let config = FileConfig::for_src(url.into())
+    let config = FileConfig::for_src(handle.url().into())
         .events(bus.clone())
         .store(StoreOptions::new(temp_dir.path()))
         .cancel(cancel.clone())
@@ -187,12 +140,12 @@ async fn remote_file_html_response_does_not_retry_storm(temp_dir: TestTempDir) {
     let stream = Stream::<File>::new(config).await.unwrap();
     let _ = wait_for_download_terminal(&mut rx, Duration::from_secs(5)).await;
 
-    let baseline = server_state.track_hits.load(Ordering::Relaxed);
+    let baseline = handle.request_count();
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         sleep(Duration::from_millis(100)).await;
     }
-    let after = server_state.track_hits.load(Ordering::Relaxed);
+    let after = handle.request_count();
 
     assert!(
         after - baseline <= 1,
