@@ -236,8 +236,8 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 Ok(DecoderSeekOutcome::Landed {
                     landed_byte,
                     landed_at,
-                    landed_frame: self.frame_offset,
                     preroll,
+                    landed_frame: self.frame_offset,
                 })
             }
             DemuxSeekOutcome::PastEof { duration } => {
@@ -579,10 +579,10 @@ mod test_counting_codec {
     use crate::{codec::FrameCodec, error::DecodeResult, types::PcmSpec};
 
     pub(super) struct CountingCodec {
-        pub(super) spec: PcmSpec,
-        pub(super) frames_per_call: u32,
         pub(super) decode_calls: Arc<AtomicU32>,
         pub(super) flush_calls: Arc<AtomicU32>,
+        pub(super) spec: PcmSpec,
+        pub(super) frames_per_call: u32,
     }
 
     impl CountingCodec {
@@ -643,8 +643,8 @@ mod seek_trim_tests {
 
     struct ThreeFrameDemuxer {
         track: TrackInfo,
-        idx: usize,
         held: Vec<u8>,
+        idx: usize,
     }
 
     impl Demuxer for ThreeFrameDemuxer {

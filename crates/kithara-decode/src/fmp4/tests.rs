@@ -74,6 +74,10 @@ impl SegmentLayout for FakeSegmented {
         None
     }
 
+    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
+        self.segments.get(segment_index as usize).cloned()
+    }
+
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         for desc in self.segments.iter() {
             let end = desc.decode_time.saturating_add(desc.duration);
@@ -82,10 +86,6 @@ impl SegmentLayout for FakeSegmented {
             }
         }
         self.segments.last().cloned()
-    }
-
-    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
-        self.segments.get(segment_index as usize).cloned()
     }
 
     fn segment_count(&self) -> Option<u32> {

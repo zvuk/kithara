@@ -7,9 +7,9 @@ use crate::{error::DecodeResult, types::PcmSpec};
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct CodecPriming {
-    pub frames: u64,
     pub packets: u32,
     pub byte_margin: u64,
+    pub frames: u64,
 }
 
 /// PCM frames per coded access unit (AAC 1024, MP3 1152). `0` for codecs
@@ -90,6 +90,16 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// reset.
     fn flush(&mut self) -> DecodeResult<()>;
 
+    /// Seek priming requirements for `codec` — packets/frames/bytes the
+    /// demuxer must back off before the seek target so this codec can
+    /// fully prime its MDCT/SBR overlap-add state. Default returns
+    /// [`CodecPriming::default()`] (no priming required). Backends that
+    /// manage priming internally (e.g. Symphonia fdk-aac / mpa) keep the
+    /// default; Apple `AudioConverter` overrides with per-codec values.
+    fn priming(&self, _codec: AudioCodec) -> CodecPriming {
+        CodecPriming::default()
+    }
+
     /// PCM output specification.
     fn spec(&self) -> PcmSpec;
 
@@ -107,16 +117,6 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// type.
     fn track_info(&self) -> crate::DecoderTrackInfo {
         crate::DecoderTrackInfo::default()
-    }
-
-    /// Seek priming requirements for `codec` — packets/frames/bytes the
-    /// demuxer must back off before the seek target so this codec can
-    /// fully prime its MDCT/SBR overlap-add state. Default returns
-    /// [`CodecPriming::default()`] (no priming required). Backends that
-    /// manage priming internally (e.g. Symphonia fdk-aac / mpa) keep the
-    /// default; Apple `AudioConverter` overrides with per-codec values.
-    fn priming(&self, _codec: AudioCodec) -> CodecPriming {
-        CodecPriming::default()
     }
 }
 

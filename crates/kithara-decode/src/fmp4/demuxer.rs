@@ -245,8 +245,8 @@ impl Demuxer for Fmp4SegmentDemuxer {
         });
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
-            landed_byte: Some(landed_byte),
             preroll,
+            landed_byte: Some(landed_byte),
         })
     }
 

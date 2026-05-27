@@ -217,10 +217,6 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `shared_stream.notify_waiting()` unsafe to call from inside the
     /// FSM (recursive mutex acquisition = stack overflow).
     peer_wake: Option<Box<dyn Fn() + Send + Sync>>,
-    shared_stream: SharedStream<T>,
-    effects: Vec<Box<dyn AudioEffect>>,
-    chunks_decoded: u64,
-    total_samples: u64,
     /// `(seek_epoch, target)` of the most recent applied seek.
     /// `committed_position` lags `target` until the seek's first
     /// (trim-aligned) chunk is consumed: the decoder lands at the
@@ -233,6 +229,10 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// backward one) never resumes against a stale forward target. See
     /// `execute_recreation`.
     resume_target: Option<(u64, Duration)>,
+    shared_stream: SharedStream<T>,
+    effects: Vec<Box<dyn AudioEffect>>,
+    chunks_decoded: u64,
+    total_samples: u64,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -1697,6 +1697,52 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    fn recreate_phase(&self, offset: u64) -> SourcePhase {
+        self.shared_stream
+            .phase_at(self.recreate_ready_range(offset))
+    }
+
+    /// Readiness for decoder recreation. When the source advertises a
+    /// **separate** init segment (CMAF `EXT-X-MAP` init box — typically
+    /// well under `DEFAULT_READ_AHEAD_BYTES`), the decoder factory's
+    /// probe only needs that init range to construct the codec; the
+    /// post-recreate `Seek` / `ApplySeek` / `Decode` action then
+    /// repositions via `decoder_seek_safe`. Gating on the init range
+    /// alone is required because after a backwards seek the HLS
+    /// scheduler emits segments around the reader byte cursor (past
+    /// `seg 0`) and never schedules `[0..DEFAULT_READ_AHEAD)`, which
+    /// produces the hang in `app.log` (2026-05-16 22:23 same-codec
+    /// V0→V2, 2026-05-17 09:08 cross-codec V3→V1).
+    ///
+    /// When the source has no separate init (raw containers like WAV,
+    /// where `format_change_segment_range` falls back to the full
+    /// `seg 0` byte range and is therefore much larger than the
+    /// read-ahead window), gating on `seg 0` is unsafe by the same
+    /// argument and we fall through to the `[offset..offset +
+    /// DEFAULT_READ_AHEAD)` slow path, whose window the scheduler
+    /// actively keeps in flight around the reader.
+    /// Byte range whose readiness gates decoder recreation. Shared by
+    /// the gate ([`Self::source_ready_for_recreate`]) and the wait path
+    /// ([`Self::wait_for_source_on_recreate`] /
+    /// [`WaitContext::Recreation`]) so the two never disagree on what
+    /// "ready" means — a mismatch livelocks the worker
+    /// (`recv_outcome_blocking` hang on HE-AAC v2 variant switch).
+    ///
+    /// For CMAF (a separate init segment within the read-ahead window)
+    /// this is the init range alone: the factory probe needs only the
+    /// init to rebuild the codec, and after a far seek the HLS scheduler
+    /// keeps segments around the reader cursor — never `[0..READ_AHEAD)`
+    /// of seg 0 — so gating or waiting on the wider boundary window
+    /// hangs. Otherwise the `[offset..offset+READ_AHEAD)` boundary window.
+    fn recreate_ready_range(&self, offset: u64) -> Range<u64> {
+        if let Ok(init_range) = self.shared_stream.format_change_segment_range()
+            && init_range.end.saturating_sub(init_range.start) <= Self::DEFAULT_READ_AHEAD_BYTES
+        {
+            return init_range;
+        }
+        offset..self.boundary_end(offset)
+    }
+
     /// Compute the upper bound of the byte range required for the
     /// decoder to safely produce its first chunk after a seek landing
     /// at `byte`: the end of the segment containing `byte` (segmented
@@ -1798,52 +1844,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             self.shared_stream.phase_at(range),
             SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
         )
-    }
-
-    /// Readiness for decoder recreation. When the source advertises a
-    /// **separate** init segment (CMAF `EXT-X-MAP` init box — typically
-    /// well under `DEFAULT_READ_AHEAD_BYTES`), the decoder factory's
-    /// probe only needs that init range to construct the codec; the
-    /// post-recreate `Seek` / `ApplySeek` / `Decode` action then
-    /// repositions via `decoder_seek_safe`. Gating on the init range
-    /// alone is required because after a backwards seek the HLS
-    /// scheduler emits segments around the reader byte cursor (past
-    /// `seg 0`) and never schedules `[0..DEFAULT_READ_AHEAD)`, which
-    /// produces the hang in `app.log` (2026-05-16 22:23 same-codec
-    /// V0→V2, 2026-05-17 09:08 cross-codec V3→V1).
-    ///
-    /// When the source has no separate init (raw containers like WAV,
-    /// where `format_change_segment_range` falls back to the full
-    /// `seg 0` byte range and is therefore much larger than the
-    /// read-ahead window), gating on `seg 0` is unsafe by the same
-    /// argument and we fall through to the `[offset..offset +
-    /// DEFAULT_READ_AHEAD)` slow path, whose window the scheduler
-    /// actively keeps in flight around the reader.
-    /// Byte range whose readiness gates decoder recreation. Shared by
-    /// the gate ([`Self::source_ready_for_recreate`]) and the wait path
-    /// ([`Self::wait_for_source_on_recreate`] /
-    /// [`WaitContext::Recreation`]) so the two never disagree on what
-    /// "ready" means — a mismatch livelocks the worker
-    /// (`recv_outcome_blocking` hang on HE-AAC v2 variant switch).
-    ///
-    /// For CMAF (a separate init segment within the read-ahead window)
-    /// this is the init range alone: the factory probe needs only the
-    /// init to rebuild the codec, and after a far seek the HLS scheduler
-    /// keeps segments around the reader cursor — never `[0..READ_AHEAD)`
-    /// of seg 0 — so gating or waiting on the wider boundary window
-    /// hangs. Otherwise the `[offset..offset+READ_AHEAD)` boundary window.
-    fn recreate_ready_range(&self, offset: u64) -> Range<u64> {
-        if let Ok(init_range) = self.shared_stream.format_change_segment_range()
-            && init_range.end.saturating_sub(init_range.start) <= Self::DEFAULT_READ_AHEAD_BYTES
-        {
-            return init_range;
-        }
-        offset..self.boundary_end(offset)
-    }
-
-    fn recreate_phase(&self, offset: u64) -> SourcePhase {
-        self.shared_stream
-            .phase_at(self.recreate_ready_range(offset))
     }
 
     fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {

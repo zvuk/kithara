@@ -33,16 +33,16 @@ use crate::{
 struct Consts;
 
 impl Consts {
-    /// Symphonia packets are unidimensional (single audio track) so
-    /// we pin `track_id` = 0 — Symphonia uses the field for routing
-    /// across multiplexed streams that we never produce.
-    const TRACK_ID: u32 = 0;
-
     /// LAME-convention decoder algorithmic delay for the `mpa` MP3
     /// decoder (528 polyphase synthesis filter convergence + 1 sync
     /// sample). See [`crate::codec::FrameCodec::decoder_algo_delay`]
     /// + `kithara-decode/README.md` "Gapless probe contract".
     const MP3_DECODER_DELAY: u64 = 528 + 1;
+
+    /// Symphonia packets are unidimensional (single audio track) so
+    /// we pin `track_id` = 0 — Symphonia uses the field for routing
+    /// across multiplexed streams that we never produce.
+    const TRACK_ID: u32 = 0;
 }
 
 /// Frame codec backed by a symphonia codec registry decoder.
@@ -173,24 +173,6 @@ impl SymphoniaCodec {
 }
 
 impl FrameCodec for SymphoniaCodec {
-    fn priming(&self, codec: AudioCodec) -> CodecPriming {
-        // AAC needs ~2 access units of pre-roll so SBR/PS QMF state converges
-        // after a flush (ISO/IEC 14496-12 audio pre-roll). HE-AAC v2 is an
-        // AAC-LC core + SBR/PS extensions that the fMP4 init parse and this
-        // codec layer both see only as `AacLc` (fdk-aac auto-detects SBR from
-        // the bitstream), so the pre-roll must be conservative for `AacLc`
-        // too — a plain-LC stream just decode-discards one harmless extra AU.
-        // The fMP4 segment demuxer reads this back-off so a boundary seek
-        // warms SBR across the previous segment instead of starting cold.
-        match codec {
-            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => CodecPriming {
-                packets: 2,
-                ..CodecPriming::default()
-            },
-            _ => CodecPriming::default(),
-        }
-    }
-
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
@@ -277,6 +259,24 @@ impl FrameCodec for SymphoniaCodec {
         Ok(())
     }
 
+    fn priming(&self, codec: AudioCodec) -> CodecPriming {
+        // AAC needs ~2 access units of pre-roll so SBR/PS QMF state converges
+        // after a flush (ISO/IEC 14496-12 audio pre-roll). HE-AAC v2 is an
+        // AAC-LC core + SBR/PS extensions that the fMP4 init parse and this
+        // codec layer both see only as `AacLc` (fdk-aac auto-detects SBR from
+        // the bitstream), so the pre-roll must be conservative for `AacLc`
+        // too — a plain-LC stream just decode-discards one harmless extra AU.
+        // The fMP4 segment demuxer reads this back-off so a boundary seek
+        // warms SBR across the previous segment instead of starting cold.
+        match codec {
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => CodecPriming {
+                packets: 2,
+                ..CodecPriming::default()
+            },
+            _ => CodecPriming::default(),
+        }
+    }
+
     fn spec(&self) -> PcmSpec {
         self.spec
     }
@@ -347,7 +347,6 @@ mod priming_tests {
         // AAC (incl. HE-AAC v1/v2, which the codec layer sees as `AacLc`)
         // needs SBR/PS pre-roll across a seek boundary: 2 access units of
         // decode-and-discard warm-up so QMF state converges before the
-        // seek target.
         for c in [AudioCodec::AacLc, AudioCodec::AacHe, AudioCodec::AacHeV2] {
             assert_eq!(
                 codec.priming(c),

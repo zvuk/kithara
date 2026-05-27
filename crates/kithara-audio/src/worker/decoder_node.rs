@@ -32,16 +32,16 @@ pub(crate) struct DecoderRuntime {
 /// stateless with respect to parked chunks.
 pub(crate) struct DecoderNode {
     preload_notify: Arc<Notify>,
+    /// Shared priority hint written wait-free by the real-time consumer and
+    /// read back here by the scheduler each pass — see [`AtomicServiceClass`].
+    service_class: Arc<AtomicServiceClass>,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     runtime: DecoderRuntime,
-    outlet: Outlet<Fetch<PcmChunk>>,
     /// Spent chunks returned by the real-time consumer. Drained at the top
     /// of every [`tick`](DecoderNode::tick) so the pooled buffers are
     /// freed/recycled on this worker thread, never on the audio thread.
     trash_inlet: Inlet<PcmChunk>,
-    /// Shared priority hint written wait-free by the real-time consumer and
-    /// read back here by the scheduler each pass — see [`AtomicServiceClass`].
-    service_class: Arc<AtomicServiceClass>,
+    outlet: Outlet<Fetch<PcmChunk>>,
     preload_chunks: usize,
 }
 
@@ -50,17 +50,6 @@ impl DecoderNode {
         if !self.runtime.preloaded {
             self.preload_notify.notify_one();
             self.runtime.preloaded = true;
-        }
-    }
-
-    fn mark_preload_progress(&mut self) {
-        if self.runtime.preloaded {
-            return;
-        }
-
-        self.runtime.chunks_sent += 1;
-        if self.runtime.chunks_sent >= self.preload_chunks && !self.outlet.has_pending() {
-            self.complete_preload();
         }
     }
 
@@ -79,6 +68,17 @@ impl DecoderNode {
     /// thread.
     fn drain_trash(&mut self) {
         while self.trash_inlet.try_pop().is_some() {}
+    }
+
+    fn mark_preload_progress(&mut self) {
+        if self.runtime.preloaded {
+            return;
+        }
+
+        self.runtime.chunks_sent += 1;
+        if self.runtime.chunks_sent >= self.preload_chunks && !self.outlet.has_pending() {
+            self.complete_preload();
+        }
     }
 
     fn sync_seek_epoch(&mut self) {

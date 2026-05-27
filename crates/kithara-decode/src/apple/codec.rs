@@ -320,16 +320,16 @@ impl FrameCodec for AppleCodec {
         Ok(())
     }
 
+    fn priming(&self, codec: AudioCodec) -> CodecPriming {
+        apple_codec_priming(codec)
+    }
+
     fn spec(&self) -> PcmSpec {
         self.spec
     }
 
     fn track_info(&self) -> DecoderTrackInfo {
         self.track_info.clone()
-    }
-
-    fn priming(&self, codec: AudioCodec) -> CodecPriming {
-        apple_codec_priming(codec)
     }
 }
 

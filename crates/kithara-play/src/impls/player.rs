@@ -89,14 +89,14 @@ pub struct PlayerConfig {
     /// Secondary lead time before EOF at which the next queued item is loaded.
     #[builder(default = 3.5)]
     pub prefetch_duration: f32,
-    /// Maximum concurrent slots in the engine. Default: 4.
-    #[builder(default = 4)]
-    pub max_slots: usize,
     /// Sample rate passed to the engine/runtime backend as a hint.
     /// Default: 44100. Offline/test harnesses set this to drive
     /// deterministic render at a known rate.
     #[builder(default = 44_100)]
     pub sample_rate: u32,
+    /// Maximum concurrent slots in the engine. Default: 4.
+    #[builder(default = 4)]
+    pub max_slots: usize,
 }
 
 impl fmt::Debug for PlayerConfig {
