@@ -7,6 +7,7 @@ use super::{
     app::Kithara,
     dj,
     message::{Message, Tab},
+    url_bar,
 };
 
 fn track_id_at(state: &Kithara, index: usize) -> Option<TrackId> {
@@ -16,9 +17,10 @@ fn track_id_at(state: &Kithara, index: usize) -> Option<TrackId> {
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
         Message::Dj(msg) => dj::handle(state, &msg),
+        Message::Url(msg) => url_bar::handle(state, msg),
         Message::WindowCloseRequested(id) => handle_window_close_requested(state, id),
         other => {
-            handle_player(state, other);
+            handle_player(state, &other);
             Task::none()
         }
     };
@@ -29,8 +31,8 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
 
 /// All player/UI messages that mutate state without scheduling a follow-up
 /// task. Window/DJ messages are handled separately in [`update`].
-fn handle_player(state: &mut Kithara, message: Message) {
-    match message {
+fn handle_player(state: &mut Kithara, message: &Message) {
+    match *message {
         Message::TogglePlayPause => handle_toggle_play_pause(state),
         Message::Next => handle_next(state),
         Message::Prev => handle_prev(state),
@@ -40,8 +42,6 @@ fn handle_player(state: &mut Kithara, message: Message) {
         Message::EqBandChanged(band, db) => handle_eq_band_changed(state, band, db),
         Message::PlayRateChanged(rate) => handle_play_rate_changed(state, rate),
         Message::CrossfadeChanged(secs) => handle_crossfade_changed(state, secs),
-        Message::UrlChanged(text) => handle_url_changed(state, text),
-        Message::AddUrl => handle_add_url(state),
         Message::ToggleMute => handle_toggle_mute(state),
         Message::ToggleShuffle => handle_toggle_shuffle(state),
         Message::ToggleRepeat => handle_toggle_repeat(state),
@@ -51,7 +51,7 @@ fn handle_player(state: &mut Kithara, message: Message) {
         Message::TabSelected(tab) => handle_tab_selected(state, tab),
         Message::SetAbrMode(variant) => handle_set_abr_mode(state, variant),
         Message::Tick => handle_tick(state),
-        Message::Dj(_) | Message::WindowCloseRequested(_) => {}
+        Message::Dj(_) | Message::Url(_) | Message::WindowCloseRequested(_) => {}
     }
 }
 
@@ -137,19 +137,6 @@ fn handle_play_rate_changed(state: &Kithara, rate: f32) {
 fn handle_crossfade_changed(state: &Kithara, secs: f32) {
     state.controller.queue().set_crossfade_duration(secs);
     state.controller.mutate(|st| st.crossfade = secs);
-}
-
-fn handle_url_changed(state: &mut Kithara, text: String) {
-    state.url_text = text;
-}
-
-fn handle_add_url(state: &mut Kithara) {
-    let url = state.url_text.trim();
-    if url.is_empty() {
-        return;
-    }
-    state.controller.queue().append(url);
-    state.url_text.clear();
 }
 
 fn handle_toggle_mute(state: &mut Kithara) {

@@ -19,10 +19,8 @@ pub(crate) enum Message {
     PlayRateChanged(f32),
     /// Crossfade duration changed (seconds).
     CrossfadeChanged(f32),
-    /// URL text field changed.
-    UrlChanged(String),
-    /// Add URL from text field to queue.
-    AddUrl,
+    /// URL bar control event (grouped to keep this enum thin).
+    Url(super::url_bar::UrlMsg),
     /// Toggle mute state.
     ToggleMute,
     /// Toggle shuffle on / off.

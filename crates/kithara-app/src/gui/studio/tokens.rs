@@ -1,14 +1,3 @@
-/// Spacing gaps shared across the studio layout.
-pub(super) struct Gap;
-impl Gap {
-    pub(super) const TEXT_STACK: f32 = 2.0;
-    pub(super) const INLINE_TIGHT: f32 = 4.0;
-    pub(super) const INLINE: f32 = 6.0;
-    pub(super) const CONTENT: f32 = 10.0;
-    pub(super) const SECTION: f32 = 12.0;
-    pub(super) const SECTION_ROOMY: f32 = 14.0;
-}
-
 pub(super) struct StudioSpace;
 impl StudioSpace {
     pub(super) const TOPBAR: [f32; 2] = [10.0, 18.0];
@@ -31,7 +20,6 @@ impl StudioSize {
     pub(super) const STATUS_DOT: f32 = 6.0;
     pub(super) const DIVIDER: f32 = 1.0;
     pub(super) const TRANSPORT_ICON: f32 = 18.0;
-    pub(super) const TRANSPORT_ICON_LG: f32 = 20.0;
 }
 
 pub(super) struct StudioRadius;

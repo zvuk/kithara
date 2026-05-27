@@ -12,10 +12,10 @@ use iced::{
 
 use super::{
     styles::{ghost_button_style, linear_background, mix_colors, vertical_divider},
-    tokens::{Gap, StudioSize, StudioSpace, StudioType},
+    tokens::{StudioSize, StudioSpace, StudioType},
 };
 use crate::{
-    gui::{dj::DjMsg, fonts, message::Message},
+    gui::{dj::DjMsg, fonts, message::Message, tokens::Gap},
     theme::gui::GuiPalette,
 };
 

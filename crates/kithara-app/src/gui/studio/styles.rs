@@ -51,10 +51,6 @@ pub(crate) fn ghost_button_style(p: GuiPalette) -> impl Fn(&Theme, ButtonStatus)
     }
 }
 
-pub(super) fn primary_button_background(p: GuiPalette) -> Background {
-    linear_background(180.0, p.accent_strong, p.accent)
-}
-
 pub(super) fn linear_background(angle: f32, start: Color, end: Color) -> Background {
     gradient::Linear::new(Degrees(angle))
         .add_stop(0.0, start)

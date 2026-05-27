@@ -9,9 +9,9 @@ use iced::{
     },
 };
 
-use super::tokens::{Gap, StudioRadius, StudioSize, StudioSpace, StudioType};
+use super::tokens::{StudioRadius, StudioSize, StudioSpace, StudioType};
 use crate::{
-    gui::{app::Kithara, fonts, icons::Icon, message::Message, view::with_alpha},
+    gui::{app::Kithara, fonts, icons::Icon, message::Message, tokens::Gap, view::with_alpha},
     theme::gui::GuiPalette,
 };
 

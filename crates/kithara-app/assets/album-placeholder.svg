@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="88" height="88" viewBox="0 0 88 88">
+  <defs>
+    <linearGradient id="cov" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#504443"/>
+      <stop offset="1" stop-color="#2a2a54"/>
+    </linearGradient>
+    <pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="6" height="12" fill="#ffffff" fill-opacity="0.04"/>
+    </pattern>
+  </defs>
+  <rect x="0" y="0" width="88" height="88" rx="8" fill="url(#cov)"/>
+  <rect x="0" y="0" width="88" height="88" rx="8" fill="url(#hatch)"/>
+  <rect x="0.5" y="0.5" width="87" height="87" rx="7.5" fill="none" stroke="#3b3b67" stroke-width="1"/>
+  <g transform="translate(28,28) scale(0.125)" fill="#bb9442" fill-opacity="0.6">
+    <path d="M210.3,56.34l-80-24A8,8,0,0,0,120,40V148.26A48,48,0,1,0,136,184V98.75l69.7,20.91A8,8,0,0,0,216,112V64A8,8,0,0,0,210.3,56.34ZM88,216a32,32,0,1,1,32-32A32,32,0,0,1,88,216ZM200,101.25l-64-19.2V50.75L200,70Z"/>
+  </g>
+</svg>

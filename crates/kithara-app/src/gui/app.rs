@@ -12,6 +12,7 @@ use super::{
     message::{Message, Tab},
     subscription::subscription_config,
     theme,
+    url_bar::UrlBar,
 };
 use crate::{
     state::{StateController, UiState},
@@ -30,7 +31,7 @@ pub(crate) struct Kithara {
     pub(crate) palette: gui::GuiPalette,
 
     pub(crate) selected_track_index: Option<usize>,
-    pub(crate) url_text: String,
+    pub(crate) url: UrlBar,
     pub(crate) active_tab: Tab,
     pub(crate) ui_state: UiState,
     pub(crate) previous_volume: f32,
@@ -59,7 +60,7 @@ impl Kithara {
             active_tab: Tab::Playlist,
             selected_track_index: None,
             blink_counter: 0,
-            url_text: String::new(),
+            url: UrlBar::default(),
             dj: DjView::default(),
             window_id: None,
         };
@@ -81,11 +82,14 @@ impl Kithara {
         );
         subs.push(window::close_requests().map(Message::WindowCloseRequested));
         if cfg.is_keyboard_enabled {
-            subs.push(event::listen_with(|e, _status, _window| match e {
+            subs.push(event::listen_with(|e, status, _window| match e {
+                // Only act on Delete/Backspace the focused widget left
+                // unhandled. A focused text input (URL bar) captures these
+                // for editing, so the playlist shortcut must not also fire.
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     key: Key::Named(Named::Delete | Named::Backspace),
                     ..
-                }) => Some(Message::DeleteTrack),
+                }) if status == event::Status::Ignored => Some(Message::DeleteTrack),
                 _ => None,
             }));
         }

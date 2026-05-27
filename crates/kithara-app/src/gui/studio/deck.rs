@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Background, Border, Element, Length, Shadow, Theme, Vector,
+    Alignment, Background, Border, Element, Length, Theme,
     font::Weight,
     widget::{
         Row, Space, button,
@@ -10,16 +10,14 @@ use iced::{
     },
 };
 
-use super::{
-    styles::primary_button_background,
-    tokens::{Gap, StudioRadius, StudioSize, StudioSpace, StudioType},
-};
+use super::tokens::{StudioRadius, StudioSize, StudioSpace, StudioType};
 use crate::{
     gui::{
         app::Kithara,
         fonts,
         icons::Icon,
         message::Message,
+        tokens::Gap,
         view::{eq_band_label, format_time, track_subtitle, with_alpha},
         widgets,
     },
@@ -127,14 +125,26 @@ fn deck_header(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
 }
 
 fn waveform_cluster(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
-    let current = format_time(state.ui_state.position.max(0.0));
-    let total = format_time(state.ui_state.duration.max(0.0));
-    let progress = playhead_progress(state.ui_state.position, state.ui_state.duration);
+    let duration = state.ui_state.duration.max(0.0);
+    // While scrubbing the waveform, follow the seek target instead of the
+    // engine position so the playhead and timer track the pointer.
+    let head_position = if state.ui_state.is_seeking {
+        state.ui_state.seek_position
+    } else {
+        state.ui_state.position
+    };
+    let current = format_time(head_position.max(0.0));
+    let total = format_time(duration);
+    let progress = playhead_progress(head_position, duration);
 
     let canvas: Element<'_, Message> = match state.ui_state.waveform.as_ref() {
-        Some(env) if env.len() >= 2 => {
-            widgets::waveform(env.clone(), progress, StudioSize::WAVEFORM_HEIGHT, p)
-        }
+        Some(env) if env.len() >= 2 => widgets::waveform(
+            env.clone(),
+            progress,
+            duration,
+            StudioSize::WAVEFORM_HEIGHT,
+            p,
+        ),
         _ => Space::new()
             .width(Length::Fill)
             .height(Length::Fixed(StudioSize::WAVEFORM_HEIGHT))
@@ -179,31 +189,9 @@ fn playhead_progress(position: f64, duration: f64) -> f32 {
 fn transport_row(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
     container(
         row![
-            icon_transport_button(
-                Icon::SkipPrev,
-                StudioSize::TRANSPORT_ICON,
-                p,
-                false,
-                Message::Prev
-            ),
-            icon_transport_button(
-                if state.ui_state.playing {
-                    Icon::Pause
-                } else {
-                    Icon::Play
-                },
-                StudioSize::TRANSPORT_ICON_LG,
-                p,
-                true,
-                Message::TogglePlayPause,
-            ),
-            icon_transport_button(
-                Icon::SkipNext,
-                StudioSize::TRANSPORT_ICON,
-                p,
-                false,
-                Message::Next
-            ),
+            secondary_transport_button(Icon::SkipPrev, p, Message::Prev),
+            widgets::play_button(state.ui_state.playing, p, Message::TogglePlayPause),
+            secondary_transport_button(Icon::SkipNext, p, Message::Next),
         ]
         .align_y(Alignment::Center)
         .spacing(Gap::INLINE),
@@ -215,31 +203,22 @@ fn transport_row(state: &Kithara, p: GuiPalette) -> Element<'_, Message> {
     .into()
 }
 
-fn icon_transport_button(
+fn secondary_transport_button(
     icon: Icon,
-    icon_size: f32,
     p: GuiPalette,
-    primary: bool,
     message: Message,
 ) -> Element<'static, Message> {
-    let sz = if primary { 56.0 } else { 44.0 };
-    let icon_color = if primary { p.bg } else { p.text_dim };
+    const SIZE: f32 = 44.0;
 
     button(
-        container(icon.view(icon_size, icon_color))
+        container(icon.view(StudioSize::TRANSPORT_ICON, p.text_dim))
             .center_x(Length::Fill)
             .center_y(Length::Fill),
     )
-    .width(Length::Fixed(sz))
-    .height(Length::Fixed(sz))
+    .width(Length::Fixed(SIZE))
+    .height(Length::Fixed(SIZE))
     .padding(0)
-    .style(move |_theme: &Theme, status| {
-        if primary {
-            transport_primary_style(p, status)
-        } else {
-            transport_secondary_style(p, status)
-        }
-    })
+    .style(move |_theme: &Theme, status| transport_secondary_style(p, status))
     .on_press(message)
     .into()
 }
@@ -257,32 +236,6 @@ fn transport_secondary_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle
         background,
         text_color: p.text_dim,
         border: Border::default().rounded(StudioRadius::BUTTON),
-        ..ButtonStyle::default()
-    }
-}
-
-fn transport_primary_style(p: GuiPalette, status: ButtonStatus) -> ButtonStyle {
-    let background = match status {
-        ButtonStatus::Pressed => Some(Background::Color(with_alpha(p.accent, 0.85))),
-        ButtonStatus::Disabled => Some(Background::Color(with_alpha(p.accent, 0.4))),
-        ButtonStatus::Active | ButtonStatus::Hovered => Some(primary_button_background(p)),
-    };
-
-    let shadow = if matches!(status, ButtonStatus::Hovered) {
-        Shadow {
-            color: p.accent_glow,
-            offset: Vector::new(0.0, 0.0),
-            blur_radius: 12.0,
-        }
-    } else {
-        Shadow::default()
-    };
-
-    ButtonStyle {
-        background,
-        text_color: p.bg,
-        border: Border::default().rounded(StudioRadius::BUTTON),
-        shadow,
         ..ButtonStyle::default()
     }
 }

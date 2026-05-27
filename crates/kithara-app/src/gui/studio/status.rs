@@ -4,9 +4,9 @@ use iced::{
     widget::{Space, container, container::Style as ContainerStyle, row, text},
 };
 
-use super::tokens::{Gap, StudioRadius, StudioSize, StudioSpace, StudioType};
+use super::tokens::{StudioRadius, StudioSize, StudioSpace, StudioType};
 use crate::{
-    gui::{app::Kithara, fonts, message::Message},
+    gui::{app::Kithara, fonts, message::Message, tokens::Gap},
     theme::gui::GuiPalette,
 };
 

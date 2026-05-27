@@ -1,19 +1,28 @@
 use iced::{
-    Color, Element, Length, Point, Rectangle, Renderer, Theme,
-    mouse::Cursor,
-    widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke, gradient},
+    Color, Element, Event, Length, Point, Rectangle, Renderer, Theme,
+    mouse::{self, Button, Cursor},
+    widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, gradient},
 };
 use kithara::audio::Envelope;
 
 use crate::{gui::message::Message, theme::gui::GuiPalette};
 
 /// Deck waveform: mirrored envelopes filled with played / unplayed
-/// vertical gradients clipped by the playhead, a faint full-height 1/8
-/// column grid, a 16-tick beat grid and a playhead. Display-only.
+/// vertical gradients split at the playhead, a faint full-height 1/8
+/// column grid, a 16-tick beat grid and a playhead. Click or drag the
+/// pointer to seek when `duration` is known.
 struct Waveform {
     samples: Envelope,
     progress: f32,
+    duration: f64,
     p: GuiPalette,
+}
+
+/// Maps an absolute cursor x to a seek target in seconds, clamped to the
+/// widget width and `[0, duration]`.
+fn seek_target(cursor_x: f32, bounds: Rectangle, duration: f64) -> f64 {
+    let frac = ((cursor_x - bounds.x) / bounds.width).clamp(0.0, 1.0);
+    f64::from(frac) * duration
 }
 
 /// Top stop of the unplayed envelope gradient: a desaturated blue with no
@@ -21,20 +30,15 @@ struct Waveform {
 /// bottom stop reuses the `line` palette token.
 const UNPLAYED_TOP: Color = Color::from_rgb(108.0 / 255.0, 111.0 / 255.0, 154.0 / 255.0);
 
-fn envelope_path(samples: &[f32], w: f32, h: f32) -> Path {
+/// Mirrored closed envelope polygon for `samples`, laid out left-to-right
+/// from `x0` with horizontal `step` between points. The played/unplayed
+/// split uses two disjoint sub-range paths, not `Frame::with_clip`: clipping
+/// a gradient canvas mesh corrupts it in `iced_wgpu` (fan artifacts).
+fn envelope_path(samples: &[f32], x0: f32, step: f32, h: f32) -> Path {
     let mid = h / 2.0;
     let amp = mid - 4.0;
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "envelope point count tracks display width and never nears the f32 mantissa limit"
-    )]
-    let step = if samples.len() > 1 {
-        w / (samples.len() - 1) as f32
-    } else {
-        0.0
-    };
     Path::new(|b| {
-        let mut x = 0.0;
+        let mut x = x0;
         for (i, &v) in samples.iter().enumerate() {
             let y = mid - v * amp;
             if i == 0 {
@@ -53,12 +57,72 @@ fn envelope_path(samples: &[f32], w: f32, h: f32) -> Path {
     })
 }
 
+/// Tracks an in-progress pointer drag so cursor moves between press and
+/// release keep emitting seek updates even past the widget edges.
+#[derive(Default)]
+struct DragState {
+    dragging: bool,
+}
+
 impl canvas::Program<Message> for Waveform {
-    type State = ();
+    type State = DragState;
+
+    fn update(
+        &self,
+        state: &mut DragState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<Message>> {
+        if self.duration <= 0.0 {
+            return None;
+        }
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
+                cursor.position_over(bounds).map(|pos| {
+                    state.dragging = true;
+                    Action::publish(Message::SeekChanged(seek_target(
+                        pos.x,
+                        bounds,
+                        self.duration,
+                    )))
+                    .and_capture()
+                })
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
+                cursor.position().map(|pos| {
+                    Action::publish(Message::SeekChanged(seek_target(
+                        pos.x,
+                        bounds,
+                        self.duration,
+                    )))
+                    .and_capture()
+                })
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.dragging => {
+                state.dragging = false;
+                Some(Action::publish(Message::SeekReleased).and_capture())
+            }
+            _ => None,
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &DragState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> mouse::Interaction {
+        if self.duration > 0.0 && (state.dragging || cursor.is_over(bounds)) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
+        }
+    }
 
     fn draw(
         &self,
-        _state: &(),
+        _state: &DragState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -83,10 +147,14 @@ impl canvas::Program<Message> for Waveform {
             );
         }
 
-        let played_w = (self.progress.clamp(0.0, 1.0) * w).clamp(0.0, w);
-
-        if self.samples.len() >= 2 {
-            let path = envelope_path(&self.samples[..], w, h);
+        let n = self.samples.len();
+        if n >= 2 {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "envelope point count tracks display width and never nears the f32 mantissa limit"
+            )]
+            let last = (n - 1) as f32;
+            let step = w / last;
 
             let unplayed = gradient::Linear::new(Point::new(0.0, 0.0), Point::new(0.0, h))
                 .add_stop(
@@ -119,24 +187,26 @@ impl canvas::Program<Message> for Waveform {
                     },
                 );
 
-            frame.with_clip(
-                Rectangle {
-                    x: played_w,
-                    y: 0.0,
-                    width: (w - played_w).max(0.0),
-                    height: h,
-                },
-                |f| f.fill(&path, unplayed),
-            );
-            frame.with_clip(
-                Rectangle {
-                    x: 0.0,
-                    y: 0.0,
-                    width: played_w,
-                    height: h,
-                },
-                |f| f.fill(&path, played),
-            );
+            // Sample index at the playhead; both sub-paths share this boundary.
+            // x0 comes from the pre-truncation float so the slice cast is the
+            // only one needed.
+            let split_f = (self.progress.clamp(0.0, 1.0) * last).round();
+            let x0 = split_f * step;
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "split_f is rounded and in [0, last]; in range for a slice index"
+            )]
+            let split = split_f as usize;
+
+            if split >= 1 {
+                let path = envelope_path(&self.samples[..=split], 0.0, step, h);
+                frame.fill(&path, played);
+            }
+            if split <= n - 2 {
+                let path = envelope_path(&self.samples[split..], x0, step, h);
+                frame.fill(&path, unplayed);
+            }
         }
 
         let tick_color = Color {
@@ -163,15 +233,19 @@ impl canvas::Program<Message> for Waveform {
 }
 
 /// Build the deck waveform element from a precomputed peak envelope.
+/// `duration` (track length in seconds) enables click/drag seeking; pass
+/// `0.0` when it is unknown to keep the widget display-only.
 pub(crate) fn waveform<'a>(
     peaks: Envelope,
     progress: f32,
+    duration: f64,
     height: f32,
     p: GuiPalette,
 ) -> Element<'a, Message> {
     Canvas::new(Waveform {
         samples: peaks,
         progress,
+        duration,
         p,
     })
     .width(Length::Fill)

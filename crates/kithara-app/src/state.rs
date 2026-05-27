@@ -8,6 +8,7 @@ use kithara::{
     audio::Envelope,
     events::{AbrMode, AppEvent, EngineEvent, Event, PlayerEvent, VariantInfo},
     prelude::ResourceConfig,
+    stream::AudioCodec,
 };
 use kithara_platform::sync::Mutex;
 use kithara_queue::{Queue, QueueEvent, RepeatMode, TrackEntry, TrackSource};
@@ -359,11 +360,31 @@ fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
 }
 
 fn variant_display_label_from_info(v: &VariantInfo) -> String {
-    v.name.clone().unwrap_or_else(|| {
-        v.bandwidth_bps.map_or_else(
-            || format!("variant {}", v.variant_index),
-            |b| format!("{} kbps", b / 1000),
-        )
+    let bitrate = v.bandwidth_bps.map(|b| format!("{} kbps", b / 1000));
+    let codec = v.codecs.as_deref().and_then(codec_label);
+    match (bitrate, codec) {
+        (Some(b), Some(c)) => format!("{b} \u{00b7} {c}"),
+        (Some(b), None) => b,
+        (None, Some(c)) => c.to_string(),
+        (None, None) => v
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("variant {}", v.variant_index)),
+    }
+}
+
+/// Human-readable codec family from an HLS `CODECS` attribute value
+/// (e.g. `mp4a.40.2` -> `AAC`). Unknown codecs yield `None` so the
+/// bitrate is shown without a trailing format tag.
+fn codec_label(codecs: &str) -> Option<&'static str> {
+    Some(match AudioCodec::parse_hls_codec(codecs)? {
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => "AAC",
+        AudioCodec::Mp3 => "MP3",
+        AudioCodec::Flac => "FLAC",
+        AudioCodec::Vorbis => "Vorbis",
+        AudioCodec::Opus => "Opus",
+        AudioCodec::Alac => "ALAC",
+        _ => return None,
     })
 }
 
@@ -374,4 +395,19 @@ fn variant_short_label(v: &VariantInfo) -> String {
             |b| format!("{}k", b / 1000),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::codec_label;
+
+    #[test]
+    fn codec_label_maps_known_hls_codecs() {
+        assert_eq!(codec_label("mp4a.40.2"), Some("AAC"));
+        assert_eq!(codec_label("mp4a.40.5"), Some("AAC"));
+        assert_eq!(codec_label("mp4a.40.34"), Some("MP3"));
+        assert_eq!(codec_label("flac"), Some("FLAC"));
+        assert_eq!(codec_label("opus"), Some("Opus"));
+        assert_eq!(codec_label("av01.0"), None);
+    }
 }
