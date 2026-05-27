@@ -11,6 +11,7 @@ use cbc::{
 };
 use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource};
 use kithara_stream::MediaInfo;
+use num_traits::AsPrimitive;
 
 use crate::{
     fixture_protocol::{
@@ -350,8 +351,12 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
     })
 }
 
+fn put_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
 fn put_block(out: &mut Vec<u8>, block: &[u8]) {
-    out.extend_from_slice(&(block.len() as u64).to_le_bytes());
+    put_u64(out, block.len().as_());
     out.extend_from_slice(block);
 }
 
@@ -359,7 +364,7 @@ fn take_block<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
     if buf.len() < 8 {
         return None;
     }
-    let len = u64::from_le_bytes(buf[..8].try_into().ok()?) as usize;
+    let len: usize = u64::from_le_bytes(buf[..8].try_into().ok()?).as_();
     let rest = &buf[8..];
     if rest.len() < len {
         return None;
@@ -382,11 +387,11 @@ fn encode_variant_blob(v: &PackagedVariantData) -> Vec<u8> {
     let mut out = Vec::new();
     put_block(&mut out, &v.init_segment);
     put_block(&mut out, v.rfc6381_codec.as_bytes());
-    out.extend_from_slice(&(v.media_segments.len() as u64).to_le_bytes());
+    put_u64(&mut out, v.media_segments.len().as_());
     for seg in &v.media_segments {
         put_block(&mut out, seg);
     }
-    out.extend_from_slice(&(v.segment_durations_secs.len() as u64).to_le_bytes());
+    put_u64(&mut out, v.segment_durations_secs.len().as_());
     for d in &v.segment_durations_secs {
         out.extend_from_slice(&d.to_le_bytes());
     }
@@ -397,12 +402,12 @@ fn decode_variant_blob(blob: &[u8]) -> Option<PackagedVariantData> {
     let mut buf = blob;
     let init = take_block(&mut buf)?.to_vec();
     let codec = std::str::from_utf8(take_block(&mut buf)?).ok()?.to_owned();
-    let media_count = take_u64(&mut buf)? as usize;
+    let media_count: usize = take_u64(&mut buf)?.as_();
     let mut media_segments = Vec::with_capacity(media_count);
     for _ in 0..media_count {
         media_segments.push(Arc::new(take_block(&mut buf)?.to_vec()));
     }
-    let dur_count = take_u64(&mut buf)? as usize;
+    let dur_count: usize = take_u64(&mut buf)?.as_();
     let mut segment_durations_secs = Vec::with_capacity(dur_count);
     for _ in 0..dur_count {
         if buf.len() < 8 {
