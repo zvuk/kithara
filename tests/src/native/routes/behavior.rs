@@ -10,6 +10,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::stream;
+use kithara_platform::time::{Duration, sleep};
 
 use crate::{
     routes::range::build_range_response,
@@ -17,7 +18,12 @@ use crate::{
 };
 
 pub(crate) fn router() -> Router<Arc<TestServerState>> {
-    Router::new().route("/behavior/{token}", get(dispatch).head(dispatch))
+    Router::new()
+        .route("/behavior/{token}", get(dispatch).head(dispatch))
+        .route(
+            "/behavior/{token}/{*rest}",
+            get(dispatch_nested).head(dispatch_nested),
+        )
 }
 
 async fn dispatch(
@@ -25,11 +31,23 @@ async fn dispatch(
     Path(token): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(behavior) = state.get_behavior(&token) else {
+    serve(&state, &token, &headers)
+}
+
+async fn dispatch_nested(
+    State(state): State<Arc<TestServerState>>,
+    Path((token, _rest)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    serve(&state, &token, &headers)
+}
+
+fn serve(state: &TestServerState, token: &str, headers: &HeaderMap) -> Response {
+    let Some(behavior) = state.get_behavior(token) else {
         return (StatusCode::NOT_FOUND, "no such behavior").into_response();
     };
-    state.bump_behavior(&token);
-    serve_content(&behavior, &headers)
+    state.bump_behavior(token);
+    serve_content(&behavior, headers)
 }
 
 fn serve_content(behavior: &FixtureBehavior, headers: &HeaderMap) -> Response {
@@ -49,8 +67,42 @@ fn serve_content(behavior: &FixtureBehavior, headers: &HeaderMap) -> Response {
             Delivery::EarlyClose { after_bytes } => {
                 early_close_response(bytes, headers, *after_bytes, *content_type)
             }
+            Delivery::Throttle { chunk, delay_ms } => {
+                throttle_response(bytes, *chunk, *delay_ms, *content_type)
+            }
         },
     }
+}
+
+fn throttle_response(
+    bytes: &[u8],
+    chunk: usize,
+    delay_ms: u64,
+    content_type: Option<&'static str>,
+) -> Response {
+    // Stream the full body from 0 in `chunk`-sized pieces with `delay_ms`
+    // between, but advertise the full length immediately so the decoder can
+    // report duration before the body finishes arriving.
+    let total = bytes.len();
+    let pieces: Vec<Bytes> = bytes
+        .chunks(chunk.max(1))
+        .map(Bytes::copy_from_slice)
+        .collect();
+    let body = Body::from_stream(stream::unfold(
+        pieces.into_iter(),
+        move |mut it| async move {
+            let piece = it.next()?;
+            sleep(Duration::from_millis(delay_ms)).await;
+            Some((Ok::<_, io::Error>(piece), it))
+        },
+    ));
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, total.to_string());
+    if let Some(ct) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, ct);
+    }
+    builder.body(body).expect("throttle response")
 }
 
 fn early_close_response(
@@ -188,5 +240,45 @@ mod tests {
             .unwrap();
         assert_eq!(part.status(), reqwest::StatusCode::PARTIAL_CONTENT);
         assert_eq!(part.bytes().await.unwrap().len(), 100);
+    }
+
+    #[kithara::test(tokio)]
+    async fn throttle_sends_full_length_and_complete_body() {
+        let state = TestServerState::new();
+        let token = state.insert_behavior(FixtureBehavior {
+            content: Content::StaticBytes {
+                bytes: Arc::new(vec![3u8; 50]),
+                content_type: Some("audio/mpeg"),
+            },
+            delivery: Delivery::Throttle {
+                chunk: 10,
+                delay_ms: 1,
+            },
+        });
+        let server = TestHttpServer::new(router().with_state(Arc::clone(&state))).await;
+        let resp = reqwest::get(server.url(&format!("/behavior/{token}")))
+            .await
+            .unwrap();
+        assert_eq!(resp.headers()[reqwest::header::CONTENT_LENGTH], "50");
+        assert_eq!(resp.bytes().await.unwrap().len(), 50);
+    }
+
+    #[kithara::test(tokio)]
+    async fn nested_child_path_dispatches_to_same_behavior() {
+        let state = TestServerState::new();
+        let token = state.insert_behavior(FixtureBehavior {
+            content: Content::StaticBytes {
+                bytes: Arc::new(b"abcdef".to_vec()),
+                content_type: Some("audio/mpeg"),
+            },
+            delivery: Delivery::Range,
+        });
+        let server = TestHttpServer::new(router().with_state(Arc::clone(&state))).await;
+        let resp = reqwest::get(server.url(&format!("/behavior/{token}/x.mp3")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        assert_eq!(resp.bytes().await.unwrap().as_ref(), b"abcdef");
+        assert_eq!(state.behavior_hits(&token), Some(1));
     }
 }

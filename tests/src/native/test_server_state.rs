@@ -43,6 +43,7 @@ pub enum Delivery {
     Normal,
     Range,
     EarlyClose { after_bytes: usize },
+    Throttle { chunk: usize, delay_ms: u64 },
 }
 
 #[derive(Clone)]

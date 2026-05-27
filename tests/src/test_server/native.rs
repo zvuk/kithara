@@ -169,6 +169,19 @@ impl BehaviorHandle {
             .expect("join behavior url")
     }
 
+    /// URL on the same fixture with an arbitrary trailing path (e.g. to give the
+    /// decoder a file-extension hint via the last path segment).
+    #[must_use]
+    pub fn child_url(&self, rest: &str) -> Url {
+        self.base_url
+            .join(&format!(
+                "/behavior/{}/{}",
+                self.token,
+                rest.trim_start_matches('/')
+            ))
+            .expect("join behavior child url")
+    }
+
     /// Number of requests this behavior has served, observed in-process.
     #[must_use]
     pub fn request_count(&self) -> u64 {
