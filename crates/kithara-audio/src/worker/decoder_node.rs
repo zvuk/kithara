@@ -7,7 +7,7 @@ use tracing::trace;
 use super::{AudioWorkerSource, handle::TrackRegistration, types::ServiceClass};
 use crate::{
     pipeline::{fetch::Fetch, track_fsm::TrackStep},
-    runtime::{Inlet, Node, Outlet, TickResult},
+    runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
 };
 
 /// Per-tick state of a [`DecoderNode`] — preload progress, EOF flag, and
@@ -39,7 +39,9 @@ pub(crate) struct DecoderNode {
     /// of every [`tick`](DecoderNode::tick) so the pooled buffers are
     /// freed/recycled on this worker thread, never on the audio thread.
     trash_inlet: Inlet<PcmChunk>,
-    service_class: ServiceClass,
+    /// Shared priority hint written wait-free by the real-time consumer and
+    /// read back here by the scheduler each pass — see [`AtomicServiceClass`].
+    service_class: Arc<AtomicServiceClass>,
     preload_chunks: usize,
 }
 
@@ -120,7 +122,7 @@ impl Node for DecoderNode {
     }
 
     fn service_class(&self) -> ServiceClass {
-        self.service_class
+        self.service_class.load()
     }
 
     fn tick(&mut self) -> TickResult {
@@ -216,7 +218,7 @@ mod tests {
             outlet,
             trash_inlet,
             preload_notify,
-            service_class: ServiceClass::default(),
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,
             runtime: DecoderRuntime::default(),
         }

@@ -25,8 +25,6 @@ pub(crate) enum SchedulerCmd<N> {
     Register(SlotId, N),
     /// Remove a node by ID.
     Unregister(SlotId),
-    /// Update service class for scheduling priority.
-    SetServiceClass(SlotId, ServiceClass),
     /// Graceful shutdown — exit the scheduler loop.
     Shutdown,
 }
@@ -88,19 +86,6 @@ impl<N: Node> SchedulerHandle<N> {
             .is_err()
         {
             warn!(slot_id = id, "register: scheduler channel closed");
-        }
-        self.inner.wake.wake();
-    }
-
-    /// Update scheduling priority for a node.
-    pub(crate) fn set_service_class(&self, id: SlotId, class: ServiceClass) {
-        if self
-            .inner
-            .cmd_tx
-            .send_sync(SchedulerCmd::SetServiceClass(id, class))
-            .is_err()
-        {
-            warn!(slot_id = id, "set_service_class: scheduler channel closed");
         }
         self.inner.wake.wake();
     }
@@ -196,6 +181,8 @@ fn run_loop<N: Node, O: SchedulerObserver>(
         if cancel_and_drain(cancel, cmd_rx, &mut slots, &mut needs_reorder) {
             return;
         }
+
+        refresh_service_classes(&mut slots, &mut needs_reorder);
 
         if needs_reorder {
             recompute_slots_order(&slots, &mut slots_order);
@@ -358,10 +345,6 @@ fn handle_drain_step<N: Node>(
             unregister_slot(slots, needs_reorder, id);
             DrainStep::Continue
         }
-        Ok(SchedulerCmd::SetServiceClass(id, class)) => {
-            set_service_class(slots, needs_reorder, id, class);
-            DrainStep::Continue
-        }
         Ok(SchedulerCmd::Shutdown) => {
             trace!("scheduler shutdown");
             cancel_all(slots);
@@ -400,17 +383,17 @@ fn unregister_slot<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool, 
     }
 }
 
-fn set_service_class<N: Node>(
-    slots: &mut [Slot<N>],
-    needs_reorder: &mut bool,
-    id: SlotId,
-    class: ServiceClass,
-) {
-    if let Some(slot) = slots.iter_mut().find(|s| s.id == id)
-        && slot.service_class != class
-    {
-        slot.service_class = class;
-        *needs_reorder = true;
+/// Re-read each node's (atomic) service class and flag a reorder when one
+/// changed. The real-time consumer updates the shared atomic wait-free and
+/// wakes the worker; the scheduler picks the change up here on its next
+/// pass, so priority changes need no command-channel round-trip.
+fn refresh_service_classes<N: Node>(slots: &mut [Slot<N>], needs_reorder: &mut bool) {
+    for slot in slots.iter_mut() {
+        let current = slot.node.service_class();
+        if slot.service_class != current {
+            slot.service_class = current;
+            *needs_reorder = true;
+        }
     }
 }
 

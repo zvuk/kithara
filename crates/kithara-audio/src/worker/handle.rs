@@ -11,11 +11,11 @@ use super::{
     AudioWorkerSource,
     decoder_node::DecoderNode,
     hang_observer::HangWatchdogObserver,
-    types::{ServiceClass, TrackId, TrackIdGen},
+    types::{TrackId, TrackIdGen},
 };
 use crate::{
     pipeline::fetch::Fetch,
-    runtime::{Scheduler, SchedulerHandle},
+    runtime::{AtomicServiceClass, Scheduler, SchedulerHandle},
 };
 
 /// Everything needed to register a track with the shared worker.
@@ -28,7 +28,9 @@ pub(crate) struct TrackRegistration {
     /// pooled buffer is freed/recycled on the worker thread rather than on
     /// the audio thread. See `crates/kithara-audio/README.md`.
     pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
-    pub(crate) service_class: ServiceClass,
+    /// Shared priority hint. The real-time consumer writes it wait-free
+    /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
+    pub(crate) service_class: Arc<AtomicServiceClass>,
     pub(crate) preload_chunks: usize,
 }
 
@@ -75,11 +77,6 @@ impl AudioWorkerHandle {
         let node: Box<dyn crate::runtime::Node> = Box::new(DecoderNode::from(reg));
         self.inner.register(id, node);
         id
-    }
-
-    /// Update scheduling priority for a track.
-    pub(crate) fn set_service_class(&self, track_id: TrackId, class: ServiceClass) {
-        self.inner.set_service_class(track_id, class);
     }
 
     /// Request graceful shutdown and cancel the worker.
@@ -234,7 +231,7 @@ mod tests {
             preload_chunks,
             source: Box::new(source),
             preload_notify: Arc::clone(&preload_notify),
-            service_class: ServiceClass::Audible,
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
         };
         (reg, inlet, preload_notify)
     }
@@ -441,18 +438,21 @@ mod tests {
         let handle = AudioWorkerHandle::new();
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 4, 0);
-        let id_a = handle.register_track(reg_a);
+        let class_a = Arc::clone(&reg_a.service_class);
+        let _id_a = handle.register_track(reg_a);
 
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(100), 4, 0);
-        let id_b = handle.register_track(reg_b);
+        let class_b = Arc::clone(&reg_b.service_class);
+        let _id_b = handle.register_track(reg_b);
 
         thread_sleep(Duration::from_millis(30));
 
         while rx_a.try_pop().is_some() {}
         while rx_b.try_pop().is_some() {}
 
-        handle.set_service_class(id_a, ServiceClass::Idle);
-        handle.set_service_class(id_b, ServiceClass::Audible);
+        class_a.store(ServiceClass::Idle);
+        class_b.store(ServiceClass::Audible);
+        handle.wake();
 
         thread_sleep(Duration::from_millis(50));
 

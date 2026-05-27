@@ -32,6 +32,7 @@ use crate::{
         source::{OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
+    runtime::AtomicServiceClass,
     traits::{ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
     worker::{
         handle::{AudioWorkerHandle, TrackRegistration},
@@ -166,6 +167,12 @@ pub struct Audio<S> {
 
     /// Worker handle for unregistration and optional shutdown.
     worker: Option<AudioWorkerHandle>,
+
+    /// Shared priority hint for this track's worker node. Written wait-free
+    /// from the real-time audio thread (`set_service_class` during fade
+    /// transitions) and read by the worker scheduler each pass, so a priority
+    /// change needs no allocating command-channel send on the audio thread.
+    service_class: Arc<AtomicServiceClass>,
 
     /// Shared PCM pool: source for the decode worker's per-packet buffers and
     /// for the held `read_planar` interleaved scratch below.
@@ -888,13 +895,15 @@ where
         let (worker, is_standalone) =
             config_worker.map_or_else(|| (AudioWorkerHandle::new(), true), |w| (w, false));
 
+        let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
+
         let track_id = worker.register_track(TrackRegistration {
             source: Box::new(audio_source),
             outlet: data_tx,
             trash_inlet,
             preload_notify: preload_notify.clone(),
             preload_chunks: preload_chunks.get(),
-            service_class: ServiceClass::default(),
+            service_class: Arc::clone(&service_class),
         });
 
         Ok(Self {
@@ -920,6 +929,7 @@ where
             preloaded: false,
             track_id: Some(track_id),
             worker: Some(worker),
+            service_class,
             is_standalone_worker: is_standalone,
             _marker: PhantomData,
         })
@@ -1331,8 +1341,9 @@ impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
     }
 
     fn set_service_class(&self, class: ServiceClass) {
-        if let (Some(worker), Some(track_id)) = (&self.worker, self.track_id) {
-            worker.set_service_class(track_id, class);
+        self.service_class.store(class);
+        if let Some(worker) = &self.worker {
+            worker.wake();
         }
     }
 
@@ -1380,6 +1391,7 @@ mod tests {
             preloaded: false,
             track_id: None,
             worker: None,
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             reader_wake: Arc::new(ThreadWake::default()),
             is_standalone_worker: false,
             abr_handle: None,
@@ -1439,6 +1451,7 @@ mod tests {
             preloaded: true,
             track_id: None,
             worker: None,
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             reader_wake: Arc::new(ThreadWake::default()),
             is_standalone_worker: false,
             abr_handle: None,
