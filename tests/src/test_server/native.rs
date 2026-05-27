@@ -154,6 +154,7 @@ impl TestServerHelper {
 }
 
 /// Handle to a registered fixture behavior on the shared server.
+#[derive(Clone)]
 pub struct BehaviorHandle {
     state: Arc<TestServerState>,
     base_url: Url,
