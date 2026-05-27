@@ -490,27 +490,31 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         let is_slow = matches!(entry.status, TrackStatus::Slow);
         let blink_on = u64::from(state.blink_counter / Consts::BLINK_DIVISOR)
             .is_multiple_of(Consts::BLINK_PERIOD);
-        let text_color = if is_failed {
-            p.danger
-        } else if is_slow && is_current {
-            if blink_on { p.warning } else { p.muted }
-        } else if is_slow {
-            p.warning
-        } else if is_current {
-            p.accent
-        } else {
-            p.text
+        let text_color = match (is_failed, is_slow, is_current) {
+            (true, _, _) => p.danger,
+            (_, true, true) => {
+                if blink_on {
+                    p.warning
+                } else {
+                    p.muted
+                }
+            }
+            (_, true, false) => p.warning,
+            (_, false, true) => p.accent,
+            (_, false, false) => p.text,
         };
-        let index_color = if is_failed {
-            p.danger
-        } else if is_slow && is_current {
-            if blink_on { p.warning } else { p.muted }
-        } else if is_slow {
-            p.warning
-        } else if is_current {
-            p.accent
-        } else {
-            p.muted
+        let index_color = match (is_failed, is_slow, is_current) {
+            (true, _, _) => p.danger,
+            (_, true, true) => {
+                if blink_on {
+                    p.warning
+                } else {
+                    p.muted
+                }
+            }
+            (_, true, false) => p.warning,
+            (_, false, true) => p.accent,
+            (_, false, false) => p.muted,
         };
         let track_name = truncate_name(&entry.name, Consts::PLAYLIST_MAX_NAME_CHARS);
 

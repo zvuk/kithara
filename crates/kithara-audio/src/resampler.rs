@@ -528,9 +528,9 @@ impl ResamplerProcessor {
     /// Pad input buffer with zeros so a final block can be processed.
     fn pad_input_for_flush(&mut self, input_frames: usize, buffered: usize) {
         let padding_needed = input_frames.saturating_sub(buffered);
-        for buf in &mut self.input_buffer {
-            buf.extend(iter::repeat_n(0.0, padding_needed));
-        }
+        self.input_buffer
+            .iter_mut()
+            .for_each(|buf| buf.extend(iter::repeat_n(0.0, padding_needed)));
         debug!(buffered, padding_needed, "Flushing resampler buffer");
     }
 

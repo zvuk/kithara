@@ -145,12 +145,18 @@ pub(crate) fn expand(input: &ItemFn, filter: ProbeFilter) -> syn::Result<TokenSt
     probe_slot_idents.extend(computed_slot_idents.iter().cloned());
 
     let mut tracing_fields: Vec<TokenStream2> = Vec::with_capacity(total_wire);
-    for (name, slot) in arg_idents.iter().zip(arg_slot_idents.iter()) {
-        tracing_fields.push(quote! { #name = #slot });
-    }
-    for ((name, _), slot) in computed.iter().zip(computed_slot_idents.iter()) {
-        tracing_fields.push(quote! { #name = #slot });
-    }
+    tracing_fields.extend(
+        arg_idents
+            .iter()
+            .zip(arg_slot_idents.iter())
+            .map(|(name, slot)| quote! { #name = #slot }),
+    );
+    tracing_fields.extend(
+        computed
+            .iter()
+            .zip(computed_slot_idents.iter())
+            .map(|((name, _), slot)| quote! { #name = #slot }),
+    );
 
     let attrs = &input.attrs;
     let vis = &input.vis;

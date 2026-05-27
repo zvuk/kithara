@@ -127,12 +127,14 @@ impl HlsCoord {
     /// entries then.
     pub(crate) fn broadcast_eviction(&self, ctx: &PlanCtx, key: &ResourceKey, seg_at_reader: u32) {
         let active_idx = self.variant_index();
-        let mut active_lost = false;
-        for (v_idx, v) in self.variants.iter().enumerate() {
-            if v.on_evict(key).is_some() && v_idx == active_idx {
-                active_lost = true;
-            }
-        }
+        let active_lost = self
+            .variants
+            .iter()
+            .enumerate()
+            .fold(false, |acc, (v_idx, v)| {
+                let hit = v.on_evict(key).is_some() && v_idx == active_idx;
+                acc || hit
+            });
         if active_lost && let Some(active) = self.active() {
             active.rebuild(ctx, seg_at_reader);
         }

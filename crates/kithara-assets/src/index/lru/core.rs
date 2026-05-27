@@ -271,8 +271,8 @@ impl LruState {
 
         if let Some(e) = self.by_root.get_mut(asset_root) {
             e.last_touch = self.clock;
-            if let Some(b) = bytes_hint {
-                e.bytes = Some(b);
+            if bytes_hint.is_some() {
+                e.bytes = bytes_hint;
             }
             false
         } else {

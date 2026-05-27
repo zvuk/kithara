@@ -61,17 +61,17 @@ impl EventBridge {
                 observer.on_event(FfiPlayerEvent::CurrentItemChanged { item_id });
             }
             QueueEvent::TrackStatusChanged { id, status } => {
-                let item = items.lock_sync().get(id).cloned();
-                if let Some(item) = item {
-                    let item_id = item.audio_id();
-                    if let Some(item_obs) = item.observer() {
-                        Self::route_track_status_to_item(&item_obs, status);
-                    }
-                    observer.on_event(FfiPlayerEvent::TrackStatusChanged {
-                        item_id,
-                        status: FfiTrackStatus::from(status.clone()),
-                    });
+                let Some(item) = items.lock_sync().get(id).cloned() else {
+                    return;
+                };
+                let item_id = item.audio_id();
+                if let Some(item_obs) = item.observer() {
+                    Self::route_track_status_to_item(&item_obs, status);
                 }
+                observer.on_event(FfiPlayerEvent::TrackStatusChanged {
+                    item_id,
+                    status: FfiTrackStatus::from(status.clone()),
+                });
             }
             QueueEvent::QueueEnded => {
                 observer.on_event(FfiPlayerEvent::QueueEnded);

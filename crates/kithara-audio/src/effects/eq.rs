@@ -373,9 +373,11 @@ impl IsolatorEq {
         for band in 0..n {
             ap_offsets.push(ap_filters.len());
             if band + 1 < xover_count {
-                for &f in &crossover_freqs[band + 1..] {
-                    ap_filters.push(DirectForm1::new(biquad_coeffs(Type::AllPass, f, sr)));
-                }
+                ap_filters.extend(
+                    crossover_freqs[band + 1..]
+                        .iter()
+                        .map(|&f| DirectForm1::new(biquad_coeffs(Type::AllPass, f, sr))),
+                );
             }
         }
         ap_offsets.push(ap_filters.len());

@@ -193,9 +193,7 @@ fn run_loop<N: Node, O: SchedulerObserver>(
 
         let before = slots.len();
         slots.retain(|slot| !slot.is_removable());
-        if slots.len() < before {
-            needs_reorder = true;
-        }
+        needs_reorder |= slots.len() < before;
 
         report_outcome(&mut observer, outcome);
         observer.on_event(SchedulerEvent::PassEnd);

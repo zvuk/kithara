@@ -279,21 +279,11 @@ mod tests {
             &BytePool::default(),
         );
 
-        let mut transitions_in = 0;
-        for _ in 0..5 {
-            if idx.add("hot_asset").unwrap() {
-                transitions_in += 1;
-            }
-        }
+        let transitions_in = (0..5).filter(|_| idx.add("hot_asset").unwrap()).count();
         assert_eq!(transitions_in, 1, "only the 0→1 transition counts");
         assert!(idx.contains("hot_asset"));
 
-        let mut transitions_out = 0;
-        for _ in 0..4 {
-            if idx.remove("hot_asset").unwrap() {
-                transitions_out += 1;
-            }
-        }
+        let transitions_out = (0..4).filter(|_| idx.remove("hot_asset").unwrap()).count();
         assert_eq!(transitions_out, 0, "intermediate decrements stay in-memory");
         assert!(idx.contains("hot_asset"), "refcount=1 keeps the pin alive");
 

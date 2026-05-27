@@ -168,9 +168,11 @@ where
             break;
         }
         byte_offset += n;
-        for chunk in raw[..n].chunks_exact(bytes_per_sample) {
-            buf.push(i16::from_le_bytes([chunk[0], chunk[1]]));
-        }
+        buf.extend(
+            raw[..n]
+                .chunks_exact(bytes_per_sample)
+                .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]])),
+        );
         while buf.len() >= frame_input_samples {
             let consumed = feed(&buf[..frame_input_samples])?;
             if consumed == 0 {

@@ -240,19 +240,17 @@ impl Dashboard {
             let number = i + 1;
             let marker = if is_active { "▶" } else { " " };
             let text = format!(" {marker} {number}  {track_name}");
-            let style = if is_failed {
-                Style::default().fg(c.danger).bg(c.bg)
-            } else if is_slow && is_active {
-                let blink_on =
-                    (self.frame_count / Self::BLINK_DIVISOR).is_multiple_of(Self::BLINK_PERIOD);
-                let fg = if blink_on { c.warning } else { c.muted };
-                Style::default().fg(fg).bg(c.bg_panel)
-            } else if is_slow {
-                Style::default().fg(c.warning).bg(c.bg)
-            } else if is_active {
-                Style::default().fg(c.accent).bg(c.bg_panel)
-            } else {
-                Style::default().fg(c.muted).bg(c.bg)
+            let style = match (is_failed, is_slow, is_active) {
+                (true, _, _) => Style::default().fg(c.danger).bg(c.bg),
+                (_, true, true) => {
+                    let blink_on =
+                        (self.frame_count / Self::BLINK_DIVISOR).is_multiple_of(Self::BLINK_PERIOD);
+                    let fg = if blink_on { c.warning } else { c.muted };
+                    Style::default().fg(fg).bg(c.bg_panel)
+                }
+                (_, true, false) => Style::default().fg(c.warning).bg(c.bg),
+                (_, false, true) => Style::default().fg(c.accent).bg(c.bg_panel),
+                (_, false, false) => Style::default().fg(c.muted).bg(c.bg),
             };
             let row = Rect::new(
                 area.x,

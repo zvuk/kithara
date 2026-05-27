@@ -181,26 +181,26 @@ impl<R: ResourceExt> ResourceExt for AtomicChunked<R> {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.inner_clone().commit(final_len)?;
 
-        let tmp = self.tmp_path.lock_sync().take();
-        if let Some(tmp) = tmp {
-            let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
-            })?;
-            f.sync_data().map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
-            })?;
-            drop(f);
-            fs::rename(&tmp, &self.canonical_path).map_err(|e| {
-                StorageError::Failed(format!(
-                    "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
-                    self.canonical_path
-                ))
-            })?;
+        let Some(tmp) = self.tmp_path.lock_sync().take() else {
+            return Ok(());
+        };
+        let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
+            StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
+        })?;
+        f.sync_data().map_err(|e| {
+            StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
+        })?;
+        drop(f);
+        fs::rename(&tmp, &self.canonical_path).map_err(|e| {
+            StorageError::Failed(format!(
+                "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
+                self.canonical_path
+            ))
+        })?;
 
-            if let Some(factory) = self.factory.as_ref() {
-                let new_inner = Arc::new(factory(&self.canonical_path, OpenIntent::Reopen)?);
-                *self.inner.lock_sync() = new_inner;
-            }
+        if let Some(factory) = self.factory.as_ref() {
+            let new_inner = Arc::new(factory(&self.canonical_path, OpenIntent::Reopen)?);
+            *self.inner.lock_sync() = new_inner;
         }
         Ok(())
     }
