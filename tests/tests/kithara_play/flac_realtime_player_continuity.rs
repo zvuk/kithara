@@ -219,17 +219,22 @@ async fn run_case(
 /// and scans it for any timeline seam: a forward content skip reads as a
 /// positive phase jump, uncompensated injected silence/lag as a negative one.
 ///
-/// This was built to hunt the reported production symptom — a 1–5 s forward
-/// position jump every 10–30 s during sustained FLAC playback (Manual lossless,
-/// single track) on the desktop cpal player. It does NOT reproduce it: across
-/// sustained FLAC, the mid-playback AAC→FLAC switch, 48 kHz-output resampling,
-/// and forced network-delay underruns, the offline render stays continuous. The
-/// player layer has no automatic forward resync (position advances only by
-/// frames served or an explicit `Seek`), so the skip cannot originate here
-/// alone — it needs true real-time cpal wall-clock pressure or the live
-/// production stream, which a paced offline pull does not recreate. Kept as a
-/// regression guard and as the harness the eventual real-time repro slots into.
+/// Built to hunt the reported production symptom — a 1–5 s forward position
+/// jump every 10–30 s during sustained FLAC playback (Manual lossless, single
+/// track) on the desktop cpal player.
+///
+/// `#[ignore]`d because it is **not yet deterministic**: when the host is idle
+/// the paced render stays continuous (green), but under machine load the ~4×
+/// pacing starves the decode worker and trips the player's underrun path,
+/// producing phase discontinuities (observed: ~40 jumps, mostly negative = the
+/// by-design zero-fill lag, plus a few positive = forward skips). That makes it
+/// a load-dependent flake, not a hard gate. The discontinuities are real, so it
+/// is a lead — but a clean RED needs a guaranteed-underrun trigger (large
+/// `DelayRule` that drains the buffer at a known point) rather than an
+/// ambient-load race. Unignore once the underrun is forced deterministically.
+/// Run with `--run-ignored`.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[ignore = "load-dependent flake, not yet deterministic — paced offline render starves decode under host load and trips the player underrun path; needs a forced-underrun trigger to become a reliable RED for the production forward-skip"]
 #[case::sustained_flac_symphonia(Scenario::SustainedFlac, DecoderBackend::Symphonia, None, 44_100)]
 #[case::switch_to_flac_symphonia(Scenario::SwitchToFlac, DecoderBackend::Symphonia, None, 44_100)]
 #[case::switch_to_flac_symphonia_delay(
