@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    item_bridge::ItemEventBridge,
+    native::item_bridge::ItemEventBridge,
     observer::{ItemLoadCallback, ItemObserver},
     types::{FfiAbrMode, FfiItemConfig, FfiItemLoadResult, FfiTimeRange},
 };

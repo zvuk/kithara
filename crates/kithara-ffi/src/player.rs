@@ -18,9 +18,10 @@ use rand::{distr::Alphanumeric, prelude::*};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config::{self, StoreOptions},
+    config::StoreOptions,
     event_bridge::EventBridge,
     item::AudioPlayerItem,
+    native_config,
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
     types::{
         FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerConfig, FfiPlayerSnapshot, FfiPlayerStatus,
@@ -722,7 +723,7 @@ impl AudioPlayer {
             .initial_abr_mode(abr_mode.unwrap_or_default())
             .build();
 
-        config::configure_resource(&mut config, &self.store);
+        native_config::configure_resource(&mut config, &self.store);
         *item.bus.lock_sync() = Some(scoped);
 
         Ok(TrackSource::Config(Box::new(config)))
