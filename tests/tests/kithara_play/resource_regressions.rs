@@ -3,15 +3,6 @@
 
 use std::{io::Read, num::NonZeroUsize, sync::Arc};
 
-use axum::{
-    Router,
-    body::Body,
-    extract::Request,
-    http::{Method, StatusCode, header},
-    response::Response,
-    routing::get,
-};
-use bytes::Bytes;
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
@@ -26,7 +17,8 @@ use kithara::{
 use kithara_decode::DecoderBackend;
 use kithara_file::{File as FileSource, FileConfig, FileSrc};
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestHttpServer, TestServerHelper, TestTempDir, create_wav_exact_bytes,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    create_wav_exact_bytes,
     fixture_protocol::PackagedSignal,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     offline::resource_from_reader,
@@ -77,89 +69,21 @@ fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
     }
 }
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "axum handler signature requires owned Request"
-)]
-fn serve_mp3_with_range(req: Request) -> Response {
-    if req.method() == Method::HEAD {
-        return Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(
-                header::CONTENT_LENGTH,
-                Consts::TEST_MP3_BYTES.len().to_string(),
-            )
-            .body(Body::empty())
-            .unwrap();
-    }
-
-    if let Some(range_header) = req
-        .headers()
-        .get(header::RANGE)
-        .and_then(|value| value.to_str().ok())
-        && let Some(range) = range_header.strip_prefix("bytes=")
-    {
-        let mut parts = range.split('-');
-        let start = parts
-            .next()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(0);
-        let end = parts
-            .next()
-            .and_then(|value| {
-                if value.is_empty() {
-                    None
-                } else {
-                    value.parse::<usize>().ok()
-                }
-            })
-            .unwrap_or(Consts::TEST_MP3_BYTES.len().saturating_sub(1))
-            .min(Consts::TEST_MP3_BYTES.len().saturating_sub(1));
-
-        if start <= end && start < Consts::TEST_MP3_BYTES.len() {
-            let chunk = &Consts::TEST_MP3_BYTES[start..=end];
-            return Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header(header::CONTENT_TYPE, "audio/mpeg")
-                .header(header::CONTENT_LENGTH, chunk.len().to_string())
-                .header(
-                    header::CONTENT_RANGE,
-                    format!("bytes {}-{}/{}", start, end, Consts::TEST_MP3_BYTES.len()),
-                )
-                .body(Body::from(Bytes::from_static(chunk)))
-                .unwrap();
-        }
-    }
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(
-            header::CONTENT_LENGTH,
-            Consts::TEST_MP3_BYTES.len().to_string(),
-        )
-        .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
-        .unwrap()
-}
-
-async fn ok_mp3(req: Request) -> Response {
-    serve_mp3_with_range(req)
-}
-
-async fn unavailable_mp3(_req: Request) -> Response {
-    Response::builder()
-        .status(StatusCode::SERVICE_UNAVAILABLE)
-        .header(header::CONTENT_TYPE, "text/plain")
-        .body(Body::from("temporarily unavailable"))
-        .unwrap()
-}
-
-fn test_app() -> Router {
-    Router::new()
-        .route("/ok.mp3", get(ok_mp3).head(ok_mp3))
-        .route("/gone.mp3", get(unavailable_mp3).head(unavailable_mp3))
-        .route("/track/stream", get(ok_mp3).head(ok_mp3))
+/// (ok mp3 url with a `.mp3` extension, unavailable 503 url) on the shared server.
+async fn mp3_endpoints() -> (url::Url, url::Url) {
+    let helper = TestServerHelper::new().await;
+    let ok = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Range,
+    });
+    let gone = helper.register_behavior(FixtureBehavior {
+        content: Content::Status(503),
+        delivery: Delivery::Normal,
+    });
+    (ok.child_url("ok.mp3"), gone.url())
 }
 
 fn store_options(temp_dir: &TestTempDir, ephemeral: bool) -> StoreOptions {
@@ -463,10 +387,8 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = TestHttpServer::new(test_app()).await;
+    let (ok_url, bad_url) = mp3_endpoints().await;
     let store = store_options(&temp_dir, true);
-    let ok_url = server.url("/ok.mp3");
-    let bad_url = server.url("/gone.mp3");
 
     let mut ok = open_resource(&ok_url, store.clone(), backend).await;
     assert!(read_some(&mut ok, "initial_ok").await > 0);
@@ -540,9 +462,8 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = TestHttpServer::new(test_app()).await;
+    let (ok_url, _) = mp3_endpoints().await;
     let store = store_options(&temp_dir, ephemeral);
-    let ok_url = server.url("/ok.mp3");
 
     let mut first = open_resource(&ok_url, store.clone(), backend).await;
     assert!(read_some(&mut first, "first_initial").await > 0);
@@ -602,13 +523,11 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let hls_server = open_audio_hls_server().await;
-    let file_server = TestHttpServer::new(test_app()).await;
+    let (ok_url, bad_url) = mp3_endpoints().await;
     let player = PlayerImpl::new(PlayerConfig::default());
     let worker = player.worker().clone();
     let store = store_options(&temp_dir, ephemeral);
     let hls_url = hls_server.url("/master.m3u8");
-    let ok_url = file_server.url("/ok.mp3");
-    let bad_url = file_server.url("/gone.mp3");
 
     let hls_pos = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
     assert!(
@@ -670,11 +589,10 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let hls_server = open_audio_hls_server().await;
-    let file_server = TestHttpServer::new(test_app()).await;
+    let (ok_url, _) = mp3_endpoints().await;
     let worker = AudioWorkerHandle::new();
     let store = store_options(&temp_dir, true);
     let hls_url = hls_server.url("/master.m3u8");
-    let ok_url = file_server.url("/ok.mp3");
 
     let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
     assert!(
@@ -1010,12 +928,11 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let hls_server = open_audio_hls_server().await;
-    let file_server = TestHttpServer::new(test_app()).await;
+    let (ok_url, _) = mp3_endpoints().await;
     let player = PlayerImpl::new(PlayerConfig::default());
     let worker = player.worker().clone();
     let store = store_options(&temp_dir, ephemeral);
     let hls_url = hls_server.url("/master.m3u8");
-    let ok_url = file_server.url("/ok.mp3");
 
     let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
     assert!(
@@ -1229,35 +1146,46 @@ async fn stress_offline_crossfade_no_gaps() {
     timeout(Duration::from_secs(15)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
-#[case::with_extension_symphonia("/ok.mp3", DecoderBackend::Symphonia)]
+#[case::with_extension_symphonia(Some("track.mp3"), DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::with_extension_apple("/ok.mp3", DecoderBackend::Apple)
+    case::with_extension_apple(Some("track.mp3"), DecoderBackend::Apple)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::with_extension_android("/ok.mp3", DecoderBackend::Android)
+    case::with_extension_android(Some("track.mp3"), DecoderBackend::Android)
 )]
-#[case::no_extension_symphonia("/track/stream", DecoderBackend::Symphonia)]
+#[case::no_extension_symphonia(None, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::no_extension_apple("/track/stream", DecoderBackend::Apple)
+    case::no_extension_apple(None, DecoderBackend::Apple)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::no_extension_android("/track/stream", DecoderBackend::Android)
+    case::no_extension_android(None, DecoderBackend::Android)
 )]
 async fn resource_mp3_no_hint_decodes_with_duration(
-    #[case] path: &str,
+    #[case] suffix: Option<&str>,
     #[case] backend: DecoderBackend,
     temp_dir: TestTempDir,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = TestHttpServer::new(test_app()).await;
-    let url = server.url(path);
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Range,
+    });
+    let url = match suffix {
+        Some(s) => handle.child_url(s),
+        None => handle.url(),
+    };
     let store = store_options(&temp_dir, true);
+    let path = url.as_str();
 
     let config = resource_config_no_hint(&url, store, backend);
     let mut resource = Resource::new(config)
