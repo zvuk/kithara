@@ -34,7 +34,14 @@ pub(crate) struct Fmp4SegmentDemuxer {
     cursor: Option<SegmentCursor>,
     duration: Option<Duration>,
     track_info: TrackInfo,
-    next_byte: u64,
+    /// Index of the next segment to decode. Sequential playback advances
+    /// this by one per segment; a seek sets it to the segment after the
+    /// landing segment. Advancing by index (rather than by the previous
+    /// segment's `byte_range.end`) keeps the decode cursor stable when the
+    /// live byte-layout shifts mid-playback — a segment's size estimate is
+    /// corrected to its real length on commit, and a byte-based advance
+    /// would then re-resolve to the wrong segment and silently skip one.
+    next_segment_index: u32,
 }
 
 impl Fmp4SegmentDemuxer {
@@ -42,10 +49,10 @@ impl Fmp4SegmentDemuxer {
         if self.cursor.is_some() {
             return EnsureCursor::Ready;
         }
-        let Some(desc) = self.segments.segment_after_byte(self.next_byte) else {
+        let Some(desc) = self.segments.segment_at_index(self.next_segment_index) else {
             return EnsureCursor::Eof;
         };
-        self.next_byte = desc.byte_range.end;
+        self.next_segment_index = desc.segment_index.saturating_add(1);
         self.cursor = Some(SegmentCursor {
             read: SegmentReadState::new(desc.byte_range),
             frames: None,
@@ -122,7 +129,7 @@ impl Fmp4SegmentDemuxer {
             source,
             segments,
             duration,
-            next_byte: 0,
+            next_segment_index: 0,
             cursor: None,
         })
     }
@@ -213,10 +220,10 @@ impl Demuxer for Fmp4SegmentDemuxer {
         {
             return Ok(DemuxSeekOutcome::PastEof { duration });
         }
-        self.next_byte = desc.byte_range.end;
         let landed_byte = desc.byte_range.start;
         let landed_at = desc.decode_time;
         let segment_index = desc.segment_index;
+        self.next_segment_index = segment_index.saturating_add(1);
         let variant_index = desc.variant_index;
         let preroll = match compute_preroll_byte(
             target,

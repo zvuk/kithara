@@ -200,13 +200,13 @@ fn pull_one_chunk(
 /// RED scaffold for ABR variant-switch sub-problem #3
 /// (see `project_hls_abr_variant_switch_init_range_bug`).
 ///
-/// `Fmp4SegmentDemuxer::open` hardcodes `next_byte = 0`. Production
-/// calls `apply_format_change` with `target_offset` equal to the
-/// init-range start in the NEW variant's byte map (which is 0 because
+/// `Fmp4SegmentDemuxer::open` hardcodes `next_segment_index = 0`.
+/// Production calls `apply_format_change` with `target_offset` equal to
+/// the init-range start in the NEW variant's byte map (which is 0 because
 /// `set_layout_variant` already swapped the active byte map). The
 /// factory then builds the demuxer with `OffsetReader::base_offset = 0`,
 /// and the demuxer's first `next_frame` queries
-/// `segment_after_byte(0)` which always returns the layout's seg-0.
+/// `segment_at_index(0)` which always returns the layout's seg-0.
 ///
 /// Result: regardless of where the previous decoder left off, the new
 /// decoder restarts at the new variant's seg-0 (T1's "drift = full
@@ -239,7 +239,7 @@ fn red_open_always_starts_at_layout_seg_0() {
     let max_strip_time = Duration::from_micros(50_000);
     assert!(
         chunk.meta.timestamp <= max_strip_time,
-        "RED — Fmp4SegmentDemuxer::open hardcodes next_byte=0, so the \
+        "RED — Fmp4SegmentDemuxer::open hardcodes next_segment_index=0, so the \
          first chunk always lands inside seg-0 (timestamp ≤ codec strip + \
          warm-up packet, ≈46 ms @ 44.1 kHz). There is no API to resume \
          at a non-zero decode_time. ABR variant-switch recreate_decoder \

@@ -407,6 +407,7 @@ impl Timeline {
         }
     }
 
+    #[kithara::probe(committed_ns = pos.end_position_ns, end_frame)]
     fn write_playhead(&self, pos: &ChunkPosition, end_frame: u64, _source_byte_end: Option<u64>) {
         let sr = u64::from(pos.sample_rate);
         if sr == 0 {

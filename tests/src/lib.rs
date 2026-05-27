@@ -55,6 +55,7 @@ pub mod signal_source_utils;
 pub mod signal_spec;
 pub mod signal_url;
 pub mod storage_ext;
+pub mod swallow_detector;
 pub mod test_server;
 pub mod token_store;
 pub mod wav;
