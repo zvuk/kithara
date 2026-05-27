@@ -148,6 +148,24 @@ test-e2e *ARGS:
 test-selenium *ARGS:
     cargo +nightly test -p kithara-integration-tests --features selenium --test suite_heavy selenium -- --nocapture {{ARGS}}
 
+# RealtimeSanitizer: compile the player RT path under `-Zsanitizer=realtime`
+# and run the offline-render tests, which enter the
+# `#[sanitize(realtime = "nonblocking")]`-marked node processors without an
+# audio device. Any malloc / lock / syscall in the RT context aborts the run.
+# The `rtsan` cfg gates the attribute on, so stable/production builds are byte
+# -identical. Requires nightly + rust-src; `--target` keeps the flags off
+# build scripts and proc-macros.
+#   just rtsan
+#   just rtsan offline_harness_smoke
+rtsan FILTER="offline_harness":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="$(rustc -vV | sed -n 's/^host: //p')"
+    RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
+    RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
+        cargo +nightly test -p kithara-integration-tests --test suite_light \
+        --target "$target" {{FILTER}} -- --nocapture
+
 # Convenience: workspace tests + doc-tests in one run.
 test-all: test test-doc
 
