@@ -23,6 +23,11 @@ pub(crate) struct TrackRegistration {
     pub(crate) preload_notify: Arc<Notify>,
     pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
+    /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
+    /// hands every consumed `PcmChunk` here instead of dropping it, so the
+    /// pooled buffer is freed/recycled on the worker thread rather than on
+    /// the audio thread. See `crates/kithara-audio/README.md`.
+    pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
     pub(crate) service_class: ServiceClass,
     pub(crate) preload_chunks: usize,
 }
@@ -220,10 +225,12 @@ mod tests {
     {
         let wake = Arc::new(ThreadWake::default());
         let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
+        let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(ringbuf_capacity + 2, None);
         let preload_notify = Arc::new(Notify::new());
 
         let reg = TrackRegistration {
             outlet,
+            trash_inlet,
             preload_chunks,
             source: Box::new(source),
             preload_notify: Arc::clone(&preload_notify),

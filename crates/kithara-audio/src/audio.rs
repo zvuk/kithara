@@ -147,6 +147,13 @@ pub struct Audio<S> {
     /// PCM chunk receiver.
     pcm_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
 
+    /// Spent-chunk return ring. Every `PcmChunk` this real-time consumer
+    /// finishes with is pushed here instead of being dropped, so the pooled
+    /// buffer is recycled on the worker thread (`DecoderNode::drain_trash`)
+    /// and never freed on the audio thread. Sized to outlive a full
+    /// ring-drain on seek, so the lock-free push never fails on the hot path.
+    trash_tx: crate::runtime::Outlet<PcmChunk>,
+
     /// Runtime ABR handle snapshot taken at construction — cloned from the
     /// underlying stream's source. `None` for non-adaptive sources.
     abr_handle: Option<kithara_abr::AbrHandle>,
@@ -388,22 +395,22 @@ impl<S> Audio<S> {
 
     fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> FetchOutcome {
         if !self.validator.is_valid(&fetch) {
+            self.discard_chunk(fetch.into_inner());
             return FetchOutcome::Continue;
         }
 
         match fetch.kind {
             FetchKind::NaturalEof => {
                 self.consumer_phase = ConsumerPhase::AtEof;
+                self.discard_chunk(fetch.into_inner());
                 FetchOutcome::Return(None)
             }
             FetchKind::Failure => {
                 self.consumer_phase = ConsumerPhase::Failed;
+                self.discard_chunk(fetch.into_inner());
                 FetchOutcome::Return(None)
             }
-            FetchKind::Data => {
-                let chunk = fetch.into_inner();
-                FetchOutcome::Return(Some(chunk))
-            }
+            FetchKind::Data => FetchOutcome::Return(Some(fetch.into_inner())),
         }
     }
 
@@ -456,7 +463,7 @@ impl<S> Audio<S> {
                 let chunk_total_frames = u64::from(chunk.meta.frames);
                 let consumed_frames_in_chunk = self.current_chunk_consumed_frames;
                 if consumed_frames_in_chunk >= chunk_total_frames {
-                    self.current_chunk = None;
+                    self.recycle_current_chunk();
                     if !self.fill_buffer() {
                         break;
                     }
@@ -484,7 +491,7 @@ impl<S> Audio<S> {
                 if final_segment {
                     self.timeline
                         .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
-                    self.current_chunk = None;
+                    self.recycle_current_chunk();
                 } else {
                     let total_frames = chunk_total_frames.max(1);
                     let start_ns =
@@ -643,11 +650,12 @@ impl<S> Audio<S> {
         let epoch = self.timeline.initiate_seek(position);
         self.timeline.mark_pending_seek_epoch(epoch);
         self.validator.epoch = epoch;
-        self.current_chunk = None;
+        self.recycle_current_chunk();
         self.current_chunk_consumed_frames = 0;
         self.consumer_phase = ConsumerPhase::SeekPending { epoch };
 
-        while self.pcm_rx.try_pop().is_some() {
+        while let Some(fetch) = self.pcm_rx.try_pop() {
+            self.discard_chunk(fetch.into_inner());
             hang_tick!();
         }
 
@@ -732,6 +740,28 @@ impl<S> Audio<S> {
     fn wake_worker(&self) {
         if let Some(ref worker) = self.worker {
             worker.wake();
+        }
+    }
+
+    /// Hand a spent chunk to the worker's return ring instead of dropping
+    /// it here. The pooled buffer is then recycled on the worker thread,
+    /// keeping `free`/`Pool::put` off the real-time audio thread. The ring
+    /// is sized so this lock-free push never fails on the hot path; the
+    /// `debug_assert` guards the sizing invariant, and the last-resort drop
+    /// only runs if that invariant is ever broken.
+    fn discard_chunk(&mut self, chunk: PcmChunk) {
+        if let Err(_overflow) = self.trash_tx.try_push(chunk) {
+            debug_assert!(
+                false,
+                "PCM trash ring overflow — spent buffer freed on the audio thread"
+            );
+        }
+    }
+
+    /// Return the current chunk to the worker for off-thread recycling.
+    fn recycle_current_chunk(&mut self) {
+        if let Some(chunk) = self.current_chunk.take() {
+            self.discard_chunk(chunk);
         }
     }
 }
@@ -865,6 +895,7 @@ where
         let preload_notify = Arc::new(Notify::new());
         let reader_wake = Arc::new(ThreadWake::default());
         let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, Arc::clone(&reader_wake));
+        let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
 
         let (worker, is_standalone) =
             config_worker.map_or_else(|| (AudioWorkerHandle::new(), true), |w| (w, false));
@@ -872,6 +903,7 @@ where
         let track_id = worker.register_track(TrackRegistration {
             source: Box::new(audio_source),
             outlet: data_tx,
+            trash_inlet,
             preload_notify: preload_notify.clone(),
             preload_chunks: preload_chunks.get(),
             service_class: ServiceClass::default(),
@@ -888,6 +920,7 @@ where
             reader_wake,
             abr_handle,
             pcm_rx: data_rx,
+            trash_tx,
             _epoch: epoch,
             validator: EpochValidator::default(),
             spec: output_spec,
@@ -913,6 +946,21 @@ where
         crate::runtime::Inlet<Fetch<PcmChunk>>,
     ) {
         crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
+    }
+
+    /// Build the spent-chunk return ring. Capacity covers every chunk the
+    /// consumer can hold at once — the whole forward ring plus the current
+    /// chunk — so a seek that drains the forward ring back into here never
+    /// overflows and the real-time push stays infallible. No wake handle:
+    /// the worker is already woken on every `recv_outcome`, and the drain is
+    /// not latency-sensitive.
+    fn create_trash_channel(
+        pcm_buffer_chunks: usize,
+    ) -> (
+        crate::runtime::Outlet<PcmChunk>,
+        crate::runtime::Inlet<PcmChunk>,
+    ) {
+        crate::runtime::connect::<PcmChunk>(pcm_buffer_chunks.max(1) + 2, None)
     }
 
     fn create_decoder_factory(
@@ -1322,9 +1370,11 @@ mod tests {
 
     fn empty_audio() -> Audio<()> {
         let (_data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(1, None);
+        let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
 
         Audio {
             pcm_rx,
+            trash_tx,
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::default(),
             spec: PcmSpec::default(),
@@ -1380,9 +1430,11 @@ mod tests {
 
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
         let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
+        let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
 
         let audio = Audio {
             pcm_rx,
+            trash_tx,
             _epoch: Arc::new(AtomicU64::new(0)),
             validator: EpochValidator::default(),
             spec: PcmSpec::default(),
