@@ -778,7 +778,7 @@ impl PlayerImpl {
 
     /// Remove all items from the queue.
     pub fn remove_all_items(&self) {
-        self.unarm_next_internal(Some(self.current_index.load(Ordering::Relaxed)));
+        self.unarm_next();
         self.items.lock_sync().clear();
         self.current_index.store(0, Ordering::Relaxed);
         self.set_status(PlayerStatus::Unknown);
@@ -788,7 +788,7 @@ impl PlayerImpl {
     /// Remove item at index. Returns the removed resource, or `None` if out of bounds
     /// or already consumed.
     pub fn remove_at(&self, index: usize) -> Option<Resource> {
-        self.unarm_next_internal(Some(self.current_index.load(Ordering::Relaxed)));
+        self.unarm_next();
 
         let mut items = self.items.lock_sync();
         if index >= items.len() {

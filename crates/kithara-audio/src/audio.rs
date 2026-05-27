@@ -677,7 +677,7 @@ impl<S> Audio<S> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.preloaded
+            self.is_preloaded()
         }
     }
 
