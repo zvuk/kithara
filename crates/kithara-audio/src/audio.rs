@@ -161,12 +161,6 @@ pub struct Audio<S> {
     /// Cancellation token for graceful shutdown.
     cancel: Option<CancellationToken>,
 
-    /// Callback to wake blocked `wait_range()` calls on seek.
-    ///
-    /// Set during construction for sources with blocking condvar waits (HLS).
-    /// Called from `seek()` after `initiate_seek()` for instant wakeup.
-    notify_waiting: Option<Box<dyn Fn() + Send + Sync>>,
-
     /// Assigned track ID in the shared worker (used for unregister on drop).
     track_id: Option<TrackId>,
 
@@ -659,10 +653,6 @@ impl<S> Audio<S> {
             hang_tick!();
         }
 
-        if let Some(ref notify) = self.notify_waiting {
-            notify();
-        }
-
         if let Some(ref worker) = self.worker {
             worker.wake();
         }
@@ -872,8 +862,6 @@ where
             pool,
             &byte_pool,
         );
-        let notify_waiting = shared_stream.make_notify_fn();
-
         let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         let abr_handle = shared_stream.abr_handle();
         let audio_source = StreamAudioSource::new(
@@ -916,7 +904,6 @@ where
             host_sample_rate,
             playback_rate,
             preload_notify,
-            notify_waiting,
             reader_wake,
             abr_handle,
             pcm_rx: data_rx,
@@ -1391,7 +1378,6 @@ mod tests {
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_notify: Arc::new(Notify::new()),
             preloaded: false,
-            notify_waiting: None,
             track_id: None,
             worker: None,
             reader_wake: Arc::new(ThreadWake::default()),
@@ -1451,7 +1437,6 @@ mod tests {
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_notify: Arc::new(Notify::new()),
             preloaded: true,
-            notify_waiting: None,
             track_id: None,
             worker: None,
             reader_wake: Arc::new(ThreadWake::default()),
