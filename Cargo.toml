@@ -53,6 +53,7 @@ default-members = [
 [workspace.lints.rust]
 unreachable_pub = "warn"
 unused_qualifications = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rtsan)'] }
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"

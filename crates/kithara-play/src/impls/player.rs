@@ -424,6 +424,7 @@ impl PlayerImpl {
         while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
             out.push(format!("{notification:?}"));
         }
+        state.drain_trash();
         out
     }
 
@@ -758,6 +759,7 @@ impl PlayerImpl {
         while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
             notifications.push(notification);
         }
+        state.drain_trash();
 
         if !notifications.is_empty() {
             tracing::debug!(

@@ -45,7 +45,14 @@ fn make_processor() -> (PlayerNodeProcessor, HeapProd<PlayerCmd>) {
     let shared_state = make_shared_state();
     let (tx, rx) = HeapRb::<PlayerCmd>::new(32).split();
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
-    let processor = PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
+    let max_block_frames = NonZeroU32::new(512).expect("BUG: non-zero");
+    let processor = PlayerNodeProcessor::new(
+        rx,
+        shared_state,
+        sample_rate,
+        max_block_frames,
+        &PcmPool::default(),
+    );
     (processor, tx)
 }
 

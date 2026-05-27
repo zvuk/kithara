@@ -308,6 +308,28 @@ Forbidden:
 
 - Hard-coded `CancellationToken::new()` (not behind `Option<CancellationToken>`) outside the marked owner / bridge sites. Those create orphan tokens that escape the hierarchy. Audio worker thread, file local source, and similar internal scopes derive children from their config's master instead.
 
+## Real-Time Audio Thread
+
+`PlayerNodeProcessor::process` and `MasterEqProcessor::process` run on the
+Firewheel audio thread and must be allocation-, free-, and lock-free. Two
+mechanisms keep them so:
+
+- **Scratch buffers** are pre-sized to `StreamInfo::max_block_frames` when the
+  processor is constructed (and re-grown in `new_stream` on stream change), so
+  the per-block `resize` in `render_audio` never reallocates.
+- **Evicted tracks** own heap (PCM reader, metadata) that must not be freed on
+  the audio thread. `load_track`, `evict_tracks_if_needed`,
+  `cleanup_finished_tracks`, and `unload_track` hand the removed `PlayerTrack`
+  to `SharedPlayerState::discard_track`, which pushes it onto a bounded
+  deferred-drop channel. The main thread drops it via `drain_trash` from the
+  notification-drain path. The channel is sized well above the live track count;
+  a full channel drops inline only as a bounded degraded path.
+
+The contract is verified by RealtimeSanitizer: `just rtsan` builds the RT path
+under `-Zsanitizer=realtime` (gated by `--cfg rtsan`, invisible to
+stable/production builds) and runs the offline-render tests, which enter both
+`#[sanitize(realtime = "nonblocking")]` processors without an audio device.
+
 ## Invariants
 
 - `SlotId` is only valid between `allocate_slot()` and `release_slot()`
@@ -317,6 +339,7 @@ Forbidden:
 - All `#[non_exhaustive]` enums and structs require builder or constructor
 - `MediaTime::INVALID` has `timescale == 0`; all arithmetic on invalid times returns invalid
 - Cancel hierarchy: production `CancellationToken::new()` only at marked owner / bridge sites (see "Cancel Hierarchy")
+- Audio-thread `process()` is allocation-, free-, and lock-free (see "Real-Time Audio Thread")
 
 ## Integration
 

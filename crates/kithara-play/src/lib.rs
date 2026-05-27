@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(all(), allow(clippy::missing_errors_doc))]
+#![cfg_attr(rtsan, feature(sanitize))]
 
 #[cfg(all(target_arch = "wasm32", not(feature = "backend-web-audio")))]
 compile_error!("kithara-play: wasm32 build requires `backend-web-audio`");

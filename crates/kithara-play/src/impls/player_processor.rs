@@ -12,6 +12,7 @@ use firewheel::{
 };
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::Mutex;
+use num_traits::cast::AsPrimitive;
 use ringbuf::{
     HeapCons,
     traits::{Consumer, Producer},
@@ -119,9 +120,18 @@ impl PlayerNodeProcessor {
         cmd_rx: HeapCons<PlayerCmd>,
         shared_state: Arc<SharedPlayerState>,
         sample_rate: NonZeroU32,
+        max_block_frames: NonZeroU32,
         pool: &PcmPool,
     ) -> Self {
-        let scratch_bufs = std::array::from_fn(|_| pool.get());
+        let max_frames: usize = max_block_frames.get().as_();
+        let scratch_bufs = std::array::from_fn(|_| {
+            let mut buf = pool.get();
+            let cap = buf.capacity();
+            if cap < max_frames {
+                buf.reserve(max_frames - cap);
+            }
+            buf
+        });
 
         Self {
             cmd_rx,
@@ -198,7 +208,8 @@ impl PlayerNodeProcessor {
 
         for entry in finished[..count].iter().flatten() {
             let (key, idx) = entry;
-            if self.tracks.remove_by_index(*idx).is_some() {
+            if let Some(track) = self.tracks.remove_by_index(*idx) {
+                self.shared_state.discard_track(track);
                 self.shared_state
                     .notification_tx
                     .lock_sync()
@@ -286,7 +297,8 @@ impl PlayerNodeProcessor {
                         "evicting a Playing track to make room for a new track"
                     );
                 }
-                if self.tracks.remove(&key).is_some() {
+                if let Some(track) = self.tracks.remove(&key) {
+                    self.shared_state.discard_track(track);
                     self.shared_state
                         .notification_tx
                         .lock_sync()
@@ -373,7 +385,8 @@ impl PlayerNodeProcessor {
         item_id: Option<Arc<str>>,
         src: &Arc<str>,
     ) {
-        if self.tracks.remove(src).is_some() {
+        if let Some(track) = self.tracks.remove(src) {
+            self.shared_state.discard_track(track);
             self.shared_state
                 .notification_tx
                 .lock_sync()
@@ -458,10 +471,6 @@ impl PlayerNodeProcessor {
         }
 
         for buf in &mut self.scratch_bufs {
-            let cap = buf.capacity();
-            if cap < frames {
-                buf.reserve(frames - cap);
-            }
             buf.resize(frames, 0.0);
         }
 
@@ -617,7 +626,8 @@ impl PlayerNodeProcessor {
 
     /// Unload a track from the arena.
     fn unload_track(&mut self, src: &Arc<str>) {
-        if self.tracks.remove(src).is_some() {
+        if let Some(track) = self.tracks.remove(src) {
+            self.shared_state.discard_track(track);
             self.shared_state
                 .notification_tx
                 .lock_sync()
@@ -691,6 +701,14 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             .sample_rate
             .store(new_sr.get(), Ordering::Relaxed);
 
+        let max_frames: usize = stream_info.max_block_frames.get().as_();
+        for buf in &mut self.scratch_bufs {
+            let cap = buf.capacity();
+            if cap < max_frames {
+                buf.reserve(max_frames - cap);
+            }
+        }
+
         for (_, track) in self.tracks.iter() {
             if let Ok(resource) = track.resource().try_lock() {
                 resource.set_host_sample_rate(new_sr);
@@ -698,6 +716,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         }
     }
 
+    #[cfg_attr(rtsan, sanitize(realtime = "nonblocking"))]
     fn process(
         &mut self,
         info: &ProcInfo,
@@ -756,8 +775,14 @@ mod tests {
         let shared_state = make_shared_state();
         let (tx, rx) = HeapRb::<PlayerCmd>::new(32).split();
         let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
-        let processor =
-            PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
+        let max_block_frames = NonZeroU32::new(512).expect("BUG: non-zero");
+        let processor = PlayerNodeProcessor::new(
+            rx,
+            shared_state,
+            sample_rate,
+            max_block_frames,
+            &PcmPool::default(),
+        );
         (processor, tx)
     }
 
@@ -858,8 +883,14 @@ mod tests {
         let shared_state = make_shared_state();
         let (tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
         let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
-        let mut processor =
-            PlayerNodeProcessor::new(rx, shared_state, sample_rate, &PcmPool::default());
+        let max_block_frames = NonZeroU32::new(512).expect("BUG: non-zero");
+        let mut processor = PlayerNodeProcessor::new(
+            rx,
+            shared_state,
+            sample_rate,
+            max_block_frames,
+            &PcmPool::default(),
+        );
 
         let mut tx = tx;
         tx.try_push(PlayerCmd::LoadTrack {

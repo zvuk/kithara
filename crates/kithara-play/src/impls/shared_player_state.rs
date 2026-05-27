@@ -2,12 +2,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use kithara_platform::Mutex;
 use portable_atomic::{AtomicF64, AtomicU32};
-use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
+use ringbuf::{
+    HeapCons, HeapProd, HeapRb,
+    traits::{Consumer, Producer, Split},
+};
 
-use super::player_notification::PlayerNotification;
-
-/// Capacity of the notification ring buffer.
-const NOTIFICATION_RINGBUF_CAPACITY: usize = 32;
+use super::{player_notification::PlayerNotification, player_track::PlayerTrack};
 
 /// Shared state that bridges the main thread and the audio processor.
 ///
@@ -34,6 +34,12 @@ pub struct SharedPlayerState {
     pub notification_rx: Mutex<HeapCons<PlayerNotification>>,
     /// Sender for processor-to-main-thread notifications.
     pub notification_tx: Mutex<HeapProd<PlayerNotification>>,
+    /// Audio-thread side of the deferred-drop channel: evicted tracks are
+    /// pushed here instead of being dropped inline.
+    pub trash_tx: Mutex<HeapProd<PlayerTrack>>,
+    /// Main-thread side of the deferred-drop channel: drained and dropped
+    /// off the audio thread.
+    pub trash_rx: Mutex<HeapCons<PlayerTrack>>,
 }
 
 impl Default for SharedPlayerState {
@@ -43,6 +49,15 @@ impl Default for SharedPlayerState {
 }
 
 impl SharedPlayerState {
+    /// Capacity of the notification ring buffer.
+    const NOTIFICATION_RINGBUF_CAPACITY: usize = 32;
+
+    /// Capacity of the deferred-drop ("trash") ring buffer. Evicted tracks own
+    /// heap (PCM reader, metadata) that must not be freed on the audio thread;
+    /// they are pushed here and dropped by the main thread. Sized well above
+    /// the live track count so the non-RT drain keeps it from ever filling.
+    const TRASH_RINGBUF_CAPACITY: usize = 64;
+
     /// Create a new shared state with default values.
     ///
     /// The notification channel is bounded to 32 to avoid dropping
@@ -50,7 +65,9 @@ impl SharedPlayerState {
     #[must_use]
     // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
-        let (tx, rx) = HeapRb::<PlayerNotification>::new(NOTIFICATION_RINGBUF_CAPACITY).split();
+        let (tx, rx) =
+            HeapRb::<PlayerNotification>::new(Self::NOTIFICATION_RINGBUF_CAPACITY).split();
+        let (trash_tx, trash_rx) = HeapRb::<PlayerTrack>::new(Self::TRASH_RINGBUF_CAPACITY).split();
         Self {
             playing: AtomicBool::new(false),
             seek_epoch: AtomicU64::new(0),
@@ -60,6 +77,8 @@ impl SharedPlayerState {
             process_count: AtomicU64::new(0),
             notification_tx: Mutex::new(tx),
             notification_rx: Mutex::new(rx),
+            trash_tx: Mutex::new(trash_tx),
+            trash_rx: Mutex::new(trash_rx),
         }
     }
 
@@ -68,6 +87,20 @@ impl SharedPlayerState {
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1)
     }
+
+    /// Hand an evicted track to the deferred-drop channel so its heap is
+    /// freed by the main thread, never on the audio thread. If the channel is
+    /// full the track drops here as a bounded degraded path.
+    pub(crate) fn discard_track(&self, track: PlayerTrack) {
+        let _ = self.trash_tx.lock_sync().try_push(track);
+    }
+
+    /// Drop every track queued for deferred destruction. Called from the
+    /// main-thread notification drain, never from the audio thread.
+    pub(crate) fn drain_trash(&self) {
+        let mut rx = self.trash_rx.lock_sync();
+        while rx.try_pop().is_some() {}
+    }
 }
 
 #[cfg(test)]
@@ -75,7 +108,6 @@ mod tests {
     use std::sync::Arc;
 
     use kithara_test_utils::kithara;
-    use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
 
