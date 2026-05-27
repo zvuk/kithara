@@ -158,7 +158,8 @@ fn encode_signal_payload_with_cache(
     Some(encoded)
 }
 
-/// Deterministic spec string for the L2 key; includes every field that changes the bytes.
+/// Deterministic L2 key; covers every field that changes the bytes. The `{:?}` repr of
+/// `kind`/`length`/`sweep` is part of the key — keep their `Debug` stable.
 fn signal_l2_spec_key(request: &SignalRequest) -> String {
     let s = &request.spec;
     format!(
