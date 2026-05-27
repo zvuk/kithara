@@ -18,25 +18,27 @@ use crate::{
     test_server_state::TestServerState,
 };
 
-/// In-process unified test server with RAII shutdown.
+/// Facade over the process-global shared test server.
 pub struct TestServerHelper {
     state: Arc<TestServerState>,
-    server: TestHttpServer,
+    base_url: Url,
 }
 
 impl TestServerHelper {
-    /// Spawn the unified server on a random localhost port.
+    /// Borrow the process-global server's state and base URL.
     pub async fn new() -> Self {
-        let state = TestServerState::new();
-        let server = TestHttpServer::new(router(Arc::clone(&state))).await;
-        Self { state, server }
+        let shared = crate::test_server::shared();
+        Self {
+            state: Arc::clone(&shared.state),
+            base_url: shared.base_url.clone(),
+        }
     }
 
     /// Build a URL for a static test asset.
     #[must_use]
     pub fn asset(&self, name: &str) -> Url {
         let trimmed = name.trim_start_matches('/');
-        self.server.url(&format!("/assets/{trimmed}"))
+        self.url(&format!("/assets/{trimmed}"))
     }
 
     /// Build a URL for the static asset `name` exposed via a path with no
@@ -46,13 +48,13 @@ impl TestServerHelper {
     #[must_use]
     pub fn streamhq(&self, name: &str) -> Url {
         let trimmed = name.trim_start_matches('/');
-        self.server.url(&format!("/streamhq?name={trimmed}"))
+        self.url(&format!("/streamhq?name={trimmed}"))
     }
 
     /// Base URL of this server.
     #[must_use]
     pub fn base_url(&self) -> &Url {
-        self.server.base_url()
+        &self.base_url
     }
 
     /// Register an HLS fixture from a builder, storing media blobs in the server.
@@ -135,7 +137,7 @@ impl TestServerHelper {
     /// Build an arbitrary URL on this server.
     #[must_use]
     pub fn url(&self, path: &str) -> Url {
-        self.server.url(path)
+        self.base_url.join(path).expect("join server URL path")
     }
 }
 
@@ -155,7 +157,7 @@ pub async fn run_test_server() {
     server.completion().await;
 }
 
-fn router(state: Arc<TestServerState>) -> Router {
+pub(crate) fn router(state: Arc<TestServerState>) -> Router {
     Router::<Arc<TestServerState>>::new()
         .route("/health", get(health))
         .merge(assets::router())
@@ -164,4 +166,21 @@ fn router(state: Arc<TestServerState>) -> Router {
         .merge(crate::routes::token::router())
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kithara;
+
+    #[kithara::test(tokio)]
+    async fn two_helpers_share_one_base_url() {
+        let a = TestServerHelper::new().await;
+        let b = TestServerHelper::new().await;
+        assert_eq!(
+            a.base_url(),
+            b.base_url(),
+            "all helpers reuse the shared server"
+        );
+    }
 }

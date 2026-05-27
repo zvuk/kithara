@@ -22,11 +22,17 @@ use crate::{
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
+#[cfg(not(target_arch = "wasm32"))]
+mod shared;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) use native::router;
+#[cfg(not(target_arch = "wasm32"))]
 pub use native::{TestServerHelper, run_test_server};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use shared::shared;
 #[cfg(target_arch = "wasm32")]
 pub use wasm::TestServerHelper;
 
