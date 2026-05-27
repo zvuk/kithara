@@ -4,6 +4,8 @@
 
 <div align="center">
 
+[![crates.io](https://img.shields.io/crates/v/kithara.svg)](https://crates.io/crates/kithara)
+[![docs.rs](https://docs.rs/kithara/badge.svg)](https://docs.rs/kithara)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 </div>
@@ -15,269 +17,69 @@
 
 > **Status: active development.** Public APIs are intended to remain stable within a release line, while internal implementation may evolve. Pin exact versions for production use.
 
-Modular audio engine in Rust. Streams, decodes, and plays audio from progressive HTTP and HLS sources with a persistent on-disk cache. Designed as an open-source alternative to AVPlayer with DJ-grade mixing capabilities — multi-slot playback, crossfading, BPM sync, and per-channel EQ.
+Modular audio engine in Rust. Streams, decodes, and plays audio from
+progressive HTTP and HLS sources with a persistent on-disk cache. Designed as
+an open-source alternative to AVPlayer with DJ-grade mixing — multi-slot
+playback, crossfading, and per-channel EQ.
 
-Components are independent crates that can be used standalone or composed into a full player.
+Components are independent crates: use one standalone, or compose them into a
+full player.
 
 ## Features
 
-- **Player engine** — AVPlayer-style API with multi-slot arena, crossfading, BPM sync, and per-channel EQ (`kithara-play`)
-- **Progressive HTTP** — stream MP3, AAC, FLAC, and ALAC over HTTP with disk caching and pull-driven range fetches
-- **HLS VOD** — adaptive bitrate streaming with variant switching, cross-codec recreate, encrypted segments (AES-128-CBC), and on-disk segment cache
-- **Multi-backend decoding** — Symphonia (software, cross-platform), Apple AudioToolbox (hardware, macOS/iOS), and Android `MediaExtractor` / `MediaCodec` (hardware, Android)
-- **Audio pipeline** — sample rate conversion via rubato, effects chain, OS-thread worker with backpressure
+- **Player engine** — AVPlayer-style API with multi-slot playback, crossfading, and per-channel EQ (`kithara-play`)
+- **Progressive HTTP** — stream MP3, AAC, FLAC, and ALAC with disk caching and pull-driven range fetches
+- **HLS VOD** — adaptive bitrate, variant switching, cross-codec recreate, AES-128-CBC encrypted segments, on-disk segment cache
+- **Multi-backend decode** — Symphonia (software, cross-platform), Apple AudioToolbox (macOS/iOS), Android `MediaCodec` (Android)
+- **Audio pipeline** — sample-rate conversion via rubato, effects chain, OS-thread worker with backpressure
 - **Persistent disk cache** — lease/pin semantics, LRU eviction, crash-safe writes
-- **Zero-allocation hot paths** — sharded buffer pool (`kithara-bufpool`) for decode and I/O loops
-- **WASM support** — browser playback bindings with shared-memory threading
+- **Zero-allocation hot paths** — sharded buffer pool for decode and I/O loops
+- **WASM** — browser playback bindings with shared-memory threading (`kithara-ffi` web module)
 
-## Architecture
-
-```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
-flowchart LR
-    apps["Apps<br/>kithara-app + kithara-wasm"]
-    ffi["FFI<br/>kithara-ffi"]
-    facade["Facade<br/>kithara"]
-    player["Player<br/>kithara-play + kithara-queue"]
-    pipeline["Pipeline<br/>audio + decode + encode + events"]
-    protocols["Protocols<br/>file + hls + abr + drm"]
-    io["I/O<br/>stream + net"]
-    storage["Storage<br/>assets + storage"]
-    infra["Infra<br/>bufpool + platform"]
-    tooling["Tooling<br/>test-macros + wasm-macros + test-utils + integration-tests"]
-
-    apps --> facade
-    ffi --> player
-    facade --> player --> pipeline --> protocols --> io --> storage --> infra
-    tooling -.-> facade
-    tooling -.-> apps
-
-    style apps fill:#4f6d7a,color:#fff
-    style ffi fill:#4f6d7a,color:#fff
-    style facade fill:#4a6fa5,color:#fff
-    style player fill:#4a6fa5,color:#fff
-    style pipeline fill:#6b8cae,color:#fff
-    style protocols fill:#7ea87e,color:#fff
-    style io fill:#c4a35a,color:#fff
-    style storage fill:#8b6b8b,color:#fff
-    style infra fill:#5b8f8f,color:#fff
-    style tooling fill:#7f7f7f,color:#fff
-```
-
-<table>
-<tr><th>Layer</th><th>Crates</th><th>Role</th></tr>
-<tr><td><b>Facade</b></td><td><a href="crates/kithara/README.md"><code>kithara</code></a></td><td>Unified <code>Resource</code> API with auto-detection (file / HLS)</td></tr>
-<tr><td><b>Player</b></td><td><a href="crates/kithara-play/README.md"><code>kithara-play</code></a><br/><a href="crates/kithara-queue/README.md"><code>kithara-queue</code></a></td><td>AVPlayer-style traits (Engine, Player, Mixer, DJ subsystem) + AVQueuePlayer-analogue queue layer</td></tr>
-<tr><td><b>Pipeline</b></td><td><a href="crates/kithara-audio/README.md"><code>kithara-audio</code></a><br/><a href="crates/kithara-decode/README.md"><code>kithara-decode</code></a><br/><a href="crates/kithara-encode/README.md"><code>kithara-encode</code></a><br/><a href="crates/kithara-events/README.md"><code>kithara-events</code></a></td><td>Threaded decode + encode + effects + resampling, event bus</td></tr>
-<tr><td><b>Protocols</b></td><td><a href="crates/kithara-file/README.md"><code>kithara-file</code></a><br/><a href="crates/kithara-hls/README.md"><code>kithara-hls</code></a><br/><a href="crates/kithara-abr/README.md"><code>kithara-abr</code></a><br/><a href="crates/kithara-drm/README.md"><code>kithara-drm</code></a></td><td>HTTP progressive, HLS VOD with ABR, AES-128 decryption</td></tr>
-<tr><td><b>I/O</b></td><td><a href="crates/kithara-stream/README.md"><code>kithara-stream</code></a><br/><a href="crates/kithara-net/README.md"><code>kithara-net</code></a></td><td>Async-to-sync bridge (<code>Read + Seek</code>), HTTP with retry</td></tr>
-<tr><td><b>Storage</b></td><td><a href="crates/kithara-assets/README.md"><code>kithara-assets</code></a><br/><a href="crates/kithara-storage/README.md"><code>kithara-storage</code></a></td><td>Disk cache with eviction, mmap/mem resources</td></tr>
-<tr><td><b>Primitives</b></td><td><a href="crates/kithara-bufpool/README.md"><code>kithara-bufpool</code></a><br/><a href="crates/kithara-platform/README.md"><code>kithara-platform</code></a></td><td>Zero-alloc buffer pool, cross-platform sync types</td></tr>
-<tr><td><b>FFI</b></td><td><a href="crates/kithara-ffi/README.md"><code>kithara-ffi</code></a></td><td>UniFFI adapter consumed by the Apple (Swift) and Android (Kotlin) build flows</td></tr>
-<tr><td><b>Applications</b></td><td><a href="crates/kithara-app/README.md"><code>kithara-app</code></a><br/><a href="crates/kithara-wasm/README.md"><code>kithara-wasm</code></a></td><td>Native (TUI + iced GUI) and WASM demo players built on shared engine crates</td></tr>
-<tr><td><b>Macros</b></td><td><a href="crates/kithara-test-macros/README.md"><code>kithara-test-macros</code></a><br/><a href="crates/kithara-wasm-macros/README.md"><code>kithara-wasm-macros</code></a></td><td>Proc-macro glue for tests and wasm exports/thread guards</td></tr>
-<tr><td><b>Testing</b></td><td><a href="crates/kithara-test-utils/README.md"><code>kithara-test-utils</code></a></td><td>Shared fixtures and helpers for workspace tests</td></tr>
-</table>
-
-## Getting Started
+## Quick Start
 
 ```bash
-# Install the task runner
 cargo install just --locked
-
-# Complete the environment setup from the section below
 cargo build --workspace
-
-# Test (nextest + doctests)
 just test-all
-
-# Lint / policy checks
-just lint-fast
-just lint-full
 ```
 
-## Environment Setup
-
-Set up both the host environment and the local tooling before relying on the `just` workflow.
-
-### Host Dependencies
-
-- Linux: install `libasound2-dev`
-- macOS: install Xcode Command Line Tools
-
-### Required Tooling
-
-- `cargo-nextest` for `just test*`
-- `ast-grep` for `just lint-fast` and `just lint-full`
-- nightly `rustfmt` for `just fmt` and `just fmt-check`
-- `prek` for the configured pre-commit and pre-push hooks
-
-One reasonable setup is:
-
-```bash
-cargo install cargo-nextest --locked
-cargo install ast-grep --locked
-rustup toolchain install nightly --component rustfmt
-```
-
-Install `prek` with your preferred Python toolchain manager, for example:
-
-```bash
-python3 -m pip install --user prek
-prek install -f
-```
-
-### Recommended Tooling
-
-- `cargo-deny` for dependency audits
-- `cargo-machete` for unused dependency scans
-- `cargo-hack` for feature-powerset checks
-- `cargo-semver-checks` for public API compatibility checks
-
-Example installation:
-
-```bash
-cargo install cargo-deny --locked
-cargo install cargo-machete --locked
-cargo install cargo-hack --locked
-cargo install cargo-semver-checks --locked
-```
-
-### Optional Tooling
-
-- `worktrunk` as a convenience wrapper over `git worktree`
-- `wasm-slim` for wasm size checks
-- `critcmp` for benchmark comparison
-- `chromedriver` or another WebDriver binary for browser-based flows
-
-## Building Mobile Libraries
-
-The repository contains two verified mobile build flows:
-
-- Android: `just android aar` builds the Rust core, generates Kotlin bindings, and exports both release AARs required by consumer apps
-- Apple: `just apple xcframework` builds the Swift-facing XCFramework consumed by local packages or Xcode projects
-
-### Android AARs
-
-Prerequisites:
-
-- Android NDK installed and `ANDROID_NDK_HOME` exported
-- `cargo-ndk` installed: `cargo install cargo-ndk`
-- Rust Android targets installed:
-
-```bash
-rustup target add aarch64-linux-android x86_64-linux-android
-```
-
-Build the Android libraries:
-
-```bash
-just android aar
-```
-
-What this command does:
-
-1. Builds the Rust JNI libraries in release mode
-2. Generates Kotlin UniFFI bindings
-3. Packages the Android library
-4. Exports both release AARs with stable file names
-
-Output files:
-
-- `android/lib/build/outputs/aar/kithara.aar`
-- `android/lib/build/outputs/aar/rust-tls.aar`
-
-Notes for consumers:
-
-- `kithara.aar` is the main Android library
-- `rust-tls.aar` must be distributed together with `kithara.aar`
-- If you consume the AARs directly from another project, keep both files in the same local artifacts directory and add any remaining app-level dependencies required by your integration
-
-### Apple XCFramework
-
-Prerequisites:
-
-- Xcode and Command Line Tools installed
-- `cargo-swift` installed: `cargo install cargo-swift`
-- Apple Rust targets installed:
-
-```bash
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin
-```
-
-Build the Apple library:
-
-```bash
-just apple xcframework
-```
-
-For a faster local iteration build:
-
-```bash
-just apple xcframework --profile debug
-```
-
-Output directory:
-
-- `apple/KitharaFFIInternal.xcframework`
-
-Expected slices:
-
-- `macos-arm64_x86_64`
-- `ios-arm64`
-- `ios-arm64_x86_64-simulator`
-
-Notes for consumers:
-
-- On Apple Silicon, the simulator slice may still be named `ios-arm64_x86_64-simulator`; this is expected from the standard build flow
-- The verified local development path is to build the XCFramework first, then point the consumer Swift package or Xcode project at this repository via `KITHARA_DIR`
-
-Example local package build against a freshly built XCFramework:
-
-```bash
-KITHARA_DIR=/absolute/path/to/kithara KITHARA_LOCAL_DEV=1 swift build
-```
-
-Example Xcode build with the same local dependency setup:
-
-```bash
-KITHARA_DIR=/absolute/path/to/kithara KITHARA_LOCAL_DEV=1 \
-xcodebuild -project /absolute/path/to/App.xcodeproj \
-  -scheme MyApp \
-  -destination "generic/platform=iOS Simulator" \
-  build
-```
+Full environment setup, lint commands, and mobile (Android / Apple) build flows
+live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Demo Players
 
 ```bash
-# Auto mode (picks TUI or GUI based on the terminal)
+# Native demo — auto-picks TUI or GUI for the terminal
 cargo run -p kithara-app -- --mode auto <TRACK_URL_1> <TRACK_URL_2>
-
-# Force terminal demo
 cargo run -p kithara-app -- --mode tui <TRACK_URL_1> <TRACK_URL_2>
-
-# Force desktop GUI demo
 cargo run -p kithara-app -- --mode gui <TRACK_URL_1> <TRACK_URL_2>
 
-# WASM demo player
-cd crates/kithara-wasm
+# WASM browser demo (via kithara-ffi)
+cd crates/kithara-ffi
 RUSTUP_TOOLCHAIN=nightly trunk serve --config Trunk.toml --port 8080
 ```
 
+## Architecture
+
+A layered workspace of independent crates, from the public player API down to
+storage and platform primitives. See [ARCHITECTURE.md](ARCHITECTURE.md) for the
+dependency graph, crate map, and data flow. Each crate also has its own
+`README.md`.
+
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and [.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md) for the local-first task flow.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and
+[.docs/workflow/rust-ai.md](.docs/workflow/rust-ai.md) for the local-first task
+flow.
 
 ## Minimum Supported Rust Version (MSRV)
 
-The current MSRV is **1.89** (Rust edition 2024). It is tracked via `rust-version` in the workspace `Cargo.toml` and may be bumped in pre-release alphas without a major version bump.
+The current MSRV is **1.89** (Rust edition 2024), tracked via `rust-version` in
+the workspace `Cargo.toml`. It may be bumped in pre-release alphas without a
+major version bump.
 
 ## License
 
-Licensed under either of
-
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT License](LICENSE-MIT)
-
-at your option.
+Licensed under either of [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) at
+your option.

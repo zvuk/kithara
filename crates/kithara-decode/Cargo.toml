@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Synchronous audio decoding via Symphonia with PCM output"
+description = "Pluggable audio decode (Symphonia / Apple / Android) to PCM."
+keywords = ["audio", "decoder", "codec", "pcm", "hls"]
+categories = ["multimedia::audio"]
 
 [lints]
 workspace = true
@@ -30,7 +32,7 @@ hotpath = { workspace = true, optional = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation = { workspace = true, optional = true }

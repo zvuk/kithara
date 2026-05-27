@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "DRM decryption support for kithara (AES-128-CBC and extensible key processing)"
+description = "AES-128 DRM decryption for streaming audio, extensible keys."
+keywords = ["drm", "aes", "audio", "hls", "streaming"]
+categories = ["multimedia::audio", "cryptography"]
 
 [lints]
 workspace = true
@@ -23,7 +25,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-drm = { path = ".", default-features = false }

@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "AVQueuePlayer-analogue orchestration on top of kithara-play (queue, loader, navigation, crossfade-aware select)"
+description = "Queue/playlist orchestration: gapless, crossfade-aware."
+keywords = ["audio", "player", "playlist", "gapless", "dj"]
+categories = ["multimedia::audio"]
 
 [lints]
 workspace = true
@@ -37,7 +39,7 @@ bon = { workspace = true }
 delegate = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-platform = { workspace = true }

@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Player engine with Firewheel audio graph, EQ, crossfade, and DJ-ready architecture"
+description = "Player engine: audio graph, EQ, crossfade, DJ-ready."
+keywords = ["audio", "player", "dj", "crossfade", "playback"]
+categories = ["multimedia::audio"]
 
 [lints]
 workspace = true
@@ -46,7 +48,7 @@ smallvec = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bevy_platform = { workspace = true }

@@ -4,6 +4,8 @@
 
 <div align="center">
 
+[![crates.io](https://img.shields.io/crates/v/kithara-decode.svg)](https://crates.io/crates/kithara-decode)
+[![docs.rs](https://docs.rs/kithara-decode/badge.svg)](https://docs.rs/kithara-decode)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
@@ -12,7 +14,7 @@
 
 Audio decoding library with explicit, typed backend selection. `DecoderFactory` creates synchronous `Decoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, ALAC, …) into pool-backed PCM (`Vec<f32>`). No threading, no channels — just decoding.
 
-The public surface centres on one trait — `Decoder`. Concrete backends (Symphonia / Apple / Android) implement it directly. Internally, container parsing and codec stepping are split: the `Demuxer` trait owns container framing, the `FrameCodec` trait owns codec decoding, and `ComposedDecoder<D, C>` (internal) wires them together so backends can be mixed and matched. The factory hides this detail — callers only ever see `Box<dyn Decoder>`.
+The public surface centres on one trait — `Decoder`. Concrete backends (Symphonia / Apple / Android) implement it directly. Internally, container parsing and frame decoding are split: the `Demuxer` trait owns container framing, the `FrameCodec` trait owns codec decoding, and `ComposedDecoder<D, C>` (internal) pairs them so backends can be mixed and matched. The factory hides this detail — callers only ever see `Box<dyn Decoder>`.
 
 ## Usage
 
@@ -42,7 +44,7 @@ For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_
 <tr><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
 <tr><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
 <tr><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
-<tr><td>Android MediaCodec</td><td>Runtime hardware path for AAC family, MP3, FLAC with recoverable fallback to Symphonia</td><td>Android</td></tr>
+<tr><td>Android MediaCodec</td><td>Runtime hardware path for AAC-LC, MP3, FLAC with recoverable fallback to Symphonia</td><td>Android</td></tr>
 </table>
 
 ## Initialization Paths
@@ -52,16 +54,13 @@ For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_
 
 ## Decoder recreate strategy
 
-- `create_for_recreate` is used for seek-time decoder rebuild.
-- It is a thin wrapper over `create_from_media_info`: callers must
-  supply a `base_offset` that lines up with the container's init
-  region (for fMP4/MP4/WAV/MKV/CAF the `ftyp`/RIFF/EBML header; for
-  MPEG-ES / ADTS / FLAC / Ogg / MPEG-TS any valid packet start).
-- **No fallback**: when the metadata-driven path fails the error is
-  propagated verbatim. Probing mid-segment bytes at a mismatched
-  offset can silently match an unrelated codec (e.g. MP3 frame sync
-  in raw AAC-in-fMP4 bytes) and drive the rest of the pipeline off a
-  `session.media_info` the decoder never actually realised.
+Seek-time and variant-switch rebuilds go through `create_from_media_info`,
+which skips probing and selects the backend from the carried `MediaInfo`.
+**No fallback**: if the metadata-driven path fails, the error propagates
+verbatim. Probing mid-segment bytes at a mismatched offset can silently
+match an unrelated codec (e.g. an MP3 frame sync inside raw AAC-in-fMP4
+bytes) and drive the rest of the pipeline off a codec the decoder never
+actually decoded — so the recreate path never probes.
 
 ## Gapless playback
 
@@ -75,8 +74,8 @@ The contract has one owner for actual trimming:
   `kithara-audio` pipeline must apply `GaplessTrimmer` before effects.
 - `None` means no engine trim should run. This covers files with no gapless
   metadata and backend paths that already applied gapless trim internally.
-- `GaplessTrimmer::notify_seek()` drops only the leading trim state; tail trim is
-  still applied at EOF for the current track.
+- `GaplessTrimmer::notify_seek()` drops seek-sensitive state — leading trim,
+  pending fade-in, and the buffered tail. Trailing trim still applies at EOF.
 
 When metadata is absent, `kithara-audio`'s `AudioConfig::gapless_mode` can select
 heuristic behaviour via `GaplessMode`:
@@ -95,9 +94,6 @@ See also `GaplessMode::Disabled` and `GaplessMode::MediaOnly` on `AudioConfig`.
 Both fallbacks apply a short raised-cosine fade-in (~3 ms) at the trim
 boundary. The metadata-driven path does not — the boundary lands on a
 sample-accurate count.
-
-`GaplessTrimmer::notify_seek()` drops both the leading-trim state and
-any pending fade-in; tail trim continues to be applied at EOF.
 
 Current metadata sources:
 
@@ -143,12 +139,6 @@ The cross-decoder protocol test lives in `kithara-integration-tests` under `test
 
 ```bash
 cargo nextest run -p kithara-integration-tests kithara_decode::
-```
-
-To exercise the same protocol per backend in isolation (no cross-feature unification):
-
-```bash
-just test-decoders
 ```
 
 ## Gapless probe contract

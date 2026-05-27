@@ -4,13 +4,15 @@
 
 <div align="center">
 
+[![crates.io](https://img.shields.io/crates/v/kithara-stream.svg)](https://crates.io/crates/kithara-stream)
+[![docs.rs](https://docs.rs/kithara-stream/badge.svg)](https://docs.rs/kithara-stream)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
 
 # kithara-stream
 
-Byte-stream orchestration bridging async producers (network) to sync consumers (decoders). Exposes:
+Bridges async producers (network) to sync consumers (decoders). Exposes:
 
 - the sync `Source` trait that decoders read through;
 - the `Stream<T>` wrapper that gives `Source` a `Read + Seek` shape;
@@ -75,8 +77,6 @@ Defined here as the single source of truth and re-exported by other crates:
 - `AudioCodec` — codec identifier (`AacLc`, `Mp3`, `Flac`, …)
 - `ContainerFormat` — container identifier (`Fmp4`, `MpegTs`, `Adts`, `Flac`, `Wav`, `Ogg`, …)
 - `MediaInfo` — format metadata: channels, codec, container, sample rate, variant index
-
-`audio_codec_supports_fmp4_packaging` is exported alongside as the canonical predicate for fMP4 codec compatibility.
 
 ## Async-to-Sync Bridge
 

@@ -5,7 +5,7 @@ import PackageDescription
 
 // Updated automatically by CI on release.
 let version = "0.0.1-alpha2"
-let checksum = "aad6993f8f394d4fd1982b3e22ce641b51a53bec9a3c5beef46921b830bbea4e"
+let checksum = "34f2520f00eabba5e08e7921816e496ed700a8b1cbd05774efa770fff52bdd87"
 
 // KITHARA_LOCAL_DEV       — use locally built xcframework (for development).
 // KITHARA_BINARY_BASE_URL — override binary download host (for GitLab mirror).

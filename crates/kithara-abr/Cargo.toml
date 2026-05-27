@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming"
+description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming."
+keywords = ["abr", "streaming", "hls", "audio", "bitrate"]
+categories = ["multimedia::audio", "network-programming"]
 
 [dependencies]
 bon = { workspace = true }
@@ -20,7 +22,7 @@ tracing = { workspace = true }
 unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 
 [features]
 # No-op shim retained so `#[kithara::probe]` macro expansions

@@ -125,7 +125,7 @@ approx_constant = "warn"
 tools = { rustfmt = "rustfmt.toml", clippy = "clippy.toml", deny = "deny.toml" }
 
 [workspace.package]
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 edition = "2024"
 rust-version = "1.89"
 authors = ["kithara contributors"]
@@ -144,28 +144,28 @@ homepage = "https://github.com/zvuk/kithara"
 # `features = ["symphonia"]`. Cargo refuses default-features overrides
 # through `workspace = true` inheritance, so the disable has to live
 # here on the workspace declaration.
-kithara = { path = "crates/kithara", version = "0.0.1-alpha1", default-features = false }
-kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha1" }
-kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha1" }
-kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha1" }
-kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha1", default-features = false }
-kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha1" }
-kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha1", default-features = false }
-kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha1" }
-kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha1" }
-kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha1" }
-kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha1" }
-kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha1" }
-kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha1" }
-kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha1", default-features = false }
-kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha1", default-features = false }
-kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha1" }
-kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha1" }
-kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha1" }
-kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha1" }
+kithara = { path = "crates/kithara", version = "0.0.1-alpha2", default-features = false }
+kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha2" }
+kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha2" }
+kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha2" }
+kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha2", default-features = false }
+kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha2" }
+kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha2", default-features = false }
+kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha2" }
+kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha2" }
+kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha2" }
+kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha2" }
+kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha2" }
+kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha2" }
+kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha2", default-features = false }
+kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha2", default-features = false }
+kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha2" }
+kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha2" }
+kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha2" }
+kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha2" }
 kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
-kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha1" }
+kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha2" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.4.0"
 unimock = { version = "0.6", features = ["std"] }

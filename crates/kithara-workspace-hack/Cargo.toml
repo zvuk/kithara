@@ -4,7 +4,7 @@
 
 [package]
 name = "kithara-workspace-hack"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 edition = "2021"
 description = "workspace-hack package, managed by hakari"
 license = "MIT OR Apache-2.0"
@@ -212,6 +212,8 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
+symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
+symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
@@ -255,6 +257,8 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
+symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
+symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
@@ -297,6 +301,8 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
+symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
+symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
@@ -340,6 +346,8 @@ serde_json = { version = "1", default-features = false, features = ["raw_value"]
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
+symphonia-core = { version = "0.6", features = ["opt-simd-avx", "opt-simd-neon", "opt-simd-sse"] }
+symphonia-metadata = { version = "0.6", default-features = false, features = ["ape", "flac", "id3v1", "riff-id3", "riff-info", "vorbis"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", default-features = false, features = ["full"] }

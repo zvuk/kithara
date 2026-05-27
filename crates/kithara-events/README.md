@@ -4,6 +4,8 @@
 
 <div align="center">
 
+[![crates.io](https://img.shields.io/crates/v/kithara-events.svg)](https://crates.io/crates/kithara-events)
+[![docs.rs](https://docs.rs/kithara-events/badge.svg)](https://docs.rs/kithara-events)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>

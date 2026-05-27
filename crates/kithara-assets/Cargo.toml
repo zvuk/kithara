@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Persistent disk cache with lease/pin semantics and LRU eviction"
+description = "Disk cache with lease/pin semantics and LRU eviction."
+keywords = ["cache", "lru", "storage", "audio", "disk"]
+categories = ["caching"]
 
 [lints]
 workspace = true
@@ -37,7 +39,7 @@ unimock = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 tempfile = { workspace = true }
 tokio-util = { workspace = true, features = ["full"] }
 

@@ -1,3 +1,15 @@
+<div align="center">
+  <img src="../../logo.svg" alt="kithara" width="300">
+</div>
+
+<div align="center">
+
+[![crates.io](https://img.shields.io/crates/v/kithara-queue.svg)](https://crates.io/crates/kithara-queue)
+[![docs.rs](https://docs.rs/kithara-queue/badge.svg)](https://docs.rs/kithara-queue)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-queue
 
 AVQueuePlayer-analogue orchestration layer on top of `kithara-play`. Owns

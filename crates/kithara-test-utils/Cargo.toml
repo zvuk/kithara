@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Shared test utilities for kithara workspace"
+description = "kithara test runtime: probe/hang/mock helpers (no-op in release)."
+keywords = ["audio", "testing", "kithara", "probe"]
+categories = ["development-tools::testing"]
 
 [lints]
 workspace = true
@@ -34,7 +36,7 @@ unimock = { workspace = true, optional = true }
 tracing-wasm = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 usdt = { workspace = true, optional = true }
 backtrace = { workspace = true }
 tokio = { workspace = true, features = ["time", "rt"] }
