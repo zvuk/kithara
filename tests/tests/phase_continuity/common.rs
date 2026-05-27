@@ -363,6 +363,52 @@ where
     drifts
 }
 
+/// Scan an already-rendered interleaved PCM buffer for phase continuity.
+///
+/// Unlike [`scripted_phase_scan`], which pulls from a live `Audio` stream,
+/// this walks a captured buffer — e.g. the output of the real-time player
+/// loop (`OfflinePlayer::render`). The buffer's frame index doubles as the
+/// playback clock: every window is compared against the previous one via the
+/// shared [`check_against_previous`] anchor, so any seam in the rendered
+/// timeline is reported regardless of sign:
+///
+/// - a **forward content skip** (player jumps ahead in the source) reads as a
+///   positive `jump_samples` (`skip mod period`);
+/// - **uncompensated injected silence / lag** (player advances its clock while
+///   the decoder stalls) reads as a negative jump, because the output frame
+///   index ran ahead of the content the window actually carries.
+///
+/// Silent windows (fade-in, underrun gaps) fit `amp < MIN_SIGNAL_AMP` and are
+/// skipped — they neither anchor nor compare.
+pub(crate) fn scan_rendered_pcm(
+    pcm: &[f32],
+    sine: SinePhaseSpec,
+    scan_interval_frames: u64,
+) -> Vec<PhaseDrift> {
+    let chan = sine.channels as usize;
+    let total_frames = (pcm.len() / chan) as u64;
+    let want = READ_FRAMES_AFTER_SEEK;
+    let mut anchor: Option<(u64, f64)> = None;
+    let mut drifts: Vec<PhaseDrift> = Vec::new();
+    let mut at: u64 = 0;
+    while at + want as u64 <= total_frames {
+        let start = at as usize * chan;
+        let end = start + want * chan;
+        if let Some(drift) = check_against_previous(
+            &mut anchor,
+            at,
+            &pcm[start..end],
+            chan,
+            sine,
+            "render phase",
+        ) {
+            drifts.push(drift);
+        }
+        at = at.saturating_add(scan_interval_frames);
+    }
+    drifts
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

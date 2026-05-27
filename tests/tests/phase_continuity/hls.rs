@@ -458,9 +458,13 @@ async fn phase_continuity_hls(
 ///
 /// NOTE: this does NOT cover the separately reported production symptom — a
 /// 1–5 s forward position jump every 10–30 s during sustained FLAC playback on
-/// the real-time (cpal) player. That is a player-loop timeline bug, not a
-/// decode-path drift, and is invisible to offline `Audio::read()` pulls (which
-/// never skip content). It needs a real player-loop repro.
+/// the real-time (cpal) player. That is invisible to offline `Audio::read()`
+/// pulls (which spin on `Pending` and never skip content). A player-loop offline
+/// repro (`kithara_play::flac_realtime_player_continuity`, driving the real
+/// `PlayerProcessor` via `OfflinePlayer::render`) was built and stays green
+/// across sustained FLAC, the AAC→FLAC switch, 48 kHz resampling, and forced
+/// underruns — so the symptom needs true real-time cpal pressure or the live
+/// production stream, not a paced offline pull.
 #[kithara::test(
     tokio,
     native,
