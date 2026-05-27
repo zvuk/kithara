@@ -12,7 +12,7 @@
 
 # kithara-test-utils
 
-Cross-crate test-runtime support: `#[kithara::test]` macro re-exports, USDT probe helpers, hang-watchdog, and `unimock` glue. This crate is test-only (`publish = false`) and does **not** contain the integration-test fixtures themselves — those live in `kithara-integration-tests` (`tests/`) since the Phase 5 refactor.
+Cross-crate test-runtime support: `#[kithara::test]` macro re-exports, USDT probe helpers, hang-watchdog, and `unimock` glue. It carries the test runtime only — the integration-test fixtures themselves (synthetic servers, signal generators, builders) live in `kithara-integration-tests`. The probe/hang/mock paths are no-ops in release builds, so production code can depend on it normally.
 
 ## Modules
 

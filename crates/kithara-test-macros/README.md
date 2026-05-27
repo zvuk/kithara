@@ -12,7 +12,7 @@
 
 # kithara-test-macros
 
-Workspace proc-macro crate (`publish = false`) with unified test attributes for native + wasm test suites.
+Proc-macro crate providing unified test attributes (`#[kithara::test]`, `#[kithara::probe]`, `#[kithara::mock]`) for native and wasm test suites. The attributes expand to no-ops in release builds, so production code can carry them as a normal dependency.
 
 ## Macros
 
