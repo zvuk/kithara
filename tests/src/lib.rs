@@ -19,6 +19,7 @@ pub mod asset_fixture;
 pub mod assets_ext;
 pub mod audio_fixture;
 pub mod audio_mock;
+pub mod bufpool_ext;
 pub mod consts;
 pub mod decode_ext;
 #[cfg(not(target_arch = "wasm32"))]
@@ -51,6 +52,7 @@ pub mod signal_source;
 pub mod signal_source_utils;
 pub mod signal_spec;
 pub mod signal_url;
+pub mod storage_ext;
 pub mod test_server;
 pub mod token_store;
 pub mod wav;

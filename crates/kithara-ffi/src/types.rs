@@ -25,7 +25,6 @@ pub enum FfiError {
     Internal { description: String },
 }
 
-pub type FfiResult<T> = Result<T, FfiError>;
 impl From<PlayError> for FfiError {
     fn from(err: PlayError) -> Self {
         match err {
