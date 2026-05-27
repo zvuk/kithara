@@ -3,114 +3,37 @@
 
 use std::{
     io::{self, Read, Seek, SeekFrom},
+    sync::Arc,
     time::Duration,
 };
 
-use axum::{Router, body::Body, extract::Request, response::Response, routing::get};
-use bytes::Bytes;
 use kithara::{
     assets::StoreOptions,
     file::{File, FileConfig},
     stream::{AudioCodec, ContainerFormat, Stream},
 };
-use kithara_integration_tests::{TestHttpServer, TestTempDir, temp_dir};
+use kithara_integration_tests::{
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
+};
 use kithara_platform::tokio::task::spawn_blocking;
+use url::Url;
 
 struct Consts;
 impl Consts {
     const AUDIO_DATA: &'static [u8] = b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345";
-    const LARGE_DATA: &'static [u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()";
 }
 
-/// Serve data with HTTP Range request support.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "axum handler signature requires owned Request"
-)]
-fn serve_with_range(data: &'static [u8], req: Request) -> Response {
-    if let Some(range_header) = req.headers().get("range").and_then(|v| v.to_str().ok())
-        && let Some(range_str) = range_header.strip_prefix("bytes=")
-    {
-        let parts: Vec<&str> = range_str.split('-').collect();
-        if parts.len() == 2 {
-            let start: usize = parts[0].parse().unwrap_or(0);
-            let end: usize = if parts[1].is_empty() {
-                data.len() - 1
-            } else {
-                parts[1].parse().unwrap_or(data.len() - 1)
-            };
-            let end = end.min(data.len() - 1);
-            if start <= end && start < data.len() {
-                let slice = &data[start..=end];
-                return Response::builder()
-                    .status(206)
-                    .header(
-                        "Content-Range",
-                        format!("bytes {}-{}/{}", start, end, data.len()),
-                    )
-                    .header("Content-Length", slice.len().to_string())
-                    .body(Body::from(Bytes::from_static(slice)))
-                    .unwrap();
-            }
-        }
-    }
-
-    Response::builder()
-        .status(200)
-        .header("Content-Length", data.len().to_string())
-        .body(Body::from(Bytes::from_static(data)))
-        .unwrap()
-}
-
-async fn test_audio_endpoint(req: Request) -> Response {
-    serve_with_range(Consts::AUDIO_DATA, req)
-}
-
-/// Mirror of `serve_with_range` that also sets `Content-Type`. Real
-/// production servers (e.g. `cdn-edge.zvq.me`) return the codec MIME on
-/// every response, and the file source must surface it through
-/// `Stream::media_info`.
-fn serve_with_mime(data: &'static [u8], mime: &'static str, req: Request) -> Response {
-    let mut resp = serve_with_range(data, req);
-    resp.headers_mut().insert(
-        "Content-Type",
-        mime.parse().expect("BUG: hard-coded mime is valid"),
-    );
-    resp
-}
-
-async fn audio_mpeg_endpoint(req: Request) -> Response {
-    serve_with_mime(Consts::AUDIO_DATA, "audio/mpeg", req)
-}
-
-async fn audio_wav_endpoint(req: Request) -> Response {
-    serve_with_mime(Consts::AUDIO_DATA, "audio/wav", req)
-}
-
-async fn audio_flac_endpoint(req: Request) -> Response {
-    serve_with_mime(Consts::AUDIO_DATA, "audio/flac", req)
-}
-
-async fn test_large_endpoint(req: Request) -> Response {
-    serve_with_range(Consts::LARGE_DATA, req)
-}
-
-fn test_app() -> Router {
-    Router::new()
-        .route("/audio.mp3", get(test_audio_endpoint))
-        .route("/large.bin", get(test_large_endpoint))
-        .route("/track/streamhq", get(audio_mpeg_endpoint))
-        .route("/track/lossless", get(audio_flac_endpoint))
-        .route("/track/wav", get(audio_wav_endpoint))
-}
-
-async fn run_test_server() -> TestHttpServer {
-    TestHttpServer::new(test_app()).await
-}
-
-#[kithara::fixture]
-async fn test_server() -> TestHttpServer {
-    run_test_server().await
+/// Register the 27-byte audio fixture with optional MIME, served over
+/// HTTP range requests, and return its URL.
+fn audio_behavior(helper: &TestServerHelper, content_type: Option<&'static str>) -> Url {
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(Consts::AUDIO_DATA.to_vec()),
+            content_type,
+        },
+        delivery: Delivery::Range,
+    });
+    handle.url()
 }
 
 #[kithara::test(
@@ -123,13 +46,12 @@ async fn test_server() -> TestHttpServer {
 #[case(10, b"estAu")]
 #[case(22, b"12345")]
 async fn stream_file_seek_start_reads_correct_bytes(
-    #[future] test_server: TestHttpServer,
     temp_dir: TestTempDir,
     #[case] seek_pos: u64,
     #[case] expected: &[u8],
 ) {
-    let server = test_server.await;
-    let url = server.url("/audio.mp3");
+    let helper = TestServerHelper::new().await;
+    let url = audio_behavior(&helper, None);
 
     let config = FileConfig::for_src(url.into())
         .store(StoreOptions::new(temp_dir.path()))
@@ -165,15 +87,14 @@ async fn stream_file_seek_start_reads_correct_bytes(
 #[case::current_after_read(Some((5, b"ID3\x04\x00")), SeekFrom::Current(5), 10, b"estA")]
 #[case::end_from_fresh(None, SeekFrom::End(-5), 22, b"12345")]
 async fn stream_file_seek_reads_expected_bytes(
-    #[future] test_server: TestHttpServer,
     temp_dir: TestTempDir,
     #[case] initial_read: Option<(usize, &'static [u8])>,
     #[case] seek_from: SeekFrom,
     #[case] expected_pos: u64,
     #[case] expected: &'static [u8],
 ) {
-    let server = test_server.await;
-    let url = server.url("/audio.mp3");
+    let helper = TestServerHelper::new().await;
+    let url = audio_behavior(&helper, None);
 
     let config = FileConfig::for_src(url.into())
         .store(StoreOptions::new(temp_dir.path()))
@@ -212,18 +133,17 @@ async fn stream_file_seek_reads_expected_bytes(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-#[case("/track/streamhq", AudioCodec::Mp3, ContainerFormat::MpegAudio)]
-#[case("/track/lossless", AudioCodec::Flac, ContainerFormat::Flac)]
-#[case("/track/wav", AudioCodec::Pcm, ContainerFormat::Wav)]
+#[case("audio/mpeg", AudioCodec::Mp3, ContainerFormat::MpegAudio)]
+#[case("audio/flac", AudioCodec::Flac, ContainerFormat::Flac)]
+#[case("audio/wav", AudioCodec::Pcm, ContainerFormat::Wav)]
 async fn stream_media_info_carries_container_from_content_type(
-    #[future] test_server: TestHttpServer,
     temp_dir: TestTempDir,
-    #[case] route: &str,
+    #[case] mime: &'static str,
     #[case] expected_codec: AudioCodec,
     #[case] expected_container: ContainerFormat,
 ) {
-    let server = test_server.await;
-    let url = server.url(route);
+    let helper = TestServerHelper::new().await;
+    let url = audio_behavior(&helper, Some(mime));
 
     let config = FileConfig::for_src(url.into())
         .store(StoreOptions::new(temp_dir.path()))
@@ -242,13 +162,13 @@ async fn stream_media_info_carries_container_from_content_type(
     assert_eq!(
         info.codec,
         Some(expected_codec),
-        "{route}: codec lost; got {:?}",
+        "{mime}: codec lost; got {:?}",
         info.codec
     );
     assert_eq!(
         info.container,
         Some(expected_container),
-        "{route}: container dropped on the floor (regression — Apple-only build will fail to dispatch); got {:?}",
+        "{mime}: container dropped on the floor (regression — Apple-only build will fail to dispatch); got {:?}",
         info.container
     );
 }
@@ -258,12 +178,9 @@ async fn stream_media_info_carries_container_from_content_type(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn stream_file_seek_past_eof_fails(
-    #[future] test_server: TestHttpServer,
-    temp_dir: TestTempDir,
-) {
-    let server = test_server.await;
-    let url = server.url("/audio.mp3");
+async fn stream_file_seek_past_eof_fails(temp_dir: TestTempDir) {
+    let helper = TestServerHelper::new().await;
+    let url = audio_behavior(&helper, None);
 
     let config = FileConfig::for_src(url.into())
         .store(StoreOptions::new(temp_dir.path()))
@@ -284,12 +201,9 @@ async fn stream_file_seek_past_eof_fails(
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1")
 )]
-async fn stream_file_multiple_seeks_work(
-    #[future] test_server: TestHttpServer,
-    temp_dir: TestTempDir,
-) {
-    let server = test_server.await;
-    let url = server.url("/audio.mp3");
+async fn stream_file_multiple_seeks_work(temp_dir: TestTempDir) {
+    let helper = TestServerHelper::new().await;
+    let url = audio_behavior(&helper, None);
 
     let config = FileConfig::for_src(url.into())
         .store(StoreOptions::new(temp_dir.path()))

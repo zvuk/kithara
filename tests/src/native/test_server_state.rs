@@ -32,11 +32,16 @@ pub(crate) struct EncodedSignal {
 pub enum Content {
     HtmlError(&'static str),
     Status(u16),
+    StaticBytes {
+        bytes: Arc<Vec<u8>>,
+        content_type: Option<&'static str>,
+    },
 }
 
 #[derive(Clone)]
 pub enum Delivery {
     Normal,
+    Range,
 }
 
 #[derive(Clone)]
