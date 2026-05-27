@@ -17,6 +17,13 @@ pub(crate) const CHANNELS: u16 = 2;
 pub(crate) const FREQ_HZ: f64 = 440.0;
 pub(crate) const STREAM_FRAMES: u64 = (SAMPLE_RATE as u64) * 60;
 pub(crate) const TOLERANCE_SAMPLES: f64 = 0.5;
+/// Minimum fitted amplitude for a scan window to carry a meaningful phase.
+/// The test sine is full-scale (amp ≈ 1.0, ≥ 0.5 even through lossy AAC);
+/// a window over codec priming/leading silence fits amp ≈ 1e-4, where the
+/// phase is pure fit noise. Anchoring continuity on such a window compares
+/// real signal against noise and false-positives at random — so windows
+/// below this floor are skipped entirely (no anchor, no comparison).
+pub(crate) const MIN_SIGNAL_AMP: f64 = 0.1;
 /// Phase fit window. Needs ≥ one full period of the test sine
 /// (≈100 samples @ 440 Hz / 44.1 kHz) so DFT correlation leakage
 /// (`Σ cos(2δk+φ)` term) cancels to <1e-3 sample of bias. 128 samples
@@ -166,6 +173,10 @@ fn check_against_previous(
         .collect();
     let delta = sine.delta_rad_per_sample();
     let (measured, amp) = measure_phase_rad_window(&mono, delta);
+    if amp < MIN_SIGNAL_AMP {
+        info!(consumed, amp, "{label} skipped (no signal)");
+        return None;
+    }
     let result = match *last {
         None => {
             info!(consumed, measured, amp, "{label} first scan");
