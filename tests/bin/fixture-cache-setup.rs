@@ -1,8 +1,3 @@
-//! nextest setup script: prepare an ephemeral per-run fixture cache dir and
-//! export it to test processes via `$NEXTEST_ENV`. Wiping the dir on each run
-//! is the cache's only invalidation mechanism — generators change between runs,
-//! never within one, so a content hash needs no source fingerprint.
-
 use std::{fs, io::Write, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {

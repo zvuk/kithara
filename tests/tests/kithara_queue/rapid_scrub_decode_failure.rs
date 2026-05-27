@@ -1,42 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-//! Reproduces the production rapid-scrub cascade from
-//! `app.log @ 09:43:50` and `app.log @ 11:50` deterministically:
-//! user taps a prod DRM track, drags the slider mid-track, the
-//! decoder seek hits `SeekOutOfRange` (or `SeekFailed("isomp4:
-//! invalid atom size")`), `decoder_next_chunk` then returns
-//! `isomp4: no atom pending read`, the PCM channel closes, the
-//! player escalates `ItemDidFail`, and the queue silently advances.
-//!
-//! Each scenario uses the same multi-variant HLS fixture
-//! (4 variants, AES-128, ABR=Auto, per-segment server-side delay
-//! comfortably above the audio worker's 10 ms `WAIT_RANGE_TIMEOUT`).
-//! The fixture itself is the "network jitter middleware" the
-//! `kithara-integration-tests` plan calls for — implemented via
-//! `DelayRule` so no test-only code leaks into production crates.
-//!
-//! Scenarios cover the three slider-drag shapes the production log
-//! shows surfaces of the bug:
-//!
-//! 1. **Single scrub into a cold mid-range** — matches the trace
-//!    for prod track `50984034_1` (pos=79.9 s / dur=194 s, ~41 %)
-//!    where a single seek into unbuffered bytes crashed the track.
-//! 2. **Single scrub near the end** — covers bug #7 from the plan
-//!    (seek to ~95 % of an unbuffered tail).
-//! 3. **Forward scrub then backward scrub** — covers bug #6 from
-//!    the plan (forward into cold, then back to a warmer region;
-//!    the second seek often crashes when the demuxer cursor never
-//!    cleanly recovered from the first).
-//! 4. **Two sequential forward scrubs (50 % then 90 %)** — the
-//!    original `app.log @ 09:43:50` reproducer; second scrub lands
-//!    in a different cold range than the post-first-seek prefetch
-//!    reached.
-//!
-//! Every assertion is on `PlayerEvent::ItemDidFail` against the
-//! scrubbed track src. The companion `false_eof_rapid_scrub.rs` runs
-//! the same shape against the prod CDN behind `#[ignore]`.
-
 use std::{sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;

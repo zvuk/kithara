@@ -1,13 +1,3 @@
-//! HE-AAC v2 encoder through `fdk-aac-sys`.
-//!
-//! Produces raw AAC access units (no ADTS) tagged as
-//! `AudioCodec::AacHeV2` together with the `AudioSpecificConfig`
-//! emitted by the encoder's `confBuf` (stored in the
-//! [`EncodedTrack::codec_config`] field). The downstream fmp4
-//! muxer (`tests/src/native/fmp4`) reads that ASC verbatim into
-//! the `esds` box so the resulting fragments decode the same way
-//! production zvuk DRM fragments do.
-
 use std::{
     cmp,
     mem::{MaybeUninit, size_of, size_of_val},

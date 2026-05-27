@@ -1,25 +1,3 @@
-//! E2E reproduction of the zvuk stage `/drm/` burst-probe failure
-//! mode, verifying the `SizeProbeMethod::RangeGet` strategy.
-//!
-//! Live HTTP — ignored by default; run explicitly:
-//!
-//! ```text
-//! KITHARA_DRM_STAGE_AUTH_TOKEN=... \
-//!     cargo test -p kithara-app --test stage_drm_burst_e2e -- --ignored --nocapture
-//! ```
-//!
-//! Walks the master playlist, picks one variant's media playlist,
-//! then mirrors what `SizeEstimator::try_head_requests` does in
-//! production for `SizeProbeMethod::RangeGet`: fires
-//! `init + first N segments` as single-byte `GET Range: bytes=0-0`
-//! requests, chunked by the same concurrency cap as production.
-//!
-//! Real `HEAD`s against `init-slq-a1.mp4` on this upstream are
-//! dropped by a WAF (`peer closed connection without sending TLS
-//! close_notify`) — that's why `range_get` exists.
-//!
-//! Temporary by design — pinned to a stage track that's likely to rot.
-
 use futures::future::join_all;
 use kithara_net::{Headers, HttpClient, NetOptions, RangeSpec};
 use url::Url;

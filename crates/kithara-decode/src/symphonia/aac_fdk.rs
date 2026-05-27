@@ -1,25 +1,3 @@
-//! In-tree `AudioDecoder` impl wrapping [`fdk_aac::dec::Decoder`].
-//!
-//! Replaces `symphonia-adapter-fdk-aac` 0.2.0 to fix two issues that
-//! surfaced when we routed all AAC playback through fdk-aac for prod
-//! zvuk content (HE-AAC v1/v2):
-//!
-//! 1. **`outputDelay` was ignored.** fdk-aac's algorithmic delay (~1744
-//!    samples for AAC-LC stereo 48 kHz) was emitted as silent leading
-//!    frames, producing an audible ~36 ms gap at the start of every AAC
-//!    track. This adapter reads `stream_info.outputDelay` after the
-//!    first decode and unconditionally strips that many leading frames
-//!    before delivering the PCM, time-aligning the decoded stream with
-//!    the encoded one. Container-level [`crate::GaplessTrimmer`] then
-//!    owns trimming of encoder-side priming/padding (`elst`, iTunSMPB).
-//!    `packet.trim_start` / `packet.trim_end` are honoured on top.
-//!
-//! 2. The upstream adapter parsed its own `AudioSpecificConfig`/M4A
-//!    info under MPL-2.0; here we read just the fields needed for ADTS
-//!    framing directly from `AudioCodecParameters` (which the
-//!    demuxer/probe stage has already populated) or from
-//!    `Decoder::stream_info()` after the first decode succeeds.
-
 use std::fmt;
 
 use fdk_aac::dec::{Decoder, DecoderError, Transport};
