@@ -82,7 +82,7 @@ impl ResourceExt for StorageResource {
             Self::Mem(r) => r.fail(reason),
         }
     }
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn len(&self) -> Option<u64> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -98,7 +98,7 @@ impl ResourceExt for StorageResource {
             Self::Mem(r) => r.next_gap(from, limit),
         }
     }
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn path(&self) -> Option<&Path> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -106,7 +106,7 @@ impl ResourceExt for StorageResource {
             Self::Mem(_) => None,
         }
     }
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn reactivate(&self) -> StorageResult<()> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -122,7 +122,7 @@ impl ResourceExt for StorageResource {
             Self::Mem(r) => r.read_at(offset, buf),
         }
     }
-
+    // ast-grep-ignore: idioms.match-self-conversion
     fn status(&self) -> ResourceStatus {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -268,5 +268,23 @@ mod tests {
 
         res.reactivate().unwrap();
         assert_eq!(res.status(), ResourceStatus::Active);
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn reactivate_clears_failed_for_refetch() {
+        let mem = MemResource::new(CancellationToken::new());
+        let res = StorageResource::from(mem);
+
+        res.write_at(0, b"par").unwrap();
+        res.fail("fetch cancelled before completion".to_string());
+        assert!(matches!(res.status(), ResourceStatus::Failed(_)));
+
+        res.reactivate()
+            .expect("reactivate must clear a prior failure so the key can be re-fetched");
+        assert_eq!(res.status(), ResourceStatus::Active);
+
+        res.write_at(0, b"data").unwrap();
+        res.commit(Some(4)).unwrap();
+        assert!(matches!(res.status(), ResourceStatus::Committed { .. }));
     }
 }

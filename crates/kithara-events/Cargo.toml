@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Unified event bus for kithara audio pipeline"
+description = "Hierarchical event bus for the audio pipeline."
+keywords = ["events", "audio", "observer", "pubsub", "player"]
+categories = ["asynchronous"]
 
 [lints]
 workspace = true
@@ -21,7 +23,7 @@ smallvec = { workspace = true }
 url = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 
 [features]
 default = ["abr", "file", "hls", "audio", "player", "app", "queue", "downloader"]
@@ -36,6 +38,6 @@ downloader = ["dep:kithara-net", "dep:url"]
 
 [dev-dependencies]
 kithara-events = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 wasm-bindgen-test = { workspace = true }
 

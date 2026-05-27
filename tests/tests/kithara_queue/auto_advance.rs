@@ -17,6 +17,11 @@ const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 const MAX_BLOCKS: usize = 1024;
 
+fn with_autoplay(mut config: QueueConfig, should_autoplay: bool) -> QueueConfig {
+    config.should_autoplay = should_autoplay;
+    config
+}
+
 fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
     let spec = PcmSpec {
         channels: CHANNELS,
@@ -76,11 +81,10 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
         PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(harness.player()))
-            .with_should_autoplay(false),
-    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        false,
+    ));
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
     let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
@@ -143,11 +147,10 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(harness.player()))
-            .with_should_autoplay(false),
-    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        false,
+    ));
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
     let _ = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
@@ -213,11 +216,10 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(harness.player()))
-            .with_should_autoplay(false),
-    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        false,
+    ));
     let mut rx = queue.subscribe();
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.10));
@@ -283,11 +285,10 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
         PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(harness.player()))
-            .with_should_autoplay(true),
-    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        true,
+    ));
 
     let id_a = queue.register_for_test();
     let id_b = queue.register_for_test();
@@ -346,11 +347,10 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(harness.player()))
-            .with_should_autoplay(false),
-    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        false,
+    ));
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, TRACK_A_VALUE));
     let id_b = queue.insert_loaded_for_test(make_resource("b", TRACK_SECS, TRACK_B_VALUE));
@@ -412,11 +412,10 @@ async fn queue_pauses_player_when_last_track_ends() {
         PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(harness.player()))
-            .with_should_autoplay(false),
-    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        false,
+    ));
     let mut rx = queue.subscribe();
 
     let id_a = queue.insert_loaded_for_test(make_resource("a", TRACK_SECS, 0.30));
@@ -469,11 +468,10 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
         PlayerConfig::builder().crossfade_duration(0.0).build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(
-        QueueConfig::default()
-            .with_player(Arc::clone(harness.player()))
-            .with_should_autoplay(true),
-    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::default().with_player(Arc::clone(harness.player())),
+        true,
+    ));
 
     let _id = queue.insert_loaded_for_test(make_resource("solo", TRACK_SECS, TRACK_VALUE));
 

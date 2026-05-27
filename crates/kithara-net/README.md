@@ -4,22 +4,25 @@
 
 <div align="center">
 
+[![crates.io](https://img.shields.io/crates/v/kithara-net.svg)](https://crates.io/crates/kithara-net)
+[![docs.rs](https://docs.rs/kithara-net/badge.svg)](https://docs.rs/kithara-net)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
 
 # kithara-net
 
-HTTP networking with retry, timeout, and streaming support. Provides the `Net` trait for HTTP operations and `HttpClient` as the default reqwest-based implementation. Includes `TimeoutNet` decorator and `MockNet` for testing.
+HTTP client with retry, timeout, and streaming. Wraps reqwest behind the `Net` trait, with a `TimeoutNet` decorator and a `MockNet` for tests.
 
 ## Usage
 
 ```rust
 use kithara_net::{HttpClient, Net, NetOptions};
+use tokio_util::sync::CancellationToken;
 
-let client = HttpClient::new(NetOptions::default());
-let bytes = client.get_bytes(url, &NetOptions::default()).await?;
-let stream = client.stream(url, &NetOptions::default()).await?;
+let client = HttpClient::new(NetOptions::default(), CancellationToken::new());
+let bytes = client.get_bytes(url, None).await?;        // None = no extra headers
+let stream = client.stream(url, None).await?;
 ```
 
 ## Decorators
@@ -32,7 +35,7 @@ use kithara_net::{HttpClient, Net, NetExt, NetOptions, RetryPolicy};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-let client = HttpClient::new(NetOptions::default())
+let client = HttpClient::new(NetOptions::default(), CancellationToken::new())
     .with_retry(RetryPolicy::default(), CancellationToken::new())
     .with_timeout(Duration::from_secs(30));
 ```
@@ -51,9 +54,16 @@ let client = HttpClient::new(NetOptions::default())
 
 ## Timeout Behavior
 
-- `get_bytes()` and `head()`: apply `request_timeout` from options.
-- `stream()`: **no timeout** (designed for long-running downloads).
-- The `TimeoutNet` decorator can override with a custom timeout.
+Two independent limits in `NetOptions`, applied to **all** methods (`get_bytes`,
+`head`, `get_range`, `stream`):
+
+- `inactivity_timeout` (default 30s) — max gap between reads (reqwest
+  `read_timeout`); guards against stalled connections, not total duration.
+- `total_timeout` (default 120s) — hard cap on request lifetime. Set to `None`
+  to allow indefinite streaming as long as data keeps flowing.
+
+The `TimeoutNet` decorator can wrap any `Net` with an additional
+`tokio::time::timeout` over the whole call.
 
 ## Integration
 

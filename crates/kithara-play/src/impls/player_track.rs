@@ -289,25 +289,6 @@ impl PlayerTrack {
         self.mix.set_mix(Mix::FULLY_WET, self.fade_curve);
     }
 
-    /// Handle natural EOF.
-    fn handle_natural_end(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
-        if self.state == TrackState::Finished {
-            return;
-        }
-        self.notified_prefetch_requested = true;
-        self.emit_handover_requested(notification_tx);
-        self.set_state(TrackState::Finished);
-        notification_tx
-            .lock_sync()
-            .try_push(PlayerNotification::PlaybackStopped {
-                src: Arc::clone(&self.src),
-                item_id: self.item_id.clone(),
-                reason: TrackPlaybackStopReason::Eof,
-            })
-            .ok();
-        self.state_dirty = false;
-    }
-
     /// Handle a mid-stream decode failure. Distinct from natural EOF:
     /// no `handover_requested` (the queue layer decides whether to
     /// advance based on the `Failed` reason), and the stop reason is
@@ -326,6 +307,25 @@ impl PlayerTrack {
                 src: Arc::clone(&self.src),
                 item_id: self.item_id.clone(),
                 reason: TrackPlaybackStopReason::Failed,
+            })
+            .ok();
+        self.state_dirty = false;
+    }
+
+    /// Handle natural EOF.
+    fn handle_natural_end(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
+        if self.state == TrackState::Finished {
+            return;
+        }
+        self.notified_prefetch_requested = true;
+        self.emit_handover_requested(notification_tx);
+        self.set_state(TrackState::Finished);
+        notification_tx
+            .lock_sync()
+            .try_push(PlayerNotification::PlaybackStopped {
+                src: Arc::clone(&self.src),
+                item_id: self.item_id.clone(),
+                reason: TrackPlaybackStopReason::Eof,
             })
             .ok();
         self.state_dirty = false;

@@ -10,6 +10,7 @@ pub struct Condvar(ParkingLotCondvar);
 impl Condvar {
     #[inline]
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self(ParkingLotCondvar::new())
     }
@@ -35,9 +36,9 @@ impl Condvar {
         &self,
         mut guard: MutexGuard<'a, T>,
         deadline: web_time::Instant,
-    ) -> (MutexGuard<'a, T>, WaitTimeoutResult) {
-        let result = self.0.wait_until(&mut guard.0, deadline);
-        (guard, WaitTimeoutResult(result.timed_out()))
+    ) -> MutexGuard<'a, T> {
+        let _ = self.0.wait_until(&mut guard.0, deadline);
+        guard
     }
 }
 
@@ -58,6 +59,7 @@ pub struct Condvar(WstCondvar);
 impl Condvar {
     #[inline]
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self(WstCondvar::new())
     }
@@ -82,9 +84,9 @@ impl Condvar {
         &self,
         guard: MutexGuard<'a, T>,
         deadline: web_time::Instant,
-    ) -> (MutexGuard<'a, T>, WaitTimeoutResult) {
-        let (g, result) = self.0.wait_sync_timeout(guard.0, deadline);
-        (MutexGuard(g), WaitTimeoutResult(result.timed_out()))
+    ) -> MutexGuard<'a, T> {
+        let (g, _) = self.0.wait_sync_timeout(guard.0, deadline);
+        MutexGuard(g)
     }
 }
 
@@ -92,18 +94,5 @@ impl Condvar {
 impl Default for Condvar {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Result of a timed wait on a [`Condvar`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WaitTimeoutResult(bool);
-
-impl WaitTimeoutResult {
-    /// Returns `true` if the wait timed out (deadline elapsed).
-    #[inline]
-    #[must_use]
-    pub fn did_time_out(&self) -> bool {
-        self.0
     }
 }

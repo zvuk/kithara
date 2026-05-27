@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU8, Ordering};
+
 /// Priority class for worker scheduling.
 ///
 /// Nodes with higher service class are served first when the scheduler
@@ -11,6 +13,46 @@ pub enum ServiceClass {
     Warm,
     /// Currently audible. Highest priority.
     Audible,
+}
+
+impl From<ServiceClass> for u8 {
+    fn from(class: ServiceClass) -> Self {
+        match class {
+            ServiceClass::Idle => 0,
+            ServiceClass::Warm => 1,
+            ServiceClass::Audible => 2,
+        }
+    }
+}
+
+impl From<u8> for ServiceClass {
+    fn from(value: u8) -> Self {
+        match value {
+            2 => Self::Audible,
+            1 => Self::Warm,
+            _ => Self::Idle,
+        }
+    }
+}
+
+/// Lock-free shared `ServiceClass`, written wait-free by the real-time
+/// consumer (`Audio::set_service_class` during fade transitions) and read
+/// by the worker scheduler each pass. Avoids the scheduler command channel
+/// — and its periodic allocation — on the real-time audio thread.
+pub(crate) struct AtomicServiceClass(AtomicU8);
+
+impl AtomicServiceClass {
+    pub(crate) fn new(class: ServiceClass) -> Self {
+        Self(AtomicU8::new(class.into()))
+    }
+
+    pub(crate) fn load(&self) -> ServiceClass {
+        self.0.load(Ordering::Relaxed).into()
+    }
+
+    pub(crate) fn store(&self, class: ServiceClass) {
+        self.0.store(class.into(), Ordering::Relaxed);
+    }
 }
 
 /// Result of a single node tick.

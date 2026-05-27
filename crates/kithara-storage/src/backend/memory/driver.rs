@@ -114,21 +114,4 @@ impl MemResource {
         Self::open(cancel, MemOptions::default())
             .expect("BUG: MemDriver::open with default options is infallible")
     }
-
-    /// Create a committed resource pre-filled with data.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `MemDriver::open` fails (should never happen with initial data).
-    #[must_use]
-    pub fn from_bytes(data: &[u8], cancel: CancellationToken) -> Self {
-        Self::open(
-            cancel,
-            MemOptions {
-                initial_data: Some(data.to_vec()),
-                ..MemOptions::default()
-            },
-        )
-        .expect("BUG: MemDriver::open with initial_data is infallible")
-    }
 }

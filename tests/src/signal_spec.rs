@@ -89,6 +89,7 @@ pub(crate) struct ResolvedSignalSpec {
     pub(crate) length: SignalLength,
     pub(crate) channels: u16,
     pub(crate) sample_rate: u32,
+    pub(crate) bit_rate: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -142,6 +143,8 @@ struct SignalSpecPayload {
     start_freq: Option<f64>,
     #[serde(default)]
     sweep_mode: Option<String>,
+    #[serde(default)]
+    bit_rate: Option<u64>,
     channels: u16,
     sample_rate: u32,
 }
@@ -237,6 +240,7 @@ fn normalize_signal_spec(
     }
 
     let length = normalize_length(kind, payload, format)?;
+    let bit_rate = normalize_bit_rate(format, payload)?;
 
     if payload.freq.is_some() && (payload.start_freq.is_some() || payload.end_freq.is_some()) {
         return Err(SignalRequestError::InvalidField {
@@ -364,7 +368,32 @@ fn normalize_signal_spec(
         sweep,
         sample_rate: payload.sample_rate,
         channels: payload.channels,
+        bit_rate,
     })
+}
+
+fn normalize_bit_rate(
+    format: SignalFormat,
+    payload: &SignalSpecPayload,
+) -> Result<Option<u64>, SignalRequestError> {
+    let Some(bit_rate) = payload.bit_rate else {
+        return Ok(None);
+    };
+    match format {
+        SignalFormat::Wav | SignalFormat::Flac => Err(SignalRequestError::InvalidField {
+            field: "bit_rate",
+            message: "is only allowed for lossy formats (`mp3`, `aac`, `m4a`)",
+        }),
+        SignalFormat::Mp3 | SignalFormat::Aac | SignalFormat::M4a => {
+            if !(Consts::MIN_LOSSY_BIT_RATE..=Consts::MAX_LOSSY_BIT_RATE).contains(&bit_rate) {
+                return Err(SignalRequestError::InvalidField {
+                    field: "bit_rate",
+                    message: "must be between 32000 and 320000 bps",
+                });
+            }
+            Ok(Some(bit_rate))
+        }
+    }
 }
 
 fn normalize_length(

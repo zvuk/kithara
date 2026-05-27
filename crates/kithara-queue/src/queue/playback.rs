@@ -56,6 +56,16 @@ impl Queue {
         self.bus.publish(QueueEvent::CurrentTrackChanged { id });
     }
 
+    fn handle_item_did_fail(&self, src: &std::sync::Arc<str>) {
+        let pos = self.player.position_seconds().unwrap_or(0.0);
+        let dur = self.player.duration_seconds().unwrap_or(0.0);
+        debug!(%src, pos, dur, "ItemDidFail received — track aborted mid-stream");
+        if self.consume_armed_advance(pos, dur) {
+            return;
+        }
+        let _ = self.advance_to_next(Transition::None);
+    }
+
     /// Decide whether `ItemDidPlayToEnd` advances the queue or is
     /// filtered as a stale crossfade fade-out signal.
     ///
@@ -133,16 +143,6 @@ impl Queue {
             }
             _ => {}
         }
-    }
-
-    fn handle_item_did_fail(&self, src: &std::sync::Arc<str>) {
-        let pos = self.player.position_seconds().unwrap_or(0.0);
-        let dur = self.player.duration_seconds().unwrap_or(0.0);
-        debug!(%src, pos, dur, "ItemDidFail received — track aborted mid-stream");
-        if self.consume_armed_advance(pos, dur) {
-            return;
-        }
-        let _ = self.advance_to_next(Transition::None);
     }
 
     /// Seek within the currently-playing track.

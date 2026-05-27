@@ -1,9 +1,6 @@
-use kithara_encode::{
-    EncoderFactory, PackagedEncodeRequest,
-    codec::{AudioCodec, ContainerFormat, MediaInfo},
-    normalize_flac_codec_config,
-};
+use kithara_encode::{EncoderFactory, PackagedEncodeRequest, normalize_flac_codec_config};
 use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
 
 const CHANNELS: u16 = 2;

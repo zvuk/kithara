@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "HLS VOD orchestration with ABR, segment caching, and offline support"
+description = "HLS VOD engine: adaptive bitrate, segment cache, offline."
+keywords = ["hls", "streaming", "audio", "abr", "vod"]
+categories = ["multimedia::audio", "network-programming"]
 
 [lints]
 workspace = true
@@ -42,7 +44,7 @@ perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 probe = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
@@ -50,7 +52,7 @@ aes = { workspace = true }
 cbc = { workspace = true }
 kithara-hls = { path = ".", default-features = false, features = ["probe"] }
 kithara-net = { workspace = true, features = ["probe"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 wasm-bindgen-test = { workspace = true }

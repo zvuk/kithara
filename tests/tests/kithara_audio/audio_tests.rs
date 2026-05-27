@@ -4,6 +4,7 @@ use std::{fs::File, io::Write};
 
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig, ReadOutcome};
+use kithara_bufpool::{PcmPool, SharedPool};
 use kithara_decode::{GaplessMode, SilenceTrimParams};
 use kithara_events::{AudioEvent, Event, EventReceiver, SeekEpoch, SeekLifecycleStage};
 use kithara_file::{FileConfig, FileSrc};
@@ -81,6 +82,46 @@ async fn test_audio_new(#[case] sample_count: usize) {
     let _audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
+}
+
+/// `Audio::new` pre-warms its PCM pool so the decode hot path and the
+/// first reads reuse pooled buffers instead of allocating on the audio
+/// thread. Drives a fresh, cold custom pool and asserts construction
+/// leaves it warmed.
+#[kithara::test(tokio)]
+async fn audio_new_warms_pcm_pool() {
+    let pool: PcmPool = SharedPool::<8, Vec<f32>>::new(128, 200_000);
+    assert_eq!(
+        pool.allocated_bytes(),
+        0,
+        "precondition: a fresh pool is cold"
+    );
+
+    let (_cache, _tmp, mut config) = test_wav_config(1000);
+    config.pcm_pool = Some(pool.clone());
+
+    let _audio = Audio::<Stream<kithara_file::File>>::new(config)
+        .await
+        .unwrap();
+
+    assert!(
+        pool.allocated_bytes() > 0,
+        "Audio::new must pre-warm its PCM pool (allocated_bytes still 0)"
+    );
+
+    // The warm-up's payoff: decode-sized buffers come back as pool hits,
+    // not fresh allocations on the audio thread.
+    let misses_before = pool.stats().alloc_misses;
+    let decode_samples = 4608 * 2;
+    let bufs: Vec<_> = (0..8)
+        .map(|_| pool.get_with(|b| b.resize(decode_samples, 0.0)))
+        .collect();
+    let misses_after = pool.stats().alloc_misses;
+    assert_eq!(
+        misses_before, misses_after,
+        "a warmed pool must serve decode-sized buffers without allocating"
+    );
+    drop(bufs);
 }
 
 #[kithara::test]

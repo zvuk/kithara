@@ -8,6 +8,7 @@ pub(crate) struct HangWatchdogObserver {
 }
 
 impl HangWatchdogObserver {
+    // ast-grep-ignore: style.prefer-default-derive
     pub(crate) fn new() -> Self {
         Self {
             detector: HangDetector::new("audio_worker_loop", default_timeout()),

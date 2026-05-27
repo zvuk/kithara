@@ -21,14 +21,29 @@ use symphonia::core::{
 };
 
 use crate::{
-    codec::FrameCodec,
+    GaplessInfo,
+    codec::{CodecPriming, FrameCodec},
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
     symphonia::config::SymphoniaConfig,
     types::{DecoderTrackInfo, PcmSpec},
 };
 
-const TRACK_ID: u32 = 0;
+/// Module-scoped constants for [`SymphoniaCodec`].
+struct Consts;
+
+impl Consts {
+    /// Symphonia packets are unidimensional (single audio track) so
+    /// we pin `track_id` = 0 — Symphonia uses the field for routing
+    /// across multiplexed streams that we never produce.
+    const TRACK_ID: u32 = 0;
+
+    /// LAME-convention decoder algorithmic delay for the `mpa` MP3
+    /// decoder (528 polyphase synthesis filter convergence + 1 sync
+    /// sample). See [`crate::codec::FrameCodec::decoder_algo_delay`]
+    /// + `kithara-decode/README.md` "Gapless probe contract".
+    const MP3_DECODER_DELAY: u64 = 528 + 1;
+}
 
 /// Frame codec backed by a symphonia codec registry decoder.
 pub(crate) struct SymphoniaCodec {
@@ -62,7 +77,7 @@ impl SymphoniaCodec {
         let opts = AudioDecoderOptions::default();
         let decoder = registry
             .make_audio_decoder(params, &opts)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            .map_err(DecodeError::backend)?;
 
         let sample_rate = params.sample_rate.ok_or_else(|| {
             DecodeError::InvalidData("symphonia native params missing sample rate".into())
@@ -123,10 +138,13 @@ impl SymphoniaCodec {
         let registry: &CodecRegistry = crate::symphonia::registry::get_codecs();
         let mut opts = AudioDecoderOptions::default();
         opts.gapless = config.gapless;
-        let track_gapless = track.gapless;
         let decoder = registry
             .make_audio_decoder(&params, &opts)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+            .map_err(DecodeError::backend)?;
+        let algo_delay = symphonia_decoder_algo_delay(track.codec);
+        let track_gapless = track
+            .gapless
+            .map(|info| apply_decoder_algo_delay(info, algo_delay));
 
         let spec = PcmSpec {
             channels: track.channels,
@@ -155,6 +173,24 @@ impl SymphoniaCodec {
 }
 
 impl FrameCodec for SymphoniaCodec {
+    fn priming(&self, codec: AudioCodec) -> CodecPriming {
+        // AAC needs ~2 access units of pre-roll so SBR/PS QMF state converges
+        // after a flush (ISO/IEC 14496-12 audio pre-roll). HE-AAC v2 is an
+        // AAC-LC core + SBR/PS extensions that the fMP4 init parse and this
+        // codec layer both see only as `AacLc` (fdk-aac auto-detects SBR from
+        // the bitstream), so the pre-roll must be conservative for `AacLc`
+        // too — a plain-LC stream just decode-discards one harmless extra AU.
+        // The fMP4 segment demuxer reads this back-off so a boundary seek
+        // warms SBR across the previous segment instead of starting cold.
+        match codec {
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => CodecPriming {
+                packets: 2,
+                ..CodecPriming::default()
+            },
+            _ => CodecPriming::default(),
+        }
+    }
+
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
@@ -165,7 +201,7 @@ impl FrameCodec for SymphoniaCodec {
         let pts_ticks = duration_to_ticks(pts, self.spec.sample_rate);
         let packet_pts = Timestamp::new(i64::try_from(pts_ticks).unwrap_or(i64::MAX));
         let packet = Packet::new(
-            TRACK_ID,
+            Consts::TRACK_ID,
             packet_pts,
             PktDuration::new(0),
             frame_data.to_vec(),
@@ -183,7 +219,7 @@ impl FrameCodec for SymphoniaCodec {
                 out.clear();
                 return Ok(0);
             }
-            Err(e) => return Err(DecodeError::Backend(Box::new(e))),
+            Err(e) => return Err(DecodeError::backend(e)),
         };
 
         let num_samples = decoded.samples_interleaved();
@@ -226,11 +262,14 @@ impl FrameCodec for SymphoniaCodec {
             return Ok(0);
         }
 
-        out.ensure_len(num_samples)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        out.ensure_len(num_samples)?;
         decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
         out.truncate(num_samples);
         Ok(u32::try_from(decoded.frames()).unwrap_or(u32::MAX))
+    }
+
+    fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
+        symphonia_decoder_algo_delay(codec)
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
@@ -247,6 +286,23 @@ impl FrameCodec for SymphoniaCodec {
     }
 }
 
+fn symphonia_decoder_algo_delay(codec: AudioCodec) -> u64 {
+    match codec {
+        AudioCodec::Mp3 => Consts::MP3_DECODER_DELAY,
+        _ => 0,
+    }
+}
+
+fn apply_decoder_algo_delay(info: GaplessInfo, algo_delay: u64) -> GaplessInfo {
+    if algo_delay == 0 {
+        return info;
+    }
+    GaplessInfo {
+        leading_frames: info.leading_frames.saturating_add(algo_delay),
+        trailing_frames: info.trailing_frames.saturating_sub(algo_delay),
+    }
+}
+
 fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfile>)> {
     match codec {
         AudioCodec::AacLc => Ok((CODEC_ID_AAC, Some(CODEC_PROFILE_AAC_LC))),
@@ -258,6 +314,59 @@ fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfi
         AudioCodec::Opus => Ok((CODEC_ID_OPUS, None)),
         AudioCodec::Vorbis => Ok((CODEC_ID_VORBIS, None)),
         AudioCodec::Pcm | AudioCodec::Adpcm => Err(DecodeError::UnsupportedCodec(codec)),
+    }
+}
+
+#[cfg(test)]
+mod priming_tests {
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
+
+    use super::SymphoniaCodec;
+    use crate::{
+        codec::{CodecPriming, FrameCodec},
+        demuxer::TrackInfo,
+        symphonia::config::SymphoniaConfig,
+    };
+
+    fn mp3_track() -> TrackInfo {
+        TrackInfo {
+            codec: AudioCodec::Mp3,
+            sample_rate: 44_100,
+            channels: 2,
+            extra_data: Vec::new(),
+            duration: None,
+            gapless: None,
+        }
+    }
+
+    #[kithara::test]
+    fn symphonia_priming_warms_aac_and_defaults_elsewhere() {
+        let codec = SymphoniaCodec::open_with_config(&mp3_track(), &SymphoniaConfig::default())
+            .expect("BUG: MP3 codec open");
+        // AAC (incl. HE-AAC v1/v2, which the codec layer sees as `AacLc`)
+        // needs SBR/PS pre-roll across a seek boundary: 2 access units of
+        // decode-and-discard warm-up so QMF state converges before the
+        // seek target.
+        for c in [AudioCodec::AacLc, AudioCodec::AacHe, AudioCodec::AacHeV2] {
+            assert_eq!(
+                codec.priming(c),
+                CodecPriming {
+                    packets: 2,
+                    ..CodecPriming::default()
+                },
+                "{c:?} must request SBR pre-roll"
+            );
+        }
+        // Codecs that converge instantly (or that Symphonia primes
+        // internally) keep the empty contract.
+        for c in [AudioCodec::Mp3, AudioCodec::Flac, AudioCodec::Pcm] {
+            assert_eq!(
+                codec.priming(c),
+                CodecPriming::default(),
+                "symphonia handles {c:?} priming internally"
+            );
+        }
     }
 }
 

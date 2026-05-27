@@ -16,26 +16,26 @@ use std::{
 };
 
 use fdk_aac_sys as sys;
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::{
     EncodeError, EncodeResult,
-    codec::{AudioCodec, ContainerFormat, MediaInfo},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest, PcmSource},
 };
 
 struct Consts;
 impl Consts {
-    /// Each HE-AAC v2 access unit holds 1024 base-AAC samples
-    /// upsampled by SBR to 2048 output samples at the encoder's
-    /// declared (output) sample rate. The encoder consumes 2048
-    /// input samples per output frame.
-    const FRAME_OUTPUT_SAMPLES: usize = 2048;
-
     /// Soft upper bound on the encoded byte size of a single
     /// access unit. HE-AAC v2 frames at 32 kbps @ `44_100` Hz fit
     /// well under `1 KiB`; `8 KiB` leaves head-room for higher
     /// bitrates.
     const ACCESS_UNIT_CAPACITY: usize = 8 * 1024;
+
+    /// Each HE-AAC v2 access unit holds 1024 base-AAC samples
+    /// upsampled by SBR to 2048 output samples at the encoder's
+    /// declared (output) sample rate. The encoder consumes 2048
+    /// input samples per output frame.
+    const FRAME_OUTPUT_SAMPLES: usize = 2048;
 }
 
 pub(crate) struct AacHeV2Encoder;
@@ -53,7 +53,6 @@ impl AacHeV2Encoder {
         }
 
         // SAFETY: handle is owned by `Encoder` for the lifetime of
-        // the encode call; we close it on drop.
         let encoder = Encoder::new(&EncoderParams {
             sample_rate,
             bit_rate: request.bit_rate.try_into().map_err(|_| {
@@ -95,8 +94,6 @@ impl AacHeV2Encoder {
             Ok::<usize, EncodeError>(encoded.input_consumed)
         })?;
 
-        // Drain trailing frames the encoder has buffered (the
-        // priming + look-ahead delay) by feeding empty input.
         let empty: [i16; 0] = [];
         loop {
             let mut output = [0u8; Consts::ACCESS_UNIT_CAPACITY];
@@ -114,13 +111,11 @@ impl AacHeV2Encoder {
             pts = pts.saturating_add(frame_pts_step);
         }
 
-        let media_info = MediaInfo {
-            codec: Some(AudioCodec::AacHeV2),
-            container: Some(ContainerFormat::Fmp4),
-            sample_rate: Some(sample_rate),
-            channels: Some(channels),
-            ..request.media_info.clone()
-        };
+        let mut media_info = request.media_info.clone();
+        media_info.codec = Some(AudioCodec::AacHeV2);
+        media_info.container = Some(ContainerFormat::Fmp4);
+        media_info.sample_rate = Some(sample_rate);
+        media_info.channels = Some(channels);
 
         Ok(EncodedTrack {
             media_info,
@@ -202,8 +197,8 @@ struct Encoder {
 }
 
 struct EncoderParams {
-    sample_rate: u32,
     bit_rate: u32,
+    sample_rate: u32,
 }
 
 struct EncodeInfo {
@@ -222,7 +217,6 @@ impl Encoder {
 
         // SAFETY: handle is non-null after aacEncOpen succeeded.
         unsafe {
-            // AOT=29 — HE-AAC v2 (LC + SBR + Parametric Stereo).
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_AOT,
@@ -236,36 +230,28 @@ impl Encoder {
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_CHANNELMODE,
-                2, // MODE_2: stereo
+                2,
             ))?;
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_BITRATE,
                 params.bit_rate,
             ))?;
-            // CBR.
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_BITRATEMODE,
                 0,
             ))?;
-            // Raw access units (no ADTS / LATM).
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_TRANSMUX,
                 0,
             ))?;
-            // SBR_MODE=1 turns on Spectral Band Replication. AOT=29
-            // additionally enables Parametric Stereo on top. This
-            // is exactly the line `fdk-aac` 0.8.0 hardcodes to 0
-            // and that we sidestep here.
             check(sys::aacEncoder_SetParam(
                 handle,
                 sys::AACENC_PARAM_AACENC_SBR_MODE,
                 1,
             ))?;
-            // Initialise the encoder by issuing one all-null
-            // encode call (per FDK docs).
             check(sys::aacEncEncode(
                 handle,
                 ptr::null(),
@@ -276,16 +262,6 @@ impl Encoder {
         }
 
         Ok(encoder)
-    }
-
-    fn info(&self) -> EncodeResult<sys::AACENC_InfoStruct> {
-        let mut info: MaybeUninit<sys::AACENC_InfoStruct> = MaybeUninit::uninit();
-        // SAFETY: aacEncInfo writes a fully-initialised struct on
-        // AACENC_OK.
-        unsafe {
-            check(sys::aacEncInfo(self.handle, info.as_mut_ptr()))?;
-            Ok(info.assume_init())
-        }
     }
 
     fn audio_specific_config(info: &sys::AACENC_InfoStruct) -> Vec<u8> {
@@ -325,11 +301,9 @@ impl Encoder {
             numAncBytes: 0,
         };
         // SAFETY: `AACENC_OutArgs` is a plain POD struct of two
-        // i32 fields; zero is a valid initial state.
         let mut out_args: sys::AACENC_OutArgs = unsafe { core::mem::zeroed() };
 
         // SAFETY: all buffers + descriptors above point into valid
-        // memory and stay live until this call returns.
         unsafe {
             check(sys::aacEncEncode(
                 self.handle,
@@ -345,13 +319,21 @@ impl Encoder {
             output_size: usize::try_from(out_args.numOutBytes).unwrap_or(0),
         })
     }
+
+    fn info(&self) -> EncodeResult<sys::AACENC_InfoStruct> {
+        let mut info: MaybeUninit<sys::AACENC_InfoStruct> = MaybeUninit::uninit();
+        // SAFETY: aacEncInfo writes a fully-initialised struct on
+        unsafe {
+            check(sys::aacEncInfo(self.handle, info.as_mut_ptr()))?;
+            Ok(info.assume_init())
+        }
+    }
 }
 
 impl Drop for Encoder {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             // SAFETY: handle was returned by aacEncOpen and not
-            // closed yet.
             unsafe {
                 sys::aacEncClose(&mut self.handle as *mut _);
             }

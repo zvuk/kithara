@@ -53,6 +53,25 @@ public extension KitharaPlayerItem {
         bitrate.asObservable()
     }
 
+    /// Full HLS variant ladder discovered for this item, sorted by
+    /// bandwidth (ascending). Rx mirror of
+    /// `KitharaPlayerItem.variantsDiscovered`.
+    var rxVariantsDiscovered: Observable<[Variant]> {
+        variantsDiscovered.asObservable()
+    }
+
+    /// Variant the ABR controller selected (pre-apply). Rx mirror of
+    /// `KitharaPlayerItem.variantSelected`.
+    var rxVariantSelected: Observable<Variant> {
+        variantSelected.asObservable()
+    }
+
+    /// Variant currently audible to the user (post-apply). Rx mirror
+    /// of `KitharaPlayerItem.variantApplied`.
+    var rxVariantApplied: Observable<Variant> {
+        variantApplied.asObservable()
+    }
+
     /// Fires once when the item transitions to `readyToPlay`. Use
     /// this to chain UI affordances like enabling the play button.
     /// Rx mirror of `KitharaPlayerItem.readyToPlay`.

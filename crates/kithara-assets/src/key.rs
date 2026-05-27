@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -36,21 +36,19 @@ impl ResourceKey {
         Self::Absolute(path.into())
     }
 
-    /// Returns the absolute path if this is an Absolute key.
+    /// Returns true if this is an absolute path key.
     #[must_use]
-    pub fn as_absolute_path(&self) -> Option<&Path> {
-        match self {
-            Self::Absolute(p) => Some(p),
-            Self::Relative(_) => None,
-        }
+    pub fn is_absolute(&self) -> bool {
+        matches!(self, Self::Absolute(_))
     }
+}
 
+impl From<&Url> for ResourceKey {
     /// Extracts a unique relative key from a URL.
     ///
     /// Includes query parameters when present so that URLs differing only
     /// in query (e.g. `?id=123` vs `?id=456`) produce distinct keys.
-    #[must_use]
-    pub fn from_url(url: &Url) -> Self {
+    fn from(url: &Url) -> Self {
         let segment = url
             .path_segments()
             .and_then(|mut segments| segments.next_back())
@@ -60,12 +58,6 @@ impl ResourceKey {
             .query()
             .map_or_else(|| segment.to_string(), |q| format!("{segment}_{q}"));
         Self::Relative(rel_path)
-    }
-
-    /// Returns true if this is an absolute path key.
-    #[must_use]
-    pub fn is_absolute(&self) -> bool {
-        matches!(self, Self::Absolute(_))
     }
 }
 
@@ -363,11 +355,14 @@ mod tests {
             let path = PathBuf::from("/tmp/song.mp3");
             let key = ResourceKey::absolute(&path);
             assert!(key.is_absolute());
-            assert_eq!(key.as_absolute_path(), Some(path.as_path()));
+            let ResourceKey::Absolute(p) = &key else {
+                unreachable!("absolute key must be the Absolute variant")
+            };
+            assert_eq!(p.as_path(), path.as_path());
         } else {
             let key = ResourceKey::new("seg.m4s");
             assert!(!key.is_absolute());
-            assert_eq!(key.as_absolute_path(), None);
+            assert!(matches!(key, ResourceKey::Relative(_)));
         }
     }
 

@@ -7,7 +7,7 @@ use std::{
 };
 
 use bon::Builder;
-use kithara_abr::{AbrController, AbrMode, AbrSettings};
+use kithara_abr::{AbrController, AbrSettings};
 use kithara_audio::{AudioWorkerHandle, EqBandConfig, SeekOutcome, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_decode::GaplessMode;
@@ -23,7 +23,7 @@ use super::{
     player_processor::PlayerCmd,
     player_resource::PlayerResource,
     player_track::TrackTransition,
-    session_engine::SessionDispatcher,
+    session::SessionDispatcher,
 };
 #[rustfmt::skip]
 use crate::traits::engine::Engine;
@@ -92,6 +92,11 @@ pub struct PlayerConfig {
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
     pub max_slots: usize,
+    /// Sample rate passed to the engine/runtime backend as a hint.
+    /// Default: 44100. Offline/test harnesses set this to drive
+    /// deterministic render at a known rate.
+    #[builder(default = 44_100)]
+    pub sample_rate: u32,
 }
 
 impl fmt::Debug for PlayerConfig {
@@ -172,6 +177,7 @@ impl PlayerImpl {
         let engine_config = EngineConfig {
             eq_layout: config.eq_layout.clone(),
             max_slots: config.max_slots,
+            sample_rate: config.sample_rate,
             pcm_pool: Some(resolved_pool.clone()),
             session: config.session.clone(),
             cancel: Some(cancel.clone()),
@@ -418,6 +424,7 @@ impl PlayerImpl {
         while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
             out.push(format!("{notification:?}"));
         }
+        state.drain_trash();
         out
     }
 
@@ -601,20 +608,6 @@ impl PlayerImpl {
         self.items.lock_sync().len()
     }
 
-    /// Read the underlying audio `src` of `items[index]` without taking
-    /// it. Returns `None` when the slot is empty (loader hasn't filled
-    /// it yet, or the engine has already taken it via `enqueue_to_processor`).
-    /// Callers use this to capture the src that will be sent to the
-    /// audio thread when they subsequently call `select_item_with_crossfade`.
-    #[must_use]
-    pub fn item_src(&self, index: usize) -> Option<Arc<str>> {
-        self.items
-            .lock_sync()
-            .get(index)?
-            .as_ref()
-            .map(|q| Arc::clone(q.resource.src()))
-    }
-
     /// Load the current queue item into the active slot.
     ///
     /// Takes the resource out of the queue (replacing with `None`), wraps it
@@ -701,11 +694,6 @@ impl PlayerImpl {
         self.select_item(index, true)
     }
 
-    /// Get shared playback rate atomic for the audio pipeline.
-    pub fn playback_rate_shared(&self) -> &Arc<AtomicF32> {
-        &self.playback_rate_shared
-    }
-
     /// Current playback position in seconds.
     pub fn position_seconds(&self) -> Option<f64> {
         let slot_id = (*self.current_slot.lock_sync())?;
@@ -771,6 +759,7 @@ impl PlayerImpl {
         while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
             notifications.push(notification);
         }
+        state.drain_trash();
 
         if !notifications.is_empty() {
             tracing::debug!(
@@ -791,7 +780,7 @@ impl PlayerImpl {
 
     /// Remove all items from the queue.
     pub fn remove_all_items(&self) {
-        self.unarm_next_internal(Some(self.current_index.load(Ordering::Relaxed)));
+        self.unarm_next();
         self.items.lock_sync().clear();
         self.current_index.store(0, Ordering::Relaxed);
         self.set_status(PlayerStatus::Unknown);
@@ -801,7 +790,7 @@ impl PlayerImpl {
     /// Remove item at index. Returns the removed resource, or `None` if out of bounds
     /// or already consumed.
     pub fn remove_at(&self, index: usize) -> Option<Resource> {
-        self.unarm_next_internal(Some(self.current_index.load(Ordering::Relaxed)));
+        self.unarm_next();
 
         let mut items = self.items.lock_sync();
         if index >= items.len() {
@@ -970,14 +959,6 @@ impl PlayerImpl {
         EngineImpl::session_ducking()
     }
 
-    /// Change ABR mode at runtime. Takes effect on next `decide()`.
-    ///
-    /// In our model, ABR is per-resource (`Resource::abr()` handle), not per-player.
-    /// Mode set here propagates to newly-loaded resources only.
-    pub fn set_abr_mode(&self, mode: AbrMode) {
-        let _ = mode;
-    }
-
     /// Enable or disable the built-in linear auto-advance handler.
     ///
     /// External orchestrators (e.g. `kithara_queue::Queue`) disable this
@@ -1098,15 +1079,6 @@ impl PlayerImpl {
         self.engine.tick()
     }
 
-    /// Load the item at `index` if it is the current item and a slot is active.
-    ///
-    /// Used by the FFI layer after a deferred (auto-load) insert completes.
-    pub fn try_load_if_current(&self, index: usize) {
-        if self.current_index() == index && self.current_slot.lock_sync().is_some() {
-            self.load_current_item();
-        }
-    }
-
     /// Drop the armed next slot without committing.
     ///
     /// Sends `UnloadTrack` to the audio thread for the armed src and
@@ -1132,30 +1104,6 @@ impl PlayerImpl {
     /// Get current volume (0.0..=1.0).
     pub fn volume(&self) -> f32 {
         self.volume.load(Ordering::Relaxed)
-    }
-
-    /// Build a player on top of an externally-constructed engine.
-    ///
-    /// Used by integration-test harnesses that drive a single
-    /// `EngineImpl` for shared offline-render plumbing. Production code
-    /// uses [`PlayerImpl::new`] which builds its engine internally.
-    ///
-    /// The caller-provided `engine` is expected to share the same cancel
-    /// master as this player (or a parent of it). Test harnesses that
-    /// don't care about the cascade omit `PlayerConfig.cancel` and the
-    /// player creates its own orphan master — the externally-built
-    /// engine's worker keeps its own independent cancel in that case.
-    #[must_use]
-    pub fn with_engine(mut config: PlayerConfig, engine: EngineImpl) -> Self {
-        let resolved_pool = config.pcm_pool.clone().unwrap_or_default();
-        let bus = config.bus.clone().unwrap_or_default();
-        let cancel = config.cancel.clone().unwrap_or_default(); // kithara:cancel:owner
-        config.cancel = Some(cancel);
-        if config.abr.is_none() {
-            config.abr = Some(AbrController::new(AbrSettings::default()));
-        }
-
-        Self::new_with_engine(config, resolved_pool, bus, engine)
     }
 
     /// Shared audio worker handle for this player's engine.
@@ -1387,6 +1335,7 @@ mod tests {
             eq_layout: generate_log_spaced_bands(5),
             gapless_mode: GaplessMode::MediaOnly,
             max_slots: 2,
+            sample_rate: 44_100,
             pcm_pool: None,
             auto_advance_enabled: true,
             session: None,
@@ -1457,7 +1406,7 @@ mod tests {
     fn set_rate_updates_shared_atomic() {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(2.0);
-        let shared = player.playback_rate_shared();
+        let shared = &player.playback_rate_shared;
         assert!((shared.load(Ordering::Relaxed) - 2.0).abs() < f32::EPSILON);
     }
 
@@ -1466,7 +1415,7 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_rate(0.0);
         assert!(player.rate() >= 0.01);
-        assert!(player.playback_rate_shared().load(Ordering::Relaxed) >= 0.01);
+        assert!(player.playback_rate_shared.load(Ordering::Relaxed) >= 0.01);
 
         player.set_rate(-1.0);
         assert!(player.rate() >= 0.01);

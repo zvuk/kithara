@@ -91,6 +91,48 @@ public final class KitharaPlayerItem: AudioPlayerItemProtocol, @unchecked Sendab
             .eraseToAnyPublisher()
     }
 
+    /// HLS variant ladder discovered for this item. Fires once per
+    /// master-playlist parse with the full sorted-by-bandwidth list.
+    /// Use this to populate a quality picker UI.
+    public nonisolated var variantsDiscovered: AnyPublisher<[Variant], Never> {
+        _eventSubject
+            .compactMap { event -> [Variant]? in
+                if case let .variantsDiscovered(variants) = event {
+                    return variants.map(Variant.init(ffi:))
+                }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Variant the ABR controller has *chosen* but not yet applied —
+    /// emits before the next segment fetch on that variant.
+    public nonisolated var variantSelected: AnyPublisher<Variant, Never> {
+        _eventSubject
+            .compactMap { event -> Variant? in
+                if case let .variantSelected(variant) = event {
+                    return Variant(ffi: variant)
+                }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
+    /// Variant the decoder is *currently* feeding to the audio
+    /// pipeline. Emits when the segment from a newly-selected variant
+    /// crosses the playback head — i.e. when the user audibly hears
+    /// the new quality.
+    public nonisolated var variantApplied: AnyPublisher<Variant, Never> {
+        _eventSubject
+            .compactMap { event -> Variant? in
+                if case let .variantApplied(variant) = event {
+                    return Variant(ffi: variant)
+                }
+                return nil
+            }
+            .eraseToAnyPublisher()
+    }
+
     /// Fires once the metadata layer reports `ReadyToPlay`. Combine
     /// equivalent of iOS `rxReadyToPlay`.
     public nonisolated var readyToPlay: AnyPublisher<Void, Never> {

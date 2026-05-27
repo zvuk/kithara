@@ -1,0 +1,65 @@
+id: rust.no-inherent-to-string
+message: |
+  `fn to_string(&self) -> String` shadows `ToString::to_string` (auto-derived
+  from `Display`). And `impl ToString for X` directly is an antipattern
+  — `ToString` is a foreign trait whose blanket impl `impl<T: Display> ToString for T`
+  is the canonical path. Always implement `Display` instead; `to_string()` becomes
+  available automatically.
+
+      // ❌
+      impl Range {
+          pub fn to_string(&self) -> String { format!("bytes={}-", self.start) }
+      }
+
+      // ❌
+      impl ToString for Range {
+          fn to_string(&self) -> String { format!("bytes={}-", self.start) }
+      }
+
+      // ✅
+      impl Display for Range {
+          fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result { write!(f, "bytes={}-", self.start) }
+      }
+      // `.to_string()` works automatically via blanket impl.
+
+  Equivalent to `clippy::inherent_to_string` / `clippy::to_string_trait_impl`
+  but enforced at workspace level via ast-grep so violations are caught
+  pre-commit, not only on `cargo clippy`.
+
+  Suppress with `// ast-grep-ignore: rust.no-inherent-to-string` when there
+  is a documented reason — e.g. an FFI bridge that intentionally exposes
+  a named symbol `to_string` with non-Display semantics.
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 12a, Wave 14).
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: |
+        impl ToString for $T {
+            $$$BODY
+        }
+    - pattern: |
+        fn to_string(&self) -> String {
+            $$$BODY
+        }
+    - pattern: |
+        pub fn to_string(&self) -> String {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn to_string(&self) -> String {
+            $$$BODY
+        }
+    - pattern: |
+        pub(super) fn to_string(&self) -> String {
+            $$$BODY
+        }

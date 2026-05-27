@@ -14,12 +14,13 @@ use super::{
     ffi::{
         AudioBuffer, AudioBufferList, AudioConverterDispose, AudioConverterFillComplexBuffer,
         AudioConverterNew, AudioConverterPrimeInfo, AudioConverterRef, AudioConverterReset,
-        AudioConverterSetProperty, AudioStreamBasicDescription, AudioStreamPacketDescription,
-        UInt32,
+        AudioConverterSetProperty, AudioFormatGetProperty, AudioFormatGetPropertyInfo,
+        AudioFormatInfo, AudioFormatListItem, AudioStreamBasicDescription,
+        AudioStreamPacketDescription, UInt32,
     },
 };
 use crate::{
-    codec::FrameCodec,
+    codec::{CodecPriming, FrameCodec},
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
     types::{DecoderTrackInfo, PcmSpec},
@@ -85,23 +86,21 @@ impl AppleCodec {
         // SAFETY: input/output formats are valid stack values; `converter`
         let status = unsafe { AudioConverterNew(&input_format, &output_format, &mut converter) };
         if status != Consts::noErr {
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!("AudioConverterNew failed: {}", os_status_to_string(status)),
-            ))));
+            return Err(DecodeError::backend_msg(format!(
+                "AudioConverterNew failed: {}",
+                os_status_to_string(status)
+            )));
         }
 
         if let Some(cookie) = cookie.as_ref().filter(|c| !c.is_empty()) {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "magic cookie length fits in u32 for valid configs"
-            )]
+            let cookie_size = UInt32::try_from(cookie.len())?;
             // SAFETY: `converter` was just successfully created above and
             let status = unsafe {
                 AudioConverterSetProperty(
                     converter,
                     Consts::kAudioConverterDecompressionMagicCookie,
-                    cookie.len() as UInt32,
-                    cookie.as_ptr() as *const c_void,
+                    cookie_size,
+                    cookie.as_ptr().cast::<c_void>(),
                 )
             };
             if status != Consts::noErr {
@@ -124,7 +123,7 @@ impl AppleCodec {
             spec,
             frames_per_packet,
             input_bytes_per_packet,
-            input_state: Box::new(ConverterInputState::new()),
+            input_state: Box::new(ConverterInputState::default()),
             track_info: DecoderTrackInfo::default(),
             last_prime_info: None,
             gapless_enabled: false,
@@ -193,6 +192,8 @@ impl AppleCodec {
         matches!(
             codec,
             AudioCodec::AacLc
+                | AudioCodec::AacHe
+                | AudioCodec::AacHeV2
                 | AudioCodec::Flac
                 | AudioCodec::Pcm
                 | AudioCodec::Mp3
@@ -229,31 +230,25 @@ impl FrameCodec for AppleCodec {
             unsafe {
                 ptr::copy_nonoverlapping(
                     packet_desc.as_ptr(),
-                    &mut d as *mut _ as *mut u8,
+                    ptr::from_mut(&mut d).cast::<u8>(),
                     size_of::<AudioStreamPacketDescription>(),
                 );
             }
             d
         } else {
+            let frame_bytes = UInt32::try_from(frame_data.len())?;
             AudioStreamPacketDescription {
                 mStartOffset: 0,
                 mVariableFramesInPacket: 0,
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "frame size fits in u32 for any realistic codec packet"
-                )]
-                mDataByteSize: frame_data.len() as UInt32,
+                mDataByteSize: frame_bytes,
             }
         };
         self.input_state.set(frame_data, desc);
 
-        let channels = self.spec.channels as usize;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "frame_data length divided by mBytesPerPacket is bounded by packet count"
-        )]
-        let target_frames = if self.input_bytes_per_packet > 0 {
-            (frame_data.len() / self.input_bytes_per_packet as usize) as u32
+        let channels = usize::from(self.spec.channels);
+        let target_frames: u32 = if self.input_bytes_per_packet > 0 {
+            let packets = frame_data.len() / usize::try_from(self.input_bytes_per_packet)?;
+            u32::try_from(packets)?
         } else {
             self.frames_per_packet.max(Consts::AAC_FRAMES_PER_PACKET)
         };
@@ -261,25 +256,23 @@ impl FrameCodec for AppleCodec {
             out.clear();
             return Ok(0);
         }
-        let needed_samples = target_frames as usize * channels;
-        out.ensure_len(needed_samples)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        let needed_samples = usize::try_from(target_frames)? * channels;
+        out.ensure_len(needed_samples)?;
 
         let mut output_packets = target_frames;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "PCM buffer byte size fits in u32 for one packet"
-        )]
+        let buffer_bytes =
+            u32::try_from(out.len() * usize::try_from(Consts::BYTES_PER_F32_SAMPLE).unwrap_or(0))?;
         let mut buffer_list = AudioBufferList {
             mNumberBuffers: 1,
             mBuffers: [AudioBuffer {
                 mNumberChannels: u32::from(self.spec.channels),
-                mDataByteSize: (out.len() * Consts::BYTES_PER_F32_SAMPLE as usize) as u32,
-                mData: out.as_mut_ptr() as *mut c_void,
+                mDataByteSize: buffer_bytes,
+                mData: out.as_mut_ptr().cast::<c_void>(),
             }],
         };
 
-        let input_ptr = self.input_state.as_mut() as *mut ConverterInputState as *mut c_void;
+        let input_ptr =
+            ptr::from_mut::<ConverterInputState>(self.input_state.as_mut()).cast::<c_void>();
 
         // SAFETY: `self.converter` is live; `input_ptr` points at a live
         let status = unsafe {
@@ -297,31 +290,31 @@ impl FrameCodec for AppleCodec {
             && status != Consts::kAudioConverterErr_NoDataNow
             && output_packets == 0
         {
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!(
-                    "AudioConverterFillComplexBuffer failed: {}",
-                    os_status_to_string(status)
-                ),
-            ))));
+            return Err(DecodeError::backend_msg(format!(
+                "AudioConverterFillComplexBuffer failed: {}",
+                os_status_to_string(status)
+            )));
         }
 
         let frames = output_packets;
-        let samples_len = frames as usize * channels;
+        let samples_len = usize::try_from(frames)? * channels;
         out.truncate(samples_len);
         self.refresh_gapless_after_first_chunk();
         Ok(frames)
+    }
+
+    fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
+        apple_decoder_algo_delay(codec)
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
         // SAFETY: `self.converter` is a live handle.
         let status = unsafe { AudioConverterReset(self.converter) };
         if status != Consts::noErr {
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!(
-                    "AudioConverterReset failed: {}",
-                    os_status_to_string(status)
-                ),
-            ))));
+            return Err(DecodeError::backend_msg(format!(
+                "AudioConverterReset failed: {}",
+                os_status_to_string(status)
+            )));
         }
         self.input_state.clear();
         Ok(())
@@ -333,6 +326,10 @@ impl FrameCodec for AppleCodec {
 
     fn track_info(&self) -> DecoderTrackInfo {
         self.track_info.clone()
+    }
+
+    fn priming(&self, codec: AudioCodec) -> CodecPriming {
+        apple_codec_priming(codec)
     }
 }
 
@@ -347,20 +344,8 @@ struct AppleInputFormat {
 /// Build the input ASBD + cookie + frames-per-packet for the given track.
 fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     match track.codec {
-        AudioCodec::AacLc => {
-            let asbd = AudioStreamBasicDescription {
-                mSampleRate: f64::from(track.sample_rate),
-                mFormatID: Consts::kAudioFormatMPEG4AAC,
-                mFramesPerPacket: Consts::AAC_FRAMES_PER_PACKET,
-                mChannelsPerFrame: u32::from(track.channels),
-                ..Default::default()
-            };
-            let cookie = (!track.extra_data.is_empty()).then(|| track.extra_data.clone());
-            Ok(AppleInputFormat {
-                asbd,
-                cookie,
-                frames_per_packet: Consts::AAC_FRAMES_PER_PACKET,
-            })
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+            build_aac_input_format(track)
         }
         AudioCodec::Flac => {
             if track.extra_data.len() < Consts::FLAC_STREAMINFO_LEN {
@@ -380,13 +365,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             cookie.push(0x80);
             cookie.push(0x00);
             cookie.push(0x00);
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "FLAC_STREAMINFO_LEN is 34, fits in u8"
-            )]
-            {
-                cookie.push(Consts::FLAC_STREAMINFO_LEN as u8);
-            }
+            cookie.push(Consts::FLAC_STREAMINFO_LEN_U8);
             cookie.extend_from_slice(streaminfo);
 
             let asbd = AudioStreamBasicDescription {
@@ -460,11 +439,198 @@ fn parse_pcm_extra_data(extra: &[u8]) -> DecodeResult<AudioStreamBasicDescriptio
     unsafe {
         ptr::copy_nonoverlapping(
             extra.as_ptr(),
-            &mut asbd as *mut _ as *mut u8,
+            ptr::from_mut(&mut asbd).cast::<u8>(),
             size_of::<AudioStreamBasicDescription>(),
         );
     }
     Ok(asbd)
+}
+
+/// Derive the input ASBD + ESDS-wrapped cookie for an AAC track using
+/// Apple's canonical `kAudioFormatProperty_FormatList` discovery path.
+///
+/// Why not manual ASBD construction?
+///
+/// For plain AAC-LC, `mFormatID = kAudioFormatMPEG4AAC` + raw ASC as
+/// `MagicCookie` works. For HE-AAC v1 (SBR, AOT=5) and HE-AAC v2 (PS,
+/// AOT=29) with **explicit** signalling in the ASC, `AudioConverterNew`
+/// silently builds an LC pipeline and `SetProperty(MagicCookie)`
+/// returns `'!dat'`. The codec then emits `'bada'` (`kAudioCodecBadDataError`)
+/// on the first `FillComplexBuffer`. Apple's documented fix is to let
+/// `AudioFormat` parse the ESDS and hand back the correct ASBD via
+/// `kAudioFormatProperty_FormatList`, which enumerates every layer the
+/// cookie can produce (sorted MOST → LEAST rich), then use the richest
+/// entry's ASBD for `AudioConverterNew`.
+///
+/// `AudioFormat` APIs reject raw ASC bytes (also `'!dat'`) — Apple expects
+/// an ESDS atom body (the same shape `AudioFileGetProperty(MagicCookieData)`
+/// returns for m4a files), so we wrap the demuxer's raw ASC in the
+/// minimum ISO/IEC 14496-1 descriptor chain first.
+fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
+    if track.extra_data.is_empty() {
+        let asbd = AudioStreamBasicDescription {
+            mSampleRate: f64::from(track.sample_rate),
+            mFormatID: Consts::kAudioFormatMPEG4AAC,
+            mFramesPerPacket: Consts::AAC_FRAMES_PER_PACKET,
+            mChannelsPerFrame: u32::from(track.channels),
+            ..Default::default()
+        };
+        return Ok(AppleInputFormat {
+            asbd,
+            cookie: None,
+            frames_per_packet: Consts::AAC_FRAMES_PER_PACKET,
+        });
+    }
+
+    // First byte = 0x03 → already a full ESDS body (M4A magic cookie);
+    // anything else → raw ASC that needs wrapping. ESDS tag 0x03 cannot
+    // appear as the first byte of a valid ASC. README "Apple AAC input
+    // format" documents the two paths.
+    let esds = if track.extra_data.first() == Some(&0x03) {
+        track.extra_data.clone()
+    } else {
+        esds_wrap_asc(&track.extra_data)?
+    };
+    let asbd = derive_aac_asbd_from_esds(&esds, track)?;
+    let frames_per_packet = if asbd.mFramesPerPacket > 0 {
+        asbd.mFramesPerPacket
+    } else {
+        Consts::AAC_FRAMES_PER_PACKET
+    };
+    Ok(AppleInputFormat {
+        asbd,
+        frames_per_packet,
+        cookie: Some(esds),
+    })
+}
+
+fn derive_aac_asbd_from_esds(
+    esds: &[u8],
+    track: &TrackInfo,
+) -> DecodeResult<AudioStreamBasicDescription> {
+    let cookie_size = UInt32::try_from(esds.len())?;
+    let specifier_size = UInt32::try_from(size_of::<AudioFormatInfo>())?;
+    let format_info = AudioFormatInfo {
+        mASBD: AudioStreamBasicDescription {
+            mFormatID: Consts::kAudioFormatMPEG4AAC,
+            ..Default::default()
+        },
+        mMagicCookie: esds.as_ptr().cast::<c_void>(),
+        mMagicCookieSize: cookie_size,
+    };
+
+    let mut list_bytes: UInt32 = 0;
+    // SAFETY: `format_info` is a valid stack value with `mMagicCookie`
+    // pointing into the `esds` slice (alive for the duration of this
+    // function). `list_bytes` is a writable `u32` slot.
+    let status = unsafe {
+        AudioFormatGetPropertyInfo(
+            Consts::kAudioFormatProperty_FormatList,
+            specifier_size,
+            ptr::from_ref(&format_info).cast::<c_void>(),
+            &mut list_bytes,
+        )
+    };
+    if status != Consts::noErr || list_bytes == 0 {
+        return Err(DecodeError::backend_msg(format!(
+            "AudioFormatGetPropertyInfo(FormatList) failed: {} (size={}, esds_len={})",
+            os_status_to_string(status),
+            list_bytes,
+            esds.len()
+        )));
+    }
+
+    let item_size = size_of::<AudioFormatListItem>();
+    let item_count = usize::try_from(list_bytes)? / item_size;
+    if item_count == 0 {
+        return Err(DecodeError::backend_msg(format!(
+            "FormatList returned {list_bytes} bytes (< 1 item)"
+        )));
+    }
+    let mut items: Vec<AudioFormatListItem> = vec![AudioFormatListItem::default(); item_count];
+    let mut io_size = list_bytes;
+    // SAFETY: `items` holds `item_count` `AudioFormatListItem`s
+    // (verified above); `format_info` is still alive.
+    let status = unsafe {
+        AudioFormatGetProperty(
+            Consts::kAudioFormatProperty_FormatList,
+            specifier_size,
+            ptr::from_ref(&format_info).cast::<c_void>(),
+            &mut io_size,
+            items.as_mut_ptr().cast::<c_void>(),
+        )
+    };
+    if status != Consts::noErr {
+        return Err(DecodeError::backend_msg(format!(
+            "AudioFormatGetProperty(FormatList) failed: {}",
+            os_status_to_string(status)
+        )));
+    }
+
+    let returned = usize::try_from(io_size)? / item_size;
+    let chosen = items
+        .first()
+        .copied()
+        .ok_or_else(|| DecodeError::backend_msg("FormatList returned zero items"))?;
+
+    tracing::debug!(
+        format_id = format!("{:#010x}", chosen.mASBD.mFormatID),
+        sample_rate = chosen.mASBD.mSampleRate,
+        channels = chosen.mASBD.mChannelsPerFrame,
+        frames_per_packet = chosen.mASBD.mFramesPerPacket,
+        channel_layout = format!("{:#010x}", chosen.mChannelLayoutTag),
+        item_count = returned,
+        esds_len = esds.len(),
+        track_codec = ?track.codec,
+        track_sample_rate = track.sample_rate,
+        track_channels = track.channels,
+        "AppleCodec: AAC ASBD derived from FormatList"
+    );
+
+    Ok(chosen.mASBD)
+}
+
+/// Wrap a raw `AudioSpecificConfig` in the minimum ISO/IEC 14496-1
+/// ESDS descriptor chain Apple's `AudioFormat` / `AudioConverter`
+/// APIs accept as a magic cookie. Layout documented in
+/// `kithara-decode/README.md` "Apple AAC input format (ESDS rationale)".
+fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
+    let too_long = |scope: &str, n: usize| {
+        DecodeError::InvalidData(format!(
+            "aac: {scope} too long for short-form ESDS size field ({n} > 127)"
+        ))
+    };
+    let dsi_body: u8 = asc
+        .len()
+        .try_into()
+        .map_err(|_| too_long("ASC", asc.len()))?;
+    let dcd_body_len = 1 + 1 + 3 + 4 + 4 + 2 + asc.len();
+    let dcd_body: u8 = dcd_body_len
+        .try_into()
+        .map_err(|_| too_long("DecoderConfigDescriptor", dcd_body_len))?;
+    let esd_body_len = 2 + 1 + 2 + dcd_body_len + 3;
+    let esd_body: u8 = esd_body_len
+        .try_into()
+        .map_err(|_| too_long("ES_Descriptor", esd_body_len))?;
+
+    let header: [u8; 22] = [
+        0x03, esd_body, // ES_Descriptor (tag, size)
+        0x00, 0x00, // ES_ID = 0
+        0x00, // Flags = 0
+        0x04, dcd_body, // DecoderConfigDescriptor (tag, size)
+        0x40,     // OTI = MPEG-4 Audio
+        0x15,     // streamType = AudioStream<<2 | reserved
+        0x00, 0x00, 0x00, // BufferSizeDB (3 bytes)
+        0x00, 0x00, 0x00, 0x00, // MaxBitrate (4 bytes)
+        0x00, 0x00, 0x00, 0x00, // AvgBitrate (4 bytes)
+        0x05, dsi_body, // DecoderSpecificInfo (tag, size)
+    ];
+    let trailer: [u8; 3] = [0x06, 0x01, 0x02];
+    Ok(header
+        .into_iter()
+        .chain(asc.iter().copied())
+        .chain(trailer)
+        .collect())
 }
 
 fn build_pcm_output_format(sample_rate: u32, channels: u16) -> AudioStreamBasicDescription {
@@ -478,5 +644,140 @@ fn build_pcm_output_format(sample_rate: u32, channels: u16) -> AudioStreamBasicD
         mChannelsPerFrame: u32::from(channels),
         mBitsPerChannel: Consts::BITS_PER_F32_SAMPLE,
         ..Default::default()
+    }
+}
+
+/// Per-codec priming requirements for the Apple `AudioConverter` backend.
+/// `AudioConverter` does not strip its own MDCT/SBR warm-up — these values
+/// represent how far back the demuxer must park before the seek target so
+/// the codec can decode-and-discard the right number of warm-up packets.
+/// `FrameCodec::priming` delegates here; the free function exists so tests
+/// can pin the table without needing a live `AudioConverterRef`.
+#[must_use]
+pub(crate) fn apple_codec_priming(codec: AudioCodec) -> CodecPriming {
+    match codec {
+        AudioCodec::AacHeV2 => CodecPriming {
+            frames: 4096,
+            packets: 3,
+            byte_margin: 32768,
+        },
+        AudioCodec::AacHe => CodecPriming {
+            frames: 2048,
+            packets: 2,
+            byte_margin: 16384,
+        },
+        AudioCodec::AacLc => CodecPriming {
+            frames: 1024,
+            packets: 2,
+            byte_margin: 8192,
+        },
+        AudioCodec::Mp3 => CodecPriming {
+            frames: 1152,
+            packets: 1,
+            byte_margin: 4608,
+        },
+        _ => CodecPriming::default(),
+    }
+}
+
+/// Apple-backend MP3 decoder algorithmic delay in PCM frames.
+///
+/// `AudioConverter` for MP3 leaves the LAME-convention 529-frame
+/// algorithmic delay un-compensated. Symphonia `mpa` declares the
+/// same number; mirror it here so gapless priming matches across
+/// backends. Non-MP3 codecs default to 0 — AAC priming is captured
+/// via `AudioConverterPrimeInfo` in the gapless capture path.
+#[must_use]
+pub(crate) fn apple_decoder_algo_delay(codec: AudioCodec) -> u64 {
+    match codec {
+        AudioCodec::Mp3 => 529,
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod algo_delay_tests {
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
+
+    use super::apple_decoder_algo_delay;
+
+    #[kithara::test]
+    fn apple_decoder_algo_delay_mp3_is_529() {
+        assert_eq!(apple_decoder_algo_delay(AudioCodec::Mp3), 529);
+    }
+
+    #[kithara::test]
+    fn apple_decoder_algo_delay_non_mp3_codecs_zero() {
+        assert_eq!(apple_decoder_algo_delay(AudioCodec::AacLc), 0);
+        assert_eq!(apple_decoder_algo_delay(AudioCodec::AacHe), 0);
+        assert_eq!(apple_decoder_algo_delay(AudioCodec::AacHeV2), 0);
+        assert_eq!(apple_decoder_algo_delay(AudioCodec::Flac), 0);
+        assert_eq!(apple_decoder_algo_delay(AudioCodec::Opus), 0);
+    }
+}
+
+#[cfg(test)]
+mod priming_table_tests {
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
+
+    use super::apple_codec_priming;
+    use crate::codec::CodecPriming;
+
+    #[kithara::test]
+    fn apple_priming_aac_he_v2() {
+        assert_eq!(
+            apple_codec_priming(AudioCodec::AacHeV2),
+            CodecPriming {
+                frames: 4096,
+                packets: 3,
+                byte_margin: 32768
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn apple_priming_aac_he() {
+        assert_eq!(
+            apple_codec_priming(AudioCodec::AacHe),
+            CodecPriming {
+                frames: 2048,
+                packets: 2,
+                byte_margin: 16384
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn apple_priming_aac_lc() {
+        assert_eq!(
+            apple_codec_priming(AudioCodec::AacLc),
+            CodecPriming {
+                frames: 1024,
+                packets: 2,
+                byte_margin: 8192
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn apple_priming_mp3() {
+        assert_eq!(
+            apple_codec_priming(AudioCodec::Mp3),
+            CodecPriming {
+                frames: 1152,
+                packets: 1,
+                byte_margin: 4608
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn apple_priming_flac_is_default() {
+        assert_eq!(
+            apple_codec_priming(AudioCodec::Flac),
+            CodecPriming::default()
+        );
     }
 }

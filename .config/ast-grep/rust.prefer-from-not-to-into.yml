@@ -1,0 +1,79 @@
+id: rust.prefer-from-not-to-into
+message: |
+  `fn to_$NAME(&self) -> Y` (Y ≠ String, ≠ Self) or
+  `fn into_$NAME(self) -> Y` is a manual `From<Self>` impl. Use
+  `impl From<&$SELF_TYPE> for Y` (for to_X) or `impl From<$SELF_TYPE>
+  for Y` (for into_X) so callers can use `.into()`.
+
+      // ❌
+      impl Rgb {
+          pub fn to_iced(self) -> iced::Color {
+              iced::Color::from_rgb(self.r, self.g, self.b)
+          }
+      }
+
+      // ✅
+      impl From<Rgb> for iced::Color {
+          fn from(rgb: Rgb) -> Self {
+              iced::Color::from_rgb(rgb.r, rgb.g, rgb.b)
+          }
+      }
+
+  For newtypes and simple wraps use `#[derive(derive_more::Into)]`.
+  Manual impl is only needed when conversion logic is non-trivial.
+
+  This rule EXCLUDES:
+  - `to_$NAME(&self) -> String` (see rust.no-to-string-method)
+  - `into_inner(self)` (idiomatic newtype unwrap, leave as is)
+  - `into_iter(self)` (IntoIterator method)
+  - return type `&Y` (reference conversion → AsRef/Deref, separate category)
+
+  Suppress with `// ast-grep-ignore: rust.prefer-from-not-to-into` when
+  there is a legitimate reason.
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Categories 1c/1d,
+  Wave 4).
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: |
+        fn $NAME(&self) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub fn $NAME(&self) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn $NAME(&self) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        fn $NAME(self) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub fn $NAME(self) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn $NAME(self) -> $RET {
+            $$$BODY
+        }
+constraints:
+  NAME:
+    regex: "^(to|into)_[a-z][a-z0-9_]*$"
+    not:
+      regex: "^(to_string|into_inner|into_iter|into_probe_arg|from_probe_arg)$"
+  RET:
+    not:
+      regex: "^(String|Self|&.*)$"

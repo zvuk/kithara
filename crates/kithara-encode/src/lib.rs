@@ -14,7 +14,6 @@
 //! })?;
 //! ```
 
-pub mod codec;
 mod error;
 mod factory;
 mod traits;
@@ -25,7 +24,6 @@ mod fdk;
 #[cfg(not(target_arch = "wasm32"))]
 mod ffmpeg;
 
-pub use codec::{AudioCodec, ContainerFormat, MediaInfo, audio_codec_supports_fmp4_packaging};
 pub use error::{EncodeError, EncodeResult};
 pub use factory::EncoderFactory;
 #[cfg(not(target_arch = "wasm32"))]

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kithara_encode::codec::AudioCodec;
+use kithara_stream::AudioCodec;
 #[cfg(target_arch = "wasm32")]
 use reqwest::Client;
 use thiserror::Error;
@@ -22,13 +22,22 @@ use crate::{
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
+#[cfg(not(target_arch = "wasm32"))]
+mod shared;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{TestServerHelper, run_test_server};
+pub(crate) use native::router;
+#[cfg(not(target_arch = "wasm32"))]
+pub use native::{BehaviorHandle, TestServerHelper, run_test_server};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use shared::shared;
 #[cfg(target_arch = "wasm32")]
 pub use wasm::TestServerHelper;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::test_server_state::{Content, Delivery, FixtureBehavior};
 
 #[derive(Debug, Error)]
 pub enum CreateHlsError {
@@ -327,6 +336,23 @@ impl HlsFixtureBuilder {
         self
     }
 
+    /// Override the encoder bit-rate hint on the packaged-audio request set
+    /// by one of the `packaged_audio_*` builders. `None` keeps the codec's
+    /// default (set by `default_bit_rate`).
+    ///
+    /// Must be called AFTER a `packaged_audio_*` builder so `packaged_audio`
+    /// is populated.
+    #[must_use]
+    pub fn packaged_audio_bit_rate(mut self, bit_rate: Option<u64>) -> Self {
+        let packaged = self.spec.packaged_audio.as_mut().expect(
+            "packaged_audio_bit_rate: call packaged_audio_* before packaged_audio_bit_rate",
+        );
+        if let Some(rate) = bit_rate {
+            packaged.bit_rate = Some(rate);
+        }
+        self
+    }
+
     #[must_use]
     pub fn packaged_audio_aac_lc(self, sample_rate: u32, channels: u16) -> Self {
         self.packaged_audio_signal_aac_lc(sample_rate, channels, PackagedSignal::Sawtooth)
@@ -549,6 +575,7 @@ mod tests {
             channels: 2,
             length: SignalSpecLength::Seconds(1.0),
             format: SignalFormat::Wav,
+            bit_rate: None,
         };
         let helper = TestServerHelper::new().await;
         let url = helper.sine(&spec, 440.0).await;

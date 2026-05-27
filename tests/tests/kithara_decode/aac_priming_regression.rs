@@ -20,7 +20,7 @@
 
 use std::io::Cursor;
 
-use kithara::decode::{DecoderConfig, DecoderFactory};
+use kithara::decode::{DecoderConfig, DecoderFactory, PcmChunk};
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
 use kithara_platform::time::Duration;
 use reqwest::Client;
@@ -39,6 +39,7 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
         channels: 2,
         length: SignalSpecLength::Seconds(1.0),
         format: SignalFormat::Aac,
+        bit_rate: None,
     };
 
     let response = client
@@ -70,11 +71,8 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     // With our `outputDelay` strip, the lookahead silence is dropped
     // before the chunk is emitted and the first surfaced chunk
     // starts with real sawtooth content.
-    let chunk = decoder
-        .next_chunk()
-        .expect("decode chunk 0")
-        .into_chunk()
-        .expect("chunk 0 must be a PCM chunk, not EOS");
+    let outcome = decoder.next_chunk().expect("decode chunk 0");
+    let chunk = PcmChunk::try_from(outcome).expect("chunk 0 must be a PCM chunk, not EOS");
     assert!(
         !chunk.pcm.is_empty(),
         "AAC chunk 0 must not be empty after priming strip",

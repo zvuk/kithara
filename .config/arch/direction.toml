@@ -21,7 +21,7 @@ crates = ["kithara-bufpool", "kithara-events", "kithara-net"]
 [[layer]]
 index = 3
 name = "services"
-crates = ["kithara-abr", "kithara-storage"]
+crates = ["kithara-abr", "kithara-storage", "kithara-test-utils"]
 
 [[layer]]
 index = 4
@@ -36,7 +36,6 @@ crates = [
     "kithara-encode",
     "kithara-file",
     "kithara-hls",
-    "kithara-test-utils",
 ]
 
 [[layer]]
@@ -52,7 +51,7 @@ crates = ["kithara-play"]
 [[layer]]
 index = 8
 name = "facade"
-crates = ["kithara", "kithara-queue", "kithara-wasm"]
+crates = ["kithara", "kithara-queue"]
 
 [[layer]]
 index = 9

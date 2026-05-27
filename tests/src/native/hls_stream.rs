@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     sync::{Arc, RwLock},
 };
@@ -8,9 +9,9 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara_encode::{
-    EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource, codec::MediaInfo,
-};
+use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource};
+use kithara_stream::MediaInfo;
+use num_traits::AsPrimitive;
 
 use crate::{
     fixture_protocol::{
@@ -323,13 +324,22 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
         let variants = packaged
             .variants
             .iter()
-            .map(|variant| {
-                encode_packaged_variant(packaged, variant)
-                    .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
-                    .and_then(|track| {
-                        mux_audio_track(&track, packaged.gapless_encoding)
-                            .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))
-                    })
+            .enumerate()
+            .map(|(idx, variant)| {
+                let cache = crate::fixture_cache::FixtureCache::from_env();
+                let key = format!("{}|v{idx}", spec.cache_key());
+                if let Some(data) = cache
+                    .get("hls-variant", key.as_bytes())
+                    .and_then(|blob| decode_variant_blob(&blob))
+                {
+                    return Ok(data);
+                }
+                let track = encode_packaged_variant(packaged, variant)
+                    .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
+                let data = mux_audio_track(&track, packaged.gapless_encoding)
+                    .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
+                cache.store("hls-variant", key.as_bytes(), &encode_variant_blob(&data));
+                Ok(data)
             })
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(MaterializedHlsBody::Packaged { variants });
@@ -338,6 +348,79 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
     Ok(MaterializedHlsBody::Legacy {
         data_mode: materialize_data_mode(spec),
         init_segments: materialize_init_mode(spec),
+    })
+}
+
+fn put_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn put_block(out: &mut Vec<u8>, block: &[u8]) {
+    put_u64(out, block.len().as_());
+    out.extend_from_slice(block);
+}
+
+fn take_block<'a>(buf: &mut &'a [u8]) -> Option<&'a [u8]> {
+    if buf.len() < 8 {
+        return None;
+    }
+    let len: usize = u64::from_le_bytes(buf[..8].try_into().ok()?).as_();
+    let rest = &buf[8..];
+    if rest.len() < len {
+        return None;
+    }
+    let (block, tail) = rest.split_at(len);
+    *buf = tail;
+    Some(block)
+}
+
+fn take_u64(buf: &mut &[u8]) -> Option<u64> {
+    if buf.len() < 8 {
+        return None;
+    }
+    let v = u64::from_le_bytes(buf[..8].try_into().ok()?);
+    *buf = &buf[8..];
+    Some(v)
+}
+
+fn encode_variant_blob(v: &PackagedVariantData) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_block(&mut out, &v.init_segment);
+    put_block(&mut out, v.rfc6381_codec.as_bytes());
+    put_u64(&mut out, v.media_segments.len().as_());
+    for seg in &v.media_segments {
+        put_block(&mut out, seg);
+    }
+    put_u64(&mut out, v.segment_durations_secs.len().as_());
+    for d in &v.segment_durations_secs {
+        out.extend_from_slice(&d.to_le_bytes());
+    }
+    out
+}
+
+fn decode_variant_blob(blob: &[u8]) -> Option<PackagedVariantData> {
+    let mut buf = blob;
+    let init = take_block(&mut buf)?.to_vec();
+    let codec = std::str::from_utf8(take_block(&mut buf)?).ok()?.to_owned();
+    let media_count: usize = take_u64(&mut buf)?.as_();
+    let mut media_segments = Vec::with_capacity(media_count);
+    for _ in 0..media_count {
+        media_segments.push(Arc::new(take_block(&mut buf)?.to_vec()));
+    }
+    let dur_count: usize = take_u64(&mut buf)?.as_();
+    let mut segment_durations_secs = Vec::with_capacity(dur_count);
+    for _ in 0..dur_count {
+        if buf.len() < 8 {
+            return None;
+        }
+        segment_durations_secs.push(f64::from_le_bytes(buf[..8].try_into().ok()?));
+        buf = &buf[8..];
+    }
+    Some(PackagedVariantData {
+        init_segment: Arc::new(init),
+        rfc6381_codec: Cow::Owned(codec),
+        media_segments,
+        segment_durations_secs,
     })
 }
 
@@ -701,7 +784,7 @@ fn encrypt_aes128_cbc(data: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_encode::codec::AudioCodec;
+    use kithara_stream::AudioCodec;
 
     use super::*;
     use crate::{
@@ -713,6 +796,25 @@ mod tests {
         hls_url::{HlsSpec, encode_hls_spec},
         kithara,
     };
+
+    #[kithara::test]
+    fn packaged_variant_blob_roundtrips() {
+        let original = PackagedVariantData {
+            init_segment: Arc::new(vec![1, 2, 3, 4]),
+            rfc6381_codec: Cow::Borrowed("mp4a.40.2"),
+            media_segments: vec![Arc::new(vec![5, 6]), Arc::new(vec![7, 8, 9])],
+            segment_durations_secs: vec![4.0, 3.5],
+        };
+        let blob = encode_variant_blob(&original);
+        let back = decode_variant_blob(&blob).expect("valid blob");
+        assert_eq!(back, original);
+    }
+
+    #[kithara::test]
+    fn truncated_variant_blob_is_a_miss() {
+        let blob = vec![0xFFu8; 4];
+        assert!(decode_variant_blob(&blob).is_none());
+    }
 
     #[kithara::test]
     fn builds_master_and_media_playlist() {

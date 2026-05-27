@@ -6,6 +6,9 @@
 # Rustfmt / Clippy / IDE noise
 **/*.rs.bk
 
+# Brainstorming session artifacts (visual companion)
+.superpowers/
+
 # macOS
 .DS_Store
 .AppleDouble

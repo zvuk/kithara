@@ -1,9 +1,9 @@
 use std::{io::Cursor, time::Duration};
 
-use kithara_decode::{Decoder, DecoderConfig, DecoderFactory};
-use kithara_integration_tests::create_test_wav;
+use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk};
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use kithara_integration_tests::ensure_silence_1s_alac_m4a;
+use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
 
@@ -183,11 +183,8 @@ fn seek_then_first_chunk_timestamp_is_after_target() {
     for backend in available_backends() {
         let mut dec = backend.make_mp3();
         dec.seek(TARGET).expect("seek should succeed");
-        let chunk = dec
-            .next_chunk()
-            .expect("next_chunk after seek")
-            .into_chunk()
-            .expect("at least one chunk after a 0.5s seek");
+        let outcome = dec.next_chunk().expect("next_chunk after seek");
+        let chunk = PcmChunk::try_from(outcome).expect("at least one chunk after a 0.5s seek");
 
         let ts = chunk.meta.timestamp;
         assert!(

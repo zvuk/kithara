@@ -8,10 +8,12 @@ repository.workspace = true
 description = "Cross-platform FFI adapter for the kithara audio player"
 publish = false
 
-# kithara-play is only consumed by src/android_test.rs, gated on
-# target_os = "android" + feature = "test". On native host targets the
-# module isn't compiled, so cargo-machete on a macOS/linux dev machine
-# flags the dep as unused — suppress it explicitly.
+# kithara-play is consumed by:
+#   - `src/android_test.rs` (target_os = "android" + feature = "test")
+#   - `src/web/*` (target_arch = "wasm32")
+# On native host targets the modules aren't compiled, so cargo-machete on
+# a macOS/linux dev machine flags the dep as unused — suppress it
+# explicitly.
 [package.metadata.cargo-machete]
 ignored = ["kithara-play"]
 
@@ -27,38 +29,35 @@ required-features = ["backend-uniffi"]
 workspace = true
 
 [dependencies]
-kithara = { workspace = true, features = ["file", "hls"] }
-kithara-drm = { workspace = true }
+# Cross-platform deps (used by both the native UniFFI modules and `src/web`).
 kithara-platform = { workspace = true }
 kithara-events = { workspace = true }
-kithara-queue = { workspace = true }
 kithara-test-macros = { workspace = true }
-# Optional direct dep so the `test` feature can enable `test-utils` on
-# kithara-play (needed for `init_offline_backend` / offline module).
-kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "probe"] }
-bytes = { workspace = true }
-rand = { workspace = true }
-unimock = { workspace = true }
-
 tokio-util = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-url = { workspace = true }
-uuid = { workspace = true }
 
-uniffi = { workspace = true, optional = true, features = ["cli"] }
-tokio = { workspace = true, optional = true, features = ["macros", "rt-multi-thread"] }
-# Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
-# `test` so the probe JNI can enumerate host/device configs without
-# touching the production firewheel backend types.
-cpal = { workspace = true, optional = true }
+# Native-only deps for the UniFFI surface (`src/{cipher,config,item,…}.rs`).
+# Moved to `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` so
+# wasm32 builds don't pull `uniffi` (Future + Send incompatible with wasm)
+# or `rand`/`uuid` which need explicit getrandom wasm_js wiring.
+# `src/web/*` doesn't use any of these directly.
 
 [features]
 default = ["backend-uniffi"]
 backend-uniffi = ["dep:uniffi"]
 apple = ["kithara/apple"]
 android = ["kithara/android"]
+# Cross-platform software decode backend. Not part of apple/android
+# (those own hardware decode on-device). Used for the host-side
+# uniffi-bindgen build, where neither the apple nor the android
+# (target_os-gated) DecoderBackend variant exists, so without a
+# backend feature `DecoderBackend` would be an empty enum.
+symphonia = ["kithara/symphonia"]
+# Marker feature for wasm32 build matrix (parallel to apple/android).
+# Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
+wasm = []
 probe = []
 mock = []
 # Dev-only conveniences enabled in xcframework builds for demo/staging.
@@ -71,7 +70,27 @@ dev = []
 # release AAR.
 test = ["kithara/probe", "dep:kithara-play", "dep:tokio", "dep:cpal"]
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara = { workspace = true, features = ["file", "hls"] }
+kithara-drm = { workspace = true }
+kithara-queue = { workspace = true, features = ["backend-cpal"] }
+# Optional direct dep so the `test` feature can enable `test-utils` on
+# kithara-play (needed for `init_offline_backend` / offline module).
+kithara-play = { workspace = true, optional = true, default-features = false, features = ["backend-cpal", "probe"] }
+bytes = { workspace = true }
+dashmap = { workspace = true }
+rand = { workspace = true }
+unimock = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+uniffi = { workspace = true, optional = true, features = ["cli"] }
+tokio = { workspace = true, optional = true, features = ["macros", "rt-multi-thread"] }
+# Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
+# `test` so the probe JNI can enumerate host/device configs without
+# touching the production firewheel backend types.
+cpal = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 futures = { workspace = true }
 kithara = { workspace = true, features = ["probe"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
@@ -82,3 +101,14 @@ jni = { workspace = true }
 ndk-context = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 tracing-android = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia"] }
+console_error_panic_hook = { workspace = true }
+js-sys = { workspace = true }
+num-traits = { workspace = true }
+tracing-log = { workspace = true }
+tracing-wasm = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true }

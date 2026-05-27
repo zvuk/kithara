@@ -1,6 +1,6 @@
 use std::{io::Cursor, time::Duration};
 
-use kithara::decode::{DecoderConfig, DecoderFactory};
+use kithara::decode::{DecoderConfig, DecoderFactory, PcmChunk};
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
@@ -59,7 +59,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
 
     decoder.seek(Duration::from_millis(500)).unwrap();
 
-    let chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
+    let chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
     let expected_frame = (0.5 * 44100.0) as u64;
 
     let diff = (chunk.meta.frame_offset as i64 - expected_frame as i64).unsigned_abs();

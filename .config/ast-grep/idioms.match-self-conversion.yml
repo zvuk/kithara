@@ -21,7 +21,7 @@ message: |
   Suppress with `// ast-grep-ignore: idioms.match-self-conversion` only when
   the method legitimately can't be a `From` (e.g. result depends on more
   state than `self`).
-severity: warning
+severity: error
 language: Rust
 files:
   - crates/**/*.rs

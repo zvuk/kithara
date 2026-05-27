@@ -11,20 +11,27 @@ use super::{
     AudioWorkerSource,
     decoder_node::DecoderNode,
     hang_observer::HangWatchdogObserver,
-    types::{ServiceClass, TrackId, TrackIdGen},
+    types::{TrackId, TrackIdGen},
 };
 use crate::{
     pipeline::fetch::Fetch,
-    runtime::{Scheduler, SchedulerHandle},
+    runtime::{AtomicServiceClass, Scheduler, SchedulerHandle},
 };
 
 /// Everything needed to register a track with the shared worker.
 pub(crate) struct TrackRegistration {
-    pub preload_notify: Arc<Notify>,
-    pub source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    pub outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
-    pub service_class: ServiceClass,
-    pub preload_chunks: usize,
+    pub(crate) preload_notify: Arc<Notify>,
+    pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+    pub(crate) outlet: crate::runtime::Outlet<Fetch<PcmChunk>>,
+    /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
+    /// hands every consumed `PcmChunk` here instead of dropping it, so the
+    /// pooled buffer is freed/recycled on the worker thread rather than on
+    /// the audio thread. See `crates/kithara-audio/README.md`.
+    pub(crate) trash_inlet: crate::runtime::Inlet<PcmChunk>,
+    /// Shared priority hint. The real-time consumer writes it wait-free
+    /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
+    pub(crate) service_class: Arc<AtomicServiceClass>,
+    pub(crate) preload_chunks: usize,
 }
 
 /// Clonable handle to a shared audio worker.
@@ -55,6 +62,7 @@ impl AudioWorkerHandle {
     /// [`AudioWorkerHandle::with_cancel`] with a child of the player
     /// master — see `kithara-play/README.md` "Cancel Hierarchy".
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self::with_cancel(CancellationToken::new()) // kithara:cancel:owner
     }
@@ -66,14 +74,9 @@ impl AudioWorkerHandle {
     /// data. Callers must ensure the worker is alive before registering.
     pub(crate) fn register_track(&self, reg: TrackRegistration) -> TrackId {
         let id = self.id_gen.next();
-        let node: Box<dyn crate::runtime::Node> = Box::new(DecoderNode::from_registration(id, reg));
+        let node: Box<dyn crate::runtime::Node> = Box::new(DecoderNode::from(reg));
         self.inner.register(id, node);
         id
-    }
-
-    /// Update scheduling priority for a track.
-    pub(crate) fn set_service_class(&self, track_id: TrackId, class: ServiceClass) {
-        self.inner.set_service_class(track_id, class);
     }
 
     /// Request graceful shutdown and cancel the worker.
@@ -217,16 +220,18 @@ mod tests {
     where
         S: AudioWorkerSource<Chunk = PcmChunk> + 'static,
     {
-        let wake = Arc::new(ThreadWake::new());
+        let wake = Arc::new(ThreadWake::default());
         let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
+        let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(ringbuf_capacity + 2, None);
         let preload_notify = Arc::new(Notify::new());
 
         let reg = TrackRegistration {
             outlet,
+            trash_inlet,
             preload_chunks,
             source: Box::new(source),
             preload_notify: Arc::clone(&preload_notify),
-            service_class: ServiceClass::Audible,
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
         };
         (reg, inlet, preload_notify)
     }
@@ -433,18 +438,21 @@ mod tests {
         let handle = AudioWorkerHandle::new();
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 4, 0);
-        let id_a = handle.register_track(reg_a);
+        let class_a = Arc::clone(&reg_a.service_class);
+        let _id_a = handle.register_track(reg_a);
 
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(100), 4, 0);
-        let id_b = handle.register_track(reg_b);
+        let class_b = Arc::clone(&reg_b.service_class);
+        let _id_b = handle.register_track(reg_b);
 
         thread_sleep(Duration::from_millis(30));
 
         while rx_a.try_pop().is_some() {}
         while rx_b.try_pop().is_some() {}
 
-        handle.set_service_class(id_a, ServiceClass::Idle);
-        handle.set_service_class(id_b, ServiceClass::Audible);
+        class_a.store(ServiceClass::Idle);
+        class_b.store(ServiceClass::Audible);
+        handle.wake();
 
         thread_sleep(Duration::from_millis(50));
 

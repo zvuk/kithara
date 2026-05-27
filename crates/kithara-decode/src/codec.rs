@@ -1,7 +1,27 @@
 use kithara_bufpool::PcmBuf;
 use kithara_platform::time::Duration;
+use kithara_stream::AudioCodec;
 
 use crate::{error::DecodeResult, types::PcmSpec};
+
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct CodecPriming {
+    pub frames: u64,
+    pub packets: u32,
+    pub byte_margin: u64,
+}
+
+/// PCM frames per coded access unit (AAC 1024, MP3 1152). `0` for codecs
+/// without a fixed AU size. Converts a seek warm-up packet count into a
+/// back-off duration (`packets * access_unit_frames / sample_rate`).
+pub(crate) fn access_unit_frames(codec: AudioCodec) -> u32 {
+    match codec {
+        AudioCodec::Mp3 => 1152,
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => 1024,
+        _ => 0,
+    }
+}
 
 /// Frame-level codec contract paired with a [`crate::demuxer::Demuxer`] in
 /// `ComposedDecoder<D, C>`.
@@ -44,6 +64,22 @@ pub(crate) trait FrameCodec: Send + 'static {
         out: &mut PcmBuf,
     ) -> DecodeResult<u32>;
 
+    /// Decoder-side algorithmic delay in PCM frames for `codec` — the
+    /// silent lead-in this concrete decoder emits **in addition to**
+    /// the encoder-declared priming. LAME-convention MP3 decoders
+    /// (Symphonia `mpa` and Apple `AudioConverter`) report 529 here;
+    /// other codecs default to 0.
+    ///
+    /// `kithara_audio::pipeline::gapless::resolve_codec_priming`
+    /// combines this with [`AudioCodec::encoder_priming_frames`] for
+    /// the [`crate::GaplessMode::CodecPriming`] fallback when probing
+    /// yields no metadata; codec `open_with_config` impls fold it into
+    /// the probed `GaplessInfo` so callers downstream see a single
+    /// fully-resolved trim.
+    fn decoder_algo_delay(&self, _codec: AudioCodec) -> u64 {
+        0
+    }
+
     /// Reset internal codec state — called after seek. Backends that
     /// can fail to reset (Android `AMediaCodec_flush`) propagate the
     /// error through `DecodeResult` so the seek path can surface it.
@@ -71,5 +107,28 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// type.
     fn track_info(&self) -> crate::DecoderTrackInfo {
         crate::DecoderTrackInfo::default()
+    }
+
+    /// Seek priming requirements for `codec` — packets/frames/bytes the
+    /// demuxer must back off before the seek target so this codec can
+    /// fully prime its MDCT/SBR overlap-add state. Default returns
+    /// [`CodecPriming::default()`] (no priming required). Backends that
+    /// manage priming internally (e.g. Symphonia fdk-aac / mpa) keep the
+    /// default; Apple `AudioConverter` overrides with per-codec values.
+    fn priming(&self, _codec: AudioCodec) -> CodecPriming {
+        CodecPriming::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codec_priming_default_is_all_zero() {
+        let p = CodecPriming::default();
+        assert_eq!(p.frames, 0);
+        assert_eq!(p.packets, 0);
+        assert_eq!(p.byte_margin, 0);
     }
 }

@@ -10,7 +10,7 @@ use std::{
 };
 
 use fast_interleave::deinterleave_variable;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{DecoderFactory, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage, SegmentLocation};
 #[cfg(target_arch = "wasm32")]
@@ -32,6 +32,7 @@ use crate::{
         source::{OffsetReader, SharedStream, StreamAudioSource},
         track_fsm::ConsumerPhase,
     },
+    runtime::AtomicServiceClass,
     traits::{ChunkOutcome, DecodeError, PcmReader, PendingReason, ReadOutcome, SeekOutcome},
     worker::{
         handle::{AudioWorkerHandle, TrackRegistration},
@@ -147,6 +148,13 @@ pub struct Audio<S> {
     /// PCM chunk receiver.
     pcm_rx: crate::runtime::Inlet<Fetch<PcmChunk>>,
 
+    /// Spent-chunk return ring. Every `PcmChunk` this real-time consumer
+    /// finishes with is pushed here instead of being dropped, so the pooled
+    /// buffer is recycled on the worker thread (`DecoderNode::drain_trash`)
+    /// and never freed on the audio thread. Sized to outlive a full
+    /// ring-drain on seek, so the lock-free push never fails on the hot path.
+    trash_tx: crate::runtime::Outlet<PcmChunk>,
+
     /// Runtime ABR handle snapshot taken at construction — cloned from the
     /// underlying stream's source. `None` for non-adaptive sources.
     abr_handle: Option<kithara_abr::AbrHandle>,
@@ -154,20 +162,27 @@ pub struct Audio<S> {
     /// Cancellation token for graceful shutdown.
     cancel: Option<CancellationToken>,
 
-    /// Callback to wake blocked `wait_range()` calls on seek.
-    ///
-    /// Set during construction for sources with blocking condvar waits (HLS).
-    /// Called from `seek()` after `initiate_seek()` for instant wakeup.
-    notify_waiting: Option<Box<dyn Fn() + Send + Sync>>,
-
     /// Assigned track ID in the shared worker (used for unregister on drop).
     track_id: Option<TrackId>,
 
     /// Worker handle for unregistration and optional shutdown.
     worker: Option<AudioWorkerHandle>,
 
-    /// Shared pool for temporary interleaved buffers (used in `read_planar`).
+    /// Shared priority hint for this track's worker node. Written wait-free
+    /// from the real-time audio thread (`set_service_class` during fade
+    /// transitions) and read by the worker scheduler each pass, so a priority
+    /// change needs no allocating command-channel send on the audio thread.
+    service_class: Arc<AtomicServiceClass>,
+
+    /// Shared PCM pool: source for the decode worker's per-packet buffers and
+    /// for the held `read_planar` interleaved scratch below.
     pcm_pool: PcmPool,
+
+    /// Interleaved scratch for `read_planar`, drawn from `pcm_pool` once and
+    /// pre-sized off the audio thread in `new` so the real-time path never
+    /// reallocates. `Option` only so it can be detached during the inner
+    /// `read` call, then restored.
+    interleaved: Option<PcmBuf>,
 
     /// Marker for source type.
     _marker: PhantomData<S>,
@@ -187,8 +202,55 @@ impl<S> Audio<S> {
     /// Probe buffer size in bytes for initial stream detection.
     const PROBE_BUFFER_SIZE: usize = 1024;
 
+    /// Per-buffer frame capacity used to pre-warm the PCM pool for the decode
+    /// worker's per-packet buffers. Covers the largest decoder packet across
+    /// supported codecs (FLAC's 4608-frame block; AAC/MP3/ALAC are smaller and
+    /// reuse these buffers without a realloc). The `read_planar` interleaved
+    /// scratch is sized separately and held per-`Audio` (see `interleaved`).
+    const WARM_DECODE_FRAMES: usize = 4608;
+
     /// Backoff duration between receive attempts.
     const RECV_BACKOFF: Duration = Duration::from_micros(100);
+
+    /// Pre-warm the shared PCM pool so the decode hot path (`pool.get()`
+    /// per packet) and the first `read_planar` calls reuse pre-allocated
+    /// buffers instead of paying a cold-start allocation on the audio
+    /// thread. Warms only a cold pool (`allocated_bytes == 0`), so the
+    /// process-global default singleton is warmed once on the first track
+    /// while a freshly-built custom pool still gets warmed when it's first
+    /// resolved here.
+    fn warm_pcm_pool(pool: &PcmPool, channels: usize, chunks: usize) {
+        if pool.allocated_bytes() != 0 {
+            return;
+        }
+        let capacity = Self::WARM_DECODE_FRAMES * channels.max(1);
+        let count = chunks.saturating_mul(2).max(1);
+        pool.pre_warm(count, |buf| {
+            buf.clear();
+            buf.resize(capacity, 0.0);
+        });
+    }
+
+    /// Acquire and pre-size the held interleaved scratch for `read_planar`.
+    ///
+    /// Sized to one second of interleaved output at `spec` — the consumer
+    /// reads at most a few hundred ms per call, so this covers the request
+    /// with margin for host-rate / playback-rate changes. Called off the audio
+    /// thread in `new`, so `read_planar` reuses this buffer without ever
+    /// reallocating on the real-time path.
+    fn alloc_interleaved_scratch(pool: &PcmPool, spec: PcmSpec) -> PcmBuf {
+        let channels = usize::from(spec.channels).max(2);
+        let sample_rate = usize::try_from(spec.sample_rate).unwrap_or(usize::MAX);
+        let capacity = sample_rate.saturating_mul(channels);
+        pool.get_with(|buf| {
+            buf.clear();
+            let cap = buf.capacity();
+            if cap < capacity {
+                buf.reserve(capacity - cap);
+            }
+        })
+    }
+
     /// Runtime ABR handle (cloned from the stream's source at
     /// construction). `Some` for adaptive sources (HLS), `None` for
     /// file/non-adaptive sources.
@@ -334,22 +396,22 @@ impl<S> Audio<S> {
 
     fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> FetchOutcome {
         if !self.validator.is_valid(&fetch) {
+            self.discard_chunk(fetch.into_inner());
             return FetchOutcome::Continue;
         }
 
         match fetch.kind {
             FetchKind::NaturalEof => {
                 self.consumer_phase = ConsumerPhase::AtEof;
+                self.discard_chunk(fetch.into_inner());
                 FetchOutcome::Return(None)
             }
             FetchKind::Failure => {
                 self.consumer_phase = ConsumerPhase::Failed;
+                self.discard_chunk(fetch.into_inner());
                 FetchOutcome::Return(None)
             }
-            FetchKind::Data => {
-                let chunk = fetch.into_inner();
-                FetchOutcome::Return(Some(chunk))
-            }
+            FetchKind::Data => FetchOutcome::Return(Some(fetch.into_inner())),
         }
     }
 
@@ -402,7 +464,7 @@ impl<S> Audio<S> {
                 let chunk_total_frames = u64::from(chunk.meta.frames);
                 let consumed_frames_in_chunk = self.current_chunk_consumed_frames;
                 if consumed_frames_in_chunk >= chunk_total_frames {
-                    self.current_chunk = None;
+                    self.recycle_current_chunk();
                     if !self.fill_buffer() {
                         break;
                     }
@@ -430,7 +492,7 @@ impl<S> Audio<S> {
                 if final_segment {
                     self.timeline
                         .advance_committed_chunk(&kithara_stream::ChunkPosition::from(&chunk.meta));
-                    self.current_chunk = None;
+                    self.recycle_current_chunk();
                 } else {
                     let total_frames = chunk_total_frames.max(1);
                     let start_ns =
@@ -589,16 +651,13 @@ impl<S> Audio<S> {
         let epoch = self.timeline.initiate_seek(position);
         self.timeline.mark_pending_seek_epoch(epoch);
         self.validator.epoch = epoch;
-        self.current_chunk = None;
+        self.recycle_current_chunk();
         self.current_chunk_consumed_frames = 0;
         self.consumer_phase = ConsumerPhase::SeekPending { epoch };
 
-        while self.pcm_rx.try_pop().is_some() {
+        while let Some(fetch) = self.pcm_rx.try_pop() {
+            self.discard_chunk(fetch.into_inner());
             hang_tick!();
-        }
-
-        if let Some(ref notify) = self.notify_waiting {
-            notify();
         }
 
         if let Some(ref worker) = self.worker {
@@ -650,7 +709,7 @@ impl<S> Audio<S> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.preloaded
+            self.is_preloaded()
         }
     }
 
@@ -678,6 +737,28 @@ impl<S> Audio<S> {
     fn wake_worker(&self) {
         if let Some(ref worker) = self.worker {
             worker.wake();
+        }
+    }
+
+    /// Hand a spent chunk to the worker's return ring instead of dropping
+    /// it here. The pooled buffer is then recycled on the worker thread,
+    /// keeping `free`/`Pool::put` off the real-time audio thread. The ring
+    /// is sized so this lock-free push never fails on the hot path; the
+    /// `debug_assert` guards the sizing invariant, and the last-resort drop
+    /// only runs if that invariant is ever broken.
+    fn discard_chunk(&mut self, chunk: PcmChunk) {
+        if let Err(_overflow) = self.trash_tx.try_push(chunk) {
+            debug_assert!(
+                false,
+                "PCM trash ring overflow — spent buffer freed on the audio thread"
+            );
+        }
+    }
+
+    /// Return the current chunk to the worker for off-thread recycling.
+    fn recycle_current_chunk(&mut self) {
+        if let Some(chunk) = self.current_chunk.take() {
+            self.discard_chunk(chunk);
         }
     }
 }
@@ -742,6 +823,11 @@ where
         let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
 
         let pool = pool.get_or_insert_with(|| PcmPool::default().clone());
+        let warm_channels = initial_media_info
+            .as_ref()
+            .and_then(|info| info.channels)
+            .map_or(2, usize::from);
+        Self::warm_pcm_pool(pool, warm_channels, pcm_buffer_chunks);
         let decoder = Self::create_initial_decoder(
             shared_stream.clone(),
             initial_media_info.clone(),
@@ -773,6 +859,8 @@ where
 
         Self::log_pipeline_ready(initial_spec, output_spec, &host_sample_rate);
 
+        let interleaved = Self::alloc_interleaved_scratch(pool, output_spec);
+
         let emit = Self::create_emit(&bus);
         let decoder_factory = Self::create_decoder_factory(
             decoder_backend,
@@ -781,8 +869,6 @@ where
             pool,
             &byte_pool,
         );
-        let notify_waiting = shared_stream.make_notify_fn();
-
         let initial_variant = initial_media_info.as_ref().and_then(|i| i.variant_index);
         let abr_handle = shared_stream.abr_handle();
         let audio_source = StreamAudioSource::new(
@@ -802,18 +888,22 @@ where
         });
 
         let preload_notify = Arc::new(Notify::new());
-        let reader_wake = Arc::new(ThreadWake::new());
+        let reader_wake = Arc::new(ThreadWake::default());
         let (data_tx, data_rx) = Self::create_channels(pcm_buffer_chunks, Arc::clone(&reader_wake));
+        let (trash_tx, trash_inlet) = Self::create_trash_channel(pcm_buffer_chunks);
 
         let (worker, is_standalone) =
             config_worker.map_or_else(|| (AudioWorkerHandle::new(), true), |w| (w, false));
 
+        let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
+
         let track_id = worker.register_track(TrackRegistration {
             source: Box::new(audio_source),
             outlet: data_tx,
+            trash_inlet,
             preload_notify: preload_notify.clone(),
             preload_chunks: preload_chunks.get(),
-            service_class: ServiceClass::default(),
+            service_class: Arc::clone(&service_class),
         });
 
         Ok(Self {
@@ -823,21 +913,23 @@ where
             host_sample_rate,
             playback_rate,
             preload_notify,
-            notify_waiting,
             reader_wake,
             abr_handle,
             pcm_rx: data_rx,
+            trash_tx,
             _epoch: epoch,
-            validator: EpochValidator::new(),
+            validator: EpochValidator::default(),
             spec: output_spec,
             current_chunk: None,
             current_chunk_consumed_frames: 0,
             consumer_phase: ConsumerPhase::Buffering,
             cancel: Some(cancel),
+            interleaved: Some(interleaved),
             pcm_pool: pool.clone(),
             preloaded: false,
             track_id: Some(track_id),
             worker: Some(worker),
+            service_class,
             is_standalone_worker: is_standalone,
             _marker: PhantomData,
         })
@@ -851,6 +943,21 @@ where
         crate::runtime::Inlet<Fetch<PcmChunk>>,
     ) {
         crate::runtime::connect::<Fetch<PcmChunk>>(pcm_buffer_chunks.max(1), Some(wake))
+    }
+
+    /// Build the spent-chunk return ring. Capacity covers every chunk the
+    /// consumer can hold at once — the whole forward ring plus the current
+    /// chunk — so a seek that drains the forward ring back into here never
+    /// overflows and the real-time push stays infallible. No wake handle:
+    /// the worker is already woken on every `recv_outcome`, and the drain is
+    /// not latency-sensitive.
+    fn create_trash_channel(
+        pcm_buffer_chunks: usize,
+    ) -> (
+        crate::runtime::Outlet<PcmChunk>,
+        crate::runtime::Inlet<PcmChunk>,
+    ) {
+        crate::runtime::connect::<PcmChunk>(pcm_buffer_chunks.max(1) + 2, None)
     }
 
     fn create_decoder_factory(
@@ -882,11 +989,11 @@ where
             match DecoderFactory::create_from_media_info(source, info, &config) {
                 Ok(d) => {
                     d.update_byte_len(byte_len);
-                    Some(d)
+                    Ok(d)
                 }
                 Err(e) => {
                     warn!(?e, "failed to recreate decoder");
-                    None
+                    Err(e)
                 }
             }
         })
@@ -1001,6 +1108,7 @@ where
             .unwrap_or_default()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     async fn spawn_probe(
         stream: Stream<T>,
         byte_pool: kithara_bufpool::BytePool,
@@ -1010,6 +1118,21 @@ where
             .await
             .map_err(|e| DecodeError::Io(IoError::other(format!("probe task panicked: {e}"))))??;
         debug!("Audio::new — probe task done");
+        Ok(result)
+    }
+
+    /// Wasm probe path: the browser tokio runtime is single-threaded
+    /// and `spawn_blocking` requires `Send` — but `Stream<T>` is
+    /// `!Send` because it holds JS-backed network streams. Probe runs
+    /// inline on the calling task.
+    #[cfg(target_arch = "wasm32")]
+    async fn spawn_probe(
+        stream: Stream<T>,
+        byte_pool: kithara_bufpool::BytePool,
+    ) -> Result<Stream<T>, DecodeError> {
+        debug!("Audio::new — running probe inline (wasm)...");
+        let result = Self::probe_stream_blocking(stream, &byte_pool)?;
+        debug!("Audio::new — probe done");
         Ok(result)
     }
 }
@@ -1069,7 +1192,7 @@ impl<S> Drop for Audio<S> {
     }
 }
 
-impl<S: Send> PcmReader for Audio<S> {
+impl<S: kithara_platform::MaybeSend> PcmReader for Audio<S> {
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.abr_handle.clone()
     }
@@ -1153,16 +1276,29 @@ impl<S: Send> PcmReader for Audio<S> {
         }
         let frames = output[0].len();
         let total_samples = frames * channels;
-        let mut interleaved = self.pcm_pool.get_with(|b| {
-            b.clear();
-            b.resize(total_samples, 0.0);
-        });
-        match self.read(&mut interleaved)? {
-            ReadOutcome::Eof { position } => Ok(ReadOutcome::Eof { position }),
-            ReadOutcome::Pending { reason, position } => {
+
+        // Detach the held, pre-sized scratch so we can pass it to `self.read`
+        // (which needs `&mut self`); restore it before returning. Pre-sized in
+        // `new`, so this `resize` stays within capacity and never reallocates
+        // on the audio thread.
+        let mut interleaved = self
+            .interleaved
+            .take()
+            .unwrap_or_else(|| self.pcm_pool.get());
+        interleaved.clear();
+        interleaved.resize(total_samples, 0.0);
+        debug_assert!(
+            interleaved.capacity() >= total_samples,
+            "Audio::read_planar scratch undersized: capacity={} < total_samples={total_samples}",
+            interleaved.capacity(),
+        );
+
+        let result = match self.read(&mut interleaved[..]) {
+            Ok(ReadOutcome::Eof { position }) => Ok(ReadOutcome::Eof { position }),
+            Ok(ReadOutcome::Pending { reason, position }) => {
                 Ok(ReadOutcome::Pending { reason, position })
             }
-            ReadOutcome::Frames { count, position } => {
+            Ok(ReadOutcome::Frames { count, position }) => {
                 let actual_frames = count.get() / channels;
                 debug_assert!(
                     actual_frames <= frames,
@@ -1171,19 +1307,25 @@ impl<S: Send> PcmReader for Audio<S> {
                 );
                 let num_channels =
                     NonZeroUsize::new(channels).expect("channels checked non-zero above");
-                deinterleave_variable(&interleaved, num_channels, output, 0..actual_frames);
-                let Some(actual) = NonZeroUsize::new(actual_frames) else {
-                    return Ok(ReadOutcome::Pending {
+                deinterleave_variable(&interleaved[..], num_channels, output, 0..actual_frames);
+                NonZeroUsize::new(actual_frames).map_or(
+                    Ok(ReadOutcome::Pending {
                         position,
                         reason: PendingReason::Buffering,
-                    });
-                };
-                Ok(ReadOutcome::Frames {
-                    position,
-                    count: actual,
-                })
+                    }),
+                    |actual| {
+                        Ok(ReadOutcome::Frames {
+                            position,
+                            count: actual,
+                        })
+                    },
+                )
             }
-        }
+            Err(err) => Err(err),
+        };
+
+        self.interleaved = Some(interleaved);
+        result
     }
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
@@ -1199,8 +1341,9 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     fn set_service_class(&self, class: ServiceClass) {
-        if let (Some(worker), Some(track_id)) = (&self.worker, self.track_id) {
-            worker.set_service_class(track_id, class);
+        self.service_class.store(class);
+        if let Some(worker) = &self.worker {
+            worker.wake();
         }
     }
 
@@ -1225,11 +1368,13 @@ mod tests {
 
     fn empty_audio() -> Audio<()> {
         let (_data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(1, None);
+        let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
 
         Audio {
             pcm_rx,
+            trash_tx,
             _epoch: Arc::new(AtomicU64::new(0)),
-            validator: EpochValidator::new(),
+            validator: EpochValidator::default(),
             spec: PcmSpec::default(),
             current_chunk: None,
             current_chunk_consumed_frames: 0,
@@ -1238,15 +1383,16 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
+            interleaved: None,
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_notify: Arc::new(Notify::new()),
             preloaded: false,
-            notify_waiting: None,
             track_id: None,
             worker: None,
-            reader_wake: Arc::new(ThreadWake::new()),
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
+            reader_wake: Arc::new(ThreadWake::default()),
             is_standalone_worker: false,
             abr_handle: None,
             _marker: PhantomData,
@@ -1282,11 +1428,13 @@ mod tests {
 
     fn audio_with_channel() -> (Audio<()>, crate::runtime::Outlet<Fetch<PcmChunk>>) {
         let (data_tx, pcm_rx) = crate::runtime::connect::<Fetch<PcmChunk>>(4, None);
+        let (trash_tx, _trash_rx) = crate::runtime::connect::<PcmChunk>(8, None);
 
         let audio = Audio {
             pcm_rx,
+            trash_tx,
             _epoch: Arc::new(AtomicU64::new(0)),
-            validator: EpochValidator::new(),
+            validator: EpochValidator::default(),
             spec: PcmSpec::default(),
             current_chunk: None,
             current_chunk_consumed_frames: 0,
@@ -1295,15 +1443,16 @@ mod tests {
             metadata: TrackMetadata::default(),
             bus: EventBus::default(),
             cancel: None,
+            interleaved: None,
             pcm_pool: PcmPool::default().clone(),
             host_sample_rate: Arc::new(AtomicU32::new(0)),
             playback_rate: Arc::new(AtomicF32::new(1.0)),
             preload_notify: Arc::new(Notify::new()),
             preloaded: true,
-            notify_waiting: None,
             track_id: None,
             worker: None,
-            reader_wake: Arc::new(ThreadWake::new()),
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
+            reader_wake: Arc::new(ThreadWake::default()),
             is_standalone_worker: false,
             abr_handle: None,
             _marker: PhantomData,

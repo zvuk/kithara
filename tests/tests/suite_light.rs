@@ -6,10 +6,8 @@
 
 mod common;
 
-#[cfg(not(target_arch = "wasm32"))]
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;
-#[cfg(not(target_arch = "wasm32"))]
 #[path = "common/gapless.rs"]
 mod gapless_common;
 
@@ -20,7 +18,6 @@ mod kithara_assets;
 mod kithara_audio;
 mod kithara_bufpool;
 
-#[cfg(not(target_arch = "wasm32"))]
 mod kithara_encode {
     mod aac_tests;
     mod bytes_tests;
@@ -32,8 +29,8 @@ mod kithara_encode {
 }
 
 mod kithara_decode {
-    #[cfg(not(target_arch = "wasm32"))]
     mod aac_priming_regression;
+    mod apple_mp3_priming_probe;
     mod decoder_seek_tests;
     mod decoder_tests;
     mod factory_tests;
@@ -44,14 +41,13 @@ mod kithara_decode {
 }
 
 mod kithara_file {
-    #[cfg(not(target_arch = "wasm32"))]
     mod early_stream_close;
-    #[cfg(not(target_arch = "wasm32"))]
     mod file_source;
     mod html_error_cleanup;
 }
 
 mod kithara_hls {
+    mod aac_he_v2_hls_decode;
     mod abr_integration;
     mod basic_playback;
     mod cancel_isolation;
@@ -59,7 +55,6 @@ mod kithara_hls {
     mod deferred_abr;
     mod driver_test;
     mod ephemeral;
-    #[cfg(not(target_arch = "wasm32"))]
     mod html_error_body;
     mod html_error_cleanup;
     mod keys_integration;
@@ -76,12 +71,9 @@ mod kithara_hls {
     mod wait_range_contract;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 mod kithara_abr_integration;
 mod kithara_net;
-#[cfg(not(target_arch = "wasm32"))]
 mod kithara_play;
-#[cfg(not(target_arch = "wasm32"))]
 mod kithara_queue;
 mod kithara_storage;
 mod kithara_stream;

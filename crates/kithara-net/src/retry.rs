@@ -165,7 +165,7 @@ mod tests {
     }
 
     fn empty_stream() -> ByteStream {
-        ByteStream::without_headers(Box::pin(stream::empty()))
+        ByteStream::new(Headers::new(), Box::pin(stream::empty()))
     }
 
     fn fast_retry_policy(max_retries: u32) -> RetryPolicy {
@@ -351,7 +351,7 @@ mod tests {
         let retry_net = retry_net_default(mock);
 
         let url = test_url();
-        let range = RangeSpec::from_start(0);
+        let range = RangeSpec::new(0, None);
         let result = retry_net.get_range(url, range, None).await;
 
         assert!(result.is_ok());
@@ -373,7 +373,7 @@ mod tests {
         let retry_net = retry_net(mock, fast_retry_policy(3));
 
         let url = test_url();
-        let range = RangeSpec::from_start(0);
+        let range = RangeSpec::new(0, None);
         let result = retry_net.get_range(url, range, None).await;
 
         assert!(result.is_ok());

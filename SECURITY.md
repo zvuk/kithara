@@ -1,13 +1,5 @@
 # Security Policy
 
-## Supported Versions
-
-| Version       | Supported          |
-|---------------|--------------------|
-| 0.0.1-alpha\* | :white_check_mark: |
-
-Pre-1.0 versioning: alpha tags do not provide API stability guarantees. Security fixes land on the latest alpha; older alphas are not patched.
-
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability, please report it through [GitHub Security Advisories](https://github.com/zvuk/kithara/security/advisories/new).

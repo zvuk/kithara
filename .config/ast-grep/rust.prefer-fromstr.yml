@@ -1,0 +1,65 @@
+id: rust.prefer-fromstr
+message: |
+  `fn from_$NAME(s: &str) -> Option<Self>` / `Result<Self>` is a manual
+  `FromStr` impl (with a domain-specific name).
+
+  Policy (see .docs/plans/2026-05-23-rust-idioms-refactor.md,
+  wave-0-decisions.md):
+  - **FromStr** — for parsing text formats (HLS codec, MIME, user input,
+    config strings)
+  - **TryFrom<&str>** — for converting typed values already represented
+    as strings
+
+      // ❌
+      impl AudioCodec {
+          pub fn from_hls_codec(s: &str) -> Option<Self> {
+              parse_hls_codec(s)
+          }
+      }
+
+      // ✅ (canonical: FromStr)
+      impl FromStr for AudioCodec {
+          type Err = UnknownHlsCodec;
+          fn from_str(s: &str) -> Result<Self, Self::Err> {
+              parse_hls_codec(s).ok_or(UnknownHlsCodec)
+          }
+      }
+
+  For C-like enums consider `#[derive(strum::EnumString)]` — the derive
+  generates FromStr automatically with sensible defaults.
+
+  Suppress with `// ast-grep-ignore: rust.prefer-fromstr` when there is
+  a legitimate reason (e.g. multiple parsers for one type with different
+  semantics).
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 3,
+  Wave 5).
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: |
+        fn $NAME($ARG: &str) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub fn $NAME($ARG: &str) -> $RET {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn $NAME($ARG: &str) -> $RET {
+            $$$BODY
+        }
+constraints:
+  NAME:
+    regex: "^from_[a-z][a-z0-9_]*$"
+  RET:
+    regex: "^(Result<Self|Option<Self|crate::Result<Self)"

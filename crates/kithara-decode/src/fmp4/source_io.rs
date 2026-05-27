@@ -72,6 +72,7 @@ pub(crate) enum LiveRange<'a> {
 }
 
 impl<'a> LiveRange<'a> {
+    // ast-grep-ignore: idioms.match-self-conversion
     fn resolve(self) -> Option<Range<u64>> {
         match self {
             LiveRange::Init(layout) => {

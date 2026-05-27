@@ -1,7 +1,6 @@
 use kithara::play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 use kithara_events::TrackStatus as TS;
 use kithara_platform::time::Duration;
-use url::Url;
 
 /// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -24,32 +23,6 @@ pub enum FfiError {
 
     #[error("{description}")]
     Internal { description: String },
-}
-
-pub type FfiResult<T> = Result<T, FfiError>;
-impl FfiError {
-    const ERROR_CODE_ENGINE_NOT_RUNNING: i32 = 4;
-    const ERROR_CODE_INTERNAL: i32 = 0;
-    const ERROR_CODE_INVALID_ARGUMENT: i32 = 5;
-    const ERROR_CODE_ITEM_FAILED: i32 = 2;
-    const ERROR_CODE_NOT_READY: i32 = 1;
-    const ERROR_CODE_SEEK_FAILED: i32 = 3;
-
-    #[must_use]
-    pub fn observer_code(&self) -> i32 {
-        ffi_error_observer_code(self)
-    }
-}
-
-fn ffi_error_observer_code(error: &FfiError) -> i32 {
-    match error {
-        FfiError::Internal { .. } => FfiError::ERROR_CODE_INTERNAL,
-        FfiError::NotReady => FfiError::ERROR_CODE_NOT_READY,
-        FfiError::ItemFailed { .. } => FfiError::ERROR_CODE_ITEM_FAILED,
-        FfiError::SeekFailed { .. } => FfiError::ERROR_CODE_SEEK_FAILED,
-        FfiError::EngineNotRunning => FfiError::ERROR_CODE_ENGINE_NOT_RUNNING,
-        FfiError::InvalidArgument { .. } => FfiError::ERROR_CODE_INVALID_ARGUMENT,
-    }
 }
 
 impl From<PlayError> for FfiError {
@@ -77,46 +50,10 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for FfiError {
     }
 }
 
-/// Convert seconds (`f64`) to [`Duration`], rejecting invalid values.
-///
-/// # Errors
-///
-/// Returns [`FfiError::InvalidArgument`] for `NaN`, infinity, or negative values.
-pub fn seconds_to_duration(seconds: f64) -> FfiResult<Duration> {
-    if seconds.is_nan() || seconds.is_infinite() {
-        return Err(FfiError::InvalidArgument {
-            reason: format!("invalid seconds value: {seconds}"),
-        });
-    }
-    if seconds < 0.0 {
-        return Err(FfiError::InvalidArgument {
-            reason: format!("negative seconds: {seconds}"),
-        });
-    }
-    Ok(Duration::from_secs_f64(seconds))
-}
-
 /// Convert [`Duration`] to seconds (`f64`).
 #[must_use]
 pub fn duration_to_seconds(d: Duration) -> f64 {
     d.as_secs_f64()
-}
-
-/// Parse a URL string, rejecting empty and invalid values.
-///
-/// # Errors
-///
-/// Returns [`FfiError::InvalidArgument`] for empty or malformed URLs.
-pub fn parse_url(s: &str) -> FfiResult<Url> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return Err(FfiError::InvalidArgument {
-            reason: "empty URL".to_string(),
-        });
-    }
-    Url::parse(trimmed).map_err(|e| FfiError::InvalidArgument {
-        reason: format!("invalid URL: {e}"),
-    })
 }
 
 /// FFI-friendly player configuration.
@@ -224,20 +161,6 @@ pub struct FfiItemConfig {
     /// Peak bitrate ceiling on expensive networks (cellular). `0.0`
     /// means no cap.
     pub preferred_peak_bitrate_expensive: f64,
-}
-
-impl FfiItemConfig {
-    #[must_use]
-    pub fn with_url(url: String) -> Self {
-        Self {
-            url,
-            headers: None,
-            preferred_peak_bitrate: 0.0,
-            preferred_peak_bitrate_expensive: 0.0,
-            abr_mode: None,
-            is_live_stream: false,
-        }
-    }
 }
 
 /// FFI-friendly mirror of [`PlayerStatus`].
@@ -507,58 +430,10 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    fn seconds_to_duration_valid() {
-        let d = seconds_to_duration(1.5).expect("BUG: hard-coded test input is in the valid range");
-        assert_eq!(d, Duration::from_secs_f64(1.5));
-    }
-
-    #[kithara::test]
-    fn seconds_to_duration_zero() {
-        let d = seconds_to_duration(0.0).expect("BUG: hard-coded test input is in the valid range");
-        assert_eq!(d, Duration::ZERO);
-    }
-
-    #[kithara::test]
-    #[case::nan(f64::NAN)]
-    #[case::positive_infinity(f64::INFINITY)]
-    #[case::negative_infinity(f64::NEG_INFINITY)]
-    #[case::negative(-1.0)]
-    fn seconds_to_duration_rejects_non_finite_or_negative(#[case] input: f64) {
-        assert!(seconds_to_duration(input).is_err());
-    }
-
-    #[kithara::test]
-    fn duration_roundtrip() {
+    fn duration_to_seconds_roundtrips() {
         let secs = 42.123_456;
-        let d =
-            seconds_to_duration(secs).expect("BUG: hard-coded test input is in the valid range");
-        let back = duration_to_seconds(d);
+        let back = duration_to_seconds(Duration::from_secs_f64(secs));
         assert!((back - secs).abs() < 1e-9);
-    }
-
-    #[kithara::test]
-    fn parse_url_valid() {
-        let u = parse_url("https://example.com/song.mp3")
-            .expect("BUG: hard-coded test input is in the valid range");
-        assert_eq!(u.scheme(), "https");
-    }
-
-    #[kithara::test]
-    fn parse_url_trimmed() {
-        let u = parse_url("  https://example.com/  ")
-            .expect("BUG: hard-coded test input is in the valid range");
-        assert_eq!(u.host_str(), Some("example.com"));
-    }
-
-    #[kithara::test]
-    fn parse_url_empty() {
-        assert!(parse_url("").is_err());
-        assert!(parse_url("   ").is_err());
-    }
-
-    #[kithara::test]
-    fn parse_url_invalid() {
-        assert!(parse_url("not a url").is_err());
     }
 
     #[kithara::test]
@@ -574,40 +449,6 @@ mod tests {
     ) {
         let ffi: FfiError = input.into();
         assert!(matches_variant(&ffi));
-    }
-
-    #[kithara::test]
-    fn observer_error_codes_match_platform_mapping() {
-        assert_eq!(FfiError::NotReady.observer_code(), 1);
-        assert_eq!(
-            FfiError::ItemFailed {
-                reason: "bad codec".into(),
-            }
-            .observer_code(),
-            2
-        );
-        assert_eq!(
-            FfiError::SeekFailed {
-                reason: "position".into(),
-            }
-            .observer_code(),
-            3
-        );
-        assert_eq!(FfiError::EngineNotRunning.observer_code(), 4);
-        assert_eq!(
-            FfiError::InvalidArgument {
-                reason: "bad arg".into(),
-            }
-            .observer_code(),
-            5
-        );
-        assert_eq!(
-            FfiError::Internal {
-                description: "boom".into(),
-            }
-            .observer_code(),
-            0
-        );
     }
 
     #[kithara::test]

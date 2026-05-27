@@ -7,7 +7,7 @@ mod scheduler;
 mod wake;
 
 pub use node::ServiceClass;
-pub(crate) use node::{Node, TickResult};
+pub(crate) use node::{AtomicServiceClass, Node, TickResult};
 pub(crate) use observer::{PassOutcome, SchedulerEvent, SchedulerObserver};
 pub(crate) use ports::{Inlet, Outlet, WakeSignal, connect};
 pub(crate) use scheduler::{Scheduler, SchedulerHandle, SlotId};

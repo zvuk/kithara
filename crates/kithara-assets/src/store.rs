@@ -15,7 +15,8 @@ use crate::disk_store::DiskAssetStore;
 use crate::{
     cache::{CachedAssets, CachedResource},
     evict::EvictAssets,
-    index::{AvailabilityIndex, EvictConfig, FlushHub, FlushPolicy},
+    flush::{FlushHub, FlushPolicy},
+    index::{AvailabilityIndex, EvictConfig},
     key::ResourceKey,
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
     mem_store::MemAssetStore,
@@ -116,20 +117,13 @@ impl StoreOptions {
         let cache_dir = PathBuf::from("/kithara");
         Self::builder().cache_dir(cache_dir)
     }
+}
 
-    /// Effective LRU cache capacity (explicit or default).
-    #[must_use]
-    pub fn effective_cache_capacity(&self) -> NonZeroUsize {
-        self.cache_capacity
-            .unwrap_or(Consts::DEFAULT_CACHE_CAPACITY)
-    }
-
-    /// Convert to internal `EvictConfig`.
-    #[must_use]
-    pub fn to_evict_config(&self) -> EvictConfig {
-        EvictConfig {
-            max_assets: self.max_assets,
-            max_bytes: self.max_bytes,
+impl From<&StoreOptions> for EvictConfig {
+    fn from(opts: &StoreOptions) -> Self {
+        Self {
+            max_assets: opts.max_assets,
+            max_bytes: opts.max_bytes,
         }
     }
 }
@@ -215,6 +209,7 @@ impl Default for AssetStoreBuilder<()> {
 impl AssetStoreBuilder<()> {
     /// Builder with defaults (no `root_dir`/`asset_root`/evict/cancel/process set).
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         let dummy_process: ProcessChunkFn<()> =
             Arc::new(|input, output, _ctx: &mut (), _is_last| {
@@ -293,21 +288,6 @@ where
         }
     }
 
-    /// Build disk-backed asset store with its own unshared
-    /// [`AvailabilityIndex`]. Kept for tests and the `internal`
-    /// feature; production construction uses
-    /// [`AssetStoreBuilder::build`] which shares the aggregate with
-    /// the enum variant.
-    ///
-    /// # Panics
-    /// Panics if `process_fn` is not set for Ctx != ().
-    #[cfg(not(target_arch = "wasm32"))]
-    #[must_use]
-    pub fn build_disk(self) -> DiskStore<Ctx> {
-        let (chain, _base) = self.build_disk_with_availability(AvailabilityIndex::new());
-        chain
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     fn build_disk_with_availability(
         self,
@@ -331,7 +311,7 @@ where
         let hub = self
             .flush_hub
             .clone()
-            .unwrap_or_else(|| FlushHub::new(cancel.clone(), FlushPolicy::default()));
+            .unwrap_or_else(|| FlushHub::new(cancel.child_token(), FlushPolicy::default()));
 
         let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
         let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
@@ -403,7 +383,7 @@ where
         let hub = self
             .flush_hub
             .clone()
-            .unwrap_or_else(|| FlushHub::new(cancel.clone(), FlushPolicy::default()));
+            .unwrap_or_else(|| FlushHub::new(cancel.child_token(), FlushPolicy::default()));
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         pins.attach_to(&hub);
@@ -771,7 +751,7 @@ mod tests {
             .asset_root(Some("test"))
             .ephemeral(true)
             .build();
-        assert!(backend.is_ephemeral());
+        assert!(matches!(backend, AssetStore::Mem { .. }));
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -793,7 +773,8 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test"))
-            .build_disk();
+            .build_disk_with_availability(AvailabilityIndex::new())
+            .0;
         assert_eq!(store.capabilities(), Capabilities::all());
     }
 
@@ -804,7 +785,8 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(None)
-            .build_disk();
+            .build_disk_with_availability(AvailabilityIndex::new())
+            .0;
         assert_eq!(store.capabilities(), Capabilities::PROCESSING);
     }
 
@@ -816,7 +798,7 @@ mod tests {
             .asset_root(Some("test"))
             .ephemeral(false)
             .build();
-        assert!(!backend.is_ephemeral());
+        assert!(matches!(backend, AssetStore::Disk { .. }));
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -876,9 +858,10 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test"))
-            .build_disk();
+            .build_disk_with_availability(AvailabilityIndex::new())
+            .0;
         let backend: AssetStore = store.into();
-        assert!(!backend.is_ephemeral());
+        assert!(matches!(backend, AssetStore::Disk { .. }));
     }
 
     /// Red test pinning the root cause of the

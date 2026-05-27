@@ -95,7 +95,7 @@ fn trim_track(
     let mut gapless = GaplessInfo::default();
     gapless.leading_frames = u64::try_from(leading_frames).expect("leading frames fit u64");
     gapless.trailing_frames = u64::try_from(trailing_frames).expect("trailing frames fit u64");
-    let mut trimmer = GaplessTrimmer::from_info(gapless);
+    let mut trimmer = GaplessTrimmer::from(gapless);
     let chunk = PcmChunk::new(
         PcmMeta {
             spec,

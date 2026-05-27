@@ -7,7 +7,7 @@ use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_storage::ResourceExt;
-use kithara_stream::AudioCodec;
+use kithara_stream::MediaInfo;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -31,7 +31,7 @@ impl FileStreamState {
         bus: Option<EventBus>,
         event_channel_capacity: usize,
     ) -> Result<Self, SourceError> {
-        let key = ResourceKey::from_url(url);
+        let key = ResourceKey::from(url);
         let res = assets.acquire_resource(&key).map_err(SourceError::Assets)?;
         let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
         Ok(Self {
@@ -77,9 +77,12 @@ pub(crate) struct FileAssetCtx {
 pub(crate) struct FileInner {
     pub(crate) asset: FileAssetCtx,
     pub(crate) source: FileSourceCtx,
-    /// Codec discovered from the HTTP `Content-Type` header on first connect.
-    /// Set at most once by the download driver.
-    pub(crate) content_type_codec: OnceLock<AudioCodec>,
+    /// `MediaInfo` discovered from the HTTP `Content-Type` header on
+    /// first connect (or sniffed from the cached bytes for local
+    /// fast-path). Set at most once. Carries both codec and container
+    /// so downstream Apple/Android dispatch can pick a backend without
+    /// re-probing the bytes.
+    pub(crate) content_type_info: OnceLock<MediaInfo>,
     /// Lazily-built fragmented-mp4 segment index. Populated on first
     /// segment-method call once the file is fully cached and parses
     /// as fragmented mp4. Stays empty for non-mp4 files, classic mp4
@@ -99,7 +102,7 @@ impl FileInner {
         let inner = Self {
             source,
             asset,
-            content_type_codec: OnceLock::new(),
+            content_type_info: OnceLock::new(),
             segment_index: OnceLock::new(),
             phase: AtomicU8::new(initial_phase as u8),
         };

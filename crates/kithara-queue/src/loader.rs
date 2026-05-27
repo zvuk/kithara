@@ -1,8 +1,9 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_events::{DownloaderEvent, Event, TrackId, TrackStatus};
+use kithara_events::{DownloaderEvent, Event, EventBus, TrackId, TrackStatus};
+use kithara_platform::tokio::task::{JoinHandle, spawn};
 use kithara_play::{PlayerImpl, Resource, ResourceConfig};
-use tokio::{spawn, sync::Semaphore, task::JoinHandle};
+use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 use crate::{
@@ -68,24 +69,19 @@ impl Loader {
         source: TrackSource,
     ) -> Result<Resource, QueueError> {
         let config = self.build_config(source)?;
-        let bus_for_slow = config.bus.clone();
-        let tracks = Arc::clone(&self.tracks);
-
-        let slow_listener = spawn(async move {
-            let Some(bus) = bus_for_slow else { return };
-            let mut rx = bus.subscribe();
-            while let Ok(ev) = rx.recv().await {
-                if matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
-                    tracks.set_status(id, TrackStatus::Slow);
-                    break;
-                }
-            }
-        });
-
-        let result = Resource::new(config).await;
-        slow_listener.abort();
-
-        result.map_err(|e| QueueError::Resource(format!("{e}")))
+        let slow_watcher =
+            Self::watch_for_slow_status(id, config.bus.clone(), Arc::clone(&self.tracks));
+        let resource_fut = async {
+            Resource::new(config)
+                .await
+                .map_err(|e| QueueError::Resource(format!("{e}")))
+        };
+        tokio::pin!(slow_watcher);
+        tokio::select! {
+            biased;
+            result = resource_fut => result,
+            never = &mut slow_watcher => match never {},
+        }
     }
 
     /// Spawn an async load. Acquires a semaphore permit for the duration of
@@ -118,6 +114,30 @@ impl Loader {
             }
             result
         })
+    }
+
+    /// Watches the [`EventBus`] for the first
+    /// [`DownloaderEvent::LoadSlow`] and flips the track status to
+    /// [`TrackStatus::Slow`]. Returns a never-completing future:
+    /// the caller `select!`s it against `Resource::new`, so the
+    /// completion side always belongs to the resource future.
+    async fn watch_for_slow_status(
+        id: TrackId,
+        bus: Option<EventBus>,
+        tracks: Arc<Tracks>,
+    ) -> std::convert::Infallible {
+        let mut rx = match bus {
+            Some(b) => b.subscribe(),
+            None => return std::future::pending().await,
+        };
+        let mut marked = false;
+        while let Ok(ev) = rx.recv().await {
+            if !marked && matches!(ev, Event::Downloader(DownloaderEvent::LoadSlow { .. })) {
+                tracks.set_status(id, TrackStatus::Slow);
+                marked = true;
+            }
+        }
+        std::future::pending().await
     }
 }
 

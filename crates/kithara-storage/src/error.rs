@@ -27,6 +27,18 @@ pub enum StorageError {
     #[error("resource failed: {0}")]
     Failed(String),
 
+    /// The atomic-chunked temp path is already claimed by another writer
+    /// (different `AssetStore` instance, possibly cross-process). The
+    /// caller should either wait for the holder to release (commit or
+    /// drop) and retry, or fall through to a read-only / passthrough
+    /// view of the canonical path once committed.
+    ///
+    /// Reported by [`crate::AtomicChunked::open`] when the sibling temp
+    /// file already exists on disk. Filesystem-level signal — no
+    /// in-process registry involved.
+    #[error("atomic-chunked tmp claimed by another writer: {0}")]
+    TmpClaimed(std::path::PathBuf),
+
     /// A read targeted a resource whose processing pipeline has not yet
     /// committed (e.g. AES-128 segment reactivated for re-fetch). The
     /// underlying bytes either still hold ciphertext or are stale; the

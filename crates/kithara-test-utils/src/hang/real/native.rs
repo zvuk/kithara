@@ -33,7 +33,7 @@ pub(crate) fn resolve_dump_dir(explicit: Option<&Path>) -> PathBuf {
 }
 
 pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>) {
-    let payload = ctx.to_json();
+    let payload = ctx.dump_json();
     let ts = now_ms();
     let pid = std::process::id();
     let dir = resolve_dump_dir(dir);

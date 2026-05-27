@@ -207,13 +207,6 @@ impl AudioPlayerItem {
         self.config.abr_mode
     }
 
-    /// Strongly-typed view of [`Self::audio_id`] for queue calls that
-    /// take a [`TrackId`]. The value is identical — just the wrapper
-    /// type — so there is no conversion loss across the boundary.
-    pub(crate) fn track_id(&self) -> TrackId {
-        self.id
-    }
-
     pub(crate) fn headers(&self) -> Option<HashMap<String, String>> {
         self.config.headers.clone()
     }
@@ -243,14 +236,32 @@ impl AudioPlayerItem {
         );
         *self.event_bridge.lock_sync() = Some(bridge);
     }
+
+    /// Strongly-typed view of [`Self::audio_id`] for queue calls that
+    /// take a [`TrackId`]. The value is identical — just the wrapper
+    /// type — so there is no conversion loss across the boundary.
+    pub(crate) fn track_id(&self) -> TrackId {
+        self.id
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn config_with_url(url: String) -> FfiItemConfig {
+        FfiItemConfig {
+            url,
+            headers: None,
+            preferred_peak_bitrate: 0.0,
+            preferred_peak_bitrate_expensive: 0.0,
+            abr_mode: None,
+            is_live_stream: false,
+        }
+    }
+
     fn item_for(url: &str) -> Arc<AudioPlayerItem> {
-        AudioPlayerItem::new(FfiItemConfig::with_url(url.to_string()))
+        AudioPlayerItem::new(config_with_url(url.to_string()))
     }
 
     #[kithara::test]
@@ -304,7 +315,7 @@ mod tests {
     fn preferred_peak_bitrate_from_config() {
         let config = FfiItemConfig {
             preferred_peak_bitrate: 256_000.0,
-            ..FfiItemConfig::with_url("https://example.com/a.mp3".to_string())
+            ..config_with_url("https://example.com/a.mp3".to_string())
         };
         let item = AudioPlayerItem::new(config);
         assert_eq!(item.preferred_peak_bitrate(), 256_000.0);
@@ -322,7 +333,7 @@ mod tests {
         headers.insert("Authorization".into(), "Bearer token".into());
         let config = FfiItemConfig {
             headers: Some(headers),
-            ..FfiItemConfig::with_url("https://example.com/a.mp3".to_string())
+            ..config_with_url("https://example.com/a.mp3".to_string())
         };
         let item = AudioPlayerItem::new(config);
         let returned = item
@@ -349,7 +360,7 @@ mod tests {
     fn is_live_stream_from_config() {
         let config = FfiItemConfig {
             is_live_stream: true,
-            ..FfiItemConfig::with_url("https://example.com/live.m3u8".to_string())
+            ..config_with_url("https://example.com/live.m3u8".to_string())
         };
         let item = AudioPlayerItem::new(config);
         assert!(item.is_live_stream());
@@ -359,7 +370,7 @@ mod tests {
     fn is_playable_live_stream_always_true() {
         let config = FfiItemConfig {
             is_live_stream: true,
-            ..FfiItemConfig::with_url("https://example.com/live.m3u8".to_string())
+            ..config_with_url("https://example.com/live.m3u8".to_string())
         };
         let item = AudioPlayerItem::new(config);
         assert!(item.is_playable(0.0, vec![]));

@@ -1,12 +1,16 @@
 use std::{path::PathBuf, sync::Arc};
 
-use kithara_assets::{AssetResource, AssetStoreBuilder, ResourceKey, asset_root_for_url};
+use kithara_assets::{
+    AssetResource, AssetStoreBuilder, AssetsError, EvictConfig, ResourceKey, asset_root_for_url,
+};
 use kithara_events::EventBus;
-use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_platform::{time::Duration, tokio};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageError};
 use kithara_stream::{
     AudioCodec, SourceError as StreamSourceError, StreamType, Timeline,
     dl::{Downloader, DownloaderConfig},
 };
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -21,6 +25,13 @@ use crate::{
 /// Marker type for file streaming.
 pub struct File;
 
+/// Bounded poll interval while a sibling `AssetStore` instance holds
+/// the atomic-chunked tmp for the same canonical path. Short enough
+/// that the observed ~67 ms race window in
+/// `local_queue_playlist_behavior` resolves in a handful of ticks but
+/// long enough not to busy-spin a tokio worker.
+const TMP_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
 impl StreamType for File {
     type Config = FileConfig;
     type Events = EventBus;
@@ -30,12 +41,12 @@ impl StreamType for File {
         let cancel = config.cancel.clone().unwrap_or_default();
         let src = config.src.clone();
 
-        std::future::ready(match src {
-            FileSrc::Local(path) => Self::create_local(path, config, &cancel),
-            FileSrc::Remote(url) => Self::create_remote(url, config, cancel),
-        })
-        .await
-        .map_err(StreamSourceError::from)
+        match src {
+            FileSrc::Local(path) => {
+                Self::create_local(path, config, &cancel).map_err(StreamSourceError::from)
+            }
+            FileSrc::Remote(url) => Self::create_remote_wait_for_claim(url, config, cancel).await,
+        }
     }
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
@@ -123,7 +134,7 @@ impl File {
         let backend_builder = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)
             .asset_root(Some(asset_root.as_str()))
-            .evict_config(config.store.to_evict_config())
+            .evict_config(EvictConfig::from(&config.store))
             .ephemeral(config.store.is_ephemeral)
             .cancel(cancel.clone());
         let backend = Arc::new(backend_builder.build());
@@ -144,12 +155,6 @@ impl File {
             let total = coord.total_bytes().unwrap_or(0);
             coord.set_download_pos(total);
 
-            // The HTTP `Content-Type` that originally drove
-            // `FilePeer::capture_content_metadata` is gone on cold
-            // restart — recover the codec by sniffing the first bytes
-            // of the cached resource so the decoder doesn't fall back
-            // to extension-based probing (which silently fails on
-            // path-extension-less URLs like `streamhq?id=N`).
             let cached_codec = sniff_codec(&state.res);
 
             return Ok(FileSource::local(
@@ -183,9 +188,40 @@ impl File {
             .register(Arc::new(FilePeer::new(Arc::clone(&inner))))
             .with_bus(state.bus.clone());
 
-        let mut source = FileSource::from_inner(inner, coord);
+        let mut source = FileSource::with_inner(inner, coord);
         source.set_peer_handle(peer_handle);
         Ok(source)
+    }
+
+    /// Wait for a sibling `AssetStore` to release the atomic-chunked
+    /// tmp file, then open. The sibling owner signals release either by
+    /// committing (canonical appears) or by dropping without commit
+    /// (tmp disappears) — both unblock our next
+    /// `OpenOptions::create_new` call.
+    ///
+    /// Wrapped in `#[kithara::hang_watchdog]` so a stale tmp from a
+    /// crashed-out previous process (which never releases the
+    /// filesystem-level signal) surfaces as a deterministic panic
+    /// rather than an indefinite hang.
+    #[kithara::hang_watchdog]
+    async fn create_remote_wait_for_claim(
+        url: url::Url,
+        config: FileConfig,
+        cancel: CancellationToken,
+    ) -> Result<FileSource, StreamSourceError> {
+        loop {
+            match Self::create_remote(url.clone(), config.clone(), cancel.clone()) {
+                Ok(src) => {
+                    hang_reset!();
+                    return Ok(src);
+                }
+                Err(SourceError::Assets(AssetsError::Storage(StorageError::TmpClaimed(_)))) => {
+                    hang_tick!();
+                    tokio::time::sleep(TMP_CLAIMED_POLL_INTERVAL).await;
+                }
+                Err(e) => return Err(StreamSourceError::from(e)),
+            }
+        }
     }
 }
 

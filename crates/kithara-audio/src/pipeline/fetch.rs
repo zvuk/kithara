@@ -70,57 +70,25 @@ impl<C> Fetch<C> {
         self.kind == FetchKind::NaturalEof
     }
 
-    /// True iff this is a failure marker.
-    pub fn is_failure(&self) -> bool {
-        self.kind == FetchKind::Failure
-    }
-
     /// True iff this is any terminal marker (natural EOF or failure).
     pub fn is_terminal(&self) -> bool {
         !matches!(self.kind, FetchKind::Data)
-    }
-
-    /// Explicit natural-EOF marker.
-    pub fn natural_eof(data: C, epoch: u64) -> Self {
-        Self {
-            data,
-            epoch,
-            kind: FetchKind::NaturalEof,
-        }
     }
 }
 
 /// Validator that checks epoch for seek invalidation.
 ///
 /// Consumer increments epoch on seek; items with old epoch are discarded.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EpochValidator {
     /// Current consumer epoch.
     pub epoch: u64,
 }
 
 impl EpochValidator {
-    /// Create a new epoch validator.
-    #[must_use]
-    pub fn new() -> Self {
-        Self { epoch: 0 }
-    }
-
     /// Check if a fetch result matches the current epoch.
     pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
         item.epoch == self.epoch
-    }
-
-    /// Increment epoch (called on seek). Returns new epoch.
-    pub fn next_epoch(&mut self) -> u64 {
-        self.epoch = self.epoch.wrapping_add(1);
-        self.epoch
-    }
-}
-
-impl Default for EpochValidator {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -132,7 +100,7 @@ mod tests {
 
     #[kithara::test]
     fn epoch_validator_keeps_matching_chunks() {
-        let mut validator = EpochValidator::new();
+        let mut validator = EpochValidator::default();
         let item = Fetch::new(vec![1u8, 2, 3], false, 1);
         validator.epoch = 1;
         assert!(validator.is_valid(&item));
@@ -140,11 +108,11 @@ mod tests {
 
     #[kithara::test]
     fn epoch_validator_rejects_stale_chunks_after_seek() {
-        let mut validator = EpochValidator::new();
+        let mut validator = EpochValidator::default();
         let stale = Fetch::new(vec![3u8], false, validator.epoch);
         let first = Fetch::new(vec![1u8], false, validator.epoch);
-        let next_epoch = validator.next_epoch();
-        let next = Fetch::new(vec![2u8], false, next_epoch);
+        validator.epoch = validator.epoch.wrapping_add(1);
+        let next = Fetch::new(vec![2u8], false, validator.epoch);
 
         assert!(!validator.is_valid(&first));
         assert!(!validator.is_valid(&stale));

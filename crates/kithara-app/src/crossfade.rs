@@ -38,6 +38,7 @@ impl Default for ProgressLog {
 
 impl ProgressLog {
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self {
             last_emit: Instant::now() - PROGRESS_LOG_INTERVAL,

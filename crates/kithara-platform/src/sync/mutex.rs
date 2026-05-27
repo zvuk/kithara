@@ -94,6 +94,13 @@ impl<T: Default> Default for Mutex<T> {
 }
 
 #[cfg(target_arch = "wasm32")]
+// SAFETY: browser is single-threaded; a `Mutex` value never crosses threads.
+unsafe impl<T> Send for Mutex<T> {}
+#[cfg(target_arch = "wasm32")]
+// SAFETY: same — no concurrent access on the single browser thread.
+unsafe impl<T> Sync for Mutex<T> {}
+
+#[cfg(target_arch = "wasm32")]
 pub struct MutexGuard<'a, T>(pub(super) wasm_safe_thread::guard::Guard<'a, T>);
 
 #[cfg(target_arch = "wasm32")]

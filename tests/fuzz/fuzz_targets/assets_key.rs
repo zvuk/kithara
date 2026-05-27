@@ -29,7 +29,7 @@ fuzz_target!(|input: Input| {
     assert_eq!(root.len(), 32);
     assert!(root.bytes().all(|b| b.is_ascii_hexdigit()));
 
-    let key = ResourceKey::from_url(&url);
+    let key = ResourceKey::from(&url);
     assert!(!key.is_absolute());
 
     if url.host().is_some() {

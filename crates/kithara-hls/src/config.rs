@@ -30,6 +30,7 @@ pub struct KeyOptions {
 
 impl KeyOptions {
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self::default()
     }
@@ -90,6 +91,11 @@ pub struct HlsConfig {
     pub name: Option<String>,
     /// Buffer pool (shared across all components, created if not provided).
     pub pool: Option<BytePool>,
+    /// Method used by size estimation to probe segment lengths. See
+    /// [`SizeProbeMethod`]. Switch to [`SizeProbeMethod::RangeGet`]
+    /// for upstreams that reject `HEAD` (zvuk stage `/drm/`).
+    #[builder(default)]
+    pub size_probe_method: SizeProbeMethod,
     /// Storage configuration.
     #[builder(default)]
     pub store: StoreOptions,
@@ -111,11 +117,6 @@ pub struct HlsConfig {
     /// generous.
     #[builder(default = 8)]
     pub head_estimation_concurrency: usize,
-    /// Method used by size estimation to probe segment lengths. See
-    /// [`SizeProbeMethod`]. Switch to [`SizeProbeMethod::RangeGet`]
-    /// for upstreams that reject `HEAD` (zvuk stage `/drm/`).
-    #[builder(default)]
-    pub size_probe_method: SizeProbeMethod,
 }
 
 impl fmt::Debug for HlsConfig {

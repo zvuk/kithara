@@ -137,6 +137,14 @@ impl PlayerResource {
         self.eof_seen.then_some(self.write_len)
     }
 
+    /// Returns true if the underlying source reported a non-recoverable
+    /// decode error and the scratch is drained. Used by callers to
+    /// surface track-failed signals separately from natural EOF.
+    #[must_use]
+    pub fn is_failed(&self) -> bool {
+        self.failed && self.write_len == 0 && !self.eof_seen
+    }
+
     /// Read PCM frames into the output buffers for the given range.
     ///
     /// Fills internal scratch buffers from the underlying resource as needed,
@@ -204,14 +212,6 @@ impl PlayerResource {
             }
             ReadOutcome::Full
         }
-    }
-
-    /// Returns true if the underlying source reported a non-recoverable
-    /// decode error and the scratch is drained. Used by callers to
-    /// surface track-failed signals separately from natural EOF.
-    #[must_use]
-    pub fn is_failed(&self) -> bool {
-        self.failed && self.write_len == 0 && !self.eof_seen
     }
 
     /// Seek to the given position in seconds.

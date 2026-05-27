@@ -51,11 +51,11 @@ impl Resource {
         let source_type = SourceType::detect(&config.src)?;
         match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio_config = config.into_file_config();
+                let audio_config = config.build_file_config();
                 Self::from_stream_audio(audio_config, src).await
             }
             SourceType::HlsStream(_) => {
-                let audio_config = config.into_hls_config()?;
+                let audio_config = config.build_hls_config()?;
                 Self::from_stream_audio(audio_config, src).await
             }
         }
@@ -83,10 +83,13 @@ impl Resource {
 
     /// Create a resource from any `PcmReader`.
     ///
-    /// The resource shares the reader's event bus directly. Use for custom
-    /// sources or offline render harnesses where the production
-    /// [`Resource::new`] / [`Resource::from_stream_audio`] paths (which
-    /// build a real `Stream<T>`) are heavier than the caller needs.
+    /// This is the single construction primitive: the stream-backed
+    /// [`Resource::new`] / [`Resource::from_stream_audio`] paths build a
+    /// real `Audio<Stream<T>>` reader and then funnel through here, so the
+    /// reader-boxing, preload, and bus-sharing logic lives in one place.
+    /// Custom sources and offline render harnesses pass their own reader.
+    ///
+    /// The resource shares the reader's event bus directly.
     ///
     /// `src` rides along on `PlayerEvent::ItemDidPlayToEnd` and is what
     /// the queue uses to tell which track ended. `None` defaults to
@@ -109,25 +112,15 @@ impl Resource {
     /// `kithara_events::EventBus`. Callers wanting fine-grained control
     /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
     pub(crate) async fn from_stream_audio<T>(
-        mut config: AudioConfig<T>,
+        config: AudioConfig<T>,
         src: Arc<str>,
     ) -> DecodeResult<Self>
     where
         T: StreamType<Events = EventBus> + 'static,
         Audio<Stream<T>>: PcmReader + 'static,
     {
-        let bus = T::event_bus(&config.stream)
-            .or_else(|| config.bus.clone())
-            .unwrap_or_default();
-        config.bus = Some(bus.clone());
-
-        let mut audio = Audio::<Stream<T>>::new(config).await?;
-        let _ = audio.preload();
-        Ok(Self {
-            src,
-            bus,
-            inner: Box::new(audio),
-        })
+        let audio = Audio::<Stream<T>>::new(config).await?;
+        Ok(Self::from_reader(audio, Some(src)))
     }
 
     /// Get track metadata.

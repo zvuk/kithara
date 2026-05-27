@@ -120,6 +120,7 @@ struct PeerEntry {
 
 /// Peer registry: owns peers, routes commands to priority slots,
 /// and drives batch execution.
+#[derive(Default)]
 pub(super) struct Registry {
     urgent_notify: Arc<Notify>,
     peers: Arena<PeerEntry>,
@@ -127,14 +128,6 @@ pub(super) struct Registry {
 }
 
 impl Registry {
-    pub(super) fn new() -> Self {
-        Self {
-            peers: Arena::new(),
-            slots: Default::default(),
-            urgent_notify: Arc::new(Notify::new()),
-        }
-    }
-
     /// Register a new peer.
     ///
     /// The peer's `peer_cancel` is the [`PeerHandle`]'s own cancel token

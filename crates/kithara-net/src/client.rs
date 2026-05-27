@@ -66,13 +66,6 @@ impl From<Compression> for Vec<ClientBuilderMod> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn build_client(options: &NetOptions) -> reqwest::Result<Client> {
-    // Short pool_idle_timeout matters for retries against upstreams
-    // that drop TCP without `close_notify` (rustls cannot mark the
-    // socket dead, so reqwest happily replays it on the next
-    // attempt and we re-hit the same failure). 5s is long enough to
-    // amortise TLS handshake across legitimate fast follow-ups but
-    // short enough that a retry after backoff always lands on a
-    // fresh connection.
     let base = Client::builder()
         .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
@@ -303,7 +296,7 @@ impl Net for RawHttp {
         let req = self
             .inner
             .get(url.clone())
-            .header("Range", range.to_header_value());
+            .header("Range", range.to_string());
         let resp = self.send_checked(req, headers, url, true).await?;
         Ok(Self::response_to_stream(resp))
     }
@@ -339,11 +332,6 @@ impl Net for RawHttp {
             out.insert(name, v);
         }
 
-        // wasm32 `head_request` issues `GET Range: bytes=0-0`, so a
-        // 206 response carries `Content-Length: 1` (just the byte
-        // we asked for) plus `Content-Range: bytes 0-0/TOTAL`.
-        // Substitute the total when present so callers see the
-        // resource size rather than the slice length.
         if out.get("content-length").is_none() {
             let total_from_range = out
                 .get("content-range")

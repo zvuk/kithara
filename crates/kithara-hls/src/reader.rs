@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use kithara_events::{EventBus, HlsEvent};
-use kithara_stream::{DecoderHooks, ReaderChunkSignal, ReaderSeekSignal};
+use kithara_stream::{DecoderHooks, PrerollHint, ReaderChunkSignal, ReaderSeekSignal};
 
 use crate::coord::HlsCoord;
 
@@ -123,9 +123,17 @@ impl DecoderHooks for HlsReaderHooks {
 
     fn on_seek(&mut self, signal: ReaderSeekSignal) {
         self.initial_seek_published = true;
-        let ReaderSeekSignal::Landed { landed_byte } = signal else {
+        let ReaderSeekSignal::Landed {
+            landed_byte,
+            preroll,
+        } = signal
+        else {
             return;
         };
+        if let PrerollHint::Required(byte) = preroll {
+            // F.2 will replace this with self.coord.request_preroll(byte);
+            let _ = byte;
+        }
         let Some(to) = landed_byte else {
             return;
         };

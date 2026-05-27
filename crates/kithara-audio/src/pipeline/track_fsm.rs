@@ -40,22 +40,22 @@ pub(crate) enum TrackState {
 /// Context for a pending seek, carried through multiple states.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SeekContext {
-    pub target: Duration,
-    pub epoch: u64,
+    pub(crate) target: Duration,
+    pub(crate) epoch: u64,
 }
 
 /// Stateful seek request tracked across retries and waits.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SeekRequest {
-    pub seek: SeekContext,
-    pub attempt: u8,
+    pub(crate) seek: SeekContext,
+    pub(crate) attempt: u8,
 }
 
 /// Seek application mode resolved before touching the decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ApplySeekState {
-    pub mode: SeekMode,
-    pub request: SeekRequest,
+    pub(crate) mode: SeekMode,
+    pub(crate) request: SeekRequest,
 }
 
 /// Resume state after a seek has been applied to the decoder.
@@ -63,10 +63,10 @@ pub(crate) struct ApplySeekState {
 pub(crate) struct ResumeState {
     /// Anchor byte offset from the seek — used for readiness checks and demand
     /// when the decoder's stream position differs from the `StreamIndex` layout.
-    pub anchor_offset: Option<u64>,
-    pub skip: Option<Duration>,
-    pub seek: SeekContext,
-    pub recover_attempts: u8,
+    pub(crate) anchor_offset: Option<u64>,
+    pub(crate) skip: Option<Duration>,
+    pub(crate) seek: SeekContext,
+    pub(crate) recover_attempts: u8,
 }
 
 /// What to do once decoder recreation succeeds.
@@ -83,11 +83,28 @@ pub(crate) enum RecreateNext {
 /// Decoder recreation task tracked by the FSM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecreateState {
-    pub media_info: MediaInfo,
-    pub cause: RecreateCause,
-    pub next: RecreateNext,
-    pub offset: u64,
-    pub attempt: u8,
+    pub(crate) media_info: MediaInfo,
+    pub(crate) cause: RecreateCause,
+    pub(crate) next: RecreateNext,
+    pub(crate) offset: u64,
+    pub(crate) attempt: u8,
+}
+
+/// Outcome of one `execute_recreation` call.
+///
+/// `NeedsSourceWait` exists for the post-VariantChange WAV-ABR / fMP4
+/// case where the decoder factory's probe reads `[0..PROBE)` of the
+/// freshly-switched variant *before* the HLS scheduler has buffered
+/// those bytes — the probe surfaces an `ErrorClass::Interrupted`
+/// (`StreamPending(WaitBudgetExhausted)`). Treating that as a hard
+/// `RecreateFailed` deadlocks the audio worker (Cluster C/D/E/F in
+/// `pure-dancing-porcupine.md`, Wave 2.A); routing back through
+/// `wait_for_source_on_recreate` lets the source catch up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecreateOutcome {
+    Done,
+    SoftFailed,
+    NeedsSourceWait,
 }
 
 /// What caused us to enter `WaitingForSource`.
@@ -158,9 +175,15 @@ pub(crate) enum TrackFailure {
 /// Created whole — never partially mutated. On recreation failure
 /// the old session remains untouched.
 pub(crate) struct DecoderSession {
-    pub decoder: Box<dyn Decoder>,
-    pub media_info: Option<MediaInfo>,
-    pub base_offset: u64,
+    pub(crate) decoder: Box<dyn Decoder>,
+    pub(crate) media_info: Option<MediaInfo>,
+    pub(crate) base_offset: u64,
+    /// Seek epoch at which this session was installed. Used by
+    /// `detect_format_change` to suppress a redundant recreate when
+    /// the in-flight seek epoch still matches the epoch that produced
+    /// the session — the decoder is already aligned with the seek's
+    /// landing variant.
+    pub(crate) installed_at_seek_epoch: u64,
 }
 
 /// Result of a single `step_track()` call.
@@ -213,19 +236,20 @@ impl TrackState {
     pub(crate) fn is_terminal(&self) -> bool {
         matches!(self, Self::Failed(_))
     }
+}
 
-    /// Fieldless discriminant for external phase queries.
+impl From<&TrackState> for TrackPhaseTag {
     #[inline(always)]
-    pub(crate) fn phase_tag(&self) -> TrackPhaseTag {
-        match self {
-            Self::Decoding => TrackPhaseTag::Decoding,
-            Self::SeekRequested(_) => TrackPhaseTag::SeekRequested,
-            Self::WaitingForSource { .. } => TrackPhaseTag::WaitingForSource,
-            Self::ApplyingSeek(_) => TrackPhaseTag::ApplyingSeek,
-            Self::RecreatingDecoder(_) => TrackPhaseTag::RecreatingDecoder,
-            Self::AwaitingResume(_) => TrackPhaseTag::AwaitingResume,
-            Self::AtEof => TrackPhaseTag::AtEof,
-            Self::Failed(_) => TrackPhaseTag::Failed,
+    fn from(state: &TrackState) -> Self {
+        match state {
+            TrackState::Decoding => Self::Decoding,
+            TrackState::SeekRequested(_) => Self::SeekRequested,
+            TrackState::WaitingForSource { .. } => Self::WaitingForSource,
+            TrackState::ApplyingSeek(_) => Self::ApplyingSeek,
+            TrackState::RecreatingDecoder(_) => Self::RecreatingDecoder,
+            TrackState::AwaitingResume(_) => Self::AwaitingResume,
+            TrackState::AtEof => Self::AtEof,
+            TrackState::Failed(_) => Self::Failed,
         }
     }
 }
@@ -304,7 +328,7 @@ mod tests {
             assert!(
                 !state.is_terminal(),
                 "expected non-terminal for {:?}",
-                state.phase_tag()
+                TrackPhaseTag::from(state)
             );
         }
 
@@ -313,28 +337,29 @@ mod tests {
 
     #[kithara::test]
     fn phase_tag_preserves_discriminant() {
-        assert_eq!(TrackState::Decoding.phase_tag(), TrackPhaseTag::Decoding);
         assert_eq!(
-            TrackState::SeekRequested(SeekRequest {
+            TrackPhaseTag::from(&TrackState::Decoding),
+            TrackPhaseTag::Decoding
+        );
+        assert_eq!(
+            TrackPhaseTag::from(&TrackState::SeekRequested(SeekRequest {
                 seek: SeekContext {
                     epoch: 1,
                     target: Duration::ZERO,
                 },
                 ..Default::default()
-            })
-            .phase_tag(),
+            })),
             TrackPhaseTag::SeekRequested
         );
         assert_eq!(
-            TrackState::WaitingForSource {
+            TrackPhaseTag::from(&TrackState::WaitingForSource {
                 context: WaitContext::Playback,
                 reason: WaitingReason::WaitingDemand,
-            }
-            .phase_tag(),
+            }),
             TrackPhaseTag::WaitingForSource
         );
         assert_eq!(
-            TrackState::ApplyingSeek(ApplySeekState {
+            TrackPhaseTag::from(&TrackState::ApplyingSeek(ApplySeekState {
                 mode: SeekMode::Direct { target_byte: None },
                 request: SeekRequest {
                     seek: SeekContext {
@@ -343,12 +368,11 @@ mod tests {
                     },
                     ..Default::default()
                 },
-            })
-            .phase_tag(),
+            })),
             TrackPhaseTag::ApplyingSeek
         );
         assert_eq!(
-            TrackState::RecreatingDecoder(RecreateState {
+            TrackPhaseTag::from(&TrackState::RecreatingDecoder(RecreateState {
                 attempt: 1,
                 cause: RecreateCause::VariantSwitch,
                 media_info: MediaInfo::default(),
@@ -360,12 +384,11 @@ mod tests {
                     },
                 }),
                 offset: 100,
-            })
-            .phase_tag(),
+            })),
             TrackPhaseTag::RecreatingDecoder
         );
         assert_eq!(
-            TrackState::AwaitingResume(ResumeState {
+            TrackPhaseTag::from(&TrackState::AwaitingResume(ResumeState {
                 recover_attempts: 0,
                 seek: SeekContext {
                     epoch: 1,
@@ -373,13 +396,15 @@ mod tests {
                 },
                 anchor_offset: None,
                 skip: None,
-            })
-            .phase_tag(),
+            })),
             TrackPhaseTag::AwaitingResume
         );
-        assert_eq!(TrackState::AtEof.phase_tag(), TrackPhaseTag::AtEof);
         assert_eq!(
-            TrackState::Failed(TrackFailure::SourceCancelled).phase_tag(),
+            TrackPhaseTag::from(&TrackState::AtEof),
+            TrackPhaseTag::AtEof
+        );
+        assert_eq!(
+            TrackPhaseTag::from(&TrackState::Failed(TrackFailure::SourceCancelled)),
             TrackPhaseTag::Failed
         );
     }
@@ -430,6 +455,6 @@ mod tests {
     fn at_eof_allows_seek_transition() {
         let state = TrackState::AtEof;
         assert!(!state.is_terminal());
-        assert_eq!(state.phase_tag(), TrackPhaseTag::AtEof);
+        assert_eq!(TrackPhaseTag::from(&state), TrackPhaseTag::AtEof);
     }
 }

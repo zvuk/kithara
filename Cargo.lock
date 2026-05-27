@@ -3942,7 +3942,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kithara"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "kithara",
  "kithara-abr",
@@ -3968,10 +3968,11 @@ dependencies = [
 
 [[package]]
 name = "kithara-abr"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "bon",
  "criterion",
+ "dashmap",
  "kithara-events",
  "kithara-platform",
  "kithara-test-utils",
@@ -3987,7 +3988,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-app"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "bon",
  "bytes",
@@ -4019,7 +4020,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-assets"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "aes",
  "bitflags 2.11.1",
@@ -4054,7 +4055,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-audio"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "aes",
  "assert_no_alloc",
@@ -4101,7 +4102,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-bufpool"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "hotpath",
  "kithara-bufpool",
@@ -4113,11 +4114,12 @@ dependencies = [
 
 [[package]]
 name = "kithara-decode"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "bon",
  "core-foundation 0.10.1",
  "core-foundation-sys",
+ "derive_more",
  "fdk-aac",
  "hotpath",
  "jni 0.22.4",
@@ -4144,7 +4146,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-drm"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "aes",
  "bon",
@@ -4161,12 +4163,13 @@ dependencies = [
 
 [[package]]
 name = "kithara-encode"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "bon",
  "fdk-aac",
  "fdk-aac-sys",
  "ffmpeg-next",
+ "kithara-stream",
  "kithara-workspace-hack",
  "tempfile",
  "thiserror 2.0.18",
@@ -4175,7 +4178,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-events"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "dashmap",
  "delegate",
@@ -4193,12 +4196,15 @@ dependencies = [
 
 [[package]]
 name = "kithara-ffi"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "bytes",
+ "console_error_panic_hook",
  "cpal",
+ "dashmap",
  "futures",
  "jni 0.22.4",
+ "js-sys",
  "kithara",
  "kithara-drm",
  "kithara-events",
@@ -4208,6 +4214,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "ndk-context",
+ "num-traits",
  "rand 0.10.1",
  "rustls-platform-verifier",
  "thiserror 2.0.18",
@@ -4215,16 +4222,21 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-android",
+ "tracing-log",
  "tracing-subscriber",
+ "tracing-wasm",
  "uniffi",
  "unimock",
  "url",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
 name = "kithara-file"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "axum",
  "bon",
@@ -4274,7 +4286,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-hls"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "aes",
  "axum",
@@ -4314,7 +4326,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-integration-tests"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "aes",
  "assert_no_alloc",
@@ -4353,6 +4365,7 @@ dependencies = [
  "kithara-test-utils",
  "memory-stats",
  "mmap-io",
+ "moka",
  "num-traits",
  "rand 0.10.1",
  "reqwest",
@@ -4384,7 +4397,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-net"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "async-trait",
  "axum",
@@ -4414,7 +4427,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-platform"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "console_error_panic_hook",
  "futures",
@@ -4437,7 +4450,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-play"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "bevy_platform",
  "bon",
@@ -4473,7 +4486,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-queue"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "bon",
  "delegate",
@@ -4491,7 +4504,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-storage"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "bon",
  "crossbeam-queue",
@@ -4515,7 +4528,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-stream"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "axum",
  "bitflags 2.11.1",
@@ -4548,7 +4561,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-test-macros"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "kithara-workspace-hack",
  "proc-macro2",
@@ -4558,7 +4571,7 @@ dependencies = [
 
 [[package]]
 name = "kithara-test-utils"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "backtrace",
  "kithara-events",
@@ -4580,42 +4593,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "kithara-wasm"
-version = "0.0.1-alpha1"
-dependencies = [
- "console_error_panic_hook",
- "js-sys",
- "kithara-platform",
- "kithara-play",
- "kithara-wasm-macros",
- "num-traits",
- "tracing",
- "tracing-log",
- "tracing-wasm",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "kithara-wasm-macros"
-version = "0.0.1-alpha1"
-dependencies = [
- "kithara-workspace-hack",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "kithara-workspace-hack"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "bit-set 0.8.0",
  "bit-vec 0.8.0",
  "bitflags 2.11.1",
  "bytemuck",
- "cc",
  "clap",
  "clap_builder",
  "cpal",
@@ -4641,6 +4625,7 @@ dependencies = [
  "hotpath-macros",
  "hyper",
  "hyper-util",
+ "idna",
  "indexmap",
  "itertools 0.13.0",
  "libc",
@@ -4670,10 +4655,13 @@ dependencies = [
  "simd-adler32",
  "slab",
  "smallvec",
+ "symphonia-core 0.6.0",
+ "symphonia-metadata 0.6.0",
  "syn 2.0.117",
  "sync_wrapper",
  "thiserror 2.0.18",
  "thunderdome",
+ "time",
  "tokio",
  "tokio-util",
  "toml_datetime 1.1.1+spec-1.1.0",
@@ -5071,6 +5059,23 @@ dependencies = [
  "memmap2 0.7.1",
  "parking_lot",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "moka"
+version = "0.12.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "957228ad12042ee839f93c8f257b62b4c0ab5eaae1d4fa60de53b27c9d7c5046"
+dependencies = [
+ "crossbeam-channel",
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "equivalent",
+ "parking_lot",
+ "portable-atomic",
+ "smallvec",
+ "tagptr",
+ "uuid",
 ]
 
 [[package]]
@@ -8129,6 +8134,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "tagptr"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
+
+[[package]]
 name = "tar"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10659,7 +10670,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 dependencies = [
  "anyhow",
  "cargo_metadata 0.23.1",

@@ -9,13 +9,14 @@ use anyhow::Result;
 use cargo_metadata::Metadata;
 
 use super::config::ArchConfig;
-use crate::common::{scope::Scope, violation::Violation};
+use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
 
 pub(crate) mod arc_clone_hotspots;
 pub(crate) mod args_wrapper_struct;
 pub(crate) mod cancel_hierarchy;
 pub(crate) mod canonical_types;
 pub(crate) mod cfg_density;
+pub(crate) mod dead_exports;
 pub(crate) mod direction;
 pub(crate) mod duplicate_error_enums;
 pub(crate) mod field_always_constant;
@@ -56,12 +57,19 @@ pub(crate) struct Context<'a> {
 pub(crate) trait Check {
     fn id(&self) -> &'static str;
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
+
+    /// Apply an automatic fix. Default is a no-op (read-only check). `apply`
+    /// distinguishes a dry run (report only) from writing changes to disk.
+    fn fix(&self, _ctx: &Context<'_>, _apply: bool) -> Result<FixOutcome> {
+        Ok(FixOutcome::default())
+    }
 }
 
 pub(crate) fn registry() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(cancel_hierarchy::CancelHierarchy),
         Box::new(cfg_density::CfgDensity),
+        Box::new(dead_exports::DeadExports),
         Box::new(direction::Direction),
         Box::new(args_wrapper_struct::ArgsWrapperStruct),
         Box::new(canonical_types::CanonicalTypes),

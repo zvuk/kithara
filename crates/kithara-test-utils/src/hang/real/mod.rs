@@ -8,9 +8,9 @@ mod platform;
 
 mod detector;
 
-pub use detector::{HangDetector, HangDump, NoContext, default_timeout};
 #[cfg(test)]
-pub(crate) use detector::{fallback_timeout, sanitize_label};
+pub(crate) use detector::sanitize_label;
+pub use detector::{HangDetector, HangDump, NoContext, default_timeout};
 #[cfg(test)]
 pub(crate) use platform::{parse_timeout_secs, resolve_dump_dir, write_dump};
 

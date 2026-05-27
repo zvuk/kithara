@@ -122,14 +122,6 @@ impl MediaTime {
     }
 
     #[must_use]
-    pub fn to_duration(&self) -> Option<Duration> {
-        if !self.is_valid() || self.is_indefinite() {
-            return None;
-        }
-        Some(Duration::from_secs_f64(self.seconds()))
-    }
-
-    #[must_use]
     pub fn value(&self) -> i64 {
         self.value
     }
@@ -160,6 +152,17 @@ impl hash::Hash for MediaTime {
 impl From<Duration> for MediaTime {
     fn from(d: Duration) -> Self {
         Self::with_duration(d)
+    }
+}
+
+impl TryFrom<&MediaTime> for Duration {
+    type Error = ();
+
+    fn try_from(t: &MediaTime) -> Result<Self, Self::Error> {
+        if !t.is_valid() || t.is_indefinite() {
+            return Err(());
+        }
+        Ok(Self::from_secs_f64(t.seconds()))
     }
 }
 

@@ -133,7 +133,7 @@ pub(crate) fn switch_track_then_seek() -> Vec<Action> {
 
 /// Bounce between tracks repeatedly with seeks in between — covers
 /// the worst-case combinator: every (DRM ↔ plain) combination of
-/// transitions, decoder recreates, AssetStore key state carryover.
+/// transitions, decoder recreates, `AssetStore` key state carryover.
 pub(crate) fn bounce_between_tracks_with_seeks() -> Vec<Action> {
     vec![
         Action::PlayFor(Duration::from_secs(2)),
@@ -165,7 +165,7 @@ pub(crate) fn long_play_then_switch_then_seek() -> Vec<Action> {
 }
 
 /// Auto-ABR up-switch repro: long warm-up so the bandwidth probe
-/// decides to UpSwitch, then a sequence of seeks across the track.
+/// decides to `UpSwitch`, then a sequence of seeks across the track.
 /// User reports that **every** seek after Auto's up-switch returns
 /// `SeekOutOfRange` or false-EOF — Manual ABR (no switch) plays + seeks
 /// fine. So the post-switch decoder is desynced from the new variant's

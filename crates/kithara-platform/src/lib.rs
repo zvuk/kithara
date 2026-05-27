@@ -37,7 +37,6 @@ pub use env::env_mutation_lock;
 pub use maybe_send::{BoxFuture, MaybeSend, MaybeSendFuture, MaybeSync, WasmSend};
 pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
-    WaitTimeoutResult,
 };
 pub use thread::{
     Duration, JoinHandle, Thread, ThreadId, current, park, park_timeout, sleep, spawn,

@@ -1,0 +1,58 @@
+id: rust.prefer-from-iterator
+message: |
+  `fn from_iter(impl Iterator<Item = T>) -> Self` shadows
+  `FromIterator::from_iter`. Implement `FromIterator<T>` instead so callers
+  can use `iter.collect::<Self>()` and so the bound widens from `Iterator`
+  to `IntoIterator` (source-compatible at every call site).
+
+      // ❌
+      impl BatchGroup {
+          pub(super) fn from_iter(entries: impl Iterator<Item = SlotEntry>) -> Self {
+              Self { entries: entries.collect() }
+          }
+      }
+
+      // ✅
+      impl FromIterator<SlotEntry> for BatchGroup {
+          fn from_iter<I: IntoIterator<Item = SlotEntry>>(iter: I) -> Self {
+              Self { entries: iter.into_iter().collect() }
+          }
+      }
+      // Callers: `entries.collect::<BatchGroup>()` works; existing
+      // `BatchGroup::from_iter(s0.drain(..).chain(s1.drain(..)))` still
+      // compiles because `IntoIterator: IntoIterator` (Iterator is also
+      // IntoIterator via blanket impl).
+
+  Suppress with `// ast-grep-ignore: rust.prefer-from-iterator` when the
+  constructor consumes a strict `Iterator` for a reason (e.g. requires
+  exact-size or ordered iteration with no backing collection).
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 12b, Wave 15).
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: |
+        fn from_iter($A: impl Iterator<Item = $T>) -> Self {
+            $$$BODY
+        }
+    - pattern: |
+        pub fn from_iter($A: impl Iterator<Item = $T>) -> Self {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn from_iter($A: impl Iterator<Item = $T>) -> Self {
+            $$$BODY
+        }
+    - pattern: |
+        pub(super) fn from_iter($A: impl Iterator<Item = $T>) -> Self {
+            $$$BODY
+        }

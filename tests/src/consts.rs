@@ -18,4 +18,7 @@ impl Consts {
 
     pub(crate) const MIN_SAMPLE_RATE: u32 = 8_000;
     pub(crate) const WAV_HEADER_SIZE: usize = 44;
+
+    pub(crate) const MIN_LOSSY_BIT_RATE: u64 = 32_000;
+    pub(crate) const MAX_LOSSY_BIT_RATE: u64 = 320_000;
 }

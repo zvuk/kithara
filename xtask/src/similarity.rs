@@ -14,7 +14,6 @@ impl Consts {
         "kithara-workspace-hack",
         "kithara-test-utils",
         "kithara-test-macros",
-        "kithara-wasm-macros",
     ];
 }
 

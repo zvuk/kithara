@@ -1,6 +1,6 @@
 use kithara_platform::thread::assert_main_thread;
 
-use crate::impls::session_engine;
+use crate::impls::session;
 
 /// Ensure the main-thread session client exists in `Local` mode.
 ///
@@ -8,7 +8,7 @@ use crate::impls::session_engine;
 /// so that the main thread gets a `Local` session and Workers get `Remote`.
 pub fn ensure_main_session() {
     assert_main_thread("ensure_main_session");
-    session_engine::session_client();
+    session::session_client();
 }
 
 /// Initialise the Worker ↔ main-thread session channel.
@@ -17,7 +17,7 @@ pub fn ensure_main_session() {
 /// calls [`PlayerImpl::new`](crate::PlayerImpl::new).
 pub fn init_worker_session() {
     assert_main_thread("init_worker_session");
-    session_engine::init_worker_channel();
+    session::init_worker_channel();
 }
 
 /// Pre-initialise the audio context and AudioWorklet eagerly.
@@ -29,7 +29,7 @@ pub fn init_worker_session() {
 /// very first user click resumes the context.
 pub fn warm_up_audio() {
     assert_main_thread("warm_up_audio");
-    session_engine::warm_up_audio();
+    session::warm_up_audio();
 }
 
 /// Poll pending session commands from Workers and update the audio graph.
@@ -37,25 +37,25 @@ pub fn warm_up_audio() {
 /// Call this on the main thread from `requestAnimationFrame`.
 pub fn tick_and_poll() {
     assert_main_thread("tick_and_poll");
-    session_engine::tick_and_poll_remote();
+    session::tick_and_poll_remote();
 }
 
 /// Current playback position in seconds (read from shared atomics).
 pub fn bridge_position_secs() -> f64 {
-    session_engine::bridge_position_secs()
+    session::bridge_position_secs()
 }
 
 /// Current media duration in seconds (read from shared atomics).
 pub fn bridge_duration_secs() -> f64 {
-    session_engine::bridge_duration_secs()
+    session::bridge_duration_secs()
 }
 
 /// Whether playback is active (read from shared atomics).
 pub fn bridge_is_playing() -> bool {
-    session_engine::bridge_is_playing()
+    session::bridge_is_playing()
 }
 
 /// Audio-thread process count (read from shared atomics).
 pub fn bridge_process_count() -> u64 {
-    session_engine::bridge_process_count()
+    session::bridge_process_count()
 }

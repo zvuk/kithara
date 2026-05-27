@@ -15,14 +15,12 @@ members = [
     "crates/kithara-storage",
     "crates/kithara-assets",
     "crates/kithara-bufpool",
-    "crates/kithara-wasm",
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
     "crates/kithara-app",
-    "crates/kithara-wasm-macros",
     "crates/kithara-ffi",
     "crates/kithara-workspace-hack",
     "tests",
@@ -44,7 +42,6 @@ default-members = [
     "crates/kithara-storage",
     "crates/kithara-assets",
     "crates/kithara-bufpool",
-    "crates/kithara-wasm",
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
@@ -56,6 +53,7 @@ default-members = [
 [workspace.lints.rust]
 unreachable_pub = "warn"
 unused_qualifications = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rtsan)'] }
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
@@ -74,6 +72,8 @@ manual_map = "deny"
 question_mark = "deny"
 doc_markdown = "warn"
 default_trait_access = "warn"
+derivable_impls = "warn"
+default_constructed_unit_structs = "warn"
 ignored_unit_patterns = "allow"
 semicolon_if_nothing_returned = "warn"
 missing_fields_in_debug = "warn"
@@ -108,6 +108,12 @@ cast_possible_truncation = "warn"
 cast_sign_loss = "warn"
 cast_precision_loss = "warn"
 derive_partial_eq_without_eq = "warn"
+derived_hash_with_manual_eq = "warn"
+partialeq_ne_impl = "warn"
+non_canonical_partial_ord_impl = "warn"
+derive_ord_xor_partial_ord = "warn"
+inherent_to_string = "warn"
+to_string_trait_impl = "warn"
 significant_drop_tightening = "warn"
 cognitive_complexity = "warn"
 too_many_lines = "warn"
@@ -119,7 +125,7 @@ approx_constant = "warn"
 tools = { rustfmt = "rustfmt.toml", clippy = "clippy.toml", deny = "deny.toml" }
 
 [workspace.package]
-version = "0.0.1-alpha1"
+version = "0.0.1-alpha2"
 edition = "2024"
 rust-version = "1.89"
 authors = ["kithara contributors"]
@@ -131,30 +137,35 @@ repository = "https://github.com/zvuk/kithara"
 homepage = "https://github.com/zvuk/kithara"
 
 [workspace.dependencies]
-kithara = { path = "crates/kithara", version = "0.0.1-alpha1" }
-kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha1" }
-kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha1" }
-kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha1" }
-kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha1" }
-kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha1" }
-kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha1" }
-kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha1" }
-kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha1" }
-kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha1" }
-kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha1" }
-kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha1" }
-kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha1" }
-kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha1", default-features = false }
-kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha1" }
-kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha1" }
-kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha1" }
-kithara-test-macros = { path = "crates/kithara-test-macros" }
-kithara-test-utils = { path = "crates/kithara-test-utils" }
-kithara-wasm = { path = "crates/kithara-wasm" }
-kithara-wasm-macros = { path = "crates/kithara-wasm-macros" }
+# Backend-bearing crates: default-features disabled at the workspace
+# level so apple / android xcframework builds don't transitively pull
+# symphonia through the default feature set. Consumers that need the
+# software backend (desktop, WASM, tests) opt in explicitly via
+# `features = ["symphonia"]`. Cargo refuses default-features overrides
+# through `workspace = true` inheritance, so the disable has to live
+# here on the workspace declaration.
+kithara = { path = "crates/kithara", version = "0.0.1-alpha2", default-features = false }
+kithara-abr = { path = "crates/kithara-abr", version = "0.0.1-alpha2" }
+kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha2" }
+kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.0.1-alpha2" }
+kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha2", default-features = false }
+kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha2" }
+kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha2", default-features = false }
+kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha2" }
+kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha2" }
+kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha2" }
+kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha2" }
+kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha2" }
+kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha2" }
+kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha2", default-features = false }
+kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha2", default-features = false }
+kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha2" }
+kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha2" }
+kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha2" }
+kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha2" }
 kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-app = { path = "crates/kithara-app", default-features = false }
-kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha1" }
+kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha2" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.4.0"
 unimock = { version = "0.6", features = ["std"] }
@@ -260,7 +271,10 @@ syn = { version = "2", features = ["full"] }
 rangemap = { version = "1.7.1", features = ["serde1"] }
 mmap-io = { version = "1.0", default-features = false }
 dashmap = "6.2.1"
+moka = { version = "0.12", features = ["sync"] }
 bon = "3.9"
+derive_more = { version = "2.1", features = ["from", "into", "try_from", "display", "as_ref", "deref", "deref_mut", "constructor", "is_variant", "from_str"] }
+strum = { version = "0.28", features = ["derive"] }
 lru = "0.18"
 
 # fuzzing

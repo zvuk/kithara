@@ -61,6 +61,12 @@ impl OutputBuffer {
     }
 }
 
+impl AsRef<[u8]> for OutputBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.data()
+    }
+}
+
 pub(crate) enum DequeueOutput {
     TryAgainLater,
     OutputFormatChanged(OutputFormat),
@@ -256,7 +262,7 @@ impl OwnedCodec {
             .ok_or_else(|| {
                 AndroidBackendError::operation("codec-output-format", "output format was null")
             })?;
-        Ok(OwnedFormat::from_raw(raw))
+        Ok(OwnedFormat::from(raw))
     }
 
     pub(crate) fn queue_end_of_stream(&mut self, index: usize) -> Result<(), AndroidBackendError> {

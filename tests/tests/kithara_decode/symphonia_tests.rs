@@ -1,7 +1,7 @@
 use std::{io::Cursor, time::Duration};
 
-use kithara_decode::{DecodeError, DecoderConfig, DecoderFactory};
-use kithara_integration_tests::create_test_wav;
+use kithara_decode::{DecodeError, DecoderConfig, DecoderFactory, PcmChunk};
+use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
 
@@ -36,7 +36,7 @@ fn test_next_chunk_returns_data() {
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
 
-    let chunk = outcome.into_chunk().unwrap();
+    let chunk = PcmChunk::try_from(outcome).unwrap();
     assert_eq!(chunk.spec().sample_rate, 44100);
     assert_eq!(chunk.spec().channels, 2);
     assert!(!chunk.pcm.is_empty());

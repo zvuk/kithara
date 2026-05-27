@@ -1,6 +1,6 @@
 use kithara_events::EventBus;
 use kithara_integration_tests::offline::OfflineSession;
-use kithara_play::{Engine, EngineConfig, EngineImpl, PlayError, SlotId};
+use kithara_play::{Engine, EngineConfig, EngineImpl, PlayError};
 use kithara_test_utils::kithara;
 
 #[derive(Clone, Copy, Debug)]

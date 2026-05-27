@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::HashMap,
     fmt::{self, Debug},
     fs,
     ops::Range,
@@ -9,6 +8,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use dashmap::DashMap;
 use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use tokio_util::sync::CancellationToken;
@@ -27,9 +27,9 @@ enum AccessMode {
 type RemoveFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 
 /// Shared registry of live (non-dropped) lease resources keyed by
-/// [`ResourceKey`]. Held under a single `Mutex` because every operation
-/// is a quick map mutation; contention is bounded by lease churn rate.
-type LiveRegistry = Mutex<HashMap<ResourceKey, Weak<LiveResource>>>;
+/// [`ResourceKey`]. Per-shard locks via `DashMap`; contention is bounded
+/// by lease churn rate and shard count (default 32).
+type LiveRegistry = DashMap<ResourceKey, Weak<LiveResource>>;
 
 struct LiveResource {
     state: Mutex<AssetResourceState>,
@@ -60,10 +60,7 @@ impl Drop for LiveResource {
         let Some(registry) = self.registry.upgrade() else {
             return;
         };
-        let mut guard = registry.lock_sync();
-        if guard.get(&self.key).and_then(Weak::upgrade).is_none() {
-            guard.remove(&self.key);
-        }
+        registry.remove_if(&self.key, |_, weak| weak.upgrade().is_none());
     }
 }
 
@@ -113,24 +110,6 @@ where
         Self::with_byte_recorder(inner, cancel, None, pins)
     }
 
-    /// Persist the current pins snapshot to disk (best-effort).
-    ///
-    /// Mutations through [`PinsIndex::add`] / [`PinsIndex::remove`]
-    /// already flush eagerly; this method is a passive flush kept for
-    /// API compatibility with callers that want an explicit checkpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the pins index resource cannot be
-    /// written. No-op (returns `Ok`) when the lease layer is bypassed
-    /// (capability inactive) or the index is ephemeral.
-    pub fn flush_pins(&self) -> AssetsResult<()> {
-        if !self.is_active() {
-            return Ok(());
-        }
-        self.pins.flush()
-    }
-
     fn is_active(&self) -> bool {
         self.inner
             .capabilities()
@@ -139,25 +118,37 @@ where
 
     fn open_live_resource(&self, key: &ResourceKey, status: ResourceStatus) -> Arc<LiveResource> {
         let next = AssetResourceState::from(status);
-        let mut registry = self.live.lock_sync();
-        if let Some(existing) = registry.get(key).and_then(Weak::upgrade) {
-            let preserve_live = matches!(
-                existing.snapshot(),
-                AssetResourceState::Active | AssetResourceState::Failed(_)
-            ) && matches!(next, AssetResourceState::Committed { .. });
-            if !preserve_live {
-                existing.set(next);
+        let entry = self.live.entry(key.clone());
+        match entry {
+            dashmap::mapref::entry::Entry::Occupied(mut occ) => {
+                if let Some(existing) = occ.get().upgrade() {
+                    let preserve_live = matches!(
+                        existing.snapshot(),
+                        AssetResourceState::Active | AssetResourceState::Failed(_)
+                    ) && matches!(next, AssetResourceState::Committed { .. });
+                    if !preserve_live {
+                        existing.set(next);
+                    }
+                    return existing;
+                }
+                let live = Arc::new(LiveResource::new(
+                    key.clone(),
+                    Arc::downgrade(&self.live),
+                    next,
+                ));
+                occ.insert(Arc::downgrade(&live));
+                live
             }
-            return existing;
+            dashmap::mapref::entry::Entry::Vacant(vac) => {
+                let live = Arc::new(LiveResource::new(
+                    key.clone(),
+                    Arc::downgrade(&self.live),
+                    next,
+                ));
+                vac.insert(Arc::downgrade(&live));
+                live
+            }
         }
-
-        let live = Arc::new(LiveResource::new(
-            key.clone(),
-            Arc::downgrade(&self.live),
-            next,
-        ));
-        registry.insert(key.clone(), Arc::downgrade(&live));
-        live
     }
 
     fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard> {
@@ -198,7 +189,7 @@ where
             cancel,
             inner,
             pins,
-            live: Arc::new(Mutex::new(HashMap::new())),
+            live: Arc::new(DashMap::new()),
         }
     }
 }
@@ -243,12 +234,6 @@ impl<R, L> LeaseResource<crate::cache::CachedResource<R>, L>
 where
     R: ResourceExt + Clone + Send + Sync + Debug + 'static,
 {
-    /// Unpin the underlying cached resource.
-    pub fn release(self) -> Self {
-        self.inner.set_released();
-        self
-    }
-
     /// Pin the underlying cached resource so it is never evicted.
     pub fn retain(self) -> Self {
         self.inner.set_retained();
@@ -368,13 +353,13 @@ where
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.live.lock_sync().remove(key);
+        self.live.remove(key);
         self.inner.remove_resource(key)
     }
 
     fn resource_state(&self, key: &ResourceKey) -> AssetsResult<AssetResourceState> {
-        let live = self.live.lock_sync().get(key).and_then(Weak::upgrade);
-        if let Some(live) = live {
+        let weak = self.live.get(key).map(|r| r.value().clone());
+        if let Some(live) = weak.and_then(|w| w.upgrade()) {
             return Ok(live.snapshot());
         }
         self.inner.resource_state(key)
@@ -584,20 +569,6 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn explicit_flush_after_pin_is_safe() {
-        let dir = tempfile::tempdir().unwrap();
-        let lease = make_lease(dir.path());
-        let key = ResourceKey::new("audio.mp3");
-
-        let _res = lease.acquire_resource(&key).unwrap();
-
-        lease.flush_pins().unwrap();
-
-        let on_disk = load_persisted_pins(dir.path());
-        assert!(on_disk.contains("test_asset"));
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn drop_guard_eagerly_persists_unpin() {
         let dir = tempfile::tempdir().unwrap();
         let key = ResourceKey::new("audio.mp3");
@@ -614,22 +585,6 @@ mod tests {
             on_disk.is_empty(),
             "unpin should be eagerly persisted, got {:?}",
             on_disk
-        );
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn flush_persists_active_pins() {
-        let dir = tempfile::tempdir().unwrap();
-        let key = ResourceKey::new("audio.mp3");
-
-        let lease = make_lease(dir.path());
-        let _res = lease.acquire_resource(&key).unwrap();
-
-        lease.flush_pins().unwrap();
-        let on_disk = load_persisted_pins(dir.path());
-        assert!(
-            on_disk.contains("test_asset"),
-            "flush should persist active pins"
         );
     }
 
@@ -666,21 +621,6 @@ mod tests {
         let _res = lease.open_resource(&key).unwrap();
 
         assert!(lease.pins.snapshot().is_empty(), "bypass should not pin");
-    }
-
-    #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn bypass_flush_is_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        let lease = make_lease_disabled(dir.path());
-        let p = dir.path().join("audio.mp3");
-        fs::write(&p, b"data").unwrap();
-        let key = ResourceKey::absolute(&p);
-
-        let _res = lease.open_resource(&key).unwrap();
-        lease.flush_pins().unwrap();
-
-        let on_disk = load_persisted_pins(dir.path());
-        assert!(on_disk.is_empty(), "bypass flush should not persist");
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

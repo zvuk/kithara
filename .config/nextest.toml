@@ -1,3 +1,14 @@
+# Ephemeral per-run fixture cache (L2). Opt-in only: the setup script that
+# wipes/recreates the cache dir and exports KITHARA_FIXTURE_CACHE is registered
+# ONLY under the `cache` profile, so the default profile (and `just test`) never
+# enables L2 — L1-only. Opt in with `cargo nextest run --profile cache ...`
+# (or `just test-cached`). L2 gives a modest (~5%) speedup by reusing
+# encode/mux output across the test processes within a single run.
+experimental = ["setup-scripts"]
+
+[scripts.setup.fixture-cache]
+command = 'cargo run -q -p kithara-integration-tests --bin fixture-cache-setup'
+
 [profile.default]
 fail-fast = false
 test-threads = "num-cpus"
@@ -27,3 +38,16 @@ fail-fast = false
 test-threads = "num-cpus"
 slow-timeout = { period = "60s", terminate-after = 5 }
 leak-timeout = "2s"
+
+# Opt-in L2 fixture-cache profile: same settings as default, plus the
+# setup script that prepares the cache dir and exports KITHARA_FIXTURE_CACHE.
+# Use via `cargo nextest run --profile cache` / `just test-cached`.
+[profile.cache]
+fail-fast = false
+test-threads = "num-cpus"
+slow-timeout = { period = "120s", terminate-after = 3 }
+leak-timeout = "2s"
+
+[[profile.cache.scripts]]
+filter = 'package(kithara-integration-tests)'
+setup = ['fixture-cache']

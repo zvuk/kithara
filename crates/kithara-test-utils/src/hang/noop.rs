@@ -1,14 +1,14 @@
 use std::{marker::PhantomData, path::PathBuf, time::Duration};
 
 pub trait HangDump {
+    fn dump_json(&self) -> String;
     fn label(&self) -> Option<&str> {
         None
     }
-    fn to_json(&self) -> String;
 }
 
 impl<T> HangDump for T {
-    fn to_json(&self) -> String {
+    fn dump_json(&self) -> String {
         String::new()
     }
 }
@@ -43,6 +43,7 @@ impl<C: HangDump> HangDetector<C> {
 
 #[must_use]
 pub fn default_timeout() -> Duration {
+    // xtask-lint-ignore: retry_fallback
     const FALLBACK_SECS: u64 = 10;
     Duration::from_secs(FALLBACK_SECS)
 }

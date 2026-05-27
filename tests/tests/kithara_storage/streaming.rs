@@ -9,6 +9,8 @@ use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource};
 use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
+#[cfg(target_arch = "wasm32")]
+use kithara_integration_tests::storage_ext::mem_resource_with_bytes;
 use kithara_integration_tests::{TestTempDir, cancel_token, temp_dir};
 use kithara_platform::{
     thread,
@@ -151,7 +153,7 @@ fn streaming_resource_open_existing_is_committed(
 
     #[cfg(target_arch = "wasm32")]
     {
-        let resource = MemResource::from_bytes(b"existing data", cancel_token);
+        let resource = mem_resource_with_bytes(b"existing data", cancel_token);
         let data = read_bytes(&resource, 0, 13);
         assert_eq!(
             resource.status(),
@@ -323,7 +325,7 @@ fn streaming_resource_reopen_round_trip(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = file_name;
-        let resource = MemResource::from_bytes(payload, cancel_token);
+        let resource = mem_resource_with_bytes(payload, cancel_token);
         if wait_after_reopen {
             let outcome = resource.wait_range(0..payload.len() as u64).unwrap();
             assert_eq!(outcome, WaitOutcome::Ready);

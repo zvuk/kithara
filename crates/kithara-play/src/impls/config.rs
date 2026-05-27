@@ -141,6 +141,12 @@ pub struct ResourceConfig {
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
     pub src: ResourceSrc,
+    /// Method used by HLS size estimation to probe segment lengths.
+    /// Default is [`SizeProbeMethod::Head`]; switch to
+    /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
+    /// `HEAD` (zvuk stage `/drm/`).
+    #[builder(default)]
+    pub size_probe_method: SizeProbeMethod,
     /// Storage configuration (cache directory, eviction limits).
     #[builder(default)]
     pub store: StoreOptions,
@@ -150,12 +156,6 @@ pub struct ResourceConfig {
     /// Maximum peak bitrate for expensive networks (e.g., cellular).
     #[builder(default = 0.0)]
     pub preferred_peak_bitrate_for_expensive_networks: f64,
-    /// Method used by HLS size estimation to probe segment lengths.
-    /// Default is [`SizeProbeMethod::Head`]; switch to
-    /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
-    /// `HEAD` (zvuk stage `/drm/`).
-    #[builder(default)]
-    pub size_probe_method: SizeProbeMethod,
 }
 
 impl ResourceConfig {
@@ -169,22 +169,8 @@ impl ResourceConfig {
         Self::for_src(input).map(ResourceConfigBuilder::build)
     }
 
-    /// Chainable counterpart to [`Self::new`]: parses input and returns a
-    /// builder with `src` already populated so call-sites can add options
-    /// before `.build()`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
-    /// absolute path. See [`Self::parse_src`].
-    pub fn for_src<S: AsRef<str>>(
-        input: S,
-    ) -> Result<ResourceConfigBuilder<resource_config_builder::SetSrc>, DecodeError> {
-        Self::parse_src(input).map(|src| Self::builder().src(src))
-    }
-
-    /// Convert into an `AudioConfig<File>`.
-    pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
+    /// Build an `AudioConfig<File>` from this resource configuration.
+    pub(crate) fn build_file_config(self) -> AudioConfig<kithara_file::File> {
         let (file_src, derived_hint) = match self.src {
             ResourceSrc::Url(ref url) => {
                 (FileSrc::Remote(url.clone()), derive_remote_file_hint(url))
@@ -243,8 +229,8 @@ impl ResourceConfig {
             .build()
     }
 
-    /// Convert into an `AudioConfig<Hls>`.
-    pub(crate) fn into_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
+    /// Build an `AudioConfig<Hls>` from this resource configuration.
+    pub(crate) fn build_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
             ResourceSrc::Path(ref p) => {
@@ -288,6 +274,20 @@ impl ResourceConfig {
             .maybe_worker(self.worker)
             .gapless_mode(self.gapless_mode)
             .build())
+    }
+
+    /// Chainable counterpart to [`Self::new`]: parses input and returns a
+    /// builder with `src` already populated so call-sites can add options
+    /// before `.build()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::InvalidData` if input is not a valid URL or
+    /// absolute path. See [`Self::parse_src`].
+    pub fn for_src<S: AsRef<str>>(
+        input: S,
+    ) -> Result<ResourceConfigBuilder<resource_config_builder::SetSrc>, DecodeError> {
+        Self::parse_src(input).map(|src| Self::builder().src(src))
     }
 
     /// Parse a URL string or local file path into a [`ResourceSrc`].
@@ -346,7 +346,7 @@ mod tests {
     fn config_file_url_derives_extension_hint_from_last_path_segment() {
         let config = ResourceConfig::new("https://example.com/audio/get-mp3/song.MP3?sign=test")
             .unwrap()
-            .into_file_config();
+            .build_file_config();
 
         assert_eq!(config.hint.as_deref(), Some("mp3"));
     }
@@ -355,7 +355,7 @@ mod tests {
     fn config_file_url_without_extension_does_not_derive_hint() {
         let config = ResourceConfig::new("https://example.com/get-mp3/42?sign=test")
             .unwrap()
-            .into_file_config();
+            .build_file_config();
 
         assert_eq!(config.hint, None);
     }
@@ -394,7 +394,7 @@ mod tests {
             .unwrap()
             .events(EventBus::new(32))
             .build();
-        let audio_config = config.into_file_config();
+        let audio_config = config.build_file_config();
         assert!(audio_config.stream.bus.is_some());
     }
 
@@ -404,7 +404,7 @@ mod tests {
             .unwrap()
             .events(EventBus::new(32))
             .build();
-        let audio_config = config.into_hls_config().unwrap();
+        let audio_config = config.build_hls_config().unwrap();
         assert!(audio_config.stream.bus.is_some());
     }
 
@@ -452,7 +452,7 @@ mod tests {
             .unwrap()
             .preferred_peak_bitrate(512_000.0)
             .build();
-        let _audio_config = config.into_hls_config().unwrap();
+        let _audio_config = config.build_hls_config().unwrap();
     }
 
     #[kithara::test]
@@ -479,7 +479,7 @@ mod tests {
             .unwrap()
             .worker(worker.clone())
             .build();
-        let audio_config = config.into_file_config();
+        let audio_config = config.build_file_config();
         assert!(audio_config.worker.is_some());
         worker.shutdown();
     }
@@ -491,7 +491,7 @@ mod tests {
             .unwrap()
             .worker(worker.clone())
             .build();
-        let audio_config = config.into_hls_config().unwrap();
+        let audio_config = config.build_hls_config().unwrap();
         assert!(audio_config.worker.is_some());
         worker.shutdown();
     }
@@ -500,7 +500,7 @@ mod tests {
     fn file_hint_none_for_url_without_extension() {
         let config =
             ResourceConfig::new("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
-        let audio_config = config.into_file_config();
+        let audio_config = config.build_file_config();
         assert_eq!(
             audio_config.hint, None,
             "URL without file extension must produce hint=None"
@@ -515,7 +515,7 @@ mod tests {
     #[case("https://example.com/audio", None)]
     fn file_hint_from_url_extension(#[case] url: &str, #[case] expected: Option<&str>) {
         let config = ResourceConfig::new(url).unwrap();
-        let audio_config = config.into_file_config();
+        let audio_config = config.build_file_config();
         assert_eq!(
             audio_config.hint.as_deref(),
             expected,

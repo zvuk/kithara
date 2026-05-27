@@ -90,14 +90,14 @@ pub(crate) mod gui {
     /// Resolved iced color palette.
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct GuiPalette {
-        pub accent: Color,
-        pub bg: Color,
-        pub bg_panel: Color,
-        pub danger: Color,
-        pub muted: Color,
-        pub success: Color,
-        pub text: Color,
-        pub warning: Color,
+        pub(crate) accent: Color,
+        pub(crate) bg: Color,
+        pub(crate) bg_panel: Color,
+        pub(crate) danger: Color,
+        pub(crate) muted: Color,
+        pub(crate) success: Color,
+        pub(crate) text: Color,
+        pub(crate) warning: Color,
     }
 
     impl From<Palette> for GuiPalette {

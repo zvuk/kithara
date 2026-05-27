@@ -1,6 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
-use kithara_encode::{EncodedAccessUnit, EncodedTrack, codec::AudioCodec};
+use kithara_encode::{EncodedAccessUnit, EncodedTrack};
+use kithara_stream::AudioCodec;
 use thiserror::Error;
 
 use crate::{
@@ -9,6 +10,7 @@ use crate::{
         bytes::{Mp4Bytes, full_box, mp4_box},
         codec::CodecDescriptor,
     },
+    rfc6381::Rfc6381Ext,
 };
 
 /// Native priming the codec's encoder emits at the start of every track,
@@ -32,7 +34,7 @@ pub(crate) enum PackagedMuxError {
     InvalidMediaInfo,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PackagedVariantData {
     pub(crate) init_segment: Arc<Vec<u8>>,
     pub(crate) rfc6381_codec: Cow<'static, str>,
@@ -489,10 +491,8 @@ fn push_identity_matrix(buf: &mut Mp4Bytes) {
 
 #[cfg(test)]
 mod tests {
-    use kithara_encode::{
-        EncodedAccessUnit, EncodedTrack,
-        codec::{ContainerFormat, MediaInfo},
-    };
+    use kithara_encode::{EncodedAccessUnit, EncodedTrack};
+    use kithara_stream::{ContainerFormat, MediaInfo};
     use kithara_test_utils::kithara;
 
     use super::*;

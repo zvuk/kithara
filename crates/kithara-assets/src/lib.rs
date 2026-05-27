@@ -40,6 +40,7 @@ mod deleter;
 mod disk_store;
 mod error;
 mod evict;
+mod flush;
 pub mod index;
 mod key;
 mod lease;
@@ -55,7 +56,8 @@ pub use cache::{CachedAssets, CachedResource};
 pub use disk_store::DiskAssetStore;
 pub use error::{AssetsError, AssetsResult};
 pub use evict::EvictAssets;
-pub use index::{EvictConfig, FlushHub, FlushPolicy};
+pub use flush::{FlushHub, FlushPolicy};
+pub use index::EvictConfig;
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
 pub use kithara_bufpool::BytePool;

@@ -69,7 +69,6 @@ quality *ARGS:
 # Feature-powerset check (requires cargo-hack).
 hack:
     cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace \
-      --exclude kithara-wasm \
       --exclude kithara-play \
       --exclude kithara-app \
       --exclude kithara-fuzz
@@ -94,8 +93,6 @@ doc:
 #   * macOS / iOS   → apple AudioToolbox + Symphonia software
 #   * Android       → Android MediaCodec + Symphonia software
 #   * Linux / other → Symphonia only
-# To verify each backend in isolation (no feature-unification crossover),
-# see `just test-decoders`.
 #
 #   just test                 # whole workspace, all available backends
 #   just test -p kithara-hls  # one package
@@ -104,35 +101,11 @@ doc:
 test *ARGS:
     cargo nextest run --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
 
-# Run the cross-decoder protocol suite once per backend in isolation so a
-# regression in one backend's feature-gating cannot hide behind feature
-# unification (e.g. an apple-only build still passing because symphonia is
-# silently picking up the slack on macOS). Skipped backends are no-ops.
-test-decoders *ARGS:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    run() {
-        echo "===> cargo nextest with features: $1"
-        cargo nextest run --cargo-profile test-release \
-            -p kithara-decode --no-default-features --features "$1" \
-            --test decoder_protocol {{ARGS}}
-    }
-    # Software-only Symphonia path (cross-platform).
-    run "symphonia"
-    case "$(uname -s)" in
-        Darwin)
-            # Apple AudioToolbox in isolation (no Symphonia fallback).
-            run "apple"
-            # Combined (default `just test` shape) — sanity check.
-            run "apple,symphonia"
-            ;;
-        Linux)
-            if [[ "$(uname -o 2>/dev/null || true)" == "Android" ]]; then
-                run "android"
-                run "android,symphonia"
-            fi
-            ;;
-    esac
+# Opt-in: run tests with the L2 fixture cache enabled (nextest `cache` profile
+# runs a setup script that prepares the cache dir + exports KITHARA_FIXTURE_CACHE).
+# ~5% faster by reusing encode/mux output across the test processes in one run.
+test-cached *ARGS:
+    cargo nextest run --profile cache --workspace --exclude kithara-fuzz --cargo-profile test-release {{ARGS}}
 
 # Doc-tests (cargo nextest doesn't run them).
 test-doc:
@@ -148,6 +121,24 @@ test-e2e *ARGS:
 # Selenium WebDriver tests (trunk + chromedriver, native target).
 test-selenium *ARGS:
     cargo +nightly test -p kithara-integration-tests --features selenium --test suite_heavy selenium -- --nocapture {{ARGS}}
+
+# RealtimeSanitizer: compile the player RT path under `-Zsanitizer=realtime`
+# and run the offline-render tests, which enter the
+# `#[sanitize(realtime = "nonblocking")]`-marked node processors without an
+# audio device. Any malloc / lock / syscall in the RT context aborts the run.
+# The `rtsan` cfg gates the attribute on, so stable/production builds are byte
+# -identical. Requires nightly + rust-src; `--target` keeps the flags off
+# build scripts and proc-macros.
+#   just rtsan
+#   just rtsan offline_harness_smoke
+rtsan FILTER="offline_harness":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="$(rustc -vV | sed -n 's/^host: //p')"
+    RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
+    RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
+        cargo +nightly test -p kithara-integration-tests --test suite_light \
+        --target "$target" {{FILTER}} -- --nocapture
 
 # Convenience: workspace tests + doc-tests in one run.
 test-all: test test-doc
@@ -512,8 +503,6 @@ mutants TARGET="" *ARGS:
         --exclude 'tests/**' \
         --exclude 'crates/kithara-ffi/**' \
         --exclude 'crates/kithara-app/**' \
-        --exclude 'crates/kithara-wasm/**' \
-        --exclude 'crates/kithara-wasm-macros/**' \
         --exclude 'xtask/**' \
         --exclude-re 'src/.*test.*\.rs' \
         -j "$JOBS" --timeout 900 --minimum-test-timeout 300 \
@@ -619,13 +608,10 @@ wasm MODE="check":
     set -uo pipefail
     case "{{MODE}}" in
       check)
-        for c in kithara-wasm kithara-storage kithara-net kithara-stream kithara-assets kithara-hls kithara-decode; do
-          if [[ "$c" == "kithara-wasm" ]]; then
-            cargo check -p "$c" --target wasm32-unknown-unknown --no-default-features
-          else
-            cargo check -p "$c" --target wasm32-unknown-unknown
-          fi
+        for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls kithara-decode; do
+          cargo check -p "$c" --target wasm32-unknown-unknown
         done
+        cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       test)
         CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
@@ -646,8 +632,8 @@ wasm MODE="check":
           echo "wasm-slim is not installed"; exit 2
         fi
         mkdir -p target
-        ln -sfn ../../target crates/kithara-wasm/target
-        cd crates/kithara-wasm
+        ln -sfn ../../target crates/kithara-ffi/target
+        cd crates/kithara-ffi
         RUSTUP_TOOLCHAIN="$toolchain" $slim_cmd build --check --no-emoji --json > ../../target/wasm-slim-result.json
         echo "wasm-slim report: target/wasm-slim-result.json"
         ;;
@@ -734,6 +720,9 @@ apple MODE="xcframework" *ARGS:
         for f in apple/KitharaFFIInternal.xcframework/*/libkithara_ffi.a; do
             strip -S -x "$f"
         done
+        # Symbol audit: fail fast if a software-backend dep leaked
+        # into the apple xcframework. Apple HW must own decode on iOS.
+        cargo xtask apple audit apple/KitharaFFIInternal.xcframework
         cd apple && zip -ry /tmp/KitharaFFIInternal.xcframework.zip KitharaFFIInternal.xcframework
         swift package compute-checksum /tmp/KitharaFFIInternal.xcframework.zip \
             | tee /tmp/KitharaFFIInternal.xcframework.zip.sha256

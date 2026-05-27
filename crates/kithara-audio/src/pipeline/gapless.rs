@@ -1,6 +1,5 @@
 use kithara_decode::{
-    Decoder, GaplessMode, GaplessOutput, GaplessTrimmer, PcmChunk, codec_priming_frames,
-    duration_for_frames,
+    Decoder, GaplessMode, GaplessOutput, GaplessTrimmer, PcmChunk, duration_for_frames,
 };
 use kithara_platform::time::Duration;
 use kithara_stream::MediaInfo;
@@ -22,12 +21,6 @@ pub(crate) struct GaplessStage {
 }
 
 impl GaplessStage {
-    /// Release any trimmer-held tail at decoder EOF.
-    pub(crate) fn flush(&mut self) {
-        let output = self.trimmer.flush();
-        self.replace_pending(output);
-    }
-
     /// Builds the trimmer for this track before any PCM flows through [`Self::push`].
     ///
     /// The implementation maps `GaplessMode` and the decoder `DecoderTrackInfo` into a `GaplessTrimmer`:
@@ -37,7 +30,7 @@ impl GaplessStage {
     /// - **`SilenceTrim`** — prefer metadata when present; otherwise use the silence-trim parameters from the mode.
     /// - **Disabled** — passthrough, no trim.
     #[must_use]
-    pub(crate) fn from_decoder(
+    pub(crate) fn build(
         decoder: &dyn Decoder,
         mode: GaplessMode,
         media_info: Option<&MediaInfo>,
@@ -46,14 +39,14 @@ impl GaplessStage {
             GaplessMode::MediaOnly => decoder
                 .track_info()
                 .gapless
-                .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from_info),
+                .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from),
             GaplessMode::CodecPriming => decoder.track_info().gapless.map_or_else(
                 || resolve_codec_priming(decoder, media_info),
-                GaplessTrimmer::from_info,
+                GaplessTrimmer::from,
             ),
             GaplessMode::SilenceTrim(params) => decoder.track_info().gapless.map_or_else(
                 || GaplessTrimmer::silence_trim(params),
-                GaplessTrimmer::from_info,
+                GaplessTrimmer::from,
             ),
             _ => GaplessTrimmer::disabled(),
         };
@@ -61,6 +54,12 @@ impl GaplessStage {
             trimmer,
             pending: None,
         }
+    }
+
+    /// Release any trimmer-held tail at decoder EOF.
+    pub(crate) fn flush(&mut self) {
+        let output = self.trimmer.flush();
+        self.replace_pending(output);
     }
 
     /// Return the next trimmed chunk from the current output batch.
@@ -101,7 +100,7 @@ fn resolve_codec_priming(decoder: &dyn Decoder, media_info: Option<&MediaInfo>) 
     let Some(codec) = media_info.and_then(|info| info.codec) else {
         return GaplessTrimmer::disabled();
     };
-    let frames = codec_priming_frames(codec);
+    let frames = decoder.default_priming_frames(codec);
     if frames == 0 {
         GaplessTrimmer::disabled()
     } else {

@@ -139,14 +139,14 @@ impl Queue {
                 self.cancel_stale_pending(id);
                 let was_playing = self.player.is_playing();
                 let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
-                self.player
-                    .select_item_with_crossfade(index, true, crossfade)?;
-                self.lock_navigation_mut().select(index);
                 if was_playing && crossfade > 0.0 {
                     self.bus.publish(QueueEvent::CrossfadeStarted {
                         duration_seconds: crossfade,
                     });
                 }
+                self.player
+                    .select_item_with_crossfade(index, true, crossfade)?;
+                self.lock_navigation_mut().select(index);
                 self.set_status(id, TrackStatus::Consumed);
                 Ok(())
             }
@@ -181,7 +181,7 @@ impl Queue {
         let pending_select = Arc::clone(&self.pending_select);
         let navigation = Arc::clone(&self.navigation);
         let bus = self.bus.clone();
-        tokio::spawn(async move {
+        drop(kithara_platform::tokio::task::spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
                 Ok(Err(_)) => return,
@@ -240,6 +240,11 @@ impl Queue {
             if let Some(transition) = pending_transition {
                 let was_playing = player.is_playing();
                 let crossfade = transition.crossfade_seconds(player.crossfade_duration());
+                if was_playing && crossfade > 0.0 {
+                    bus.publish(QueueEvent::CrossfadeStarted {
+                        duration_seconds: crossfade,
+                    });
+                }
                 if let Err(e) = player.select_item_with_crossfade(index, true, crossfade) {
                     warn!(id = id.as_u64(), error = %e, "pending select failed");
                 } else {
@@ -247,15 +252,10 @@ impl Queue {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .select(index);
-                    if was_playing && crossfade > 0.0 {
-                        bus.publish(QueueEvent::CrossfadeStarted {
-                            duration_seconds: crossfade,
-                        });
-                    }
                     mark_consumed();
                 }
             }
-        });
+        }));
     }
 
     /// Test-only path: if a respawn resource was pre-supplied via
@@ -280,6 +280,11 @@ impl Queue {
         self.set_status(id, TrackStatus::Loaded);
         let was_playing = self.player.is_playing();
         let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
+        if was_playing && crossfade > 0.0 {
+            self.bus.publish(QueueEvent::CrossfadeStarted {
+                duration_seconds: crossfade,
+            });
+        }
         if let Err(err) = self
             .player
             .select_item_with_crossfade(index, true, crossfade)
@@ -287,11 +292,6 @@ impl Queue {
             return Some(Err(err.into()));
         }
         self.lock_navigation_mut().select(index);
-        if was_playing && crossfade > 0.0 {
-            self.bus.publish(QueueEvent::CrossfadeStarted {
-                duration_seconds: crossfade,
-            });
-        }
         self.set_status(id, TrackStatus::Consumed);
         Some(Ok(()))
     }

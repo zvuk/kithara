@@ -4,13 +4,15 @@
 
 <div align="center">
 
+[![crates.io](https://img.shields.io/crates/v/kithara-abr.svg)](https://crates.io/crates/kithara-abr)
+[![docs.rs](https://docs.rs/kithara-abr/badge.svg)](https://docs.rs/kithara-abr)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
 
 # kithara-abr
 
-Protocol-agnostic adaptive bitrate (ABR) algorithm. Provides `AbrController` with auto (throughput-based) and manual modes, buffer-aware switching decisions, and configurable hysteresis to prevent oscillation.
+Protocol-agnostic adaptive bitrate (ABR) for HLS and any other streaming source. `AbrController` offers auto (throughput-based) and manual modes, buffer-aware decisions, and configurable hysteresis to prevent oscillation.
 
 ## Usage
 
@@ -38,9 +40,9 @@ ABR decisions are pull-driven — they fire from the peer's scheduler on each fe
 1. If in Manual mode → return current variant (`ManualOverride`).
 2. If less than `min_switch_interval` (default 30 s) since last switch → `MinInterval`.
 3. Estimate throughput via dual-track EWMA (seeded at construction from `initial_throughput_bps` if set).
-4. Select highest-bandwidth variant not exceeding `estimate / safety_factor`.
-5. **Up-switch**: requires buffer ≥ `min_buffer_for_up_switch_secs` (10 s) AND throughput ≥ `candidate_bw × up_hysteresis_ratio` (1.3×).
-6. **Down-switch**: triggered by buffer ≤ `down_switch_buffer_secs` (5 s) OR throughput ≤ `current_bw × down_hysteresis_ratio` (0.8×).
+4. Select highest-bandwidth variant not exceeding `estimate / throughput_safety_factor` (default 1.5).
+5. **Up-switch**: requires buffer ≥ `min_buffer_for_up_switch` (10 s) AND throughput ≥ `candidate_bw × up_hysteresis_ratio` (1.3×).
+6. **Down-switch**: triggered by buffer ≤ `urgent_downswitch_buffer` (5 s) OR throughput ≤ `current_bw × down_hysteresis_ratio` (0.8×).
 
 ## Initial Bandwidth Seed
 

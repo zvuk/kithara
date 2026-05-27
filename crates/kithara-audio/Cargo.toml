@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Audio pipeline with OS thread worker, effects chain, and resampling"
+description = "Audio pipeline: worker thread, effects chain, resampling."
+keywords = ["audio", "dsp", "resampling", "playback", "player"]
+categories = ["multimedia::audio"]
 
 [lints]
 workspace = true
@@ -54,7 +56,7 @@ symphonia = ["kithara-decode/symphonia"]
 # play through the software fallback.
 fdk-aac = ["kithara-decode/fdk-aac"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -73,7 +75,7 @@ bytes = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 tempfile = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }

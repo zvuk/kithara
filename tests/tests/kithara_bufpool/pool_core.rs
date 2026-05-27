@@ -1,4 +1,5 @@
 use kithara_bufpool::*;
+use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
 use kithara_platform::tokio::task::spawn_blocking;
 use kithara_test_utils::kithara;
 

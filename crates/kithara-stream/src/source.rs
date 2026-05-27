@@ -3,7 +3,7 @@
 use std::{error::Error as StdError, fmt, num::NonZeroUsize, ops::Range, sync::Arc};
 
 use kithara_events::VariantInfo;
-use kithara_platform::time::Duration;
+use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
@@ -186,7 +186,7 @@ pub struct SourceSeekAnchor {
 /// Methods take `&mut self` to allow sources to maintain internal state
 /// (e.g., progress tracking, segment index updates).
 #[kithara::mock(api = SourceMock)]
-pub trait Source: Send + Sync + 'static {
+pub trait Source: MaybeSend + MaybeSync + 'static {
     /// Current ABR handle for runtime mode/bandwidth control.
     ///
     /// Adaptive sources (HLS) return the peer's `AbrHandle` so callers —

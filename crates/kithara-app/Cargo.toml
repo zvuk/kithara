@@ -21,7 +21,7 @@ lib-only = []
 kithara = { workspace = true, features = ["file", "hls"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
-kithara-queue = { workspace = true }
+kithara-queue = { workspace = true, features = ["backend-cpal"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bytes = { workspace = true }
@@ -30,7 +30,7 @@ crabtime = { workspace = true }
 bon = { workspace = true }
 crossterm = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
 rand = { workspace = true }
@@ -43,6 +43,14 @@ url = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 kithara = { workspace = true, features = ["apple"] }
+
+# Desktop (non-Apple, non-Android, native) — fall back to symphonia
+# software decoding. workspace.dependencies now disables kithara's
+# defaults at the workspace level, so without this target.cfg
+# `cargo build` on Linux/Windows would leave the binary with no audio
+# backend at all.
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
+kithara = { workspace = true, features = ["symphonia", "fdk-aac"] }
 
 [dev-dependencies]
 kithara-net = { workspace = true }

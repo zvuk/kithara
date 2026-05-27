@@ -19,8 +19,6 @@ use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    gapless::probe_mp4_gapless_dyn,
-    traits::DecoderInput,
     types::{DecoderTrackInfo, PcmSpec},
 };
 
@@ -33,29 +31,30 @@ impl Consts {
 }
 
 /// Frame-level codec wrapping Android's `AMediaCodec`.
+///
+/// `MediaCodec` does not surface encoder priming, so this backend has
+/// no `decoder_algo_delay` (default 0). Gapless metadata, when needed,
+/// comes from the upstream demuxer (`AndroidMediaExtractorDemuxer`
+/// parses MP4 `udta`/`iTunSMPB` and stamps it into `TrackInfo.gapless`).
 pub(crate) struct AndroidCodec {
     pcm_encoding: AndroidPcmEncoding,
-    /// Decoder-owned playback contract. Populated from container-level
-    /// gapless metadata (MP4 udta) when `gapless` was requested at
-    /// [`AndroidCodec::probe_track_info`]; left empty otherwise.
-    /// `MediaCodec` itself does not surface encoder priming, so the
-    /// contract value comes solely from container probing.
     track_info: DecoderTrackInfo,
     codec: OwnedCodec,
     spec: PcmSpec,
 }
 
 impl AndroidCodec {
-    /// Inherent constructor used by [`Self::open_with_config`].
+    /// Build an [`AndroidCodec`] from `TrackInfo`. Captures
+    /// `track.gapless` verbatim — `MediaCodec` has no algorithmic
+    /// delay of its own, so no per-backend adjustment is applied.
     ///
     /// # Errors
     ///
     /// Returns [`DecodeError::UnsupportedCodec`] for codecs the
     /// `MediaCodec` codec layer doesn't accept; any FFI failure
-    /// surfaces as [`DecodeError::Backend`] via
-    /// [`AndroidBackendError::into_decode_error`].
-    fn open(track: &TrackInfo) -> DecodeResult<Self> {
-        ensure_current_thread_attached().map_err(AndroidBackendError::into_decode_error)?;
+    /// surfaces as [`DecodeError::Backend`] via [`DecodeError::from`].
+    pub(crate) fn open_with_config(track: &TrackInfo) -> DecodeResult<Self> {
+        ensure_current_thread_attached().map_err(DecodeError::from)?;
 
         let mime = match track.codec {
             AudioCodec::AacLc => MIME_AAC,
@@ -66,66 +65,18 @@ impl AndroidCodec {
             other => return Err(DecodeError::UnsupportedCodec(other)),
         };
 
-        let format = build_format(mime, track).map_err(AndroidBackendError::into_decode_error)?;
-        let codec = OwnedCodec::create_with_format(mime, &format)
-            .map_err(AndroidBackendError::into_decode_error)?;
-        let (spec, pcm_encoding) =
-            read_output_format(&codec).map_err(AndroidBackendError::into_decode_error)?;
+        let format = build_format(mime, track).map_err(DecodeError::from)?;
+        let codec = OwnedCodec::create_with_format(mime, &format).map_err(DecodeError::from)?;
+        let (spec, pcm_encoding) = read_output_format(&codec).map_err(DecodeError::from)?;
 
         Ok(Self {
             codec,
             spec,
             pcm_encoding,
-            track_info: DecoderTrackInfo::default(),
-        })
-    }
-
-    /// Build an [`AndroidCodec`]. `gapless` is intentionally accepted for
-    /// API symmetry with [`super::super::apple::AppleCodec::open_with_config`]
-    /// and [`super::super::symphonia::SymphoniaCodec::open_with_config`],
-    /// but `MediaCodec` does not surface encoder priming — gapless
-    /// numbers come exclusively from the demuxer's MP4 udta probe in
-    /// [`Self::probe_track_info`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DecodeError::Backend`] when `AMediaCodec_createDecoderByType`
-    /// or `AMediaFormat` setup fails for the track's codec/sample-rate/channels.
-    pub(crate) fn open_with_config(track: &TrackInfo, _gapless: bool) -> DecodeResult<Self> {
-        Self::open(track)
-    }
-
-    /// Probe the source for container-level gapless metadata before
-    /// opening the codec. Currently only AAC inside MP4 udta carries
-    /// useful priming/padding numbers (`iTunSMPB`); other codecs
-    /// return `DecoderTrackInfo::default()`.
-    ///
-    /// # Errors
-    ///
-    /// Forwards [`DecodeError`] from the MP4 probe.
-    pub(crate) fn probe_track_info(
-        source: &mut dyn DecoderInput,
-        codec: AudioCodec,
-        gapless: bool,
-    ) -> DecodeResult<DecoderTrackInfo> {
-        let gapless = if gapless && codec == AudioCodec::AacLc {
-            let info = probe_mp4_gapless_dyn(source)?;
-            if let Some(info) = info {
-                tracing::debug!(
-                    target: "kithara::gapless",
-                    codec = ?codec,
-                    leading_frames = info.leading_frames,
-                    trailing_frames = info.trailing_frames,
-                    "captured AAC gapless metadata for Android"
-                );
-            }
-            info
-        } else {
-            None
-        };
-        Ok(DecoderTrackInfo {
-            gapless,
-            ..DecoderTrackInfo::default()
+            track_info: DecoderTrackInfo {
+                gapless: track.gapless,
+                ..DecoderTrackInfo::default()
+            },
         })
     }
 
@@ -162,7 +113,7 @@ impl FrameCodec for AndroidCodec {
         match self
             .codec
             .dequeue_input_buffer(Consts::INPUT_DEQUEUE_TIMEOUT_US)
-            .map_err(AndroidBackendError::into_decode_error)?
+            .map_err(DecodeError::from)?
         {
             Some(mut buf) => {
                 let dst = buf.data_mut();
@@ -176,7 +127,7 @@ impl FrameCodec for AndroidCodec {
                         presentation_time_us: pts_us,
                         flags: 0,
                     })
-                    .map_err(AndroidBackendError::into_decode_error)?;
+                    .map_err(DecodeError::from)?;
             }
             None => {
                 out.clear();
@@ -187,7 +138,7 @@ impl FrameCodec for AndroidCodec {
         match self
             .codec
             .dequeue_output_buffer(Consts::OUTPUT_DEQUEUE_TIMEOUT_US)
-            .map_err(AndroidBackendError::into_decode_error)?
+            .map_err(DecodeError::from)?
         {
             DequeueOutput::Output(buffer) => {
                 let bytes = buffer.data();
@@ -198,7 +149,7 @@ impl FrameCodec for AndroidCodec {
                 let index = buffer.index;
                 self.codec
                     .release_output_buffer(index)
-                    .map_err(AndroidBackendError::into_decode_error)?;
+                    .map_err(DecodeError::from)?;
                 let channels = self.spec.channels as usize;
                 let frames = if channels == 0 {
                     0
@@ -221,9 +172,7 @@ impl FrameCodec for AndroidCodec {
     }
 
     fn flush(&mut self) -> DecodeResult<()> {
-        self.codec
-            .flush()
-            .map_err(AndroidBackendError::into_decode_error)
+        self.codec.flush().map_err(DecodeError::from)
     }
 
     fn spec(&self) -> PcmSpec {
@@ -242,7 +191,7 @@ fn build_format(
     // SAFETY: AMediaFormat_new returns a freshly allocated AMediaFormat
     let raw = NonNull::new(unsafe { ffi::AMediaFormat_new() })
         .ok_or_else(|| AndroidBackendError::operation("media-format-new", "returned null"))?;
-    let mut format = OwnedFormat::from_raw(raw);
+    let mut format = OwnedFormat::from(raw);
 
     // SAFETY: format is live; key/value are static null-terminated CStrs.
     unsafe {
@@ -311,8 +260,7 @@ fn read_output_format(
 
 fn decode_pcm16_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
     let count = bytes.len() / 2;
-    out.ensure_len(count)
-        .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+    out.ensure_len(count)?;
     for (dst, chunk) in out.iter_mut().zip(bytes.chunks_exact(2)) {
         let s = i16::from_le_bytes([chunk[0], chunk[1]]);
         *dst = f32::from(s) / Consts::PCM16_SCALE;
@@ -323,8 +271,7 @@ fn decode_pcm16_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
 
 fn decode_pcm_float_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
     let count = bytes.len() / 4;
-    out.ensure_len(count)
-        .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+    out.ensure_len(count)?;
     for (dst, chunk) in out.iter_mut().zip(bytes.chunks_exact(4)) {
         *dst = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
     }

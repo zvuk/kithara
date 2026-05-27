@@ -16,9 +16,9 @@ pub(crate) enum CodecConfig {
     Flac(Vec<u8>),
 }
 
-impl CodecConfig {
-    #[cfg(test)]
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+impl AsRef<[u8]> for CodecConfig {
+    // ast-grep-ignore: idioms.match-self-conversion
+    fn as_ref(&self) -> &[u8] {
         match self {
             Self::Aac(bytes) | Self::Flac(bytes) => bytes,
         }
@@ -80,23 +80,6 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
         StsdBoxContent::Mp4a(mp4a) => {
             let sample_rate = u32::from(mp4a.samplerate.value());
             let channels = mp4a.channelcount;
-            // Raw `esds` `DecoderSpecificInfo` payload, taken
-            // verbatim from the init segment. `re_mp4` exposes the
-            // descriptor as three parsed fields (profile, freq_index,
-            // chan_conf) and discards the rest; reconstructing an
-            // AudioSpecificConfig from those produces a 2-byte blob,
-            // which is enough for AAC-LC implicit signalling but
-            // truncates HE-AAC v1/v2 explicit-AOT-29 signalling
-            // (extension AOT + extension sample-rate index + PS bits
-            // live in bytes 3+). fdk-aac rejects the truncated config
-            // with "unexpected end of bitstream" and HE-AAC v2 prod
-            // tracks never load. The raw path keeps the full ASC
-            // intact for every codec sharing the mp4a/esds layout;
-            // on a malformed init we surface the parse error instead
-            // of silently falling back to the 2-byte reconstruction
-            // — a silent fallback would degrade HE-AAC v2 to the
-            // cascade this commit is fixing with no log signal
-            // (AGENTS.md "No fallback chains").
             let asc = extract_aac_asc_raw(bytes)?;
             (
                 AudioCodec::AacLc,
@@ -176,7 +159,6 @@ fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
     let stsd_size = read_box_size(&mut cursor)?;
     let stsd_end = cursor.position() + stsd_size - 8;
 
-    // Skip stsd full-box header (version+flags) and entry_count.
     cursor
         .seek(SeekFrom::Current(8))
         .map_err(|e| DecodeError::InvalidData(format!("seek past stsd header: {e}")))?;
@@ -192,19 +174,14 @@ fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
     let entry_end = entry_start + entry_size;
     let _ = stsd_end;
 
-    // SampleEntry (8 bytes reserved + dataReferenceIndex) + AudioSampleEntry
-    // body (8 reserved, 2 channelcount, 2 samplesize, 2 pre_defined,
-    // 2 reserved, 4 samplerate) = 28 bytes before child boxes.
     cursor
         .seek(SeekFrom::Current(28))
         .map_err(|e| DecodeError::InvalidData(format!("seek past mp4a header: {e}")))?;
 
-    // Scan child boxes of mp4a for esds.
     while cursor.position() < entry_end {
         let child_start = cursor.position();
         let (child_type, child_size) = read_header(&mut cursor)?;
         if u32::from(child_type) == FOURCC_ESDS {
-            // Skip full-box version (1) + flags (3).
             cursor
                 .seek(SeekFrom::Current(4))
                 .map_err(|e| DecodeError::InvalidData(format!("seek past esds header: {e}")))?;
@@ -235,9 +212,6 @@ fn read_esds_decoder_specific_info(
     tag_dec_config: u8,
     tag_dsi: u8,
 ) -> DecodeResult<Vec<u8>> {
-    // ES_Descriptor: tag 0x03, then size, then ES_ID(2) + flags(1) +
-    // optional fields gated by the flag byte (dependsOn 0x80, URL 0x40,
-    // OCR 0x20) and a streamPriority byte we always skip past.
     let (es_tag, es_size) = read_descriptor_header(cursor)?;
     if es_tag != tag_es {
         return Err(DecodeError::InvalidData(format!(
@@ -270,9 +244,6 @@ fn read_esds_decoder_specific_info(
             .map_err(|e| DecodeError::InvalidData(format!("skip OCR_ES_ID: {e}")))?;
     }
 
-    // DecoderConfigDescriptor: tag 0x04, size, then 13 bytes (object_type
-    // + stream_type/flags + bufferSizeDB(3) + maxBitrate(4) + avgBitrate(4))
-    // before the embedded DecSpecificInfo descriptor.
     let _ = es_body_end;
     let (dc_tag, dc_size) = read_descriptor_header(cursor)?;
     if dc_tag != tag_dec_config {
@@ -285,7 +256,6 @@ fn read_esds_decoder_specific_info(
         .seek(SeekFrom::Current(13))
         .map_err(|e| DecodeError::InvalidData(format!("skip DCD body: {e}")))?;
 
-    // DecoderSpecificInfo: tag 0x05, size, then raw ASC bytes.
     let (dsi_tag, dsi_size) = read_descriptor_header(cursor)?;
     if dsi_tag != tag_dsi {
         return Err(DecodeError::InvalidData(format!(
@@ -597,7 +567,7 @@ mod tests {
         assert!(init.timescale > 0, "timescale={}", init.timescale);
         assert!(init.sample_rate >= 8_000 && init.sample_rate <= 96_000);
         assert!(init.channels >= 1 && init.channels <= 8);
-        let asc = init.config.as_bytes();
+        let asc = init.config.as_ref();
         assert!(
             asc.len() == 2 || asc.len() == 5,
             "ASC length unexpected: {} bytes",
@@ -613,7 +583,7 @@ mod tests {
         let init = parse_init(&bytes).expect("BUG: parse FLAC init");
         assert_eq!(init.codec, AudioCodec::Flac);
         assert!(matches!(init.config, CodecConfig::Flac(_)));
-        let len = init.config.as_bytes().len();
+        let len = init.config.as_ref().len();
         assert_eq!(len, 34, "STREAMINFO body must be 34 bytes");
     }
 

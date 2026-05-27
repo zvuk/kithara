@@ -4,288 +4,171 @@
 
 <div align="center">
 
+[![crates.io](https://img.shields.io/crates/v/kithara-play.svg)](https://crates.io/crates/kithara-play)
+[![docs.rs](https://docs.rs/kithara-play/badge.svg)](https://docs.rs/kithara-play)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
 
 # kithara-play
 
-Trait-first player architecture mirroring Apple AVPlayer API with DJ engine capabilities. Exposes AVPlayer-style traits and also ships default concrete implementations (`EngineImpl`, `PlayerImpl`, `Resource`) under `impls`. Most traits are independently mockable via `unimock` (behind `test-utils` feature) unless noted otherwise.
+The player engine behind kithara. A trait-first API modelled on Apple's
+AVPlayer, with multi-slot mixing, sample-accurate crossfade, and pro-audio
+features. Ships default implementations (`EngineImpl`,
+`PlayerImpl`, `Resource`); the core traits are mockable via `unimock` (the
+`mock` feature).
 
 ## Usage
 
 ```rust
-use kithara_play::{Engine, Player, PlayerItem, CrossfadeConfig, PlayError};
+use kithara_play::{Engine, Player, CrossfadeConfig};
 
-// Engine lifecycle
 engine.start()?;
 let slot_a = engine.allocate_slot()?;
 
-// Attach player to slot, load media
 player.replace_current_item(Some(item));
 player.play();
 
-// Time observation
 let id = player.add_periodic_time_observer(interval, Box::new(|time| {
-    println!("position: {:?}", time);
+    println!("position: {time:?}");
 }));
 
-// Crossfade between two slots
+// Crossfade into a second slot
 let slot_b = engine.allocate_slot()?;
 engine.crossfade(slot_a, slot_b, CrossfadeConfig::default())?;
 
-// Cleanup
 engine.release_slot(slot_a)?;
 engine.stop()?;
 ```
 
-## Architecture
+## Core Traits
 
-```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
-flowchart TD
-    subgraph Engine ["Engine (singleton -- arena of slots, audio output)"]
-        S0["Slot 0<br/><i>Player · Item · Asset</i>"]
-        S1["Slot 1<br/><i>Player · Item · Asset</i>"]
-        SN["Slot N<br/><i>Player · Item · Asset</i>"]
-
-        MX["Mixer<br/><i>gain · pan · mute · solo · EQ</i><br/><i>per-channel + master bus</i><br/><i>hardware-style crossfader</i>"]
-
-        DJ["DJ subsystem<br/><i>CrossfadeController · BpmAnalyzer</i><br/><i>BpmSync · Equalizer · DjEffect</i>"]
-
-        AS["AudioSession<br/><i>category · mode · route · latency</i>"]
-
-        S0 --> MX
-        S1 --> MX
-        SN --> MX
-        MX --> DJ
-        DJ ~~~ AS
-    end
-
-    style S0 fill:#7ea87e,color:#fff
-    style S1 fill:#7ea87e,color:#fff
-    style SN fill:#7ea87e,color:#fff
-    style MX fill:#6b8cae,color:#fff
-    style DJ fill:#c4a35a,color:#fff
-    style AS fill:#8b6b8b,color:#fff
-```
-
-## Key Types
-
-### AVPlayer API surface
+An `Engine` manages multiple playback slots; each slot drives one `Player` over
+a `PlayerItem`. The engine owns master output and crossfade; a per-slot
+`Equalizer` shapes the sound.
 
 <table>
-<tr><th>Trait</th><th>AVPlayer equivalent</th><th>Key methods</th></tr>
-<tr><td><code>Asset</code></td><td><code>AVAsset</code></td><td><code>duration</code>, <code>is_playable</code>, <code>metadata</code>, <code>url</code></td></tr>
-<tr><td><code>PlayerItem</code></td><td><code>AVPlayerItem</code></td><td><code>status</code>, <code>current_time</code>, <code>duration</code>, <code>loaded_time_ranges</code>, <code>seek</code>, buffering state</td></tr>
+<tr><th>Trait</th><th>AVPlayer analogue</th><th>Role</th></tr>
 <tr><td><code>Player</code></td><td><code>AVPlayer</code></td><td><code>play</code>, <code>pause</code>, <code>seek</code>, <code>rate</code>, <code>volume</code>, <code>replace_current_item</code>, time observers</td></tr>
+<tr><td><code>PlayerItem</code></td><td><code>AVPlayerItem</code></td><td>status, current time, duration, loaded ranges, seek, buffering</td></tr>
 <tr><td><code>QueuePlayer</code></td><td><code>AVQueuePlayer</code></td><td><code>items</code>, <code>advance_to_next_item</code>, <code>insert</code>, <code>remove</code></td></tr>
-<tr><td><code>AudioSession</code></td><td><code>AVAudioSession</code></td><td><code>category</code>, <code>mode</code>, <code>set_active</code>, <code>output_volume</code>, <code>current_route</code></td></tr>
+<tr><td><code>Engine</code></td><td>—</td><td>Lifecycle, slot arena, master output, <code>crossfade</code></td></tr>
+<tr><td><code>Equalizer</code></td><td>—</td><td>N-band parametric EQ with per-band gain</td></tr>
 </table>
 
-`Player` and `QueuePlayer` use `Box<dyn Fn>` callbacks for time observers, which makes them unsuitable for unimock's matching ergonomics. They are tested through integration tests.
+`Player` and `QueuePlayer` take `Box<dyn Fn>` time-observer callbacks, so they
+are integration-tested rather than `unimock`ed.
 
-### Engine and mixing
+## Crossfade
 
-<table>
-<tr><th>Trait</th><th>Role</th></tr>
-<tr><td><code>Engine</code></td><td>Singleton lifecycle, arena slot management, master output, crossfade delegation</td></tr>
-<tr><td><code>Mixer</code></td><td>Per-channel gain/pan/mute/solo, master bus, per-channel N-band EQ, hardware crossfader</td></tr>
-</table>
+`Engine::crossfade(from, to, config)` fades one slot out while the other fades
+in. `CrossfadeConfig` selects the curve (`CrossfadeCurve`: `EqualPower`,
+`Linear`, `SCurve`, `ConstantPower`, `FastFadeIn`, `FastFadeOut`), duration,
+cut points, and a `beat_aligned` flag. Beat/BPM data types (`BeatGrid`,
+`BpmInfo`) and `DjEvent` exist for callers that supply their own analysis.
 
-### DJ subsystem
+## Events
 
-<table>
-<tr><th>Trait</th><th>Role</th></tr>
-<tr><td><code>CrossfadeController</code></td><td>Start/cancel crossfade between two slots, curve control, progress</td></tr>
-<tr><td><code>BpmAnalyzer</code></td><td>BPM detection, beat grid, tap tempo</td></tr>
-<tr><td><code>BpmSync</code></td><td>Sync follower to leader BPM, phase offset, nudge, quantize</td></tr>
-<tr><td><code>Equalizer</code></td><td>N-band parametric EQ with per-band gain control</td></tr>
-<tr><td><code>DjEffect</code></td><td>Pluggable effects (filter, echo, reverb, flanger, brake, etc.)</td></tr>
-</table>
-
-### Identity and time
-
-<table>
-<tr><th>Type</th><th>Role</th></tr>
-<tr><td><code>SlotId</code></td><td>Arena position in the engine (opaque, <code>Copy</code>)</td></tr>
-<tr><td><code>ObserverId</code></td><td>Time observer handle (opaque, <code>Copy</code>)</td></tr>
-<tr><td><code>MediaTime</code></td><td>High-precision time with value/timescale (mirrors <code>CMTime</code>), supports arithmetic and <code>Ord</code></td></tr>
-</table>
-
-### Status enums
-
-- `PlayerStatus` -- `Unknown | ReadyToPlay | Failed`
-- `TimeControlStatus` -- `Paused | WaitingToPlay | Playing`
-- `ItemStatus` -- `Unknown | ReadyToPlay | Failed`
-- `WaitingReason` -- why playback is stalled
-- `ActionAtItemEnd` -- `Advance | Pause | None`
-
-### Audio session types
-
-- `SessionCategory` -- `Ambient | SoloAmbient | Playback | Record | PlayAndRecord | MultiRoute`
-- `SessionMode` -- `Default | VoiceChat | VideoChat | GameChat | Measurement | MoviePlayback | SpokenAudio`
-- `SessionOptions` -- mix/duck/bluetooth/airplay flags
-- `PortType`, `PortDescription`, `RouteDescription` -- audio routing
-
-### DJ types
-
-- `CrossfadeCurve` -- `EqualPower | Linear | SCurve | ConstantPower | FastFadeIn | FastFadeOut`
-- `CrossfadeConfig` -- duration, curve, beat-aligned flag, cut points
-- `BpmInfo` -- detected BPM, confidence, first beat offset
-- `BeatGrid` -- BPM, offset, beats per bar
-- `EqBandConfig` -- frequency, Q, kind (low-shelf / peaking / high-shelf) per band
-- `DjEffectKind` -- `Filter | Echo | Reverb | Flanger | Phaser | Brake | Spinback | Backspin | Gate | BitCrusher`
-
-## Event System
-
-Events use `tokio::sync::broadcast`. Subscribe via `player.subscribe()` or `engine.subscribe()`.
+`tokio::sync::broadcast`, via `player.subscribe()` / `engine.subscribe()`.
 
 <table>
 <tr><th>Enum</th><th>Scope</th></tr>
-<tr><td><code>PlayerEvent</code></td><td>Status, rate, volume, mute, current item changes</td></tr>
-<tr><td><code>ItemEvent</code></td><td>Item status, buffering, seek, end-of-stream, stall</td></tr>
+<tr><td><code>PlayerEvent</code></td><td>Status, rate, volume, mute, current item, prefetch/handover, EOF, failure</td></tr>
+<tr><td><code>ItemEvent</code></td><td>Item status, buffering, seek, stall, end-of-stream</td></tr>
 <tr><td><code>EngineEvent</code></td><td>Slot lifecycle, crossfade progress, master volume</td></tr>
 <tr><td><code>SessionEvent</code></td><td>Interruption, route change, media services</td></tr>
-<tr><td><code>DjEvent</code></td><td>BPM detection, beat tick, sync engage/disengage</td></tr>
+<tr><td><code>DjEvent</code></td><td>BPM detected, beat tick, sync engage/disengage, phase aligned</td></tr>
 </table>
+
+Status types: `PlayerStatus`, `TimeControlStatus`, `ItemStatus`,
+`WaitingReason`. Audio-session value types (`SessionCategory`, `SessionMode`,
+`SessionOptions`, `PortType`, `RouteDescription`) describe routing. Identity/time:
+`SlotId`, `ObserverId`, `MediaTime` (a `CMTime` mirror with `Ord` and arithmetic).
 
 ## Queue Auto-Advance
 
-`PlayerImpl` exposes a small handover API for external orchestrators
-(e.g. `kithara-queue::Queue`):
+`PlayerImpl` exposes a handover API for external orchestrators (e.g.
+`kithara-queue::Queue`):
 
-- `arm_next(idx) -> Option<Arc<str>>` — load `items[idx]` into the
-  audio-thread arena in `Preloading` state, ready for sample-accurate
-  gapless stitch (cf=0) or parallel fade (cf>0).
-- `commit_next(idx) -> Result<(), PlayError>` — promote the armed slot:
-  send `FadeIn`, update `current_index`, publish `CurrentItemChanged`.
-  Used by orchestrators when the cf>0 handover threshold fires; **must
-  not** be called for cf=0 (the audio thread handles handover internally).
-- `unarm_next()` — drop the armed slot without committing. Skips the
-  unload if the slot was already activated for the current index.
-- `armed_next() -> Option<usize>` — snapshot of the armed-next index.
+- `arm_next(idx) -> Option<Arc<str>>` — load the next item into the audio thread,
+  ready for gapless stitch (cf=0) or parallel fade (cf>0).
+- `commit_next(idx) -> Result<(), PlayError>` — promote the armed slot (cf>0 only;
+  the audio thread handles cf=0 internally).
+- `unarm_next()` — drop the armed slot without committing.
+- `armed_next() -> Option<usize>` — snapshot of the armed index.
 
-Two near-end triggers are emitted on the public bus:
-
-- `PlayerEvent::PrefetchRequested` — the leading track entered the
-  prefetch lead window (`max(prefetch_duration, fade_duration) +
-  block_seconds` before EOF). Subscribers should arm the next track via
-  `arm_next`.
-- `PlayerEvent::TrackHandoverRequested` — the leading track entered the
-  crossfade window (`fade_duration + block_seconds` before EOF). Emitted
-  **only when** `crossfade_duration > 0`; subscribers commit via
-  `commit_next`. For `crossfade_duration == 0` this event is suppressed —
-  the audio thread does sample-accurate handover at EOF and the player
-  publishes `CurrentItemChanged` after the leading track's
-  `ItemDidPlayToEnd`.
-
-`PlayerConfig::auto_advance_enabled` (default `true`) controls a built-in
-linear `next = current + 1` policy that wires the events to the public API
-internally. Standalone callers (tests, demos) get gapless playback for
-free; orchestrators (`Queue::new`) toggle it off and drive auto-advance
-themselves.
-
-Internal audio-thread → main-thread channel signals
-(`PlayerNotification::TrackRequested` / `HandoverRequested` /
-`TrackPlaybackStopped { reason: Eof | Stop }`) remain the source of
-truth; the public events are translations of the first two, gated on
-`crossfade_duration` for the handover event.
+Two near-end triggers are published: `PlayerEvent::PrefetchRequested` (arm the
+next track) and `PlayerEvent::TrackHandoverRequested` (commit it; emitted only
+when `crossfade_duration > 0`). `PlayerConfig::auto_advance_enabled` (default
+`true`) uses a built-in linear policy (`next = current + 1`); orchestrators turn
+it off and drive advance themselves.
 
 ## Engine Lifecycle
 
-1. `Engine::start()` -- activate audio output
-2. `Engine::allocate_slot()` -> `SlotId` -- reserve arena position
-3. Attach a `Player` to the slot (player holds `slot_id()`)
-4. `Player::replace_current_item(Some(item))` -- load media
-5. `Player::play()` -- engine begins pulling PCM from slot
-6. For crossfade: allocate second slot, load second player, call `Engine::crossfade(from, to, config)`
-7. `Engine::release_slot(id)` -- return arena position
-8. `Engine::stop()` -- deactivate audio output
+`start()` → `allocate_slot()` → attach `Player` → `replace_current_item(Some(item))`
+→ `play()`. For crossfade, allocate a second slot and call
+`Engine::crossfade(from, to, config)`. Tear down with `release_slot(id)` then
+`stop()`.
 
-## Crossfade Flow
+## Cancel Hierarchy
 
-```mermaid
-gantt
-    title Crossfade Timeline
-    dateFormat X
-    axisFormat %s
+A single `CancellationToken` master flows top-down; subsystems (Downloader,
+AssetStore, HlsPeer, audio worker, epoch cancel) derive children via
+`.child_token()`, and cancelling the master cascades to all of them. When used
+directly, `PlayerImpl::new` is the canonical fallback owner (`unwrap_or_default()`,
+marked `// kithara:cancel:owner`); consumer crates (`Queue`, `App`, FFI) build
+their own master and pass it through `PlayerConfig.cancel`. `Drop for PlayerImpl`
+pulses `cancel()` before teardown. Hard-coded `CancellationToken::new()` outside
+marked owner/bridge sites is forbidden.
 
-    section Slot A
-        Full volume   :a1, 0, 6
-        Fade out      :a2, 6, 10
+## Real-Time Audio Thread
 
-    section Slot B
-        Fade in       :b1, 6, 10
-        Full volume   :b2, 10, 16
-```
+`PlayerNodeProcessor::process` and `MasterEqProcessor::process` run on the
+Firewheel audio thread and stay allocation-, free-, and lock-free: scratch
+buffers are pre-sized at stream start, and evicted tracks are handed to a bounded
+deferred-drop channel (drained on the main thread) instead of being freed on the
+audio thread. Verified by RealtimeSanitizer (`just rtsan`, gated by `--cfg rtsan`).
 
-`CrossfadeController::start(a, b, config)` initiates the transition. When `beat_aligned: true`, the controller waits for the next beat boundary before starting the fade.
+## Session Hosting
 
-## DJ Mixing Flow
-
-1. Analyze both tracks: `BpmAnalyzer::analyze(slot_a)`, `BpmAnalyzer::analyze(slot_b)`
-2. Sync tempos: `BpmSync::sync(follower: slot_b, leader: slot_a)`
-3. Adjust phase: `BpmSync::set_phase_offset(slot_b, 0.0)` (align downbeats)
-4. Shape sound: `Equalizer::set_gain(0, -24.0)` (cut bass on incoming)
-5. Crossfade: `CrossfadeController::start(slot_a, slot_b, config)`
-6. During transition: gradually restore bass on incoming, cut bass on outgoing
-7. Cleanup: `BpmSync::unsync(slot_b)`, release slot A
+Platform-asymmetric by necessity. Native (`impls/session/host_native.rs`): a
+dedicated engine worker thread drains a `ringbuf` of commands. Web
+(`impls/session/host_web.rs`): `AudioContext` lives on the browser main thread,
+and Worker-side clients proxy commands over an `mpsc` bridge. The cross-platform
+core (`state.rs`, `client.rs`) carries zero `#[cfg]`; the only structural gate is
+two lines in `mod.rs`.
 
 ## Feature Flags
 
 <table>
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
-<tr><td><code>default</code></td><td>yes</td><td>Enables <code>backend-cpal</code></td></tr>
-<tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL backend via <code>firewheel/cpal</code></td></tr>
-<tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend via <code>firewheel-web-audio</code> (wasm32 only)</td></tr>
-<tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM backend via <code>firewheel/wasm-bindgen</code></td></tr>
-<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode path via <code>kithara-audio/apple</code></td></tr>
-<tr><td><code>probe</code></td><td>no</td><td>USDT probes for runtime tracing</td></tr>
-<tr><td><code>mock</code></td><td>no</td><td><code>unimock</code>-generated mocks for trait testing</td></tr>
+<tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL output via <code>firewheel/cpal</code></td></tr>
+<tr><td><code>backend-web-audio</code></td><td>no</td><td>WebAudio backend (wasm32)</td></tr>
+<tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM bindings via <code>firewheel/wasm-bindgen</code></td></tr>
+<tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox decode via <code>kithara-audio/apple</code></td></tr>
+<tr><td><code>probe</code></td><td>no</td><td>USDT runtime tracing</td></tr>
+<tr><td><code>mock</code></td><td>no</td><td><code>unimock</code> trait mocks</td></tr>
 </table>
 
-File and HLS pipelines are unconditional dependencies (not feature-gated) — `kithara-play` always links `kithara-file`, `kithara-hls`, `kithara-abr`, `kithara-assets`, `kithara-net`.
-
-## Testing
-
-The offline render backend used by deterministic engine/player tests lives in `kithara-integration-tests::offline` (since 2026-05-07), not in `kithara-play`. Native test crates depend on `kithara-integration-tests` to drive `EngineImpl + PlayerImpl` against a manual-render Firewheel graph; this crate exposes no `new_offline` / `render_offline` constructor.
-
-For pure trait-level testing, enable the `mock` feature to get `unimock`-generated mocks of the public traits.
-
-## Cancel Hierarchy
-
-A single `CancellationToken` master flows top-down through the player tree. Subsystems (Downloader, AssetStore, HlsPeer, Audio worker, epoch_cancel) derive children from it via `.child_token()`; cancelling the master cascades to every descendant.
-
-Ownership rules:
-
-- **Master owner**: the consumer crate that the user picks as their entry point.
-  - `kithara-play` used directly: `PlayerImpl::new` is the canonical fallback site — if `PlayerConfig.cancel = None`, it constructs a fresh master via `unwrap_or_default()`.
-  - `kithara-queue::Queue`, `kithara-app::App`, `kithara-ffi` player handle: each constructs its own master in its constructor and propagates it via `PlayerConfig.cancel = Some(master.clone())` before building `PlayerImpl`.
-- **Per-track child**: `PlayerImpl::prepare_config` injects `Some(self.cancel.child_token())` into `ResourceConfig.cancel` (only when caller hasn't supplied a per-track override). Each track is therefore independently cancellable while sharing the master root.
-- **Subsystem cascade**: `HlsConfig`, `AudioConfig`, `FileConfig`, `DownloaderConfig`, `AssetStoreBuilder` all carry `cancel: Option<CancellationToken>`. After `prepare_config` runs in production, the field is always `Some(per_track_child)`. Subsystems may keep `unwrap_or_default()` as a test/standalone safety net — the production path never hits the fallback.
-- **Drop pulse**: `Drop for PlayerImpl` (and consumer-crate equivalents) calls `self.cancel.cancel()` so subsystems observe the pulse before structural Arc teardown unwinds.
-
-Allowed `CancellationToken::new()` sites in production:
-
-- The `unwrap_or_default()` in `PlayerImpl::new_with_engine` (canonical fallback) — marked `// kithara:cancel:owner`.
-- Master construction in `Queue::new` / `App::new` / FFI player constructor — same marker.
-- FFI observer / item-bridge sites that intentionally outlive any single track — marked `// kithara:cancel:bridge`.
-
-Forbidden:
-
-- Hard-coded `CancellationToken::new()` (not behind `Option<CancellationToken>`) outside the marked owner / bridge sites. Those create orphan tokens that escape the hierarchy. Audio worker thread, file local source, and similar internal scopes derive children from their config's master instead.
+File and HLS pipelines are unconditional: `kithara-play` always links
+`kithara-file`, `kithara-hls`, `kithara-abr`, `kithara-assets`, `kithara-net`.
 
 ## Invariants
 
-- `SlotId` is only valid between `allocate_slot()` and `release_slot()`
-- At most `Engine::max_slots()` slots may be allocated simultaneously
-- Only one crossfade may be active at a time
-- `Player::slot_id()` returns `None` until registered with the engine
-- All `#[non_exhaustive]` enums and structs require builder or constructor
-- `MediaTime::INVALID` has `timescale == 0`; all arithmetic on invalid times returns invalid
-- Cancel hierarchy: production `CancellationToken::new()` only at marked owner / bridge sites (see "Cancel Hierarchy")
+- `SlotId` is valid only between `allocate_slot()` and `release_slot()`.
+- At most `Engine::max_slots()` slots allocated at once; at most one active crossfade.
+- `Player::slot_id()` is `None` until registered with the engine.
+- `MediaTime::INVALID` has `timescale == 0`; arithmetic on invalid times stays invalid.
+- Audio-thread `process()` is allocation-, free-, and lock-free.
+
+## Testing
+
+The offline render backend for deterministic engine/player tests lives in
+`kithara-integration-tests::offline`, not here. Enable `mock` for trait-level
+`unimock` testing.
 
 ## Integration
 
-Defines the public player API consumed by higher-level crates. All traits are `Send + Sync + 'static`. `PlayError` covers all failure modes. No `unwrap()`/`expect()` in production code -- implementations must propagate errors via `Result<T, PlayError>`.
+Defines the public player API consumed by higher-level crates. All traits are
+`Send + Sync + 'static`; failures propagate via `Result<T, PlayError>` (no
+`unwrap()`/`expect()` in production code).

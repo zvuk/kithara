@@ -28,18 +28,19 @@ impl AndroidBackendError {
         }
     }
 
-    pub(crate) fn into_decode_error(self) -> DecodeError {
-        match self {
-            Self::UnsupportedCodec { codec } => DecodeError::UnsupportedCodec(codec),
-            Self::UnsupportedPcmEncoding { .. } => DecodeError::Backend(Box::new(self)),
-            other => DecodeError::Backend(Box::new(other)),
-        }
-    }
-
     pub(crate) fn operation(operation: &'static str, details: impl Into<String>) -> Self {
         Self::Operation {
             operation,
             details: details.into(),
+        }
+    }
+}
+
+impl From<AndroidBackendError> for DecodeError {
+    fn from(err: AndroidBackendError) -> Self {
+        match err {
+            AndroidBackendError::UnsupportedCodec { codec } => DecodeError::UnsupportedCodec(codec),
+            _ => DecodeError::backend(err),
         }
     }
 }

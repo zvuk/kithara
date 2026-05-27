@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::fs;
-use std::{io::Write, ops::Range, path::Path};
+use std::{fs, io::Write};
+use std::{ops::Range, path::Path};
 
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::NamedTempFile;
@@ -103,7 +103,3 @@ impl<R: ResourceExt> Atomic<R> {
         self.inner.write_all(data)
     }
 }
-
-/// Crash-safe mmap-backed resource.
-#[cfg(not(target_arch = "wasm32"))]
-pub type AtomicMmap = Atomic<crate::MmapResource>;

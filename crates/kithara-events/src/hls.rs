@@ -16,14 +16,6 @@ pub enum HlsError {
     Other(String),
 }
 
-impl HlsError {
-    /// Whether the consumer can reasonably retry the request.
-    #[must_use]
-    pub const fn is_recoverable(&self) -> bool {
-        matches!(self, Self::Other(_))
-    }
-}
-
 impl std::fmt::Display for HlsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

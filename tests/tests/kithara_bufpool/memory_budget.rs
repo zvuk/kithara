@@ -1,4 +1,5 @@
 use kithara_bufpool::{BudgetExhausted, ByteBudget, Pool, SharedPool};
+use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
 use kithara_test_utils::kithara;
 
 #[kithara::test]

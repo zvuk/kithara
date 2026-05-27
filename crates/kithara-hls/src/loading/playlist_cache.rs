@@ -93,42 +93,9 @@ impl PlaylistCache {
         parse(&bytes)
     }
 
-    /// Synchronous access to an already-loaded media playlist.
-    ///
-    /// Returns `None` if the master or media playlist hasn't been loaded
-    /// yet. After `Hls::create()` all playlists are pre-populated so
-    /// this always succeeds during playback.
-    #[must_use]
-    pub fn get_media_playlist_sync(&self, variant: usize) -> Option<MediaPlaylist> {
-        let master = self.master.get()?;
-        master.variants.get(variant)?;
-        let playlist = self.media.get(&VariantId(variant))?.get()?.clone();
-        Some(playlist)
-    }
-
     #[must_use]
     pub fn headers(&self) -> Option<Headers> {
         self.config.lock_sync_read().headers.clone()
-    }
-
-    /// Load the media playlist for `variant`, returning both its
-    /// resolved URL and the parsed struct. Used by segment-loader paths
-    /// that need both pieces.
-    ///
-    /// # Errors
-    /// Returns an error when the master playlist, URL resolution, or
-    /// media playlist fetch fails.
-    pub async fn load_media_playlist(&self, variant: usize) -> HlsResult<MediaPlaylist> {
-        let master_url = self.master_url_clone()?;
-        let master = self.master_playlist(&master_url).await?;
-
-        let variant_stream = master
-            .variants
-            .get(variant)
-            .ok_or_else(|| HlsError::VariantNotFound(format!("variant {variant}")))?;
-
-        let media_url = self.resolve_url(&master_url, &variant_stream.uri)?;
-        self.media_playlist(&media_url, VariantId(variant)).await
     }
 
     /// Load and parse the master playlist. First call fetches from the
@@ -145,14 +112,6 @@ impl PlaylistCache {
             })
             .await?;
         Ok(master.clone())
-    }
-
-    fn master_url_clone(&self) -> HlsResult<Url> {
-        self.config
-            .lock_sync_read()
-            .master_url
-            .clone()
-            .ok_or_else(|| HlsError::InvalidUrl("master_url not set on PlaylistCache".to_string()))
     }
 
     /// Load and parse the media playlist for `variant_id`. Deduplicated

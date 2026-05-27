@@ -43,7 +43,7 @@ pub(crate) struct SimHarness {
     track_ids: Vec<TrackId>,
     /// Captured codec of the currently-playing variant. Updated by
     /// `enter_track` and on each successful quality switch; the
-    /// SetQuality action compares the codec before and after the
+    /// `SetQuality` action compares the codec before and after the
     /// switch to catch cross-codec recreate regressions.
     last_known_codec: Option<String>,
 }
@@ -147,7 +147,7 @@ impl SimHarness {
 
     /// Start playback of the queue track at `idx`: select it, wait for
     /// Loaded, play for `warmup` so the audio worker is past initial
-    /// pre-roll, then snapshot the codec so SetQuality has a baseline.
+    /// pre-roll, then snapshot the codec so `SetQuality` has a baseline.
     pub(crate) async fn enter_track(&mut self, idx: usize, warmup: Duration) {
         let id = self.track_ids[idx];
         self.queue

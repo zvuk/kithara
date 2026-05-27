@@ -138,7 +138,7 @@ impl InitEntry {
             .parse()
             .expect("static placeholder URL parses");
         Self {
-            resource_id: ResourceKey::from_url(&url),
+            resource_id: ResourceKey::from(&url),
             url,
             state: SegmentState::Loaded.into(),
             size: AtomicU64::new(0),
@@ -271,12 +271,12 @@ pub(crate) struct HlsVariant {
     codec: Option<AudioCodec>,
     /// Cached container format — see [`Self::codec`].
     container: Option<ContainerFormat>,
-    cancel: RwLock<CancellationToken>,
     /// HTTP headers applied to every `FetchCmd` this variant emits.
     /// Snapshotted from `PlanCtx::headers` at construction; carries
     /// resource-wide auth (e.g. zvuk `X-Auth-Token`) so segment GETs
     /// reach the same authenticated endpoint as the playlist load.
     headers: Option<Headers>,
+    cancel: RwLock<CancellationToken>,
     /// Cumulative byte offsets for **media** segments only, seeded with
     /// `init.size` (the init prefix occupies `[0, init.size)` in
     /// variant-byte space). Recomputed on every commit — AES-128 CBC
@@ -453,7 +453,7 @@ impl HlsVariant {
             .cancel(cancel)
             .maybe_headers(self.headers.clone())
             .writer(slot.writer())
-            .on_complete(slot.into_on_complete())
+            .on_complete(OnCompleteFn::from(slot))
             .build()
     }
 
@@ -486,7 +486,7 @@ impl HlsVariant {
         playlist_state
             .init_url(variant_idx)
             .map_or_else(InitEntry::empty, |url| InitEntry {
-                resource_id: ResourceKey::from_url(&url),
+                resource_id: ResourceKey::from(&url),
                 url,
                 state: SegmentState::Missing.into(),
                 size: AtomicU64::new(playlist_state.init_size(variant_idx)),
@@ -533,7 +533,7 @@ impl HlsVariant {
                 .map_or(Duration::ZERO, |(start, end)| end.saturating_sub(start));
             let decrypt_ctx = decrypt_contexts.get(seg_idx).cloned().flatten();
             entries.push(SegmentEntry {
-                resource_id: ResourceKey::from_url(&url),
+                resource_id: ResourceKey::from(&url),
                 url,
                 state: SegmentState::Missing.into(),
                 size: AtomicU64::new(media_size),
@@ -556,6 +556,28 @@ impl HlsVariant {
 
     pub(crate) fn cancel_handle(&self) -> CancellationToken {
         self.cancel.lock_sync_read().clone()
+    }
+
+    /// Skip-fetch guard: a previously-cached resource may stay
+    /// `Committed` on disk even after the in-memory LRU evicts it
+    /// (eviction clears the cache slot, not the on-disk bytes). The reader's
+    /// `contains_range` already falls back to `resource_state` so the
+    /// segment is readable; dispatching a fresh `acquire_resource` against
+    /// a committed key would race the existing writer and fail with
+    /// `cannot write to committed resource`.
+    ///
+    /// Returns the committed on-disk length when the resource is
+    /// `Committed` with a known `final_len`. The caller uses that length
+    /// to mirror what `FetchSlot::settle` would have done — apply the
+    /// post-processing size so `init_size` / per-segment sizes match the
+    /// actual bytes on disk (after PKCS7 unpad, container framing, etc).
+    /// Without that apply, the announced/estimated size and the on-disk
+    /// size disagree and `range_ready` deadlocks on a cache-hot resource.
+    fn committed_final_len(ctx: &PlanCtx, key: &ResourceKey) -> Option<u64> {
+        match ctx.asset_store.resource_state(key) {
+            Ok(AssetResourceState::Committed { final_len }) => final_len,
+            _ => None,
+        }
     }
 
     pub(crate) fn descriptor(&self, idx: usize) -> Option<SegmentDescriptor> {
@@ -660,7 +682,10 @@ impl HlsVariant {
                         entry.set_state(SegmentState::Loaded);
                         continue;
                     }
-                    out.push(self.emit_fetch_cmd(ctx, seg_idx));
+                    let Some(cmd) = self.emit_fetch_cmd(ctx, seg_idx) else {
+                        continue;
+                    };
+                    out.push(cmd);
                 }
             }
             remaining -= 1;
@@ -686,26 +711,34 @@ impl HlsVariant {
         segment_index = u64::from(seg_idx),
         variant = self.variant as u64
     )]
-    fn emit_fetch_cmd(self: &Arc<Self>, ctx: &PlanCtx, seg_idx: u32) -> FetchCmd {
+    fn emit_fetch_cmd(self: &Arc<Self>, ctx: &PlanCtx, seg_idx: u32) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
-        let resource = entry.decrypt_ctx.clone().map_or_else(
-            || {
-                ctx.asset_store
-                    .acquire_resource(&entry.resource_id)
-                    .expect("acquire_resource for segment must succeed")
-            },
+        let acquire = entry.decrypt_ctx.clone().map_or_else(
+            || ctx.asset_store.acquire_resource(&entry.resource_id),
             |ctx_inner| {
                 ctx.asset_store
                     .acquire_resource_with_ctx(&entry.resource_id, Some(ctx_inner))
-                    .expect("acquire_resource_with_ctx for segment must succeed")
             },
         );
-        self.build_cmd(
+        let resource = match acquire {
+            Ok(r) => r,
+            Err(err) => {
+                debug!(
+                    variant = self.variant,
+                    seg_idx,
+                    error = %err,
+                    "emit_fetch_cmd: acquire_resource dropped (variant switch in flight)"
+                );
+                entry.set_state(SegmentState::Missing);
+                return None;
+            }
+        };
+        Some(self.build_cmd(
             entry.url.clone(),
             resource,
             Arc::clone(&entry.state),
             PlannedFetch::Segment(seg_idx),
-        )
+        ))
     }
 
     /// Reader-facing lookup in **virtual** byte space. Subtracts the
@@ -923,6 +956,28 @@ impl HlsVariant {
             .build()
     }
 
+    /// Replace the per-variant fetch queue with `[from_seg .. num_segments)`
+    /// (plus `Init` if applicable). Does NOT cancel in-flight fetches —
+    /// dedup is handled at `dispatch` time via the `Downloading` state.
+    /// `dispatch` skips `Downloading` and `Loaded` entries without burning
+    /// budget, so the queue can safely include them.
+    ///
+    /// Cancellation is reserved for variant deactivation
+    /// ([`cancel`](Self::cancel) / teardown) — there we really want to
+    /// abandon the variant's in-flight work; the freshly activated variant
+    /// has its own cancel token. Seek / eviction never need to cancel,
+    /// they only need to reseed the queue.
+    ///
+    /// Callers: seek (`seek_to`), ABR variant flip
+    /// (`activate_at_segment`), eviction of an active-variant resource,
+    /// and the initial peer activation.
+    /// Whether the next dispatch should issue the separate init fetch
+    /// (CMAF `EXT-X-MAP`) — true only if the variant advertises a
+    /// non-zero init segment that hasn't been loaded yet.
+    fn needs_init_fetch(&self) -> bool {
+        self.init_size() > 0 && !matches!(self.init.state(), SegmentState::Loaded)
+    }
+
     #[must_use]
     pub(crate) fn num_segments(&self) -> u32 {
         u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
@@ -1111,21 +1166,6 @@ impl HlsVariant {
         *self.cancel.lock_sync_write() = fresh;
     }
 
-    /// Replace the per-variant fetch queue with `[from_seg .. num_segments)`
-    /// (plus `Init` if applicable). Does NOT cancel in-flight fetches —
-    /// dedup is handled at `dispatch` time via the `Downloading` state.
-    /// `dispatch` skips `Downloading` and `Loaded` entries without burning
-    /// budget, so the queue can safely include them.
-    ///
-    /// Cancellation is reserved for variant deactivation
-    /// ([`cancel`](Self::cancel) / teardown) — there we really want to
-    /// abandon the variant's in-flight work; the freshly activated variant
-    /// has its own cancel token. Seek / eviction never need to cancel,
-    /// they only need to reseed the queue.
-    ///
-    /// Callers: seek (`seek_to`), ABR variant flip
-    /// (`activate_at_segment`), eviction of an active-variant resource,
-    /// and the initial peer activation.
     #[kithara::probe(
         variant = self.variant as u64,
         from_seg,
@@ -1133,14 +1173,14 @@ impl HlsVariant {
     )]
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
         let segs_len = self.num_segments();
+        let init = self
+            .needs_init_fetch()
+            .then_some(PlannedFetch::Init)
+            .into_iter();
+        let tail = (from_seg..segs_len).map(PlannedFetch::Segment);
         let mut queue = self.queue.lock_sync();
         queue.clear();
-        if self.init_size() > 0 && !matches!(self.init.state(), SegmentState::Loaded) {
-            queue.push_back(PlannedFetch::Init);
-        }
-        for seg in from_seg..segs_len {
-            queue.push_back(PlannedFetch::Segment(seg));
-        }
+        queue.extend(init.chain(tail));
     }
 
     pub(crate) fn rebuild_at_time(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {
@@ -1150,6 +1190,48 @@ impl HlsVariant {
         }
         self.rebuild(ctx, seg);
         Some(seg)
+    }
+
+    /// Same as [`Self::rebuild`] but **also** enqueues `seg 0` when
+    /// `from_seg > 0`. The decoder factory's probe (Symphonia format
+    /// reader) reads the container's first ~1 KB to construct the
+    /// codec; on post-ABR switch into mid-playback the active variant's
+    /// queue would otherwise start at `target_seg`, leaving
+    /// `[0..PROBE)` unfetched and the probe hanging on
+    /// `wait_range budget exceeded v=new range_start=0` (Cluster C/D/F
+    /// sentinel, Wave 2.A.3b memo).
+    ///
+    /// `seg 0` is required even when the variant advertises a separate
+    /// init (CMAF `EXT-X-MAP`): the init covers a few-dozen-byte
+    /// header, but the probe scans further into the first media chunk.
+    /// Skipping `seg 0` here masked the bug while `rebuild(0)` worked
+    /// (loaded every segment from 0 — over-fetched whole file).
+    ///
+    /// After probe succeeds, `decoder_seek_safe(target_time)` jumps the
+    /// decoder forward to the user-visible position, so segments
+    /// `1..from_seg` are **never** fetched — only `seg 0` itself.
+    /// Adds at most one extra segment (~`one_segment_size` bytes) per
+    /// switch; if `seg 0` is already cached the scheduler skips the
+    /// fetch and the queue entry resolves via `committed_final_len` in
+    /// `dispatch`.
+    #[kithara::probe(
+        variant = self.variant as u64,
+        from_seg,
+        old_queue_len = self.queue.lock_sync().len() as u64
+    )]
+    pub(crate) fn rebuild_with_decoder_probe(&self, _ctx: &PlanCtx, from_seg: u32) {
+        let segs_len = self.num_segments();
+        let init = self
+            .needs_init_fetch()
+            .then_some(PlannedFetch::Init)
+            .into_iter();
+        let probe_seg = (from_seg > 0)
+            .then_some(PlannedFetch::Segment(0))
+            .into_iter();
+        let tail = (from_seg..segs_len).map(PlannedFetch::Segment);
+        let mut queue = self.queue.lock_sync();
+        queue.clear();
+        queue.extend(init.chain(probe_seg).chain(tail));
     }
 
     /// Recompute cumulative media offsets seeded with `init.size`.
@@ -1185,28 +1267,6 @@ impl HlsVariant {
             .store(self.num_segments(), Ordering::Release);
         self.recompute_offsets();
         self.rearm_cancel();
-    }
-
-    /// Skip-fetch guard: a previously-cached resource may stay
-    /// `Committed` on disk even after the in-memory LRU evicts it
-    /// (eviction clears the cache slot, not the on-disk bytes). The reader's
-    /// `contains_range` already falls back to `resource_state` so the
-    /// segment is readable; dispatching a fresh `acquire_resource` against
-    /// a committed key would race the existing writer and fail with
-    /// `cannot write to committed resource`.
-    ///
-    /// Returns the committed on-disk length when the resource is
-    /// `Committed` with a known `final_len`. The caller uses that length
-    /// to mirror what `FetchSlot::settle` would have done — apply the
-    /// post-processing size so `init_size` / per-segment sizes match the
-    /// actual bytes on disk (after PKCS7 unpad, container framing, etc).
-    /// Without that apply, the announced/estimated size and the on-disk
-    /// size disagree and `range_ready` deadlocks on a cache-hot resource.
-    fn committed_final_len(ctx: &PlanCtx, key: &ResourceKey) -> Option<u64> {
-        match ctx.asset_store.resource_state(key) {
-            Ok(AssetResourceState::Committed { final_len }) => final_len,
-            _ => None,
-        }
     }
 
     pub(crate) fn seek_time_anchor(
@@ -1432,11 +1492,13 @@ struct FetchSlot {
     variant: Weak<HlsVariant>,
 }
 
-impl FetchSlot {
-    fn into_on_complete(self) -> OnCompleteFn {
-        Box::new(move |bytes_written, _headers, err| self.settle(bytes_written, err))
+impl From<FetchSlot> for OnCompleteFn {
+    fn from(slot: FetchSlot) -> Self {
+        Box::new(move |bytes_written, _headers, err| slot.settle(bytes_written, err))
     }
+}
 
+impl FetchSlot {
     /// On success, commits the resource. `bytes_written` is forwarded as
     /// `final_len` — required by [`ProcessedResource::commit`] to trigger
     /// the post-write decrypt pass on encrypted segments (passing `None`
@@ -1468,6 +1530,22 @@ impl FetchSlot {
         }
     }
 
+    fn settle_failure(&self, e: &NetError) -> SegmentState {
+        let committed = matches!(self.resource.status(), ResourceStatus::Committed { .. });
+        debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
+        if committed {
+            if let ResourceStatus::Committed { final_len: Some(n) } = self.resource.status()
+                && let Some(v) = self.variant.upgrade()
+            {
+                v.apply_commit(self.planned, n);
+            }
+            SegmentState::Loaded
+        } else {
+            self.resource.fail(e.to_string());
+            SegmentState::Missing
+        }
+    }
+
     fn settle_success(&self, bytes_written: u64) -> SegmentState {
         let commit_result = self.resource.commit(Some(bytes_written));
         let commit_ok = commit_result.is_ok();
@@ -1492,22 +1570,6 @@ impl FetchSlot {
             v.apply_commit(self.planned, actual);
         }
         SegmentState::Loaded
-    }
-
-    fn settle_failure(&self, e: &NetError) -> SegmentState {
-        let committed = matches!(self.resource.status(), ResourceStatus::Committed { .. });
-        debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
-        if committed {
-            if let ResourceStatus::Committed { final_len: Some(n) } = self.resource.status()
-                && let Some(v) = self.variant.upgrade()
-            {
-                v.apply_commit(self.planned, n);
-            }
-            SegmentState::Loaded
-        } else {
-            self.resource.fail(e.to_string());
-            SegmentState::Missing
-        }
     }
 
     fn writer(&self) -> WriterFn {

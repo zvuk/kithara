@@ -134,6 +134,7 @@ impl AudioNodeProcessor for MasterEqProcessor {
         self.eq_r.update_sample_rate(self.sample_rate.get());
     }
 
+    #[cfg_attr(rtsan, sanitize(realtime = "nonblocking"))]
     fn process(
         &mut self,
         info: &ProcInfo,

@@ -29,9 +29,9 @@ use crate::{
         fetch::Fetch,
         gapless::GaplessStage,
         track_fsm::{
-            ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateState,
-            ResumeState, SeekContext, SeekMode, SeekRequest, TrackFailure, TrackPhaseTag,
-            TrackState, TrackStep, WaitContext, WaitingReason, map_source_phase,
+            ApplySeekState, DecoderSession, RecreateCause, RecreateNext, RecreateOutcome,
+            RecreateState, ResumeState, SeekContext, SeekMode, SeekRequest, TrackFailure,
+            TrackPhaseTag, TrackState, TrackStep, WaitContext, WaitingReason, map_source_phase,
         },
     },
     traits::AudioEffect,
@@ -176,8 +176,14 @@ impl<T: StreamType> Seek for OffsetReader<T> {
 ///
 /// Production: creates Symphonia `Decoder` via [`OffsetReader`].
 /// Tests: returns `MockDecoder` without real I/O.
+///
+/// Returns `Result<_, DecodeError>` so the caller can distinguish a
+/// **transient** failure (e.g. probe ran before the source buffered
+/// `[0..PROBE)` of a freshly-switched variant — `ErrorClass::Interrupted`)
+/// from a **hard** decoder/codec error. Transient errors must route to
+/// `wait_for_source_on_recreate`, not `Failed(RecreateFailed)`.
 pub(crate) type DecoderFactory<T> =
-    Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn Decoder>> + Send>;
+    Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Result<Box<dyn Decoder>, DecodeError> + Send>;
 
 /// Audio source for Stream with format change detection.
 ///
@@ -215,6 +221,18 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     chunks_decoded: u64,
     total_samples: u64,
+    /// `(seek_epoch, target)` of the most recent applied seek.
+    /// `committed_position` lags `target` until the seek's first
+    /// (trim-aligned) chunk is consumed: the decoder lands at the
+    /// containing segment's start and trims forward, so
+    /// `commit_seek_landed` records the segment boundary, not the
+    /// requested instant. A variant-switch recreate firing inside that
+    /// window must resume at the real target, not at the lagging
+    /// committed boundary — otherwise playback rewinds to the segment
+    /// start. Tagged with the seek epoch so a later seek (especially a
+    /// backward one) never resumes against a stale forward target. See
+    /// `execute_recreation`.
+    resume_target: Option<(u64, Duration)>,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -236,11 +254,12 @@ impl<T: StreamType> StreamAudioSource<T> {
         let timeline = shared_stream.timeline();
         let peer_wake = shared_stream.make_notify_fn();
         let gapless =
-            GaplessStage::from_decoder(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
+            GaplessStage::build(decoder.as_ref(), gapless_mode, initial_media_info.as_ref());
         let session = DecoderSession {
             decoder,
             base_offset: 0,
             media_info: initial_media_info,
+            installed_at_seek_epoch: timeline.seek_epoch(),
         };
         timeline.set_playing(true);
         Self {
@@ -258,6 +277,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             total_samples: 0,
             last_spec: None,
             emit: None,
+            resume_target: None,
         }
     }
 
@@ -408,9 +428,16 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     /// Apply pending format change: clear fence, seek to segment start, recreate decoder.
-    /// Returns true if decoder was recreated successfully.
+    ///
+    /// `Ok(())` = decoder recreated; `Err(DecodeError)` propagates the cause.
+    /// Caller distinguishes transient (`ErrorClass::Interrupted`) from hard via
+    /// [`DecodeError::classify`].
     #[kithara::probe(target_offset)]
-    fn apply_format_change(&mut self, new_info: &MediaInfo, target_offset: u64) -> bool {
+    fn apply_format_change(
+        &mut self,
+        new_info: &MediaInfo,
+        target_offset: u64,
+    ) -> Result<(), DecodeError> {
         let current_pos = self.shared_stream.position();
         debug!(
             current_pos,
@@ -422,10 +449,12 @@ impl<T: StreamType> StreamAudioSource<T> {
 
         self.shared_stream.clear_variant_fence();
 
-        if let Err(e) = self.shared_stream.seek(SeekFrom::Start(target_offset)) {
-            warn!(?e, target_offset, "Failed to seek to segment boundary");
-            return false;
-        }
+        self.shared_stream
+            .seek(SeekFrom::Start(target_offset))
+            .map_err(|e| {
+                warn!(?e, target_offset, "Failed to seek to segment boundary");
+                DecodeError::from(e)
+            })?;
 
         let pos_after_seek = self.shared_stream.position();
         debug!(
@@ -433,10 +462,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             pos_after_seek, "apply_format_change: stream seeked, about to recreate decoder"
         );
 
-        let recreated = self.recreate_decoder(new_info, target_offset);
+        let result = self.recreate_decoder(new_info, target_offset);
         let pos_after_recreate = self.shared_stream.position();
-        debug!(recreated, pos_after_recreate, "apply_format_change: exit");
-        recreated
+        debug!(
+            recreated = result.is_ok(),
+            pos_after_recreate, "apply_format_change: exit"
+        );
+        result
     }
 
     fn apply_seek_applied(
@@ -447,6 +479,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         anchor_offset: Option<u64>,
     ) {
         reset_effects(&mut self.effects);
+        self.resume_target = Some((epoch, position));
         self.emit_seek_lifecycle(SeekLifecycleStage::SeekApplied, epoch, location);
         self.update_state(TrackState::AwaitingResume(ResumeState {
             anchor_offset,
@@ -651,6 +684,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 landed_frame,
                 landed_at,
                 landed_byte,
+                ..
             } => (landed_frame, landed_at, landed_byte),
             DecoderSeekOutcome::PastEof { duration } => {
                 let end_frame = num_traits::cast::ToPrimitive::to_u64(
@@ -769,6 +803,18 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// `NoChange` when neither applies.
     #[kithara::probe]
     fn detect_format_change(&self) -> FormatChangeDetection {
+        // Suppress redundant cross-variant recreate inside a single seek
+        // epoch: when the session was installed for the in-flight seek's
+        // epoch and that seek is still pending, the decoder is already
+        // aligned with the seek's landing variant. A second recreate at
+        // the same epoch is wasted work and discards the freshly-built
+        // decoder before it ever emits a sample.
+        let timeline = self.shared_stream.timeline();
+        if timeline.is_seek_pending()
+            && self.session.installed_at_seek_epoch == timeline.seek_epoch()
+        {
+            return FormatChangeDetection::NoChange;
+        }
         let current_info = self.shared_stream.media_info();
         let session_info = self.session.media_info.as_ref();
         let Some(target) = current_info
@@ -895,6 +941,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             base_offset,
             decoder: new_decoder,
             media_info: Some(new_info.clone()),
+            installed_at_seek_epoch: self.shared_stream.timeline().seek_epoch(),
         };
         debug!(?new_duration, base_offset, "Decoder recreated successfully");
         self.emit_event(AudioEvent::DecoderReady {
@@ -1097,7 +1144,11 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// (`decoder`, `base_offset`, `media_info`) change together.
     /// On failure, `session` is unchanged (fixes prior bug where
     /// `media_info` and `base_offset` were updated before factory call).
-    fn recreate_decoder(&mut self, new_info: &MediaInfo, base_offset: u64) -> bool {
+    fn recreate_decoder(
+        &mut self,
+        new_info: &MediaInfo,
+        base_offset: u64,
+    ) -> Result<(), DecodeError> {
         debug!(
             old = ?self.session.media_info,
             new = ?new_info,
@@ -1105,14 +1156,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             "Recreating decoder for new format"
         );
 
-        let Some(new_decoder) =
-            (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
-        else {
-            warn!(base_offset, "Failed to recreate decoder");
-            return false;
-        };
+        let new_decoder = (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
+            .map_err(|e| {
+                warn!(base_offset, ?e, "Failed to recreate decoder");
+                e
+            })?;
         self.install_recreated_session(new_info, base_offset, new_decoder);
-        true
+        Ok(())
     }
 
     /// Soft seek rejection: the seek attempt cannot be honoured
@@ -1647,6 +1697,22 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Compute the upper bound of the byte range required for the
+    /// decoder to safely produce its first chunk after a seek landing
+    /// at `byte`: the end of the segment containing `byte` (segmented
+    /// sources) or the standard 32 KB look-ahead (raw sources). Always
+    /// clamped to `Source::len()` so we don't gate on phantom bytes
+    /// past EOF.
+    fn seek_landing_end(&self, byte: u64) -> u64 {
+        let segment_end = self
+            .shared_stream
+            .as_segment_layout()
+            .and_then(|layout| layout.segment_at_byte(byte))
+            .map(|seg| seg.byte_range.end);
+        let end = segment_end.unwrap_or_else(|| self.boundary_end(byte));
+        self.shared_stream.len().map_or(end, |len| end.min(len))
+    }
+
     /// Check whether the underlying source has data ready for a non-blocking
     /// decode. Returns `true` for `Ready`, `Eof`, or `Seeking` phases.
     fn source_is_ready(&self) -> bool {
@@ -1709,22 +1775,6 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.shared_stream.phase_at(byte..end)
     }
 
-    /// Compute the upper bound of the byte range required for the
-    /// decoder to safely produce its first chunk after a seek landing
-    /// at `byte`: the end of the segment containing `byte` (segmented
-    /// sources) or the standard 32 KB look-ahead (raw sources). Always
-    /// clamped to `Source::len()` so we don't gate on phantom bytes
-    /// past EOF.
-    fn seek_landing_end(&self, byte: u64) -> u64 {
-        let segment_end = self
-            .shared_stream
-            .as_segment_layout()
-            .and_then(|layout| layout.segment_at_byte(byte))
-            .map(|seg| seg.byte_range.end);
-        let end = segment_end.unwrap_or_else(|| self.boundary_end(byte));
-        self.shared_stream.len().map_or(end, |len| end.min(len))
-    }
-
     fn source_phase_for_wait_context(&self, context: &WaitContext) -> SourcePhase {
         match context {
             WaitContext::ApplySeek(applying) => match applying.mode {
@@ -1734,7 +1784,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 } => self.source_phase_for_seek_landing(byte),
                 SeekMode::Direct { target_byte: None } => self.shared_stream.phase(),
             },
-            WaitContext::Recreation(recreate) => self.source_phase_for_boundary(recreate.offset),
+            WaitContext::Recreation(recreate) => self.recreate_phase(recreate.offset),
             WaitContext::PostSeek(resume) => resume.anchor_offset.map_or_else(
                 || self.shared_stream.phase(),
                 |byte| self.source_phase_for_boundary(byte),
@@ -1769,14 +1819,38 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// argument and we fall through to the `[offset..offset +
     /// DEFAULT_READ_AHEAD)` slow path, whose window the scheduler
     /// actively keeps in flight around the reader.
-    fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
-        if let Ok(init_range) = self.shared_stream.format_change_segment_range() {
-            let init_len = init_range.end.saturating_sub(init_range.start);
-            if init_len <= Self::DEFAULT_READ_AHEAD_BYTES {
-                return self.source_ready_for_range(init_range);
-            }
+    /// Byte range whose readiness gates decoder recreation. Shared by
+    /// the gate ([`Self::source_ready_for_recreate`]) and the wait path
+    /// ([`Self::wait_for_source_on_recreate`] /
+    /// [`WaitContext::Recreation`]) so the two never disagree on what
+    /// "ready" means — a mismatch livelocks the worker
+    /// (`recv_outcome_blocking` hang on HE-AAC v2 variant switch).
+    ///
+    /// For CMAF (a separate init segment within the read-ahead window)
+    /// this is the init range alone: the factory probe needs only the
+    /// init to rebuild the codec, and after a far seek the HLS scheduler
+    /// keeps segments around the reader cursor — never `[0..READ_AHEAD)`
+    /// of seg 0 — so gating or waiting on the wider boundary window
+    /// hangs. Otherwise the `[offset..offset+READ_AHEAD)` boundary window.
+    fn recreate_ready_range(&self, offset: u64) -> Range<u64> {
+        if let Ok(init_range) = self.shared_stream.format_change_segment_range()
+            && init_range.end.saturating_sub(init_range.start) <= Self::DEFAULT_READ_AHEAD_BYTES
+        {
+            return init_range;
         }
-        self.source_is_ready_for_boundary(recreate.offset)
+        offset..self.boundary_end(offset)
+    }
+
+    fn recreate_phase(&self, offset: u64) -> SourcePhase {
+        self.shared_stream
+            .phase_at(self.recreate_ready_range(offset))
+    }
+
+    fn source_ready_for_recreate(&self, recreate: &RecreateState) -> bool {
+        matches!(
+            self.recreate_phase(recreate.offset),
+            SourcePhase::Ready | SourcePhase::Eof | SourcePhase::Seeking
+        )
     }
 }
 
@@ -1797,12 +1871,28 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    /// Map a recreate-path error to the FSM outcome. Transient
+    /// `ErrorClass::Interrupted` (probe ran before the source buffered
+    /// `[0..PROBE)` of a freshly-switched variant — see Wave 2.A
+    /// memo / commit message) → `NeedsSourceWait` so the caller retries
+    /// after the source phase becomes Ready. Everything else → hard fail.
+    fn classify_recreate_err(e: &DecodeError, _offset: u64) -> RecreateOutcome {
+        if e.classify() == ErrorClass::Interrupted {
+            RecreateOutcome::NeedsSourceWait
+        } else {
+            RecreateOutcome::SoftFailed
+        }
+    }
+
     /// Execute the actual decoder recreation once readiness is confirmed.
     ///
-    /// Returns `Some(true)` on success, `Some(false)` on soft failure
-    /// (caller must mark track failed), or `None` when the track was
-    /// already terminated inside this helper (e.g. stream seek error).
-    fn execute_recreation(&mut self, recreate: &RecreateState) -> Option<bool> {
+    /// Returns `Some(RecreateOutcome::Done)` on success,
+    /// `Some(RecreateOutcome::SoftFailed)` on hard failure (caller marks track failed),
+    /// `Some(RecreateOutcome::NeedsSourceWait)` on transient `ErrorClass::Interrupted`
+    /// (caller routes to `wait_for_source_on_recreate` for retry once the source
+    /// has buffered the probe window), or `None` when the track was already
+    /// terminated inside this helper (e.g. stream seek error).
+    fn execute_recreation(&mut self, recreate: &RecreateState) -> Option<RecreateOutcome> {
         if recreate.cause == RecreateCause::FormatBoundary
             && matches!(recreate.next, RecreateNext::Decode)
         {
@@ -1815,10 +1905,18 @@ impl<T: StreamType> StreamAudioSource<T> {
                 stream_len = ?self.shared_stream.len(),
                 "execute_recreation: FormatBoundary+Decode branch enter"
             );
-            if !self.apply_format_change(&recreate.media_info, recreate.offset) {
-                return Some(false);
+            if let Err(e) = self.apply_format_change(&recreate.media_info, recreate.offset) {
+                return Some(Self::classify_recreate_err(&e, recreate.offset));
             }
-            let target_time = self.timeline.committed_position();
+            let committed = self.timeline.committed_position();
+            let target_time = match self.resume_target {
+                Some((seek_epoch, target))
+                    if seek_epoch == self.epoch.load(Ordering::Acquire) && target > committed =>
+                {
+                    target
+                }
+                _ => committed,
+            };
             debug!(
                 ?target_time,
                 stream_pos = self.shared_stream.position(),
@@ -1833,14 +1931,14 @@ impl<T: StreamType> StreamAudioSource<T> {
                     ?target_time,
                     "Failed to seek decoder to timeline position after cross-codec recreate"
                 );
-                return Some(false);
+                return Some(Self::classify_recreate_err(&e, recreate.offset));
             }
             debug!(
                 ?target_time,
                 stream_pos_final = self.shared_stream.position(),
                 "execute_recreation: FormatBoundary+Decode branch exit"
             );
-            return Some(true);
+            return Some(RecreateOutcome::Done);
         }
         self.shared_stream.clear_variant_fence();
         if self
@@ -1854,7 +1952,12 @@ impl<T: StreamType> StreamAudioSource<T> {
             return None;
         }
         self.shared_stream.clear_variant_fence();
-        Some(self.recreate_decoder(&recreate.media_info, recreate.offset))
+        Some(
+            match self.recreate_decoder(&recreate.media_info, recreate.offset) {
+                Ok(()) => RecreateOutcome::Done,
+                Err(e) => Self::classify_recreate_err(&e, recreate.offset),
+            },
+        )
     }
 
     fn finish_apply_seek_after_recreate(&mut self, request: SeekRequest) -> TrackStep<PcmChunk> {
@@ -2009,17 +2112,22 @@ impl<T: StreamType> StreamAudioSource<T> {
             }
         };
 
-        let Some(recreated) = self.execute_recreation(&recreate) else {
+        let Some(outcome) = self.execute_recreation(&recreate) else {
             return TrackStep::Failed;
         };
-        if !recreated {
-            self.update_state(TrackState::Failed(TrackFailure::RecreateFailed {
-                offset: recreate.offset,
-            }));
-            return TrackStep::Failed;
+        match outcome {
+            RecreateOutcome::Done => self.apply_recreate_next(&recreate.next),
+            RecreateOutcome::SoftFailed => {
+                self.update_state(TrackState::Failed(TrackFailure::RecreateFailed {
+                    offset: recreate.offset,
+                }));
+                TrackStep::Failed
+            }
+            RecreateOutcome::NeedsSourceWait => {
+                self.update_state(TrackState::RecreatingDecoder(recreate.clone()));
+                self.wait_for_source_on_recreate(recreate.offset)
+            }
         }
-
-        self.apply_recreate_next(&recreate.next)
     }
 
     fn step_seek_requested(&mut self) -> TrackStep<PcmChunk> {
@@ -2108,7 +2216,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     /// `step_recreating_decoder`. Transitions to `WaitingForSource` or
     /// terminates the track, depending on the source phase.
     fn wait_for_source_on_recreate(&mut self, offset: u64) -> TrackStep<PcmChunk> {
-        let phase = self.source_phase_for_boundary(offset);
+        let phase = self.recreate_phase(offset);
         if let Some(reason) = map_source_phase(phase) {
             let recreate = match std::mem::replace(&mut self.state, TrackState::Decoding) {
                 TrackState::RecreatingDecoder(recreate) => recreate,
@@ -2148,7 +2256,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             return TrackStep::StateChanged;
         }
 
-        match self.state.phase_tag() {
+        match TrackPhaseTag::from(&self.state) {
             TrackPhaseTag::Decoding => self.step_decoding(),
             TrackPhaseTag::SeekRequested => self.step_seek_requested(),
             TrackPhaseTag::WaitingForSource => self.step_waiting_for_source(),
@@ -2414,7 +2522,7 @@ mod playing_flag_tests {
                 playing_for_state(state),
                 *expected,
                 "mismatch for phase_tag={:?}",
-                state.phase_tag()
+                TrackPhaseTag::from(state)
             );
         }
     }

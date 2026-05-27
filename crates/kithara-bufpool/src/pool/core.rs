@@ -154,13 +154,6 @@ where
         usize::try_from(tid % shards_u64).unwrap_or(0)
     }
 
-    /// Instance-method form of [`Pool::shard_index`] for callers that
-    /// have a `&Pool` and don't want to spell out the generics.
-    #[inline]
-    pub fn shard_index_of(&self) -> usize {
-        Self::shard_index()
-    }
-
     /// Get pool hit/miss statistics.
     pub fn stats(&self) -> PoolStats {
         PoolStats {

@@ -4,12 +4,12 @@ use ffmpeg::{
         Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
         flag::Flags as CodecFlags,
     },
-    encoder::find as find_encoder,
 };
 use ffmpeg_next as ffmpeg;
+use kithara_stream::AudioCodec;
 
 use super::{
-    build_direct_filter, ensure_ffmpeg_initialized,
+    build_direct_filter, ensure_ffmpeg_initialized, find_encoder,
     pcm::{
         drain_filtered_frames, flush_filter, pump_pcm_frames, send_eof_to_encoder,
         send_frame_to_filter,
@@ -17,7 +17,6 @@ use super::{
 };
 use crate::{
     EncodeError, EncodeResult,
-    codec::{AudioCodec, MediaInfo},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
@@ -63,12 +62,10 @@ impl AacFFmpegEncoder {
         send_eof_to_encoder(&mut encoder.encoder)?;
         encoder.receive_and_collect_packets();
 
-        let media_info = MediaInfo {
-            codec: Some(AudioCodec::AacLc),
-            sample_rate: Some(request.pcm.sample_rate()),
-            channels: Some(request.pcm.channels()),
-            ..request.media_info.clone()
-        };
+        let mut media_info = request.media_info.clone();
+        media_info.codec = Some(AudioCodec::AacLc);
+        media_info.sample_rate = Some(request.pcm.sample_rate());
+        media_info.channels = Some(request.pcm.channels());
 
         Ok(EncodedTrack {
             media_info,
@@ -78,7 +75,7 @@ impl AacFFmpegEncoder {
             packets_per_segment: request.packets_per_segment,
             encoder_delay: request.encoder_delay,
             trailing_delay: request.trailing_delay,
-            access_units: encoder.into_units(),
+            access_units: encoder.into(),
         })
     }
 
@@ -94,6 +91,12 @@ struct PacketCollectingEncoder {
     encoder_time_base: Rational,
     target_time_base: Rational,
     units: Vec<EncodedAccessUnit>,
+}
+
+impl From<PacketCollectingEncoder> for Vec<EncodedAccessUnit> {
+    fn from(encoder: PacketCollectingEncoder) -> Self {
+        encoder.units
+    }
 }
 
 impl PacketCollectingEncoder {
@@ -140,10 +143,6 @@ impl PacketCollectingEncoder {
             timestamp_origin: None,
             units: Vec::new(),
         })
-    }
-
-    fn into_units(self) -> Vec<EncodedAccessUnit> {
-        self.units
     }
 
     fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {

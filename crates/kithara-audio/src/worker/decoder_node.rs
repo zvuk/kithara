@@ -4,14 +4,10 @@ use kithara_decode::PcmChunk;
 use kithara_platform::tokio::sync::Notify;
 use tracing::trace;
 
-use super::{
-    AudioWorkerSource,
-    handle::TrackRegistration,
-    types::{ServiceClass, TrackId},
-};
+use super::{AudioWorkerSource, handle::TrackRegistration, types::ServiceClass};
 use crate::{
     pipeline::{fetch::Fetch, track_fsm::TrackStep},
-    runtime::{Node, Outlet, TickResult},
+    runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
 };
 
 /// Per-tick state of a [`DecoderNode`] — preload progress, EOF flag, and
@@ -39,7 +35,13 @@ pub(crate) struct DecoderNode {
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     runtime: DecoderRuntime,
     outlet: Outlet<Fetch<PcmChunk>>,
-    service_class: ServiceClass,
+    /// Spent chunks returned by the real-time consumer. Drained at the top
+    /// of every [`tick`](DecoderNode::tick) so the pooled buffers are
+    /// freed/recycled on this worker thread, never on the audio thread.
+    trash_inlet: Inlet<PcmChunk>,
+    /// Shared priority hint written wait-free by the real-time consumer and
+    /// read back here by the scheduler each pass — see [`AtomicServiceClass`].
+    service_class: Arc<AtomicServiceClass>,
     preload_chunks: usize,
 }
 
@@ -48,21 +50,6 @@ impl DecoderNode {
         if !self.runtime.preloaded {
             self.preload_notify.notify_one();
             self.runtime.preloaded = true;
-        }
-    }
-
-    pub(crate) fn from_registration(_track_id: TrackId, reg: TrackRegistration) -> Self {
-        let seek_epoch = reg.source.timeline().seek_epoch();
-        Self {
-            source: reg.source,
-            outlet: reg.outlet,
-            service_class: reg.service_class,
-            preload_notify: reg.preload_notify,
-            preload_chunks: reg.preload_chunks,
-            runtime: DecoderRuntime {
-                seek_epoch,
-                ..Default::default()
-            },
         }
     }
 
@@ -86,6 +73,14 @@ impl DecoderNode {
     /// cached value. The slow path still re-reads the canonical
     /// `seek_epoch` so a spurious latch consume costs at most one
     /// no-op compare.
+    /// Drop every spent chunk the real-time consumer returned. Each drop
+    /// recycles the pooled buffer (`PooledOwned::drop` → `Pool::put`) on
+    /// this worker thread, keeping that allocation work off the audio
+    /// thread.
+    fn drain_trash(&mut self) {
+        while self.trash_inlet.try_pop().is_some() {}
+    }
+
     fn sync_seek_epoch(&mut self) {
         if !self.source.timeline().did_take_decoder_node_seek() {
             return;
@@ -103,16 +98,35 @@ impl DecoderNode {
     }
 }
 
+impl From<TrackRegistration> for DecoderNode {
+    fn from(reg: TrackRegistration) -> Self {
+        let seek_epoch = reg.source.timeline().seek_epoch();
+        Self {
+            source: reg.source,
+            outlet: reg.outlet,
+            trash_inlet: reg.trash_inlet,
+            service_class: reg.service_class,
+            preload_notify: reg.preload_notify,
+            preload_chunks: reg.preload_chunks,
+            runtime: DecoderRuntime {
+                seek_epoch,
+                ..Default::default()
+            },
+        }
+    }
+}
+
 impl Node for DecoderNode {
     fn on_cancel(&mut self) {
         self.complete_preload();
     }
 
     fn service_class(&self) -> ServiceClass {
-        self.service_class
+        self.service_class.load()
     }
 
     fn tick(&mut self) -> TickResult {
+        self.drain_trash();
         self.sync_seek_epoch();
 
         if !self.outlet.flush() {
@@ -198,11 +212,13 @@ mod tests {
         outlet: Outlet<Fetch<PcmChunk>>,
         preload_notify: Arc<Notify>,
     ) -> DecoderNode {
+        let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
         DecoderNode {
             source,
             outlet,
+            trash_inlet,
             preload_notify,
-            service_class: ServiceClass::default(),
+            service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
             preload_chunks: 1,
             runtime: DecoderRuntime::default(),
         }

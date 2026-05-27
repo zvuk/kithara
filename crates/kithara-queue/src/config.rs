@@ -71,35 +71,15 @@ impl Default for QueueConfig {
 impl QueueConfig {
     /// Create a new [`QueueConfig`] with all defaults.
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Set the concurrency cap for `Loader` in-flight loads.
-    #[must_use]
-    pub fn with_max_concurrent_loads(mut self, cap: NonZeroUsize) -> Self {
-        self.max_concurrent_loads = cap;
-        self
     }
 
     /// Replace the [`PlayerImpl`] instance.
     #[must_use]
     pub fn with_player(mut self, player: Arc<PlayerImpl>) -> Self {
         self.player = Some(player);
-        self
-    }
-
-    /// Set the prefetch lead-time (seconds) before EOF.
-    #[must_use]
-    pub fn with_prefetch_duration(mut self, secs: f32) -> Self {
-        self.prefetch_duration = secs;
-        self
-    }
-
-    /// Set whether the queue auto-advances at EOF.
-    #[must_use]
-    pub fn with_should_autoplay(mut self, value: bool) -> Self {
-        self.should_autoplay = value;
         self
     }
 }

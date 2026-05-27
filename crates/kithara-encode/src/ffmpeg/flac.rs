@@ -7,6 +7,7 @@ use ffmpeg::{
     encoder::find as find_encoder,
 };
 use ffmpeg_next as ffmpeg;
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 use super::{
     build_direct_filter,
@@ -19,7 +20,6 @@ use super::{
 };
 use crate::{
     BytesEncodeRequest, BytesEncodeTarget, EncodeError, EncodeResult,
-    codec::{AudioCodec, ContainerFormat, MediaInfo},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
 
@@ -72,15 +72,13 @@ impl FlacFFmpegEncoder {
         send_eof_to_encoder(&mut encoder.encoder)?;
         encoder.receive_and_collect_packets();
 
-        let media_info = MediaInfo {
-            codec: Some(AudioCodec::Flac),
-            container: Some(ContainerFormat::Fmp4),
-            sample_rate: Some(request.pcm.sample_rate()),
-            channels: Some(request.pcm.channels()),
-            ..request.media_info.clone()
-        };
+        let mut media_info = request.media_info.clone();
+        media_info.codec = Some(AudioCodec::Flac);
+        media_info.container = Some(ContainerFormat::Fmp4);
+        media_info.sample_rate = Some(request.pcm.sample_rate());
+        media_info.channels = Some(request.pcm.channels());
 
-        let (codec_config, access_units) = encoder.into_track_parts();
+        let (codec_config, access_units) = encoder.into();
 
         Ok(EncodedTrack {
             media_info,
@@ -107,6 +105,12 @@ struct PacketCollectingEncoder {
     target_time_base: Rational,
     codec_config: Vec<u8>,
     units: Vec<EncodedAccessUnit>,
+}
+
+impl From<PacketCollectingEncoder> for (Vec<u8>, Vec<EncodedAccessUnit>) {
+    fn from(encoder: PacketCollectingEncoder) -> Self {
+        (encoder.codec_config, encoder.units)
+    }
 }
 
 impl PacketCollectingEncoder {
@@ -156,10 +160,6 @@ impl PacketCollectingEncoder {
             timestamp_origin: None,
             units: Vec::new(),
         })
-    }
-
-    fn into_track_parts(self) -> (Vec<u8>, Vec<EncodedAccessUnit>) {
-        (self.codec_config, self.units)
     }
 
     fn receive_and_collect_filtered_frames(&mut self) -> Result<(), FfmpegError> {

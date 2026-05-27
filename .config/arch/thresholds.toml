@@ -8,7 +8,16 @@ warn = 5
 deny = 10
 # Platform adapter crate: cfg gates are its raison d'être.
 exempt_crates = ["kithara-platform"]
-exclude_globs = ["**/tests/**", "**/benches/**"]
+exclude_globs = [
+    "**/tests/**",
+    "**/benches/**",
+    # `kithara-ffi/src/lib.rs` is the single structural boundary for the
+    # browser/wasm bindings (`pub mod web;`) and the Android JNI surface
+    # (`pub(crate) mod android;`). The mod-level cfg gates are exactly what
+    # this lint normally pushes toward; they live here intentionally.
+    # Documented in `crates/kithara-ffi/README.md` "Web target".
+    "crates/kithara-ffi/src/lib.rs",
+]
 
 [file_size]
 warn = 400
@@ -46,10 +55,8 @@ warn = 8
 [god_module.overrides]
 "kithara-app" = 20
 "kithara-ffi" = 20
-"kithara-wasm" = 20
 "kithara-test-utils" = 20
 "kithara-test-macros" = 20
-"kithara-wasm-macros" = 20
 "xtask" = 20
 
 [god_struct]
@@ -103,7 +110,6 @@ warn = 4
 [module_fan_out.overrides]
 "kithara-app" = 8
 "kithara-ffi" = 8
-"kithara-wasm" = 8
 "kithara-test-utils" = 8
 "xtask" = 8
 
@@ -116,11 +122,9 @@ warn = 4
 exempt_crates = [
     "kithara-app",
     "kithara-ffi",
-    "kithara-wasm",
     "xtask",
     "kithara-test-utils",
     "kithara-test-macros",
-    "kithara-wasm-macros",
     "kithara-probe-macros",
 ]
 
@@ -156,7 +160,6 @@ exempt_crates = []
 exempt = [
     "kithara-workspace-hack",
     "kithara-test-macros",
-    "kithara-wasm-macros",
 ]
 min_bytes = 200
 
@@ -293,3 +296,73 @@ max_words = 1
 exempt_filenames = ["mod.rs", "lib.rs", "main.rs", "build.rs"]
 exempt_globs = []
 severity = "warn"
+
+[dead_exports]
+# Non-private items (`pub`, `pub(crate)`, `pub(super)`, `pub(in ...)`) defined
+# in production crates whose only references — across the whole workspace —
+# live in test code: `#[cfg(test)]`/`#[test]`/`#[kithara::test]` blocks or
+# test-only crates. Such items are tested but never exercised in production:
+# the test asserts behaviour no shipped code path depends on. The compiler
+# cannot see this — a `pub` item is always "reachable", and an item consumed
+# by a separate test crate is "used" — so this fills the gap rustc `dead_code`
+# leaves open.
+#
+# Restricted-visibility items used only from an in-crate `#[cfg(test)]` block
+# are already caught by rustc (the module is stripped in a normal build), but
+# we still report them for a single, total picture of test-only surface.
+kinds = ["fn", "method", "const", "static", "type", "struct", "enum", "trait"]
+# Crates treated as test-only scaffolding: a reference originating in one of
+# these counts as a test reference (not a production caller).
+test_crates = [
+    "kithara-integration-tests",
+    "kithara-test-utils",
+    "kithara-test-macros",
+    "kithara-fuzz",
+]
+# Skipped entirely: build tooling and the cargo-hakari workspace-hack shim
+# own no production contract and pull in unrelated symbol names.
+ignore_crates = ["xtask", "kithara-workspace-hack"]
+# Attribute path segments marking an external entry point with no in-tree
+# Rust caller; such definitions are never flagged.
+export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
+# Symbol names never flagged (escape hatch for false positives the syntactic
+# scanner cannot resolve — e.g. names reached only through a macro expansion or
+# a non-Rust caller).
+#   advance_to_next_item: documented public QueuePlayer API (AVQueuePlayer
+#   analogue) exposed to Swift via the uniffi FFI layer; the only in-tree Rust
+#   caller is a test.
+#   ensure_thread_pool: emitted by the #[kithara::test(browser)] macro on the
+#   WASM path (kithara_platform::tokio::ensure_thread_pool().await); the call
+#   lives in cfg-disabled macro expansion the default-target scan cannot see.
+#   env_mutation_lock: emitted by the #[kithara::test] macro as the env-mutation
+#   guard (kithara_platform::env_mutation_lock()); same macro-expansion blind
+#   spot as above.
+#   active_named_thread_count: thread-budget regression diagnostic. Production
+#   maintains the counter when naming threads; only the thread-leak regression
+#   tests read it. There is no production reader by design.
+#   track_mut: white-box accessor into the processor's private track arena, used
+#   by the *_internal handover/fade tests. Every production site reads the arena
+#   through a split field-borrow (self.tracks.get_mut inside a
+#   self.tracks_transitions.retain closure); a &mut self method cannot replace
+#   it without a borrow conflict. Relocating the tests in-crate would duplicate
+#   the integration crate's PcmReader mock.
+#   try_pop_notification: white-box drain of the processor->main notification
+#   channel; the processor is the producer side, so no production reader exists.
+#   Same relocation constraint as track_mut.
+#   drain_notifications: white-box drain+format of the active engine slot's
+#   notifications for *_internal ordering assertions; the public PlayerEvent bus
+#   path consumes-and-converts, losing the raw-notification granularity these
+#   tests assert.
+exempt = [
+    "advance_to_next_item",
+    "ensure_thread_pool",
+    "env_mutation_lock",
+    "active_named_thread_count",
+    "track_mut",
+    "try_pop_notification",
+    "drain_notifications",
+]
+# Path fragments whose defs `--fix` must never auto-delete: platform-gated
+# module dirs whose callers live in cfg-disabled or non-Rust (JNI) code the
+# scan cannot see. Reporting still lists them; deletion is held for review.
+fix_protect_paths = ["/android/"]

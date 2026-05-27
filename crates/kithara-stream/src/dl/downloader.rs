@@ -74,6 +74,7 @@ pub(super) struct DownloaderInner {
     pub(super) client: HttpClient,
     /// Receiver — taken once by [`ensure_spawned`](Downloader::ensure_spawned).
     pub(super) register_rx: Mutex<Option<mpsc::UnboundedReceiver<RegisteredPeerEntry>>>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) runtime: Option<tokio::runtime::Handle>,
     /// Sender for registering new peers (cold path).
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
@@ -111,12 +112,14 @@ impl Downloader {
         let (tx, rx) = mpsc::unbounded_channel();
         let chunk_timeout = config.client.options().inactivity_timeout;
         let soft_timeout = config.soft_timeout;
+        #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
         let abr = AbrController::new(config.abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
                 chunk_timeout,
                 soft_timeout,
+                #[cfg(not(target_arch = "wasm32"))]
                 runtime,
                 abr,
                 client: config.client,
@@ -132,28 +135,14 @@ impl Downloader {
         }
     }
 
-    /// Shared ABR controller for this downloader.
-    #[must_use]
-    pub fn abr_controller(&self) -> &Arc<AbrController> {
-        &self.inner.abr
-    }
-
     /// Ensure the download loop is running (lazy spawn on first register
     /// in an async-capable context).
     fn ensure_spawned(&self) {
-        let handle = self
-            .inner
-            .runtime
-            .clone()
-            .or_else(|| tokio::runtime::Handle::try_current().ok());
-        let Some(handle) = handle else {
-            return;
-        };
         let Some(rx) = self.inner.register_rx.lock_sync().take() else {
             return;
         };
         let this = self.clone();
-        handle.spawn(async move { this.run(rx).await });
+        Self::spawn_run(&self.inner, this, rx);
     }
 
     /// Register a peer and return its [`PeerHandle`].
@@ -204,7 +193,7 @@ impl Downloader {
     ///   stalls across the timeout window → panic.
     #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn run(&self, mut register_rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>) {
-        let mut registry = Registry::new();
+        let mut registry = Registry::default();
 
         loop {
             let progress = tokio::select! {
@@ -225,6 +214,33 @@ impl Downloader {
 
             registry.reschedule();
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_run(
+        inner: &DownloaderInner,
+        this: Self,
+        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
+    ) {
+        let Some(handle) = inner
+            .runtime
+            .clone()
+            .or_else(|| tokio::runtime::Handle::try_current().ok())
+        else {
+            return;
+        };
+        handle.spawn(async move { this.run(rx).await });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn spawn_run(
+        _inner: &DownloaderInner,
+        this: Self,
+        rx: mpsc::UnboundedReceiver<RegisteredPeerEntry>,
+    ) {
+        drop(tokio::task::spawn(async move {
+            this.run(rx).await;
+        }));
     }
 }
 

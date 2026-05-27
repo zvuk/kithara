@@ -7,6 +7,4 @@ pub(crate) mod atomic;
 pub(crate) mod chunked;
 
 pub use atomic::Atomic;
-#[cfg(not(target_arch = "wasm32"))]
-pub use atomic::AtomicMmap;
 pub use chunked::{AtomicChunked, OpenIntent};

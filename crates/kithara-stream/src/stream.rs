@@ -88,6 +88,7 @@ impl fmt::Display for StreamReadError {
 }
 
 impl StdError for StreamReadError {
+    // ast-grep-ignore: idioms.match-self-conversion
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Source(e) => Some(e),
@@ -95,25 +96,29 @@ impl StdError for StreamReadError {
     }
 }
 
-/// Typed payload of an `io::Error` (kind [`ErrorKind::WouldBlock`])
+/// Typed payload of an `io::Error` (kind [`ErrorKind::Interrupted`])
 /// emitted by `impl Read for Stream` when the underlying source could
-/// not satisfy the read this call. `ErrorKind::Interrupted` is
-/// reserved for seek-pending — mixing the two would re-route
-/// `NotReady` reads through `kithara-decode::is_seek_pending_io` and
-/// abort the load as "Interrupted by seek". Carries the [`PendingReason`]
-/// verbatim plus a snapshot of source/timeline state at the wrap site,
-/// so callers downcasting from `io::Error` recover both *what* stalled
-/// and *why* without having to instrument their own decoder.
+/// not satisfy the read this call. Both `SeekPending` and
+/// `NotReady`/`Retry` surface as `Interrupted` so demuxers (notably
+/// Symphonia's fragmented MP4 reader) treat the pause as a transient
+/// cooperative interruption and let `kithara-decode::is_seek_pending_io`
+/// classify the failure correctly — the previous `WouldBlock` mapping
+/// was treated as a hard "would block" by Symphonia's seek path and
+/// corrupted the demuxer cursor on partial reads. Carries the
+/// [`PendingReason`] verbatim plus a snapshot of source/timeline state
+/// at the wrap site, so callers downcasting from `io::Error` recover
+/// both *what* stalled and *why* without having to instrument their
+/// own decoder.
 #[derive(Debug, Clone, Copy)]
 pub struct StreamPending {
-    pub reason: PendingReason,
-    pub pos: u64,
-    pub want: usize,
     pub len: Option<u64>,
+    pub reason: PendingReason,
     pub phase: SourcePhase,
-    pub epoch: u64,
     pub flushing: bool,
     pub variant_fence: bool,
+    pub epoch: u64,
+    pub pos: u64,
+    pub want: usize,
 }
 
 impl fmt::Display for StreamPending {
@@ -342,6 +347,11 @@ impl<T: StreamType> Stream<T> {
             let pos = self.source.position();
             let range = pos..pos.saturating_add(buf.len() as u64);
 
+            // WHY: `wait_range` returns `Interrupted` when the source has a
+            if self.source.has_variant_change_pending() {
+                return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
+            }
+
             let wait_result = self
                 .source
                 .wait_range(range, Some(Self::WAIT_RANGE_TIMEOUT));
@@ -432,15 +442,12 @@ impl<T: StreamType> Read for Stream<T> {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
             Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
             Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
-                // `ErrorKind::Interrupted` is the in-band signal
-                // `kithara-decode::is_seek_pending_io` checks for —
-                // wrap the reason as the source for typed downcasts.
                 Err(IoError::new(ErrorKind::Interrupted, reason))
             }
             Ok(StreamReadOutcome::Pending(
                 reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
             )) => Err(IoError::new(
-                ErrorKind::WouldBlock,
+                ErrorKind::Interrupted,
                 self.snapshot_pending(reason, buf.len()),
             )),
             Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {

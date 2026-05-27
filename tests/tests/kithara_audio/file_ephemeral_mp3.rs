@@ -1,15 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use axum::{
-    Router,
-    body::Body,
-    extract::Request,
-    http::{Method, StatusCode, header},
-    response::Response,
-    routing::get,
-};
-use bytes::Bytes;
+use std::sync::Arc;
+
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, ReadOutcome},
@@ -17,159 +10,49 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_integration_tests::{TestHttpServer, TestTempDir};
+use kithara_integration_tests::{
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+};
 use kithara_platform::{time::Duration, tokio::task::spawn_blocking};
 
 use crate::common::test_defaults::Consts;
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "axum handler signature requires owned Request"
-)]
-fn serve_mp3_with_range(req: Request) -> Response {
-    if req.method() == Method::HEAD {
-        return Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(
-                header::CONTENT_LENGTH,
-                Consts::TEST_MP3_BYTES.len().to_string(),
-            )
-            .body(Body::empty())
-            .unwrap();
-    }
-
-    if let Some(range_header) = req
-        .headers()
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        && let Some(range) = range_header.strip_prefix("bytes=")
-    {
-        let mut parts = range.split('-');
-        let start = parts
-            .next()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-        let end = parts
-            .next()
-            .and_then(|s| {
-                if s.is_empty() {
-                    None
-                } else {
-                    s.parse::<usize>().ok()
-                }
-            })
-            .unwrap_or(Consts::TEST_MP3_BYTES.len().saturating_sub(1))
-            .min(Consts::TEST_MP3_BYTES.len().saturating_sub(1));
-
-        if start <= end && start < Consts::TEST_MP3_BYTES.len() {
-            let chunk = &Consts::TEST_MP3_BYTES[start..=end];
-            return Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header(header::CONTENT_TYPE, "audio/mpeg")
-                .header(header::CONTENT_LENGTH, chunk.len().to_string())
-                .header(
-                    header::CONTENT_RANGE,
-                    format!("bytes {}-{}/{}", start, end, Consts::TEST_MP3_BYTES.len()),
-                )
-                .body(Body::from(Bytes::from_static(chunk)))
-                .unwrap();
-        }
-    }
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(
-            header::CONTENT_LENGTH,
-            Consts::TEST_MP3_BYTES.len().to_string(),
-        )
-        .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
-        .unwrap()
-}
-
-async fn mp3_endpoint(req: Request) -> Response {
-    serve_mp3_with_range(req)
-}
-
-/// Serve MP3 with real delay between chunks — simulates slow remote server.
-/// Content-Length sent immediately, body drips at ~10KB/50ms.
-async fn throttled_mp3_endpoint(req: Request) -> Response {
-    use futures::stream::unfold;
-    use kithara_platform::time::sleep;
-
-    if req.method() == Method::HEAD {
-        return Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(
-                header::CONTENT_LENGTH,
-                Consts::TEST_MP3_BYTES.len().to_string(),
-            )
-            .body(Body::empty())
-            .unwrap();
-    }
-
-    let chunk_size = 10 * 1024;
-    let chunks: Vec<Bytes> = Consts::TEST_MP3_BYTES
-        .chunks(chunk_size)
-        .map(Bytes::copy_from_slice)
-        .collect();
-
-    let body_stream = unfold(chunks.into_iter(), |mut iter| async move {
-        let chunk = iter.next()?;
-        sleep(Duration::from_millis(50)).await;
-        Some((Ok::<_, std::io::Error>(chunk), iter))
-    });
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(
-            header::CONTENT_LENGTH,
-            Consts::TEST_MP3_BYTES.len().to_string(),
-        )
-        .body(Body::from_stream(body_stream))
-        .unwrap()
-}
-
-fn app() -> Router {
-    Router::new()
-        .route("/test.mp3", get(mp3_endpoint).head(mp3_endpoint))
-        .route("/track/stream", get(mp3_endpoint).head(mp3_endpoint))
-        .route(
-            "/slow/stream",
-            get(throttled_mp3_endpoint).head(throttled_mp3_endpoint),
-        )
-}
-
-/// Expected duration of test.mp3 (ffprobe: 187.102041s).
-
 #[kithara::test(tokio)]
-#[case::sw_ext_hint("/test.mp3", Some("mp3"), DecoderBackend::Symphonia)]
-#[case::sw_ext("/test.mp3", None, DecoderBackend::Symphonia)]
-#[case::sw_no_ext_hint("/track/stream", Some("mp3"), DecoderBackend::Symphonia)]
-#[case::sw_no_ext("/track/stream", None, DecoderBackend::Symphonia)]
+#[case::sw_ext_hint(Some("audio.mp3"), Some("mp3"), DecoderBackend::Symphonia)]
+#[case::sw_ext(Some("audio.mp3"), None, DecoderBackend::Symphonia)]
+#[case::sw_no_ext_hint(None, Some("mp3"), DecoderBackend::Symphonia)]
+#[case::sw_no_ext(None, None, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hw_ext_hint("/test.mp3", Some("mp3"), DecoderBackend::Apple)
+    case::hw_ext_hint(Some("audio.mp3"), Some("mp3"), DecoderBackend::Apple)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hw_no_ext("/track/stream", None, DecoderBackend::Apple)
+    case::hw_no_ext(None, None, DecoderBackend::Apple)
 )]
 async fn audio_file_mp3_decodes_with_duration(
-    #[case] path: &str,
+    #[case] suffix: Option<&str>,
     #[case] hint: Option<&str>,
     #[case] backend: DecoderBackend,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let server = TestHttpServer::new(app()).await;
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Range,
+    });
+    let url = match suffix {
+        Some(s) => handle.child_url(s),
+        None => handle.url(),
+    };
     let temp_dir = TestTempDir::new();
 
-    let file_config = FileConfig::for_src(server.url(path).into())
+    let file_config = FileConfig::for_src(url.clone().into())
         .store(
             StoreOptions::builder()
                 .cache_dir(temp_dir.path().into())
@@ -183,17 +66,17 @@ async fn audio_file_mp3_decodes_with_duration(
         .build();
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
-        .unwrap_or_else(|e| panic!("probe failed for path={path} hint={hint:?}: {e}"));
+        .unwrap_or_else(|e| panic!("probe failed for url={url} hint={hint:?}: {e}"));
 
     let duration = audio.duration();
     assert!(
         duration.is_some(),
-        "path={path} hint={hint:?}: duration must be reported (got None)"
+        "url={url} hint={hint:?}: duration must be reported (got None)"
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
         (dur_secs - Consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
-        "path={path} hint={hint:?}: expected ~{}s, got {dur_secs:.1}s",
+        "url={url} hint={hint:?}: expected ~{}s, got {dur_secs:.1}s",
         Consts::TEST_MP3_DURATION_SECS
     );
 
@@ -227,7 +110,7 @@ async fn audio_file_mp3_decodes_with_duration(
     assert!(samples_read > 0, "no decoded samples");
     assert!(
         position >= Duration::from_secs(2),
-        "path={path} hint={hint:?}: playback ended too early: \
+        "url={url} hint={hint:?}: playback ended too early: \
          pos={position:?} eof={eof} samples={samples_read}"
     );
 }
@@ -239,13 +122,24 @@ async fn audio_file_mp3_decodes_with_duration(
 /// arrives in small chunks, so only a fraction is downloaded when
 /// the decoder initializes. Duration must still reflect the full track.
 #[kithara::test(tokio, timeout(Duration::from_secs(15)))]
-#[case::throttled_no_hint("/slow/stream", None)]
-#[case::throttled_with_hint("/slow/stream", Some("mp3"))]
-async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Option<&str>) {
-    let server = TestHttpServer::new(app()).await;
+#[case::throttled_no_hint(None)]
+#[case::throttled_with_hint(Some("mp3"))]
+async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Throttle {
+            chunk: 10 * 1024,
+            delay_ms: 50,
+        },
+    });
+    let url = handle.url();
     let temp_dir = TestTempDir::new();
 
-    let file_config = FileConfig::for_src(server.url(path).into())
+    let file_config = FileConfig::for_src(url.clone().into())
         .store(
             StoreOptions::builder()
                 .cache_dir(temp_dir.path().into())
@@ -258,27 +152,34 @@ async fn mp3_duration_correct_before_decode(#[case] path: &str, #[case] hint: Op
         .build();
     let audio = Audio::<Stream<File>>::new(config)
         .await
-        .unwrap_or_else(|e| panic!("creation failed for path={path} hint={hint:?}: {e}"));
+        .unwrap_or_else(|e| panic!("creation failed for url={url} hint={hint:?}: {e}"));
 
     let duration = audio.duration();
     assert!(
         duration.is_some(),
-        "path={path} hint={hint:?}: duration must be available immediately (got None)"
+        "url={url} hint={hint:?}: duration must be available immediately (got None)"
     );
     let dur_secs = duration.expect("checked").as_secs_f64();
     assert!(
         (dur_secs - Consts::TEST_MP3_DURATION_SECS).abs() < 2.0,
-        "path={path} hint={hint:?}: expected ~{}s immediately, got {dur_secs:.1}s",
+        "url={url} hint={hint:?}: expected ~{}s immediately, got {dur_secs:.1}s",
         Consts::TEST_MP3_DURATION_SECS
     );
 }
 
 #[kithara::test(tokio)]
 async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
-    let server = TestHttpServer::new(app()).await;
+    let helper = TestServerHelper::new().await;
+    let handle = helper.register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            content_type: Some("audio/mpeg"),
+        },
+        delivery: Delivery::Range,
+    });
     let temp_dir = TestTempDir::new();
 
-    let file_config = FileConfig::for_src(server.url("/track/stream").into())
+    let file_config = FileConfig::for_src(handle.url().into())
         .store(
             StoreOptions::builder()
                 .cache_dir(temp_dir.path().into())

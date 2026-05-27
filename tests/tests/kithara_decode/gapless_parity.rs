@@ -7,11 +7,11 @@ use kithara::{
     platform::time::Duration,
     stream::{AudioCodec as StreamAudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_encode::codec::AudioCodec;
 use kithara_integration_tests::{
     HlsFixtureBuilder, SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
+use kithara_stream::AudioCodec;
 use reqwest::Client;
 
 use crate::gapless_common::{
@@ -188,7 +188,7 @@ fn decode_visible_frames(mut decoder: Box<dyn Decoder>) -> DecodeResult<DecodedF
     let mut trimmer = decoder
         .track_info()
         .gapless
-        .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from_info);
+        .map_or_else(GaplessTrimmer::disabled, GaplessTrimmer::from);
     let mut frames = 0usize;
 
     loop {
@@ -251,6 +251,7 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
         channels: GAPLESS_CHANNELS,
         length: SignalSpecLength::Frames(expected_frames),
         format,
+        bit_rate: None,
     };
 
     let bytes = Client::new()

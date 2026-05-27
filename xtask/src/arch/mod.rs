@@ -50,6 +50,13 @@ pub(crate) struct ArchArgs {
     /// Restrict scan to workspace-relative path(s). Repeatable.
     #[arg(long = "path", value_name = "PATH")]
     pub paths: Vec<PathBuf>,
+    /// Run each selected check's autofix instead of reporting. Dry run unless
+    /// `--apply` is also passed.
+    #[arg(long)]
+    pub fix: bool,
+    /// With `--fix`, write changes to disk (otherwise only report the plan).
+    #[arg(long)]
+    pub apply: bool,
 }
 
 pub(crate) fn run(args: &ArchArgs) -> Result<()> {
@@ -80,6 +87,34 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
         }
         Some(args.check.iter().map(String::as_str).collect())
     };
+
+    if args.fix {
+        let mut outcome = crate::common::fix::FixOutcome::default();
+        for check in &registry {
+            if let Some(filter) = &filter
+                && !filter.contains(check.id())
+            {
+                continue;
+            }
+            let o = check.fix(&ctx, args.apply)?;
+            outcome.writes += o.writes;
+            outcome.skipped.extend(o.skipped);
+            outcome.changes.extend(o.changes);
+        }
+        outcome.changes.sort();
+        for c in &outcome.changes {
+            println!("  - {c}");
+        }
+        let verb = if args.apply { "wrote" } else { "would change" };
+        println!("{verb} {} file(s)", outcome.writes);
+        for s in &outcome.skipped {
+            println!("  skipped: {s}");
+        }
+        if !args.apply {
+            println!("(dry run — pass --apply to write)");
+        }
+        return Ok(());
+    }
 
     let mut report = Report::default();
     let mut ran: Vec<&'static str> = Vec::new();

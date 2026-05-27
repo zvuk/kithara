@@ -153,8 +153,6 @@ fn build_stages() -> Vec<Stage> {
                 "2",
                 "--workspace",
                 "--exclude",
-                "kithara-wasm",
-                "--exclude",
                 "kithara-play",
                 "--exclude",
                 "kithara-app",

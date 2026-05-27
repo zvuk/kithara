@@ -10,7 +10,7 @@ pub mod player_processor;
 pub mod player_resource;
 pub mod player_track;
 pub mod resource;
-pub mod session_engine;
+pub mod session;
 pub mod shared_eq;
 pub mod shared_player_state;
 pub mod source_type;

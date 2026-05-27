@@ -30,4 +30,8 @@ pub(crate) use rewriter::SourceRewriter;
 pub(crate) struct FixOutcome {
     pub(crate) writes: usize,
     pub(crate) skipped: Vec<String>,
+    /// Human-readable description of each change the fix made (or, in a dry
+    /// run, would make). Surfaced by the runner so `--fix` without `--apply`
+    /// shows exactly what will be removed.
+    pub(crate) changes: Vec<String>,
 }

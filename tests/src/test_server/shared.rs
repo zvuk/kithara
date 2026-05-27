@@ -1,0 +1,59 @@
+use std::{
+    sync::{Arc, OnceLock},
+    thread,
+};
+
+use url::Url;
+
+use crate::{native::http_server::router_base_url_on_runtime, test_server_state::TestServerState};
+
+/// Process-global test server. Lives on a dedicated runtime thread so it
+/// outlives any individual `#[tokio::test]` runtime within the process.
+pub(crate) struct SharedTestServer {
+    pub(crate) base_url: Url,
+    pub(crate) state: Arc<TestServerState>,
+}
+
+static SHARED: OnceLock<SharedTestServer> = OnceLock::new();
+
+/// Get the process-global server, starting it on first use.
+pub(crate) fn shared() -> &'static SharedTestServer {
+    SHARED.get_or_init(|| {
+        let state = TestServerState::new();
+        let state_for_thread = Arc::clone(&state);
+        let (tx, rx) = std::sync::mpsc::channel::<Url>();
+        thread::Builder::new()
+            .name("kithara-shared-test-server".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build shared-server runtime");
+                rt.block_on(async move {
+                    let base_url = router_base_url_on_runtime(state_for_thread).await;
+                    tx.send(base_url).expect("send shared server base url");
+                    std::future::pending::<()>().await;
+                });
+            })
+            .expect("spawn shared test server thread");
+        let base_url = rx.recv().expect("shared server failed to start");
+        SharedTestServer { base_url, state }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kithara;
+
+    #[kithara::test(tokio)]
+    async fn shared_server_is_one_instance_and_serves_health() {
+        let a = shared().base_url.clone();
+        let b = shared().base_url.clone();
+        assert_eq!(a, b, "shared() must return the same server across calls");
+
+        let resp = reqwest::get(a.join("/health").unwrap()).await.unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        assert_eq!(resp.text().await.unwrap(), "ok");
+    }
+}

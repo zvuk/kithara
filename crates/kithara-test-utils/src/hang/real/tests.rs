@@ -5,7 +5,7 @@ use crate::kithara;
 
 #[kithara::test]
 fn no_context_serializes_to_null() {
-    assert_eq!(super::NoContext.to_json(), "null");
+    assert_eq!(super::NoContext.dump_json(), "null");
 }
 
 mod detector_tests {
@@ -57,7 +57,7 @@ mod native_detector_tests {
         time::Duration,
     };
 
-    use super::super::{HangDetector, fallback_timeout, parse_timeout_secs};
+    use super::super::{HangDetector, parse_timeout_secs};
     use crate::kithara;
 
     #[kithara::test]
@@ -70,11 +70,6 @@ mod native_detector_tests {
     #[kithara::test]
     fn parse_timeout_secs_accepts_positive_numbers() {
         assert_eq!(parse_timeout_secs("7"), Some(Duration::from_secs(7)));
-    }
-
-    #[kithara::test]
-    fn fallback_timeout_is_ten_seconds() {
-        assert_eq!(fallback_timeout(), Duration::from_secs(10));
     }
 
     #[kithara::test(native)]
@@ -126,7 +121,7 @@ fn blanket_impl_serializes_serde_type() {
         value: 7,
         name: "x",
     }
-    .to_json();
+    .dump_json();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed["value"], 7);
     assert_eq!(parsed["name"], "x");

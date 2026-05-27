@@ -1,7 +1,8 @@
 use kithara_platform::time::Duration;
+pub(crate) use kithara_stream::PrerollHint;
 use kithara_stream::{AudioCodec, PendingReason};
 
-use crate::error::DecodeResult;
+use crate::{codec::CodecPriming, error::DecodeResult};
 
 /// Container-side demuxer trait.
 ///
@@ -39,6 +40,12 @@ pub(crate) trait Demuxer: Send {
 
     /// Seek the demuxer to `target` time.
     ///
+    /// `priming` carries the codec's pre-roll requirements — packets/frames
+    /// the demuxer should back off before `target` so the codec layer can
+    /// decode-and-discard warm-up data. Demuxers that do not support
+    /// byte-accurate pre-roll (Android, Apple `AudioFile`) may ignore the
+    /// field and return `PrerollHint::NotNeeded`.
+    ///
     /// Returns the actual landing point — `Landed { landed_at }` for a
     /// successful seek, `PastEof { duration }` when the target lies
     /// beyond the stream's known length.
@@ -46,7 +53,7 @@ pub(crate) trait Demuxer: Send {
     /// # Errors
     ///
     /// Surfaces parser-level seek failures verbatim.
-    fn seek(&mut self, target: Duration) -> DecodeResult<DemuxSeekOutcome>;
+    fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome>;
 
     /// Track-level metadata exposed by the container.
     fn track_info(&self) -> &TrackInfo;
@@ -57,9 +64,9 @@ pub(crate) trait Demuxer: Send {
 #[non_exhaustive]
 pub(crate) struct TrackInfo {
     /// Audio codec carried by this track.
-    pub codec: AudioCodec,
+    pub(crate) codec: AudioCodec,
     /// Total track duration if available.
-    pub duration: Option<Duration>,
+    pub(crate) duration: Option<Duration>,
     /// Container-level gapless metadata — populated by demuxers that
     /// can extract it without consuming the decoder (MP4 `iTunSMPB`
     /// or track `elst`, FLAC `padded_sample_count`, etc.). `None` when
@@ -67,15 +74,15 @@ pub(crate) struct TrackInfo {
     /// recognised source. Codec-level capture (`AppleCodec` `PrimeInfo`
     /// refresh, `Symphonia` `AudioDecoderOptions::gapless`) supplements
     /// this for codecs whose priming is not container-visible.
-    pub gapless: Option<crate::GaplessInfo>,
+    pub(crate) gapless: Option<crate::GaplessInfo>,
     /// Codec-specific extra data — `AudioSpecificConfig` (AAC),
     /// `STREAMINFO` (FLAC), `esds` cookie (Apple), etc. Empty when the
     /// codec needs no extra data.
-    pub extra_data: Vec<u8>,
+    pub(crate) extra_data: Vec<u8>,
     /// Channel count.
-    pub channels: u16,
+    pub(crate) channels: u16,
     /// Decoded sample rate (Hz).
-    pub sample_rate: u32,
+    pub(crate) sample_rate: u32,
 }
 
 /// One demuxed audio frame, borrowed from the demuxer's internal state.
@@ -87,17 +94,17 @@ pub(crate) struct TrackInfo {
 pub(crate) struct Frame<'a> {
     /// Raw frame bytes — slice into the demuxer's owned buffer (mp4
     /// segment, Symphonia `Packet`, etc.). Zero-copy: never cloned.
-    pub data: &'a [u8],
+    pub(crate) data: &'a [u8],
     /// Opaque per-packet metadata for codecs that need it for VBR
     /// decoding. Apple-native MP3 / ALAC paths pass a serialized
     /// `AudioStreamPacketDescription` here; the codec interprets the
     /// bytes. Demuxers without VBR descriptors leave this empty.
     /// Borrow lifetime mirrors `data`.
-    pub packet_desc: &'a [u8],
+    pub(crate) packet_desc: &'a [u8],
     /// Frame duration.
-    pub duration: Duration,
+    pub(crate) duration: Duration,
     /// Presentation time of this frame.
-    pub pts: Duration,
+    pub(crate) pts: Duration,
 }
 
 /// Result of a [`Demuxer::next_frame`] call.
@@ -117,10 +124,12 @@ pub(crate) enum DemuxOutcome<'a> {
 pub(crate) enum DemuxSeekOutcome {
     /// Successfully landed inside the stream. `landed_at` is the
     /// authoritative target (≤ requested target). `landed_byte` is the
-    /// optional byte-level cursor for source-level reconciliation.
+    /// optional byte-level cursor where playback continues.
     Landed {
         landed_at: Duration,
         landed_byte: Option<u64>,
+        /// Codec priming hint. See `kithara-decode` README §Seek priming.
+        preroll: PrerollHint,
     },
     /// The seek target lies past the stream's end; `duration` is the
     /// total stream duration.

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(all(), allow(clippy::missing_errors_doc))]
+#![cfg_attr(rtsan, feature(sanitize))]
 
 #[cfg(all(target_arch = "wasm32", not(feature = "backend-web-audio")))]
 compile_error!("kithara-play: wasm32 build requires `backend-web-audio`");
@@ -35,7 +36,7 @@ pub use impls::{
     player::{PlayerConfig, PlayerImpl},
     player_node::PlayerNode,
     resource::Resource,
-    session_engine::{
+    session::{
         AllocatedSlot, Cmd, CmdMsg, PlayerId, Reply, SessionDispatcher, SessionState,
         StartStreamFn, run_cmd,
     },
@@ -47,25 +48,19 @@ pub use kithara_net::Headers;
 pub use metadata::{Artwork, Metadata};
 pub use time::MediaTime;
 pub use traits::{
-    asset::Asset,
     dj,
     dj::{
-        bpm::{BeatGrid, BpmAnalyzer, BpmInfo, BpmSync},
-        crossfade::{CrossfadeConfig, CrossfadeController, CrossfadeCurve},
-        effects::{DjEffect, DjEffectKind},
+        bpm::{BeatGrid, BpmInfo},
+        crossfade::{CrossfadeConfig, CrossfadeCurve},
         eq::Equalizer,
     },
     engine::Engine,
     item::PlayerItem,
-    mixer::Mixer,
     player::Player,
     queue::QueuePlayer,
-    session::{
-        AudioSession, PortDescription, PortType, RouteDescription, SessionCategory, SessionMode,
-        SessionOptions,
-    },
+    session::{PortDescription, PortType, RouteDescription},
 };
 pub use types::{
-    ActionAtItemEnd, ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId,
-    TimeControlStatus, TimeRange, WaitingReason,
+    ItemStatus, ObserverId, PlayerStatus, SessionDuckingMode, SlotId, TimeControlStatus, TimeRange,
+    WaitingReason,
 };

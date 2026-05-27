@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Facade crate for audio streaming with auto-detection (file / HLS)"
+description = "Cross-platform streaming audio player: HLS + progressive, gapless, DJ-grade mixing. An AVPlayer-class engine in Rust."
+keywords = ["audio", "streaming", "hls", "player", "dj"]
+categories = ["multimedia::audio"]
 
 [lints]
 workspace = true
@@ -28,7 +30,7 @@ kithara-drm = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-play = { workspace = true, default-features = false, features = ["backend-cpal", "wasm-bindgen"] }
@@ -69,7 +71,11 @@ perf = [
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
-apple = ["kithara-audio/apple", "kithara-play/apple", "fdk-aac"]
+# Apple HW backend. Does NOT include `fdk-aac` — Apple AudioToolbox
+# decodes HE-AAC v1/v2 natively via kAudioFormatMPEG4AAC_HE / _HE_V2
+# (see crates/kithara-decode/src/apple/codec.rs). fdk-aac stays
+# coupled to symphonia for desktop/WASM software fallback builds only.
+apple = ["kithara-audio/apple", "kithara-play/apple"]
 android = ["kithara-audio/android", "kithara-decode/android"]
 full = ["file", "hls", "assets", "net", "bufpool"]
 

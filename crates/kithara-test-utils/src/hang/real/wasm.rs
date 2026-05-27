@@ -6,7 +6,7 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, _dir: Option<&Path>)
     tracing::error!(
         target: "kithara_hang_detector",
         label,
-        payload = %ctx.to_json(),
+        payload = %ctx.dump_json(),
         "hang detected — context dump (wasm; file write skipped)"
     );
 }

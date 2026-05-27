@@ -7,10 +7,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SubscriptionConfig {
     /// Global keyboard listener for Delete/Backspace shortcuts.
-    pub is_keyboard_enabled: bool,
+    pub(crate) is_keyboard_enabled: bool,
     /// Time tick interval in milliseconds that drives position/state sync
     /// with the queue. Lower interval = more responsive but more CPU.
-    pub tick_interval_ms: u64,
+    pub(crate) tick_interval_ms: u64,
 }
 
 /// Time-tick interval while a track is actively playing.

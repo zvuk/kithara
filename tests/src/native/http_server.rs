@@ -1,4 +1,4 @@
-use std::{io, time::Duration};
+use std::{io, sync::Arc, time::Duration};
 
 use axum::Router;
 use tokio::{
@@ -7,6 +7,8 @@ use tokio::{
     time::sleep as tokio_sleep,
 };
 use url::Url;
+
+use crate::test_server_state::TestServerState;
 
 /// Lightweight HTTP test server wrapper.
 pub struct TestHttpServer {
@@ -104,6 +106,17 @@ impl TestHttpServer {
     pub fn url(&self, path: &str) -> Url {
         self.base_url.join(path).expect("join server URL path")
     }
+}
+
+/// Bind the unified router on `127.0.0.1:0` on the current runtime and return
+/// its base URL. The serve task is detached (no shutdown handle) — intended for
+/// the process-global shared server that must serve for the whole run.
+pub(crate) async fn router_base_url_on_runtime(state: Arc<TestServerState>) -> Url {
+    let router = crate::test_server::router(state);
+    let server = TestHttpServer::new(router).await;
+    let url = server.base_url().clone();
+    std::mem::forget(server);
+    url
 }
 
 impl Drop for TestHttpServer {

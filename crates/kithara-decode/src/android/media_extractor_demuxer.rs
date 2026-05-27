@@ -1,10 +1,11 @@
 #![cfg(target_os = "android")]
 
 use kithara_platform::time::Duration;
-use kithara_stream::AudioCodec;
+use kithara_stream::{AudioCodec, PrerollHint};
 
 use super::media_extractor::{AndroidMediaExtractor, TrackFormatInfo};
 use crate::{
+    codec::CodecPriming,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
     error::DecodeResult,
     traits::BoxedSource,
@@ -94,12 +95,13 @@ impl Demuxer for AndroidMediaExtractorDemuxer {
         Ok(DemuxOutcome::Frame(frame))
     }
 
-    fn seek(&mut self, target: Duration) -> DecodeResult<DemuxSeekOutcome> {
+    fn seek(&mut self, target: Duration, _priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         let pts_us = i64::try_from(target.as_micros()).unwrap_or(i64::MAX);
         self.extractor.seek_to(pts_us)?;
         Ok(DemuxSeekOutcome::Landed {
             landed_at: target,
             landed_byte: None,
+            preroll: PrerollHint::NotNeeded,
         })
     }
 

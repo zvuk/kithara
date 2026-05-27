@@ -119,9 +119,8 @@ pub(super) struct BatchGroup {
     epochs: Vec<EpochGroup>,
 }
 
-impl BatchGroup {
-    /// Build from a drain of slot entries, grouping by cancel token identity.
-    pub(super) fn from_iter(entries: impl Iterator<Item = SlotEntry>) -> Self {
+impl FromIterator<SlotEntry> for BatchGroup {
+    fn from_iter<I: IntoIterator<Item = SlotEntry>>(entries: I) -> Self {
         let mut epochs: Vec<EpochGroup> = Vec::new();
         for entry in entries {
             let found = epochs
@@ -137,7 +136,9 @@ impl BatchGroup {
         }
         Self { epochs }
     }
+}
 
+impl BatchGroup {
     pub(super) fn is_empty(&self) -> bool {
         self.epochs.is_empty()
     }
@@ -318,7 +319,7 @@ async fn establish(
     }
 
     let resp_headers = byte_stream.headers.clone();
-    let body = BodyStream::from_http(byte_stream, cancel.clone(), chunk_timeout);
+    let body = BodyStream::wrap_http(byte_stream, cancel.clone(), chunk_timeout);
     Ok(FetchResponse {
         body,
         headers: resp_headers,

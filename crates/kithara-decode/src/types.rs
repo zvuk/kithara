@@ -196,6 +196,12 @@ impl PcmChunk {
     }
 }
 
+impl AsRef<[f32]> for PcmChunk {
+    fn as_ref(&self) -> &[f32] {
+        &self.pcm
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

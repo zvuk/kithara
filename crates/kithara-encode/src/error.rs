@@ -1,8 +1,7 @@
 use std::{error::Error as StdError, io};
 
+use kithara_stream::{AudioCodec, ContainerFormat};
 use thiserror::Error;
-
-use crate::codec::{AudioCodec, ContainerFormat};
 
 #[derive(Debug, Error)]
 #[error("{0}")]

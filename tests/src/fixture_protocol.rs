@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_encode::codec::AudioCodec;
+use kithara_stream::AudioCodec;
 use serde::{Deserialize, Serialize};
 
 use crate::{signal_pcm::signal, wav::create_wav_header};
@@ -8,7 +8,7 @@ use crate::{signal_pcm::signal, wav::create_wav_header};
 /// Serde for [`AudioCodec`] as `snake_case` strings (matches the former
 /// `derive(Serialize)` on the enum).
 mod serde_audio_codec {
-    use kithara_encode::codec::AudioCodec;
+    use kithara_stream::AudioCodec;
     use serde::{Deserialize, Deserializer, Serializer, de::Error as DeError};
 
     #[expect(
@@ -195,7 +195,7 @@ pub struct PackagedAudioVariantOverride {
 }
 
 mod serde_audio_codec_opt {
-    use kithara_encode::codec::AudioCodec;
+    use kithara_stream::AudioCodec;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     use super::serde_audio_codec;

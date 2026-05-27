@@ -20,10 +20,10 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct AppConfig {
-    playback: Playback,
-    network: Network,
-    playlist: Playlist,
     drm: Drm,
+    network: Network,
+    playback: Playback,
+    playlist: Playlist,
 }
 
 #[derive(Deserialize)]
@@ -34,17 +34,17 @@ struct Playback {
 
 #[derive(Deserialize)]
 struct Network {
-    should_accept_invalid_certs: bool,
-    /// `Accept-Encoding` algorithms the HTTP client offers. Mapped to
-    /// the `kithara_net::Compression` bitflags. Empty list ships as
-    /// `Compression::empty()` (Accept-Encoding negotiation disabled).
-    #[serde(default = "default_compression")]
-    compression: Vec<String>,
     /// HLS size-estimation probe method. `"head"` (RFC default) or
     /// `"range_get"` for upstreams that reject `HEAD` (e.g. zvuk
     /// stage `/drm/`). See [`kithara::hls::SizeProbeMethod`].
     #[serde(default = "default_size_probe_method")]
     size_probe_method: String,
+    /// `Accept-Encoding` algorithms the HTTP client offers. Mapped to
+    /// the `kithara_net::Compression` bitflags. Empty list ships as
+    /// `Compression::empty()` (Accept-Encoding negotiation disabled).
+    #[serde(default = "default_compression")]
+    compression: Vec<String>,
+    should_accept_invalid_certs: bool,
 }
 
 fn default_size_probe_method() -> String {
@@ -70,19 +70,6 @@ struct Drm {
 
 #[derive(Deserialize)]
 struct DrmProvider {
-    name: String,
-    domains: Vec<String>,
-    /// Inline non-secret cipher key (ships verbatim in the binary).
-    cipher_key: Option<String>,
-    /// Env reference of the form `$KITHARA_...`; resolved at build
-    /// time and wrapped with `obfstr!()`.
-    cipher_env: Option<String>,
-    /// Per-provider X-Encrypted-Key salt shape. Defaults to the iOS
-    /// prod format (8-char lowercase hex). Override per provider when
-    /// the upstream WAF expects a different alphabet/length — zvq.me
-    /// staging is captured against a 16-char alphanumeric salt.
-    #[serde(default)]
-    seed: SeedSpec,
     /// Extra HTTP headers attached to every request matched by this
     /// provider (playlist, segments, key fetches). Values starting
     /// with `$` are env references and wrapped with `obfstr!()`;
@@ -91,14 +78,27 @@ struct DrmProvider {
     /// per-provider header.
     #[serde(default)]
     headers: std::collections::BTreeMap<String, String>,
+    /// Env reference of the form `$KITHARA_...`; resolved at build
+    /// time and wrapped with `obfstr!()`.
+    cipher_env: Option<String>,
+    /// Inline non-secret cipher key (ships verbatim in the binary).
+    cipher_key: Option<String>,
+    /// Per-provider X-Encrypted-Key salt shape. Defaults to the iOS
+    /// prod format (8-char lowercase hex). Override per provider when
+    /// the upstream WAF expects a different alphabet/length — zvq.me
+    /// staging is captured against a 16-char alphanumeric salt.
+    #[serde(default)]
+    seed: SeedSpec,
+    name: String,
+    domains: Vec<String>,
 }
 
 #[derive(Deserialize)]
 struct SeedSpec {
-    /// Output salt length in characters.
-    length: usize,
     /// `hex` (0-9 a-f) or `alphanumeric` (a-z A-Z 0-9).
     alphabet: String,
+    /// Output salt length in characters.
+    length: usize,
 }
 
 impl Default for SeedSpec {

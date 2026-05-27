@@ -1,5 +1,6 @@
 //! Integration tests for kithara-hls
 
+mod aac_he_v2_hls_decode;
 mod abr_switch_playback;
 mod abr_integration;
 mod basic_playback;
@@ -23,6 +24,7 @@ mod stress_chunk_integrity;
 mod stress_seek_abr;
 mod stress_seek_abr_audio;
 mod stress_seek_audio;
+
 mod stress_seek_lifecycle;
 mod stress_seek_random;
 mod sync_reader_hls_test;

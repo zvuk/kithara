@@ -150,7 +150,7 @@ pub enum ChunkOutcome {
 /// }
 /// ```
 #[kithara::mock(api = PcmReaderMock)]
-pub trait PcmReader: Send {
+pub trait PcmReader: kithara_platform::MaybeSend {
     /// Runtime ABR handle for the underlying stream.
     ///
     /// Adaptive readers (HLS) return `Some(handle)` so the queue/FFI can

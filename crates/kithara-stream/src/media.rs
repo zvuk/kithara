@@ -86,9 +86,86 @@ impl MediaInfo {
             variant_index: None,
         }
     }
+
+    /// Parse codec **and** container from an HTTP `Content-Type` value.
+    ///
+    /// Distinct from [`AudioCodec::parse_mime`], which returns the codec
+    /// only. Standalone HTTP file sources can lose container information
+    /// if the caller drops it on the floor; downstream Apple/Android
+    /// dispatch needs both codec and container to pick a backend.
+    #[must_use]
+    pub fn parse_mime(mime: &str) -> Option<Self> {
+        let codec = AudioCodec::parse_mime(mime)?;
+        let container = match mime.to_lowercase().as_str() {
+            "audio/mp4" | "audio/x-m4a" => Some(ContainerFormat::Mp4),
+            "audio/aac" | "audio/aacp" => Some(ContainerFormat::Adts),
+            _ => ContainerFormat::try_from(codec).ok(),
+        };
+        Some(Self::new(Some(codec), container))
+    }
 }
 
+/// Build `MediaInfo` from a codec alone, filling the container when it is
+/// implied by the codec for standalone (non-HLS) sources. AAC and Adpcm
+/// have ambiguous containers and leave `container = None`.
+impl From<AudioCodec> for MediaInfo {
+    fn from(codec: AudioCodec) -> Self {
+        Self::new(Some(codec), ContainerFormat::try_from(codec).ok())
+    }
+}
+
+/// The codec uniquely picks a container for standalone sources.
+/// Mp3→MpegAudio, Pcm→Wav, Flac→Flac, Vorbis/Opus→Ogg, Alac→Caf.
+/// AAC (ADTS vs Mp4) and Adpcm are ambiguous and fail.
+impl TryFrom<AudioCodec> for ContainerFormat {
+    type Error = AmbiguousContainer;
+
+    fn try_from(codec: AudioCodec) -> Result<Self, Self::Error> {
+        match codec {
+            AudioCodec::Mp3 => Ok(Self::MpegAudio),
+            AudioCodec::Pcm => Ok(Self::Wav),
+            AudioCodec::Flac => Ok(Self::Flac),
+            AudioCodec::Vorbis | AudioCodec::Opus => Ok(Self::Ogg),
+            AudioCodec::Alac => Ok(Self::Caf),
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 | AudioCodec::Adpcm => {
+                Err(AmbiguousContainer(codec))
+            }
+        }
+    }
+}
+
+/// Returned by `TryFrom<AudioCodec> for ContainerFormat` when the codec
+/// alone is not enough to determine the container (AAC, Adpcm).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("ambiguous container for codec: {0:?}")]
+pub struct AmbiguousContainer(pub AudioCodec);
+
 impl AudioCodec {
+    /// Encoder-side priming silence in PCM frames added by mainstream
+    /// encoders for `codec` when no container or encoder tag declares
+    /// an explicit count. Used as a fallback by the gapless pipeline
+    /// when probing yields no metadata.
+    ///
+    /// Does **not** include any decoder-side algorithmic delay — that
+    /// is per-backend (LAME-convention `mpa` decoders add 529 for MP3,
+    /// Apple's `AudioConverter` internally compensates and adds 0) and
+    /// lives on the `FrameCodec` trait in `kithara-decode`.
+    ///
+    /// Free-standing (`AudioCodec::encoder_priming_frames(codec)`)
+    /// rather than `codec.encoder_priming_frames()` so that the
+    /// `match codec { ... }` body does not pretend to be a
+    /// `From<AudioCodec>` conversion — `u64` here means "priming
+    /// frames", not the codec rewritten as an integer.
+    #[must_use]
+    pub fn encoder_priming_frames(codec: Self) -> u64 {
+        match codec {
+            Self::AacLc | Self::AacHe | Self::AacHeV2 => 1024,
+            Self::Mp3 => 576,
+            Self::Opus => 312,
+            Self::Flac | Self::Vorbis | Self::Alac | Self::Pcm | Self::Adpcm => 0,
+        }
+    }
+
     /// Parse from HLS CODECS attribute value.
     ///
     /// Examples:
@@ -98,7 +175,7 @@ impl AudioCodec {
     /// - `mp4a.40.34` -> `Mp3`
     /// - `mp4a.69` or `mp4a.6B` -> `Mp3`
     #[must_use]
-    pub fn from_hls_codec(codec: &str) -> Option<Self> {
+    pub fn parse_hls_codec(codec: &str) -> Option<Self> {
         let codec_lower = codec.to_lowercase();
 
         if codec_lower.starts_with("mp4a.40.29") {
@@ -131,7 +208,7 @@ impl AudioCodec {
     /// - `audio/aac` -> `AacLc`
     /// - `audio/flac` -> `Flac`
     #[must_use]
-    pub fn from_mime(mime: &str) -> Option<Self> {
+    pub fn parse_mime(mime: &str) -> Option<Self> {
         let m = mime.to_lowercase();
         if m.contains("mp3") || m == "audio/mpeg" {
             return Some(Self::Mp3);
@@ -209,9 +286,6 @@ impl TryFrom<&[u8]> for AudioCodec {
                 ..,
             ] => Ok(Self::Pcm),
             [_, _, _, _, b'f', b't', b'y', b'p', ..] => Ok(Self::AacLc),
-            // MPEG audio sync: 11 leading 1-bits (`0xFFFx`). Layer field
-            // lives in byte 1 bits 1-2; layer III (`0b01`) is MP3, the
-            // reserved value `0b00` is the prefix AAC ADTS reuses.
             [0xFF, b1, ..] if (b1 & 0xE0) == 0xE0 => match (b1 >> 1) & 0b11 {
                 0b00 => Ok(Self::AacLc),
                 _ => Ok(Self::Mp3),
@@ -250,7 +324,7 @@ mod tests {
         #[case] expected: Option<AudioCodec>,
         #[case] _description: &str,
     ) {
-        assert_eq!(AudioCodec::from_hls_codec(codec_str), expected);
+        assert_eq!(AudioCodec::parse_hls_codec(codec_str), expected);
     }
 
     #[kithara::test]

@@ -1,7 +1,6 @@
-use kithara_encode::{
-    BytesEncodeTarget,
-    codec::{AudioCodec, ContainerFormat},
-};
+use kithara_encode::BytesEncodeTarget;
+use kithara_integration_tests::encode_ext::BytesEncodeTargetExt;
+use kithara_stream::{AudioCodec, ContainerFormat};
 use kithara_test_utils::kithara;
 
 #[kithara::test]

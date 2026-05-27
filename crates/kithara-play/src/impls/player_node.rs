@@ -50,6 +50,7 @@ impl PlayerNode {
     /// [`PlayerNode::with_channel`] when you need to send commands
     /// from the main thread.
     #[cfg(test)]
+    // ast-grep-ignore: style.prefer-default-derive
     pub(crate) fn new() -> Self {
         let (_, rx) = HeapRb::<PlayerCmd>::new(1).split();
         Self {
@@ -84,6 +85,7 @@ impl AudioNode for PlayerNode {
         cx: ConstructProcessorContext,
     ) -> impl AudioNodeProcessor {
         let sample_rate = cx.stream_info.sample_rate;
+        let max_block_frames = cx.stream_info.max_block_frames;
         let cmd_rx = self.cmd_rx.lock_sync().take().unwrap_or_else(|| {
             let (_, rx) = HeapRb::<PlayerCmd>::new(1).split();
             rx
@@ -92,6 +94,7 @@ impl AudioNode for PlayerNode {
             cmd_rx,
             Arc::clone(&self.shared_state),
             sample_rate,
+            max_block_frames,
             &self.pcm_pool,
         )
     }

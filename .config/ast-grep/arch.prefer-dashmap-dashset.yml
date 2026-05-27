@@ -1,0 +1,117 @@
+id: arch.prefer-dashmap-dashset
+message: |
+  `Mutex<HashSet<...>>`, `RwLock<HashSet<...>>`, bare `Mutex<HashMap<...>>`
+  (without `Arc<...>`) — a shared hash collection behind a global lock.
+  Use **`DashMap` / `DashSet`** (`dashmap` crate) — per-shard locks
+  (default 32 shards), no global contention on hot paths, and works on
+  WASM (critical for `kithara-wasm` / `kithara-ffi/web`).
+
+  This rule is complementary to `arch.no-arc-mutex-godmap.yml`, which
+  catches `Arc<Mutex<HashMap<...>>>` patterns. Here we cover:
+    - `Mutex<HashSet<...>>`, `RwLock<HashSet<...>>` (with and without Arc)
+    - bare `Mutex<HashMap<...>>`, `RwLock<HashMap<...>>` (without Arc)
+    - parking_lot::* / tokio::sync::* variants of the above
+
+      // ❌
+      struct Cache {
+          pinned: Arc<Mutex<HashSet<ResourceKey>>>,
+          headers: Mutex<HashMap<String, String>>,
+      }
+
+      // ✅
+      use dashmap::{DashMap, DashSet};
+      struct Cache {
+          pinned: Arc<DashSet<ResourceKey>>,  // DashSet is itself Send+Sync
+          headers: DashMap<String, String>,
+      }
+
+  API mapping:
+    - `mutex.lock().unwrap().insert(k, v)` → `dashmap.insert(k, v)`
+    - `mutex.lock().unwrap().get(k).cloned()` → `dashmap.get(k).map(|r| r.clone())`
+    - `mutex.lock().unwrap().contains_key(k)` → `dashmap.contains_key(k)`
+    - iter: `dashmap.iter()` (yields `RefMulti`, not `(&K, &V)` — use `.key()/.value()`)
+
+  When **manual review** is required (not auto-fix):
+    - Lock-ordering invariants: if Mutex<HashMap> is integrated with an
+      external Mutex in a lock-acquisition order, switching to DashMap
+      can break the ordering
+    - Long-held refs: `dashmap` shards are locked while a ref is held —
+      do not hold long, otherwise deadlock with insert into the same shard
+    - Read-mostly snapshot: prefer `ArcSwap<Arc<HashMap>>` for heavy reads
+    - Single-threaded: `HashMap` without a lock is sufficient for an actor
+      pattern (single owner)
+
+  Suppress with `// ast-grep-ignore: arch.prefer-dashmap-dashset` when
+  there is a legitimate reason (document in a comment or the owning
+  crate's README).
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 11,
+  Wave 13). See memory `feedback_prefer_dashmap_dashset.md`.
+severity: error
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    # bare Mutex<HashMap>, without Arc (Arc<Mutex<HashMap>> is caught by arch.no-arc-mutex-godmap)
+    - pattern:
+        context: "type _T = Mutex<HashMap<$K, $V>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = RwLock<HashMap<$K, $V>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = parking_lot::Mutex<HashMap<$K, $V>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = parking_lot::RwLock<HashMap<$K, $V>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = tokio::sync::Mutex<HashMap<$K, $V>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = tokio::sync::RwLock<HashMap<$K, $V>>;"
+        selector: generic_type
+    # Mutex<HashSet>, bare and with Arc
+    - pattern:
+        context: "type _T = Mutex<HashSet<$E>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = RwLock<HashSet<$E>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<Mutex<HashSet<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<RwLock<HashSet<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = parking_lot::Mutex<HashSet<$E>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = parking_lot::RwLock<HashSet<$E>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::Mutex<HashSet<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<parking_lot::RwLock<HashSet<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = tokio::sync::Mutex<HashSet<$E>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = tokio::sync::RwLock<HashSet<$E>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::Mutex<HashSet<$E>>>;"
+        selector: generic_type
+    - pattern:
+        context: "type _T = Arc<tokio::sync::RwLock<HashSet<$E>>>;"
+        selector: generic_type

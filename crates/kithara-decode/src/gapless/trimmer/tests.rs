@@ -79,7 +79,7 @@ fn collect_pcm(out: &[PcmChunk]) -> Vec<f32> {
 #[kithara::test]
 fn leading_trim_updates_offset_and_timestamp() {
     let spec = mono_spec();
-    let mut trimmer = GaplessTrimmer::from_info(GaplessInfo {
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 576,
         trailing_frames: 0,
     });
@@ -96,7 +96,7 @@ fn leading_trim_updates_offset_and_timestamp() {
 #[kithara::test]
 fn leading_trim_can_consume_multiple_chunks() {
     let spec = mono_spec();
-    let mut trimmer = GaplessTrimmer::from_info(GaplessInfo {
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 2400,
         trailing_frames: 0,
     });
@@ -115,7 +115,7 @@ fn leading_trim_can_consume_multiple_chunks() {
 #[kithara::test]
 fn trailing_trim_buffers_until_flush() {
     let spec = mono_spec();
-    let mut trimmer = GaplessTrimmer::from_info(GaplessInfo {
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 0,
         trailing_frames: 64,
     });
@@ -133,7 +133,7 @@ fn trailing_trim_buffers_until_flush() {
 #[kithara::test]
 fn trailing_trim_drops_tail_on_flush() {
     let spec = mono_spec();
-    let mut trimmer = GaplessTrimmer::from_info(GaplessInfo {
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 0,
         trailing_frames: 2_048,
     });
@@ -149,7 +149,7 @@ fn trailing_trim_drops_tail_on_flush() {
 #[kithara::test]
 fn trailing_trim_handles_more_than_inline_tail_chunks() {
     let spec = mono_spec();
-    let mut trimmer = GaplessTrimmer::from_info(GaplessInfo {
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 0,
         trailing_frames: 8,
     });
@@ -181,7 +181,7 @@ fn disabled_trimmer_passes_through() {
 #[kithara::test]
 fn notify_seek_resets_leading_only() {
     let spec = mono_spec();
-    let mut trimmer = GaplessTrimmer::from_info(GaplessInfo {
+    let mut trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 128,
         trailing_frames: 64,
     });
@@ -242,7 +242,7 @@ fn codec_priming_drops_leading_frames_and_fades_in() {
 #[kithara::test]
 fn codec_priming_metadata_takes_precedence_when_combined() {
     let spec = mono_spec();
-    let metadata_trimmer = GaplessTrimmer::from_info(GaplessInfo {
+    let metadata_trimmer = GaplessTrimmer::from(GaplessInfo {
         leading_frames: 50,
         trailing_frames: 0,
     });

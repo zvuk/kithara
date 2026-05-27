@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "HTTP networking with retry, timeout, and streaming support"
+description = "Streaming HTTP for audio: retry, timeout, byte ranges."
+keywords = ["http", "networking", "streaming", "audio", "download"]
+categories = ["network-programming", "asynchronous"]
 
 [lints]
 workspace = true
@@ -32,7 +34,7 @@ unimock = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
 reqwest = { workspace = true, features = [
     "brotli",
@@ -50,7 +52,7 @@ gloo-timers = { workspace = true }
 
 [dev-dependencies]
 kithara-net = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }

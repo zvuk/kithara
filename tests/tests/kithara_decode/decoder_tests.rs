@@ -3,10 +3,12 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory},
+    decode::{DecoderConfig, DecoderFactory, PcmChunk},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_integration_tests::audio_fixture::EmbeddedAudio;
+use kithara_integration_tests::{
+    audio_fixture::EmbeddedAudio, decode_ext::DecoderChunkOutcomeTestExt,
+};
 
 fn test_config() -> DecoderConfig {
     DecoderConfig::default()
@@ -46,7 +48,7 @@ fn decode_with_probe(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
 
-    let chunk = outcome.into_chunk().unwrap();
+    let chunk = PcmChunk::try_from(outcome).unwrap();
     assert!(!chunk.pcm.is_empty());
 }
 
@@ -160,7 +162,7 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
         DecoderFactory::create_with_probe(reader, Some("wav"), &test_config()).unwrap();
     let spec = decoder.spec();
 
-    let chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
+    let chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
 
     for sample in chunk.pcm.iter() {
         assert!(
@@ -225,8 +227,8 @@ fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let mut decoder =
         DecoderFactory::create_with_probe(reader, Some("wav"), &test_config()).unwrap();
 
-    let first_chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
-    let second_chunk = decoder.next_chunk().unwrap().into_chunk().unwrap();
+    let first_chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
+    let second_chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
 
     if first_chunk.pcm.len() > 10 && second_chunk.pcm.len() > 10 {
         let differs = first_chunk

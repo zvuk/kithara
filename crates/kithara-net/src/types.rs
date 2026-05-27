@@ -1,4 +1,4 @@
-use std::{cmp::min, collections::HashMap, time::Duration};
+use std::{cmp::min, collections::HashMap, fmt, time::Duration};
 
 use bitflags::bitflags;
 use bon::Builder;
@@ -21,17 +21,16 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Headers {
     inner: HashMap<String, String>,
 }
 
 impl Headers {
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
@@ -52,12 +51,6 @@ impl Headers {
     }
 }
 
-impl Default for Headers {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl From<HashMap<String, String>> for Headers {
     fn from(map: HashMap<String, String>) -> Self {
         Self { inner: map }
@@ -75,18 +68,14 @@ impl RangeSpec {
     pub fn new(start: u64, end: Option<u64>) -> Self {
         Self { end, start }
     }
+}
 
-    #[must_use]
-    pub fn from_start(start: u64) -> Self {
-        Self { end: None, start }
-    }
-
-    #[must_use]
-    pub fn to_header_value(&self) -> String {
-        self.end.map_or_else(
-            || format!("bytes={}-", self.start),
-            |end| format!("bytes={}-{}", self.start, end),
-        )
+impl fmt::Display for RangeSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.end {
+            Some(end) => write!(f, "bytes={}-{}", self.start, end),
+            None => write!(f, "bytes={}-", self.start),
+        }
     }
 }
 
@@ -133,6 +122,13 @@ impl RetryPolicy {
 #[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct NetOptions {
+    /// `Accept-Encoding` algorithms the client offers and auto-decodes.
+    /// Defaults to all four (`gzip | deflate | brotli | zstd`); narrow it
+    /// when an upstream rejects the full set (anti-bot WAFs that
+    /// fingerprint on the exact `Accept-Encoding` string are a common
+    /// reason).
+    #[builder(default = Compression::all())]
+    pub compression: Compression,
     /// Maximum allowed inactivity between consecutive read operations.
     /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
     /// "The timeout applies to each read operation, and resets after a
@@ -171,13 +167,6 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
-    /// `Accept-Encoding` algorithms the client offers and auto-decodes.
-    /// Defaults to all four (`gzip | deflate | brotli | zstd`); narrow it
-    /// when an upstream rejects the full set (anti-bot WAFs that
-    /// fingerprint on the exact `Accept-Encoding` string are a common
-    /// reason).
-    #[builder(default = Compression::all())]
-    pub compression: Compression,
 }
 
 impl Default for NetOptions {
@@ -268,21 +257,7 @@ mod tests {
         #[case] expected_header: &str,
     ) {
         let range = RangeSpec::new(start, end);
-        assert_eq!(range.to_header_value(), expected_header);
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    #[case::from_start_0(0, 0, None)]
-    #[case::from_start_100(100, 100, None)]
-    #[case::from_start_max(u64::MAX, u64::MAX, None)]
-    async fn test_range_spec_from_start(
-        #[case] start: u64,
-        #[case] expected_start: u64,
-        #[case] expected_end: Option<u64>,
-    ) {
-        let range = RangeSpec::from_start(start);
-        assert_eq!(range.start, expected_start);
-        assert_eq!(range.end, expected_end);
+        assert_eq!(range.to_string(), expected_header);
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
@@ -442,7 +417,7 @@ mod tests {
         #[case] expected_header: &str,
     ) {
         let range = RangeSpec::new(start, end);
-        assert_eq!(range.to_header_value(), expected_header);
+        assert_eq!(range.to_string(), expected_header);
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

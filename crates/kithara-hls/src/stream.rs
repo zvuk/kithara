@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use kithara_assets::{
-    AssetStore, AssetStoreBuilder, OnInvalidatedFn, ProcessChunkFn, ResourceKey, asset_root_for_url,
+    AssetStore, AssetStoreBuilder, EvictConfig, OnInvalidatedFn, ProcessChunkFn, ResourceKey,
+    asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::EventBus;
@@ -86,7 +87,7 @@ impl StreamType for Hls {
         playlist_cache.set_base_url(config.base_url.clone());
         playlist_cache.set_headers(config.headers.clone());
 
-        let key_manager = KeyManager::from_options(
+        let key_manager = KeyManager::with_options(
             peer_handle.clone(),
             backend.clone(),
             config.headers.clone(),
@@ -105,10 +106,7 @@ impl StreamType for Hls {
             media_playlists.push(playlist);
         }
 
-        let playlist_state = Arc::new(PlaylistState::from_parsed(
-            &master.variants,
-            &media_playlists,
-        ));
+        let playlist_state = Arc::new(PlaylistState::assemble(&master.variants, &media_playlists));
 
         hls_peer.set_abr_variants(variant_info_from_master(&master, &media_playlists));
 
@@ -222,7 +220,7 @@ fn build_asset_store(
         .cancel(cancel)
         .on_invalidated(on_invalidated)
         .root_dir(&config.store.cache_dir)
-        .evict_config(config.store.to_evict_config())
+        .evict_config(EvictConfig::from(&config.store))
         .ephemeral(config.store.is_ephemeral);
     if let Some(ref pool) = config.pool {
         builder = builder.pool(pool.clone());

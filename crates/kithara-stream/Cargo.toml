@@ -5,7 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Streaming orchestration (source -> bytes stream) with sync Read+Seek"
+description = "Streaming source-to-bytes layer with sync Read+Seek for audio playback."
+keywords = ["audio", "streaming", "hls", "io", "seek"]
+categories = ["multimedia::audio", "asynchronous"]
 
 [lints]
 workspace = true
@@ -36,7 +38,7 @@ probe = []
 mock = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha1", path = "../kithara-workspace-hack" }
+kithara-workspace-hack = { version = "0.0.1-alpha2", path = "../kithara-workspace-hack" }
 tokio-util = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -45,7 +47,7 @@ wasm_safe_thread = { workspace = true }
 
 [dev-dependencies]
 kithara-stream = { path = ".", default-features = false }
-kithara-test-utils = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe"] }
 tokio-stream = { workspace = true }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }

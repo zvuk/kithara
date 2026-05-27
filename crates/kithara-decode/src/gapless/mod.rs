@@ -1,17 +1,12 @@
-mod codec_priming;
 mod heuristic;
 mod info;
-#[cfg(feature = "symphonia")]
 mod mp3;
 mod mp4;
+mod probe;
 mod trimmer;
 
-pub use codec_priming::codec_priming_frames;
 pub use heuristic::{GaplessMode, SilenceTrimParams};
 pub use info::GaplessInfo;
-#[cfg(feature = "symphonia")]
-pub(crate) use mp3::{LAME_DECODER_DELAY, read_lame_trim};
 pub use mp4::probe_mp4_gapless;
-#[cfg(any(feature = "symphonia", all(feature = "android", target_os = "android")))]
-pub(crate) use mp4::probe_mp4_gapless_dyn;
+pub(crate) use probe::scoped_probe;
 pub use trimmer::{GaplessOutput, GaplessTrimmer};

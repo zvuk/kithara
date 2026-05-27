@@ -30,6 +30,7 @@ impl NavigationState {
     /// New empty state: no current track, history empty, shuffle off,
     /// [`RepeatMode::Off`].
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self::default()
     }

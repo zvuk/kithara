@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use kithara_stream::SegmentLayout;
+use kithara_stream::{AudioCodec, SegmentLayout};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -8,7 +8,8 @@ use super::{
     source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
-    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
+    codec::{CodecPriming, access_unit_frames},
+    demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, PrerollHint, TrackInfo},
     error::{DecodeError, DecodeResult},
     traits::BoxedSource,
 };
@@ -33,7 +34,14 @@ pub(crate) struct Fmp4SegmentDemuxer {
     cursor: Option<SegmentCursor>,
     duration: Option<Duration>,
     track_info: TrackInfo,
-    next_byte: u64,
+    /// Index of the next segment to decode. Sequential playback advances
+    /// this by one per segment; a seek sets it to the segment after the
+    /// landing segment. Advancing by index (rather than by the previous
+    /// segment's `byte_range.end`) keeps the decode cursor stable when the
+    /// live byte-layout shifts mid-playback — a segment's size estimate is
+    /// corrected to its real length on commit, and a byte-based advance
+    /// would then re-resolve to the wrong segment and silently skip one.
+    next_segment_index: u32,
 }
 
 impl Fmp4SegmentDemuxer {
@@ -41,10 +49,10 @@ impl Fmp4SegmentDemuxer {
         if self.cursor.is_some() {
             return EnsureCursor::Ready;
         }
-        let Some(desc) = self.segments.segment_after_byte(self.next_byte) else {
+        let Some(desc) = self.segments.segment_at_index(self.next_segment_index) else {
             return EnsureCursor::Eof;
         };
-        self.next_byte = desc.byte_range.end;
+        self.next_segment_index = desc.segment_index.saturating_add(1);
         self.cursor = Some(SegmentCursor {
             read: SegmentReadState::new(desc.byte_range),
             frames: None,
@@ -121,7 +129,7 @@ impl Fmp4SegmentDemuxer {
             source,
             segments,
             duration,
-            next_byte: 0,
+            next_segment_index: 0,
             cursor: None,
         })
     }
@@ -193,8 +201,15 @@ impl Demuxer for Fmp4SegmentDemuxer {
         }
     }
 
-    fn seek(&mut self, target: Duration) -> DecodeResult<DemuxSeekOutcome> {
-        let Some(desc) = self.segments.segment_at_time(target) else {
+    fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
+        // Back the seek into the previous segment(s) when the codec needs
+        // SBR/PS pre-roll: landing at `target - warmup` means a boundary
+        // seek decodes the tail of the prior segment to converge SBR state,
+        // and `ComposedDecoder::pending_seek_target` drops it up to `target`.
+        let seek_target =
+            warmup_backoff(self.track_info.codec, self.track_info.sample_rate, &priming)
+                .map_or(target, |backoff| target.saturating_sub(backoff));
+        let Some(desc) = self.segments.segment_at_time(seek_target) else {
             return Err(DecodeError::SeekFailed(format!(
                 "no segment for time {}ms",
                 target.as_millis()
@@ -205,11 +220,23 @@ impl Demuxer for Fmp4SegmentDemuxer {
         {
             return Ok(DemuxSeekOutcome::PastEof { duration });
         }
-        self.next_byte = desc.byte_range.end;
         let landed_byte = desc.byte_range.start;
         let landed_at = desc.decode_time;
         let segment_index = desc.segment_index;
+        self.next_segment_index = segment_index.saturating_add(1);
         let variant_index = desc.variant_index;
+        let preroll = match compute_preroll_byte(
+            target,
+            landed_at,
+            segment_index,
+            self.segments.as_ref(),
+            &priming,
+        ) {
+            Some(byte) => PrerollHint::Required(byte),
+            None if priming.byte_margin == 0 => PrerollHint::NotNeeded,
+            None if segment_index == 0 => PrerollHint::FirstSegment,
+            None => PrerollHint::NotNeeded,
+        };
         self.cursor = Some(SegmentCursor {
             segment_index,
             variant_index,
@@ -219,12 +246,48 @@ impl Demuxer for Fmp4SegmentDemuxer {
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
             landed_byte: Some(landed_byte),
+            preroll,
         })
     }
 
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
     }
+}
+
+/// Seek warm-up back-off duration for `codec` at `sample_rate`, derived
+/// from the codec's pre-roll packet count. `None` when no pre-roll is
+/// required (`packets == 0`) or the codec has no fixed access-unit size.
+fn warmup_backoff(codec: AudioCodec, sample_rate: u32, priming: &CodecPriming) -> Option<Duration> {
+    if priming.packets == 0 {
+        return None;
+    }
+    let au = access_unit_frames(codec);
+    if au == 0 {
+        return None;
+    }
+    let frames = priming.packets.saturating_mul(au);
+    Some(Duration::from_secs_f64(
+        f64::from(frames) / f64::from(sample_rate.max(1)),
+    ))
+}
+
+fn compute_preroll_byte(
+    target: Duration,
+    landed_at: Duration,
+    segment_index: u32,
+    layout: &dyn SegmentLayout,
+    priming: &CodecPriming,
+) -> Option<u64> {
+    if priming.byte_margin == 0 {
+        return None;
+    }
+    if landed_at < target {
+        return None;
+    }
+    let prev_index = segment_index.checked_sub(1)?;
+    let prev = layout.segment_at_index(prev_index)?;
+    Some(prev.byte_range.start)
 }
 
 fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInfo {

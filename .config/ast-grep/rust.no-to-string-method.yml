@@ -1,0 +1,57 @@
+id: rust.no-to-string-method
+message: |
+  `fn to_$NAME(&self) -> String` is a manual `Display` impl. Use
+  `impl Display for $TYPE` so callers can use `{}`-format and
+  `.to_string()` directly.
+
+      // ❌
+      impl Range {
+          pub fn to_header_value(&self) -> String {
+              format!("bytes={}-", self.start)
+          }
+      }
+
+      // ✅
+      impl Display for Range {
+          fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+              write!(f, "bytes={}-", self.start)
+          }
+      }
+
+  For C-like enums consider `#[derive(strum::Display)]`. For newtypes
+  and general structs use `#[derive(derive_more::Display)]` with
+  `#[display(fmt = "...")]`.
+
+  Suppress with `// ast-grep-ignore: rust.no-to-string-method` when
+  there is a legitimate reason (e.g. multiple distinct formats for the
+  same type).
+
+  See .docs/plans/2026-05-23-rust-idioms-refactor.md (Category 2,
+  Wave 1).
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: |
+        fn $NAME(&self) -> String {
+            $$$BODY
+        }
+    - pattern: |
+        pub fn $NAME(&self) -> String {
+            $$$BODY
+        }
+    - pattern: |
+        pub(crate) fn $NAME(&self) -> String {
+            $$$BODY
+        }
+constraints:
+  NAME:
+    regex: "^to_[a-z][a-z0-9_]*$"

@@ -32,7 +32,7 @@ pub(crate) async fn fetch_atomic_body(
     rel_path: &str,
     resource_kind: &str,
 ) -> HlsResult<Bytes> {
-    let key = ResourceKey::from_url(url);
+    let key = ResourceKey::from(url);
     if let Some(bytes) = try_read_cached(backend, byte_pool, &key, url, rel_path, resource_kind)? {
         return Ok(bytes);
     }

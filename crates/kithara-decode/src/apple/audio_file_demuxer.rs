@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 
 use kithara_platform::time::Duration;
-use kithara_stream::AudioCodec;
+use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
 
 use super::{
     audio_file::AppleAudioFile,
@@ -9,20 +9,44 @@ use super::{
     ffi::{AudioStreamBasicDescription, AudioStreamPacketDescription},
 };
 use crate::{
+    GaplessInfo,
+    codec::CodecPriming,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
-    error::DecodeResult,
+    error::{DecodeError, DecodeResult},
+    pcm_time::{duration_for_frames, frames_for_duration},
     traits::BoxedSource,
 };
 
-/// `Demuxer` over `AppleAudioFile` for standalone (non-fMP4) container
-/// formats. Currently wires WAV/PCM, MP3, ALAC-in-M4A and ALAC-in-CAF;
-/// extends via additional file-type hints.
+/// Clamp a `kAudioFilePropertyDataFormat`'s `mSampleRate` (f64) into a
+/// non-negative `u32`. Container metadata always carries a positive,
+/// integer-valued rate (44100 / 48000 / 96000); the conversion is
+/// lossless in practice but a pathological negative / `NaN` / overflow
+/// value clamps to 0 / `u32::MAX` (downstream code already treats 0
+/// as "unknown rate").
+#[expect(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    reason = "explicit guards clamp NaN/negative/overflow; final `as u32` is lossless for 0..u32::MAX"
+)]
+fn sample_rate_from_asbd(rate: f64) -> u32 {
+    if !rate.is_finite() || rate <= 0.0 {
+        return 0;
+    }
+    if rate >= f64::from(u32::MAX) {
+        return u32::MAX;
+    }
+    rate as u32
+}
+
+/// [`Demuxer`] over [`AppleAudioFile`] for standalone (non-fMP4)
+/// container formats. Currently wires WAV/PCM, MP3, ALAC-in-M4A and
+/// ALAC-in-CAF; extends via additional file-type hints.
 ///
-/// The `AppleAudioFile` packet descriptor (a `#[repr(C)]` POD) is
+/// The [`AppleAudioFile`] packet descriptor (a `#[repr(C)]` POD) is
 /// serialized into `last_packet_desc_blob` and exposed to the codec
-/// layer through `Frame::packet_desc`. CBR codecs ignore it; VBR codecs
-/// (MP3, ALAC) reinterpret the bytes back into
-/// `AudioStreamPacketDescription`.
+/// layer through `Frame::packet_desc`. CBR codecs ignore it; VBR
+/// codecs (MP3, ALAC) reinterpret the bytes back into
+/// [`AudioStreamPacketDescription`].
 pub(crate) struct AppleAudioFileDemuxer {
     file: AppleAudioFile,
     /// `Some(packets_per_call)` for CBR (`LinearPCM`) — every `next_frame`
@@ -39,12 +63,12 @@ pub(crate) struct AppleAudioFileDemuxer {
     last_read_len: usize,
 }
 
-/// Target ~16 `KiB` per CBR read — large enough to amortise the source
-/// `wait_range` cost on streamed sources (HLS), small enough to keep
-/// the in-flight buffer bounded.
-const CBR_BATCH_TARGET_BYTES: u32 = 16 * 1024;
-
 impl AppleAudioFileDemuxer {
+    /// Target ~16 `KiB` per CBR read — large enough to amortise the
+    /// source `wait_range` cost on streamed sources (HLS), small enough
+    /// to keep the in-flight buffer bounded.
+    const CBR_BATCH_TARGET_BYTES: u32 = 16 * 1024;
+
     fn open(source: BoxedSource, hint: Option<u32>, codec: AudioCodec) -> DecodeResult<Self> {
         let file = AppleAudioFile::open(source, hint)?;
         let asbd = file.data_format();
@@ -55,29 +79,19 @@ impl AppleAudioFileDemuxer {
             4096
         };
 
-        let duration = if asbd.mSampleRate > 0.0 && total_packets > 0 {
-            let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "frames * fpp stays well within f64 precision for sub-day audio"
-            )]
-            Some(Duration::from_secs_f64(frames as f64 / asbd.mSampleRate))
-        } else {
-            None
-        };
-
         let extra_data = match codec {
             AudioCodec::Pcm => serialize_asbd(&asbd),
             _ => file.magic_cookie().unwrap_or_default(),
         };
 
         let channels = u16::try_from(asbd.mChannelsPerFrame).unwrap_or(2);
-        #[expect(
-            clippy::cast_sign_loss,
-            clippy::cast_possible_truncation,
-            reason = "sample rate is positive and well under u32::MAX in practice"
-        )]
-        let sample_rate = asbd.mSampleRate.max(0.0) as u32;
+        let sample_rate = sample_rate_from_asbd(asbd.mSampleRate);
+        let duration = if sample_rate > 0 && total_packets > 0 {
+            let frames = total_packets.saturating_mul(u64::from(frames_per_packet));
+            Some(duration_for_frames(sample_rate, frames))
+        } else {
+            None
+        };
 
         let track_info = TrackInfo {
             codec,
@@ -88,7 +102,7 @@ impl AppleAudioFileDemuxer {
             gapless: None,
         };
 
-        let (cbr_batch_packets, buf_cap) = CBR_BATCH_TARGET_BYTES
+        let (cbr_batch_packets, buf_cap) = Self::CBR_BATCH_TARGET_BYTES
             .checked_div(asbd.mBytesPerPacket)
             .map_or_else(
                 || {
@@ -102,7 +116,7 @@ impl AppleAudioFileDemuxer {
                     let bytes = packets.saturating_mul(asbd.mBytesPerPacket);
                     (
                         Some(packets),
-                        usize::try_from(bytes).unwrap_or(CBR_BATCH_TARGET_BYTES as usize),
+                        usize::try_from(bytes).unwrap_or(Self::CBR_BATCH_TARGET_BYTES as usize),
                     )
                 },
             );
@@ -120,20 +134,59 @@ impl AppleAudioFileDemuxer {
         })
     }
 
-    pub(crate) fn open_alac_caf(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, Some(Consts::kAudioFileCAFType), AudioCodec::Alac)
+    /// Single source of truth: maps `(codec, container)` to the
+    /// `kAudioFileXxxType` four-cc hint `AudioFileServices` needs.
+    /// Returns `None` when Apple's standalone file path can't handle the
+    /// combination — the factory consults this through [`Self::supports`]
+    /// before dispatching, so any new (codec, container) only needs one
+    /// match arm here.
+    fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
+        Some(match (codec, container) {
+            (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::kAudioFileWAVEType,
+            (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::kAudioFileMP3Type,
+            (AudioCodec::Alac, ContainerFormat::Mp4) => Consts::kAudioFileM4AType,
+            (AudioCodec::Alac, ContainerFormat::Caf) => Consts::kAudioFileCAFType,
+            (AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2, ContainerFormat::Mp4) => {
+                Consts::kAudioFileM4AType
+            }
+            (
+                AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2,
+                ContainerFormat::Adts,
+            ) => Consts::kAudioFileAAC_ADTSType,
+            _ => return None,
+        })
     }
 
-    pub(crate) fn open_alac_m4a(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, Some(Consts::kAudioFileM4AType), AudioCodec::Alac)
+    /// Whether Apple's standalone file path supports this `(codec,
+    /// container)` pair. Used by the factory to gate dispatch into
+    /// [`Self::open_for`]; mirrors [`Self::file_type_id`].
+    #[must_use]
+    pub(crate) fn supports(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
+        container.is_some_and(|c| Self::file_type_id(codec, c).is_some())
     }
 
-    pub(crate) fn open_mp3(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, Some(Consts::kAudioFileMP3Type), AudioCodec::Mp3)
+    /// Open a track for the given `(codec, container)` pair, picking the
+    /// `AudioFileServices` file-type hint internally. The caller is
+    /// expected to have checked [`Self::supports`] (the factory does);
+    /// unsupported combinations return [`DecodeError::UnsupportedCodec`].
+    pub(crate) fn open_for(
+        source: BoxedSource,
+        codec: AudioCodec,
+        container: Option<ContainerFormat>,
+    ) -> DecodeResult<Self> {
+        let hint = container
+            .and_then(|c| Self::file_type_id(codec, c))
+            .ok_or(DecodeError::UnsupportedCodec(codec))?;
+        Self::open(source, Some(hint), codec)
     }
 
-    pub(crate) fn open_wav(source: BoxedSource) -> DecodeResult<Self> {
-        Self::open(source, Some(Consts::kAudioFileWAVEType), AudioCodec::Pcm)
+    /// Inject encoder priming/padding metadata probed by the factory
+    /// layer (e.g. Xing/Info+LAME for MP3, `iTunSMPB`/`elst` for AAC).
+    /// `AudioFileServices` does not expose Xing/LAME or MP4 edit lists,
+    /// so the factory probes the source separately and pipes the
+    /// captured trim counts through here.
+    pub(crate) fn set_gapless(&mut self, gapless: Option<GaplessInfo>) {
+        self.track_info.gapless = gapless;
     }
 }
 
@@ -147,14 +200,10 @@ impl Demuxer for AppleAudioFileDemuxer {
             return Ok(DemuxOutcome::Eof);
         }
 
-        let rate = f64::from(self.track_info.sample_rate.max(1));
+        let sample_rate = self.track_info.sample_rate.max(1);
         let start_packet = self.next_packet;
         let frame_idx = start_packet.saturating_mul(u64::from(self.frames_per_packet));
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "frame index fits well within f64 precision for sub-day audio"
-        )]
-        let pts = Duration::from_secs_f64(frame_idx as f64 / rate);
+        let pts = duration_for_frames(sample_rate, frame_idx);
 
         if let Some(batch_packets) = self.cbr_batch_packets {
             let remaining =
@@ -169,11 +218,7 @@ impl Demuxer for AppleAudioFileDemuxer {
             self.last_read_len = bytes as usize;
             let total_frames =
                 u64::from(packets_read).saturating_mul(u64::from(self.frames_per_packet));
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "total_frames * fpp within f64 precision for sub-day audio"
-            )]
-            let dur = Duration::from_secs_f64(total_frames as f64 / rate);
+            let dur = duration_for_frames(sample_rate, total_frames);
             self.next_packet = start_packet.saturating_add(u64::from(packets_read));
             return Ok(DemuxOutcome::Frame(Frame {
                 pts,
@@ -202,11 +247,7 @@ impl Demuxer for AppleAudioFileDemuxer {
         } else {
             u64::from(self.frames_per_packet)
         };
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "frames-per-packet small, exact in f64"
-        )]
-        let dur = Duration::from_secs_f64(frames as f64 / rate);
+        let dur = duration_for_frames(sample_rate, frames);
 
         let frame = Frame {
             pts,
@@ -219,16 +260,12 @@ impl Demuxer for AppleAudioFileDemuxer {
         Ok(DemuxOutcome::Frame(frame))
     }
 
-    fn seek(&mut self, target: Duration) -> DecodeResult<DemuxSeekOutcome> {
-        let rate = f64::from(self.track_info.sample_rate.max(1));
+    fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
+        let sample_rate = self.track_info.sample_rate.max(1);
         let total_frames = self
             .total_packets
             .saturating_mul(u64::from(self.frames_per_packet));
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "frame counts within f64 range for sub-day audio"
-        )]
-        let total_duration = Duration::from_secs_f64(total_frames as f64 / rate);
+        let total_duration = duration_for_frames(sample_rate, total_frames);
 
         if target >= total_duration {
             return Ok(DemuxSeekOutcome::PastEof {
@@ -236,25 +273,19 @@ impl Demuxer for AppleAudioFileDemuxer {
             });
         }
 
-        #[expect(
-            clippy::cast_sign_loss,
-            clippy::cast_possible_truncation,
-            reason = "target is non-negative and well below u64::MAX in practice"
-        )]
-        let target_frame = (target.as_secs_f64() * rate) as u64;
+        let target_frame = frames_for_duration(sample_rate, target) as u64;
         let target_packet = target_frame / u64::from(self.frames_per_packet.max(1));
-        self.next_packet = target_packet;
+        let backup = u64::from(priming.packets).min(target_packet);
+        let landed_packet = target_packet.saturating_sub(backup);
+        self.next_packet = landed_packet;
 
-        let landed_frame = target_packet.saturating_mul(u64::from(self.frames_per_packet));
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "landed_frame within f64 precision range"
-        )]
-        let landed_at = Duration::from_secs_f64(landed_frame as f64 / rate);
+        let landed_frame = landed_packet.saturating_mul(u64::from(self.frames_per_packet));
+        let landed_at = duration_for_frames(sample_rate, landed_frame);
 
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
             landed_byte: None,
+            preroll: PrerollHint::NotNeeded,
         })
     }
 
@@ -277,7 +308,7 @@ fn serialize_asbd(asbd: &AudioStreamBasicDescription) -> Vec<u8> {
 mod tests {
     use std::io::Cursor;
 
-    use kithara_stream::AudioCodec;
+    use kithara_stream::{AudioCodec, ContainerFormat};
     use kithara_test_utils::kithara;
 
     use super::AppleAudioFileDemuxer;
@@ -296,8 +327,12 @@ mod tests {
     #[kithara::test]
     fn open_wav_demuxer_track_info_and_first_frame() {
         let bytes = read_asset("silence_1s.wav");
-        let mut dx = AppleAudioFileDemuxer::open_wav(Box::new(Cursor::new(bytes)))
-            .expect("open_wav must succeed");
+        let mut dx = AppleAudioFileDemuxer::open_for(
+            Box::new(Cursor::new(bytes)),
+            AudioCodec::Pcm,
+            Some(ContainerFormat::Wav),
+        )
+        .expect("open_for(Pcm, Wav) must succeed");
 
         let info = dx.track_info();
         assert_eq!(info.codec, AudioCodec::Pcm);

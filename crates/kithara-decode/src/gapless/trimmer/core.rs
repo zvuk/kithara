@@ -131,17 +131,17 @@ impl FadeInState {
         let remaining = self.total_frames.saturating_sub(self.applied_frames);
         let to_shape = remaining.min(u16::try_from(frames).unwrap_or(u16::MAX));
         let total = f32::from(self.total_frames.max(1));
-        let mut offset = 0;
-        while offset < to_shape {
-            let frame = self.applied_frames.saturating_add(offset);
+        let start_frame = self.applied_frames;
+        let shape_samples = usize::from(to_shape) * channels;
+        let prefix_len = shape_samples.min(chunk.pcm.len());
+        let prefix = &mut chunk.pcm[..prefix_len];
+        for (frame_offset, frame_samples) in prefix.chunks_exact_mut(channels).enumerate() {
+            let frame = start_frame.saturating_add(u16::try_from(frame_offset).unwrap_or(u16::MAX));
             let position = f32::from(frame) / total;
             let gain = 0.5 - 0.5 * (std::f32::consts::PI * position).cos();
-            let frame_start = usize::from(offset).saturating_mul(channels);
-            let frame_end = frame_start.saturating_add(channels).min(chunk.pcm.len());
-            for sample in &mut chunk.pcm[frame_start..frame_end] {
+            for sample in frame_samples {
                 *sample *= gain;
             }
-            offset = offset.saturating_add(1);
         }
         self.applied_frames = self.applied_frames.saturating_add(to_shape);
     }
@@ -211,27 +211,6 @@ impl GaplessTrimmer {
         }
     }
 
-    /// Build a trimmer driven by decoder-reported metadata. No
-    /// fade-in is applied — the decoder's frame counts are exact and
-    /// the trimmed boundary lands on a silent sample.
-    #[must_use]
-    pub fn from_info(info: GaplessInfo) -> Self {
-        let enabled = info.leading_frames > 0 || info.trailing_frames > 0;
-        Self {
-            mode: if enabled {
-                GaplessMode::Fixed {
-                    leading_remaining: info.leading_frames,
-                    fade_in: None,
-                }
-            } else {
-                GaplessMode::Disabled
-            },
-            trailing_frames: info.trailing_frames,
-            tail_buffer: TailBuffer::new(),
-            tail_buffered_frames: 0,
-        }
-    }
-
     /// Drop seek-sensitive state. Both heuristic search and pending
     /// fade-in are abandoned: after a seek we land mid-track and
     /// trying to "trim leading silence" or apply a fade-in there
@@ -294,6 +273,25 @@ impl GaplessTrimmer {
         Self {
             trailing_frames: params.scan_window_frames,
             mode: GaplessMode::Heuristic(Box::new(HeuristicState::new(params))),
+            tail_buffer: TailBuffer::new(),
+            tail_buffered_frames: 0,
+        }
+    }
+}
+
+impl From<GaplessInfo> for GaplessTrimmer {
+    fn from(info: GaplessInfo) -> Self {
+        let enabled = info.leading_frames > 0 || info.trailing_frames > 0;
+        Self {
+            mode: if enabled {
+                GaplessMode::Fixed {
+                    leading_remaining: info.leading_frames,
+                    fade_in: None,
+                }
+            } else {
+                GaplessMode::Disabled
+            },
+            trailing_frames: info.trailing_frames,
             tail_buffer: TailBuffer::new(),
             tail_buffered_frames: 0,
         }
@@ -412,49 +410,42 @@ fn flush_heuristic(
 /// shaped (gain still goes from 1.0 down to ~0.0 across whatever is
 /// available).
 fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
-    use num_traits::AsPrimitive;
-
     if tail_buffer.is_empty() {
         return;
     }
-    let total_frames =
+    let total_frames_u64 =
         u64::from(sample_rate.max(1)).saturating_mul(Consts::FADE_OUT_DURATION_MS) / 1000;
-    let total_frames = total_frames.max(1);
+    let total_frames = usize_from_u64_saturating(total_frames_u64).max(1);
+    let denom = u32::try_from(total_frames.saturating_sub(1).max(1)).unwrap_or(u32::MAX);
+    let denom = f32::from(u16::try_from(denom).unwrap_or(u16::MAX));
 
-    let mut frames_remaining = total_frames;
+    let mut faded_so_far: usize = 0;
     for chunk in tail_buffer.iter_mut().rev() {
-        if frames_remaining == 0 {
+        if faded_so_far >= total_frames {
             break;
         }
-        let chunk_total_frames = chunk_frames(chunk);
         let channels = usize::from(chunk.spec().channels.max(1));
-        let to_shape = chunk_total_frames.min(frames_remaining);
-        if to_shape == 0 {
+        let chunk_total_frames = usize_from_u64_saturating(chunk_frames(chunk));
+        if chunk_total_frames == 0 {
             continue;
         }
-        let first_to_shape = chunk_total_frames.saturating_sub(to_shape);
-        let already_shaped_after_this = total_frames.saturating_sub(frames_remaining);
-        let denom: f32 = total_frames.saturating_sub(1).max(1).as_();
+        let in_window = (total_frames - faded_so_far).min(chunk_total_frames);
+        let first_to_shape = chunk_total_frames - in_window;
 
-        for chunk_local_frame in first_to_shape..chunk_total_frames {
-            let distance_from_end = chunk_total_frames
-                .saturating_sub(1)
-                .saturating_sub(chunk_local_frame)
-                .saturating_add(already_shaped_after_this);
-            let frame_in_fade = total_frames
-                .saturating_sub(1)
-                .saturating_sub(distance_from_end);
-            let frame_in_fade_f32: f32 = frame_in_fade.as_();
-            let position = frame_in_fade_f32 / denom;
+        let pcm_end = (chunk_total_frames * channels).min(chunk.pcm.len());
+        let pcm_start = (first_to_shape * channels).min(pcm_end);
+        let window = &mut chunk.pcm[pcm_start..pcm_end];
+        for (frame_in_chunk, frame_samples) in window.chunks_exact_mut(channels).enumerate() {
+            let frames_to_end = in_window - 1 - frame_in_chunk + faded_so_far;
+            let frame_in_fade = total_frames - 1 - frames_to_end;
+            let position = f32::from(u16::try_from(frame_in_fade).unwrap_or(u16::MAX)) / denom;
             let gain = 0.5 + 0.5 * (std::f32::consts::PI * position).cos();
-            let frame_start = usize_from_u64_saturating(chunk_local_frame).saturating_mul(channels);
-            let frame_end = frame_start.saturating_add(channels).min(chunk.pcm.len());
-            for sample in &mut chunk.pcm[frame_start..frame_end] {
+            for sample in frame_samples {
                 *sample *= gain;
             }
         }
 
-        frames_remaining = frames_remaining.saturating_sub(to_shape);
+        faded_so_far += in_window;
     }
 }
 

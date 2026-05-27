@@ -10,5 +10,3 @@ pub(crate) mod core;
 mod tests;
 
 pub use core::Atomic;
-#[cfg(not(target_arch = "wasm32"))]
-pub use core::AtomicMmap;

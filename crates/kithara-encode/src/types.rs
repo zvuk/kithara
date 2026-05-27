@@ -1,4 +1,4 @@
-use crate::codec::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
 const DEFAULT_LOSSY_BIT_RATE: u64 = 128_000;
 
@@ -36,16 +36,6 @@ impl BytesEncodeTarget {
             Self::Flac => ContainerFormat::Flac,
             Self::Aac => ContainerFormat::Adts,
             Self::M4a => ContainerFormat::Mp4,
-        }
-    }
-
-    #[must_use]
-    pub const fn content_type(self) -> &'static str {
-        match self {
-            Self::Mp3 => "audio/mpeg",
-            Self::Flac => "audio/flac",
-            Self::Aac => "audio/aac",
-            Self::M4a => "audio/mp4",
         }
     }
 

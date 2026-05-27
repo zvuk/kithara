@@ -139,6 +139,14 @@ impl KeyProcessorRule {
         Self::for_domains(patterns, factory).build()
     }
 
+    /// Produce a fresh [`KeyRequest`] for one key fetch. Caller must
+    /// invoke this once per outgoing request — never cache or reuse
+    /// the returned headers / processor across fetches.
+    #[must_use]
+    pub fn build_request(&self) -> KeyRequest {
+        (self.key_request_factory)()
+    }
+
     /// Chainable counterpart to [`KeyProcessorRule::new`]: returns a
     /// builder with `factory` and `matchers` already set so callers
     /// can attach `.headers(...)` / `.query_params(...)` then `.build()`.
@@ -159,14 +167,6 @@ impl KeyProcessorRule {
                 .collect(),
         )
     }
-
-    /// Produce a fresh [`KeyRequest`] for one key fetch. Caller must
-    /// invoke this once per outgoing request — never cache or reuse
-    /// the returned headers / processor across fetches.
-    #[must_use]
-    pub fn build_request(&self) -> KeyRequest {
-        (self.key_request_factory)()
-    }
 }
 
 /// Registry of domain-scoped key processors.
@@ -182,6 +182,7 @@ pub struct KeyProcessorRegistry {
 
 impl KeyProcessorRegistry {
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self::default()
     }

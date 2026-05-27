@@ -66,6 +66,43 @@ pub(crate) type AudioConverterComplexInputDataProc = extern "C" fn(
     inUserData: *mut c_void,
 ) -> OSStatus;
 
+pub(crate) type AudioFormatPropertyID = u32;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AudioFormatInfo {
+    pub(crate) mASBD: AudioStreamBasicDescription,
+    pub(crate) mMagicCookie: *const c_void,
+    pub(crate) mMagicCookieSize: UInt32,
+}
+
+pub(crate) type AudioChannelLayoutTag = u32;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AudioFormatListItem {
+    pub(crate) mASBD: AudioStreamBasicDescription,
+    pub(crate) mChannelLayoutTag: AudioChannelLayoutTag,
+}
+
+#[link(name = "AudioToolbox", kind = "framework")]
+unsafe extern "C" {
+    pub(crate) fn AudioFormatGetPropertyInfo(
+        inPropertyID: AudioFormatPropertyID,
+        inSpecifierSize: UInt32,
+        inSpecifier: *const c_void,
+        outPropertyDataSize: *mut UInt32,
+    ) -> OSStatus;
+
+    pub(crate) fn AudioFormatGetProperty(
+        inPropertyID: AudioFormatPropertyID,
+        inSpecifierSize: UInt32,
+        inSpecifier: *const c_void,
+        ioPropertyDataSize: *mut UInt32,
+        outPropertyData: *mut c_void,
+    ) -> OSStatus;
+}
+
 #[link(name = "AudioToolbox", kind = "framework")]
 unsafe extern "C" {
     pub(crate) fn AudioConverterNew(

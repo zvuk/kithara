@@ -5,7 +5,8 @@ use std::{
 };
 
 use kithara_stream::{
-    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, StreamPending, StreamSeekPastEof,
+    AudioCodec, ContainerFormat, NotReadyCause, PendingReason, PrerollHint, StreamPending,
+    StreamSeekPastEof,
 };
 use kithara_test_utils::kithara;
 use symphonia::core::{
@@ -25,6 +26,7 @@ use symphonia::core::{
 };
 
 use crate::{
+    codec::CodecPriming,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
     error::{DecodeError, DecodeResult},
     symphonia::{
@@ -214,11 +216,6 @@ impl Demuxer for SymphoniaDemuxer {
                 Err(SymphoniaError::IoError(e))
                     if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock =>
                 {
-                    // `Interrupted` carries the seek-pending signal;
-                    // `WouldBlock` carries `NotReady` / `Retry` via the
-                    // [`StreamPending`] payload (HLS source wraps it
-                    // there to keep `Interrupted` reserved for seek so
-                    // `is_seek_pending_io` stays unambiguous).
                     let reason = e
                         .get_ref()
                         .and_then(|src| src.downcast_ref::<StreamPending>())
@@ -231,7 +228,7 @@ impl Demuxer for SymphoniaDemuxer {
                         .unwrap_or(PendingReason::NotReady(NotReadyCause::SourcePending));
                     return Ok(DemuxOutcome::Pending(reason));
                 }
-                Err(e) => return Err(DecodeError::Backend(Box::new(e))),
+                Err(e) => return Err(DecodeError::backend(e)),
             };
             if packet.track_id != self.track_id {
                 continue;
@@ -249,10 +246,30 @@ impl Demuxer for SymphoniaDemuxer {
         }
     }
 
-    fn seek(&mut self, target: Duration) -> DecodeResult<DemuxSeekOutcome> {
+    fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
+        // For MDCT codecs park the cursor before the user-requested target so
+        // the `pending_seek_target` guard in `ComposedDecoder` can trim frames
+        // to the exact sub-packet boundary. Backup magnitude covers two needs:
+        //
+        // 1. `priming.frames` sample-domain warmup — Apple-style codecs that
+        //    need pre-target packets fed through to prime MDCT/SBR state.
+        // 2. At least 1 codec packet for sample-accurate trim — composed.rs
+        //    pending_seek_target/frames_to_trim relies on landing on a packet
+        //    whose pts < target.
+        //
+        // Both are derived from codec facts (1024 frames/packet for AAC,
+        // 1152 for MP3) and the actual track sample_rate — no magic ms.
+        let sr = f64::from(self.track_info.sample_rate.max(1));
+        let priming_secs = f64::from(u32::try_from(priming.frames).unwrap_or(u32::MAX)) / sr;
+        let packet_secs = f64::from(mdct_packet_frames(self.track_info.codec)) / sr;
+        let backup_duration = Duration::from_secs_f64(priming_secs.max(packet_secs));
+        let effective_target = target.saturating_sub(backup_duration);
         let seek_to = SeekTo::Time {
-            time: Time::try_new(target.as_secs() as i64, target.subsec_nanos())
-                .unwrap_or(Time::ZERO),
+            time: Time::try_new(
+                effective_target.as_secs() as i64,
+                effective_target.subsec_nanos(),
+            )
+            .unwrap_or(Time::ZERO),
             track_id: Some(self.track_id),
         };
         let seeked = self
@@ -268,9 +285,17 @@ impl Demuxer for SymphoniaDemuxer {
             return Ok(DemuxSeekOutcome::PastEof { duration });
         }
 
+        let landed_byte = self.current_byte();
+        let preroll = match landed_byte {
+            Some(lb) if priming.byte_margin > 0 => {
+                PrerollHint::Required(lb.saturating_sub(priming.byte_margin))
+            }
+            _ => PrerollHint::NotNeeded,
+        };
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
-            landed_byte: self.current_byte(),
+            landed_byte,
+            preroll,
         })
     }
 
@@ -454,5 +479,13 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
             DecodeError::Interrupted
         }
         _ => DecodeError::SeekFailed(err.to_string()),
+    }
+}
+
+fn mdct_packet_frames(codec: AudioCodec) -> u32 {
+    match codec {
+        AudioCodec::Mp3 => 1152,
+        AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => 1024,
+        _ => 0,
     }
 }

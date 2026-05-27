@@ -78,7 +78,7 @@ impl PlaylistState {
     /// index in `variants`. Segment URIs are resolved against the media
     /// playlist URL; failures fall back to the media URL itself.
     #[must_use]
-    pub fn from_parsed(
+    pub fn assemble(
         variants: &[crate::parsing::VariantStream],
         media_playlists: &[crate::parsing::MediaPlaylist],
     ) -> Self {
@@ -140,38 +140,6 @@ impl PlaylistState {
     #[must_use]
     pub fn num_variants(&self) -> usize {
         self.variants.len()
-    }
-
-    /// Reconcile a segment's actual size after DRM decryption.
-    ///
-    /// Updates the segment's size and recalculates all subsequent offsets.
-    /// This handles the case where decrypted size differs from encrypted size.
-    pub fn reconcile_segment_size(
-        &self,
-        variant: VariantIndex,
-        segment_index: SegmentIndex,
-        actual_total: u64,
-    ) {
-        let Some(lock) = self.variants.get(variant) else {
-            return;
-        };
-        let mut state = lock.lock_sync_write();
-        let Some(size_map) = state.size_map.as_mut() else {
-            return;
-        };
-        if segment_index >= size_map.segment_sizes.len() {
-            return;
-        }
-
-        size_map.segment_sizes[segment_index] = actual_total;
-
-        for i in (segment_index + 1)..size_map.offsets.len() {
-            size_map.offsets[i] = size_map.offsets[i - 1] + size_map.segment_sizes[i - 1];
-        }
-
-        let last_idx = size_map.segment_sizes.len() - 1;
-        size_map.total = size_map.offsets[last_idx] + size_map.segment_sizes[last_idx];
-        drop(state);
     }
 
     /// Clone of `segment_sizes` from the `size_map` (for `StreamIndex` sync).
@@ -529,28 +497,6 @@ mod tests {
         assert_eq!(state.find_segment_at_offset(0, offset), expected);
     }
 
-    #[kithara::test]
-    fn test_reconcile_segment_size() {
-        let state = PlaylistState::new(vec![make_variant(0, 3)]);
-
-        let sm = make_size_map(100, &[200, 300, 400]);
-        state.set_size_map(0, sm);
-
-        assert_eq!(state.total_variant_size(0), Some(1000));
-        assert_eq!(state.segment_byte_offset(0, 1), Some(300));
-        assert_eq!(state.segment_byte_offset(0, 2), Some(600));
-
-        state.reconcile_segment_size(0, 1, 250);
-
-        assert_eq!(state.segment_byte_offset(0, 0), Some(0));
-        assert_eq!(state.segment_byte_offset(0, 1), Some(300));
-        assert_eq!(state.segment_byte_offset(0, 2), Some(550));
-        assert_eq!(state.total_variant_size(0), Some(950));
-
-        assert_eq!(state.find_segment_at_offset(0, 549), Some(1));
-        assert_eq!(state.find_segment_at_offset(0, 550), Some(2));
-    }
-
     #[kithara::test(wasm)]
     #[case::first_segment_start(0, 0, Some(0))]
     #[case::init_region(0, 49, Some(0))]
@@ -674,7 +620,7 @@ mod tests {
         };
 
         let media_playlists = vec![playlist];
-        let state = PlaylistState::from_parsed(&variants, &media_playlists);
+        let state = PlaylistState::assemble(&variants, &media_playlists);
 
         assert_eq!(state.num_variants(), 1);
 

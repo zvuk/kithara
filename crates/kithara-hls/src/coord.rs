@@ -223,7 +223,10 @@ impl HlsCoord {
             if is_cross_codec {
                 v_new.invalidate_init();
             }
-            let target_time = self.timeline.committed_position();
+            let target_time = self
+                .timeline
+                .seek_target()
+                .unwrap_or_else(|| self.timeline.committed_position());
             let target_seg: u32 = self
                 .playlist_state
                 .find_seek_point_for_time(new_v, target_time)
@@ -233,7 +236,7 @@ impl HlsCoord {
             v_new.set_position(target_byte);
             self.variant_generation.fetch_add(1, Ordering::Release);
             self.abr.apply_decision(&decision, Instant::now());
-            v_new.rebuild(ctx, target_seg);
+            v_new.rebuild_with_decoder_probe(ctx, target_seg);
         }
         let reader_pt = self.timeline.committed_position();
         self.abr

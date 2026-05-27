@@ -16,13 +16,19 @@ pub mod alac_fixture;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple_warmup;
 pub mod asset_fixture;
+pub mod assets_ext;
 pub mod audio_fixture;
 pub mod audio_mock;
+pub mod bufpool_ext;
 pub mod consts;
+pub mod decode_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod decode_mock;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod encode_ext;
 pub mod encode_test_pcm;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod fixture_cache;
 pub mod fixture_protocol;
 pub mod fixtures;
 pub mod hls_blob_store;
@@ -40,6 +46,7 @@ mod native;
 pub mod net_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod offline;
+pub mod rfc6381;
 pub mod rng;
 pub mod server_url;
 pub mod signal_pcm;
@@ -47,6 +54,8 @@ pub mod signal_source;
 pub mod signal_source_utils;
 pub mod signal_spec;
 pub mod signal_url;
+pub mod storage_ext;
+pub mod swallow_detector;
 pub mod test_server;
 pub mod token_store;
 pub mod wav;
@@ -74,5 +83,8 @@ pub use signal_source_utils::*;
 pub use signal_url::{
     SignalFormat, SignalKind, SignalSpec, SignalSpecLength, SweepMode, signal_path,
 };
-pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
+pub use test_server::{
+    BehaviorHandle, Content, CreateHlsError, CreatedHls, Delivery, FixtureBehavior,
+    HlsFixtureBuilder, TestServerHelper,
+};
 pub use wav::{create_test_wav, create_wav_exact_bytes};

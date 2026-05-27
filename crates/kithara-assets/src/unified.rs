@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+use std::{fmt::Debug, hash::Hash, ops::Range, path::Path};
 
 use rangemap::RangeSet;
 
@@ -98,6 +100,7 @@ where
     }
 
     /// Return the crate-private aggregate availability handle.
+    // ast-grep-ignore: idioms.match-self-conversion
     pub(crate) fn availability(&self) -> &AvailabilityIndex {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -143,6 +146,7 @@ where
     ///
     /// Returns `AssetsError` if the persistent index resource cannot
     /// be opened or the atomic write fails.
+    // ast-grep-ignore: idioms.match-self-conversion
     pub fn checkpoint(&self) -> AssetsResult<()> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -199,21 +203,6 @@ where
             return Some(len);
         }
         None
-    }
-
-    /// Compatibility helper for callers that only care about committed resources.
-    #[must_use]
-    pub fn has_resource(&self, key: &ResourceKey) -> bool {
-        matches!(
-            self.resource_state(key),
-            Ok(AssetResourceState::Committed { .. })
-        )
-    }
-
-    /// Whether this backend is ephemeral (in-memory).
-    #[must_use]
-    pub fn is_ephemeral(&self) -> bool {
-        matches!(self, Self::Mem { .. })
     }
 
     /// Open a resource by key (no processing context).

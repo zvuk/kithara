@@ -28,22 +28,19 @@ use url::Url;
 
 use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
 
-mod consts {
-    pub(super) const POLL_MS: u64 = 50;
-    pub(super) const REQUEST_TIMEOUT_SECS: u64 = 60;
-    pub(super) const CANCEL_GUARD_SECS: u64 = 2;
-    pub(super) const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
-    pub(super) const FLOOD_BATCH_SIZE: usize = 10;
-    pub(super) const FLOOD_DEADLINE_SECS: u64 = 20;
-    pub(super) const FLOOD_POLL_MS: u64 = 100;
-    pub(super) const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
-    pub(super) const SLOW_SERVER_DELAY_MS: u64 = 500;
-    pub(super) const SOFT_TIMEOUT_MS: u64 = 50;
-    pub(super) const EVENT_BUS_CAPACITY: usize = 64;
-    pub(super) const SLOW_DEADLINE_SECS: u64 = 5;
-    pub(super) const SLOW_POLL_TIMEOUT_MS: u64 = 200;
-}
-use consts::*;
+const POLL_MS: u64 = 50;
+const REQUEST_TIMEOUT_SECS: u64 = 60;
+const CANCEL_GUARD_SECS: u64 = 2;
+const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
+const FLOOD_BATCH_SIZE: usize = 10;
+const FLOOD_DEADLINE_SECS: u64 = 20;
+const FLOOD_POLL_MS: u64 = 100;
+const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
+const SLOW_SERVER_DELAY_MS: u64 = 500;
+const SOFT_TIMEOUT_MS: u64 = 50;
+const EVENT_BUS_CAPACITY: usize = 64;
+const SLOW_DEADLINE_SECS: u64 = 5;
+const SLOW_POLL_TIMEOUT_MS: u64 = 200;
 
 struct MockPeer;
 
@@ -60,7 +57,7 @@ fn test_config() -> DownloaderConfig {
 
 fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
     let stream = stream_iter(chunks.into_iter().map(|c| Ok(Bytes::from_static(c))));
-    BodyStream::from_raw(Box::pin(stream))
+    BodyStream::wrap_raw(Box::pin(stream))
 }
 
 fn sleep(ms: u64) -> tokio_time::Sleep {

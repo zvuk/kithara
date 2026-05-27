@@ -54,6 +54,7 @@ impl PlayerNotification {
     /// tracing call-sites that need to discriminate between concurrent
     /// tracks beyond what the variant tag alone can express.
     #[must_use]
+    // ast-grep-ignore: idioms.match-self-conversion
     pub fn src(&self) -> Option<&Arc<str>> {
         match self {
             Self::Loaded { src }

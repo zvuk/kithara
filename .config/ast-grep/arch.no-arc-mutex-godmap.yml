@@ -1,17 +1,18 @@
 id: arch.no-arc-mutex-godmap
 message: |
-  `Arc<Mutex<HashMap<…>>>` / `Arc<RwLock<HashMap<…>>>` — god-state с
-  map/dict под shared lock. Почти всегда антипаттерн: владелец
-  размазан, hot-path читателей и писателей дерётся за один lock,
-  расширение состояния через add-key вместо явного контракта.
+  `Arc<Mutex<HashMap<…>>>` / `Arc<RwLock<HashMap<…>>>` — god-state with
+  a map/dict behind a shared lock. Almost always an antipattern: the
+  owner is diffuse, hot-path readers and writers contend for the same
+  lock, state grows via add-key instead of an explicit contract.
 
-  Альтернативы:
-    - actor / single-owner task + channel'ом для write-команд;
-    - `dashmap` (per-shard lock) если действительно concurrent KV;
-    - `Arc<Vec<…>>` snapshot + `ArcSwap` если read-mostly;
-    - убрать map целиком — часто god-map это симптом, не структура.
+  Alternatives:
+    - actor / single-owner task + channel for write commands;
+    - `dashmap` (per-shard lock) for genuinely concurrent KV;
+    - `Arc<Vec<…>>` snapshot + `ArcSwap` for read-mostly;
+    - drop the map entirely — god-map is often a symptom, not a structure.
 
-  Если это легитимный кейс — обсудите в README owner-крейта почему.
+  If this is a legitimate case, document the rationale in the owning
+  crate's README.
 severity: warning
 language: Rust
 files:

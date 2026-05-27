@@ -1,6 +1,9 @@
 use std::{borrow::Borrow, collections::HashMap, hash::Hash};
 
-use thunderdome::{Arena, Index};
+use thunderdome::{
+    Arena, Index,
+    iter::{Iter as ArenaIter, IterMut as ArenaIterMut},
+};
 
 pub(crate) struct ArenaRegistry<K, V> {
     values: Arena<V>,
@@ -89,5 +92,29 @@ where
             by_key: HashMap::with_capacity(cap),
             values: Arena::with_capacity(cap),
         }
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a ArenaRegistry<K, V>
+where
+    K: Clone + Eq + Hash,
+{
+    type IntoIter = ArenaIter<'a, V>;
+    type Item = (Index, &'a V);
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter()
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a mut ArenaRegistry<K, V>
+where
+    K: Clone + Eq + Hash,
+{
+    type IntoIter = ArenaIterMut<'a, V>;
+    type Item = (Index, &'a mut V);
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter_mut()
     }
 }

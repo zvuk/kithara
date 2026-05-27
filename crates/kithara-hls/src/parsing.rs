@@ -190,7 +190,7 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                     .split(',')
                     .map(str::trim)
                     .map(|codec| codec.trim_matches('"'))
-                    .find_map(AudioCodec::from_hls_codec);
+                    .find_map(AudioCodec::parse_hls_codec);
 
                 let container =
                     detect_container_from_codecs(&c).or_else(|| detect_container_from_uri(&uri));

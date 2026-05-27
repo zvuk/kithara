@@ -57,8 +57,6 @@ bitflags! {
         const FLUSHING     = 1 << 1;
         /// Seek initiated but the decoder has not yet repositioned.
         const SEEK_PENDING = 1 << 2;
-        /// End of stream reached.
-        const EOF          = 1 << 3;
     }
 }
 
@@ -85,8 +83,7 @@ pub struct Timeline {
     /// reset its preload counters / drop parked chunks on each new
     /// epoch — needs its own one-shot signal. `initiate_seek` arms both.
     decoder_node_seek_latch: Arc<AtomicBool>,
-    download_position: Arc<AtomicU64>,
-    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `EOF`, `PLAYING`.
+    /// Consolidated boolean state: `FLUSHING`, `SEEK_PENDING`, `PLAYING`.
     flags: Arc<AtomicU8>,
     /// Sample rate (Hz) of the most recently committed chunk; lets
     /// readers convert `committed_frame_end` ↔ `committed_position`
@@ -119,12 +116,12 @@ impl Timeline {
     const NO_SEEK_TARGET: u64 = u64::MAX;
 
     #[must_use]
+    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self {
             committed_position_ns: Arc::new(AtomicU64::new(0)),
             committed_frame_end: Arc::new(AtomicU64::new(0)),
             last_sample_rate: Arc::new(AtomicU64::new(0)),
-            download_position: Arc::new(AtomicU64::new(0)),
             pending_seek_epoch: Arc::new(AtomicU64::new(Self::NO_PENDING_SEEK)),
             total_duration_ns: Arc::new(AtomicU64::new(Self::NO_DURATION)),
             segment_position: Arc::new(AtomicU64::new(0)),
@@ -181,15 +178,6 @@ impl Timeline {
     /// (if known) is the byte offset the decoder is now reading from.
     pub fn commit_seek_landed(&self, pos: &ChunkPosition) {
         self.write_playhead(pos, pos.frame_offset, pos.source_byte_offset);
-    }
-
-    /// Frame end (exclusive) of the consumer's playhead. `Audio::read`
-    /// derives the per-chunk consumption offset from this and the
-    /// chunk's `frame_offset`, so we don't need a separate
-    /// `chunk_offset` field outside the timeline.
-    #[must_use]
-    pub fn committed_frame_end(&self) -> u64 {
-        self.committed_frame_end.load(Ordering::Acquire)
     }
 
     #[must_use]
@@ -259,11 +247,6 @@ impl Timeline {
         self.seek_preempt_latch.swap(false, Ordering::Acquire)
     }
 
-    #[must_use]
-    pub fn download_position(&self) -> u64 {
-        self.download_position.load(Ordering::Acquire)
-    }
-
     #[inline]
     fn flags_snapshot_with(&self, order: Ordering) -> TimelineFlags {
         TimelineFlags::from_bits_truncate(self.flags.load(order))
@@ -298,11 +281,6 @@ impl Timeline {
         self.flags.fetch_or(flags.bits(), order);
     }
 
-    #[must_use]
-    pub fn is_eof(&self) -> bool {
-        self.contains_flag(TimelineFlags::EOF)
-    }
-
     /// Check if the pipeline is being flushed (seek pending).
     #[must_use]
     pub fn is_flushing(&self) -> bool {
@@ -329,12 +307,6 @@ impl Timeline {
     #[must_use]
     pub fn is_seek_pending(&self) -> bool {
         self.contains_flag(TimelineFlags::SEEK_PENDING)
-    }
-
-    /// Sample rate of the most recently committed chunk.
-    #[must_use]
-    pub fn last_sample_rate(&self) -> u32 {
-        u32::try_from(self.last_sample_rate.load(Ordering::Acquire)).unwrap_or(0)
     }
 
     pub fn mark_pending_seek_epoch(&self, seek_epoch: u64) {
@@ -388,11 +360,6 @@ impl Timeline {
         }
     }
 
-    #[must_use]
-    pub fn segment_position(&self) -> u64 {
-        self.segment_position.load(Ordering::Acquire)
-    }
-
     /// # Panics
     /// Panics if `position` overflows `u64::MAX` nanoseconds (≈584 years);
     /// no realistic media stream can hit this.
@@ -402,19 +369,18 @@ impl Timeline {
         self.committed_position_ns.store(nanos, Ordering::Release);
     }
 
+    /// Report the current download byte position. The value is not
+    /// stored on the timeline — it exists only as a USDT probe point
+    /// (`#[kithara::probe]`) for download-progress observability.
     #[kithara::probe(position)]
     pub fn set_download_position(&self, position: u64) {
-        self.download_position.store(position, Ordering::Release);
-    }
-
-    pub fn set_eof(&self, eof: bool) {
-        self.replace_flags(TimelineFlags::EOF, eof);
+        let _ = position;
     }
 
     /// Toggle the `PLAYING` flag.
     ///
-    /// Orthogonal to `FLUSHING` / `SEEK_PENDING` / `EOF`: toggling
-    /// `PLAYING` does not affect the seek or EOF state.
+    /// Orthogonal to `FLUSHING` / `SEEK_PENDING`: toggling `PLAYING`
+    /// does not affect the seek state.
     pub fn set_playing(&self, playing: bool) {
         self.replace_flags(TimelineFlags::PLAYING, playing);
     }
@@ -441,6 +407,7 @@ impl Timeline {
         }
     }
 
+    #[kithara::probe(committed_ns = pos.end_position_ns, end_frame)]
     fn write_playhead(&self, pos: &ChunkPosition, end_frame: u64, _source_byte_end: Option<u64>) {
         let sr = u64::from(pos.sample_rate);
         if sr == 0 {
@@ -475,21 +442,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-
-    #[kithara::test]
-    fn download_position_defaults_to_zero() {
-        let timeline = Timeline::new();
-        assert_eq!(timeline.download_position(), 0);
-    }
-
-    #[kithara::test]
-    fn download_position_is_shared_between_clones() {
-        let timeline = Timeline::new();
-        let clone = timeline.clone();
-
-        timeline.set_download_position(512);
-        assert_eq!(clone.download_position(), 512);
-    }
 
     #[kithara::test]
     fn initiate_seek_sets_flushing_and_target() {
@@ -605,24 +557,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn set_eof_toggles_flag_without_affecting_others() {
-        let tl = Timeline::new();
-        assert!(!tl.is_eof());
-        tl.set_eof(true);
-        assert!(tl.is_eof());
-        assert!(!tl.is_flushing());
-        assert!(!tl.is_seek_pending());
-        tl.set_eof(false);
-        assert!(!tl.is_eof());
-    }
-
-    #[kithara::test]
-    fn flag_triple_matrix_matches_bitflags_snapshot() {
-        for mask in 0u8..8 {
+    fn flag_pair_matrix_matches_bitflags_snapshot() {
+        for mask in 0u8..4 {
             let tl = Timeline::new();
             let want_flushing = mask & 1 != 0;
             let want_seek_pending = mask & 2 != 0;
-            let want_eof = mask & 4 != 0;
 
             if want_flushing || want_seek_pending {
                 let _ = tl.initiate_seek(Duration::from_secs(1));
@@ -633,31 +572,24 @@ mod tests {
                     tl.clear_seek_pending(tl.seek_epoch());
                 }
             }
-            tl.set_eof(want_eof);
 
-            assert_eq!(tl.is_flushing(), want_flushing, "mask {mask:#05b} flushing");
+            assert_eq!(tl.is_flushing(), want_flushing, "mask {mask:#04b} flushing");
             assert_eq!(
                 tl.is_seek_pending(),
                 want_seek_pending,
-                "mask {mask:#05b} seek_pending"
+                "mask {mask:#04b} seek_pending"
             );
-            assert_eq!(tl.is_eof(), want_eof, "mask {mask:#05b} eof");
 
             let snapshot = tl.flags_snapshot_with(Ordering::Acquire);
             assert_eq!(
                 snapshot.contains(TimelineFlags::FLUSHING),
                 want_flushing,
-                "mask {mask:#05b} snapshot flushing"
+                "mask {mask:#04b} snapshot flushing"
             );
             assert_eq!(
                 snapshot.contains(TimelineFlags::SEEK_PENDING),
                 want_seek_pending,
-                "mask {mask:#05b} snapshot seek_pending"
-            );
-            assert_eq!(
-                snapshot.contains(TimelineFlags::EOF),
-                want_eof,
-                "mask {mask:#05b} snapshot eof"
+                "mask {mask:#04b} snapshot seek_pending"
             );
         }
     }
@@ -689,7 +621,7 @@ mod tests {
         let a = thread::spawn(move || {
             barrier_a.wait();
             for i in 0..ITER {
-                tl_a.set_eof(i % 2 == 0);
+                tl_a.set_playing(i % 2 == 0);
             }
         });
 
@@ -724,7 +656,10 @@ mod tests {
             .join()
             .expect("BUG: spawned thread C must not panic in this test");
 
-        assert!(!tl.is_eof(), "EOF must match the last deterministic write");
+        assert!(
+            !tl.is_playing(),
+            "PLAYING must match the last deterministic write"
+        );
         assert!(!tl.is_flushing(), "FLUSHING must be fully cleared");
         assert!(
             !tl.is_seek_pending(),
@@ -761,12 +696,11 @@ mod tests {
 
     #[kithara::test]
     fn playing_is_orthogonal_to_other_flags() {
-        for mask in 0u8..8 {
+        for mask in 0u8..4 {
             for &initial_playing in &[false, true] {
                 let tl = Timeline::new();
                 let want_flushing = mask & 1 != 0;
                 let want_seek_pending = mask & 2 != 0;
-                let want_eof = mask & 4 != 0;
 
                 if want_flushing || want_seek_pending {
                     let _ = tl.initiate_seek(Duration::from_secs(1));
@@ -777,31 +711,24 @@ mod tests {
                         tl.clear_seek_pending(tl.seek_epoch());
                     }
                 }
-                tl.set_eof(want_eof);
                 tl.set_playing(initial_playing);
 
                 assert_eq!(tl.is_playing(), initial_playing);
                 assert_eq!(
                     tl.is_flushing(),
                     want_flushing,
-                    "mask {mask:#05b} play={initial_playing} flushing"
+                    "mask {mask:#04b} play={initial_playing} flushing"
                 );
                 assert_eq!(
                     tl.is_seek_pending(),
                     want_seek_pending,
-                    "mask {mask:#05b} play={initial_playing} seek_pending"
-                );
-                assert_eq!(
-                    tl.is_eof(),
-                    want_eof,
-                    "mask {mask:#05b} play={initial_playing} eof"
+                    "mask {mask:#04b} play={initial_playing} seek_pending"
                 );
 
                 tl.set_playing(!initial_playing);
                 assert_eq!(tl.is_playing(), !initial_playing);
                 assert_eq!(tl.is_flushing(), want_flushing);
                 assert_eq!(tl.is_seek_pending(), want_seek_pending);
-                assert_eq!(tl.is_eof(), want_eof);
             }
         }
     }
