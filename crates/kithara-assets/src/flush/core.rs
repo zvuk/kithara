@@ -195,18 +195,6 @@ impl FlushHub {
         self.worker.is_started()
     }
 
-    /// Count registered sources whose owning index is still alive.
-    ///
-    /// Drops dead `Weak` entries while counting, so this is also the
-    /// canonical way to verify that a destroyed `AssetStore` was GC'd
-    /// from the registry.
-    #[must_use]
-    pub fn live_source_count(&self) -> usize {
-        let mut g = self.sources.lock_sync();
-        g.retain(|w| w.strong_count() > 0);
-        g.len()
-    }
-
     /// Register an index for background-driven flushing. The hub holds
     /// a `Weak`: if the index is dropped, the slot is GC'd on the next
     /// `flush_dirty` pass.

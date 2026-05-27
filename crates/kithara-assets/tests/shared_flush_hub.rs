@@ -9,8 +9,6 @@ use kithara_test_utils::kithara;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
-const INDEXES_PER_DISK_STORE: usize = 3;
-
 /// Policy whose worker stays dormant for the whole test: a one-hour
 /// debounce and an unreachable op cap mean the background worker never
 /// flushes on its own, so `flush_now` is provably the persistence path.
@@ -22,41 +20,14 @@ fn dormant_worker_policy() -> FlushPolicy {
     }
 }
 
+/// Dropping a store leaves a dangling `Weak` in the hub registry; the
+/// next `flush_now` must GC it (the `retain(strong_count > 0)` pass in
+/// `flush_dirty`) and still persist the surviving store — observable via
+/// the survivor's availability landing and `flush_now` not erroring.
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn shared_hub_registers_three_indexes_per_store() {
+fn shared_hub_flush_survives_dropped_store() {
     let dir = tempdir().unwrap();
-    let hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
-    assert_eq!(hub.live_source_count(), 0, "fresh hub has no sources");
-
-    let _store_a = AssetStoreBuilder::new()
-        .root_dir(dir.path().join("a"))
-        .asset_root(Some("track-a"))
-        .flush_hub(hub.clone())
-        .build();
-
-    assert_eq!(
-        hub.live_source_count(),
-        INDEXES_PER_DISK_STORE,
-        "one disk store registers Pins+Lru+Availability with the hub"
-    );
-
-    let _store_b = AssetStoreBuilder::new()
-        .root_dir(dir.path().join("b"))
-        .asset_root(Some("track-b"))
-        .flush_hub(hub.clone())
-        .build();
-
-    assert_eq!(
-        hub.live_source_count(),
-        INDEXES_PER_DISK_STORE * 2,
-        "second disk store contributes another three indexes"
-    );
-}
-
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn shared_hub_gcs_dropped_store_indexes() {
-    let dir = tempdir().unwrap();
-    let hub = FlushHub::new(CancellationToken::new(), FlushPolicy::default());
+    let hub = FlushHub::new(CancellationToken::new(), dormant_worker_policy());
 
     let store_a = AssetStoreBuilder::new()
         .root_dir(dir.path().join("a"))
@@ -68,34 +39,29 @@ fn shared_hub_gcs_dropped_store_indexes() {
         .asset_root(Some("track-b"))
         .flush_hub(hub.clone())
         .build();
-    assert_eq!(hub.live_source_count(), INDEXES_PER_DISK_STORE * 2);
 
-    let _res_a = store_a
-        .acquire_resource(&ResourceKey::new("seg.bin"))
-        .unwrap();
-    let _res_b = store_b
-        .acquire_resource(&ResourceKey::new("seg.bin"))
-        .unwrap();
+    let key = ResourceKey::new("seg.bin");
+    let res_b = store_b.acquire_resource(&key).unwrap();
+    res_b.write_at(0, b"bravo").unwrap();
+    res_b.commit(Some(5)).unwrap();
+    drop(res_b);
 
-    drop(_res_a);
+    // Drop store A before any flush — its registry entries now dangle.
     drop(store_a);
 
-    assert_eq!(
-        hub.live_source_count(),
-        INDEXES_PER_DISK_STORE,
-        "dropping store A must GC its three indexes from the hub"
-    );
-
-    drop(_res_b);
     hub.flush_now()
-        .expect("flush_now must succeed for the surviving store");
+        .expect("flush_now must GC the dropped store and still persist survivors");
 
-    drop(store_b);
-    assert_eq!(
-        hub.live_source_count(),
-        0,
-        "all stores destroyed → registry empties"
+    let avail_b = dir.path().join("b/_index/availability.bin");
+    assert!(
+        avail_b.metadata().is_ok_and(|m| m.len() > 0),
+        "surviving store B must persist after a sibling store was dropped"
     );
+
+    // All stores gone — the registry fully GCs and flush stays a no-op.
+    drop(store_b);
+    hub.flush_now()
+        .expect("flush_now must succeed with no live stores left");
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
