@@ -331,7 +331,37 @@ export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
 #   advance_to_next_item: documented public QueuePlayer API (AVQueuePlayer
 #   analogue) exposed to Swift via the uniffi FFI layer; the only in-tree Rust
 #   caller is a test.
-exempt = ["advance_to_next_item"]
+#   ensure_thread_pool: emitted by the #[kithara::test(browser)] macro on the
+#   WASM path (kithara_platform::tokio::ensure_thread_pool().await); the call
+#   lives in cfg-disabled macro expansion the default-target scan cannot see.
+#   env_mutation_lock: emitted by the #[kithara::test] macro as the env-mutation
+#   guard (kithara_platform::env_mutation_lock()); same macro-expansion blind
+#   spot as above.
+#   active_named_thread_count: thread-budget regression diagnostic. Production
+#   maintains the counter when naming threads; only the thread-leak regression
+#   tests read it. There is no production reader by design.
+#   track_mut: white-box accessor into the processor's private track arena, used
+#   by the *_internal handover/fade tests. Every production site reads the arena
+#   through a split field-borrow (self.tracks.get_mut inside a
+#   self.tracks_transitions.retain closure); a &mut self method cannot replace
+#   it without a borrow conflict. Relocating the tests in-crate would duplicate
+#   the integration crate's PcmReader mock.
+#   try_pop_notification: white-box drain of the processor->main notification
+#   channel; the processor is the producer side, so no production reader exists.
+#   Same relocation constraint as track_mut.
+#   drain_notifications: white-box drain+format of the active engine slot's
+#   notifications for *_internal ordering assertions; the public PlayerEvent bus
+#   path consumes-and-converts, losing the raw-notification granularity these
+#   tests assert.
+exempt = [
+    "advance_to_next_item",
+    "ensure_thread_pool",
+    "env_mutation_lock",
+    "active_named_thread_count",
+    "track_mut",
+    "try_pop_notification",
+    "drain_notifications",
+]
 # Path fragments whose defs `--fix` must never auto-delete: platform-gated
 # module dirs whose callers live in cfg-disabled or non-Rust (JNI) code the
 # scan cannot see. Reporting still lists them; deletion is held for review.
