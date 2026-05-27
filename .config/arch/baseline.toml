@@ -612,7 +612,6 @@ schema_version = 1
 "crates/kithara-play/src/impls/shared_player_state.rs" = 1
 "crates/kithara-play/src/impls/source_type.rs" = 1
 "crates/kithara-play/src/wasm_support.rs" = 1
-"crates/kithara-stream/src/media_rfc6381.rs" = 1
 "crates/kithara-test-macros/src/test/expand_async.rs" = 1
 "crates/kithara-test-macros/src/test/expand_sync.rs" = 1
 "crates/kithara-test-macros/src/test/fixture_args.rs" = 1

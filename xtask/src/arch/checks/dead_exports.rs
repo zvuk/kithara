@@ -135,7 +135,7 @@ fn emit(
             "{} `{}` ({}) is exported but {}",
             def.kind, def.name, def.crate_name, status,
         );
-        violations.push(Violation::warn(ID, key, msg));
+        violations.push(Violation::deny(ID, key, msg));
     }
     violations.sort_by(|a, b| a.key.cmp(&b.key));
     violations.dedup_by(|a, b| a.key == b.key);
