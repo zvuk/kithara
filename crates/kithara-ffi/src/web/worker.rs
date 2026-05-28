@@ -120,11 +120,11 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
                 .insert_with_id(id, source, after)
                 .map(|_| ())
                 .map_err(|e| e.to_string());
-            crate::web::js::send_reply(request_id, result);
+            crate::web::interop::send_reply(request_id, result);
         }
         WorkerCmd::Remove { id, request_id } => {
             let result = queue.remove(id).map_err(|e| e.to_string());
-            crate::web::js::send_reply(request_id, result);
+            crate::web::interop::send_reply(request_id, result);
         }
         WorkerCmd::Replace {
             index,
@@ -133,7 +133,7 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
             request_id,
         } => {
             let result = replace_track(queue, &build_state.borrow(), index, id, url);
-            crate::web::js::send_reply(request_id, result);
+            crate::web::interop::send_reply(request_id, result);
         }
         WorkerCmd::SelectQueue {
             id,
@@ -141,7 +141,7 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
             request_id,
         } => {
             let result = queue.select(id, transition).map_err(|e| e.to_string());
-            crate::web::js::send_reply(request_id, result);
+            crate::web::interop::send_reply(request_id, result);
         }
         WorkerCmd::RemoveAll => queue.clear(),
         WorkerCmd::SetAbrMode { variant_index } => {

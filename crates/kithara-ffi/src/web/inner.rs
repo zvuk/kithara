@@ -112,7 +112,7 @@ impl WasmInner {
     }
 
     fn next_request_id() -> u32 {
-        crate::web::js::next_request_id()
+        crate::web::interop::next_request_id()
     }
 
     fn id_at(&self, index: u32) -> Option<kithara_queue::TrackId> {
@@ -405,7 +405,7 @@ impl WasmInner {
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {
-        let salt = crate::web::js::generate_salt();
+        let salt = crate::web::interop::generate_salt();
         let rule = FfiKeyRule {
             processor,
             headers: None,
@@ -418,7 +418,7 @@ impl WasmInner {
 
     pub(crate) fn setup_hls_aes_with_rule(&self, rule: FfiKeyRule) {
         crate::web::key_processor_bridge::install_main_processor(Arc::clone(&rule.processor));
-        let salt = rule.salt.unwrap_or_else(crate::web::js::generate_salt);
+        let salt = rule.salt.unwrap_or_else(crate::web::interop::generate_salt);
         self.send(WorkerCmd::SetupHlsAes {
             salt,
             domains: rule.domains,
