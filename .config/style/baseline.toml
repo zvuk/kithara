@@ -1,64 +1,23 @@
 schema_version = 1
 
 [const_locality]
-"crates/kithara-app/src/crossfade.rs::PROGRESS_LOG_INTERVAL" = 1
-"crates/kithara-app/src/events.rs::SECONDS_PER_MINUTE" = 1
 "crates/kithara-app/src/gui/subscription.rs::TICK_INTERVAL_ACTIVE_MS" = 1
 "crates/kithara-app/src/gui/subscription.rs::TICK_INTERVAL_IDLE_MS" = 1
-"crates/kithara-app/src/tui/session.rs::CURSOR_GUARD_LINES" = 1
-"crates/kithara-app/tests/stage_drm_burst_e2e.rs::ENV_AUTH" = 1
-"crates/kithara-app/tests/stage_drm_burst_e2e.rs::PROBE_BURST_CONCURRENCY" = 1
-"crates/kithara-app/tests/stage_drm_burst_e2e.rs::PROBE_BURST_SEGMENTS" = 1
-"crates/kithara-app/tests/stage_drm_burst_e2e.rs::STAGE_UA" = 1
-"crates/kithara-app/tests/stage_drm_burst_e2e.rs::TRACK_MASTER" = 1
-"crates/kithara-assets/src/disk_store.rs::INDEX_INITIAL_SIZE" = 1
-"crates/kithara-assets/src/index/persist.rs::INITIAL_LEN" = 1
-"crates/kithara-decode/src/composed.rs::default_priming_tests::TEST_MP3_BYTES" = 1
-"crates/kithara-decode/src/gapless/probe.rs::LAME_PROBE_WINDOW_BYTES" = 1
 "crates/kithara-drm/src/decrypt.rs::AES_BLOCK_SIZE" = 1
-"crates/kithara-encode/src/types.rs::DEFAULT_LOSSY_BIT_RATE" = 1
 "crates/kithara-events/src/abr.rs::ABR_MODE_AUTO_THRESHOLD" = 1
 "crates/kithara-ffi/src/player.rs::SALT_LEN" = 1
-"crates/kithara-file/src/stream.rs::TMP_CLAIMED_POLL_INTERVAL" = 1
 "crates/kithara-play/src/impls/crossfade.rs::DEFAULT_CROSSFADE_DURATION" = 1
-"crates/kithara-play/src/impls/master_eq_node.rs::MIN_STEREO" = 1
-"crates/kithara-play/src/impls/player.rs::MIN_PLAYBACK_RATE" = 1
-"crates/kithara-play/src/impls/player_track.rs::MIN_STEREO_CHANNELS" = 1
 "crates/kithara-play/src/impls/shared_eq.rs::EQ_MAX_GAIN_DB" = 1
 "crates/kithara-play/src/impls/shared_eq.rs::EQ_MIN_GAIN_DB" = 1
-"crates/kithara-queue/src/loader.rs::tests::CAP_3" = 1
-"crates/kithara-stream/src/dl/downloader.rs::PEER_CMD_CHANNEL_CAPACITY" = 1
 "crates/kithara-stream/src/dl/registry.rs::SLOT_COUNT" = 1
-"crates/kithara-stream/src/dl/tests.rs::CANCEL_GUARD_SECS" = 1
-"crates/kithara-stream/src/dl/tests.rs::EVENT_BUS_CAPACITY" = 1
-"crates/kithara-stream/src/dl/tests.rs::FLOOD_DEADLINE_SECS" = 1
-"crates/kithara-stream/src/dl/tests.rs::POLL_MS" = 1
-"crates/kithara-stream/src/dl/tests.rs::REQUEST_TIMEOUT_SECS" = 1
 "crates/kithara-stream/src/dl/tests.rs::SLOW_DEADLINE_SECS" = 1
-"crates/kithara-stream/src/dl/tests.rs::SLOW_POLL_TIMEOUT_MS" = 1
-"crates/kithara-stream/src/dl/tests.rs::SLOW_SERVER_DELAY_MS" = 1
-"crates/kithara-stream/src/dl/tests.rs::SOFT_TIMEOUT_MS" = 1
-"crates/kithara-test-utils/src/hang/real/detector.rs::FALLBACK_TIMEOUT" = 1
 
 [struct_field_order]
-"crates/kithara-net/src/timeout.rs::TimeoutNet" = 1
 "crates/kithara-queue/src/queue/state.rs::Queue" = 1
 
 [struct_init_order]
 "crates/kithara-app/src/gui/app.rs:46::Self" = 1
-"crates/kithara-app/src/tui/session.rs:118::Position" = 1
-"crates/kithara-assets/src/cache.rs:138::Self" = 1
-"crates/kithara-assets/src/index/availability/disk.rs:160::AvailabilityFile" = 1
-"crates/kithara-audio/src/resampler.rs:252::Self" = 1
-"crates/kithara-decode/src/symphonia/aac_fdk.rs:101::Self" = 1
-"crates/kithara-decode/src/symphonia/aac_fdk.rs:123::Self" = 1
-"crates/kithara-encode/src/fdk/aac_he_v2.rs:75::EncodedAccessUnit" = 1
-"crates/kithara-encode/src/fdk/aac_he_v2.rs:94::EncodedAccessUnit" = 1
 "crates/kithara-hls/src/variant.rs:140::Self" = 1
 "crates/kithara-hls/src/variant.rs:488::InitEntry" = 1
 "crates/kithara-hls/src/variant.rs:535::SegmentEntry" = 1
 "crates/kithara-play/src/impls/player.rs:632::Self" = 1
-"crates/kithara-play/src/impls/player.rs:725::ResourceConfig" = 1
-"crates/kithara-play/src/impls/player_track.rs:154::Self" = 1
-"crates/kithara-stream/src/dl/tests.rs:549::DownloaderConfig" = 1
-"crates/kithara-test-utils/src/hang/real/detector.rs:66::Self" = 1

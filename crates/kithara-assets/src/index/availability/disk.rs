@@ -157,7 +157,7 @@ fn write_aggregate<R: ResourceExt>(
             (entry.key().clone(), AssetAvailabilityFile { resources })
         })
         .collect();
-    let file = AvailabilityFile { version: 1, assets };
+    let file = AvailabilityFile { assets, version: 1 };
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&file)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
     if durable {

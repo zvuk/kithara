@@ -37,9 +37,6 @@ use crate::{
     types::{PlayerStatus, SessionDuckingMode, SlotId},
 };
 
-/// Minimum playback rate to prevent stalling.
-const MIN_PLAYBACK_RATE: f32 = 0.01;
-
 struct QueuedResource {
     item_id: Option<Arc<str>>,
     resource: Resource,
@@ -164,6 +161,9 @@ pub struct PlayerImpl {
 }
 
 impl PlayerImpl {
+    /// Minimum playback rate to prevent stalling.
+    const MIN_PLAYBACK_RATE: f32 = 0.01;
+
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig) -> Self {
@@ -662,7 +662,7 @@ impl PlayerImpl {
 
     /// Start playback at the configured default rate.
     pub fn play(&self) {
-        let rate = self.default_rate().max(MIN_PLAYBACK_RATE);
+        let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(rate, Ordering::Relaxed);
         self.playback_rate_shared.store(rate, Ordering::Relaxed);
 
@@ -723,11 +723,11 @@ impl PlayerImpl {
         let bus = config.bus.or_else(|| Some(self.bus.scoped()));
         let cancel = config.cancel.or_else(|| Some(self.cancel.child_token()));
         super::config::ResourceConfig {
+            bus,
+            cancel,
             worker: Some(self.engine.worker().clone()),
             host_sample_rate: std::num::NonZeroU32::new(self.engine.master_sample_rate()),
             gapless_mode: self.config.gapless_mode,
-            bus,
-            cancel,
             ..config
         }
     }
@@ -1020,7 +1020,7 @@ impl PlayerImpl {
     /// Updates the local rate and propagates to the audio pipeline resampler
     /// via `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
     pub fn set_rate(&self, rate: f32) {
-        let clamped = rate.max(MIN_PLAYBACK_RATE);
+        let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
         self.rate.store(clamped, Ordering::Relaxed);
         self.playback_rate_shared.store(clamped, Ordering::Relaxed);
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(clamped));

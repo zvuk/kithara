@@ -15,9 +15,6 @@ use kithara_audio::{EqBandConfig, IsolatorEq};
 
 use super::shared_eq::{EQ_MAX_GAIN_DB, EQ_MIN_GAIN_DB};
 
-/// Minimum stereo channel count for processing.
-const MIN_STEREO: usize = 2;
-
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {
     pub(crate) frequency: f32,
@@ -142,6 +139,8 @@ impl AudioNodeProcessor for MasterEqProcessor {
         events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
+        /// Minimum stereo channel count for processing.
+        const MIN_STEREO: usize = 2;
         let mut dirty = false;
         for patch in events.drain_patches::<MasterEqNode>() {
             self.params.apply(patch);

@@ -64,9 +64,9 @@ impl<C: HangDump> HangDetector<C> {
     #[must_use]
     pub fn new(label: &'static str, timeout: Duration) -> Self {
         Self {
-            deadline: Instant::now() + timeout,
             label,
             timeout,
+            deadline: Instant::now() + timeout,
             ctx: None,
             dump_dir: None,
             fired: false,
@@ -131,11 +131,10 @@ impl<C: HangDump> HangDetector<C> {
     }
 }
 
-// xtask-lint-ignore: retry_fallback
-pub(crate) const FALLBACK_TIMEOUT: Duration = Duration::from_secs(10);
-
 #[must_use]
 pub fn default_timeout() -> Duration {
+    // xtask-lint-ignore: retry_fallback
+    const FALLBACK_TIMEOUT: Duration = Duration::from_secs(10);
     default_timeout_with_env(FALLBACK_TIMEOUT)
 }
 

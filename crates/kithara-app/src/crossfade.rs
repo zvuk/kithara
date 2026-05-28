@@ -1,7 +1,5 @@
 use std::time::{Duration, Instant};
 
-const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(1);
-
 pub struct CrossfadeClock {
     duration: Duration,
     started_at: Instant,
@@ -37,17 +35,19 @@ impl Default for ProgressLog {
 }
 
 impl ProgressLog {
+    const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(1);
+
     #[must_use]
     // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
         Self {
-            last_emit: Instant::now() - PROGRESS_LOG_INTERVAL,
+            last_emit: Instant::now() - Self::PROGRESS_LOG_INTERVAL,
         }
     }
 
     pub fn should_emit(&mut self) -> bool {
         let now = Instant::now();
-        if now.duration_since(self.last_emit) < PROGRESS_LOG_INTERVAL {
+        if now.duration_since(self.last_emit) < Self::PROGRESS_LOG_INTERVAL {
             return false;
         }
         self.last_emit = now;

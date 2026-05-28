@@ -15,10 +15,9 @@ pub fn is_progress_event(event: &Event) -> bool {
     )
 }
 
-const SECONDS_PER_MINUTE: u64 = 60;
-
 #[must_use]
 pub fn format_seconds(seconds: f64) -> String {
+    const SECONDS_PER_MINUTE: u64 = 60;
     let whole = if seconds.is_finite() && seconds > 0.0 {
         Duration::from_secs_f64(seconds).as_secs()
     } else {

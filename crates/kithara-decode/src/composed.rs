@@ -300,12 +300,11 @@ mod default_priming_tests {
     use super::*;
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
-    const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/test.mp3"
-    ));
-
     fn build_mp3_decoder() -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec> {
+        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/test.mp3"
+        ));
         let cursor = Cursor::new(TEST_MP3_BYTES.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();

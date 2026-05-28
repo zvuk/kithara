@@ -73,8 +73,8 @@ impl AacHeV2Encoder {
             let encoded = encoder.encode(input, &mut output)?;
             if encoded.output_size > 0 {
                 units.push(EncodedAccessUnit {
-                    bytes: output[..encoded.output_size].to_vec(),
                     pts,
+                    bytes: output[..encoded.output_size].to_vec(),
                     dts: pts,
                     duration: u32::try_from(frame_pts_step).unwrap_or(u32::MAX),
                     is_sync: true,
@@ -92,8 +92,8 @@ impl AacHeV2Encoder {
                 break;
             }
             units.push(EncodedAccessUnit {
-                bytes: output[..encoded.output_size].to_vec(),
                 pts,
+                bytes: output[..encoded.output_size].to_vec(),
                 dts: pts,
                 duration: u32::try_from(frame_pts_step).unwrap_or(u32::MAX),
                 is_sync: true,
