@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use syn::{
     BinOp, Expr, ExprBinary, ExprCall, ExprIf, ExprMatch, ExprMethodCall, ExprTry, ImplItem, Item,
-    ItemImpl, Local, Stmt, Visibility,
+    ItemImpl, Local, Stmt, Type, Visibility,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -19,21 +19,31 @@ pub(crate) const ID: &str = "function_branch_density";
 
 pub(crate) struct FunctionBranchDensity;
 
+/// Resolution key for a call site or definition. Resolution is purely
+/// syntactic: a free function resolves by name, a method resolves by the
+/// `(receiver type, method name)` pair. Anything whose receiver type is
+/// not syntactically known is dropped at the call site (UNRESOLVED) rather
+/// than fanned out across every same-named function in the workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FnKey {
+    Free(String),
+    Method { ty: String, name: String },
+}
+
 #[derive(Debug, Clone)]
 struct FnInfo {
     /// Branches in *this* function's body (no descent).
     own_branches: usize,
-    /// Names of called functions (last path segment / method ident).
-    calls: Vec<String>,
+    /// Resolved keys of called functions. Unresolved calls are dropped
+    /// (not traversed) — never inflated via name collision.
+    calls: Vec<FnKey>,
     /// `(rel_path, line, col)` for the function declaration.
     span: (String, usize, usize),
     /// `pub` / `pub(crate)` / `pub(super)` etc. — only public entries
     /// drive the walk.
     is_public: bool,
-    /// Function name (used as registry key; collisions across the
-    /// workspace are conservative — both implementations get walked,
-    /// inflating but never deflating the metric).
-    name: String,
+    /// Registry key for this definition. Used by the cycle guard.
+    key: FnKey,
 }
 
 impl Check for FunctionBranchDensity {
@@ -44,7 +54,7 @@ impl Check for FunctionBranchDensity {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.function_branch_density;
         let exempt = compile_globs(&cfg.exempt_files);
-        let mut registry: HashMap<String, Vec<FnInfo>> = HashMap::new();
+        let mut registry: HashMap<FnKey, Vec<FnInfo>> = HashMap::new();
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let rel_path = relative_to(ctx.workspace_root, &path).to_path_buf();
             let rel = rel_path.to_string_lossy().replace('\\', "/");
@@ -60,7 +70,7 @@ impl Check for FunctionBranchDensity {
         let mut violations = Vec::new();
         for entries in registry.values() {
             for entry in entries.iter().filter(|e| e.is_public) {
-                let mut visited: HashSet<&str> = HashSet::new();
+                let mut visited: HashSet<*const FnInfo> = HashSet::new();
                 let (longest, total) = walk_density(entry, &registry, &mut visited);
                 let path_breach = longest > cfg.warn_path;
                 let total_breach = total > cfg.warn_total;
@@ -77,7 +87,7 @@ impl Check for FunctionBranchDensity {
                      of conditional jumps the CPU sees. Consider caching predicate state \
                      (compute once when it changes, read once on the hot path), eliminating \
                      redundant work, or using a tag-enum + match instead of branch ladders.",
-                    entry.name
+                    fn_name(&entry.key)
                 );
                 violations.push(Violation::warn(ID, key, msg));
             }
@@ -87,20 +97,29 @@ impl Check for FunctionBranchDensity {
     }
 }
 
+fn fn_name(key: &FnKey) -> &str {
+    match key {
+        FnKey::Free(name) | FnKey::Method { name, .. } => name,
+    }
+}
+
 /// DFS through the call graph counting branches. Returns
-/// `(longest_path_branches, total_branches)`.
+/// `(longest_path_branches, total_branches)`. The cycle guard uses the
+/// `FnInfo` pointer identity so that distinct definitions sharing a key
+/// (rare cross-crate collisions) are still visited independently while a
+/// recursive call back into the same definition terminates.
 fn walk_density<'a>(
     entry: &'a FnInfo,
-    registry: &'a HashMap<String, Vec<FnInfo>>,
-    visited: &mut HashSet<&'a str>,
+    registry: &'a HashMap<FnKey, Vec<FnInfo>>,
+    visited: &mut HashSet<*const FnInfo>,
 ) -> (usize, usize) {
-    if !visited.insert(entry.name.as_str()) {
+    if !visited.insert(entry as *const FnInfo) {
         return (0, 0);
     }
     let mut deepest_callee_path = 0;
     let mut callee_total = 0;
-    for callee_name in &entry.calls {
-        let Some(targets) = registry.get(callee_name) else {
+    for callee_key in &entry.calls {
+        let Some(targets) = registry.get(callee_key) else {
             continue;
         };
         for target in targets {
@@ -118,19 +137,20 @@ fn walk_density<'a>(
 }
 
 /// Walk a parsed file once and stash every function/method definition
-/// into the registry keyed by name.
-fn collect_functions(file: &syn::File, rel: &str, registry: &mut HashMap<String, Vec<FnInfo>>) {
+/// into the registry keyed by `FnKey`.
+fn collect_functions(file: &syn::File, rel: &str, registry: &mut HashMap<FnKey, Vec<FnInfo>>) {
     for item in &file.items {
         match item {
             Item::Fn(item_fn) => {
                 let info = build_fn_info(
                     rel,
-                    &item_fn.sig.ident.to_string(),
+                    FnKey::Free(item_fn.sig.ident.to_string()),
+                    None,
                     is_public_visibility(&item_fn.vis),
                     item_fn.span(),
                     &item_fn.block.stmts,
                 );
-                registry.entry(info.name.clone()).or_default().push(info);
+                registry.entry(info.key.clone()).or_default().push(info);
             }
             Item::Impl(item_impl) => {
                 walk_impl(rel, item_impl, registry);
@@ -150,19 +170,33 @@ fn collect_functions(file: &syn::File, rel: &str, registry: &mut HashMap<String,
     }
 }
 
-fn walk_impl(rel: &str, item: &ItemImpl, registry: &mut HashMap<String, Vec<FnInfo>>) {
+fn walk_impl(rel: &str, item: &ItemImpl, registry: &mut HashMap<FnKey, Vec<FnInfo>>) {
     let trait_impl = item.trait_.is_some();
+    let self_ty = self_type_name(&item.self_ty);
     for impl_item in &item.items {
         if let ImplItem::Fn(method) = impl_item {
             let is_public = trait_impl || is_public_visibility(&method.vis);
+            let name = method.sig.ident.to_string();
+            // Methods on a syntactically-known Self type get a Method key;
+            // impls on non-path self types (e.g. `impl (A, B)`) fall back to
+            // a Free key — sound because such methods are only ever reached
+            // via UNRESOLVED method calls, so they are entry-only.
+            let key = match &self_ty {
+                Some(ty) => FnKey::Method {
+                    ty: ty.clone(),
+                    name,
+                },
+                None => FnKey::Free(name),
+            };
             let info = build_fn_info(
                 rel,
-                &method.sig.ident.to_string(),
+                key,
+                self_ty.clone(),
                 is_public,
                 method.span(),
                 &method.block.stmts,
             );
-            registry.entry(info.name.clone()).or_default().push(info);
+            registry.entry(info.key.clone()).or_default().push(info);
             for stmt in &method.block.stmts {
                 if let Stmt::Item(Item::Mod(m)) = stmt
                     && let Some((_, items)) = &m.content
@@ -179,9 +213,19 @@ fn walk_impl(rel: &str, item: &ItemImpl, registry: &mut HashMap<String, Vec<FnIn
     }
 }
 
+/// Last path-segment ident of a `Self` type, if it is a plain type path.
+fn self_type_name(ty: &Type) -> Option<String> {
+    if let Type::Path(tp) = ty {
+        tp.path.segments.last().map(|s| s.ident.to_string())
+    } else {
+        None
+    }
+}
+
 fn build_fn_info(
     rel: &str,
-    name: &str,
+    key: FnKey,
+    cur_self: Option<String>,
     is_public: bool,
     span: proc_macro2::Span,
     body: &[Stmt],
@@ -189,6 +233,7 @@ fn build_fn_info(
     let mut counter = BodyCounter {
         own_branches: 0,
         calls: Vec::new(),
+        cur_self,
     };
     counter.visit_stmts(body);
     let s = span.start();
@@ -197,7 +242,7 @@ fn build_fn_info(
         calls: counter.calls,
         span: (rel.to_string(), s.line, s.column),
         is_public,
-        name: name.to_string(),
+        key,
     }
 }
 
@@ -207,7 +252,10 @@ fn is_public_visibility(vis: &Visibility) -> bool {
 
 struct BodyCounter {
     own_branches: usize,
-    calls: Vec<String>,
+    calls: Vec<FnKey>,
+    /// The Self type of the enclosing impl, if any. Drives `self`/`Self`
+    /// method-call resolution.
+    cur_self: Option<String>,
 }
 
 impl BodyCounter {
@@ -215,6 +263,57 @@ impl BodyCounter {
         for s in stmts {
             self.visit_stmt(s);
         }
+    }
+
+    /// Resolve a method-call receiver/method to a key, or `None` (UNRESOLVED).
+    fn resolve_method_call(&self, node: &ExprMethodCall) -> Option<FnKey> {
+        let name = node.method.to_string();
+        if receiver_is_self(node.receiver.as_ref()) {
+            self.cur_self.as_ref().map(|ty| FnKey::Method {
+                ty: ty.clone(),
+                name,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Resolve a path-function call to a key, or `None` (UNRESOLVED).
+    fn resolve_path_call(&self, node: &ExprCall) -> Option<FnKey> {
+        let Expr::Path(path) = node.func.as_ref() else {
+            return None;
+        };
+        let segs = &path.path.segments;
+        let last = segs.last()?.ident.to_string();
+        if segs.len() >= 2 {
+            let prev = segs[segs.len() - 2].ident.to_string();
+            if prev == "Self" {
+                return self.cur_self.as_ref().map(|ty| FnKey::Method {
+                    ty: ty.clone(),
+                    name: last,
+                });
+            }
+            Some(FnKey::Method {
+                ty: prev,
+                name: last,
+            })
+        } else {
+            Some(FnKey::Free(last))
+        }
+    }
+}
+
+fn receiver_is_self(expr: &Expr) -> bool {
+    if let Expr::Path(path) = expr {
+        path.qself.is_none()
+            && path.path.segments.len() == 1
+            && path
+                .path
+                .segments
+                .first()
+                .is_some_and(|s| s.ident == "self" || s.ident == "Self")
+    } else {
+        false
     }
 }
 
@@ -269,16 +368,16 @@ impl<'ast> Visit<'ast> for BodyCounter {
     }
 
     fn visit_expr_call(&mut self, node: &'ast ExprCall) {
-        if let Expr::Path(path) = node.func.as_ref()
-            && let Some(seg) = path.path.segments.last()
-        {
-            self.calls.push(seg.ident.to_string());
+        if let Some(key) = self.resolve_path_call(node) {
+            self.calls.push(key);
         }
         visit::visit_expr_call(self, node);
     }
 
     fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
-        self.calls.push(node.method.to_string());
+        if let Some(key) = self.resolve_method_call(node) {
+            self.calls.push(key);
+        }
         visit::visit_expr_method_call(self, node);
     }
 }
@@ -292,9 +391,33 @@ mod tests {
         let mut counter = BodyCounter {
             own_branches: 0,
             calls: Vec::new(),
+            cur_self: None,
         };
         counter.visit_stmts(&block.stmts);
         counter.own_branches
+    }
+
+    /// Count branches and collect resolved call keys for a body with an
+    /// optional enclosing Self type.
+    fn analyze(body: &str, cur_self: Option<&str>) -> (usize, Vec<FnKey>) {
+        let block: syn::Block = syn::parse_str(body).expect("valid Rust block");
+        let mut counter = BodyCounter {
+            own_branches: 0,
+            calls: Vec::new(),
+            cur_self: cur_self.map(str::to_string),
+        };
+        counter.visit_stmts(&block.stmts);
+        (counter.own_branches, counter.calls)
+    }
+
+    fn leaf(key: FnKey, own: usize) -> FnInfo {
+        FnInfo {
+            own_branches: own,
+            calls: Vec::new(),
+            span: ("x.rs".into(), 1, 0),
+            is_public: true,
+            key,
+        }
     }
 
     #[test]
@@ -333,22 +456,164 @@ mod tests {
     }
 
     #[test]
-    fn collects_call_targets() {
-        let block: syn::Block = syn::parse_str(
+    fn collects_free_and_type_qualified_calls() {
+        let (_, calls) = analyze(
             r#"{
                 helper(a);
-                obj.method(b);
                 module::path::call(c);
+                Foo::bar(d);
             }"#,
-        )
-        .unwrap();
-        let mut counter = BodyCounter {
-            own_branches: 0,
-            calls: Vec::new(),
+            None,
+        );
+        assert!(calls.contains(&FnKey::Free("helper".into())));
+        // `module::path::call` → second-to-last segment `path` treated as type.
+        assert!(calls.contains(&FnKey::Method {
+            ty: "path".into(),
+            name: "call".into()
+        }));
+        assert!(calls.contains(&FnKey::Method {
+            ty: "Foo".into(),
+            name: "bar".into()
+        }));
+    }
+
+    #[test]
+    fn non_self_method_receiver_is_unresolved() {
+        let (_, calls) = analyze(
+            r#"{
+                value.method(b);
+            }"#,
+            Some("Foo"),
+        );
+        // A non-self receiver carries no syntactic type → not traversable.
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn self_method_call_resolves_to_cur_self() {
+        let (_, calls) = analyze(
+            r#"{
+                self.helper(b);
+            }"#,
+            Some("Foo"),
+        );
+        assert_eq!(
+            calls,
+            vec![FnKey::Method {
+                ty: "Foo".into(),
+                name: "helper".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn self_uppercase_path_call_resolves_to_cur_self() {
+        let (_, calls) = analyze(
+            r#"{
+                let _x = Self::make();
+            }"#,
+            Some("Widget"),
+        );
+        assert_eq!(
+            calls,
+            vec![FnKey::Method {
+                ty: "Widget".into(),
+                name: "make".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn self_method_without_cur_self_is_unresolved() {
+        // No enclosing impl → cannot resolve `self.x()`.
+        let (_, calls) = analyze(
+            r#"{
+                self.helper(b);
+            }"#,
+            None,
+        );
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn walk_resolves_type_aware_not_by_bare_name() {
+        // Two methods named `new` on different types with different branch
+        // counts. A caller of `Foo::new` must pick up Foo's count, not Bar's.
+        let mut registry: HashMap<FnKey, Vec<FnInfo>> = HashMap::new();
+        registry
+            .entry(FnKey::Method {
+                ty: "Foo".into(),
+                name: "new".into(),
+            })
+            .or_default()
+            .push(leaf(
+                FnKey::Method {
+                    ty: "Foo".into(),
+                    name: "new".into(),
+                },
+                3,
+            ));
+        registry
+            .entry(FnKey::Method {
+                ty: "Bar".into(),
+                name: "new".into(),
+            })
+            .or_default()
+            .push(leaf(
+                FnKey::Method {
+                    ty: "Bar".into(),
+                    name: "new".into(),
+                },
+                99,
+            ));
+
+        let caller = FnInfo {
+            own_branches: 1,
+            calls: vec![FnKey::Method {
+                ty: "Foo".into(),
+                name: "new".into(),
+            }],
+            span: ("x.rs".into(), 10, 0),
+            is_public: true,
+            key: FnKey::Free("caller".into()),
         };
-        counter.visit_stmts(&block.stmts);
-        assert!(counter.calls.contains(&"helper".to_string()));
-        assert!(counter.calls.contains(&"method".to_string()));
-        assert!(counter.calls.contains(&"call".to_string()));
+        let mut visited = HashSet::new();
+        let (longest, total) = walk_density(&caller, &registry, &mut visited);
+        // 1 (own) + 3 (Foo::new), Bar::new (99) must be excluded.
+        assert_eq!(longest, 4);
+        assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn walk_excludes_unresolved_method_callee_branches() {
+        // The callee's branches are excluded because the call site is an
+        // unresolved non-self method call.
+        let mut registry: HashMap<FnKey, Vec<FnInfo>> = HashMap::new();
+        registry
+            .entry(FnKey::Method {
+                ty: "Heavy".into(),
+                name: "method".into(),
+            })
+            .or_default()
+            .push(leaf(
+                FnKey::Method {
+                    ty: "Heavy".into(),
+                    name: "method".into(),
+                },
+                100,
+            ));
+
+        let (_, calls) = analyze(r#"{ value.method(b); }"#, Some("Foo"));
+        let caller = FnInfo {
+            own_branches: 2,
+            calls,
+            span: ("x.rs".into(), 1, 0),
+            is_public: true,
+            key: FnKey::Free("caller".into()),
+        };
+        let mut visited = HashSet::new();
+        let (longest, total) = walk_density(&caller, &registry, &mut visited);
+        assert_eq!(longest, 2);
+        assert_eq!(total, 2);
     }
 }
