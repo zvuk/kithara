@@ -106,14 +106,8 @@ impl DriverIo for MmapDriver {
     }
 
     fn try_fast_check(&self, range: &Range<u64>) -> bool {
-        let mut found_match = false;
-        while let Some(ready) = self.ready_ranges.pop() {
-            if ready.start <= range.start && ready.end >= range.end {
-                found_match = true;
-                break;
-            }
-        }
-        found_match
+        std::iter::from_fn(|| self.ready_ranges.pop())
+            .any(|ready| ready.start <= range.start && ready.end >= range.end)
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]

@@ -132,8 +132,6 @@ schema_version = 1
 "crates/kithara-decode/src/factory/inner.rs:153:4" = 1
 "crates/kithara-decode/src/factory/inner.rs:181:4" = 1
 "crates/kithara-decode/src/factory/inner.rs:218:4" = 1
-"crates/kithara-decode/src/factory/probe.rs:18:0" = 1
-"crates/kithara-decode/src/factory/probe.rs:25:0" = 1
 "crates/kithara-decode/src/fmp4/demuxer.rs:156:4" = 1
 "crates/kithara-decode/src/fmp4/demuxer.rs:89:4" = 1
 "crates/kithara-decode/src/fmp4/parsing.rs:402:0" = 1
@@ -236,7 +234,6 @@ schema_version = 1
 [guard_cascade]
 "crates/kithara-app/src/gui/view.rs:970:4" = 1
 "crates/kithara-assets/src/flush/worker.rs:81:12" = 1
-"crates/kithara-decode/src/factory/probe.rs:33:4" = 1
 "crates/kithara-encode/src/fdk/aac_he_v2.rs:128:4" = 1
 "crates/kithara-encode/src/ffmpeg/aac.rs:31:8" = 1
 "crates/kithara-encode/src/ffmpeg/flac.rs:211:4" = 1
@@ -312,10 +309,8 @@ schema_version = 1
 "crates/kithara-test-macros/src/test/shared.rs:178:30" = 1
 
 [loop_flag_accumulator]
-"crates/kithara-abr/src/handle.rs:412:seen" = 1
 "crates/kithara-app/src/tui/runner.rs:98:tick_error_logged" = 1
 "crates/kithara-queue/src/loader.rs:134:marked" = 1
-"crates/kithara-storage/src/backend/mmap/io.rs:110:found_match" = 1
 
 [parallel_loops]
 "crates/kithara-hls/src/variant/tests.rs:448:4::cmds" = 1

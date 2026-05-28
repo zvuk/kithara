@@ -408,16 +408,16 @@ mod tests {
         };
         handle.notify_commit(decision, 0, Duration::ZERO, Instant::now());
 
-        let mut seen = false;
-        while let Ok(event) = rx.try_recv() {
+        let found = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| {
             if let Event::Abr(AbrEvent::VariantApplied { from, to, reason }) = event {
                 assert_eq!(from, 0);
                 assert_eq!(to, 2);
                 assert_eq!(reason, AbrReason::UpSwitch);
-                seen = true;
-                break;
+                Some(())
+            } else {
+                None
             }
-        }
-        assert!(seen, "expected VariantApplied event on the bus");
+        });
+        assert!(found.is_some(), "expected VariantApplied event on the bus");
     }
 }
