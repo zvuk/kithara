@@ -16,6 +16,7 @@ use iced::{
         text, text_input, vertical_slider,
     },
 };
+use kithara_queue::TrackEntry;
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -478,68 +479,71 @@ fn view_playlist(state: &Kithara) -> Element<'_, Message> {
         .into();
     }
 
-    let mut tracks = column![]
-        .spacing(Consts::PLAYLIST_SPACING)
-        .width(Length::Fill);
-
-    for (index, entry) in state.ui_state.tracks.iter().enumerate() {
-        let is_current = state.ui_state.current_track_index == Some(index);
-        let is_selected = state.selected_track_index == Some(index);
-        let blink_on = u64::from(state.blink_counter / Consts::BLINK_DIVISOR)
-            .is_multiple_of(Consts::BLINK_PERIOD);
-        let row = TrackRow::classify(&entry.status, is_current);
-        let text_color = match &row {
-            TrackRow::Failed => p.danger,
-            TrackRow::SlowCurrent => {
-                if blink_on {
-                    p.warning
-                } else {
-                    p.muted
-                }
-            }
-            TrackRow::Slow => p.warning,
-            TrackRow::Current => p.accent,
-            TrackRow::Normal => p.text,
-        };
-        let index_color = match &row {
-            TrackRow::Failed => p.danger,
-            TrackRow::SlowCurrent => {
-                if blink_on {
-                    p.warning
-                } else {
-                    p.muted
-                }
-            }
-            TrackRow::Slow => p.warning,
-            TrackRow::Current => p.accent,
-            TrackRow::Normal => p.muted,
-        };
-        let track_name = truncate_name(&entry.name, Consts::PLAYLIST_MAX_NAME_CHARS);
-
-        let item = button(
-            row![
-                text(format!("{:02}", index + 1))
-                    .size(Consts::PLAYLIST_INDEX_FONT)
-                    .color(index_color),
-                text(track_name)
-                    .size(Consts::PLAYLIST_TRACK_FONT)
-                    .color(text_color),
-            ]
-            .spacing(Consts::ELEMENT_SPACING)
-            .align_y(Alignment::Center),
-        )
-        .width(Length::Fill)
-        .padding([
-            Consts::PLAYLIST_ITEM_PADDING_Y,
-            Consts::PLAYLIST_ITEM_PADDING_X,
-        ])
-        .style(move |_theme, status| playlist_item_style(p, is_current, is_selected, status))
-        .on_press(Message::SelectTrack(index));
-
-        tracks = tracks.push(item);
-    }
+    let tracks = state.ui_state.tracks.iter().enumerate().fold(
+        column![]
+            .spacing(Consts::PLAYLIST_SPACING)
+            .width(Length::Fill),
+        |tracks, (index, entry)| tracks.push(view_track_row(state, index, entry)),
+    );
 
     scrollable(tracks).height(Length::Fill).into()
+}
+
+fn view_track_row<'a>(state: &Kithara, index: usize, entry: &TrackEntry) -> Element<'a, Message> {
+    let p = state.palette;
+    let is_current = state.ui_state.current_track_index == Some(index);
+    let is_selected = state.selected_track_index == Some(index);
+    let blink_on =
+        u64::from(state.blink_counter / Consts::BLINK_DIVISOR).is_multiple_of(Consts::BLINK_PERIOD);
+    let row = TrackRow::classify(&entry.status, is_current);
+    let text_color = match &row {
+        TrackRow::Failed => p.danger,
+        TrackRow::SlowCurrent => {
+            if blink_on {
+                p.warning
+            } else {
+                p.muted
+            }
+        }
+        TrackRow::Slow => p.warning,
+        TrackRow::Current => p.accent,
+        TrackRow::Normal => p.text,
+    };
+    let index_color = match &row {
+        TrackRow::Failed => p.danger,
+        TrackRow::SlowCurrent => {
+            if blink_on {
+                p.warning
+            } else {
+                p.muted
+            }
+        }
+        TrackRow::Slow => p.warning,
+        TrackRow::Current => p.accent,
+        TrackRow::Normal => p.muted,
+    };
+    let track_name = truncate_name(&entry.name, Consts::PLAYLIST_MAX_NAME_CHARS);
+
+    button(
+        row![
+            text(format!("{:02}", index + 1))
+                .size(Consts::PLAYLIST_INDEX_FONT)
+                .color(index_color),
+            text(track_name)
+                .size(Consts::PLAYLIST_TRACK_FONT)
+                .color(text_color),
+        ]
+        .spacing(Consts::ELEMENT_SPACING)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding([
+        Consts::PLAYLIST_ITEM_PADDING_Y,
+        Consts::PLAYLIST_ITEM_PADDING_X,
+    ])
+    .style(move |_theme, status| playlist_item_style(p, is_current, is_selected, status))
+    .on_press(Message::SelectTrack(index))
+    .into()
 }
 
 fn view_equalizer(state: &Kithara) -> Element<'_, Message> {
@@ -967,34 +971,32 @@ fn abr_button<'a>(label: &str, active: bool, p: GuiPalette, msg: Message) -> Ele
 }
 
 fn track_subtitle(state: &Kithara) -> String {
-    let Some(index) = state.ui_state.current_track_index else {
-        return "Artist / Album unavailable".to_string();
-    };
-    let Some(entry) = state.ui_state.tracks.get(index) else {
-        return "Artist / Album unavailable".to_string();
-    };
-    let Some(url) = entry.url.as_deref() else {
-        return "Artist / Album unavailable".to_string();
-    };
+    let resolved = state
+        .ui_state
+        .current_track_index
+        .and_then(|index| state.ui_state.tracks.get(index))
+        .and_then(|entry| entry.url.as_deref())
+        .and_then(|url| {
+            let path = Path::new(url);
+            let album = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|p| p.to_str());
+            let artist = path
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.file_name())
+                .and_then(|p| p.to_str());
+            match (artist, album) {
+                (Some(artist), Some(album)) if !artist.is_empty() && !album.is_empty() => {
+                    Some(format!("{artist} / {album}"))
+                }
+                (None, Some(album)) if !album.is_empty() => Some(album.to_string()),
+                _ => None,
+            }
+        });
 
-    let path = Path::new(url);
-    let album = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|p| p.to_str());
-    let artist = path
-        .parent()
-        .and_then(|p| p.parent())
-        .and_then(|p| p.file_name())
-        .and_then(|p| p.to_str());
-
-    match (artist, album) {
-        (Some(artist), Some(album)) if !artist.is_empty() && !album.is_empty() => {
-            format!("{artist} / {album}")
-        }
-        (None, Some(album)) if !album.is_empty() => album.to_string(),
-        _ => "Artist / Album unavailable".to_string(),
-    }
+    resolved.unwrap_or_else(|| "Artist / Album unavailable".to_string())
 }
 
 fn with_alpha(color: Color, alpha: f32) -> Color {

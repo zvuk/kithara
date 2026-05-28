@@ -292,23 +292,9 @@ fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, S
         .collect::<Vec<_>>()
         .join(", ");
     let mut extra_inserts = String::new();
-    for (name, value) in &p.headers {
-        if name.as_str() == "X-Encrypted-Key" {
-            panic!(
-                "provider `{}` headers must not set `X-Encrypted-Key` — it is generated per request from the cipher_key",
-                p.name
-            );
-        }
-        let label = format!("provider `{}` header `{name}`", p.name);
-        let Some(value_expr) = render_template(value, env_map, &label) else {
-            continue;
-        };
-        writeln!(
-            extra_inserts,
-            "        base_headers.insert({name:?}.to_string(), ({value_expr}).to_string());"
-        )
-        .expect("write to String never fails");
-    }
+    p.headers
+        .iter()
+        .for_each(|(name, value)| emit_header(&mut extra_inserts, &p.name, name, value, env_map));
     let seed_let = p.seed.emit_let_seed(&p.name);
     writeln!(
         code,
@@ -329,6 +315,33 @@ fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, S
                 .build()
         );
     }}"#
+    )
+    .expect("write to String never fails");
+}
+
+/// Emit one `base_headers.insert(...)` line for a provider header, resolving
+/// any `${KITHARA_*}` templates. Headers whose value references a missing
+/// env var are dropped (no line emitted). Panics on the reserved
+/// `X-Encrypted-Key`, which is generated per request from the `cipher_key`.
+fn emit_header(
+    extra_inserts: &mut String,
+    provider_name: &str,
+    name: &str,
+    value: &str,
+    env_map: &HashMap<String, String>,
+) {
+    if name == "X-Encrypted-Key" {
+        panic!(
+            "provider `{provider_name}` headers must not set `X-Encrypted-Key` — it is generated per request from the cipher_key"
+        );
+    }
+    let label = format!("provider `{provider_name}` header `{name}`");
+    let Some(value_expr) = render_template(value, env_map, &label) else {
+        return;
+    };
+    writeln!(
+        extra_inserts,
+        "        base_headers.insert({name:?}.to_string(), ({value_expr}).to_string());"
     )
     .expect("write to String never fails");
 }
@@ -401,25 +414,43 @@ fn render_template(value: &str, env_map: &HashMap<String, String>, label: &str) 
     let mut fmt_str = String::new();
     let mut args: Vec<String> = Vec::new();
     let mut rest = value;
-    while let Some(start) = rest.find("${") {
-        let (before, tail) = rest.split_at(start);
-        fmt_str.push_str(&before.replace('{', "{{").replace('}', "}}"));
-        let tail = &tail[2..];
-        let end = tail
-            .find('}')
-            .unwrap_or_else(|| panic!("{label}: unterminated `${{...` in `{value}`"));
-        let name = &tail[..end];
-        if let Some(v) = env_map.get(name).filter(|v| !v.is_empty()) {
-            fmt_str.push_str("{}");
-            args.push(literal_expr(v, true));
-        } else {
-            println!("cargo:warning={label}: env `{name}` not set; value omitted");
-            return None;
+    while rest.contains("${") {
+        match push_placeholder(&mut fmt_str, &mut args, rest, env_map, label, value) {
+            Some(next) => rest = next,
+            None => return None,
         }
-        rest = &tail[end + 1..];
     }
     fmt_str.push_str(&rest.replace('{', "{{").replace('}', "}}"));
     Some(format!("format!({fmt_str:?}, {})", args.join(", ")))
+}
+
+/// Consume the literal prefix and the first `${KITHARA_VAR}` placeholder in
+/// `rest`, appending the escaped prefix and a `{}` slot to `fmt_str` and the
+/// resolved value to `args`. Returns the remainder after the placeholder, or
+/// `None` if the referenced env var is missing (caller drops the header).
+fn push_placeholder<'a>(
+    fmt_str: &mut String,
+    args: &mut Vec<String>,
+    rest: &'a str,
+    env_map: &HashMap<String, String>,
+    label: &str,
+    value: &str,
+) -> Option<&'a str> {
+    let start = rest.find("${")?;
+    let (before, tail) = rest.split_at(start);
+    fmt_str.push_str(&before.replace('{', "{{").replace('}', "}}"));
+    let tail = &tail[2..];
+    let end = tail
+        .find('}')
+        .unwrap_or_else(|| panic!("{label}: unterminated `${{...` in `{value}`"));
+    let name = &tail[..end];
+    let v = env_map.get(name).filter(|v| !v.is_empty()).or_else(|| {
+        println!("cargo:warning={label}: env `{name}` not set; value omitted");
+        None
+    })?;
+    fmt_str.push_str("{}");
+    args.push(literal_expr(v, true));
+    Some(&tail[end + 1..])
 }
 
 fn load_env(path: &PathBuf) -> HashMap<String, String> {
@@ -427,23 +458,28 @@ fn load_env(path: &PathBuf) -> HashMap<String, String> {
     let Ok(contents) = fs::read_to_string(path) else {
         return map;
     };
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        if !key.starts_with("KITHARA_") {
-            continue;
-        }
-        if map.contains_key(key) {
-            continue;
-        }
-        let value = value.trim().trim_matches(|c: char| c == '"' || c == '\'');
-        map.insert(key.to_string(), value.to_string());
-    }
+    contents
+        .lines()
+        .filter_map(parse_env_line)
+        .for_each(|(key, value)| {
+            map.entry(key.to_string())
+                .or_insert_with(|| value.to_string());
+        });
     map
+}
+
+/// Parse one `.env` line into a `KITHARA_*` `(key, value)` pair, skipping
+/// blanks, comments, malformed lines, and non-`KITHARA_` keys.
+fn parse_env_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let (key, value) = trimmed.split_once('=')?;
+    let key = key.trim();
+    if !key.starts_with("KITHARA_") {
+        return None;
+    }
+    let value = value.trim().trim_matches(|c: char| c == '"' || c == '\'');
+    Some((key, value))
 }

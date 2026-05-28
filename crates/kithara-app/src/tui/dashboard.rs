@@ -1,3 +1,4 @@
+use kithara_queue::TrackEntry;
 use num_traits::ToPrimitive;
 use ratatui::{
     Frame,
@@ -204,21 +205,24 @@ impl Dashboard {
     }
 
     fn render_eq(&self, frame: &mut Frame, area: Rect, state: &UiState) {
-        let mut bars = Vec::new();
-        for (i, &gain) in state.eq_bands.iter().enumerate() {
-            let clamped = gain.clamp(Self::EQ_GAIN_MIN, Self::EQ_GAIN_MAX);
-            let val = clamp_f32_to_u64((clamped - Self::EQ_GAIN_MIN).max(0.0));
-            let style = if i == self.selected_eq_band {
-                Style::default().fg(self.colors.accent)
-            } else {
-                Style::default().fg(self.colors.text)
-            };
-            let bar = ratatui::widgets::Bar::default()
-                .value(val)
-                .text_value(format!("{gain:+.1}"))
-                .style(style);
-            bars.push(bar);
-        }
+        let bars: Vec<_> = state
+            .eq_bands
+            .iter()
+            .enumerate()
+            .map(|(i, &gain)| {
+                let clamped = gain.clamp(Self::EQ_GAIN_MIN, Self::EQ_GAIN_MAX);
+                let val = clamp_f32_to_u64((clamped - Self::EQ_GAIN_MIN).max(0.0));
+                let style = if i == self.selected_eq_band {
+                    Style::default().fg(self.colors.accent)
+                } else {
+                    Style::default().fg(self.colors.text)
+                };
+                ratatui::widgets::Bar::default()
+                    .value(val)
+                    .text_value(format!("{gain:+.1}"))
+                    .style(style)
+            })
+            .collect();
 
         let chart = BarChart::default()
             .data(ratatui::widgets::BarGroup::default().bars(&bars))
@@ -230,34 +234,8 @@ impl Dashboard {
     }
 
     fn render_playlist(&self, frame: &mut Frame, area: Rect, state: &UiState) {
-        let c = &self.colors;
         for (i, entry) in state.tracks.iter().enumerate() {
-            let track_name = &entry.name;
-            let is_active = Some(i) == state.current_track_index;
-            let number = i + 1;
-            let marker = if is_active { "▶" } else { " " };
-            let text = format!(" {marker} {number}  {track_name}");
-            let track_row = TrackRow::classify(&entry.status, is_active);
-            let style = match track_row {
-                TrackRow::Failed => Style::default().fg(c.danger).bg(c.bg),
-                TrackRow::SlowCurrent => {
-                    let blink_on =
-                        (self.frame_count / Self::BLINK_DIVISOR).is_multiple_of(Self::BLINK_PERIOD);
-                    let fg = if blink_on { c.warning } else { c.muted };
-                    Style::default().fg(fg).bg(c.bg_panel)
-                }
-                TrackRow::Slow => Style::default().fg(c.warning).bg(c.bg),
-                TrackRow::Current => Style::default().fg(c.accent).bg(c.bg_panel),
-                TrackRow::Normal => Style::default().fg(c.muted).bg(c.bg),
-            };
-            let row = Rect::new(
-                area.x,
-                area.y.saturating_add(count_to_u16(i)),
-                area.width,
-                1,
-            );
-            let padded = fit_cell(&text, usize::from(row.width));
-            frame.render_widget(Paragraph::new(Line::raw(padded)).style(style), row);
+            self.render_track_row(frame, area, i, entry, state);
         }
     }
 
@@ -316,30 +294,66 @@ impl Dashboard {
 
     fn render_tabs(&self, frame: &mut Frame, area: Rect) {
         let tabs = [Tab::Playlist, Tab::Equalizer, Tab::Settings];
-        let mut spans = Vec::new();
-
-        for tab in tabs {
-            let label = match tab {
-                Tab::Playlist => "Playlist",
-                Tab::Equalizer => "EQ",
-                Tab::Settings => "Settings",
-            };
-
-            let is_active = self.active_tab == tab;
-            let style = if is_active {
-                Style::default()
-                    .fg(self.colors.bg)
-                    .bg(self.colors.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(self.colors.text).bg(self.colors.bg)
-            };
-
-            spans.push(Span::styled(format!(" [ {label} ] "), style));
-        }
+        let spans: Vec<_> = tabs
+            .into_iter()
+            .map(|tab| {
+                let label = match tab {
+                    Tab::Playlist => "Playlist",
+                    Tab::Equalizer => "EQ",
+                    Tab::Settings => "Settings",
+                };
+                let is_active = self.active_tab == tab;
+                let style = if is_active {
+                    Style::default()
+                        .fg(self.colors.bg)
+                        .bg(self.colors.accent)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(self.colors.text).bg(self.colors.bg)
+                };
+                Span::styled(format!(" [ {label} ] "), style)
+            })
+            .collect();
 
         let paragraph = Paragraph::new(Line::from(spans));
         frame.render_widget(paragraph, area);
+    }
+
+    fn render_track_row(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        i: usize,
+        entry: &TrackEntry,
+        state: &UiState,
+    ) {
+        let c = &self.colors;
+        let track_name = &entry.name;
+        let is_active = Some(i) == state.current_track_index;
+        let number = i + 1;
+        let marker = if is_active { "▶" } else { " " };
+        let text = format!(" {marker} {number}  {track_name}");
+        let track_row = TrackRow::classify(&entry.status, is_active);
+        let style = match track_row {
+            TrackRow::Failed => Style::default().fg(c.danger).bg(c.bg),
+            TrackRow::SlowCurrent => {
+                let blink_on =
+                    (self.frame_count / Self::BLINK_DIVISOR).is_multiple_of(Self::BLINK_PERIOD);
+                let fg = if blink_on { c.warning } else { c.muted };
+                Style::default().fg(fg).bg(c.bg_panel)
+            }
+            TrackRow::Slow => Style::default().fg(c.warning).bg(c.bg),
+            TrackRow::Current => Style::default().fg(c.accent).bg(c.bg_panel),
+            TrackRow::Normal => Style::default().fg(c.muted).bg(c.bg),
+        };
+        let row = Rect::new(
+            area.x,
+            area.y.saturating_add(count_to_u16(i)),
+            area.width,
+            1,
+        );
+        let padded = fit_cell(&text, usize::from(row.width));
+        frame.render_widget(Paragraph::new(Line::raw(padded)).style(style), row);
     }
 }
 
