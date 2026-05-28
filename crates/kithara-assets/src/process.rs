@@ -209,33 +209,60 @@ where
         let mut write_offset = 0u64;
 
         while read_offset < final_len {
-            let remaining_u64 = (final_len - read_offset).min(Consts::CHUNK_SIZE_U64);
-            let to_read = usize::try_from(remaining_u64).map_err(|err| {
-                StorageError::Failed(format!(
-                    "process_and_write: chunk size {remaining_u64} does not fit usize: {err}"
-                ))
-            })?;
-            let is_last = read_offset + remaining_u64 >= final_len;
-
-            let n = self.inner.read_at(read_offset, &mut input_buf[..to_read])?;
-            if n == 0 {
+            let Some((read, written)) = self.process_chunk(
+                final_len,
+                read_offset,
+                write_offset,
+                &mut ctx,
+                &mut input_buf,
+                &mut output_buf,
+            )?
+            else {
                 break;
-            }
-
-            let written = (self.process)(&input_buf[..n], &mut output_buf[..n], &mut ctx, is_last)
-                .map_err(StorageError::Failed)?;
-
-            self.inner.write_at(write_offset, &output_buf[..written])?;
-
-            read_offset += n as u64;
-            write_offset += u64::try_from(written).map_err(|err| {
-                StorageError::Failed(format!(
-                    "process_and_write: written {written} does not fit u64: {err}"
-                ))
-            })?;
+            };
+            read_offset += read;
+            write_offset += written;
         }
 
         Ok(write_offset)
+    }
+
+    /// Read, transform, and write back one chunk starting at
+    /// `read_offset`. Returns the `(bytes_read, bytes_written)` advance,
+    /// or `None` when the inner resource yields no bytes (end of data).
+    fn process_chunk(
+        &self,
+        final_len: u64,
+        read_offset: u64,
+        write_offset: u64,
+        ctx: &mut Ctx,
+        input_buf: &mut [u8],
+        output_buf: &mut [u8],
+    ) -> StorageResult<Option<(u64, u64)>> {
+        let remaining_u64 = (final_len - read_offset).min(Consts::CHUNK_SIZE_U64);
+        let to_read = usize::try_from(remaining_u64).map_err(|err| {
+            StorageError::Failed(format!(
+                "process_and_write: chunk size {remaining_u64} does not fit usize: {err}"
+            ))
+        })?;
+        let is_last = read_offset + remaining_u64 >= final_len;
+
+        let n = self.inner.read_at(read_offset, &mut input_buf[..to_read])?;
+        if n == 0 {
+            return Ok(None);
+        }
+
+        let written = (self.process)(&input_buf[..n], &mut output_buf[..n], ctx, is_last)
+            .map_err(StorageError::Failed)?;
+
+        self.inner.write_at(write_offset, &output_buf[..written])?;
+
+        let written = u64::try_from(written).map_err(|err| {
+            StorageError::Failed(format!(
+                "process_and_write: written {written} does not fit u64: {err}"
+            ))
+        })?;
+        Ok(Some((n as u64, written)))
     }
 }
 

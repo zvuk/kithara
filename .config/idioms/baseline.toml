@@ -5,9 +5,6 @@ schema_version = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:443:12" = 1
 
 [fat_loop_body]
-"crates/kithara-assets/src/flush/worker.rs:65:loop_body" = 1
-"crates/kithara-assets/src/flush/worker.rs:79:loop_body" = 1
-"crates/kithara-assets/src/process.rs:211:while_body" = 1
 "crates/kithara-audio/src/audio.rs:543:loop_body" = 1
 "crates/kithara-audio/src/effects/eq.rs:1128:for_body" = 1
 "crates/kithara-audio/src/runtime/scheduler.rs:178:loop_body" = 1
@@ -30,8 +27,6 @@ schema_version = 1
 "crates/kithara-play/src/impls/player_processor.rs:532:for_body" = 1
 "crates/kithara-play/src/impls/player_resource.rs:95:while_body" = 1
 "crates/kithara-storage/src/backend/resource/wait.rs:35:loop_body" = 1
-"crates/kithara-stream/src/dl/registry.rs:208:for_body" = 1
-"crates/kithara-stream/src/stream.rs:344:loop_body" = 1
 "crates/kithara-stream/src/timeline.rs:561:for_body" = 1
 "crates/kithara-stream/src/timeline.rs:700:for_body" = 1
 
@@ -55,7 +50,7 @@ schema_version = 1
 "crates/kithara-assets/src/evict.rs:226:4" = 1
 "crates/kithara-assets/src/index/availability/core.rs:233:4" = 1
 "crates/kithara-assets/src/index/availability/core.rs:237:4" = 1
-"crates/kithara-assets/src/index/availability/disk.rs:120:4" = 1
+"crates/kithara-assets/src/index/availability/disk.rs:130:4" = 1
 "crates/kithara-assets/src/index/availability/disk.rs:28:4" = 1
 "crates/kithara-assets/src/index/lru/core.rs:181:4" = 1
 "crates/kithara-assets/src/index/lru/core.rs:185:4" = 1
@@ -72,10 +67,10 @@ schema_version = 1
 "crates/kithara-assets/src/lease.rs:384:4" = 1
 "crates/kithara-assets/src/lease.rs:396:4" = 1
 "crates/kithara-assets/src/mem_store.rs:187:4" = 1
-"crates/kithara-assets/src/process.rs:247:4" = 1
-"crates/kithara-assets/src/process.rs:286:4" = 1
-"crates/kithara-assets/src/process.rs:357:4" = 1
-"crates/kithara-assets/src/process.rs:365:4" = 1
+"crates/kithara-assets/src/process.rs:274:4" = 1
+"crates/kithara-assets/src/process.rs:313:4" = 1
+"crates/kithara-assets/src/process.rs:384:4" = 1
+"crates/kithara-assets/src/process.rs:392:4" = 1
 "crates/kithara-assets/src/store.rs:225:4" = 1
 "crates/kithara-assets/src/unified.rs:158:4" = 1
 "crates/kithara-assets/src/unified.rs:202:4" = 1
@@ -193,14 +188,13 @@ schema_version = 1
 "crates/kithara-storage/src/unified.rs:142:4" = 1
 "crates/kithara-storage/src/unified.rs:62:4" = 1
 "crates/kithara-stream/src/stream.rs:209:4" = 1
-"crates/kithara-stream/src/stream.rs:327:4" = 1
-"crates/kithara-stream/src/stream.rs:440:4" = 1
-"crates/kithara-stream/src/stream.rs:488:4" = 1
-"crates/kithara-stream/src/stream.rs:612:8" = 1
-"crates/kithara-stream/src/stream.rs:702:8" = 1
+"crates/kithara-stream/src/stream.rs:348:4" = 1
+"crates/kithara-stream/src/stream.rs:503:4" = 1
+"crates/kithara-stream/src/stream.rs:551:4" = 1
+"crates/kithara-stream/src/stream.rs:675:8" = 1
+"crates/kithara-stream/src/stream.rs:765:8" = 1
 
 [guard_cascade]
-"crates/kithara-assets/src/flush/worker.rs:81:12" = 1
 "crates/kithara-hls/src/loading/size_estimation.rs:105:8" = 1
 "crates/kithara-hls/src/variant.rs:674:20" = 1
 "crates/kithara-play/src/impls/player_processor.rs:533:20" = 1
@@ -208,10 +202,6 @@ schema_version = 1
 
 [loop_allocation]
 "crates/kithara-app/src/tui/runner.rs:142:29" = 1
-"crates/kithara-assets/src/index/availability/disk.rs:102:33" = 1
-"crates/kithara-assets/src/index/availability/disk.rs:85:27" = 1
-"crates/kithara-assets/src/process.rs:214:37" = 1
-"crates/kithara-assets/src/process.rs:232:37" = 1
 "crates/kithara-decode/src/android/media_extractor.rs:159:56" = 1
 "crates/kithara-decode/src/fmp4/parsing.rs:187:54" = 1
 "crates/kithara-decode/src/fmp4/parsing.rs:198:50" = 1
@@ -232,9 +222,6 @@ schema_version = 1
 "crates/kithara-decode/src/fmp4/source_io.rs:148:52" = 1
 "crates/kithara-decode/src/mp4/scan.rs:489:36" = 1
 "crates/kithara-play/src/impls/player.rs:425:21" = 1
-"crates/kithara-stream/src/dl/response.rs:112:61" = 1
-"crates/kithara-stream/src/stream.rs:375:70" = 1
-"crates/kithara-stream/src/stream.rs:408:68" = 1
 
 [retry_fallback]
 "crates/kithara-audio/src/pipeline/track_fsm.rs:51:attempt" = 1

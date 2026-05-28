@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     batch::BatchGroup,
+    cmd::FetchCmd,
     downloader::{DownloaderInner, RegisteredPeerEntry},
     peer::{InternalCmd, Peer, ResponseTarget, SlotEntry},
 };
@@ -100,6 +101,52 @@ fn slot_index(peer_prio: RequestPriority, cmd_prio: RequestPriority) -> usize {
         (RequestPriority::Low, RequestPriority::High) => Slot::LowHigh as usize,
         (RequestPriority::Low, RequestPriority::Low) => Slot::LowLow as usize,
     }
+}
+
+/// Context for proactively scheduling a peer's batch command: the
+/// fields of the owning [`PeerEntry`] plus its arena index and the
+/// bus snapshot taken for the current poll.
+struct PeerCmdCtx<'a> {
+    idx: Index,
+    peer_prio: RequestPriority,
+    peer_cancel: &'a CancellationToken,
+    peer_id: AbrPeerId,
+    bus: &'a Option<EventBus>,
+}
+
+/// Wrap a single proactively-scheduled `FetchCmd` as an [`InternalCmd`]
+/// and route it onto its priority slot. The per-fetch cancel chains the
+/// peer cancel with the command's own epoch token (or a fresh child when
+/// the command carries none).
+fn enqueue_peer_cmd(
+    slots: &mut [VecDeque<SlotEntry>; SLOT_COUNT],
+    urgent_notify: &Notify,
+    inner: &DownloaderInner,
+    ctx: &PeerCmdCtx<'_>,
+    cmd: FetchCmd,
+) {
+    let cancel = cmd.cancel.clone().map_or_else(
+        || CancelGroup::new(vec![ctx.peer_cancel.child_token()]),
+        |epoch| CancelGroup::new(vec![ctx.peer_cancel.clone(), epoch]),
+    );
+    let cmd_prio = RequestPriority::Low;
+    let slot = slot_index(ctx.peer_prio, cmd_prio);
+    let request_id = inner.next_request_id();
+    let entry_slot = SlotEntry {
+        cmd: InternalCmd {
+            cmd,
+            cancel,
+            request_id,
+            enqueued_at: kithara_platform::time::Instant::now(),
+            priority: cmd_prio,
+            response: ResponseTarget::Streaming,
+            peer: Some(ctx.idx),
+            bus: ctx.bus.clone(),
+            peer_id: ctx.peer_id,
+        },
+        peer_cancel: ctx.peer_cancel.clone(),
+    };
+    enqueue_request(slots, slot, urgent_notify, entry_slot, request_id, cmd_prio);
 }
 
 /// Per-peer entry in the registry.
@@ -202,42 +249,17 @@ impl Registry {
 
             match entry.peer.poll_next(cx) {
                 Poll::Ready(Some(batch)) => {
-                    let peer_prio = entry.peer.priority();
                     let bus = entry.bus.lock_sync_read().clone();
+                    let ctx = PeerCmdCtx {
+                        idx,
+                        peer_prio: entry.peer.priority(),
+                        peer_cancel: &entry.peer_cancel,
+                        peer_id: entry.peer_id,
+                        bus: &bus,
+                    };
                     let batch_had_cmds = !batch.is_empty();
                     for cmd in batch {
-                        let epoch_cancel = cmd.cancel.clone();
-                        let cancel = match epoch_cancel {
-                            Some(epoch) => CancelGroup::new(vec![entry.peer_cancel.clone(), epoch]),
-                            None => CancelGroup::new(vec![entry.peer_cancel.child_token()]),
-                        };
-                        let cmd_prio = RequestPriority::Low;
-                        let slot = slot_index(peer_prio, cmd_prio);
-                        let request_id = inner.next_request_id();
-                        let enqueued_at = kithara_platform::time::Instant::now();
-                        let internal = InternalCmd {
-                            cmd,
-                            cancel,
-                            request_id,
-                            enqueued_at,
-                            priority: cmd_prio,
-                            response: ResponseTarget::Streaming,
-                            peer: Some(idx),
-                            bus: bus.clone(),
-                            peer_id: entry.peer_id,
-                        };
-                        let entry_slot = SlotEntry {
-                            cmd: internal,
-                            peer_cancel: entry.peer_cancel.clone(),
-                        };
-                        enqueue_request(
-                            &mut self.slots,
-                            slot,
-                            &self.urgent_notify,
-                            entry_slot,
-                            request_id,
-                            cmd_prio,
-                        );
+                        enqueue_peer_cmd(&mut self.slots, &self.urgent_notify, inner, &ctx, cmd);
                     }
                     if batch_had_cmds {
                         stats.peer_batches += 1;

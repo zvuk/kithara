@@ -302,6 +302,27 @@ impl<T: StreamType> Stream<T> {
     }
 }
 
+/// Next action after [`Stream::wait_phase`] classifies a `wait_range`.
+enum WaitStep {
+    /// Range is ready and the epoch is unchanged — proceed to read.
+    Read,
+    /// Terminal outcome to return to the caller verbatim.
+    Done(StreamReadOutcome),
+    /// Transient non-readiness — the driver bumps the spin counter and
+    /// either retries or surfaces `NotReady(cause)` once exhausted.
+    Spin(NotReadyCause),
+}
+
+/// Next action after [`Stream::read_phase`] performs the source read.
+enum ReadStep {
+    /// `count` bytes read; the driver resets the watchdog and advances.
+    Bytes(NonZeroUsize),
+    /// Terminal outcome to return to the caller verbatim.
+    Done(StreamReadOutcome),
+    /// Source asked to retry — the driver yields and loops.
+    Retry,
+}
+
 impl<T: StreamType> Stream<T> {
     /// Maximum `wait_range` retries before returning
     /// `Pending(NotReady)` to the caller. Each retry takes
@@ -342,96 +363,138 @@ impl<T: StreamType> Stream<T> {
         let mut wait_spins = 0u32;
 
         loop {
-            let timeline = self.source.timeline();
-            let read_epoch = timeline.seek_epoch();
-            let pos = self.source.position();
-            let range = pos..pos.saturating_add(buf.len() as u64);
+            let (timeline, pos, read_epoch) = self.read_cursor();
 
-            // WHY: `wait_range` returns `Interrupted` when the source has a
-            if self.source.has_variant_change_pending() {
-                return Ok(StreamReadOutcome::Pending(PendingReason::VariantChange));
-            }
-
-            let wait_result = self
-                .source
-                .wait_range(range, Some(Self::WAIT_RANGE_TIMEOUT));
-            let wait_outcome = match wait_result {
-                Ok(outcome) => outcome,
-                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                    if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                    }
+            match self.wait_phase(buf, pos, &timeline, read_epoch)? {
+                WaitStep::Read => wait_spins = 0,
+                WaitStep::Done(outcome) => return Ok(outcome),
+                WaitStep::Spin(cause) => {
                     wait_spins += 1;
                     if wait_spins >= Self::MAX_WAIT_SPINS {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
-                            NotReadyCause::WaitBudgetExhausted,
-                        )));
+                        return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(cause)));
                     }
                     hang_tick!();
                     yield_now();
                     continue;
                 }
-                Err(e) => {
-                    return Err(StreamReadError::Source(IoError::other(e.to_string())));
-                }
-            };
-            match wait_outcome {
-                WaitOutcome::Ready => {}
-                WaitOutcome::Eof => {
-                    return Ok(StreamReadOutcome::Eof { byte_position: pos });
-                }
-                WaitOutcome::Interrupted => {
-                    if !timeline.is_flushing() {
-                        wait_spins += 1;
-                        if wait_spins >= Self::MAX_WAIT_SPINS {
-                            return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
-                                NotReadyCause::WaitInterrupted,
-                            )));
-                        }
-                        hang_tick!();
-                        yield_now();
-                        continue;
-                    }
-                    return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                }
             }
 
-            wait_spins = 0;
-
-            if timeline.seek_epoch() != read_epoch {
-                return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-            }
-
-            match self
-                .source
-                .read_at(pos, buf)
-                .map_err(|e| StreamReadError::Source(IoError::other(e.to_string())))?
-            {
-                ReadOutcome::Bytes(count) => {
-                    if timeline.seek_epoch() != read_epoch {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                    }
+            match self.read_phase(buf, pos, &timeline, read_epoch)? {
+                ReadStep::Bytes(count) => {
                     hang_reset!();
                     timeline.set_segment_position(pos);
                     self.source.advance(count.get() as u64);
-                    let new_pos = self.source.position();
                     return Ok(StreamReadOutcome::Bytes {
                         count,
-                        byte_position: new_pos,
+                        byte_position: self.source.position(),
                     });
                 }
-                ReadOutcome::Eof => {
-                    return Ok(StreamReadOutcome::Eof { byte_position: pos });
-                }
-                ReadOutcome::Pending(PendingReason::Retry) => {
+                ReadStep::Done(outcome) => return Ok(outcome),
+                ReadStep::Retry => {
                     hang_tick!();
                     yield_now();
                     continue;
                 }
-                ReadOutcome::Pending(reason) => {
-                    return Ok(StreamReadOutcome::Pending(reason));
-                }
             }
+        }
+    }
+
+    /// Snapshot the read cursor for one `try_read` iteration: the
+    /// timeline, the current byte position, and the seek epoch at that
+    /// instant. Captured once so both phases see a consistent view.
+    fn read_cursor(&self) -> (Timeline, u64, u64) {
+        let timeline = self.source.timeline();
+        let read_epoch = timeline.seek_epoch();
+        let pos = self.source.position();
+        (timeline, pos, read_epoch)
+    }
+
+    /// Wait for `pos..pos+buf.len()` to become readable. Classifies the
+    /// outcome into the next loop action without touching the spin
+    /// counter or the hang watchdog (the driver owns those).
+    fn wait_phase(
+        &mut self,
+        buf: &[u8],
+        pos: u64,
+        timeline: &Timeline,
+        read_epoch: u64,
+    ) -> Result<WaitStep, StreamReadError> {
+        if self.source.has_variant_change_pending() {
+            return Ok(WaitStep::Done(StreamReadOutcome::Pending(
+                PendingReason::VariantChange,
+            )));
+        }
+
+        let range = pos..pos.saturating_add(buf.len() as u64);
+        let wait_outcome = match self
+            .source
+            .wait_range(range, Some(Self::WAIT_RANGE_TIMEOUT))
+        {
+            Ok(outcome) => outcome,
+            Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
+                if timeline.is_flushing() || timeline.seek_epoch() != read_epoch {
+                    return Ok(WaitStep::Done(StreamReadOutcome::Pending(
+                        PendingReason::SeekPending,
+                    )));
+                }
+                return Ok(WaitStep::Spin(NotReadyCause::WaitBudgetExhausted));
+            }
+            Err(e) => return Err(StreamReadError::Source(IoError::other(e.to_string()))),
+        };
+
+        match wait_outcome {
+            WaitOutcome::Ready => {}
+            WaitOutcome::Eof => {
+                return Ok(WaitStep::Done(StreamReadOutcome::Eof {
+                    byte_position: pos,
+                }));
+            }
+            WaitOutcome::Interrupted => {
+                if !timeline.is_flushing() {
+                    return Ok(WaitStep::Spin(NotReadyCause::WaitInterrupted));
+                }
+                return Ok(WaitStep::Done(StreamReadOutcome::Pending(
+                    PendingReason::SeekPending,
+                )));
+            }
+        }
+
+        if timeline.seek_epoch() != read_epoch {
+            return Ok(WaitStep::Done(StreamReadOutcome::Pending(
+                PendingReason::SeekPending,
+            )));
+        }
+        Ok(WaitStep::Read)
+    }
+
+    /// Read `pos..pos+buf.len()` once the range is ready. Returns the
+    /// byte count for the driver to finalise, a terminal outcome, or a
+    /// retry signal. The driver owns the hang watchdog.
+    fn read_phase(
+        &mut self,
+        buf: &mut [u8],
+        pos: u64,
+        timeline: &Timeline,
+        read_epoch: u64,
+    ) -> Result<ReadStep, StreamReadError> {
+        match self
+            .source
+            .read_at(pos, buf)
+            .map_err(|e| StreamReadError::Source(IoError::other(e.to_string())))?
+        {
+            ReadOutcome::Bytes(count) => {
+                if timeline.seek_epoch() != read_epoch {
+                    return Ok(ReadStep::Done(StreamReadOutcome::Pending(
+                        PendingReason::SeekPending,
+                    )));
+                }
+                Ok(ReadStep::Bytes(count))
+            }
+            ReadOutcome::Eof => Ok(ReadStep::Done(StreamReadOutcome::Eof {
+                byte_position: pos,
+            })),
+            ReadOutcome::Pending(PendingReason::Retry) => Ok(ReadStep::Retry),
+            ReadOutcome::Pending(reason) => Ok(ReadStep::Done(StreamReadOutcome::Pending(reason))),
         }
     }
 }
