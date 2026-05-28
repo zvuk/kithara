@@ -42,18 +42,6 @@ impl FilePeer {
         }
     }
 
-    /// Start of the next byte range worth fetching, or `None` when the
-    /// resource is terminal (neither `Active` nor `Committed`) or already
-    /// fully covered. The gap walk only runs once the status check passes.
-    fn next_fetchable_gap(&self) -> Option<u64> {
-        matches!(
-            self.inner.asset.res.status(),
-            ResourceStatus::Active | ResourceStatus::Committed { .. }
-        )
-        .then(|| self.inner.next_gap_start())
-        .flatten()
-    }
-
     fn build_fetch_cmd(&self, resume_from: u64) -> FetchCmd {
         let url = self.inner.asset.url.clone();
         let headers = self.inner.asset.headers.clone();
@@ -97,6 +85,18 @@ impl FilePeer {
             .maybe_headers(headers)
             .on_complete(on_complete)
             .build()
+    }
+
+    /// Start of the next byte range worth fetching, or `None` when the
+    /// resource is terminal (neither `Active` nor `Committed`) or already
+    /// fully covered. The gap walk only runs once the status check passes.
+    fn next_fetchable_gap(&self) -> Option<u64> {
+        matches!(
+            self.inner.asset.res.status(),
+            ResourceStatus::Active | ResourceStatus::Committed { .. }
+        )
+        .then(|| self.inner.next_gap_start())
+        .flatten()
     }
 }
 

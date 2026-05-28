@@ -163,6 +163,7 @@ schema_version = 1
 "crates/kithara-app/src/gui/app.rs:46::Self" = 1
 "crates/kithara-app/src/tui/session.rs:118::Position" = 1
 "crates/kithara-assets/src/cache.rs:138::Self" = 1
+"crates/kithara-assets/src/index/availability/disk.rs:160::AvailabilityFile" = 1
 "crates/kithara-audio/src/resampler.rs:252::Self" = 1
 "crates/kithara-decode/src/symphonia/aac_fdk.rs:101::Self" = 1
 "crates/kithara-decode/src/symphonia/aac_fdk.rs:123::Self" = 1

@@ -21,35 +21,6 @@ impl Queue {
         Some(id)
     }
 
-    /// Walk the navigation cursor forward, skipping entries that vanished
-    /// or are [`TrackStatus::Cancelled`], and return the first selectable
-    /// id. Publishes [`QueueEvent::QueueEnded`] once the cursor runs off
-    /// the end without finding one.
-    fn next_selectable(&self) -> Option<TrackId> {
-        let len = self.len();
-        let selected =
-            std::iter::from_fn(|| self.lock_navigation_mut().next(len)).find_map(|idx| {
-                let (id, status) = self
-                    .lock_tracks()
-                    .get(idx)
-                    .map(|e| (e.id, e.status.clone()))?;
-                match status {
-                    TrackStatus::Cancelled => {
-                        debug!(
-                            id = id.as_u64(),
-                            "advance_to_next: skipping cancelled track"
-                        );
-                        None
-                    }
-                    _ => Some(id),
-                }
-            });
-        if selected.is_none() {
-            self.bus.publish(QueueEvent::QueueEnded);
-        }
-        selected
-    }
-
     /// Synchronous-select counterpart to [`Self::override_pending_select`]:
     /// the user picked a `Loaded` track, so any other in-flight load is
     /// stale. Drop pending and mark the stale track [`TrackStatus::Cancelled`]
@@ -85,6 +56,35 @@ impl Queue {
         if let Some(index) = index {
             self.player.clear_item(index);
         }
+    }
+
+    /// Walk the navigation cursor forward, skipping entries that vanished
+    /// or are [`TrackStatus::Cancelled`], and return the first selectable
+    /// id. Publishes [`QueueEvent::QueueEnded`] once the cursor runs off
+    /// the end without finding one.
+    fn next_selectable(&self) -> Option<TrackId> {
+        let len = self.len();
+        let selected =
+            std::iter::from_fn(|| self.lock_navigation_mut().next(len)).find_map(|idx| {
+                let (id, status) = self
+                    .lock_tracks()
+                    .get(idx)
+                    .map(|e| (e.id, e.status.clone()))?;
+                match status {
+                    TrackStatus::Cancelled => {
+                        debug!(
+                            id = id.as_u64(),
+                            "advance_to_next: skipping cancelled track"
+                        );
+                        None
+                    }
+                    _ => Some(id),
+                }
+            });
+        if selected.is_none() {
+            self.bus.publish(QueueEvent::QueueEnded);
+        }
+        selected
     }
 
     /// Replace `pending_select` with a new selection. If the previous

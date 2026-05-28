@@ -61,9 +61,6 @@ schema_version = 1
 "crates/kithara-test-utils/src/probe/real/wire.rs" = 1
 "crates/kithara/src/lib.rs" = 1
 
-[dead_exports]
-"crates/kithara-play/src/impls/player_resource.rs:144:11::is_failed" = 1
-
 [field_always_constant]
 "crates/kithara-abr/src/handle.rs:271:StatefulPeer::state" = 1
 "crates/kithara-hls/src/variant.rs:73:SegmentEntry::state" = 1
@@ -213,7 +210,6 @@ schema_version = 1
 "crates/kithara-ffi/src/item_bridge.rs::ItemEventBridge::dispatch" = 1
 "crates/kithara-ffi/src/item_bridge.rs::ItemEventBridge::spawn" = 1
 "crates/kithara-ffi/src/item_bridge.rs::ItemEventBridge::spawn_event_task" = 1
-"crates/kithara-file/src/session/segments.rs::segment_descriptor" = 1
 "crates/kithara-file/src/session/source.rs::FileSource::local" = 1
 "crates/kithara-hls/src/coord.rs::HlsCoord::new" = 1
 "crates/kithara-hls/src/loading/atomic_fetch.rs::fetch_atomic_body" = 1
@@ -562,7 +558,6 @@ schema_version = 1
 "crates/kithara-hls/src/variant.rs::impl HlsVariant" = 1
 "crates/kithara-play/src/impls/player.rs::impl PlayerImpl" = 1
 "crates/kithara-play/src/impls/player_processor.rs::impl PlayerNodeProcessor" = 1
-"crates/kithara-play/src/impls/player_resource.rs::impl PlayerResource" = 1
 "crates/kithara-play/src/impls/player_track.rs::impl PlayerTrack" = 1
 "crates/kithara-queue/src/queue/lifecycle.rs::impl Queue" = 1
 "crates/kithara-queue/src/queue/selection.rs::impl Queue" = 1

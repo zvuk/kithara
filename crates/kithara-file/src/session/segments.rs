@@ -72,10 +72,12 @@ impl FileSegmentIndex {
             let segment_index = u32::try_from(idx).ok()?;
             let (descriptor, decode_end) = segment_descriptor(
                 moof,
-                byte_end,
-                timescale,
-                segment_index,
-                cumulative_decode_time,
+                FragmentInput {
+                    byte_end,
+                    timescale,
+                    segment_index,
+                    prev_decode_time: cumulative_decode_time,
+                },
             )?;
             cumulative_decode_time = Some(decode_end);
             segments.push(descriptor);
@@ -88,17 +90,28 @@ impl FileSegmentIndex {
     }
 }
 
+#[derive(Clone, Copy)]
+struct FragmentInput {
+    prev_decode_time: Option<u64>,
+    segment_index: u32,
+    timescale: u32,
+    byte_end: u64,
+}
+
 /// Build the [`SegmentDescriptor`] for one `moof` and return it alongside
 /// the cumulative decode-time tick count after this fragment. Returns
 /// `None` for a malformed fragment (no `traf`, zero duration, or a byte
 /// range that does not advance).
 fn segment_descriptor(
     moof: &re_mp4::MoofBox,
-    byte_end: u64,
-    timescale: u32,
-    segment_index: u32,
-    prev_decode_time: Option<u64>,
+    input: FragmentInput,
 ) -> Option<(SegmentDescriptor, u64)> {
+    let FragmentInput {
+        byte_end,
+        timescale,
+        segment_index,
+        prev_decode_time,
+    } = input;
     let traf = moof.trafs.first()?;
     let decode_ticks = traf
         .tfdt
