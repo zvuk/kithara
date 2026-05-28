@@ -88,6 +88,44 @@ impl EventBridge {
         }
     }
 
+    /// Emit [`FfiPlayerEvent::DurationChanged`] when `duration` moved past the
+    /// update threshold relative to `last`, tracking the last reported value.
+    fn emit_duration_change(
+        observer: &Arc<dyn PlayerObserver>,
+        duration: Option<f64>,
+        last: &mut Option<f64>,
+    ) {
+        match duration {
+            Some(d) if last.is_none_or(|prev| (prev - d).abs() > Self::TIME_UPDATE_THRESHOLD) => {
+                observer.on_event(FfiPlayerEvent::DurationChanged { seconds: d });
+                *last = Some(d);
+            }
+            None if last.is_some() => {
+                *last = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Emit [`FfiPlayerEvent::TimeChanged`] when `time` moved past the
+    /// update threshold relative to `last`, tracking the last reported value.
+    fn emit_time_change(
+        observer: &Arc<dyn PlayerObserver>,
+        time: Option<f64>,
+        last: &mut Option<f64>,
+    ) {
+        match time {
+            Some(t) if last.is_none_or(|prev| (prev - t).abs() > Self::TIME_UPDATE_THRESHOLD) => {
+                observer.on_event(FfiPlayerEvent::TimeChanged { seconds: t });
+                *last = Some(t);
+            }
+            None if last.is_some() => {
+                *last = None;
+            }
+            _ => {}
+        }
+    }
+
     fn player_event_to_ffi(event: &PlayerEvent) -> Option<FfiPlayerEvent> {
         Some(match event {
             PlayerEvent::RateChanged { rate } => FfiPlayerEvent::RateChanged { rate: *rate },
@@ -114,6 +152,16 @@ impl EventBridge {
         })
     }
 
+    /// Look up the item observer registered for `track_id`, if both the
+    /// item and its observer are present.
+    fn resolve_item_observer(
+        items: &Arc<Mutex<ItemRegistry>>,
+        track_id: kithara_events::TrackId,
+    ) -> Option<Arc<dyn ItemObserver>> {
+        let item = items.lock_sync().get(&track_id).cloned()?;
+        item.observer()
+    }
+
     /// Forward player-level signals (`ItemDidPlayToEnd`, `ItemDidFail`,
     /// `TimeControlStatusChanged → WaitingToPlay`) to the corresponding
     /// item-level observer, mapping them onto
@@ -136,10 +184,7 @@ impl EventBridge {
             _ => return,
         };
         let Some(track_id) = target else { return };
-        let Some(item) = items.lock_sync().get(&track_id).cloned() else {
-            return;
-        };
-        let Some(item_obs) = item.observer() else {
+        let Some(item_obs) = Self::resolve_item_observer(items, track_id) else {
             return;
         };
         let ffi_event = match event {
@@ -248,36 +293,8 @@ impl EventBridge {
                 sleep(interval);
                 let _ = queue.tick();
                 queue.process_notifications();
-                let time = queue.position_seconds();
-                let duration = queue.duration_seconds();
-
-                match time {
-                    Some(t)
-                        if last_time
-                            .is_none_or(|prev| (prev - t).abs() > Self::TIME_UPDATE_THRESHOLD) =>
-                    {
-                        observer.on_event(FfiPlayerEvent::TimeChanged { seconds: t });
-                        last_time = Some(t);
-                    }
-                    None if last_time.is_some() => {
-                        last_time = None;
-                    }
-                    _ => {}
-                }
-
-                match duration {
-                    Some(d)
-                        if last_duration
-                            .is_none_or(|prev| (prev - d).abs() > Self::TIME_UPDATE_THRESHOLD) =>
-                    {
-                        observer.on_event(FfiPlayerEvent::DurationChanged { seconds: d });
-                        last_duration = Some(d);
-                    }
-                    None if last_duration.is_some() => {
-                        last_duration = None;
-                    }
-                    _ => {}
-                }
+                Self::emit_time_change(&observer, queue.position_seconds(), &mut last_time);
+                Self::emit_duration_change(&observer, queue.duration_seconds(), &mut last_duration);
             }
         })
     }

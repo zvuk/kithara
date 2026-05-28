@@ -216,10 +216,10 @@ mod tests {
         headers.insert("key2", "value2");
         headers.insert("key3", "value3");
 
-        let mut iterated = HashMap::new();
-        for (k, v) in headers.iter() {
-            iterated.insert(k.to_string(), v.to_string());
-        }
+        let iterated: HashMap<String, String> = headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
 
         assert_eq!(iterated.len(), 3);
         assert_eq!(iterated.get("key1"), Some(&"value1".to_string()));
