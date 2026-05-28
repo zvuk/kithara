@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use anyhow::Result;
 use syn::{
@@ -17,7 +20,15 @@ use crate::common::{
 
 pub(crate) const ID: &str = "function_branch_density";
 
+/// Checked-in call graph emitted by `cargo xtask callgraph`. When present, the
+/// walk follows these real direct-call edges; absent or unparsable, the static
+/// type-aware resolver (`walk_density`) is used instead.
+const CALLGRAPH_REL: &str = ".config/idioms/callgraph.json";
+
 pub(crate) struct FunctionBranchDensity;
+
+/// A call-graph node key, the `"rel_file:line"` label used by `callgraph.json`.
+type NodeKey = String;
 
 /// Resolution key for a call site or definition. Resolution is purely
 /// syntactic: a free function resolves by name, a method resolves by the
@@ -58,7 +69,7 @@ impl Check for FunctionBranchDensity {
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
             let rel_path = relative_to(ctx.workspace_root, &path).to_path_buf();
             let rel = rel_path.to_string_lossy().replace('\\', "/");
-            if matches_any(&exempt, std::path::Path::new(&rel)) {
+            if matches_any(&exempt, Path::new(&rel)) {
                 continue;
             }
             let Ok(file) = parse_file(&path) else {
@@ -67,11 +78,17 @@ impl Check for FunctionBranchDensity {
             collect_functions(&file, &rel, &mut registry);
         }
 
+        let graph = load_callgraph(&ctx.workspace_root.join(CALLGRAPH_REL));
+        let branches = graph.as_ref().map(|g| g.branches_by_node(&registry));
         let mut violations = Vec::new();
         for entries in registry.values() {
             for entry in entries.iter().filter(|e| e.is_public) {
-                let mut visited: HashSet<*const FnInfo> = HashSet::new();
-                let (longest, total) = walk_density(entry, &registry, &mut visited);
+                let (longest, total) = if let (Some(g), Some(branches)) = (&graph, &branches) {
+                    g.density_of(entry, branches)
+                } else {
+                    let mut visited: HashSet<*const FnInfo> = HashSet::new();
+                    walk_density(entry, &registry, &mut visited)
+                };
                 let path_breach = longest > cfg.warn_path;
                 let total_breach = total > cfg.warn_total;
                 if !path_breach && !total_breach {
@@ -95,6 +112,143 @@ impl Check for FunctionBranchDensity {
         violations.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(violations)
     }
+}
+
+/// The real workspace call graph loaded from `callgraph.json`, indexed so an AST
+/// `FnInfo` can be joined to its node and the branch density walked along the
+/// real direct-call edges.
+struct RealGraph {
+    /// `node -> direct callee nodes`.
+    edges: HashMap<NodeKey, Vec<NodeKey>>,
+    /// `(rel_file, base_name) -> candidate node lines`, for the source-join.
+    nodes_by_name: HashMap<(String, String), Vec<usize>>,
+}
+
+impl RealGraph {
+    /// Parse `callgraph.json`. Missing / malformed file → `None` (silent
+    /// fall back to the static resolver).
+    fn load(path: &Path) -> Option<Self> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let nodes = doc.get("nodes")?.as_object()?;
+        let edges_obj = doc.get("edges")?.as_object()?;
+
+        let mut nodes_by_name: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for (key, name) in nodes {
+            let (Some(file), Some(line), Some(name)) =
+                (node_file(key), node_line(key), name.as_str())
+            else {
+                continue;
+            };
+            nodes_by_name
+                .entry((file.to_string(), name.to_string()))
+                .or_default()
+                .push(line);
+        }
+
+        let mut edges: HashMap<NodeKey, Vec<NodeKey>> = HashMap::new();
+        for (src, targets) in edges_obj {
+            let Some(arr) = targets.as_array() else {
+                continue;
+            };
+            let dsts = arr
+                .iter()
+                .filter_map(|t| t.as_str().map(str::to_string))
+                .collect();
+            edges.insert(src.clone(), dsts);
+        }
+        Some(Self {
+            edges,
+            nodes_by_name,
+        })
+    }
+
+    /// Resolve `(rel_file, base_name)` to a node key, disambiguating multiple
+    /// same-name candidates by the declaration line nearest the AST span line.
+    /// Mirrors the phase-A source-join used by `cargo xtask callgraph`.
+    fn join(&self, file: &str, name: &str, ast_line: usize) -> Option<NodeKey> {
+        let lines = self
+            .nodes_by_name
+            .get(&(file.to_string(), name.to_string()))?;
+        let line = lines
+            .iter()
+            .copied()
+            .min_by_key(|line| line.abs_diff(ast_line))?;
+        Some(format!("{file}:{line}"))
+    }
+
+    /// `node -> own_branches`, built by joining every AST `FnInfo` to its node.
+    /// Nodes with no AST match keep an implicit 0 (closures / derive bodies).
+    fn branches_by_node(&self, registry: &HashMap<FnKey, Vec<FnInfo>>) -> HashMap<NodeKey, usize> {
+        let mut out: HashMap<NodeKey, usize> = HashMap::new();
+        for entries in registry.values() {
+            for info in entries {
+                if let Some(node) = self.join(&info.span.0, fn_name(&info.key), info.span.1) {
+                    // Same node line can host several same-name candidates; keep
+                    // the heaviest so the density is not under-counted.
+                    let slot = out.entry(node).or_insert(0);
+                    *slot = (*slot).max(info.own_branches);
+                }
+            }
+        }
+        out
+    }
+
+    /// Branch density for one public entry, joining it to its graph node and
+    /// walking the real edges. Entries with no graph node count their own
+    /// branches only (e.g. a public fn the IR never emitted a node for).
+    fn density_of(&self, entry: &FnInfo, branches: &HashMap<NodeKey, usize>) -> (usize, usize) {
+        let Some(node) = self.join(&entry.span.0, fn_name(&entry.key), entry.span.1) else {
+            return (entry.own_branches, entry.own_branches);
+        };
+        let mut visited: HashSet<NodeKey> = HashSet::new();
+        walk_real(&node, &self.edges, branches, &mut visited)
+    }
+}
+
+/// Load the checked-in call graph, returning `None` on any read/parse failure.
+fn load_callgraph(path: &Path) -> Option<RealGraph> {
+    RealGraph::load(path)
+}
+
+/// `"file:line"` → `file`. Splits on the LAST `:` so Windows-style drive
+/// prefixes never appear here (paths are already `/`-normalised).
+fn node_file(key: &str) -> Option<&str> {
+    key.rsplit_once(':').map(|(file, _)| file)
+}
+
+/// `"file:line"` → `line`.
+fn node_line(key: &str) -> Option<usize> {
+    key.rsplit_once(':').and_then(|(_, line)| line.parse().ok())
+}
+
+/// DFS through the real call graph counting branches. Returns
+/// `(longest_path_branches, total_branches)`, reproducing `walk_density`'s
+/// accumulation contract over real direct-call edges: `longest = own + max
+/// callee longest`, `total = own + sum callee totals`. The visited set of node
+/// keys guards against cycles (recursion, mutual calls).
+fn walk_real(
+    node: &NodeKey,
+    edges: &HashMap<NodeKey, Vec<NodeKey>>,
+    branches: &HashMap<NodeKey, usize>,
+    visited: &mut HashSet<NodeKey>,
+) -> (usize, usize) {
+    if !visited.insert(node.clone()) {
+        return (0, 0);
+    }
+    let own = branches.get(node).copied().unwrap_or(0);
+    let mut deepest_callee_path = 0;
+    let mut callee_total = 0;
+    if let Some(callees) = edges.get(node) {
+        for callee in callees {
+            let (path, total) = walk_real(callee, edges, branches, visited);
+            if path > deepest_callee_path {
+                deepest_callee_path = path;
+            }
+            callee_total += total;
+        }
+    }
+    (own + deepest_callee_path, own + callee_total)
 }
 
 fn fn_name(key: &FnKey) -> &str {
@@ -615,5 +769,68 @@ mod tests {
         let (longest, total) = walk_density(&caller, &registry, &mut visited);
         assert_eq!(longest, 2);
         assert_eq!(total, 2);
+    }
+
+    fn edges(pairs: &[(&str, &[&str])]) -> HashMap<NodeKey, Vec<NodeKey>> {
+        pairs
+            .iter()
+            .map(|(src, dsts)| {
+                (
+                    (*src).to_string(),
+                    dsts.iter().map(|d| (*d).to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn branches(pairs: &[(&str, usize)]) -> HashMap<NodeKey, usize> {
+        pairs.iter().map(|(k, v)| ((*k).to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn real_walk_accumulates_longest_and_total_over_edges() {
+        //        root(1)
+        //        /     \
+        //     a(2)     b(3)
+        //      |        |
+        //     c(10)    d(4)
+        // longest path: root->a->c = 1 + 2 + 10 = 13
+        // total: 1 + (2 + 10) + (3 + 4) = 20
+        let edges = edges(&[
+            ("f:1", &["f:2", "f:3"]),
+            ("f:2", &["f:10"]),
+            ("f:3", &["f:4"]),
+        ]);
+        let branches = branches(&[("f:1", 1), ("f:2", 2), ("f:3", 3), ("f:4", 4), ("f:10", 10)]);
+        let mut visited = HashSet::new();
+        let (longest, total) = walk_real(&"f:1".to_string(), &edges, &branches, &mut visited);
+        assert_eq!(longest, 13);
+        assert_eq!(total, 20);
+    }
+
+    #[test]
+    fn real_walk_uses_zero_for_nodes_without_branches() {
+        // `f:2` has no entry in branches_by_node (a closure/derive node).
+        let edges = edges(&[("f:1", &["f:2"]), ("f:2", &["f:3"])]);
+        let branches = branches(&[("f:1", 5), ("f:3", 7)]);
+        let mut visited = HashSet::new();
+        let (longest, total) = walk_real(&"f:1".to_string(), &edges, &branches, &mut visited);
+        // 5 + 0 (f:2) + 7 (f:3) along the only path; total identical (linear).
+        assert_eq!(longest, 12);
+        assert_eq!(total, 12);
+    }
+
+    #[test]
+    fn real_walk_cycle_guard_terminates() {
+        // Direct recursion plus a mutual cycle must both terminate without
+        // double-counting the re-entered node.
+        let edges = edges(&[("f:1", &["f:1", "f:2"]), ("f:2", &["f:1"])]);
+        let branches = branches(&[("f:1", 4), ("f:2", 6)]);
+        let mut visited = HashSet::new();
+        let (longest, total) = walk_real(&"f:1".to_string(), &edges, &branches, &mut visited);
+        // f:1 visited once (own 4); its self-edge re-enters → (0,0); f:2 (own 6)
+        // re-enters f:1 → (0,0). longest = 4 + max(0, 6) = 10; total = 4 + 0 + 6 = 10.
+        assert_eq!(longest, 10);
+        assert_eq!(total, 10);
     }
 }
