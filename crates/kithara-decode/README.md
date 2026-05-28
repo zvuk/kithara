@@ -95,6 +95,40 @@ Both fallbacks apply a short raised-cosine fade-in (~3 ms) at the trim
 boundary. The metadata-driven path does not — the boundary lands on a
 sample-accurate count.
 
+## Seek pre-roll and trim
+
+Seeking is a two-step contract shared by the demuxer and `ComposedDecoder`:
+
+1. **Demuxer back-off (pre-roll).** `Demuxer::seek` parks the cursor
+   *before* the user-requested target. The back-off magnitude comes from
+   `FrameCodec::priming(codec)` (a `CodecPriming`) and covers two needs:
+   - **Codec warm-up.** MDCT/SBR/PS codecs must decode pre-target packets
+     to converge overlap-add and QMF state, otherwise a cold flush leaks
+     artifacts. AAC (incl. HE-AAC v1/v2, which the fMP4 init parse and the
+     codec layer both see only as `AacLc` — fdk-aac auto-detects SBR from
+     the bitstream) requests **2 access units** of pre-roll; a plain-LC
+     stream just decode-discards one harmless extra AU. Codecs that
+     converge instantly, or that Symphonia primes internally (MP3, FLAC,
+     …), keep the empty `CodecPriming::default()`.
+   - **At least one whole codec packet** so the trim step below lands on a
+     packet boundary. Back-off is derived from codec facts (1024
+     frames/packet for AAC, 1152 for MP3) and the track `sample_rate` — no
+     magic millisecond constants.
+
+   For fMP4 the back-off (`target − warmup`) can cross a segment boundary;
+   `Fmp4SegmentDemuxer::seek` then decodes the tail of the prior segment as
+   decode-and-discard warm-up so SBR converges across the boundary instead
+   of starting cold. Reads stay confined to the pre-roll segment plus the
+   target segment — never a prefix walk from seg-0.
+
+2. **Sample-accurate trim.** Landing on a packet boundary means the first
+   decoded frame straddles the target. `ComposedDecoder::pending_seek_target`
+   drops whole pre-target frames, then trims the leading samples of the
+   straddling frame (`frames_to_trim`, round-to-nearest sample) so the
+   emitted chunk starts exactly at `target` rather than at the packet
+   boundary. Without this trim a seek leaks up to one packet of pre-target
+   audio.
+
 Current metadata sources:
 
 - AAC in MP4/M4A/fMP4: MP4 probe reads `edts/elst` first, then falls back to

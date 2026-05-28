@@ -200,9 +200,7 @@ impl DecoderFactory {
             ..Default::default()
         };
 
-        // `.m4a`/`.mp4` only identify the container — AAC, ALAC, and FLAC
-        // all live in MP4. Sniff the `stsd` sample-entry tag so e.g. a FLAC
-        // fMP4 segment is not misrouted to the AAC decoder path.
+        // WHY: MP4/M4A is container-only (AAC/ALAC/FLAC all live there); sniff the `stsd` sample-entry tag to pick the right codec backend.
         if matches!(
             probe_hint.container,
             Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
