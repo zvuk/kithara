@@ -6,6 +6,7 @@ mod android;
 mod apple;
 mod arch;
 mod ast_grep;
+mod callgraph;
 mod common;
 mod health;
 mod idioms;
@@ -25,6 +26,7 @@ mod wasm;
 use android::AndroidCommand;
 use apple::AppleCommand;
 use ast_grep::AstGrepArgs;
+use callgraph::CallgraphArgs;
 use health::HealthArgs;
 use lint::LintArgs;
 use orphans::OrphansArgs;
@@ -108,6 +110,8 @@ enum Command {
     Health(HealthArgs),
     /// Architecture visualization tools (hierarchy, arc-map).
     Viz(VizArgs),
+    /// Build a workspace call graph from emitted LLVM-IR (opt-in, slow).
+    Callgraph(CallgraphArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -132,5 +136,6 @@ fn main() -> anyhow::Result<()> {
         Command::Orphans(ref args) => orphans::run(args),
         Command::Health(ref args) => health::run(args),
         Command::Viz(ref args) => viz::run(args),
+        Command::Callgraph(ref args) => callgraph::run(args),
     }
 }
