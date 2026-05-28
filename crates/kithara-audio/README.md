@@ -116,6 +116,7 @@ On an ABR variant switch, the `DecoderNode` detects the format change via `Sourc
 - Decoder is recreated when a stream format changes (codec/container boundary) or when post-seek decode reports a recoverable format mismatch.
 - Recreate path is metadata-first (`MediaInfo`) with native Symphonia probe fallback from a fresh source.
 - Decoder recreate always uses seek target anchor/base offset from timeline/source, so new decoder starts from stream timeline truth.
+- A failed `decoder.seek()` is classified by `DecodeError` variant, not by string match. `SeekOutOfRange` (caller-side target past EOF or out of range) fails the seek with no recreate and no retry, since a fresh decoder rejects the same target the same way; any other error is treated as decoder internal-state corruption (e.g. stale moof offsets after a variant switch) and recreates. Init-bearing containers (fMP4/MP4/WAV/MKV/CAF) recreate at the init segment range -- a mid-segment recreate lands on bytes with no ftyp/RIFF/EBML header and fails silently; mid-stream-decodable (MPEG-ES/ADTS/FLAC/Ogg/MPEG-TS) and unknown containers recreate at the seek offset directly.
 
 ## Epoch-Based Seek
 

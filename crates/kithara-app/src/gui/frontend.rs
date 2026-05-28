@@ -74,7 +74,7 @@ impl Frontend for GuiFrontend {
             config.cancel.child_token(),
         ));
 
-        iced::daemon(
+        let result = iced::daemon(
             move || Kithara::new(Arc::clone(&controller), palette),
             update::update,
             view::view,
@@ -88,7 +88,10 @@ impl Frontend for GuiFrontend {
         .font(fonts::JETBRAINS_MONO_REGULAR_BYTES)
         .font(fonts::JETBRAINS_MONO_MEDIUM_BYTES)
         .font(fonts::JETBRAINS_MONO_SEMIBOLD_BYTES)
-        .run()?;
+        .run();
+
+        config.cancel.cancel();
+        result?;
 
         Ok(())
     }

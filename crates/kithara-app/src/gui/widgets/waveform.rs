@@ -4,6 +4,7 @@ use iced::{
     widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, gradient},
 };
 use kithara::audio::Envelope;
+use num_traits::cast::AsPrimitive;
 
 use crate::{gui::message::Message, theme::gui::GuiPalette};
 
@@ -149,11 +150,7 @@ impl canvas::Program<Message> for Waveform {
 
         let n = self.samples.len();
         if n >= 2 {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "envelope point count tracks display width and never nears the f32 mantissa limit"
-            )]
-            let last = (n - 1) as f32;
+            let last: f32 = (n - 1).as_();
             let step = w / last;
 
             let unplayed = gradient::Linear::new(Point::new(0.0, 0.0), Point::new(0.0, h))
@@ -192,12 +189,7 @@ impl canvas::Program<Message> for Waveform {
             // only one needed.
             let split_f = (self.progress.clamp(0.0, 1.0) * last).round();
             let x0 = split_f * step;
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "split_f is rounded and in [0, last]; in range for a slice index"
-            )]
-            let split = split_f as usize;
+            let split: usize = split_f.as_();
 
             if split >= 1 {
                 let path = envelope_path(&self.samples[..=split], 0.0, step, h);

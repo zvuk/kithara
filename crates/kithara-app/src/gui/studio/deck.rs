@@ -9,6 +9,7 @@ use iced::{
         row, text,
     },
 };
+use num_traits::cast::AsPrimitive;
 
 use super::{
     styles::vertical_divider,
@@ -193,16 +194,12 @@ fn playhead_progress(position: f64, duration: f64) -> f32 {
     if duration <= 0.0 {
         return 0.0;
     }
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "playhead fraction is bounded to [0,1]; f32 precision is ample for a pixel offset"
-    )]
-    let progress = (position / duration).clamp(0.0, 1.0) as f32;
+    let progress: f32 = (position / duration).clamp(0.0, 1.0).as_();
     progress
 }
 
 /// Transport (prev / play / next) on the left, a divider, then the EQ fader
-/// bank — all in one panel, matching the reference deck layout.
+/// bank - all in one panel, matching the reference deck layout.
 fn transport_and_faders_row(state: &Kithara, p: GuiPalette) -> Element<'static, Message> {
     container(
         row![

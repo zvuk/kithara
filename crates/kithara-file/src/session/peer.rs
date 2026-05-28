@@ -39,7 +39,7 @@ pub(crate) struct FilePeer {
     /// attach-time winner (or `None` for a loser); a loser promotes
     /// itself via [`DemandLease::try_take_producer`] once the previous
     /// producer drops. When no demand lease was attached (standalone,
-    /// no shared store) the peer always drives — see `poll_next`.
+    /// no shared store) the peer always drives - see `poll_next`.
     producer: Mutex<Option<ProducerHandle>>,
 }
 

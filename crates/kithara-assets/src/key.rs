@@ -30,7 +30,7 @@ pub enum ResourceKey {
         #[serde(with = "arc_str")]
         rel_path: Arc<str>,
     },
-    /// Absolute filesystem path — its own namespace.
+    /// Absolute filesystem path - its own namespace.
     Absolute(PathBuf),
 }
 

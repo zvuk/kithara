@@ -4,7 +4,7 @@
 //! `AssetStore` by the headers that produced the request. Names are
 //! lowercased; duplicate names keep the last value (HTTP multi-value is
 //! out of scope, see crate `README.md`). `Debug` prints only a stable
-//! hash of the headers — never names or values — so auth tokens and
+//! hash of the headers - never names or values -- so auth tokens and
 //! cookies cannot leak through logs.
 
 use std::{

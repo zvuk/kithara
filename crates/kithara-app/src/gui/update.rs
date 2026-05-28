@@ -1,7 +1,7 @@
 use iced::{Task, window};
 use kithara::abr::AbrMode;
 use kithara_queue::{RepeatMode, TrackId, Transition};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use super::{
     app::Kithara,
@@ -114,15 +114,18 @@ fn handle_eq_band_changed(state: &Kithara, band: usize, db: f32) {
     if band >= state.ui_state.eq_bands.len() {
         return;
     }
-    match state.controller.queue().set_eq_gain(band, db) {
-        Ok(()) => {
-            state.controller.mutate(|st| {
-                if let Some(slot) = st.eq_bands.get_mut(band) {
-                    *slot = db;
-                }
-            });
+    // `eq_bands` is the user's desired EQ and the source of truth: record it
+    // regardless of whether a playback slot exists yet. The listener re-applies
+    // it to the engine once a track becomes active.
+    state.controller.mutate(|st| {
+        if let Some(slot) = st.eq_bands.get_mut(band) {
+            *slot = db;
         }
-        Err(e) => error!("set EQ gain band={band} db={db:.1} failed: {e:?}"),
+    });
+    if let Err(e) = state.controller.queue().set_eq_gain(band, db) {
+        // Expected before playback starts (no active slot yet); the gain is
+        // retained in `eq_bands` and pushed down when playback begins.
+        debug!("set EQ gain band={band} db={db:.1} deferred: {e:?}");
     }
 }
 

@@ -91,7 +91,7 @@ impl DemandCell {
 /// Carries the shared [`DemandCell`] (for the aggregate watermark and the
 /// wake notify) and the slot's `producer_cancel`. Drives the single
 /// download task; its lifetime is the elected producer's. Dropping it
-/// re-opens the election so a surviving consumer can take over — see
+/// re-opens the election so a surviving consumer can take over -- see
 /// [`DemandLease::try_take_producer`].
 #[non_exhaustive]
 pub struct ProducerHandle {
@@ -122,7 +122,7 @@ impl Drop for ProducerHandle {
     fn drop(&mut self) {
         // Re-open the election: a surviving consumer's next
         // `try_take_producer` wins and takes over the download. Harmless
-        // when no consumer remains — the slot is removed by the last
+        // when no consumer remains - the slot is removed by the last
         // `DemandLease` drop anyway.
         self.slot.producer_spawned.store(false, Ordering::Release);
         self.slot.notify.notify_one();

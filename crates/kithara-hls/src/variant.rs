@@ -1219,15 +1219,14 @@ impl HlsVariant {
     /// reader) reads the container's first ~1 KB to construct the
     /// codec; on post-ABR switch into mid-playback the active variant's
     /// queue would otherwise start at `target_seg`, leaving
-    /// `[0..PROBE)` unfetched and the probe hanging on
-    /// `wait_range budget exceeded v=new range_start=0` (Cluster C/D/F
-    /// sentinel, Wave 2.A.3b memo).
+    /// `[0..PROBE)` unfetched and the probe hanging on a `wait_range`
+    /// budget-exceeded for `range_start=0` of the new variant.
     ///
     /// `seg 0` is required even when the variant advertises a separate
     /// init (CMAF `EXT-X-MAP`): the init covers a few-dozen-byte
     /// header, but the probe scans further into the first media chunk.
     /// Skipping `seg 0` here masked the bug while `rebuild(0)` worked
-    /// (loaded every segment from 0 — over-fetched whole file).
+    /// (loaded every segment from 0, over-fetching the whole file).
     ///
     /// After probe succeeds, `decoder_seek_safe(target_time)` jumps the
     /// decoder forward to the user-visible position, so segments

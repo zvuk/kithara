@@ -201,7 +201,7 @@ mod tests {
             None,
             vec![Box::new(PassthroughEffect)],
         );
-        // [Resampler, custom] — resampler-first, no pre slot.
+        // [Resampler, custom] -- resampler-first, no pre slot.
         assert_eq!(effects.len(), 2);
     }
 
@@ -219,7 +219,7 @@ mod tests {
             None,
             vec![Box::new(PassthroughEffect)],
         );
-        // [TimeStretch, Resampler, custom] — pre-resampler slot present.
+        // [TimeStretch, Resampler, custom] -- pre-resampler slot present.
         assert_eq!(effects.len(), 3);
     }
 }

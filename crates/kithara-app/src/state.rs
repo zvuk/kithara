@@ -317,21 +317,41 @@ fn resource_config_from_source(source: TrackSource, config: &AppConfig) -> Optio
     }
 }
 
+/// Push the desired EQ gains down to the engine. Calls for bands with no
+/// active slot are no-ops; the master EQ persists once a slot accepts them.
+fn reapply_eq(queue: &Queue, eq_bands: &[f32]) {
+    for (band, &gain) in eq_bands.iter().enumerate() {
+        let _ = queue.set_eq_gain(band, gain);
+    }
+}
+
 fn apply_event(event: Event, queue: &Queue, state: &Mutex<UiState>) {
     match event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
-            let mut st = state.lock_sync();
-            st.current_track_index = current_index;
-            st.track_name = current_index
-                .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
-                .unwrap_or_default();
-            st.selected_variant = None;
-            st.is_seeking = false;
+            let eq_bands = {
+                let mut st = state.lock_sync();
+                st.current_track_index = current_index;
+                st.track_name = current_index
+                    .and_then(|idx| st.tracks.get(idx).map(|t| t.name.clone()))
+                    .unwrap_or_default();
+                st.selected_variant = None;
+                st.is_seeking = false;
+                st.eq_bands.clone()
+            };
+            reapply_eq(queue, &eq_bands);
         }
         Event::Player(PlayerEvent::RateChanged { rate }) => {
+            let started = rate > 0.0;
             let mut st = state.lock_sync();
-            st.playing = rate > 0.0;
+            st.playing = started;
+            let eq_bands = started.then(|| st.eq_bands.clone());
+            drop(st);
+            // Playback just started on an active slot -- push the desired EQ
+            // down so gains set before play take effect.
+            if let Some(eq_bands) = eq_bands {
+                reapply_eq(queue, &eq_bands);
+            }
         }
         Event::Player(PlayerEvent::VolumeChanged { volume })
         | Event::Engine(EngineEvent::MasterVolumeChanged { volume }) => {

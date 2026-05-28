@@ -10,7 +10,7 @@ use crate::{error::AssetsResult, key::ResourceKey, unified::AssetStore};
 
 /// A lightweight handle that holds one `asset_root` over a shared
 /// [`AssetStore`] and mints self-identifying [`ResourceKey`]s under it.
-/// Cloning is cheap — the backing store is shared, not copied.
+/// Cloning is cheap - the backing store is shared, not copied.
 ///
 /// Obtain one via [`AssetStore::scope`]. Per-resource operations live on
 /// the store ([`AssetStore::open_resource`] and friends) and take a

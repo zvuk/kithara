@@ -81,7 +81,7 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     /// Bind this store to one `asset_root`, returning a scoped handle
-    /// that drops the per-call `asset_root` argument. Cheap to clone —
+    /// that drops the per-call `asset_root` argument. Cheap to clone --
     /// the backing store is shared, so many scopes over distinct asset
     /// roots cooperate on one store.
     #[must_use]
@@ -120,7 +120,7 @@ where
     /// advances directly); `look_ahead` of `None` requests the whole
     /// file as fast as possible. Returns a [`DemandLease`] the consumer
     /// must hold for the lifetime of its demand, plus a
-    /// [`ProducerHandle`] to the single CAS-winning attacher only — the
+    /// [`ProducerHandle`] to the single CAS-winning attacher only -- the
     /// winner drives the shared download task. See `README.md`
     /// "Consumer Demand".
     pub fn attach_demand(

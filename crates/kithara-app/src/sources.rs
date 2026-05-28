@@ -52,7 +52,7 @@ pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<Res
                 tracing::debug!(
                     %url,
                     host,
-                    "drm: no registry rule for host — plain (non-DRM) resource path"
+                    "drm: no registry rule for host -- plain (non-DRM) resource path"
                 );
                 None
             },
