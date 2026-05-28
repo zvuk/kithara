@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     observer::{ItemObserver, PlayerObserver},
-    player::ItemRegistry,
+    registry::ItemRegistry,
     types::{FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiTrackStatus},
 };
 
