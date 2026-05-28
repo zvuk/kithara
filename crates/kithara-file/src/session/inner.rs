@@ -144,21 +144,21 @@ impl FileInner {
         if self.segment_index.get().is_some() {
             return;
         }
-        let Some(total) = self.asset.res.len() else {
-            return;
-        };
-        if total == 0 || !self.asset.res.contains_range(0..total) {
-            return;
-        }
-        let Ok(total_usize) = usize::try_from(total) else {
-            return;
-        };
-        let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
-        if self.asset.res.read_at(0, &mut buf).is_err() {
-            return;
-        }
-        if let Some(index) = FileSegmentIndex::try_build(&buf) {
+        if let Some(index) = self.build_segment_index_from_cache() {
             let _ = self.segment_index.set(index);
         }
+    }
+
+    /// Read the fully cached file bytes and parse a fragmented-mp4 index,
+    /// or `None` when the file is not yet complete or not fragmented mp4.
+    fn build_segment_index_from_cache(&self) -> Option<FileSegmentIndex> {
+        let total = self.asset.res.len()?;
+        if total == 0 || !self.asset.res.contains_range(0..total) {
+            return None;
+        }
+        let total_usize = usize::try_from(total).ok()?;
+        let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
+        self.asset.res.read_at(0, &mut buf).ok()?;
+        FileSegmentIndex::try_build(&buf)
     }
 }
