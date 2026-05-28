@@ -3,6 +3,7 @@
 use std::{
     collections::VecDeque,
     io::{Error as IoError, ErrorKind},
+    marker::PhantomData,
     num::NonZeroUsize,
     ops::Range,
     sync::{
@@ -48,10 +49,10 @@ mod tests;
 /// `Loaded -> Missing`.
 ///
 /// The bit values are private and the only mutators are the typed
-/// transitions on [`SegmentDownloading`] / [`SegmentLoaded`] /
-/// [`SegmentMissing`], so there is no silent `From<u8>` fallback. Reads
-/// stay a plain atomic (no lock) because `download_head` scans every
-/// slot on the ABR tick.
+/// transitions on the phase-specific `impl Segment<Downloading>` /
+/// `impl Segment<Loaded>` blocks, so there is no silent `From<u8>`
+/// fallback. Reads stay a plain atomic (no lock) because `download_head`
+/// scans every slot on the ABR tick.
 #[derive(Debug)]
 struct SegmentSlotState(AtomicU8);
 
@@ -73,13 +74,13 @@ impl SegmentSlotState {
     }
 
     /// Atomic `Missing -> Downloading` claim. Returns the owned
-    /// [`SegmentDownloading`] proof when the caller now owns the in-flight
-    /// slot, `None` when another caller already claimed it.
+    /// [`Segment<Downloading>`](Segment) handle when the caller now owns
+    /// the in-flight slot, `None` when another caller already claimed it.
     fn try_claim(
         self: &Arc<Self>,
         planned: PlannedFetch,
         variant: Weak<HlsVariant>,
-    ) -> Option<SegmentDownloading> {
+    ) -> Option<Segment<Downloading>> {
         self.0
             .compare_exchange(
                 Self::MISSING,
@@ -88,11 +89,14 @@ impl SegmentSlotState {
                 Ordering::Acquire,
             )
             .ok()
-            .map(|_| SegmentDownloading {
-                slot: Arc::clone(self),
-                planned,
-                variant,
-                settled: false,
+            .map(|_| Segment {
+                data: DownloadClaim {
+                    slot: Arc::clone(self),
+                    planned,
+                    variant,
+                    settled: false,
+                },
+                _phase: PhantomData,
             })
     }
 
@@ -105,67 +109,144 @@ impl SegmentSlotState {
     }
 }
 
-/// Owned proof that a segment / init slot is claimed and in-flight
-/// (`Downloading`). Issued by [`SegmentSlotState::try_claim`] after a
-/// successful `Missing -> Downloading` CAS, and consumed by exactly one
-/// terminal transition: [`Self::into_loaded`] (commit + cache-hit),
-/// [`Self::into_loaded_no_apply`], [`Self::into_missing`], or
-/// [`Self::abandon`]. The `Drop` safety net reverts the slot to `Missing`
-/// if a claim is dropped without a transition, so a leaked handle can
-/// never strand the slot in `Downloading`.
-struct SegmentDownloading {
+mod sealed {
+    pub(super) trait Sealed {}
+}
+
+/// Compile-time download phase of a segment / init slot. The phantom
+/// parameter on [`Segment`] encodes which transitions are legal, so the
+/// invariants that `SegmentSlotState` used to check at runtime become
+/// type errors: only a `Segment<Downloading>` can settle, and it settles
+/// by consuming itself into a `Segment<Loaded>` or `Segment<Missing>`.
+///
+/// Sealed — the phase set is closed to this module. Each phase carries its
+/// own [`Data`](SegmentPhase::Data) payload; phases without state use `()`.
+trait SegmentPhase: sealed::Sealed {
+    type Data;
+}
+
+/// In-flight: claimed via a `Missing -> Downloading` CAS, fetch pending.
+struct Downloading;
+/// Committed on disk; carries the resolved `final_len`.
+struct Loaded;
+/// Returned to the dispatch pool (recoverable failure / cancel / evict).
+struct Missing;
+
+impl sealed::Sealed for Downloading {}
+impl sealed::Sealed for Loaded {}
+impl sealed::Sealed for Missing {}
+
+impl SegmentPhase for Downloading {
+    type Data = DownloadClaim;
+}
+impl SegmentPhase for Loaded {
+    type Data = LoadedProof;
+}
+impl SegmentPhase for Missing {
+    type Data = ();
+}
+
+/// Phantom-typed handle to a segment / init slot. `S` is one of
+/// [`Downloading`], [`Loaded`], [`Missing`]; the per-phase fields live in
+/// `S::Data`. Transitions are consume-self methods on the phase-specific
+/// `impl` blocks below, so the compiler rejects a double settle or an
+/// [`apply_commit`](HlsVariant::apply_commit) on anything but a `Loaded`
+/// handle.
+struct Segment<S: SegmentPhase> {
+    data: S::Data,
+    _phase: PhantomData<S>,
+}
+
+/// Backing payload of a [`Segment<Downloading>`](Segment). Shares the slot
+/// CAS cell so a terminal transition can flip it, holds the `Weak`
+/// back-reference for the post-commit size apply, and carries the `Drop`
+/// disarm flag.
+struct DownloadClaim {
     slot: Arc<SegmentSlotState>,
     planned: PlannedFetch,
     variant: Weak<HlsVariant>,
     settled: bool,
 }
 
-impl SegmentDownloading {
+/// Backing payload of a [`Segment<Loaded>`](Segment): the committed slot
+/// identity and resolved size consumed by [`HlsVariant::apply_commit`].
+struct LoadedProof {
+    planned: PlannedFetch,
+    final_len: u64,
+}
+
+impl Segment<Downloading> {
     /// `Downloading -> Loaded` with a post-commit size apply. `actual` is
-    /// the on-disk `final_len` (success / cache-hit / committed-by-race);
-    /// the variant shrinks its layout to match before the slot flips.
-    fn into_loaded(mut self, actual: u64) -> SegmentLoaded {
-        let loaded = SegmentLoaded {
-            planned: self.planned,
-            final_len: actual,
+    /// the on-disk `final_len` (success / cache-hit / committed-by-race).
+    /// `apply_commit` shrinks the variant's layout to match *before*
+    /// `mark_loaded` flips the slot — a reader that observes `Loaded` then
+    /// reads the size must never see the stale estimate.
+    fn into_loaded(mut self, actual: u64) -> Segment<Loaded> {
+        let loaded = Segment {
+            data: LoadedProof {
+                planned: self.data.planned,
+                final_len: actual,
+            },
+            _phase: PhantomData,
         };
-        if let Some(v) = self.variant.upgrade() {
+        if let Some(v) = self.data.variant.upgrade() {
             v.apply_commit(&loaded);
         }
-        self.slot.mark_loaded();
-        self.settled = true;
+        self.data.slot.mark_loaded();
+        self.data.settled = true;
         loaded
     }
 
     /// `Downloading -> Loaded` without a size apply — the resource
     /// committed by a racing writer but reported no `final_len`, so the
     /// existing layout estimate stands.
-    fn into_loaded_no_apply(mut self) -> SegmentLoaded {
-        self.slot.mark_loaded();
-        self.settled = true;
-        SegmentLoaded {
-            planned: self.planned,
-            final_len: 0,
+    fn into_loaded_no_apply(mut self) -> Segment<Loaded> {
+        self.data.slot.mark_loaded();
+        self.data.settled = true;
+        Segment {
+            data: LoadedProof {
+                planned: self.data.planned,
+                final_len: 0,
+            },
+            _phase: PhantomData,
         }
     }
 
     /// `Downloading -> Missing` recovery (recoverable failure / cancel
     /// before commit). The slot returns to the dispatch pool.
-    fn into_missing(mut self) -> SegmentMissing {
-        self.slot.mark_missing();
-        self.settled = true;
-        SegmentMissing
+    fn into_missing(mut self) -> Segment<Missing> {
+        self.data.slot.mark_missing();
+        self.data.settled = true;
+        Segment {
+            data: (),
+            _phase: PhantomData,
+        }
     }
 
     /// Consume the claim without touching slot state — used for a stale
     /// (cancelled) settle whose resource already committed: the new epoch
     /// owns the slot, so leaving it as-is is correct.
     fn abandon(mut self) {
-        self.settled = true;
+        self.data.settled = true;
     }
 }
 
-impl Drop for SegmentDownloading {
+impl Segment<Loaded> {
+    fn planned(&self) -> PlannedFetch {
+        self.data.planned
+    }
+
+    fn final_len(&self) -> u64 {
+        self.data.final_len
+    }
+}
+
+/// The `Drop` safety net lives on the concrete payload (not on the generic
+/// `Segment<Downloading>`, which `Drop` cannot specialize): if a claim is
+/// dropped without a transition, the slot reverts to `Missing` so a leaked
+/// handle can never strand it in `Downloading`. The consume-self
+/// transitions set `settled` first, disarming this no-op.
+impl Drop for DownloadClaim {
     fn drop(&mut self) {
         if !self.settled {
             self.slot.mark_missing();
@@ -177,19 +258,6 @@ impl Drop for SegmentDownloading {
         }
     }
 }
-
-/// Proof that a slot's resource is committed on disk (`Loaded`). Required
-/// by [`HlsVariant::apply_commit`] so the layout shrink only runs after a
-/// genuine commit, never on a speculative size.
-struct SegmentLoaded {
-    planned: PlannedFetch,
-    final_len: u64,
-}
-
-/// Proof that a claimed slot fell back to `Missing` (recoverable failure
-/// / cancel). Returned by the failure transitions so callers can observe
-/// the recovery in the type system.
-struct SegmentMissing;
 
 /// Decryption disposition for a segment / init resource. Replaces
 /// `decrypt_ctx: Option<DecryptContext>`, whose `.is_some()` /
@@ -210,7 +278,7 @@ impl From<Option<DecryptContext>> for SegmentContent {
 
 #[derive(Debug)]
 pub(crate) struct SegmentEntry {
-    /// Cache state. The owning [`SegmentDownloading`] handle (held by the
+    /// Cache state. The owning [`Segment<Downloading>`](Segment) handle (held by the
     /// segment's `FetchSlot`) shares this `Arc` and flips it on settle:
     /// `Loaded` on success, `Missing` on recoverable failure. Stale
     /// settles (cancelled before completion) are gated by
@@ -499,13 +567,13 @@ impl HlsVariant {
     /// lock — a reader that races in between would see a new size with
     /// stale offsets and fall into a non-existent gap, hanging on
     /// `range_ready`.
-    fn apply_commit(&self, loaded: &SegmentLoaded) {
+    fn apply_commit(&self, loaded: &Segment<Loaded>) {
         let mut offsets = self.offsets.lock_sync_write();
-        match loaded.planned {
-            PlannedFetch::Init => self.init.size.store(loaded.final_len, Ordering::Release),
+        match loaded.planned() {
+            PlannedFetch::Init => self.init.size.store(loaded.final_len(), Ordering::Release),
             PlannedFetch::Segment(idx) => {
                 if let Some(slot) = self.segments.get(idx as usize) {
-                    slot.size.store(loaded.final_len, Ordering::Release);
+                    slot.size.store(loaded.final_len(), Ordering::Release);
                 }
             }
         }
@@ -535,7 +603,7 @@ impl HlsVariant {
         self: &Arc<Self>,
         url: Url,
         resource: AssetResource<DecryptContext>,
-        handle: SegmentDownloading,
+        handle: Segment<Downloading>,
     ) -> FetchCmd {
         let cancel = self.cancel_handle();
         let slot = FetchSlot {
@@ -551,7 +619,7 @@ impl HlsVariant {
             .build()
     }
 
-    fn build_init_cmd(self: &Arc<Self>, ctx: &PlanCtx, handle: SegmentDownloading) -> FetchCmd {
+    fn build_init_cmd(self: &Arc<Self>, ctx: &PlanCtx, handle: Segment<Downloading>) -> FetchCmd {
         let resource = match &self.init.content {
             SegmentContent::Plain => ctx
                 .asset_store
@@ -807,7 +875,7 @@ impl HlsVariant {
         self: &Arc<Self>,
         ctx: &PlanCtx,
         seg_idx: u32,
-        handle: SegmentDownloading,
+        handle: Segment<Downloading>,
     ) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
         let acquire = match &entry.content {
@@ -1576,7 +1644,7 @@ impl HlsVariant {
 /// apply the post-decrypt size — we use `Weak` (not `Arc`) so a dropped
 /// peer doesn't keep the variant alive past teardown.
 struct FetchSlot {
-    handle: SegmentDownloading,
+    handle: Segment<Downloading>,
     resource: AssetResource<DecryptContext>,
     cancel: CancellationToken,
 }
@@ -1598,8 +1666,8 @@ impl FetchSlot {
     /// estimates are always upper bounds.
     ///
     /// Consumes the slot (`OnCompleteFn` is `FnOnce`): the owned
-    /// [`SegmentDownloading`] handle is moved into exactly one terminal
-    /// transition, so the slot state can never be double-driven.
+    /// [`Segment<Downloading>`](Segment) handle is moved into exactly one
+    /// terminal transition, so the slot state can never be double-driven.
     fn settle(self, bytes_written: u64, err: Option<&NetError>) {
         if self.cancel.is_cancelled() {
             self.settle_cancelled(bytes_written);
