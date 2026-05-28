@@ -4,7 +4,7 @@ use kithara_abr::{AbrController, AbrPeerId};
 use kithara_events::{
     BandwidthSource, CancelReason, DownloaderEvent, EventBus, RequestId, RequestMethod,
 };
-use kithara_net::{HttpClient, NetError};
+use kithara_net::{HttpClient, NetError, Retryability};
 use kithara_platform::{
     CancelGroup,
     time::{Duration, Instant},
@@ -468,7 +468,7 @@ fn publish_failure_or_cancel(
         let reason = classify_cancel(peer_cancel, epoch_cancel, downloader_cancel);
         abort_request(bus, request_id, reason, bytes_transferred, true);
     } else {
-        let retryable = err.is_retryable();
+        let retryable = err.retryability() == Retryability::Transient;
         fail_request(bus, request_id, err, retryable);
     }
 }

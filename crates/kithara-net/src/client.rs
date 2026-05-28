@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{num::NonZeroU16, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,7 +23,7 @@ const HTTP_PARTIAL_CONTENT: u16 = 206;
 /// and appends a `…(truncated, N chars total)` suffix for anything longer.
 fn truncate_error_body(mut body: String) -> String {
     /// Maximum characters of an HTTP error body kept in
-    /// [`NetError::HttpError`].
+    /// [`NetError::Status`].
     const MAX_CHARS: usize = 200;
 
     let total = body.chars().count();
@@ -37,6 +37,17 @@ fn truncate_error_body(mut body: String) -> String {
     body.truncate(cut_at);
     body.push_str(&format!("…(truncated, {total} chars total)"));
     body
+}
+
+fn status_error(url: Url, status: u16, body: String) -> NetError {
+    match NonZeroU16::new(status) {
+        Some(status) => NetError::Status {
+            status,
+            url: Some(url),
+            body: Some(body),
+        },
+        None => NetError::Network(format!("unexpected zero HTTP status for {url}")),
+    }
 }
 
 /// Build a `reqwest::Client` with our default configuration. Native
@@ -153,11 +164,7 @@ impl RawHttp {
         let ok = status.is_success() || (accept_partial && status.as_u16() == HTTP_PARTIAL_CONTENT);
         if !ok {
             let body = truncate_error_body(resp.text().await.unwrap_or_default());
-            return Err(NetError::HttpError {
-                url,
-                status: status.as_u16(),
-                body: Some(body),
-            });
+            return Err(status_error(url, status.as_u16(), body));
         }
 
         Ok(resp)
@@ -316,11 +323,7 @@ impl Net for RawHttp {
 
         if !status.is_success() && status.as_u16() != HTTP_PARTIAL_CONTENT {
             let body = truncate_error_body(resp.text().await.unwrap_or_default());
-            return Err(NetError::HttpError {
-                url,
-                status: status.as_u16(),
-                body: Some(body),
-            });
+            return Err(status_error(url, status.as_u16(), body));
         }
 
         let mut out = Headers::new();
@@ -447,8 +450,8 @@ mod tests {
             .await
             .expect_err("max_retries=0 must propagate the 503");
         assert!(
-            matches!(err, NetError::HttpError { status: 503, .. }),
-            "expected HttpError(503), got {err:?}"
+            matches!(err, NetError::Status { status, .. } if status.get() == 503),
+            "expected Status(503), got {err:?}"
         );
         assert_eq!(
             counter.load(Ordering::SeqCst),

@@ -15,7 +15,7 @@ mod kithara {
 
 use crate::{
     ByteStream,
-    error::NetError,
+    error::{NetError, Retryability},
     traits::Net,
     types::{Headers, RangeSpec, RetryPolicy},
 };
@@ -38,7 +38,7 @@ impl DefaultRetryPolicy {
             return false;
         }
 
-        error.is_retryable()
+        error.retryability() == Retryability::Transient
     }
 }
 
@@ -153,6 +153,8 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
+    use std::num::NonZeroU16;
+
     use ::tokio::time::timeout;
     use futures::stream;
     use unimock::{MockFn, Unimock, matching};
@@ -162,6 +164,14 @@ mod tests {
 
     fn test_url() -> Url {
         Url::parse("http://test.com").expect("BUG: hard-coded test URL is valid")
+    }
+
+    fn status_404() -> NetError {
+        NetError::Status {
+            status: NonZeroU16::new(404).expect("BUG: 404 is non-zero"),
+            url: None,
+            body: None,
+        }
     }
 
     fn empty_stream() -> ByteStream {
@@ -216,7 +226,7 @@ mod tests {
     fn test_default_retry_policy_should_not_retry_non_retryable() {
         let policy = RetryPolicy::default();
         let retry_policy = DefaultRetryPolicy::new(policy);
-        let error = NetError::Http("status: 404".to_string());
+        let error = status_404();
         assert!(!retry_policy.should_retry(&error, 0));
     }
 
@@ -295,7 +305,7 @@ mod tests {
         let mock = Unimock::new(
             NetMock::get_bytes
                 .some_call(matching!(_, _))
-                .returns(Err(NetError::Http("status: 404".to_string()))),
+                .returns(Err(status_404())),
         );
         let retry_net = retry_net_default(mock);
 
